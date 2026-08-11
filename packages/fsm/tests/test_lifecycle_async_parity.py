@@ -73,9 +73,7 @@ def _trivial_config() -> FSMConfig:
             NetworkConfig(
                 name="main",
                 states=[
-                    StateConfig(
-                        name="start", is_start=True, arcs=[ArcConfig(target="end")]
-                    ),
+                    StateConfig(name="start", is_start=True, arcs=[ArcConfig(target="end")]),
                     StateConfig(name="end", is_end=True),
                 ],
             )
@@ -197,8 +195,7 @@ async def test_async_simple_fsm_is_an_async_context_manager() -> None:
         assert provider.get_all_instances()
 
     assert provider.get_all_instances() == {}, (
-        "exiting the AsyncSimpleFSM context manager did not clean up the "
-        "resource manager"
+        "exiting the AsyncSimpleFSM context manager did not clean up the resource manager"
     )
 
 
@@ -207,15 +204,11 @@ async def test_async_simple_fsm_is_an_async_context_manager() -> None:
 # --------------------------------------------------------------------------- #
 
 
-def _manager_with_pooled_provider() -> tuple[
-    ResourceManager, PropertiesResource
-]:
+def _manager_with_pooled_provider() -> tuple[ResourceManager, PropertiesResource]:
     """A manager holding one pooled provider with one acquired resource."""
     manager = ResourceManager()
     provider = PropertiesResource("props", initial_properties={"k": "v"})
-    manager.register_provider(
-        "props", provider, pool_config=PoolConfig(min_size=1, max_size=2)
-    )
+    manager.register_provider("props", provider, pool_config=PoolConfig(min_size=1, max_size=2))
     manager.acquire("props", owner_id="state_a")
     return manager, provider
 

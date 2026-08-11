@@ -121,8 +121,7 @@ def _split(ref: str) -> tuple[str, str]:
 
     if not sep or not module_path or not attribute:
         raise DottedPathError(
-            f"Invalid dotted path {ref!r}; expected 'module.path:name' "
-            "or 'module.path.name'",
+            f"Invalid dotted path {ref!r}; expected 'module.path:name' or 'module.path.name'",
             ref=ref,
             reason=DottedPathReason.MALFORMED,
         )
@@ -167,15 +166,9 @@ def _suggestions(module: Any) -> str:
     """
     own_name = _peek(module, "__name__")
     public = [
-        name
-        for name in dir(module)
-        if not name.startswith("_") and callable(_peek(module, name))
+        name for name in dir(module) if not name.startswith("_") and callable(_peek(module, name))
     ]
-    defined_here = [
-        name
-        for name in public
-        if _peek(_peek(module, name), "__module__") == own_name
-    ]
+    defined_here = [name for name in public if _peek(_peek(module, name), "__module__") == own_name]
 
     available = sorted(defined_here or public)
     if not available:
@@ -228,8 +221,7 @@ def resolve_dotted(ref: str) -> Any:
         module = importlib.import_module(module_path)
     except ModuleNotFoundError as exc:
         raise DottedPathError(
-            f"Cannot import module {module_path!r} from {ref!r} "
-            f"({type(exc).__name__})",
+            f"Cannot import module {module_path!r} from {ref!r} ({type(exc).__name__})",
             ref=ref,
             reason=DottedPathReason.MODULE_NOT_FOUND,
         ) from exc
@@ -241,8 +233,7 @@ def resolve_dotted(ref: str) -> Any:
         # rather than the clause above, which is right: the module began
         # executing.
         raise DottedPathError(
-            f"Cannot import module {module_path!r} from {ref!r} "
-            f"({type(exc).__name__})",
+            f"Cannot import module {module_path!r} from {ref!r} ({type(exc).__name__})",
             ref=ref,
             reason=DottedPathReason.IMPORT_FAILED,
         ) from exc

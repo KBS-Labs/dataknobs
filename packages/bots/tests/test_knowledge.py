@@ -115,9 +115,7 @@ class TestRAGKnowledgeBase:
         kb_str = await RAGKnowledgeBase.from_config(config)
         with open(test_doc, encoding="utf-8") as f:
             content = f.read()
-        num_from_str = await kb_str.load_markdown_text(
-            content, source=str(test_doc)
-        )
+        num_from_str = await kb_str.load_markdown_text(content, source=str(test_doc))
 
         assert num_from_file == num_from_str
 

@@ -178,9 +178,7 @@ async def test_list_sort_asc_routed_to_backend(app_client) -> None:
     await backend.register("alice", {})
     await backend.register("bob", {})
 
-    resp = await client.get(
-        f"{API_PREFIX}/configs", params={"sort": "bot_id:asc"}
-    )
+    resp = await client.get(f"{API_PREFIX}/configs", params={"sort": "bot_id:asc"})
     assert resp.status_code == 200
     assert [r["bot_id"] for r in resp.json()["items"]] == ["alice", "bob", "charlie"]
 
@@ -192,9 +190,7 @@ async def test_list_sort_desc_routed_to_backend(app_client) -> None:
     await backend.register("bob", {})
     await backend.register("charlie", {})
 
-    resp = await client.get(
-        f"{API_PREFIX}/configs", params={"sort": "bot_id:desc"}
-    )
+    resp = await client.get(f"{API_PREFIX}/configs", params={"sort": "bot_id:desc"})
     assert resp.status_code == 200
     assert [r["bot_id"] for r in resp.json()["items"]] == ["charlie", "bob", "alice"]
 
@@ -238,9 +234,7 @@ async def test_list_sort_multi_key_preserves_order(app_client) -> None:
 async def test_list_sort_invalid_order_returns_422(app_client) -> None:
     """``?sort=field:wrong`` is a wire-protocol error."""
     client, _ = app_client
-    resp = await client.get(
-        f"{API_PREFIX}/configs", params={"sort": "bot_id:sideways"}
-    )
+    resp = await client.get(f"{API_PREFIX}/configs", params={"sort": "bot_id:sideways"})
     assert resp.status_code == 422
     assert "sideways" in resp.json()["detail"]
 

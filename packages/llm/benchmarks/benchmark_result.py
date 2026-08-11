@@ -20,6 +20,7 @@ class BenchmarkResult:
         max_time: Maximum time (seconds)
         operations_per_second: Throughput (ops/sec)
     """
+
     name: str
     iterations: int
     total_time: float
@@ -59,7 +60,7 @@ class BenchmarkResult:
             std_dev=std_dev,
             min_time=min_time,
             max_time=max_time,
-            operations_per_second=ops_per_sec
+            operations_per_second=ops_per_sec,
         )
 
     def format_summary(self) -> str:

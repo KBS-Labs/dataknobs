@@ -44,7 +44,7 @@ class TestValidationConfig:
         config = ValidationConfig(
             level=ValidationLevel.ERROR,
             required_params=["name", "age"],
-            optional_params=["city", "country"]
+            optional_params=["city", "country"],
         )
         assert config.required_params == {"name", "age"}
         assert config.optional_params == {"city", "country"}
@@ -77,7 +77,7 @@ class TestRenderResult:
             params_used={"name": "Alice"},
             params_missing=["age"],
             validation_warnings=["Missing parameter: age"],
-            metadata={"template_name": "greeting"}
+            metadata={"template_name": "greeting"},
         )
         assert result.content == "Hello Alice"
         assert result.params_used == {"name": "Alice"}

@@ -17,6 +17,7 @@ upward dependencies on any consumer layer. LLM-layer reasoning
 strategies, tool routers, and downstream packages (the wizard in
 ``dataknobs-bots``, for example) consume these from here.
 """
+
 from __future__ import annotations
 
 import re
@@ -36,16 +37,38 @@ DEFAULT_NEGATION_KEYWORDS = _DEFAULT_NEGATION_KEYWORDS
 # boolean recovery (or analogous text-classification tasks) import
 # them from here directly.
 
-DEFAULT_AFFIRMATIVE_SIGNALS: frozenset[str] = frozenset({
-    "yes", "confirm", "save", "approve", "correct", "sure",
-    "ok", "okay", "agreed", "accept", "absolutely", "definitely",
-    "yep", "yeah",
-})
+DEFAULT_AFFIRMATIVE_SIGNALS: frozenset[str] = frozenset(
+    {
+        "yes",
+        "confirm",
+        "save",
+        "approve",
+        "correct",
+        "sure",
+        "ok",
+        "okay",
+        "agreed",
+        "accept",
+        "absolutely",
+        "definitely",
+        "yep",
+        "yeah",
+    }
+)
 
-DEFAULT_NEGATIVE_SIGNALS: frozenset[str] = frozenset({
-    "no", "wait", "stop", "cancel", "wrong", "redo", "nope",
-    "nah", "incorrect",
-})
+DEFAULT_NEGATIVE_SIGNALS: frozenset[str] = frozenset(
+    {
+        "no",
+        "wait",
+        "stop",
+        "cancel",
+        "wrong",
+        "redo",
+        "nope",
+        "nah",
+        "incorrect",
+    }
+)
 
 
 # ── Word-boundary tokenizer ───────────────────────────────────────────
@@ -69,16 +92,32 @@ def word_in_text(word: str, text: str) -> bool:
 # ── Intent vocabulary ────────────────────────────────────────────────
 
 
-_INTENT_ACCEPT_PHRASES: frozenset[str] = frozenset({
-    "do it", "go ahead", "sounds good", "that works",
-    "please proceed", "let's go", "alright",
-})
-_INTENT_DECLINE_PHRASES: frozenset[str] = frozenset({
-    "not really", "no thanks", "don't", "skip that",
-})
-_INTENT_UNCLEAR_PHRASES: frozenset[str] = frozenset({
-    "not sure", "maybe", "i don't know",
-})
+_INTENT_ACCEPT_PHRASES: frozenset[str] = frozenset(
+    {
+        "do it",
+        "go ahead",
+        "sounds good",
+        "that works",
+        "please proceed",
+        "let's go",
+        "alright",
+    }
+)
+_INTENT_DECLINE_PHRASES: frozenset[str] = frozenset(
+    {
+        "not really",
+        "no thanks",
+        "don't",
+        "skip that",
+    }
+)
+_INTENT_UNCLEAR_PHRASES: frozenset[str] = frozenset(
+    {
+        "not sure",
+        "maybe",
+        "i don't know",
+    }
+)
 
 
 DEFAULT_VOCABULARY: dict[str, frozenset[str]] = {
@@ -95,7 +134,7 @@ DEFAULT_LLM_PROMPT_TEMPLATE = (
     "Classify the user's reply into exactly one of these intents: "
     "{intent_list}, or null if none apply.\n\n"
     'Reply: "{message}"\n\n'
-    'Output JSON only: '
+    "Output JSON only: "
     '{{"intent": <name|null>, "extracted": <string|null>}}. '
     "Set 'extracted' to the user-named alternative only for intents "
     "that capture one ({extract_intents}); otherwise null."

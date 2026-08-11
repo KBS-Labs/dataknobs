@@ -65,9 +65,7 @@ class TestMapSectionToStage:
 
     def test_map_known_sections(self, amendment_fsm) -> None:
         """Default mapping works for known sections."""
-        reasoning = WizardReasoning(
-            wizard_fsm=amendment_fsm, allow_post_completion_edits=True
-        )
+        reasoning = WizardReasoning(wizard_fsm=amendment_fsm, allow_post_completion_edits=True)
 
         # These stages exist in the fixture
         assert reasoning._map_section_to_stage("llm") == "configure_llm"
@@ -78,9 +76,7 @@ class TestMapSectionToStage:
 
     def test_map_known_sections_case_insensitive(self, amendment_fsm) -> None:
         """Section mapping is case-insensitive."""
-        reasoning = WizardReasoning(
-            wizard_fsm=amendment_fsm, allow_post_completion_edits=True
-        )
+        reasoning = WizardReasoning(wizard_fsm=amendment_fsm, allow_post_completion_edits=True)
 
         assert reasoning._map_section_to_stage("LLM") == "configure_llm"
         assert reasoning._map_section_to_stage("Llm") == "configure_llm"
@@ -88,9 +84,7 @@ class TestMapSectionToStage:
 
     def test_map_unknown_section_returns_none(self, amendment_fsm) -> None:
         """Unknown sections return None."""
-        reasoning = WizardReasoning(
-            wizard_fsm=amendment_fsm, allow_post_completion_edits=True
-        )
+        reasoning = WizardReasoning(wizard_fsm=amendment_fsm, allow_post_completion_edits=True)
 
         assert reasoning._map_section_to_stage("unknown") is None
         assert reasoning._map_section_to_stage("") is None
@@ -98,9 +92,7 @@ class TestMapSectionToStage:
 
     def test_map_handles_whitespace(self, amendment_fsm) -> None:
         """Section names with whitespace are trimmed."""
-        reasoning = WizardReasoning(
-            wizard_fsm=amendment_fsm, allow_post_completion_edits=True
-        )
+        reasoning = WizardReasoning(wizard_fsm=amendment_fsm, allow_post_completion_edits=True)
 
         assert reasoning._map_section_to_stage("  llm  ") == "configure_llm"
         assert reasoning._map_section_to_stage("\tmodel\n") == "configure_llm"
@@ -148,9 +140,7 @@ class TestDetectAmendment:
     @pytest.mark.asyncio
     async def test_detect_amendment_wants_edit(self, amendment_fsm) -> None:
         """Detect when user wants to edit LLM config."""
-        extractor = ConfigurableExtractor(
-            result_data={"wants_edit": True, "target_section": "llm"}
-        )
+        extractor = ConfigurableExtractor(result_data={"wants_edit": True, "target_section": "llm"})
 
         reasoning = WizardReasoning(
             wizard_fsm=amendment_fsm,
@@ -184,9 +174,7 @@ class TestDetectAmendment:
             allow_post_completion_edits=True,
         )
 
-        state = WizardState(
-            current_stage="save", completed=True, data={}
-        )
+        state = WizardState(current_stage="save", completed=True, data={})
 
         result = await reasoning._detect_amendment("thanks!", state, llm=None)
 
@@ -206,9 +194,7 @@ class TestDetectAmendment:
         )
 
         state = WizardState(current_stage="save", completed=True, data={})
-        result = await reasoning._detect_amendment(
-            "change the unknown thing", state, llm=None
-        )
+        result = await reasoning._detect_amendment("change the unknown thing", state, llm=None)
 
         # Can't map to a stage
         assert result is None
@@ -283,9 +269,7 @@ stages:
   - name: done
     is_end: true
 """
-        with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".yaml", delete=False
-        ) as f:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
             f.write(config_content)
             config_path = Path(f.name)
 

@@ -180,9 +180,7 @@ class TestNoneReturnPreservation:
         ctx = ExecutionContext()
 
         func_ctx = arc._create_function_context(ctx)
-        result = await arc._execute_single_transform_async(
-            "mutate", {"x": 1}, func_ctx
-        )
+        result = await arc._execute_single_transform_async("mutate", {"x": 1}, func_ctx)
 
         assert result == {"x": 1, "added": True}
 

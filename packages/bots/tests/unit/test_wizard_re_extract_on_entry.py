@@ -49,12 +49,12 @@ def _edit_back_config(
     )
     if target_has_schema:
         builder = builder.field(
-            "value_field", field_type="string", required=True,
+            "value_field",
+            field_type="string",
+            required=True,
         )
-    builder = (
-        builder
-        .transition("done", "data.get('value_field')")
-        .stage("done", is_end=True, prompt="Complete!")
+    builder = builder.transition("done", "data.get('value_field')").stage(
+        "done", is_end=True, prompt="Complete!"
     )
     return builder.build()
 
@@ -159,7 +159,8 @@ class TestReExtractOnEntry:
     async def test_re_extract_with_no_schema_is_skipped(self) -> None:
         """Target stage with no schema silently skips re-extraction."""
         config = _edit_back_config(
-            re_extract=True, target_has_schema=False,
+            re_extract=True,
+            target_has_schema=False,
         )
 
         async with await BotTestHarness.create(
@@ -218,8 +219,7 @@ class TestReExtractOnEntry:
             .stage("source", is_start=True, prompt="Start.")
             .field("routing_field", field_type="string", required=True)
             .transition("target", "data.get('routing_field')")
-            .stage("target", prompt="Enter value.",
-                   re_extract_on_entry=True)
+            .stage("target", prompt="Enter value.", re_extract_on_entry=True)
             .field("value_field", field_type="string", required=True)
             .field("extra_field", field_type="string", required=True)
             .transition(
@@ -286,19 +286,24 @@ class TestReExtractAdvancePath:
         loader = WizardConfigLoader()
         wizard_fsm = loader.load_from_dict(config)
         reasoning = WizardReasoning(
-            wizard_fsm=wizard_fsm, strict_validation=False,
+            wizard_fsm=wizard_fsm,
+            strict_validation=False,
         )
 
         # Set up extractor: first call for source extraction, second
         # for re-extraction at target.
-        extractor = ConfigurableExtractor(results=[
-            SimpleExtractionResult(
-                data={"routing_field": "go"}, confidence=0.9,
-            ),
-            SimpleExtractionResult(
-                data={"value_field": "formal"}, confidence=0.9,
-            ),
-        ])
+        extractor = ConfigurableExtractor(
+            results=[
+                SimpleExtractionResult(
+                    data={"routing_field": "go"},
+                    confidence=0.9,
+                ),
+                SimpleExtractionResult(
+                    data={"value_field": "formal"},
+                    confidence=0.9,
+                ),
+            ]
+        )
         reasoning.set_extractor(extractor)
 
         provider = EchoProvider({"provider": "echo", "model": "test"})
@@ -313,7 +318,9 @@ class TestReExtractAdvancePath:
         state.skip_extraction = True
 
         result = await reasoning.advance(
-            "Route and set value to formal", state, llm=provider,
+            "Route and set value to formal",
+            state,
+            llm=provider,
         )
 
         # Transitioned source → target, re-extraction captured value_field,
@@ -570,11 +577,13 @@ class TestReExtractRequiredFieldsGate:
         ) as harness:
             await harness.greet()
             # Pre-populate data simulating prior visit to configure_options
-            harness.seed_wizard_data({
-                "llm_model": "",
-                "kb_enabled": True,
-                "llm_provider": "ollama",
-            })
+            harness.seed_wizard_data(
+                {
+                    "llm_model": "",
+                    "kb_enabled": True,
+                    "llm_provider": "ollama",
+                }
+            )
 
             await harness.chat("Change the tone to formal")
 
@@ -605,10 +614,12 @@ class TestReExtractRequiredFieldsGate:
             ],
         ) as harness:
             await harness.greet()
-            harness.seed_wizard_data({
-                "llm_model": None,
-                "domain_name": None,
-            })
+            harness.seed_wizard_data(
+                {
+                    "llm_model": None,
+                    "domain_name": None,
+                }
+            )
 
             await harness.chat("Change the tone to formal")
             assert harness.wizard_stage == "done"
@@ -808,14 +819,21 @@ class TestReExtractRequiredFieldsGate:
         ) as harness:
             await harness.greet()
             # Pre-populate ALL optional fields with empty strings
-            harness.seed_wizard_data({
-                field: ""
-                for field in [
-                    "llm_model", "llm_provider", "kb_enabled",
-                    "tools_enabled", "hints_enabled", "max_hints",
-                    "domain_name", "domain_id",
-                ]
-            })
+            harness.seed_wizard_data(
+                {
+                    field: ""
+                    for field in [
+                        "llm_model",
+                        "llm_provider",
+                        "kb_enabled",
+                        "tools_enabled",
+                        "hints_enabled",
+                        "max_hints",
+                        "domain_name",
+                        "domain_id",
+                    ]
+                }
+            )
 
             await harness.chat("Set tone to casual")
             assert harness.wizard_data.get("tone") == "casual"
@@ -881,7 +899,8 @@ class TestReExtractRequiredFieldsGate:
             )
             .field("tone", field_type="string")
             .transition(
-                "intermediate", "data.get('tone')",
+                "intermediate",
+                "data.get('tone')",
             )
             .stage(
                 "intermediate",
@@ -1058,12 +1077,14 @@ class TestReExtractDiverseScenarios:
         ) as harness:
             await harness.greet()
             # Simulate prior visit: language set, others partial/empty
-            harness.seed_wizard_data({
-                "language": "en",
-                "notifications": None,
-                "font_size": 14,
-                "timezone": "",
-            })
+            harness.seed_wizard_data(
+                {
+                    "language": "en",
+                    "notifications": None,
+                    "font_size": 14,
+                    "timezone": "",
+                }
+            )
 
             await harness.chat("Go to preferences and set theme to dark")
             assert harness.wizard_data.get("theme") == "dark"
@@ -1082,7 +1103,9 @@ class TestReExtractDiverseScenarios:
         async with await BotTestHarness.create(
             wizard_config=config,
             main_responses=[
-                "Welcome!", "Got it!", "Set your preferences.",
+                "Welcome!",
+                "Got it!",
+                "Set your preferences.",
             ],
             extraction_results=[
                 [{"jump_to": "preferences"}],
@@ -1239,13 +1262,15 @@ class TestReExtractDiverseScenarios:
         ) as harness:
             await harness.greet()
             # Pre-populate ALL fields with legitimate "zero" values
-            harness.seed_wizard_data({
-                "enabled": False,
-                "verbose": False,
-                "max_retries": 0,
-                "timeout": 0,
-                "log_level": "INFO",
-            })
+            harness.seed_wizard_data(
+                {
+                    "enabled": False,
+                    "verbose": False,
+                    "max_retries": 0,
+                    "timeout": 0,
+                    "log_level": "INFO",
+                }
+            )
 
             await harness.chat("Go to settings")
             # All fields filled with legitimate values, auto_advance: true

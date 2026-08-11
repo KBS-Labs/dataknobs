@@ -58,7 +58,7 @@ class PromptBuilder(BasePromptBuilder):
         library: AbstractPromptLibrary,
         adapters: Dict[str, ResourceAdapter] | None = None,
         default_validation: ValidationLevel = ValidationLevel.WARN,
-        raise_on_rag_error: bool = False
+        raise_on_rag_error: bool = False,
     ):
         """Initialize the synchronous prompt builder.
 
@@ -86,8 +86,7 @@ class PromptBuilder(BasePromptBuilder):
         for name, adapter in self.adapters.items():
             if adapter.is_async():
                 raise TypeError(
-                    f"Adapter '{name}' is async. "
-                    "Use AsyncPromptBuilder for async adapters."
+                    f"Adapter '{name}' is async. Use AsyncPromptBuilder for async adapters."
                 )
 
     def render_system_prompt(
@@ -98,7 +97,7 @@ class PromptBuilder(BasePromptBuilder):
         validation_override: ValidationLevel | None = None,
         return_rag_metadata: bool = False,
         cached_rag: Dict[str, Any] | None = None,
-        **kwargs: Any
+        **kwargs: Any,
     ) -> RenderResult:
         """Render a system prompt with parameters and optional RAG content.
 
@@ -151,7 +150,7 @@ class PromptBuilder(BasePromptBuilder):
             validation_override=validation_override,
             return_rag_metadata=return_rag_metadata,
             cached_rag=cached_rag,
-            **kwargs
+            **kwargs,
         )
 
     def render_user_prompt(
@@ -162,7 +161,7 @@ class PromptBuilder(BasePromptBuilder):
         validation_override: ValidationLevel | None = None,
         return_rag_metadata: bool = False,
         cached_rag: Dict[str, Any] | None = None,
-        **kwargs: Any
+        **kwargs: Any,
     ) -> RenderResult:
         """Render a user prompt with parameters and optional RAG content.
 
@@ -199,7 +198,7 @@ class PromptBuilder(BasePromptBuilder):
             validation_override=validation_override,
             return_rag_metadata=return_rag_metadata,
             cached_rag=cached_rag,
-            **kwargs
+            **kwargs,
         )
 
     def _render_prompt_impl(
@@ -212,7 +211,7 @@ class PromptBuilder(BasePromptBuilder):
         validation_override: ValidationLevel | None,
         return_rag_metadata: bool = False,
         cached_rag: Dict[str, Any] | None = None,
-        **kwargs: Any
+        **kwargs: Any,
     ) -> RenderResult:
         """Internal method to render a prompt template synchronously.
 
@@ -253,7 +252,7 @@ class PromptBuilder(BasePromptBuilder):
                     prompt_type=prompt_type,
                     params=all_params,
                     capture_metadata=return_rag_metadata,
-                    **kwargs
+                    **kwargs,
                 )
 
             # Merge RAG content into parameters
@@ -267,7 +266,7 @@ class PromptBuilder(BasePromptBuilder):
             template=template,
             params=all_params,
             validation=validation_config,
-            template_metadata=template_metadata
+            template_metadata=template_metadata,
         )
 
         # Attach RAG metadata if requested
@@ -275,12 +274,14 @@ class PromptBuilder(BasePromptBuilder):
             result.rag_metadata = rag_metadata
 
         # Add builder metadata
-        result.metadata.update({
-            "prompt_name": prompt_name,
-            "prompt_type": prompt_type,
-            "include_rag": include_rag,
-            "used_cached_rag": cached_rag is not None,
-        })
+        result.metadata.update(
+            {
+                "prompt_name": prompt_name,
+                "prompt_type": prompt_type,
+                "include_rag": include_rag,
+                "used_cached_rag": cached_rag is not None,
+            }
+        )
 
         return result
 
@@ -290,7 +291,7 @@ class PromptBuilder(BasePromptBuilder):
         prompt_type: str,
         params: Dict[str, Any],
         capture_metadata: bool = False,
-        **kwargs: Any
+        **kwargs: Any,
     ) -> tuple[Dict[str, str], Dict[str, Any] | None]:
         """Execute RAG searches and format results for injection.
 
@@ -308,9 +309,7 @@ class PromptBuilder(BasePromptBuilder):
         """
         # Get RAG configurations for this prompt
         rag_configs = self.library.get_prompt_rag_configs(
-            prompt_name=prompt_name,
-            prompt_type=prompt_type,
-            **kwargs
+            prompt_name=prompt_name, prompt_type=prompt_type, **kwargs
         )
 
         if not rag_configs:
@@ -346,18 +345,15 @@ class PromptBuilder(BasePromptBuilder):
                     rag_content[placeholder] = ""
                     if capture_metadata and rag_metadata is not None:
                         from datetime import datetime
+
                         rag_metadata[placeholder] = {
                             "error": str(e),
-                            "timestamp": datetime.now().isoformat()
+                            "timestamp": datetime.now().isoformat(),
                         }
 
         return rag_content, rag_metadata
 
-    def _execute_single_rag_search(
-        self,
-        rag_config: RAGConfig,
-        params: Dict[str, Any]
-    ) -> str:
+    def _execute_single_rag_search(self, rag_config: RAGConfig, params: Dict[str, Any]) -> str:
         """Execute a single RAG search and format results.
 
         Args:
@@ -395,17 +391,13 @@ class PromptBuilder(BasePromptBuilder):
 
         # Format results
         formatted_content = self._format_rag_results(
-            results=search_results,
-            rag_config=rag_config,
-            params=params
+            results=search_results, rag_config=rag_config, params=params
         )
 
         return formatted_content
 
     def _execute_single_rag_with_metadata(
-        self,
-        rag_config: RAGConfig,
-        params: Dict[str, Any]
+        self, rag_config: RAGConfig, params: Dict[str, Any]
     ) -> tuple[str, Dict[str, Any]]:
         """Execute a single RAG search with metadata capture.
 
@@ -464,9 +456,7 @@ class PromptBuilder(BasePromptBuilder):
 
         # Format results
         formatted_content = self._format_rag_results(
-            results=search_results,
-            rag_config=rag_config,
-            params=params
+            results=search_results, rag_config=rag_config, params=params
         )
 
         # Build metadata

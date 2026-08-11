@@ -184,9 +184,7 @@ def test_mixing_typed_config_with_kwargs_raises(
     ADOPTERS,
     ids=_IDS,
 )
-def test_default_construction(
-    consumer_cls, config_cls, _typed_config, _equivalent_dict
-) -> None:
+def test_default_construction(consumer_cls, config_cls, _typed_config, _equivalent_dict) -> None:
     """Every strategy config is all-default — construction with no args works."""
     obj = consumer_cls()
     assert isinstance(obj.config, config_cls)
@@ -198,9 +196,7 @@ def test_default_construction(
     ADOPTERS,
     ids=_IDS,
 )
-def test_config_roundtrip(
-    _consumer_cls, _config_cls, typed_config, _equivalent_dict
-) -> None:
+def test_config_roundtrip(_consumer_cls, _config_cls, typed_config, _equivalent_dict) -> None:
     """Each strategy config round-trips through from_dict/to_dict."""
     assert_structured_config_roundtrip(typed_config)
 
@@ -231,9 +227,7 @@ def test_simple_setup_binds_greeting_template() -> None:
 
 
 def test_react_setup_binds_scalars_and_defaults_collaborators() -> None:
-    strat = ReActReasoning.from_config(
-        {"max_iterations": 7, "verbose": True, "store_trace": True}
-    )
+    strat = ReActReasoning.from_config({"max_iterations": 7, "verbose": True, "store_trace": True})
     assert strat.max_iterations == 7
     assert strat.verbose is True
     assert strat.store_trace is True
@@ -410,9 +404,7 @@ def test_wizard_is_consumer_and_parity_holds() -> None:
     the guard's MRO check is exempt for an ``__init__``-defining class.
     """
     assert issubclass(WizardReasoning, StructuredConfigConsumer)
-    assert_structured_config_consumer(
-        WizardReasoning, ignore_params=_WIZARD_IGNORE_PARAMS
-    )
+    assert_structured_config_consumer(WizardReasoning, ignore_params=_WIZARD_IGNORE_PARAMS)
 
 
 def test_wizard_from_config_carries_real_config() -> None:

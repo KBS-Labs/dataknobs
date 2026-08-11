@@ -100,16 +100,16 @@ class MarkdownParser:
     """
 
     # Regex patterns for markdown constructs
-    HEADING_PATTERN = re.compile(r'^(#{1,6})\s+(.+)$')
-    FENCED_CODE_START = re.compile(r'^```(\w*).*$')
-    FENCED_CODE_END = re.compile(r'^```\s*$')
-    INDENTED_CODE = re.compile(r'^(    |\t)(.*)$')
-    HORIZONTAL_RULE = re.compile(r'^(\*{3,}|-{3,}|_{3,})\s*$')
-    UNORDERED_LIST = re.compile(r'^(\s*)([-*+])\s+(.+)$')
-    ORDERED_LIST = re.compile(r'^(\s*)(\d+\.)\s+(.+)$')
-    BLOCKQUOTE = re.compile(r'^>\s*(.*)$')
-    TABLE_ROW = re.compile(r'^\|(.+)\|$')
-    TABLE_SEPARATOR = re.compile(r'^\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?\s*$')
+    HEADING_PATTERN = re.compile(r"^(#{1,6})\s+(.+)$")
+    FENCED_CODE_START = re.compile(r"^```(\w*).*$")
+    FENCED_CODE_END = re.compile(r"^```\s*$")
+    INDENTED_CODE = re.compile(r"^(    |\t)(.*)$")
+    HORIZONTAL_RULE = re.compile(r"^(\*{3,}|-{3,}|_{3,})\s*$")
+    UNORDERED_LIST = re.compile(r"^(\s*)([-*+])\s+(.+)$")
+    ORDERED_LIST = re.compile(r"^(\s*)(\d+\.)\s+(.+)$")
+    BLOCKQUOTE = re.compile(r"^>\s*(.*)$")
+    TABLE_ROW = re.compile(r"^\|(.+)\|$")
+    TABLE_SEPARATOR = re.compile(r"^\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?\s*$")
 
     def __init__(
         self,
@@ -206,9 +206,7 @@ class MarkdownParser:
                     char_end=ce,
                 )
 
-                current_parent, _ = self._find_heading_parent(
-                    root, current_parent, level
-                )
+                current_parent, _ = self._find_heading_parent(root, current_parent, level)
 
                 heading_node = current_parent.add_child(node_data)
                 current_parent = heading_node
@@ -324,7 +322,7 @@ class MarkdownParser:
                 continue
 
             # Default: body text
-            text = line.rstrip('\n')
+            text = line.rstrip("\n")
             cs, ce = self._char_span(i, i, lines)
 
             if self.max_line_length and len(text) > self.max_line_length:
@@ -379,7 +377,7 @@ class MarkdownParser:
         """
         if isinstance(source, str):
             return iter(source.splitlines())
-        elif hasattr(source, 'read'):
+        elif hasattr(source, "read"):
             # File-like object
             return iter(source)
         else:
@@ -406,7 +404,7 @@ class MarkdownParser:
         while i < len(lines):
             if self.FENCED_CODE_END.match(lines[i]):
                 return code_lines, i - start_idx + 1
-            code_lines.append(lines[i].rstrip('\n'))
+            code_lines.append(lines[i].rstrip("\n"))
             i += 1
 
         # No closing fence found, treat as code anyway
@@ -470,7 +468,7 @@ class MarkdownParser:
         while i < len(lines):
             if not self.TABLE_ROW.match(lines[i]):
                 break
-            table_lines.append(lines[i].rstrip('\n'))
+            table_lines.append(lines[i].rstrip("\n"))
             i += 1
 
         return table_lines, i - start_idx
@@ -507,12 +505,12 @@ class MarkdownParser:
                 match = self.UNORDERED_LIST.match(line)
 
             if match:
-                list_lines.append(line.rstrip('\n'))
+                list_lines.append(line.rstrip("\n"))
                 i += 1
-            elif line.strip() and line.startswith(('  ', '\t')):
+            elif line.strip() and line.startswith(("  ", "\t")):
                 # Continuation line (indented)
                 if list_lines:
-                    list_lines.append(line.rstrip('\n'))
+                    list_lines.append(line.rstrip("\n"))
                     i += 1
                 else:
                     break
@@ -520,9 +518,11 @@ class MarkdownParser:
                 # Empty line might be part of list or end it
                 # Look ahead to see if more list items follow
                 if i + 1 < len(lines):
-                    next_match = (self.ORDERED_LIST.match(lines[i + 1])
-                                  if is_ordered
-                                  else self.UNORDERED_LIST.match(lines[i + 1]))
+                    next_match = (
+                        self.ORDERED_LIST.match(lines[i + 1])
+                        if is_ordered
+                        else self.UNORDERED_LIST.match(lines[i + 1])
+                    )
                     if next_match:
                         list_lines.append("")
                         i += 1
@@ -616,7 +616,7 @@ class MarkdownParser:
         chunks = []
 
         # Try to split at sentence boundaries
-        sentences = re.split(r'([.!?]+\s+)', text)
+        sentences = re.split(r"([.!?]+\s+)", text)
         current_chunk = ""
 
         for segment in sentences:

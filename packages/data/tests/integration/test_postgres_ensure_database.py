@@ -99,15 +99,19 @@ class TestAsyncEnsureDatabase:
 
     @pytest.mark.asyncio
     async def test_creates_database_if_missing(
-        self, unique_db_name: str, postgres_connection_params: dict,
+        self,
+        unique_db_name: str,
+        postgres_connection_params: dict,
     ) -> None:
         assert not _database_exists(postgres_connection_params, unique_db_name)
 
-        db = AsyncPostgresDatabase(config={
-            **postgres_connection_params,
-            "database": unique_db_name,
-            "table": "test_records",
-        })
+        db = AsyncPostgresDatabase(
+            config={
+                **postgres_connection_params,
+                "database": unique_db_name,
+                "table": "test_records",
+            }
+        )
 
         await db.connect()
         try:
@@ -121,48 +125,58 @@ class TestAsyncEnsureDatabase:
 
     @pytest.mark.asyncio
     async def test_skips_existing_database(
-        self, unique_db_name: str, postgres_connection_params: dict,
+        self,
+        unique_db_name: str,
+        postgres_connection_params: dict,
     ) -> None:
         """No error when database already exists."""
         _pre_create_database(postgres_connection_params, unique_db_name)
         assert _database_exists(postgres_connection_params, unique_db_name)
 
-        db = AsyncPostgresDatabase(config={
-            **postgres_connection_params,
-            "database": unique_db_name,
-            "table": "test_records",
-        })
+        db = AsyncPostgresDatabase(
+            config={
+                **postgres_connection_params,
+                "database": unique_db_name,
+                "table": "test_records",
+            }
+        )
 
         await db.connect()
         await db.close()
 
     @pytest.mark.asyncio
     async def test_disabled_fails_on_missing_database(
-        self, postgres_connection_params: dict,
+        self,
+        postgres_connection_params: dict,
     ) -> None:
         """With ensure_database=False, missing database raises InvalidCatalogNameError."""
         missing_name = f"dk_noexist_{uuid.uuid4().hex[:8]}"
         assert not _database_exists(postgres_connection_params, missing_name)
 
-        db = AsyncPostgresDatabase(config={
-            **postgres_connection_params,
-            "database": missing_name,
-            "table": "test_records",
-            "ensure_database": False,
-        })
+        db = AsyncPostgresDatabase(
+            config={
+                **postgres_connection_params,
+                "database": missing_name,
+                "table": "test_records",
+                "ensure_database": False,
+            }
+        )
 
         with pytest.raises(asyncpg.InvalidCatalogNameError):
             await db.connect()
 
     @pytest.mark.asyncio
     async def test_existing_database_no_maintenance_connection(
-        self, postgres_connection_params: dict,
+        self,
+        postgres_connection_params: dict,
     ) -> None:
         """Connecting to an existing DB should not need the maintenance DB."""
-        db = AsyncPostgresDatabase(config={
-            **postgres_connection_params,
-            "table": "test_no_maintenance",
-        })
+        db = AsyncPostgresDatabase(
+            config={
+                **postgres_connection_params,
+                "table": "test_no_maintenance",
+            }
+        )
 
         # Should succeed — the database already exists, so no maintenance
         # DB connection is attempted (catch-and-create only fires on error).
@@ -171,7 +185,9 @@ class TestAsyncEnsureDatabase:
 
     @pytest.mark.asyncio
     async def test_creates_database_with_connection_string(
-        self, unique_db_name: str, postgres_connection_params: dict,
+        self,
+        unique_db_name: str,
+        postgres_connection_params: dict,
     ) -> None:
         """Async backend auto-creates DB when using connection_string config."""
         params = postgres_connection_params
@@ -179,10 +195,12 @@ class TestAsyncEnsureDatabase:
             f"postgresql://{params['user']}:{params['password']}"
             f"@{params['host']}:{params['port']}/{unique_db_name}"
         )
-        db = AsyncPostgresDatabase(config={
-            "connection_string": conn_str,
-            "table": "test_records",
-        })
+        db = AsyncPostgresDatabase(
+            config={
+                "connection_string": conn_str,
+                "table": "test_records",
+            }
+        )
 
         await db.connect()
         try:
@@ -195,15 +213,19 @@ class TestSyncEnsureDatabase:
     """Sync backend auto-create database tests."""
 
     def test_creates_database_if_missing(
-        self, unique_db_name: str, postgres_connection_params: dict,
+        self,
+        unique_db_name: str,
+        postgres_connection_params: dict,
     ) -> None:
         assert not _database_exists(postgres_connection_params, unique_db_name)
 
-        db = SyncPostgresDatabase(config={
-            **postgres_connection_params,
-            "database": unique_db_name,
-            "table": "test_records",
-        })
+        db = SyncPostgresDatabase(
+            config={
+                **postgres_connection_params,
+                "database": unique_db_name,
+                "table": "test_records",
+            }
+        )
 
         db.connect()
         try:
@@ -216,51 +238,63 @@ class TestSyncEnsureDatabase:
             db.close()
 
     def test_skips_existing_database(
-        self, unique_db_name: str, postgres_connection_params: dict,
+        self,
+        unique_db_name: str,
+        postgres_connection_params: dict,
     ) -> None:
         """No error when database already exists."""
         _pre_create_database(postgres_connection_params, unique_db_name)
 
-        db = SyncPostgresDatabase(config={
-            **postgres_connection_params,
-            "database": unique_db_name,
-            "table": "test_records",
-        })
+        db = SyncPostgresDatabase(
+            config={
+                **postgres_connection_params,
+                "database": unique_db_name,
+                "table": "test_records",
+            }
+        )
 
         db.connect()
         db.close()
 
     def test_disabled_fails_on_missing_database(
-        self, postgres_connection_params: dict,
+        self,
+        postgres_connection_params: dict,
     ) -> None:
         """With ensure_database=False, missing database raises OperationalError."""
         missing_name = f"dk_noexist_{uuid.uuid4().hex[:8]}"
         assert not _database_exists(postgres_connection_params, missing_name)
 
-        db = SyncPostgresDatabase(config={
-            **postgres_connection_params,
-            "database": missing_name,
-            "table": "test_records",
-            "ensure_database": False,
-        })
+        db = SyncPostgresDatabase(
+            config={
+                **postgres_connection_params,
+                "database": missing_name,
+                "table": "test_records",
+                "ensure_database": False,
+            }
+        )
 
         with pytest.raises(psycopg2.OperationalError):
             db.connect()
 
     def test_existing_database_no_maintenance_connection(
-        self, postgres_connection_params: dict,
+        self,
+        postgres_connection_params: dict,
     ) -> None:
         """Connecting to an existing DB should not need the maintenance DB."""
-        db = SyncPostgresDatabase(config={
-            **postgres_connection_params,
-            "table": "test_no_maintenance",
-        })
+        db = SyncPostgresDatabase(
+            config={
+                **postgres_connection_params,
+                "table": "test_no_maintenance",
+            }
+        )
 
         db.connect()
         db.close()
 
     def test_creates_database_with_connection_string(
-        self, unique_db_name: str, postgres_connection_params: dict,
+        self,
+        unique_db_name: str,
+        postgres_connection_params: dict,
     ) -> None:
         """Sync backend auto-creates DB when using connection_string config."""
         params = postgres_connection_params
@@ -268,10 +302,12 @@ class TestSyncEnsureDatabase:
             f"postgresql://{params['user']}:{params['password']}"
             f"@{params['host']}:{params['port']}/{unique_db_name}"
         )
-        db = SyncPostgresDatabase(config={
-            "connection_string": conn_str,
-            "table": "test_records",
-        })
+        db = SyncPostgresDatabase(
+            config={
+                "connection_string": conn_str,
+                "table": "test_records",
+            }
+        )
 
         db.connect()
         try:

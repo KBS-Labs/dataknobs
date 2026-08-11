@@ -19,12 +19,13 @@ source "$ROOT_DIR/bin/package-discovery.sh"
 
 # Default values
 TARGETS=()
+PRINT_FORMAT_TARGETS=false
 
 # Usage function
 usage() {
     echo "Usage: $0 [OPTIONS] [TARGETS...]"
     echo ""
-    echo "Auto-fix lint findings using ruff"
+    echo "Auto-fix lint findings and formatting using ruff"
     echo ""
     echo "Arguments:"
     echo "  TARGETS               Packages, directories, or files to fix"
@@ -35,6 +36,10 @@ usage() {
     echo "                        If not specified, fixes all packages"
     echo ""
     echo "Options:"
+    echo "      --print-format-targets"
+    echo "                        Print what the formatter pass would rewrite and"
+    echo "                        exit, fixing nothing. The check names this set"
+    echo "                        too, and the two have to agree"
     echo "  -h, --help            Show this help message"
     echo ""
     echo "Examples:"
@@ -43,14 +48,18 @@ usage() {
     echo "  $0 packages/utils/src                     # Fix specific directory"
     echo "  $0 packages/utils/src/dataknobs_utils/*.py  # Fix specific files"
     echo ""
-    echo "Formatting is not run here and is not enforced by any check. See"
-    echo "'dk format' if you want it."
+    echo "Runs ruff's linter with --fix and then its formatter, which is what"
+    echo "bin/validate.sh checks. Both use the root pyproject.toml."
     exit 0
 }
 
 # Parse arguments
 while [[ $# -gt 0 ]]; do
     case $1 in
+        --print-format-targets)
+            PRINT_FORMAT_TARGETS=true
+            shift
+            ;;
         -h|--help)
             usage
             ;;
@@ -81,10 +90,12 @@ done <<< "${_discovered// /$'\n'}"
 
 # Determine what to fix
 FIX_TARGETS=()
+FIX_PACKAGES=()
 
 if [[ ${#TARGETS[@]} -eq 0 ]]; then
     # No targets specified, fix all packages
     for package in "${ALL_PACKAGES[@]}"; do
+        FIX_PACKAGES+=("$package")
         if [[ -d "packages/$package/src" ]]; then
             FIX_TARGETS+=("packages/$package/src")
         fi
@@ -105,6 +116,7 @@ else
     for target in "${TARGETS[@]}"; do
         if [[ -d "packages/$target" ]]; then
             # It's a package name
+            FIX_PACKAGES+=("$target")
             if [[ -d "packages/$target/src" ]]; then
                 FIX_TARGETS+=("packages/$target/src")
             fi
@@ -139,12 +151,63 @@ if [[ ${#FIX_TARGETS[@]} -eq 0 ]]; then
     exit 1
 fi
 
+# The formatter's population, kept separate from the linter's for the reason
+# validate.sh states: the quality contract enforces `format` at ceiling 0 over
+# cells whose ruff tier is deferred, so the two tools do not share a target set.
+# The linter's pass must NOT be widened to match — running `ruff check --fix`
+# over a deferred cell would rewrite files nothing asked to be clean.
+#
+# Widened the same way validate.sh widens its own, from the same declaration:
+# each in-scope package contributes its whole format set, and anything the
+# caller named directly passes through.
+FORMAT_TARGETS=()
+for package in ${FIX_PACKAGES[@]+"${FIX_PACKAGES[@]}"}; do
+    for _subdir in $(format_subdirs); do
+        if [[ -d "packages/$package/$_subdir" ]]; then
+            FORMAT_TARGETS+=("packages/$package/$_subdir")
+        fi
+    done
+done
+
+# Only the entries an in-scope package already contributed are dropped. A
+# caller naming packages/utils/src directly puts no package in FIX_PACKAGES,
+# so that path must pass through rather than match a pattern and vanish.
+for target in "${FIX_TARGETS[@]}"; do
+    _contributed=false
+    for package in ${FIX_PACKAGES[@]+"${FIX_PACKAGES[@]}"}; do
+        if [[ "$target" == "packages/$package/src" || "$target" == "packages/$package/tests" ]]; then
+            _contributed=true
+            break
+        fi
+    done
+    # `if` rather than `[[ ... ]] && ...`, for the reason validate.sh gives at
+    # the same spot: as the last command in the body it would make the loop's
+    # exit status the test's, and errexit would abort on a false final one.
+    if [[ "$_contributed" == false ]]; then
+        FORMAT_TARGETS+=("$target")
+    fi
+done
+
+if [[ "$PRINT_FORMAT_TARGETS" == true ]]; then
+    printf '%s\n' "${FORMAT_TARGETS[@]}"
+    exit 0
+fi
+
 echo -e "${YELLOW}Fixing code issues...${NC}"
 
 # Fix each target
+#
+# Two passes over two populations, rather than one pass doing both to each
+# target. The formatter's set is the wider one, and running the linter's --fix
+# over the difference would rewrite files whose ruff tier is deferred -- churn
+# nobody asked for, in cells the contract does not hold to a lint ceiling.
+#
+# The linter goes first for the reason the single loop had it second: its fixes
+# move code and the formatter then lays it out. Whole-pass rather than
+# per-target only changes the interleaving, and no target is in both orders.
 for target in "${FIX_TARGETS[@]}"; do
     echo -e "\n${YELLOW}Fixing $target...${NC}"
-    
+
     # Through `uv run`: the workspace pins the ruff that produced the findings
     # being fixed here. A bare `ruff` resolves against PATH, which this
     # workspace does not populate — so this step printed "some issues remain
@@ -157,6 +220,18 @@ for target in "${FIX_TARGETS[@]}"; do
         echo -e "${GREEN}✓ Ruff auto-fix completed${NC}"
     else
         echo -e "${YELLOW}⚠ Some issues remain that need manual fixing${NC}"
+    fi
+done
+
+# The write side of validate.sh's format check, over the set that check reads.
+# A target the check flags and this pass cannot reach is a finding with no
+# remedy, which is the fault test_remediation_paths.py exists to refuse.
+for target in "${FORMAT_TARGETS[@]}"; do
+    echo -e "\n${YELLOW}Formatting $target...${NC}"
+    if uv run ruff format "$target" --config "$ROOT_DIR/pyproject.toml"; then
+        echo -e "${GREEN}✓ Formatting applied${NC}"
+    else
+        echo -e "${YELLOW}⚠ The formatter failed on this target${NC}"
     fi
 done
 

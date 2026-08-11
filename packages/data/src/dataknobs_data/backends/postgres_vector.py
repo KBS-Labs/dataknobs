@@ -16,10 +16,10 @@ logger = logging.getLogger(__name__)
 
 def check_pgvector_extension_sync(db: Any) -> bool:
     """Check if pgvector extension is installed (sync version).
-    
+
     Args:
         db: PostgresDB connection object
-        
+
     Returns:
         True if pgvector is installed, False otherwise
     """
@@ -37,10 +37,10 @@ def check_pgvector_extension_sync(db: Any) -> bool:
 
 def install_pgvector_extension_sync(db: Any) -> bool:
     """Install pgvector extension if not already installed (sync version).
-    
+
     Args:
         db: PostgresDB connection object
-        
+
     Returns:
         True if installation successful or already installed
     """
@@ -61,10 +61,10 @@ def install_pgvector_extension_sync(db: Any) -> bool:
 
 async def check_pgvector_extension(conn: asyncpg.Connection) -> bool:
     """Check if pgvector extension is installed.
-    
+
     Args:
         conn: AsyncPG connection
-        
+
     Returns:
         True if pgvector is installed, False otherwise
     """
@@ -78,10 +78,10 @@ async def check_pgvector_extension(conn: asyncpg.Connection) -> bool:
 
 async def install_pgvector_extension(conn: asyncpg.Connection) -> bool:
     """Install pgvector extension if not already installed.
-    
+
     Args:
         conn: AsyncPG connection
-        
+
     Returns:
         True if installation successful or already installed
     """
@@ -102,10 +102,10 @@ async def install_pgvector_extension(conn: asyncpg.Connection) -> bool:
 
 def get_vector_operator(metric: str) -> str:
     """Get PostgreSQL vector operator for distance metric.
-    
+
     Args:
         metric: Distance metric (cosine, euclidean, inner_product)
-        
+
     Returns:
         PostgreSQL operator string
     """
@@ -121,10 +121,10 @@ def get_vector_operator(metric: str) -> str:
 
 def get_optimal_index_type(num_vectors: int) -> tuple[str, dict[str, Any]]:
     """Determine optimal index type based on dataset size.
-    
+
     Args:
         num_vectors: Number of vectors in dataset
-        
+
     Returns:
         Tuple of (index_type, index_parameters)
     """
@@ -133,7 +133,7 @@ def get_optimal_index_type(num_vectors: int) -> tuple[str, dict[str, Any]]:
         return "ivfflat", {"lists": min(100, num_vectors // 10)}
     elif num_vectors < 1000000:
         # For medium datasets, use IVFFlat with standard parameters
-        lists = int(num_vectors ** 0.5)  # Square root heuristic
+        lists = int(num_vectors**0.5)  # Square root heuristic
         return "ivfflat", {"lists": min(lists, 5000)}
     else:
         # For large datasets, consider HNSW (if available in pgvector version)
@@ -149,7 +149,7 @@ def build_vector_index_sql(
     metric: str = "cosine",
     index_type: str = "ivfflat",
     index_params: dict[str, Any] | None = None,
-    field_name: str | None = None
+    field_name: str | None = None,
 ) -> str:
     """Build SQL for creating a vector index.
 
@@ -229,16 +229,17 @@ def build_vector_index_sql(
 
 def sanitize_identifier(name: str) -> str:
     """Sanitize a string to be used as a database identifier.
-    
+
     Removes or replaces special characters that are not valid in identifiers.
-    
+
     Args:
         name: Raw string that may contain special characters
-        
+
     Returns:
         Sanitized string safe for use as identifier
     """
     import re
+
     # Remove SQL operators and special chars
     name = re.sub(r"[->()'\[\]:,\s]+", "_", name)
     # Remove multiple underscores
@@ -250,14 +251,15 @@ def sanitize_identifier(name: str) -> str:
 
 def extract_field_name(column_expression: str) -> str:
     """Extract field name from a column expression.
-    
+
     Args:
         column_expression: SQL expression like "(data->'field'->>'value')::vector"
-        
+
     Returns:
         Extracted field name or 'vector' as fallback
     """
     import re
+
     # Try to extract from JSON path expressions
     patterns = [
         r"data->'([^']+)'",  # data->'field'
@@ -278,12 +280,12 @@ def extract_field_name(column_expression: str) -> str:
 
 def get_vector_index_name(table_name: str, field_name: str, metric: str = "cosine") -> str:
     """Generate consistent index name for vector field.
-    
+
     Args:
         table_name: Name of the table
         field_name: Name of the vector field (or column expression)
         metric: Distance metric
-        
+
     Returns:
         Index name string
     """
@@ -295,14 +297,16 @@ def get_vector_index_name(table_name: str, field_name: str, metric: str = "cosin
     return f"idx_{clean_table}_{clean_field}_{clean_metric}"
 
 
-def build_vector_column_expression(field_name: str, dimensions: int | None = None, for_index: bool = False) -> str:
+def build_vector_column_expression(
+    field_name: str, dimensions: int | None = None, for_index: bool = False
+) -> str:
     """Build SQL expression for vector column from JSON field.
-    
+
     Args:
         field_name: Name of the vector field in JSON
         dimensions: Optional dimensions for casting
         for_index: Whether this is for index creation (needs special handling)
-        
+
     Returns:
         SQL expression for vector column
     """
@@ -335,14 +339,16 @@ def get_vector_count_sql(q_schema_name: str, q_table_name: str, field_name: str)
     """
 
 
-def get_index_check_sql(schema_name: str, table_name: str, field_name: str) -> tuple[str, list[Any]]:
+def get_index_check_sql(
+    schema_name: str, table_name: str, field_name: str
+) -> tuple[str, list[Any]]:
     """Get SQL to check if vector index exists.
-    
+
     Args:
         schema_name: Database schema
-        table_name: Table name  
+        table_name: Table name
         field_name: Vector field name
-        
+
     Returns:
         Tuple of (SQL query, parameters)
     """
@@ -359,14 +365,14 @@ def get_index_check_sql(schema_name: str, table_name: str, field_name: str) -> t
 
 def format_vector_for_postgres(vector: np.ndarray | list[float]) -> str:
     """Format vector for PostgreSQL vector column.
-    
+
     Args:
         vector: Numpy array or list of floats
-        
+
     Returns:
         PostgreSQL vector string format
     """
-    if hasattr(vector, 'tolist'):
+    if hasattr(vector, "tolist"):
         vector = vector.tolist()
 
     # Format as PostgreSQL vector literal
@@ -375,10 +381,10 @@ def format_vector_for_postgres(vector: np.ndarray | list[float]) -> str:
 
 def parse_postgres_vector(vector_str: str) -> list[float]:
     """Parse PostgreSQL vector string to list of floats.
-    
+
     Args:
         vector_str: PostgreSQL vector string like '[0.1,0.2,0.3]'
-        
+
     Returns:
         List of floats
     """

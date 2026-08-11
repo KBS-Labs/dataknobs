@@ -20,11 +20,7 @@ class AbstractPromptLibrary(ABC):
     # ===== System Prompts =====
 
     @abstractmethod
-    def get_system_prompt(
-        self,
-        name: str,
-        **kwargs: Any
-    ) -> PromptTemplateDict | None:
+    def get_system_prompt(self, name: str, **kwargs: Any) -> PromptTemplateDict | None:
         """Retrieve a system prompt template by name.
 
         Args:
@@ -48,11 +44,7 @@ class AbstractPromptLibrary(ABC):
     # ===== User Prompts =====
 
     @abstractmethod
-    def get_user_prompt(
-        self,
-        name: str,
-        **kwargs: Any
-    ) -> PromptTemplateDict | None:
+    def get_user_prompt(self, name: str, **kwargs: Any) -> PromptTemplateDict | None:
         """Retrieve a user prompt template by name.
 
         Args:
@@ -76,11 +68,7 @@ class AbstractPromptLibrary(ABC):
     # ===== Message Indexes =====
 
     @abstractmethod
-    def get_message_index(
-        self,
-        name: str,
-        **kwargs: Any
-    ) -> MessageIndex | None:
+    def get_message_index(self, name: str, **kwargs: Any) -> MessageIndex | None:
         """Retrieve a message index by name.
 
         Args:
@@ -104,11 +92,7 @@ class AbstractPromptLibrary(ABC):
     # ===== RAG Configurations =====
 
     @abstractmethod
-    def get_rag_config(
-        self,
-        name: str,
-        **kwargs: Any
-    ) -> RAGConfig | None:
+    def get_rag_config(self, name: str, **kwargs: Any) -> RAGConfig | None:
         """Retrieve a standalone RAG configuration by name.
 
         Standalone RAG configs can be referenced from prompts or used directly.
@@ -124,10 +108,7 @@ class AbstractPromptLibrary(ABC):
 
     @abstractmethod
     def get_prompt_rag_configs(
-        self,
-        prompt_name: str,
-        prompt_type: str = "user",
-        **kwargs: Any
+        self, prompt_name: str, prompt_type: str = "user", **kwargs: Any
     ) -> List[RAGConfig]:
         """Retrieve RAG configurations for a specific prompt.
 

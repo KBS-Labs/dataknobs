@@ -41,7 +41,8 @@ def _make_evaluation(
         rubric_version="1.0.0",
         target_id="art_001",
         target_type="content",
-        criterion_results=criterion_results or [
+        criterion_results=criterion_results
+        or [
             CriterionResult(
                 criterion_id="clarity",
                 level_id="excellent",
@@ -197,14 +198,22 @@ class TestFormatCriterionDetail:
 
 class TestFormatComparison:
     def test_two_evaluations(self) -> None:
-        eval1 = _make_evaluation(passed=False, score=0.5, criterion_results=[
-            CriterionResult(criterion_id="clarity", level_id="fail", score=0.3),
-            CriterionResult(criterion_id="accuracy", level_id="pass", score=0.7),
-        ])
-        eval2 = _make_evaluation(passed=True, score=0.85, criterion_results=[
-            CriterionResult(criterion_id="clarity", level_id="excellent", score=0.9),
-            CriterionResult(criterion_id="accuracy", level_id="pass", score=0.8),
-        ])
+        eval1 = _make_evaluation(
+            passed=False,
+            score=0.5,
+            criterion_results=[
+                CriterionResult(criterion_id="clarity", level_id="fail", score=0.3),
+                CriterionResult(criterion_id="accuracy", level_id="pass", score=0.7),
+            ],
+        )
+        eval2 = _make_evaluation(
+            passed=True,
+            score=0.85,
+            criterion_results=[
+                CriterionResult(criterion_id="clarity", level_id="excellent", score=0.9),
+                CriterionResult(criterion_id="accuracy", level_id="pass", score=0.8),
+            ],
+        )
         result = format_comparison([eval1, eval2])
 
         assert "## Evaluation Comparison" in result
@@ -226,15 +235,24 @@ class TestFormatComparison:
 
     def test_three_evaluations_no_change_column(self) -> None:
         evals = [
-            _make_evaluation(score=0.5, criterion_results=[
-                CriterionResult(criterion_id="c1", level_id="pass", score=0.5),
-            ]),
-            _make_evaluation(score=0.7, criterion_results=[
-                CriterionResult(criterion_id="c1", level_id="pass", score=0.7),
-            ]),
-            _make_evaluation(score=0.9, criterion_results=[
-                CriterionResult(criterion_id="c1", level_id="excellent", score=0.9),
-            ]),
+            _make_evaluation(
+                score=0.5,
+                criterion_results=[
+                    CriterionResult(criterion_id="c1", level_id="pass", score=0.5),
+                ],
+            ),
+            _make_evaluation(
+                score=0.7,
+                criterion_results=[
+                    CriterionResult(criterion_id="c1", level_id="pass", score=0.7),
+                ],
+            ),
+            _make_evaluation(
+                score=0.9,
+                criterion_results=[
+                    CriterionResult(criterion_id="c1", level_id="excellent", score=0.9),
+                ],
+            ),
         ]
         result = format_comparison(evals)
 

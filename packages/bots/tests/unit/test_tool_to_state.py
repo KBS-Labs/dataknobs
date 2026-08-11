@@ -148,7 +148,9 @@ class TestToolResultMappingEntry:
 
     def test_frozen(self) -> None:
         entry = ToolResultMappingEntry(
-            tool_name="t", params={}, mapping={},
+            tool_name="t",
+            params={},
+            mapping={},
         )
         with pytest.raises(AttributeError):
             entry.tool_name = "other"  # type: ignore[misc]
@@ -179,6 +181,7 @@ class TestConfigLoading:
 
     def test_known_stage_fields_includes_tool_result_mapping(self) -> None:
         from dataknobs_bots.reasoning.wizard_loader import KNOWN_STAGE_FIELDS
+
         assert "tool_result_mapping" in KNOWN_STAGE_FIELDS
 
     def test_extract_metadata_includes_tool_result_mapping(self) -> None:
@@ -260,8 +263,8 @@ def _build_lookup_wizard_config(
             prompt="What product are you looking for?",
             tool_result_mapping=tool_result_mapping,
         )
-            .field("product_name", field_type="string", required=True)
-            .transition("review", "has('product_id')")
+        .field("product_name", field_type="string", required=True)
+        .transition("review", "has('product_id')")
         .stage("review", is_end=True, prompt="Here are the details.")
         .build()
     )
@@ -273,16 +276,18 @@ class TestToolToStateEndToEnd:
     @pytest.mark.asyncio
     async def test_extraction_triggers_tool_and_maps_results(self) -> None:
         """Full flow: extract product_name → tool lookup → product_id in state → transition."""
-        config = _build_lookup_wizard_config(tool_result_mapping=[
-            {
-                "tool": "product_lookup",
-                "params": {"query": "product_name"},
-                "mapping": {
-                    "product_id": "product_id",
-                    "category": "product_category",
+        config = _build_lookup_wizard_config(
+            tool_result_mapping=[
+                {
+                    "tool": "product_lookup",
+                    "params": {"query": "product_name"},
+                    "mapping": {
+                        "product_id": "product_id",
+                        "category": "product_category",
+                    },
                 },
-            },
-        ])
+            ]
+        )
 
         async with await BotTestHarness.create(
             wizard_config=config,
@@ -302,14 +307,16 @@ class TestToolToStateEndToEnd:
     @pytest.mark.asyncio
     async def test_tool_error_skip(self) -> None:
         """Tool error with on_error=skip: state not polluted, stage stays."""
-        config = _build_lookup_wizard_config(tool_result_mapping=[
-            {
-                "tool": "failing_tool",
-                "params": {},
-                "mapping": {"result": "result_value"},
-                "on_error": "skip",
-            },
-        ])
+        config = _build_lookup_wizard_config(
+            tool_result_mapping=[
+                {
+                    "tool": "failing_tool",
+                    "params": {},
+                    "mapping": {"result": "result_value"},
+                    "on_error": "skip",
+                },
+            ]
+        )
 
         async with await BotTestHarness.create(
             wizard_config=config,
@@ -328,14 +335,16 @@ class TestToolToStateEndToEnd:
     @pytest.mark.asyncio
     async def test_tool_error_fail(self) -> None:
         """Tool error with on_error=fail: error flag written to state."""
-        config = _build_lookup_wizard_config(tool_result_mapping=[
-            {
-                "tool": "failing_tool",
-                "params": {},
-                "mapping": {"result": "result_value"},
-                "on_error": "fail",
-            },
-        ])
+        config = _build_lookup_wizard_config(
+            tool_result_mapping=[
+                {
+                    "tool": "failing_tool",
+                    "params": {},
+                    "mapping": {"result": "result_value"},
+                    "on_error": "fail",
+                },
+            ]
+        )
 
         async with await BotTestHarness.create(
             wizard_config=config,
@@ -352,13 +361,15 @@ class TestToolToStateEndToEnd:
     @pytest.mark.asyncio
     async def test_tool_not_found(self) -> None:
         """Tool not in registry: graceful skip via ToolExecution error record."""
-        config = _build_lookup_wizard_config(tool_result_mapping=[
-            {
-                "tool": "nonexistent_tool",
-                "params": {},
-                "mapping": {"result": "result_value"},
-            },
-        ])
+        config = _build_lookup_wizard_config(
+            tool_result_mapping=[
+                {
+                    "tool": "nonexistent_tool",
+                    "params": {},
+                    "mapping": {"result": "result_value"},
+                },
+            ]
+        )
 
         async with await BotTestHarness.create(
             wizard_config=config,
@@ -377,13 +388,15 @@ class TestToolToStateEndToEnd:
     @pytest.mark.asyncio
     async def test_non_dict_tool_result(self) -> None:
         """Non-dict tool result maps to first target key."""
-        config = _build_lookup_wizard_config(tool_result_mapping=[
-            {
-                "tool": "scalar_tool",
-                "params": {"input": "product_name"},
-                "mapping": {"value": "computed_score"},
-            },
-        ])
+        config = _build_lookup_wizard_config(
+            tool_result_mapping=[
+                {
+                    "tool": "scalar_tool",
+                    "params": {"input": "product_name"},
+                    "mapping": {"value": "computed_score"},
+                },
+            ]
+        )
 
         async with await BotTestHarness.create(
             wizard_config=config,
@@ -399,16 +412,18 @@ class TestToolToStateEndToEnd:
     @pytest.mark.asyncio
     async def test_missing_params_omitted(self) -> None:
         """When a state key for a param is not yet populated, param is omitted."""
-        config = _build_lookup_wizard_config(tool_result_mapping=[
-            {
-                "tool": "product_lookup",
-                "params": {
-                    "query": "product_name",
-                    "filter": "nonexistent_key",  # Not in state
+        config = _build_lookup_wizard_config(
+            tool_result_mapping=[
+                {
+                    "tool": "product_lookup",
+                    "params": {
+                        "query": "product_name",
+                        "filter": "nonexistent_key",  # Not in state
+                    },
+                    "mapping": {"product_id": "product_id"},
                 },
-                "mapping": {"product_id": "product_id"},
-            },
-        ])
+            ]
+        )
 
         tool = ProductLookupTool()
 
@@ -429,8 +444,8 @@ class TestToolToStateEndToEnd:
         config = (
             WizardConfigBuilder("no-tools")
             .stage("gather", is_start=True, prompt="Enter your name.")
-                .field("name", field_type="string", required=True)
-                .transition("done", "has('name')")
+            .field("name", field_type="string", required=True)
+            .transition("done", "has('name')")
             .stage("done", is_end=True, prompt="All done!")
             .build()
         )
@@ -450,13 +465,15 @@ class TestToolToStateEndToEnd:
     @pytest.mark.asyncio
     async def test_extraction_fails_tools_do_not_fire(self) -> None:
         """When extraction fails confidence gate (clarification), tools do NOT fire."""
-        config = _build_lookup_wizard_config(tool_result_mapping=[
-            {
-                "tool": "product_lookup",
-                "params": {"query": "product_name"},
-                "mapping": {"product_id": "product_id"},
-            },
-        ])
+        config = _build_lookup_wizard_config(
+            tool_result_mapping=[
+                {
+                    "tool": "product_lookup",
+                    "params": {"query": "product_name"},
+                    "mapping": {"product_id": "product_id"},
+                },
+            ]
+        )
 
         # Extraction returns empty data → confidence gate fails → clarification.
         # Tools should NOT run on this turn.

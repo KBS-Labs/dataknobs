@@ -11,15 +11,13 @@ from dataknobs_llm.prompts.adapters import InMemoryAsyncAdapter
 
 try:
     from dataknobs_data.backends import AsyncMemoryDatabase
+
     DATAKNOBS_DATA_AVAILABLE = True
 except ImportError:
     DATAKNOBS_DATA_AVAILABLE = False
 
 
-pytestmark = pytest.mark.skipif(
-    not DATAKNOBS_DATA_AVAILABLE,
-    reason="dataknobs-data not available"
-)
+pytestmark = pytest.mark.skipif(not DATAKNOBS_DATA_AVAILABLE, reason="dataknobs-data not available")
 
 
 class TestEndToEndRAGCaching:
@@ -30,11 +28,7 @@ class TestEndToEndRAGCaching:
         """Test complete RAG caching workflow with branching."""
         # Setup: Create conversation with RAG caching enabled
         config = {
-            "system": {
-                "assistant": {
-                    "template": "You are a helpful coding assistant."
-                }
-            },
+            "system": {"assistant": {"template": "You are a helpful coding assistant."}},
             "user": {
                 "code_question": {
                     "template": """Context from documentation:
@@ -48,11 +42,11 @@ User question: {{question}}""",
                             "k": 5,
                             "placeholder": "DOCS",
                             "header": "# Relevant Documentation\n\n",
-                            "item_template": "- {{content}}\n"
+                            "item_template": "- {{content}}\n",
                         }
-                    ]
+                    ],
                 }
-            }
+            },
         }
 
         library = ConfigPromptLibrary(config)
@@ -60,17 +54,17 @@ User question: {{question}}""",
         # InMemory documentation adapter
         docs_adapter = InMemoryAsyncAdapter(
             search_results=[
-                {"content": "Python decorators are functions that modify other functions", "score": 0.95},
+                {
+                    "content": "Python decorators are functions that modify other functions",
+                    "score": 0.95,
+                },
                 {"content": "Use @decorator syntax to apply decorators", "score": 0.90},
                 {"content": "Decorators can take arguments", "score": 0.85},
             ],
-            name="docs"
+            name="docs",
         )
 
-        builder = AsyncPromptBuilder(
-            library=library,
-            adapters={"docs": docs_adapter}
-        )
+        builder = AsyncPromptBuilder(library=library, adapters={"docs": docs_adapter})
 
         llm = EchoProvider(config={"provider": "echo", "model": "echo"})
         backend = AsyncMemoryDatabase()
@@ -82,7 +76,7 @@ User question: {{question}}""",
             storage=storage,
             system_prompt_name="assistant",
             cache_rag_results=True,
-            reuse_rag_on_branch=True
+            reuse_rag_on_branch=True,
         )
 
         # Step 1: Add first user question with RAG
@@ -92,8 +86,8 @@ User question: {{question}}""",
             params={
                 "question": "How do I use decorators?",
                 "language": "python",
-                "topic": "decorators"
-            }
+                "topic": "decorators",
+            },
         )
 
         # Verify RAG search was executed
@@ -119,8 +113,8 @@ User question: {{question}}""",
             params={
                 "question": "Can you show an example?",
                 "language": "python",
-                "topic": "decorator examples"
-            }
+                "topic": "decorator examples",
+            },
         )
 
         # Verify new RAG search was executed (different query)
@@ -140,8 +134,8 @@ User question: {{question}}""",
             params={
                 "question": "How do I use decorators?",  # Same query parameters
                 "language": "python",
-                "topic": "decorators"
-            }
+                "topic": "decorators",
+            },
         )
 
         # Verify RAG search was NOT executed (cache was reused!)
@@ -175,34 +169,29 @@ Question: {{question}}""",
                         {
                             "adapter_name": "docs",
                             "query": "{{topic}} documentation",
-                            "placeholder": "DOCS"
+                            "placeholder": "DOCS",
                         },
                         {
                             "adapter_name": "examples",
                             "query": "{{topic}} code examples",
-                            "placeholder": "EXAMPLES"
-                        }
-                    ]
+                            "placeholder": "EXAMPLES",
+                        },
+                    ],
                 }
-            }
+            },
         }
 
         library = ConfigPromptLibrary(config)
 
         # InMemory adapters
-        docs_adapter = InMemoryAsyncAdapter(
-            search_results=[{"content": "Doc 1"}],
-            name="docs"
-        )
+        docs_adapter = InMemoryAsyncAdapter(search_results=[{"content": "Doc 1"}], name="docs")
 
         examples_adapter = InMemoryAsyncAdapter(
-            search_results=[{"content": "Example 1"}],
-            name="examples"
+            search_results=[{"content": "Example 1"}], name="examples"
         )
 
         builder = AsyncPromptBuilder(
-            library=library,
-            adapters={"docs": docs_adapter, "examples": examples_adapter}
+            library=library, adapters={"docs": docs_adapter, "examples": examples_adapter}
         )
 
         llm = EchoProvider(config={"provider": "echo", "model": "echo"})
@@ -214,14 +203,12 @@ Question: {{question}}""",
             storage=storage,
             system_prompt_name="sys",
             cache_rag_results=True,
-            reuse_rag_on_branch=True
+            reuse_rag_on_branch=True,
         )
 
         # Add message - both adapters should be called
         await manager.add_message(
-            role="user",
-            prompt_name="research",
-            params={"question": "How?", "topic": "async"}
+            role="user", prompt_name="research", params={"question": "How?", "topic": "async"}
         )
 
         assert docs_adapter.search_count == 1
@@ -241,9 +228,7 @@ Question: {{question}}""",
         examples_adapter.reset()
 
         await manager.add_message(
-            role="user",
-            prompt_name="research",
-            params={"question": "How?", "topic": "async"}
+            role="user", prompt_name="research", params={"question": "How?", "topic": "async"}
         )
 
         # Neither adapter should be called (both cached)
@@ -258,22 +243,20 @@ Question: {{question}}""",
             "user": {
                 "q": {
                     "template": "{{RAG}}",
-                    "rag_configs": [{
-                        "adapter_name": "docs",
-                        "query": "test query",
-                        "placeholder": "RAG"
-                    }]
+                    "rag_configs": [
+                        {"adapter_name": "docs", "query": "test query", "placeholder": "RAG"}
+                    ],
                 }
-            }
+            },
         }
 
         library = ConfigPromptLibrary(config)
         adapter = InMemoryAsyncAdapter(
             search_results=[
                 {"content": "Result 1", "score": 0.9, "metadata": {"source": "doc1.md"}},
-                {"content": "Result 2", "score": 0.8, "metadata": {"source": "doc2.md"}}
+                {"content": "Result 2", "score": 0.8, "metadata": {"source": "doc2.md"}},
             ],
-            name="docs"
+            name="docs",
         )
 
         builder = AsyncPromptBuilder(library=library, adapters={"docs": adapter})
@@ -285,7 +268,7 @@ Question: {{question}}""",
             prompt_builder=builder,
             storage=storage,
             system_prompt_name="sys",
-            cache_rag_results=True
+            cache_rag_results=True,
         )
 
         # Add message
@@ -314,20 +297,15 @@ Question: {{question}}""",
             "user": {
                 "q": {
                     "template": "{{RAG}}",
-                    "rag_configs": [{
-                        "adapter_name": "docs",
-                        "query": "test",
-                        "placeholder": "RAG"
-                    }]
+                    "rag_configs": [
+                        {"adapter_name": "docs", "query": "test", "placeholder": "RAG"}
+                    ],
                 }
-            }
+            },
         }
 
         library = ConfigPromptLibrary(config)
-        adapter = InMemoryAsyncAdapter(
-            search_results=[{"content": "Result"}],
-            name="docs"
-        )
+        adapter = InMemoryAsyncAdapter(search_results=[{"content": "Result"}], name="docs")
 
         builder = AsyncPromptBuilder(library=library, adapters={"docs": adapter})
         llm = EchoProvider(config={"provider": "echo", "model": "echo"})
@@ -340,12 +318,12 @@ Question: {{question}}""",
             storage=storage,
             system_prompt_name="sys",
             cache_rag_results=False,
-            reuse_rag_on_branch=False
+            reuse_rag_on_branch=False,
         )
 
         # Add message
         await manager.add_message(role="user", prompt_name="q", params={})
-        assert adapter.search_count ==1
+        assert adapter.search_count == 1
 
         # Branch and add again
         await manager.complete()
@@ -353,7 +331,7 @@ Question: {{question}}""",
         await manager.add_message(role="user", prompt_name="q", params={})
 
         # Search should be called again (no caching)
-        assert adapter.search_count ==2
+        assert adapter.search_count == 2
 
         # Verify no RAG metadata stored
         metadata = manager.get_rag_metadata()

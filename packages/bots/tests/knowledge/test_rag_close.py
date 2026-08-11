@@ -35,9 +35,7 @@ async def _make_shared_store() -> Any:
 
 
 async def _make_shared_provider() -> Any:
-    provider = LLMProviderFactory(is_async=True).create(
-        {"provider": "echo", "model": "test"}
-    )
+    provider = LLMProviderFactory(is_async=True).create({"provider": "echo", "model": "test"})
     await provider.initialize()
     return provider
 
@@ -82,12 +80,8 @@ async def test_close_leaves_shared_store_usable_for_second_kb() -> None:
     store = await _make_shared_store()
     provider = await _make_shared_provider()
 
-    kb_a = RAGKnowledgeBase.from_components(
-        {}, vector_store=store, embedding_provider=provider
-    )
-    kb_b = RAGKnowledgeBase.from_components(
-        {}, vector_store=store, embedding_provider=provider
-    )
+    kb_a = RAGKnowledgeBase.from_components({}, vector_store=store, embedding_provider=provider)
+    kb_b = RAGKnowledgeBase.from_components({}, vector_store=store, embedding_provider=provider)
 
     await kb_a.close()
 

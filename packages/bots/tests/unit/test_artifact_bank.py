@@ -316,9 +316,7 @@ class TestArtifactBankSerialization:
         """db_factory is called for non-memory backends during restore."""
         factory_calls: list[tuple[str, dict[str, Any]]] = []
 
-        def mock_factory(
-            name: str, cfg: dict[str, Any]
-        ) -> tuple[SyncDatabase, str]:
+        def mock_factory(name: str, cfg: dict[str, Any]) -> tuple[SyncDatabase, str]:
             factory_calls.append((name, cfg))
             return SyncMemoryDatabase(), "external"
 
@@ -378,9 +376,7 @@ class TestArtifactBankFromConfig:
     def test_config_with_db_factory(self) -> None:
         factory_calls: list[tuple[str, dict[str, Any]]] = []
 
-        def test_factory(
-            name: str, cfg: dict[str, Any]
-        ) -> tuple[SyncDatabase, str]:
+        def test_factory(name: str, cfg: dict[str, Any]) -> tuple[SyncDatabase, str]:
             factory_calls.append((name, cfg))
             return SyncMemoryDatabase(), "inline"
 

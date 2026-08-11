@@ -37,7 +37,7 @@ def _fence_dockerenv(monkeypatch: Any, present: bool) -> None:
     real_exists = os.path.exists
     monkeypatch.setattr(
         "dataknobs_common.testing._core.os.path.exists",
-        lambda p: (present if p == "/.dockerenv" else real_exists(p)),
+        lambda p: present if p == "/.dockerenv" else real_exists(p),
     )
 
 

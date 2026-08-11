@@ -41,9 +41,7 @@ from _bedrock_stubs import _StubBedrockClient, _StubSession, _stub_provider
 
 def _provider(model: str, **config_kwargs: Any) -> BedrockProvider:
     """A construction-only provider (no session) for pure detect-path reads."""
-    return BedrockProvider(
-        LLMConfig(provider="bedrock", model=model, **config_kwargs)
-    )
+    return BedrockProvider(LLMConfig(provider="bedrock", model=model, **config_kwargs))
 
 
 def _converse_client() -> _StubBedrockClient:
@@ -101,9 +99,7 @@ class TestCapabilities:
         """A Claude-on-Bedrock id resolves the SHARED Claude capability set
         (proving the reuse composition, not a Bedrock-local copy).
         """
-        caps = _provider(
-            "anthropic.claude-3-5-sonnet-20240620-v1:0"
-        ).get_capabilities()
+        caps = _provider("anthropic.claude-3-5-sonnet-20240620-v1:0").get_capabilities()
         assert ModelCapability.VISION in caps
         assert ModelCapability.FUNCTION_CALLING in caps
         assert ModelCapability.JSON_MODE in caps
@@ -145,12 +141,8 @@ class TestConstraints:
         assert "temperature" in c.rejected_params
 
     def test_cross_region_resolves_same_family(self) -> None:
-        base = _provider(
-            "anthropic.claude-opus-4-8-20260101-v1:0"
-        ).get_constraints()
-        regioned = _provider(
-            "us.anthropic.claude-opus-4-8-20260101-v1:0"
-        ).get_constraints()
+        base = _provider("anthropic.claude-opus-4-8-20260101-v1:0").get_constraints()
+        regioned = _provider("us.anthropic.claude-opus-4-8-20260101-v1:0").get_constraints()
         assert regioned.max_tokens_ceiling == base.max_tokens_ceiling
         assert regioned.max_tokens_ceiling == 128000
 
@@ -180,9 +172,9 @@ class TestValidateModel:
         assert await _provider("amazon.nova-ultra-v9:0").validate_model() is True
 
     async def test_region_prefixed_claude_valid(self) -> None:
-        assert await _provider(
-            "us.anthropic.claude-3-5-sonnet-20240620-v1:0"
-        ).validate_model() is True
+        assert (
+            await _provider("us.anthropic.claude-3-5-sonnet-20240620-v1:0").validate_model() is True
+        )
 
     async def test_unknown_vendor_invalid(self) -> None:
         assert await _provider("gpt-4").validate_model() is False
@@ -203,9 +195,7 @@ class TestRequestShaping:
         """
         client = _converse_client()
         provider = _stub_provider(
-            LLMConfig(
-                provider="bedrock", model="amazon.nova-pro-v1:0"
-            ),
+            LLMConfig(provider="bedrock", model="amazon.nova-pro-v1:0"),
             client,
         )
         await provider.complete("hi", max_tokens=500_000)
@@ -361,9 +351,7 @@ class TestLiveAvailability:
         """A model absent from the account catalog is False — even though it is a
         recognised vendor id the *maintained* resource would call available.
         """
-        provider = _live_provider(
-            "amazon.nova-pro-v1:0", ["meta.llama3-8b-instruct-v1:0"]
-        )
+        provider = _live_provider("amazon.nova-pro-v1:0", ["meta.llama3-8b-instruct-v1:0"])
         assert await provider.validate_model() is False
 
     async def test_default_off_is_maintained_availability(self) -> None:
@@ -451,12 +439,8 @@ class TestTooling:
                 "responseStreamingSupported": True,
             }
         ]
-        sync_facts = await model_limits.fetch_bedrock_facts(
-            _CatalogControlPlaneClient(summaries)
-        )
-        async_facts = await model_limits.fetch_bedrock_facts(
-            _AsyncCatalogClient(summaries)
-        )
+        sync_facts = await model_limits.fetch_bedrock_facts(_CatalogControlPlaneClient(summaries))
+        async_facts = await model_limits.fetch_bedrock_facts(_AsyncCatalogClient(summaries))
         assert sync_facts == async_facts
         assert sync_facts["amazon.nova-pro-v1:0"] == {"vision": True, "streaming": True}
 
@@ -467,7 +451,13 @@ class TestTooling:
             "    capabilities: [chat, vision, streaming]\n    available: true\n",
         )
         client = _CatalogControlPlaneClient(
-            [{"modelId": "amazon.nova-pro-v1:0", "inputModalities": ["TEXT", "IMAGE"], "responseStreamingSupported": True}]
+            [
+                {
+                    "modelId": "amazon.nova-pro-v1:0",
+                    "inputModalities": ["TEXT", "IMAGE"],
+                    "responseStreamingSupported": True,
+                }
+            ]
         )
         rc = model_limits.main(
             ["--provider", "bedrock", "--check"], client=client, resource_path=path
@@ -483,8 +473,16 @@ class TestTooling:
         )
         client = _CatalogControlPlaneClient(
             [
-                {"modelId": "amazon.nova-pro-v1:0", "inputModalities": ["TEXT", "IMAGE"], "responseStreamingSupported": True},
-                {"modelId": "acme.brand-new-v1:0", "inputModalities": ["TEXT"], "responseStreamingSupported": True},
+                {
+                    "modelId": "amazon.nova-pro-v1:0",
+                    "inputModalities": ["TEXT", "IMAGE"],
+                    "responseStreamingSupported": True,
+                },
+                {
+                    "modelId": "acme.brand-new-v1:0",
+                    "inputModalities": ["TEXT"],
+                    "responseStreamingSupported": True,
+                },
             ]
         )
         rc = model_limits.main(
@@ -500,7 +498,13 @@ class TestTooling:
             "    capabilities: [chat, streaming]\n    available: true\n",
         )
         client = _CatalogControlPlaneClient(
-            [{"modelId": "amazon.nova-pro-v1:0", "inputModalities": ["TEXT", "IMAGE"], "responseStreamingSupported": True}]
+            [
+                {
+                    "modelId": "amazon.nova-pro-v1:0",
+                    "inputModalities": ["TEXT", "IMAGE"],
+                    "responseStreamingSupported": True,
+                }
+            ]
         )
         rc = model_limits.main(
             ["--provider", "bedrock", "--check"], client=client, resource_path=path
@@ -516,7 +520,13 @@ class TestTooling:
             "models:\n  anthropic.claude-3-haiku:\n    available: true\n",
         )
         client = _CatalogControlPlaneClient(
-            [{"modelId": "anthropic.claude-3-haiku-20240307-v1:0", "inputModalities": ["TEXT", "IMAGE"], "responseStreamingSupported": True}]
+            [
+                {
+                    "modelId": "anthropic.claude-3-haiku-20240307-v1:0",
+                    "inputModalities": ["TEXT", "IMAGE"],
+                    "responseStreamingSupported": True,
+                }
+            ]
         )
         rc = model_limits.main(
             ["--provider", "bedrock", "--check"], client=client, resource_path=path
@@ -545,6 +555,7 @@ class TestTooling:
             def list(self, **_k: Any) -> Any:
                 async def _gen() -> Any:
                     yield _M("claude-a", 100)
+
                 return _gen()
 
         class _Client:

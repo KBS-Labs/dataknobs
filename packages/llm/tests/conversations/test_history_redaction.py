@@ -83,9 +83,7 @@ class TestApplyHistoryRedactionsToDicts:
         assert len(none_content) == 1
         assert none_content[0]["role"] == "assistant"
 
-        missing_key = apply_history_redactions_to_dicts(
-            [{"role": "assistant"}], patterns
-        )
+        missing_key = apply_history_redactions_to_dicts([{"role": "assistant"}], patterns)
         assert len(missing_key) == 1
         assert missing_key[0]["role"] == "assistant"
 
@@ -97,12 +95,8 @@ class TestApplyHistoryRedactionsToDicts:
         """
         patterns = compile_history_redactions(
             [
-                HistoryRedaction(
-                    pattern=r"\[bib:\d+[^\]]*\]", replacement="[prior citation]"
-                ),
-                HistoryRedaction(
-                    pattern=r"\bbib:\d+\b", replacement="[prior citation]"
-                ),
+                HistoryRedaction(pattern=r"\[bib:\d+[^\]]*\]", replacement="[prior citation]"),
+                HistoryRedaction(pattern=r"\bbib:\d+\b", replacement="[prior citation]"),
             ]
         )
         system = {"role": "system", "content": "bib:5 stays"}
@@ -156,12 +150,8 @@ class TestApplyHistoryRedactionsToDicts:
         """
         patterns = compile_history_redactions(
             [
-                HistoryRedaction(
-                    pattern=r"\[bib:\d+[^\]]*\]", replacement="[prior citation]"
-                ),
-                HistoryRedaction(
-                    pattern=r"\bbib:\d+\b", replacement="[prior citation]"
-                ),
+                HistoryRedaction(pattern=r"\[bib:\d+[^\]]*\]", replacement="[prior citation]"),
+                HistoryRedaction(pattern=r"\bbib:\d+\b", replacement="[prior citation]"),
             ]
         )
         messages = [
@@ -202,12 +192,8 @@ class TestGenericHelperSymmetry:
         """
         patterns = compile_history_redactions(
             [
-                HistoryRedaction(
-                    pattern=r"\[bib:\d+[^\]]*\]", replacement="[prior citation]"
-                ),
-                HistoryRedaction(
-                    pattern=r"\bbib:\d+\b", replacement="[prior citation]"
-                ),
+                HistoryRedaction(pattern=r"\[bib:\d+[^\]]*\]", replacement="[prior citation]"),
+                HistoryRedaction(pattern=r"\bbib:\d+\b", replacement="[prior citation]"),
             ]
         )
         roles_and_content = [

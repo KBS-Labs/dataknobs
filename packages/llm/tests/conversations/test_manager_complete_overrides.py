@@ -25,14 +25,10 @@ def _create_prompts(prompt_dir: Path) -> None:
     """Create test prompt files."""
     system_dir = prompt_dir / "system"
     system_dir.mkdir(parents=True, exist_ok=True)
-    (system_dir / "helpful.yaml").write_text(
-        yaml.dump({"template": "You are a helpful assistant"})
-    )
+    (system_dir / "helpful.yaml").write_text(yaml.dump({"template": "You are a helpful assistant"}))
     user_dir = prompt_dir / "user"
     user_dir.mkdir(parents=True, exist_ok=True)
-    (user_dir / "greeting.yaml").write_text(
-        yaml.dump({"template": "Hello!"})
-    )
+    (user_dir / "greeting.yaml").write_text(yaml.dump({"template": "Hello!"}))
 
 
 @pytest.fixture
@@ -67,7 +63,9 @@ class TestSystemPromptOverride:
     """Tests for system_prompt_override parameter on ConversationManager.complete()."""
 
     @pytest.mark.asyncio
-    async def test_override_replaces_system_message(self, manager_with_provider: dict[str, Any]) -> None:
+    async def test_override_replaces_system_message(
+        self, manager_with_provider: dict[str, Any]
+    ) -> None:
         """system_prompt_override replaces the system message sent to the LLM."""
         manager = manager_with_provider["manager"]
         provider: EchoProvider = manager_with_provider["provider"]
@@ -88,7 +86,9 @@ class TestSystemPromptOverride:
         assert system_msgs[0].content == "You are a wizard at step 2"
 
     @pytest.mark.asyncio
-    async def test_override_does_not_mutate_tree(self, manager_with_provider: dict[str, Any]) -> None:
+    async def test_override_does_not_mutate_tree(
+        self, manager_with_provider: dict[str, Any]
+    ) -> None:
         """system_prompt_override must NOT mutate the conversation tree."""
         manager = manager_with_provider["manager"]
         provider: EchoProvider = manager_with_provider["provider"]
@@ -227,7 +227,8 @@ class TestSystemPromptOverridePersistence:
 
     @pytest.mark.asyncio
     async def test_override_persisted_in_node_metadata(
-        self, manager_with_provider: dict[str, Any],
+        self,
+        manager_with_provider: dict[str, Any],
     ) -> None:
         """system_prompt_override is stored in the assistant node metadata."""
         manager = manager_with_provider["manager"]
@@ -247,7 +248,8 @@ class TestSystemPromptOverridePersistence:
 
     @pytest.mark.asyncio
     async def test_no_override_no_metadata_key(
-        self, manager_with_provider: dict[str, Any],
+        self,
+        manager_with_provider: dict[str, Any],
     ) -> None:
         """Without system_prompt_override, metadata does NOT contain the key."""
         manager = manager_with_provider["manager"]
@@ -262,7 +264,8 @@ class TestSystemPromptOverridePersistence:
 
     @pytest.mark.asyncio
     async def test_override_stores_full_prompt(
-        self, manager_with_provider: dict[str, Any],
+        self,
+        manager_with_provider: dict[str, Any],
     ) -> None:
         """The full enhanced prompt is stored, not just the delta."""
         manager = manager_with_provider["manager"]
@@ -285,7 +288,8 @@ class TestSystemPromptOverridePersistence:
 
     @pytest.mark.asyncio
     async def test_override_survives_serialization(
-        self, manager_with_provider: dict[str, Any],
+        self,
+        manager_with_provider: dict[str, Any],
     ) -> None:
         """Override persists through node to_dict/from_dict round-trip."""
         manager = manager_with_provider["manager"]
@@ -305,7 +309,8 @@ class TestSystemPromptOverridePersistence:
 
     @pytest.mark.asyncio
     async def test_stream_complete_persists_override(
-        self, manager_with_provider: dict[str, Any],
+        self,
+        manager_with_provider: dict[str, Any],
     ) -> None:
         """stream_complete() also persists the system_prompt_override."""
         manager = manager_with_provider["manager"]
@@ -326,7 +331,8 @@ class TestSystemPromptOverridePersistence:
 
     @pytest.mark.asyncio
     async def test_stream_complete_no_override_no_key(
-        self, manager_with_provider: dict[str, Any],
+        self,
+        manager_with_provider: dict[str, Any],
     ) -> None:
         """stream_complete() without override does not add the metadata key."""
         manager = manager_with_provider["manager"]

@@ -47,7 +47,7 @@ class BatchProcessor:
 
     def __init__(self, config: BatchConfig | None = None):
         """Initialize the batch processor.
-        
+
         Args:
             config: Batch configuration
         """
@@ -59,7 +59,7 @@ class BatchProcessor:
 
     async def add(self, item: Any, callback: Callable | None = None) -> None:
         """Add an item to the batch queue.
-        
+
         Args:
             item: Item to process
             callback: Optional callback when item is processed
@@ -77,7 +77,7 @@ class BatchProcessor:
 
     async def flush(self) -> int:
         """Process all items in the queue.
-        
+
         Returns:
             Number of items processed
         """
@@ -101,10 +101,10 @@ class BatchProcessor:
 
     async def _process_sequential(self, items: list[tuple]) -> int:
         """Process items sequentially.
-        
+
         Args:
             items: List of (item, callback) tuples
-            
+
         Returns:
             Number of items processed
         """
@@ -128,10 +128,10 @@ class BatchProcessor:
 
     async def _process_parallel(self, items: list[tuple]) -> int:
         """Process items in parallel.
-        
+
         Args:
             items: List of (item, callback) tuples
-            
+
         Returns:
             Number of items processed
         """
@@ -140,24 +140,15 @@ class BatchProcessor:
         if chunk_size == 0:
             chunk_size = 1
 
-        chunks = [
-            items[i:i + chunk_size]
-            for i in range(0, len(items), chunk_size)
-        ]
+        chunks = [items[i : i + chunk_size] for i in range(0, len(items), chunk_size)]
 
         # Process chunks in parallel
-        tasks = [
-            self._process_sequential(chunk)
-            for chunk in chunks
-        ]
+        tasks = [self._process_sequential(chunk) for chunk in chunks]
 
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
         # Count successful processes
-        processed = sum(
-            r for r in results
-            if isinstance(r, int)
-        )
+        processed = sum(r for r in results if isinstance(r, int))
 
         return processed
 
@@ -194,15 +185,15 @@ class VectorOptimizer:
     def optimize_batch_size(
         num_vectors: int,
         vector_dim: int,
-        available_memory: int = 1024 * 1024 * 1024  # 1GB default
+        available_memory: int = 1024 * 1024 * 1024,  # 1GB default
     ) -> int:
         """Calculate optimal batch size based on available resources.
-        
+
         Args:
             num_vectors: Total number of vectors
             vector_dim: Dimension of each vector
             available_memory: Available memory in bytes
-            
+
         Returns:
             Optimal batch size
         """
@@ -226,17 +217,15 @@ class VectorOptimizer:
 
     @staticmethod
     def select_index_type(
-        num_vectors: int,
-        vector_dim: int,
-        metric: DistanceMetric
+        num_vectors: int, vector_dim: int, metric: DistanceMetric
     ) -> dict[str, Any]:
         """Select optimal index type based on dataset characteristics.
-        
+
         Args:
             num_vectors: Number of vectors
             vector_dim: Vector dimensions
             metric: Distance metric
-            
+
         Returns:
             Index configuration
         """
@@ -267,16 +256,13 @@ class VectorOptimizer:
         return config
 
     @staticmethod
-    def optimize_search_params(
-        index_type: str,
-        recall_target: float = 0.95
-    ) -> dict[str, Any]:
+    def optimize_search_params(index_type: str, recall_target: float = 0.95) -> dict[str, Any]:
         """Optimize search parameters for target recall.
-        
+
         Args:
             index_type: Type of index
             recall_target: Target recall rate (0-1)
-            
+
         Returns:
             Optimized search parameters
         """
@@ -314,11 +300,9 @@ class VectorOptimizer:
 class ConnectionPool:
     """Manages a pool of connections for vector stores."""
 
-    def __init__(self,
-                 factory: Callable,
-                 config: ConnectionPoolConfig | None = None):
+    def __init__(self, factory: Callable, config: ConnectionPoolConfig | None = None):
         """Initialize the connection pool.
-        
+
         Args:
             factory: Function to create new connections
             config: Pool configuration
@@ -332,7 +316,7 @@ class ConnectionPool:
 
     async def acquire(self) -> Any:
         """Acquire a connection from the pool.
-        
+
         Returns:
             A connection object
         """
@@ -368,7 +352,7 @@ class ConnectionPool:
 
     async def release(self, conn: Any) -> None:
         """Release a connection back to the pool.
-        
+
         Args:
             conn: Connection to release
         """
@@ -390,7 +374,7 @@ class ConnectionPool:
 
         # Close connections (if they have close method)
         for conn in all_conns:
-            if hasattr(conn, 'close'):
+            if hasattr(conn, "close"):
                 try:
                     if asyncio.iscoroutinefunction(conn.close):
                         await conn.close()
@@ -404,18 +388,14 @@ class QueryOptimizer:
     """Optimizes vector queries for better performance."""
 
     @staticmethod
-    def should_use_index(
-        num_vectors: int,
-        k: int,
-        filter_selectivity: float = 1.0
-    ) -> bool:
+    def should_use_index(num_vectors: int, k: int, filter_selectivity: float = 1.0) -> bool:
         """Determine if index should be used for query.
-        
+
         Args:
             num_vectors: Total number of vectors
             k: Number of results to return
             filter_selectivity: Estimated filter selectivity (0-1)
-            
+
         Returns:
             True if index should be used
         """
@@ -431,18 +411,14 @@ class QueryOptimizer:
         return True
 
     @staticmethod
-    def optimize_reranking(
-        initial_k: int,
-        final_k: int,
-        rerank_factor: float = 3.0
-    ) -> int:
+    def optimize_reranking(initial_k: int, final_k: int, rerank_factor: float = 3.0) -> int:
         """Calculate optimal number of candidates for reranking.
-        
+
         Args:
             initial_k: Initial number of results
             final_k: Final number of results after reranking
             rerank_factor: Multiplier for candidates
-            
+
         Returns:
             Optimal number of candidates
         """

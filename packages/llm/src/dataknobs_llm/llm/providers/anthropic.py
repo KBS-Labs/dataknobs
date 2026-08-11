@@ -67,9 +67,16 @@ from typing import TYPE_CHECKING, Any, Dict, List, Union, AsyncIterator
 from dataknobs_common.exceptions import ValidationError
 
 from ..base import (
-    LLMAdapter, LLMConfig, LLMMessage, LLMResponse, LLMStreamResponse,
-    AsyncLLMProvider, ModelConstraints, ToolCall,
-    normalize_claude_stop_reason, normalize_llm_config
+    LLMAdapter,
+    LLMConfig,
+    LLMMessage,
+    LLMResponse,
+    LLMStreamResponse,
+    AsyncLLMProvider,
+    ModelConstraints,
+    ToolCall,
+    normalize_claude_stop_reason,
+    normalize_llm_config,
 )
 from ._claude_shared import (
     CLAUDE_5_TEMPERATURE_REJECTORS,
@@ -265,9 +272,7 @@ _DISCOVERED_REJECTED_PARAMS: Dict[str, set[str]] = {}
 #:   lossy case visible without changing structure).
 #: - ``"reject"`` — raise :class:`~dataknobs_common.exceptions.ValidationError`
 #:   (treat a mid-conversation system message as a configuration error).
-_SYSTEM_MESSAGE_POLICIES: frozenset[str] = frozenset(
-    {"inline", "hoist", "warn", "reject"}
-)
+_SYSTEM_MESSAGE_POLICIES: frozenset[str] = frozenset({"inline", "hoist", "warn", "reject"})
 
 #: Default mid-conversation system-message policy. ``"inline"`` is the safe
 #: default because the adapter's content-block consolidation keeps the adapted
@@ -381,9 +386,7 @@ class AnthropicAdapter(LLMAdapter):
             if msg.role == "system":
                 if not seen_non_system:
                     # Leading system prompt — always hoist (correct + required).
-                    system_content = self._merge_system(
-                        system_content, msg.content
-                    )
+                    system_content = self._merge_system(system_content, msg.content)
                 elif self.accepts_inline_system:
                     # The family accepts an inline system message — leave it in
                     # place rather than hoisting or converting. RESERVED: no
@@ -394,18 +397,14 @@ class AnthropicAdapter(LLMAdapter):
                     # sets accepts_inline_system=True via S1 constraints; do NOT
                     # force constraints={"accepts_inline_system": True} for a
                     # current model — use policy 'inline' instead.
-                    anthropic_messages.append(
-                        {"role": "system", "content": msg.content}
-                    )
+                    anthropic_messages.append({"role": "system", "content": msg.content})
                 elif self._mid_system_inlines(msg):
                     self._append_user_block(
                         anthropic_messages,
                         {"type": "text", "text": msg.content},
                     )
                 else:
-                    system_content = self._merge_system(
-                        system_content, msg.content
-                    )
+                    system_content = self._merge_system(system_content, msg.content)
                 continue
 
             seen_non_system = True
@@ -414,16 +413,20 @@ class AnthropicAdapter(LLMAdapter):
                 if msg.content:
                     content_blocks.append({"type": "text", "text": msg.content})
                 for tc in msg.tool_calls:
-                    content_blocks.append({
-                        "type": "tool_use",
-                        "id": tc.id or tc.name,
-                        "name": tc.name,
-                        "input": tc.parameters,
-                    })
-                anthropic_messages.append({
-                    "role": "assistant",
-                    "content": content_blocks,
-                })
+                    content_blocks.append(
+                        {
+                            "type": "tool_use",
+                            "id": tc.id or tc.name,
+                            "name": tc.name,
+                            "input": tc.parameters,
+                        }
+                    )
+                anthropic_messages.append(
+                    {
+                        "role": "assistant",
+                        "content": content_blocks,
+                    }
+                )
             elif msg.role == "tool":
                 # Anthropic expects tool results as user messages with
                 # tool_result content blocks paired by tool_use_id.
@@ -453,10 +456,12 @@ class AnthropicAdapter(LLMAdapter):
                     {"type": "text", "text": msg.content},
                 )
             else:
-                anthropic_messages.append({
-                    "role": msg.role,
-                    "content": msg.content,
-                })
+                anthropic_messages.append(
+                    {
+                        "role": msg.role,
+                        "content": msg.content,
+                    }
+                )
 
         return system_content, anthropic_messages
 
@@ -529,9 +534,7 @@ class AnthropicAdapter(LLMAdapter):
             last = anthropic_messages[-1]
             content = last["content"]
             if isinstance(content, str):
-                content = (
-                    [{"type": "text", "text": content}] if content else []
-                )
+                content = [{"type": "text", "text": content}] if content else []
                 last["content"] = content
             if block.get("type") == "tool_result":
                 insert_at = 0
@@ -563,25 +566,23 @@ class AnthropicAdapter(LLMAdapter):
             if block.type == "text":
                 content += block.text
             elif block.type == "tool_use":
-                tool_calls.append(ToolCall(
-                    name=block.name,
-                    parameters=block.input if isinstance(block.input, dict) else {},
-                    id=block.id,
-                ))
+                tool_calls.append(
+                    ToolCall(
+                        name=block.name,
+                        parameters=block.input if isinstance(block.input, dict) else {},
+                        id=block.id,
+                    )
+                )
 
         usage = None
         if hasattr(response, "usage"):
             usage = {
                 "prompt_tokens": response.usage.input_tokens,
                 "completion_tokens": response.usage.output_tokens,
-                "total_tokens": (
-                    response.usage.input_tokens + response.usage.output_tokens
-                ),
+                "total_tokens": (response.usage.input_tokens + response.usage.output_tokens),
             }
 
-        finish_reason, truncated, metadata = normalize_claude_stop_reason(
-            response.stop_reason
-        )
+        finish_reason, truncated, metadata = normalize_claude_stop_reason(response.stop_reason)
 
         return LLMResponse(
             content=content,
@@ -638,7 +639,8 @@ class AnthropicAdapter(LLMAdapter):
         ]
 
     def adapt_raw_functions(
-        self, functions: list[Dict[str, Any]],
+        self,
+        functions: list[Dict[str, Any]],
     ) -> list[Dict[str, Any]]:
         """Convert raw function dicts to Anthropic tools format.
 
@@ -656,11 +658,14 @@ class AnthropicAdapter(LLMAdapter):
             {
                 "name": func.get("name", ""),
                 "description": func.get("description", ""),
-                "input_schema": func.get("parameters", {
-                    "type": "object",
-                    "properties": {},
-                    "required": [],
-                }),
+                "input_schema": func.get(
+                    "parameters",
+                    {
+                        "type": "object",
+                        "properties": {},
+                        "required": [],
+                    },
+                ),
             }
             for func in functions
         ]
@@ -786,7 +791,7 @@ class AnthropicProvider(ProfileDetectionMixin, AsyncLLMProvider):
     def __init__(
         self,
         config: Union[LLMConfig, "Config", Dict[str, Any]],
-        prompt_builder: AsyncPromptBuilder | None = None
+        prompt_builder: AsyncPromptBuilder | None = None,
     ):
         # Normalize config first
         llm_config = normalize_llm_config(config)
@@ -804,9 +809,7 @@ class AnthropicProvider(ProfileDetectionMixin, AsyncLLMProvider):
         # future family whose accepts_inline_system varied by model would need
         # this resolved per-call in adapt_messages instead.
         policy = str(
-            llm_config.options.get(
-                "system_message_policy", _DEFAULT_SYSTEM_MESSAGE_POLICY
-            )
+            llm_config.options.get("system_message_policy", _DEFAULT_SYSTEM_MESSAGE_POLICY)
         )
         # Dynamic ceiling resolution knobs (see the module-level
         # _anthropic_live_extractor / LiveApiSource docs). Read once from options
@@ -845,18 +848,18 @@ class AnthropicProvider(ProfileDetectionMixin, AsyncLLMProvider):
         try:
             import anthropic
 
-            api_key = self.config.api_key or os.environ.get('ANTHROPIC_API_KEY')
+            api_key = self.config.api_key or os.environ.get("ANTHROPIC_API_KEY")
             if not api_key:
                 raise ValueError("Anthropic API key not provided")
 
             self._client = anthropic.AsyncAnthropic(
-                api_key=api_key,
-                base_url=self.config.api_base,
-                timeout=self.config.timeout
+                api_key=api_key, base_url=self.config.api_base, timeout=self.config.timeout
             )
             self._is_initialized = True
         except ImportError as e:
-            raise ImportError("anthropic package not installed. Install with: pip install anthropic") from e
+            raise ImportError(
+                "anthropic package not installed. Install with: pip install anthropic"
+            ) from e
         # NOTE: initialize() deliberately does NO network I/O beyond building
         # the client. The per-model max_tokens ceilings are refreshed lazily at
         # the first request boundary (complete/stream_complete/function_call all
@@ -902,9 +905,7 @@ class AnthropicProvider(ProfileDetectionMixin, AsyncLLMProvider):
         """
         return LayeredModelProfileResolver(
             [
-                ConfigOverrideSource(
-                    getattr(config, "model_profile_overrides", None)
-                ),
+                ConfigOverrideSource(getattr(config, "model_profile_overrides", None)),
                 self._live_source,
                 _RESOURCE_PROFILE_SOURCE,
                 _HEURISTIC_PROFILE_SOURCE,
@@ -944,10 +945,7 @@ class AnthropicProvider(ProfileDetectionMixin, AsyncLLMProvider):
         except Exception:
             return False
         model = self.config.model.lower()
-        return any(
-            bool(mid) and (model == mid or model in mid or mid in model)
-            for mid in listed
-        )
+        return any(bool(mid) and (model == mid or model in mid or mid in model) for mid in listed)
 
     def _detect_constraints(self, config: LLMConfig) -> ModelConstraints:
         """Auto-detect Anthropic request-shape constraints for *config*'s model.
@@ -1074,16 +1072,10 @@ class AnthropicProvider(ProfileDetectionMixin, AsyncLLMProvider):
             return None
         status = getattr(exc, "status_code", None)
         response = getattr(exc, "response", None)
-        retry_after = self._retry_after_from_headers(
-            getattr(response, "headers", None)
-        )
-        return self._dataknobs_error_for_status(
-            status, str(exc), retry_after=retry_after
-        )
+        retry_after = self._retry_after_from_headers(getattr(response, "headers", None))
+        return self._dataknobs_error_for_status(status, str(exc), retry_after=retry_after)
 
-    def _recover_rejected_param(
-        self, exc: Exception, api_kwargs: Dict[str, Any]
-    ) -> str | None:
+    def _recover_rejected_param(self, exc: Exception, api_kwargs: Dict[str, Any]) -> str | None:
         """Drop a sampling param an unexpected 400 identifies, for one retry.
 
         The safety net for a model family the static constraint table doesn't
@@ -1151,7 +1143,7 @@ class AnthropicProvider(ProfileDetectionMixin, AsyncLLMProvider):
         messages: Union[str, List[LLMMessage]],
         config_overrides: Dict[str, Any] | None = None,
         tools: list[Any] | None = None,
-        **kwargs: Any
+        **kwargs: Any,
     ) -> LLMResponse:
         """Generate completion.
 
@@ -1175,7 +1167,8 @@ class AnthropicProvider(ProfileDetectionMixin, AsyncLLMProvider):
             msg_list = messages
 
         system_content, anthropic_messages = self.adapter.adapt_messages(
-            msg_list, system_prompt=self.config.system_prompt,
+            msg_list,
+            system_prompt=self.config.system_prompt,
         )
 
         # Keep the per-model max_tokens ceiling fresh (TTL-gated, ≤1 poll per
@@ -1202,7 +1195,7 @@ class AnthropicProvider(ProfileDetectionMixin, AsyncLLMProvider):
         messages: Union[str, List[LLMMessage]],
         config_overrides: Dict[str, Any] | None = None,
         tools: list[Any] | None = None,
-        **kwargs: Any
+        **kwargs: Any,
     ) -> AsyncIterator[LLMStreamResponse]:
         """Generate streaming completion.
 
@@ -1226,7 +1219,8 @@ class AnthropicProvider(ProfileDetectionMixin, AsyncLLMProvider):
             msg_list = messages
 
         system_content, anthropic_messages = self.adapter.adapt_messages(
-            msg_list, system_prompt=self.config.system_prompt,
+            msg_list,
+            system_prompt=self.config.system_prompt,
         )
 
         # Keep the per-model max_tokens ceiling fresh (TTL-gated) before the
@@ -1254,20 +1248,17 @@ class AnthropicProvider(ProfileDetectionMixin, AsyncLLMProvider):
             try:
                 async with self._client.messages.stream(**stream_kwargs) as stream:
                     async for chunk in stream:
-                        if chunk.type == 'content_block_delta':
-                            if hasattr(chunk.delta, 'text'):
+                        if chunk.type == "content_block_delta":
+                            if hasattr(chunk.delta, "text"):
                                 yielded = True
-                                yield LLMStreamResponse(
-                                    delta=chunk.delta.text,
-                                    is_final=False
-                                )
+                                yield LLMStreamResponse(delta=chunk.delta.text, is_final=False)
 
                     # Final message — use adapter to parse content blocks
                     message = await stream.get_final_message()
                     parsed = self.adapter.adapt_response(message)
 
                     final_chunk = LLMStreamResponse(
-                        delta='',
+                        delta="",
                         is_final=True,
                         finish_reason=parsed.finish_reason,
                         truncated=parsed.truncated,
@@ -1293,18 +1284,13 @@ class AnthropicProvider(ProfileDetectionMixin, AsyncLLMProvider):
                 self._raise_translated(exc)
 
     async def embed(
-        self,
-        texts: Union[str, List[str]],
-        **kwargs
+        self, texts: Union[str, List[str]], **kwargs
     ) -> Union[List[float], List[List[float]]]:
         """Anthropic doesn't provide embeddings."""
         raise NotImplementedError("Anthropic doesn't provide embedding models")
 
     async def function_call(
-        self,
-        messages: List[LLMMessage],
-        functions: List[Dict[str, Any]],
-        **kwargs: Any
+        self, messages: List[LLMMessage], functions: List[Dict[str, Any]], **kwargs: Any
     ) -> LLMResponse:
         """Execute function calling with native Anthropic tools API (Claude 3+)."""
         warnings.warn(
@@ -1316,7 +1302,8 @@ class AnthropicProvider(ProfileDetectionMixin, AsyncLLMProvider):
             await self.initialize()
 
         system_content, anthropic_messages = self.adapter.adapt_messages(
-            messages, system_prompt=self.config.system_prompt,
+            messages,
+            system_prompt=self.config.system_prompt,
         )
 
         # function_call() receives raw dicts, not Tool objects — delegate
@@ -1345,9 +1332,7 @@ class AnthropicProvider(ProfileDetectionMixin, AsyncLLMProvider):
             # path preserves truncated / raw_finish_reason and fires the
             # truncation warning — exactly like complete()/stream_complete().
             # Rebuilding a fresh LLMResponse here would silently drop them.
-            return self._analyze_response(
-                self._attach_legacy_function_call(parsed)
-            )
+            return self._analyze_response(self._attach_legacy_function_call(parsed))
 
         except ValidationError as e:
             # A 400 (translated to ValidationError by _create_message) means the
@@ -1360,13 +1345,13 @@ class AnthropicProvider(ProfileDetectionMixin, AsyncLLMProvider):
             # fallback that would issue a second call against the same endpoint.
             logger.warning(
                 "Anthropic native tools unsupported (request rejected), falling "
-                "back to prompt-based function calling: %s", e,
+                "back to prompt-based function calling: %s",
+                e,
             )
 
-            function_descriptions = "\n".join([
-                f"- {f['name']}: {f['description']}"
-                for f in functions
-            ])
+            function_descriptions = "\n".join(
+                [f"- {f['name']}: {f['description']}" for f in functions]
+            )
 
             system_prompt = f"""You have access to the following functions:
 {function_descriptions}
@@ -1377,9 +1362,9 @@ FUNCTION_CALL: {{
     "arguments": {{...}}
 }}"""
 
-            messages_with_system = [
-                LLMMessage(role="system", content=system_prompt)
-            ] + list(messages)
+            messages_with_system = [LLMMessage(role="system", content=system_prompt)] + list(
+                messages
+            )
 
             response = await self.complete(messages_with_system, **kwargs)
 

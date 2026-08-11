@@ -9,6 +9,7 @@ The fixture pattern mirrors ``test_scoped_middleware.py`` — real
 ``FileSystemPromptLibrary``, and ``DataknobsConversationStorage`` over
 ``AsyncMemoryDatabase``. No mocks.
 """
+
 from __future__ import annotations
 
 import logging
@@ -137,9 +138,7 @@ async def manager_factory():
         prompt_dir = Path(tmpdir) / "prompts"
         _create_prompts(prompt_dir)
 
-        config = LLMConfig(
-            provider="echo", model="echo-model", options={"echo_prefix": ""}
-        )
+        config = LLMConfig(provider="echo", model="echo-model", options={"echo_prefix": ""})
         llm = EchoProvider(config)
         builder = AsyncPromptBuilder(library=FileSystemPromptLibrary(prompt_dir))
         storage = DataknobsConversationStorage(AsyncMemoryDatabase())
@@ -207,13 +206,9 @@ class TestPersistNamespaceMerge:
         assert response.metadata["telemetry_count"] == 5
 
     @pytest.mark.asyncio
-    async def test_persist_does_not_clobber_canonical_fields(
-        self, manager_factory
-    ):
+    async def test_persist_does_not_clobber_canonical_fields(self, manager_factory):
         """Canonical framework fields win over ``_persist`` values."""
-        mw = PersistingMiddleware(
-            {"usage": "bogus", "model": "bogus", "custom": "ok"}
-        )
+        mw = PersistingMiddleware({"usage": "bogus", "model": "bogus", "custom": "ok"})
         manager = await manager_factory(middleware=[mw])
         await manager.add_message(role="user", content="Hello")
         response = await manager.complete()
@@ -250,31 +245,22 @@ class TestPersistNamespaceMerge:
         assert "provider" in metadata
 
     @pytest.mark.asyncio
-    async def test_non_dict_persist_value_skipped_and_warned(
-        self, manager_factory, caplog
-    ):
+    async def test_non_dict_persist_value_skipped_and_warned(self, manager_factory, caplog):
         """Non-dict ``_persist`` values are skipped with a WARNING log."""
         mw = NonDictPersistMiddleware()
         manager = await manager_factory(middleware=[mw])
         await manager.add_message(role="user", content="Hello")
 
-        with caplog.at_level(
-            logging.WARNING, logger="dataknobs_llm.conversations.manager"
-        ):
+        with caplog.at_level(logging.WARNING, logger="dataknobs_llm.conversations.manager"):
             await manager.complete()
 
         metadata = _assistant_metadata(manager)
         assert "_persist" not in metadata
         # No crash, and the warning was emitted.
-        assert any(
-            "expected dict, got str" in record.message
-            for record in caplog.records
-        )
+        assert any("expected dict, got str" in record.message for record in caplog.records)
 
     @pytest.mark.asyncio
-    async def test_multiple_middleware_merge_disjoint_keys(
-        self, manager_factory
-    ):
+    async def test_multiple_middleware_merge_disjoint_keys(self, manager_factory):
         """Disjoint ``_persist`` writes from multiple middleware all land."""
         mw_a = PersistingMiddleware({"a": 1})
         mw_b = PersistingMiddleware({"b": 2})
@@ -287,9 +273,7 @@ class TestPersistNamespaceMerge:
         assert metadata["b"] == 2
 
     @pytest.mark.asyncio
-    async def test_outer_middleware_wins_on_shared_persist_key(
-        self, manager_factory
-    ):
+    async def test_outer_middleware_wins_on_shared_persist_key(self, manager_factory):
         """With onion ordering, the last ``process_response`` to run wins.
 
         ``middleware = [mw_outer, mw_inner]`` — onion convention:
@@ -322,9 +306,7 @@ class TestPersistNamespaceMerge:
         assert "_persist" not in metadata
 
     @pytest.mark.asyncio
-    async def test_provider_write_to_persist_is_also_merged(
-        self, manager_factory
-    ):
+    async def test_provider_write_to_persist_is_also_merged(self, manager_factory):
         """Provider-sourced ``_persist`` writes are merged (writer-agnostic)."""
         manager = await manager_factory()
         # Pre-script the provider to return an LLMResponse with _persist
@@ -354,9 +336,7 @@ class TestPromoteToPersistMiddleware:
     """The adapter middleware promotes flat keys into ``_persist``."""
 
     @pytest.mark.asyncio
-    async def test_promote_middleware_moves_flat_keys_to_persist(
-        self, manager_factory
-    ):
+    async def test_promote_middleware_moves_flat_keys_to_persist(self, manager_factory):
         """Promoter at position [0] captures flat keys written by later
         middleware (earlier on response due to onion reversal)."""
         promoter = PromoteToPersistMiddleware(keys=["telemetry_count"])
@@ -373,9 +353,7 @@ class TestPromoteToPersistMiddleware:
     @pytest.mark.asyncio
     async def test_promote_middleware_skips_missing_keys(self, manager_factory):
         """Missing allowlisted keys do not error and do not land on the node."""
-        promoter = PromoteToPersistMiddleware(
-            keys=["not_written", "also_not_written"]
-        )
+        promoter = PromoteToPersistMiddleware(keys=["not_written", "also_not_written"])
         manager = await manager_factory(middleware=[promoter])
         await manager.add_message(role="user", content="Hello")
         await manager.complete()
@@ -388,9 +366,7 @@ class TestPromoteToPersistMiddleware:
         assert "provider" in metadata
 
     @pytest.mark.asyncio
-    async def test_promote_middleware_preserves_native_persist_writer(
-        self, manager_factory
-    ):
+    async def test_promote_middleware_preserves_native_persist_writer(self, manager_factory):
         """Native ``_persist`` writer takes precedence over the promoter."""
         promoter = PromoteToPersistMiddleware(keys=["shared"])
         native = PersistingMiddleware({"shared": "native"})
@@ -399,9 +375,7 @@ class TestPromoteToPersistMiddleware:
         # - response: ephemeral runs first (writes flat "shared"=flat),
         #             native runs next (writes _persist["shared"]="native"),
         #             promoter runs last (setdefault skips — already set).
-        manager = await manager_factory(
-            middleware=[promoter, native, ephemeral]
-        )
+        manager = await manager_factory(middleware=[promoter, native, ephemeral])
         await manager.add_message(role="user", content="Hello")
         await manager.complete()
 

@@ -98,15 +98,20 @@ class MemoryVectorStore(VectorStore):
 
         # Save all data
         with open(self.persist_path, "wb") as f:
-            pickle.dump({
-                "vectors": {k: v.tolist() for k, v in vectors.items()},
-                "metadata_store": metadata_store,
-                "timestamps": timestamps,
-                "config": {
-                    "dimensions": self.dimensions,
-                    "metric": self.metric.value if hasattr(self.metric, 'value') else str(self.metric),
-                }
-            }, f)
+            pickle.dump(
+                {
+                    "vectors": {k: v.tolist() for k, v in vectors.items()},
+                    "metadata_store": metadata_store,
+                    "timestamps": timestamps,
+                    "config": {
+                        "dimensions": self.dimensions,
+                        "metric": self.metric.value
+                        if hasattr(self.metric, "value")
+                        else str(self.metric),
+                    },
+                },
+                f,
+            )
 
     async def load(self) -> None:
         """Load vectors and metadata from disk (offloaded off the event loop)."""
@@ -188,18 +193,10 @@ class MemoryVectorStore(VectorStore):
         for vector_id in ids:
             if vector_id in self.vectors:
                 vector = self.vectors[vector_id]
-                meta = (
-                    self.metadata_store.get(vector_id)
-                    if include_metadata
-                    else None
-                )
+                meta = self.metadata_store.get(vector_id) if include_metadata else None
                 if inject:
-                    created, updated = self.timestamps.get(
-                        vector_id, (None, None)
-                    )
-                    meta = self._inject_timestamps(
-                        meta, created=created, updated=updated
-                    )
+                    created, updated = self.timestamps.get(vector_id, (None, None))
+                    meta = self._inject_timestamps(meta, created=created, updated=updated)
                 results.append((vector, meta))
             else:
                 results.append((None, None))
@@ -271,18 +268,10 @@ class MemoryVectorStore(VectorStore):
         results = []
         inject = include_timestamps and include_metadata
         for vector_id, score in scores[:k]:
-            meta = (
-                self.metadata_store.get(vector_id)
-                if include_metadata
-                else None
-            )
+            meta = self.metadata_store.get(vector_id) if include_metadata else None
             if inject:
-                created, updated = self.timestamps.get(
-                    vector_id, (None, None)
-                )
-                meta = self._inject_timestamps(
-                    meta, created=created, updated=updated
-                )
+                created, updated = self.timestamps.get(vector_id, (None, None))
+                meta = self._inject_timestamps(meta, created=created, updated=updated)
             results.append((vector_id, score, meta))
 
         return results

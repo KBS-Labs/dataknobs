@@ -118,18 +118,18 @@ class ArtifactBankCatalog:
             for key, value in compiled.items():
                 if key.startswith("_"):
                     continue
-                if isinstance(value, list) and all(
-                    isinstance(v, dict) for v in value
-                ):
+                if isinstance(value, list) and all(isinstance(v, dict) for v in value):
                     sections[key] = len(value)
                 else:
                     fields[key] = value
-            entries.append({
-                "name": name,
-                "artifact_type": artifact_type,
-                "fields": fields,
-                "sections": sections,
-            })
+            entries.append(
+                {
+                    "name": name,
+                    "artifact_type": artifact_type,
+                    "fields": fields,
+                    "sections": sections,
+                }
+            )
         return entries
 
     def get(self, name: str) -> dict[str, Any] | None:
@@ -176,10 +176,7 @@ class ArtifactBankCatalog:
         """
         errors = artifact.validate()
         if errors:
-            raise ValueError(
-                f"Cannot save artifact '{artifact.name}': "
-                + "; ".join(errors)
-            )
+            raise ValueError(f"Cannot save artifact '{artifact.name}': " + "; ".join(errors))
         key = self.resolve_entry_name(artifact)
         compiled = artifact.compile()
 

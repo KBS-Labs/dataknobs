@@ -11,6 +11,7 @@ from .base import BasePoolConfig
 @dataclass
 class ElasticsearchPoolConfig(BasePoolConfig):
     """Configuration for Elasticsearch connection pools."""
+
     hosts: list[str] | None = None
     index: str = "records"
     api_key: str | None = None
@@ -64,7 +65,7 @@ class ElasticsearchPoolConfig(BasePoolConfig):
             ca_certs=config.get("ca_certs"),
             client_cert=config.get("client_cert"),
             client_key=config.get("client_key"),
-            ssl_show_warn=config.get("ssl_show_warn", True)
+            ssl_show_warn=config.get("ssl_show_warn", True),
         )
 
 

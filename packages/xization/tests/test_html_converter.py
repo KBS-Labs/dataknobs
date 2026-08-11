@@ -359,6 +359,7 @@ class TestRFCDetection:
         html = '<div class="rfcmarkup"><pre>content</pre></div>'
         converter = HTMLConverter()
         from bs4 import BeautifulSoup
+
         soup = BeautifulSoup(html, "html.parser")
         assert converter._is_rfc_markup(soup) is True
 
@@ -367,6 +368,7 @@ class TestRFCDetection:
         html = '<pre><span class="h2">1. Introduction</span></pre>'
         converter = HTMLConverter()
         from bs4 import BeautifulSoup
+
         soup = BeautifulSoup(html, "html.parser")
         assert converter._is_rfc_markup(soup) is True
 
@@ -375,6 +377,7 @@ class TestRFCDetection:
         html = "<h1>Title</h1><p>Content.</p>"
         converter = HTMLConverter()
         from bs4 import BeautifulSoup
+
         soup = BeautifulSoup(html, "html.parser")
         assert converter._is_rfc_markup(soup) is False
 
@@ -419,10 +422,7 @@ class TestRFCConversion:
 
     def test_rfc_page_footer_stripped(self):
         """Test RFC page footers are removed."""
-        grey_footer = (
-            "Hardt                        "
-            "Standards Track                    [Page 4]"
-        )
+        grey_footer = "Hardt                        Standards Track                    [Page 4]"
         grey_header = (
             '<a href="/doc/html/rfc6749">RFC 6749</a>'
             "                        OAuth 2.0"
@@ -436,7 +436,7 @@ class TestRFCConversion:
             "   Content here.\n\n"
             f'<span class="grey">{grey_footer}</span></pre>\n'
             "<hr class='noprint'/>"
-            '<pre class=\'newpage\'>'
+            "<pre class='newpage'>"
             '<span id="page-5" ></span>\n'
             f'<span class="grey">{grey_header}</span>\n\n'
             "   More content here.\n"

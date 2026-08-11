@@ -65,9 +65,11 @@ async def test_task_overrides_only(provider: EchoProvider) -> None:
     provider.set_responses([text_response("ok")])
     executor = ParallelLLMExecutor(provider, max_concurrency=1)
 
-    results = await executor.execute({
-        "t": LLMTask(messages=_msg(), config_overrides={"temperature": 0.9}),
-    })
+    results = await executor.execute(
+        {
+            "t": LLMTask(messages=_msg(), config_overrides={"temperature": 0.9}),
+        }
+    )
 
     assert results["t"].success
     overrides = provider.get_last_call()["config_overrides"]
@@ -84,12 +86,14 @@ async def test_task_overrides_win(provider: EchoProvider) -> None:
         default_config_overrides={"temperature": 0.5, "model": "fast"},
     )
 
-    results = await executor.execute({
-        "t": LLMTask(
-            messages=_msg(),
-            config_overrides={"temperature": 0.9},
-        ),
-    })
+    results = await executor.execute(
+        {
+            "t": LLMTask(
+                messages=_msg(),
+                config_overrides={"temperature": 0.9},
+            ),
+        }
+    )
 
     assert results["t"].success
     overrides = provider.get_last_call()["config_overrides"]
@@ -99,22 +103,26 @@ async def test_task_overrides_win(provider: EchoProvider) -> None:
 @pytest.mark.asyncio
 async def test_defaults_applied_to_all_tasks(provider: EchoProvider) -> None:
     """Default overrides are applied to every task in a batch."""
-    provider.set_responses([
-        text_response("r1"),
-        text_response("r2"),
-        text_response("r3"),
-    ])
+    provider.set_responses(
+        [
+            text_response("r1"),
+            text_response("r2"),
+            text_response("r3"),
+        ]
+    )
     executor = ParallelLLMExecutor(
         provider,
         max_concurrency=5,
         default_config_overrides={"model": "fast"},
     )
 
-    results = await executor.execute({
-        "a": LLMTask(messages=_msg("q1")),
-        "b": LLMTask(messages=_msg("q2")),
-        "c": LLMTask(messages=_msg("q3")),
-    })
+    results = await executor.execute(
+        {
+            "a": LLMTask(messages=_msg("q1")),
+            "b": LLMTask(messages=_msg("q2")),
+            "c": LLMTask(messages=_msg("q3")),
+        }
+    )
 
     assert all(r.success for r in results.values())
     for call in provider.calls:

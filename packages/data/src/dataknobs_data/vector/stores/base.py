@@ -72,12 +72,12 @@ class VectorStore(ABC, VectorStoreBase):
         metadata: list[dict[str, Any]] | None = None,
     ) -> list[str]:
         """Add vectors to the store.
-        
+
         Args:
             vectors: Vector(s) to add
             ids: Optional IDs for vectors (generated if not provided)
             metadata: Optional metadata for each vector
-            
+
         Returns:
             List of IDs for the added vectors
         """
@@ -108,10 +108,10 @@ class VectorStore(ABC, VectorStoreBase):
     @abstractmethod
     async def delete_vectors(self, ids: list[str]) -> int:
         """Delete vectors by ID.
-        
+
         Args:
             ids: Vector IDs to delete
-            
+
         Returns:
             Number of vectors deleted
         """
@@ -150,11 +150,11 @@ class VectorStore(ABC, VectorStoreBase):
         metadata: list[dict[str, Any]],
     ) -> int:
         """Update metadata for existing vectors.
-        
+
         Args:
             ids: Vector IDs to update
             metadata: New metadata for each vector
-            
+
         Returns:
             Number of vectors updated
         """
@@ -163,10 +163,10 @@ class VectorStore(ABC, VectorStoreBase):
     @abstractmethod
     async def count(self, filter: dict[str, Any] | None = None) -> int:
         """Count vectors in the store.
-        
+
         Args:
             filter: Optional metadata filter
-            
+
         Returns:
             Number of vectors matching filter
         """
@@ -219,9 +219,7 @@ class VectorStore(ABC, VectorStoreBase):
             so the default is never reached for a backend DataKnobs
             ships.
         """
-        raise NotImplementedError(
-            f"{type(self).__name__} does not support update_metadata_where()"
-        )
+        raise NotImplementedError(f"{type(self).__name__} does not support update_metadata_where()")
 
     async def metadata_fields(self) -> set[str]:
         """Discover metadata field names present across stored vectors.
@@ -245,9 +243,7 @@ class VectorStore(ABC, VectorStoreBase):
             ``NotImplementedError`` and decide what "unknown" means
             for their use case.
         """
-        raise NotImplementedError(
-            f"{type(self).__name__} does not support metadata_fields()"
-        )
+        raise NotImplementedError(f"{type(self).__name__} does not support metadata_fields()")
 
     async def update_vectors(
         self,
@@ -256,15 +252,15 @@ class VectorStore(ABC, VectorStoreBase):
         metadata: list[dict[str, Any]] | None = None,
     ) -> list[str]:
         """Update existing vectors by ID.
-        
+
         This is a convenience method that deletes and re-adds vectors.
         Some vector stores may override this with a more efficient implementation.
-        
+
         Args:
             vectors: New vector values
             ids: IDs of vectors to update
             metadata: Optional new metadata
-            
+
         Returns:
             List of updated IDs
         """
@@ -283,12 +279,12 @@ class VectorStore(ABC, VectorStoreBase):
         include_fields: list[str] | None = None,
     ) -> list[str]:
         """Add records with vector fields to the store.
-        
+
         Args:
             records: Records containing vector fields
             vector_field: Name of the vector field
             include_fields: Fields to include in metadata
-            
+
         Returns:
             List of IDs for added vectors
         """
@@ -304,7 +300,7 @@ class VectorStore(ABC, VectorStoreBase):
             vector_obj = record.fields[vector_field]
             if not isinstance(vector_obj, VectorField):
                 continue
-            
+
             # Skip records without IDs
             if record.id is None:
                 continue
@@ -348,19 +344,17 @@ class VectorStore(ABC, VectorStoreBase):
         fetch_records: Callable[[list[str]], list[Record]] | None = None,
     ) -> list[VectorSearchResult]:
         """Search and return results as VectorSearchResult objects.
-        
+
         Args:
             query_vector: Query vector
             k: Number of results
             filter: Optional metadata filter
             fetch_records: Optional function to fetch full records
-            
+
         Returns:
             List of VectorSearchResult objects
         """
-        results = await self.search(
-            query_vector, k=k, filter=filter, include_metadata=True
-        )
+        results = await self.search(query_vector, k=k, filter=filter, include_metadata=True)
 
         search_results = []
         record_ids = []
@@ -415,14 +409,14 @@ class VectorStore(ABC, VectorStoreBase):
         batch_size: int | None = None,
     ) -> list[str]:
         """Embed texts and store vectors.
-        
+
         Args:
             texts: Texts to embed
             embedding_fn: Function to generate embeddings
             ids: Optional IDs for vectors
             metadata: Optional metadata for each vector
             batch_size: Batch size for embedding
-            
+
         Returns:
             List of IDs for added vectors
         """
@@ -430,9 +424,9 @@ class VectorStore(ABC, VectorStoreBase):
         all_ids = []
 
         for i in range(0, len(texts), batch_size):
-            batch_texts = texts[i:i + batch_size]
-            batch_ids = ids[i:i + batch_size] if ids else None
-            batch_metadata = metadata[i:i + batch_size] if metadata else None
+            batch_texts = texts[i : i + batch_size]
+            batch_ids = ids[i : i + batch_size] if ids else None
+            batch_metadata = metadata[i : i + batch_size] if metadata else None
 
             # Generate embeddings
             embeddings = embedding_fn(batch_texts)
@@ -445,9 +439,7 @@ class VectorStore(ABC, VectorStoreBase):
                 batch_metadata[j]["source_text"] = text
 
             # Store vectors
-            stored_ids = await self.add_vectors(
-                embeddings, ids=batch_ids, metadata=batch_metadata
-            )
+            stored_ids = await self.add_vectors(embeddings, ids=batch_ids, metadata=batch_metadata)
             all_ids.extend(stored_ids)
 
         return all_ids

@@ -18,11 +18,13 @@ class TestSyncDuckDBAutoCreateTable:
     def test_disabled_raises_when_table_missing(self, tmp_path):
         """auto_create_table=False raises clearly when table is absent."""
         path = str(tmp_path / "missing.duckdb")
-        db = SyncDuckDBDatabase({
-            "path": path,
-            "table": "records",
-            "auto_create_table": False,
-        })
+        db = SyncDuckDBDatabase(
+            {
+                "path": path,
+                "table": "records",
+                "auto_create_table": False,
+            }
+        )
         with pytest.raises(RuntimeError, match="auto_create_table is disabled"):
             db.connect()
 
@@ -33,11 +35,13 @@ class TestSyncDuckDBAutoCreateTable:
         bootstrap.connect()
         bootstrap.close()
 
-        db = SyncDuckDBDatabase({
-            "path": path,
-            "table": "records",
-            "auto_create_table": False,
-        })
+        db = SyncDuckDBDatabase(
+            {
+                "path": path,
+                "table": "records",
+                "auto_create_table": False,
+            }
+        )
         db.connect()
         record_id = db.create(Record({"x": 1}))
         assert record_id
@@ -46,11 +50,13 @@ class TestSyncDuckDBAutoCreateTable:
     def test_string_false_coerced(self, tmp_path):
         """YAML/env-delivered 'false' string is correctly coerced."""
         path = str(tmp_path / "string.duckdb")
-        db = SyncDuckDBDatabase({
-            "path": path,
-            "table": "records",
-            "auto_create_table": "false",
-        })
+        db = SyncDuckDBDatabase(
+            {
+                "path": path,
+                "table": "records",
+                "auto_create_table": "false",
+            }
+        )
         with pytest.raises(RuntimeError, match="auto_create_table is disabled"):
             db.connect()
 
@@ -69,11 +75,13 @@ class TestAsyncDuckDBAutoCreateTable:
     async def test_disabled_raises_when_table_missing(self, tmp_path):
         """auto_create_table=False raises clearly when table is absent."""
         path = str(tmp_path / "missing_async.duckdb")
-        db = AsyncDuckDBDatabase({
-            "path": path,
-            "table": "records",
-            "auto_create_table": False,
-        })
+        db = AsyncDuckDBDatabase(
+            {
+                "path": path,
+                "table": "records",
+                "auto_create_table": False,
+            }
+        )
         with pytest.raises(RuntimeError, match="auto_create_table is disabled"):
             await db.connect()
 
@@ -85,11 +93,13 @@ class TestAsyncDuckDBAutoCreateTable:
         await bootstrap.connect()
         await bootstrap.close()
 
-        db = AsyncDuckDBDatabase({
-            "path": path,
-            "table": "records",
-            "auto_create_table": False,
-        })
+        db = AsyncDuckDBDatabase(
+            {
+                "path": path,
+                "table": "records",
+                "auto_create_table": False,
+            }
+        )
         await db.connect()
         record_id = await db.create(Record({"x": 1}))
         assert record_id
@@ -99,10 +109,12 @@ class TestAsyncDuckDBAutoCreateTable:
     async def test_string_false_coerced(self, tmp_path):
         """YAML/env-delivered 'false' string is correctly coerced."""
         path = str(tmp_path / "string_async.duckdb")
-        db = AsyncDuckDBDatabase({
-            "path": path,
-            "table": "records",
-            "auto_create_table": "false",
-        })
+        db = AsyncDuckDBDatabase(
+            {
+                "path": path,
+                "table": "records",
+                "auto_create_table": "false",
+            }
+        )
         with pytest.raises(RuntimeError, match="auto_create_table is disabled"):
             await db.connect()

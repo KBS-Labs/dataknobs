@@ -50,12 +50,7 @@ class Tool(ABC):
                     raise ValueError(f"Unknown operation: {operation}")
     """
 
-    def __init__(
-        self,
-        name: str,
-        description: str,
-        metadata: Dict[str, Any] | None = None
-    ):
+    def __init__(self, name: str, description: str, metadata: Dict[str, Any] | None = None):
         """Initialize a tool.
 
         Args:

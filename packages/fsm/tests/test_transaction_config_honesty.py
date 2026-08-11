@@ -26,9 +26,7 @@ async def test_execution_context_transaction_does_not_drive_async_database():
     db = async_database_factory.create(backend="memory")
     await db.connect()
     try:
-        ctx = ExecutionContext(
-            transaction_mode=TransactionMode.PER_RECORD, database=db
-        )
+        ctx = ExecutionContext(transaction_mode=TransactionMode.PER_RECORD, database=db)
         assert ctx.start_transaction() is True
         assert ctx.current_transaction is not None
         # The database must be untouched by the in-memory bookkeeping.

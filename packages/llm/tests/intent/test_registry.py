@@ -177,7 +177,9 @@ class TestIntentClassifierBackendsPluginRegistry:
             return _StubClassifier()
 
         intent_classifier_backends.register(
-            "test-custom", _make_stub, allow_overwrite=True,
+            "test-custom",
+            _make_stub,
+            allow_overwrite=True,
         )
         try:
             clf = create_intent_classifier("test-custom", {})

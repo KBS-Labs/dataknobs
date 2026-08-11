@@ -283,9 +283,7 @@ class ExecutionTracker:
         """
         self._state_entry_time = time.time()
 
-    def query(
-        self, query: ExecutionHistoryQuery | None = None
-    ) -> list[ExecutionRecord]:
+    def query(self, query: ExecutionHistoryQuery | None = None) -> list[ExecutionRecord]:
         """Query execution history.
 
         Args:
@@ -324,7 +322,7 @@ class ExecutionTracker:
             results = [r for r in results if not r.success]
 
         if query.limit:
-            results = results[-query.limit:]
+            results = results[-query.limit :]
 
         return results
 
@@ -370,9 +368,7 @@ class ExecutionTracker:
         )
 
         # Find most visited state
-        most_visited_state = (
-            max(state_counts, key=state_counts.get) if state_counts else None
-        )
+        most_visited_state = max(state_counts, key=state_counts.get) if state_counts else None
 
         return ExecutionStats(
             total_transitions=len(self._history),

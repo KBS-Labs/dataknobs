@@ -370,11 +370,13 @@ class TestEventBusIntegration:
         audit_log = []
 
         async def audit_handler(event):
-            audit_log.append({
-                "type": event.type.value,
-                "topic": event.topic,
-                "timestamp": event.timestamp,
-            })
+            audit_log.append(
+                {
+                    "type": event.type.value,
+                    "topic": event.topic,
+                    "timestamp": event.timestamp,
+                }
+            )
 
         # Cache invalidation
         cache = {}
@@ -559,9 +561,7 @@ class TestEventBusRegistry:
 
         await bus.connect()
         await bus.subscribe("t", handler)
-        await bus.publish(
-            "t", Event(type=EventType.CREATED, topic="t", payload={"k": 1})
-        )
+        await bus.publish("t", Event(type=EventType.CREATED, topic="t", payload={"k": 1}))
         await asyncio.sleep(0.05)
         await bus.close()
 
@@ -643,9 +643,7 @@ class TestEventBusRegistry:
 
         event_bus_backends.register("custom_test", _factory)
         try:
-            bus = create_event_bus(
-                {"backend": "custom_test", "tag": "consumer-x"}
-            )
+            bus = create_event_bus({"backend": "custom_test", "tag": "consumer-x"})
             assert isinstance(bus, TaggingEventBus)
             assert bus.tag == "consumer-x"
 
@@ -656,9 +654,7 @@ class TestEventBusRegistry:
 
             await bus.connect()
             await bus.subscribe("c", handler)
-            await bus.publish(
-                "c", Event(type=EventType.CUSTOM, topic="c", payload={})
-            )
+            await bus.publish("c", Event(type=EventType.CUSTOM, topic="c", payload={}))
             await asyncio.sleep(0.05)
             await bus.close()
 

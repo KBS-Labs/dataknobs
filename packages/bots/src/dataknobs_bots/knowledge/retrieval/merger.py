@@ -156,6 +156,7 @@ class ChunkMerger:
         Returns:
             Sorted list
         """
+
         def get_position(chunk: dict[str, Any]) -> int:
             metadata = chunk.get("metadata", {})
             # Try chunk_index first, then line_number
@@ -208,9 +209,7 @@ class ChunkMerger:
 
         # Don't forget the last group
         if current_chunks:
-            merged_results.append(
-                self._create_merged_chunk(current_chunks, source, heading_path)
-            )
+            merged_results.append(self._create_merged_chunk(current_chunks, source, heading_path))
 
         return merged_results
 
@@ -265,15 +264,17 @@ class ChunkMerger:
         """
         results = []
         for merged in merged_chunks:
-            results.append({
-                "text": merged.text,
-                "source": merged.source,
-                "heading_path": merged.heading_display,
-                "similarity": merged.avg_similarity,
-                "metadata": {
-                    "headings": merged.heading_path,
-                    "content_length": merged.content_length,
-                    "merged_count": len(merged.chunks),
-                },
-            })
+            results.append(
+                {
+                    "text": merged.text,
+                    "source": merged.source,
+                    "heading_path": merged.heading_display,
+                    "similarity": merged.avg_similarity,
+                    "metadata": {
+                        "headings": merged.heading_path,
+                        "content_length": merged.content_length,
+                        "merged_count": len(merged.chunks),
+                    },
+                }
+            )
         return results

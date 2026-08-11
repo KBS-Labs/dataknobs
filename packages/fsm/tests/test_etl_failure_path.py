@@ -41,10 +41,7 @@ async def _read_target(path: str) -> dict[str, dict]:
     """Reopen the target and return its rows keyed by id."""
     db = await AsyncDatabase.from_backend("file", {"type": "file", "path": path})
     try:
-        return {
-            r.to_dict()["id"]: r.to_dict()
-            async for r in db.stream_read(Query())
-        }
+        return {r.to_dict()["id"]: r.to_dict() async for r in db.stream_read(Query())}
     finally:
         await db.close()
 
@@ -87,9 +84,7 @@ async def test_raising_transformation_counts_as_error(tmp_path: Path) -> None:
     assert metrics["errors"] == 1, (
         f"a raising transformation was swallowed instead of counted as an error: {metrics}"
     )
-    assert metrics["loaded"] == 2, (
-        f"only the two clean rows should count as loaded: {metrics}"
-    )
+    assert metrics["loaded"] == 2, f"only the two clean rows should count as loaded: {metrics}"
     assert metrics["transformed"] == 2
     assert metrics["extracted"] == 3
 
@@ -190,8 +185,7 @@ async def test_failed_transform_record_not_loaded_to_target(tmp_path: Path) -> N
 
     target = await _read_target(tgt)
     assert "2" not in target, (
-        "the failed record was upserted to the target instead of being "
-        f"skipped: {target}"
+        f"the failed record was upserted to the target instead of being skipped: {target}"
     )
     assert set(target) == {"1", "3"}, f"only the clean rows should persist: {target}"
     # The persisted rows must carry the transform's output, not raw source data.

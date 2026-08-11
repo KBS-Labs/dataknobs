@@ -83,9 +83,7 @@ class InProcessLock:
                 self._locks.pop(key, None)
                 self._refs.pop(key, None)
 
-    def hold(
-        self, key: str, *, timeout: float | None = None
-    ) -> AbstractAsyncContextManager[bool]:
+    def hold(self, key: str, *, timeout: float | None = None) -> AbstractAsyncContextManager[bool]:
         """Async CM wrapping acquire/release. See the protocol."""
         return _hold(self, key, timeout)
 

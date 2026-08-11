@@ -63,9 +63,7 @@ class SyncElasticsearchDatabase(
     ``from_config`` / factory paths share one construction route.
     """
 
-    CONFIG_CLS: ClassVar[type[SyncElasticsearchDatabaseConfig]] = (
-        SyncElasticsearchDatabaseConfig
-    )
+    CONFIG_CLS: ClassVar[type[SyncElasticsearchDatabaseConfig]] = SyncElasticsearchDatabaseConfig
 
     def _setup(self) -> None:
         """Derive backend attributes from the typed config.
@@ -108,10 +106,14 @@ class SyncElasticsearchDatabase(
         # Get settings optimized for KNN if we have vector fields
         settings = cfg.settings
         if not settings:
-            settings = self.get_knn_index_settings() if (self.vector_fields or self._vector_enabled) else {
-                "number_of_shards": 1,
-                "number_of_replicas": 0,
-            }
+            settings = (
+                self.get_knn_index_settings()
+                if (self.vector_fields or self._vector_enabled)
+                else {
+                    "number_of_shards": 1,
+                    "number_of_replicas": 0,
+                }
+            )
 
         # Initialize the Elasticsearch index
         self.es_index = SimplifiedElasticsearchIndex(
@@ -128,6 +130,7 @@ class SyncElasticsearchDatabase(
 
         # Create an Elasticsearch client for bulk operations
         from elasticsearch import Elasticsearch
+
         self.es_client = Elasticsearch([f"http://{self.host}:{self.port}"])
 
         self._connected = True
@@ -404,7 +407,7 @@ class SyncElasticsearchDatabase(
                 "_op_type": "create",
                 "_index": self.es_index.index_name,
                 "_id": record_id,
-                "_source": doc
+                "_source": doc,
             }
             bulk_operations.append(action)
 
@@ -464,7 +467,7 @@ class SyncElasticsearchDatabase(
                 bulk_operations,
                 refresh=self.refresh,
                 raise_on_error=False,
-                stats_only=False
+                stats_only=False,
             )
             # Process results to return actual IDs
             if errors:
@@ -472,12 +475,12 @@ class SyncElasticsearchDatabase(
                 error_dict = {}
                 for err in errors:
                     # Error dict can have 'index', 'create', 'update', or 'delete' keys
-                    for op_type in ['index', 'create']:
+                    for op_type in ["index", "create"]:
                         if op_type in err:
                             op = err[op_type]
-                            if raise_on_conflict and op.get('status') == 409:
-                                raise DuplicateRecordError(op.get('_id'))
-                            error_dict[op.get('_id')] = err
+                            if raise_on_conflict and op.get("status") == 409:
+                                raise DuplicateRecordError(op.get("_id"))
+                            error_dict[op.get("_id")] = err
                             break
 
                 result_ids = []
@@ -495,7 +498,7 @@ class SyncElasticsearchDatabase(
             raise
         except Exception as e:
             # Check if this is a BulkIndexError from the helpers module
-            if hasattr(e, 'errors'):
+            if hasattr(e, "errors"):
                 # Extract which operations failed. An error entry carries an
                 # 'index' or 'create' key depending on the op type, so probe
                 # both — mirroring the returned-errors reconciliation above, and
@@ -503,12 +506,12 @@ class SyncElasticsearchDatabase(
                 # fails closed rather than silently passing as success.
                 failed_ids = set()
                 for err in e.errors:
-                    for op_type in ['index', 'create']:
+                    for op_type in ["index", "create"]:
                         if op_type in err:
                             op = err[op_type]
-                            if raise_on_conflict and op.get('status') == 409:
-                                raise DuplicateRecordError(op.get('_id')) from e
-                            failed_ids.add(op.get('_id'))
+                            if raise_on_conflict and op.get("status") == 409:
+                                raise DuplicateRecordError(op.get("_id")) from e
+                            failed_ids.add(op.get("_id"))
                             break
                 result_ids = []
                 for record_id in ids:
@@ -530,12 +533,12 @@ class SyncElasticsearchDatabase(
 
     def delete_batch(self, ids: list[str]) -> list[bool]:
         """Delete multiple records efficiently using the bulk API.
-        
+
         Uses Elasticsearch's bulk API for efficient batch deletion.
-        
+
         Args:
             ids: List of record IDs to delete
-            
+
         Returns:
             List of success flags for each deletion
         """
@@ -546,11 +549,7 @@ class SyncElasticsearchDatabase(
         bulk_operations = []
         for record_id in ids:
             # Create action dict for bulk delete
-            action = {
-                "_op_type": "delete",
-                "_index": self.es_index.index_name,
-                "_id": record_id
-            }
+            action = {"_op_type": "delete", "_index": self.es_index.index_name, "_id": record_id}
             bulk_operations.append(action)
 
         # Execute bulk delete
@@ -563,7 +562,7 @@ class SyncElasticsearchDatabase(
                 bulk_operations,
                 refresh=self.refresh,
                 raise_on_error=False,
-                stats_only=False
+                stats_only=False,
             )
 
             # Process results to determine which deletes succeeded
@@ -571,14 +570,14 @@ class SyncElasticsearchDatabase(
             if errors:
                 error_dict = {}
                 for err in errors:
-                    if 'delete' in err:
-                        error_dict[err['delete'].get('_id')] = err
+                    if "delete" in err:
+                        error_dict[err["delete"].get("_id")] = err
 
                 for record_id in ids:
                     if record_id in error_dict:
                         # Check if error was "not found" (404) - that's still a successful delete
                         error = error_dict[record_id]
-                        status = error.get('delete', {}).get('status')
+                        status = error.get("delete", {}).get("status")
                         results.append(status == 200 or status == 404)
                     else:
                         results.append(True)
@@ -590,10 +589,10 @@ class SyncElasticsearchDatabase(
 
         except Exception as e:
             # Check if this is a BulkIndexError from the helpers module
-            if hasattr(e, 'errors'):
+            if hasattr(e, "errors"):
                 # Extract which operations failed
                 results = []
-                failed_ids = {err.get('delete', {}).get('_id') for err in e.errors}
+                failed_ids = {err.get("delete", {}).get("_id") for err in e.errors}
 
                 for record_id in ids:
                     results.append(record_id not in failed_ids)
@@ -605,12 +604,12 @@ class SyncElasticsearchDatabase(
 
     def update_batch(self, updates: list[tuple[str, Record]]) -> list[bool]:
         """Update multiple records efficiently using the bulk API.
-        
+
         Uses Elasticsearch's bulk API for efficient batch updates.
-        
+
         Args:
             updates: List of (id, record) tuples to update
-            
+
         Returns:
             List of success flags for each update
         """
@@ -627,7 +626,7 @@ class SyncElasticsearchDatabase(
                 "_index": self.es_index.index_name,
                 "_id": record_id,
                 "doc": doc,
-                "doc_as_upsert": False  # Don't create if doesn't exist
+                "doc_as_upsert": False,  # Don't create if doesn't exist
             }
             bulk_operations.append(action)
 
@@ -641,7 +640,7 @@ class SyncElasticsearchDatabase(
                 bulk_operations,
                 refresh=self.refresh,
                 raise_on_error=False,
-                stats_only=False
+                stats_only=False,
             )
 
             # Process results to determine which updates succeeded
@@ -649,15 +648,15 @@ class SyncElasticsearchDatabase(
             error_dict = {}
             if errors:
                 for err in errors:
-                    if 'update' in err:
-                        error_dict[err['update']['_id']] = err
+                    if "update" in err:
+                        error_dict[err["update"]["_id"]] = err
 
             for record_id, _ in updates:
                 # Check if this ID had an error
                 if record_id in error_dict:
                     error = error_dict[record_id]
                     # If error is 404 (not found), mark as failed
-                    status = error.get('update', {}).get('status')
+                    status = error.get("update", {}).get("status")
                     results.append(status == 200)  # Only 200 is success for update
                 else:
                     results.append(True)
@@ -666,10 +665,10 @@ class SyncElasticsearchDatabase(
 
         except Exception as e:
             # Check if this is a BulkIndexError from the helpers module
-            if hasattr(e, 'errors'):
+            if hasattr(e, "errors"):
                 # Extract which operations failed
                 results = []
-                failed_ids = {err['update']['_id'] for err in e.errors}
+                failed_ids = {err["update"]["_id"] for err in e.errors}
 
                 for record_id, _ in updates:
                     results.append(record_id not in failed_ids)
@@ -685,9 +684,7 @@ class SyncElasticsearchDatabase(
         # async and vector-pre-filter sites cannot drift apart.
         if isinstance(query, ComplexQuery):
             es_query = (
-                build_complex_es_query(query.condition)
-                if query.condition
-                else {"match_all": {}}
+                build_complex_es_query(query.condition) if query.condition else {"match_all": {}}
             )
         else:
             es_query = build_bool_query(query.filters)
@@ -705,10 +702,24 @@ class SyncElasticsearchDatabase(
                     field_path = f"data.{sort_spec.field}"
                     # Don't add .keyword if user already specified it or for common numeric fields
                     # This is a heuristic - ideally we'd check the mapping
-                    numeric_fields = ['age', 'salary', 'balance', 'count', 'score', 'amount', 'price', 'index', 'number', 'total', 'quantity']
-                    if (not sort_spec.field.endswith('.keyword') and
-                        not sort_spec.field.endswith('.raw') and
-                        sort_spec.field.lower() not in numeric_fields):
+                    numeric_fields = [
+                        "age",
+                        "salary",
+                        "balance",
+                        "count",
+                        "score",
+                        "amount",
+                        "price",
+                        "index",
+                        "number",
+                        "total",
+                        "quantity",
+                    ]
+                    if (
+                        not sort_spec.field.endswith(".keyword")
+                        and not sort_spec.field.endswith(".raw")
+                        and sort_spec.field.lower() not in numeric_fields
+                    ):
                         # Likely a text field, add .keyword for sorting
                         field_path = f"data.{sort_spec.field}.keyword"
                 order = "desc" if sort_spec.order == SortOrder.DESC else "asc"
@@ -731,11 +742,11 @@ class SyncElasticsearchDatabase(
 
         # Check if the response is valid (has the expected structure)
         # An empty result set is still a valid response
-        if not hasattr(response, 'json') or response.json is None:
+        if not hasattr(response, "json") or response.json is None:
             raise DatabaseError(f"Invalid search response: {response}")
 
         # Check for actual errors in the response
-        if 'error' in response.json:
+        if "error" in response.json:
             raise DatabaseError(f"Failed to search records: {response.json['error']}")
 
         # Parse results
@@ -763,10 +774,10 @@ class SyncElasticsearchDatabase(
 
     def count(self, query: Query | None = None) -> int:
         """Count records matching a query using efficient Elasticsearch count.
-        
+
         Args:
             query: Optional search query (counts all if None)
-            
+
         Returns:
             Number of matching records
         """
@@ -785,9 +796,7 @@ class SyncElasticsearchDatabase(
         count = self._count_all()
 
         # Delete by query - delete all documents
-        response = self.es_index.delete_by_query(
-            body={"query": {"match_all": {}}}
-        )
+        response = self.es_index.delete_by_query(body={"query": {"match_all": {}}})
 
         # Refresh if needed
         if self.refresh:
@@ -796,9 +805,7 @@ class SyncElasticsearchDatabase(
         return response.get("deleted", count)
 
     def stream_read(
-        self,
-        query: Query | None = None,
-        config: StreamConfig | None = None
+        self, query: Query | None = None, config: StreamConfig | None = None
     ) -> Iterator[Record]:
         """Stream records from Elasticsearch."""
         config = config or StreamConfig()
@@ -811,14 +818,12 @@ class SyncElasticsearchDatabase(
 
         # Yield records in batches for consistency
         for i in range(0, len(records), config.batch_size):
-            batch = records[i:i + config.batch_size]
+            batch = records[i : i + config.batch_size]
             for record in batch:
                 yield record
 
     def stream_write(
-        self,
-        records: Iterator[Record],
-        config: StreamConfig | None = None
+        self, records: Iterator[Record], config: StreamConfig | None = None
     ) -> StreamResult:
         """Stream records into Elasticsearch.
 
@@ -866,10 +871,10 @@ class SyncElasticsearchDatabase(
         score_threshold: float | None = None,
     ) -> list[VectorSearchResult]:
         """Search for similar vectors using Elasticsearch KNN.
-        
+
         Note: This is a synchronous wrapper around the async implementation.
         For production use, consider using the async version for better performance.
-        
+
         Args:
             query_vector: The vector to search for
             vector_field: Name of the vector field to search
@@ -878,7 +883,7 @@ class SyncElasticsearchDatabase(
             filter: Optional query filter to apply before vector search
             include_source: Whether to include source document in results
             score_threshold: Optional minimum similarity score
-            
+
         Returns:
             List of search results ordered by similarity
         """
@@ -933,16 +938,18 @@ class SyncElasticsearchDatabase(
             if record is None:
                 continue
 
-            results.append(VectorSearchResult(
-                record=record,
-                score=score,
-                vector_field=field_name,
-                metadata={
-                    "index": self.index_name,
-                    "metric": metric.value,
-                    "doc_id": hit["_id"],
-                },
-            ))
+            results.append(
+                VectorSearchResult(
+                    record=record,
+                    score=score,
+                    vector_field=field_name,
+                    metadata={
+                        "index": self.index_name,
+                        "metric": metric.value,
+                        "doc_id": hit["_id"],
+                    },
+                )
+            )
 
         return results
 
@@ -955,14 +962,14 @@ class SyncElasticsearchDatabase(
         **kwargs: Any,
     ) -> bool:
         """Create or update index mapping for vector field.
-        
+
         Args:
             vector_field: Name of the vector field to index
             dimensions: Number of dimensions
             metric: Distance metric for the index
             index_type: Type of index (ignored for ES, always uses HNSW)
             **kwargs: Additional index parameters
-            
+
         Returns:
             True if index was created/updated successfully
         """
@@ -988,17 +995,16 @@ class SyncElasticsearchDatabase(
         # Update index mapping using the es_client
         try:
             self.es_client.indices.put_mapping(
-                index=self.index_name,
-                properties={
-                    f"data.{vector_field}": mapping
-                }
+                index=self.index_name, properties={f"data.{vector_field}": mapping}
             )
 
             # Track the vector field
             self.vector_fields[vector_field] = dimensions
             self._vector_enabled = True
 
-            logger.info(f"Created vector mapping for field '{vector_field}' with {dimensions} dimensions")
+            logger.info(
+                f"Created vector mapping for field '{vector_field}' with {dimensions} dimensions"
+            )
             return True
 
         except Exception as e:

@@ -147,9 +147,7 @@ class TestFileBackendNativeSnapshot:
     store, so ``list_changes_since`` is a minimal file-level diff (not
     the mixin's full-set default)."""
 
-    async def test_file_backend_minimal_disjoint_diff(
-        self, tmp_path: Path
-    ) -> None:
+    async def test_file_backend_minimal_disjoint_diff(self, tmp_path: Path) -> None:
         be = FileKnowledgeBackend(base_path=tmp_path / "kb")
         await be.initialize()
         await be.create_kb("d")
@@ -176,9 +174,7 @@ class TestFileBackendNativeSnapshot:
         assert cs.is_empty is False
         await be.close()
 
-    async def test_file_backend_empty_baseline_round_trips(
-        self, tmp_path: Path
-    ) -> None:
+    async def test_file_backend_empty_baseline_round_trips(self, tmp_path: Path) -> None:
         """The empty-KB identity ("") resolves to the empty snapshot
         even though no file is written for it."""
         be = FileKnowledgeBackend(base_path=tmp_path / "kb")
@@ -193,9 +189,7 @@ class TestFileBackendNativeSnapshot:
         assert not cs.modified and not cs.deleted
         await be.close()
 
-    async def test_file_backend_unretained_version_raises(
-        self, tmp_path: Path
-    ) -> None:
+    async def test_file_backend_unretained_version_raises(self, tmp_path: Path) -> None:
         """A real store ⇒ an unknown version is reported, not silently
         treated as the empty snapshot (which would mis-report a full
         add-everything diff)."""
@@ -296,14 +290,8 @@ def test_normalize_ingestion_status_rejects_unknown_with_validation_error() -> N
     )
 
     # The typed and valid-string forms still pass through unchanged.
-    assert (
-        normalize_ingestion_status(IngestionStatus.READY)
-        is IngestionStatus.READY
-    )
-    assert (
-        normalize_ingestion_status("swapping")
-        is IngestionStatus.SWAPPING
-    )
+    assert normalize_ingestion_status(IngestionStatus.READY) is IngestionStatus.READY
+    assert normalize_ingestion_status("swapping") is IngestionStatus.SWAPPING
 
     with pytest.raises(ValidationError) as excinfo:
         normalize_ingestion_status("not-a-real-status")

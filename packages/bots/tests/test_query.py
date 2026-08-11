@@ -47,6 +47,7 @@ class TestQueryTransformer:
         transformer = QueryTransformer(TransformerConfig(enabled=False))
 
         import asyncio
+
         result = asyncio.run(transformer.transform("test query"))
 
         assert result == ["test query"]
@@ -56,6 +57,7 @@ class TestQueryTransformer:
         transformer = QueryTransformer(TransformerConfig(enabled=True))
 
         import asyncio
+
         with pytest.raises(RuntimeError, match="not initialized"):
             asyncio.run(transformer.transform("test"))
 
@@ -117,7 +119,7 @@ learning from demonstrations"""
         """Test that quotes are stripped from queries."""
         transformer = QueryTransformer()
 
-        response = '"query one"\n\'query two\''
+        response = "\"query one\"\n'query two'"
 
         queries = transformer._parse_response(response, "fallback")
 
@@ -140,7 +142,7 @@ class TestParseQueryResponse:
         assert parse_query_response("", "fallback") == ["fallback"]
 
     def test_strips_quotes(self) -> None:
-        queries = parse_query_response('"quoted query"\n\'single quoted\'', "fb")
+        queries = parse_query_response("\"quoted query\"\n'single quoted'", "fb")
         assert "quoted query" in queries
         assert "single quoted" in queries
 
@@ -230,7 +232,11 @@ class TestQueryTransformerExternalProvider:
         last_call = provider.get_last_call()
         assert last_call is not None
         # The prompt is the first message content
-        prompt = last_call["messages"][0].content if hasattr(last_call["messages"][0], "content") else str(last_call["messages"][0])
+        prompt = (
+            last_call["messages"][0].content
+            if hasattr(last_call["messages"][0], "content")
+            else str(last_call["messages"][0])
+        )
         assert "conversation context" in prompt.lower()
         assert "OAuth 2.0" in prompt
 

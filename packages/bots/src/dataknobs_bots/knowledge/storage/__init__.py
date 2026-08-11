@@ -112,8 +112,7 @@ def create_knowledge_backend(
         return s3_cls.from_config(config)
     else:
         raise ValueError(
-            f"Unknown knowledge backend type: {backend_type}. "
-            f"Available types: memory, file, s3"
+            f"Unknown knowledge backend type: {backend_type}. Available types: memory, file, s3"
         )
 
 

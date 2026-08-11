@@ -58,6 +58,7 @@ logger = logging.getLogger(__name__)
 
 class InheritanceError(Exception):
     """Error during configuration inheritance resolution."""
+
     pass
 
 
@@ -181,9 +182,7 @@ def substitute_env_vars(
         if substitute_keys:
             return {
                 (
-                    _substitute_string(
-                        k, type_coerce=False, expand_user_paths=expand_user_paths
-                    )
+                    _substitute_string(k, type_coerce=False, expand_user_paths=expand_user_paths)
                     if isinstance(k, str)
                     else k
                 ): substitute_env_vars(
@@ -691,9 +690,7 @@ class InheritableConfigLoader:
         except ConfigLoadError as e:
             raise InheritanceError(str(e)) from e
         except OSError as e:
-            raise InheritanceError(
-                f"Failed to read configuration file {filepath}: {e}"
-            ) from e
+            raise InheritanceError(f"Failed to read configuration file {filepath}: {e}") from e
 
     def clear_cache(self, name: str | None = None) -> None:
         """Clear configuration cache.

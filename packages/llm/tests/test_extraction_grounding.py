@@ -29,6 +29,7 @@ from dataknobs_llm.extraction.grounding import (
 # Helpers
 # ──────────────────────────────────────────────────────────────────
 
+
 def _string_prop(description: str = "", **extra: object) -> dict:
     """Build a string schema property."""
     p: dict[str, Any] = {"type": "string"}
@@ -72,6 +73,7 @@ def _array_prop(description: str = "", **extra: object) -> dict:
 # TestIsFieldGrounded — type-dispatched checks
 # ──────────────────────────────────────────────────────────────────
 
+
 class TestIsFieldGrounded:
     """Core type-dispatched grounding checks."""
 
@@ -90,7 +92,10 @@ class TestIsFieldGrounded:
     def test_string_overlap_above_threshold(self) -> None:
         prop = _string_prop()
         result = is_field_grounded(
-            "topic", "machine learning", "tell me about machine learning", prop,
+            "topic",
+            "machine learning",
+            "tell me about machine learning",
+            prop,
         )
         assert result.grounded is True
         assert result.strategy == "string_overlap"
@@ -98,8 +103,10 @@ class TestIsFieldGrounded:
     def test_string_overlap_below_threshold(self) -> None:
         prop = _string_prop()
         result = is_field_grounded(
-            "topic", "quantum computing research",
-            "tell me about the weather today", prop,
+            "topic",
+            "quantum computing research",
+            "tell me about the weather today",
+            prop,
         )
         assert result.grounded is False
 
@@ -107,7 +114,10 @@ class TestIsFieldGrounded:
         """Value consisting only of stopwords is trusted."""
         prop = _string_prop()
         result = is_field_grounded(
-            "filler", "the is a", "some random message", prop,
+            "filler",
+            "the is a",
+            "some random message",
+            prop,
         )
         assert result.grounded is True
 
@@ -130,7 +140,10 @@ class TestIsFieldGrounded:
     def test_boolean_field_keywords_present(self) -> None:
         prop = _bool_prop(description="Enable notifications")
         result = is_field_grounded(
-            "notifications", True, "yes enable notifications", prop,
+            "notifications",
+            True,
+            "yes enable notifications",
+            prop,
         )
         assert result.grounded is True
         assert result.strategy == "boolean"
@@ -138,7 +151,10 @@ class TestIsFieldGrounded:
     def test_boolean_field_keywords_absent(self) -> None:
         prop = _bool_prop(description="Enable notifications")
         result = is_field_grounded(
-            "notifications", True, "tell me about the weather", prop,
+            "notifications",
+            True,
+            "tell me about the weather",
+            prop,
         )
         assert result.grounded is False
 
@@ -146,7 +162,10 @@ class TestIsFieldGrounded:
         """False value grounded when negation keyword is near field keyword."""
         prop = _bool_prop(description="Enable notifications")
         result = is_field_grounded(
-            "notifications", False, "no notifications please", prop,
+            "notifications",
+            False,
+            "no notifications please",
+            prop,
         )
         assert result.grounded is True
 
@@ -154,14 +173,20 @@ class TestIsFieldGrounded:
         """False value ungrounded when no negation keyword."""
         prop = _bool_prop(description="Enable notifications")
         result = is_field_grounded(
-            "notifications", False, "yes notifications please", prop,
+            "notifications",
+            False,
+            "yes notifications please",
+            prop,
         )
         assert result.grounded is False
 
     def test_array_element_in_message(self) -> None:
         prop = _array_prop(description="Topics to search")
         result = is_field_grounded(
-            "topics", ["python", "rust"], "I want to learn python", prop,
+            "topics",
+            ["python", "rust"],
+            "I want to learn python",
+            prop,
         )
         assert result.grounded is True
         assert result.strategy == "array"
@@ -169,21 +194,30 @@ class TestIsFieldGrounded:
     def test_array_no_elements(self) -> None:
         prop = _array_prop(description="Topics to search")
         result = is_field_grounded(
-            "topics", ["quantum", "biology"], "tell me about python", prop,
+            "topics",
+            ["quantum", "biology"],
+            "tell me about python",
+            prop,
         )
         assert result.grounded is False
 
     def test_empty_string_with_negation(self) -> None:
         prop = _string_prop(description="Subject area")
         result = is_field_grounded(
-            "subject", "", "clear the subject please", prop,
+            "subject",
+            "",
+            "clear the subject please",
+            prop,
         )
         assert result.grounded is True
 
     def test_empty_string_without_negation(self) -> None:
         prop = _string_prop(description="Subject area")
         result = is_field_grounded(
-            "subject", "", "tell me about history", prop,
+            "subject",
+            "",
+            "tell me about history",
+            prop,
         )
         assert result.grounded is False
 
@@ -274,7 +308,10 @@ class TestIsFieldGrounded:
         """Bool value for boolean field goes through normal boolean grounding."""
         prop = _bool_prop(description="Enable feature")
         result = is_field_grounded(
-            "enabled", True, "yes enable the feature", prop,
+            "enabled",
+            True,
+            "yes enable the feature",
+            prop,
         )
         assert result.grounded is True
         assert result.strategy == "boolean"
@@ -311,6 +348,7 @@ class TestIsFieldGrounded:
 # TestXExtractionOverrides
 # ──────────────────────────────────────────────────────────────────
 
+
 class TestXExtractionOverrides:
     """Per-field x-extraction annotation overrides."""
 
@@ -342,8 +380,10 @@ class TestXExtractionOverrides:
         prop = _string_prop(**{"x-extraction": {"overlap_threshold": 0.1}})
         # "research" overlaps, that's 1/3 words = 0.33 > 0.1
         result = is_field_grounded(
-            "topic", "quantum computing research",
-            "I want research papers", prop,
+            "topic",
+            "quantum computing research",
+            "I want research papers",
+            prop,
         )
         assert result.grounded is True
 
@@ -358,7 +398,10 @@ class TestXExtractionOverrides:
             **{"x-extraction": {"negation_keywords": ["deactivate"]}},
         )
         result = is_field_grounded(
-            "alerts", False, "deactivate alerts", prop,
+            "alerts",
+            False,
+            "deactivate alerts",
+            prop,
         )
         assert result.grounded is True
 
@@ -370,7 +413,10 @@ class TestXExtractionOverrides:
         )
         # "no" is 1 word from "alerts" — within proximity 2
         result = is_field_grounded(
-            "alerts", False, "no alerts please", prop,
+            "alerts",
+            False,
+            "no alerts please",
+            prop,
         )
         assert result.grounded is True
 
@@ -383,7 +429,10 @@ class TestXExtractionOverrides:
         # False value but no negation — normally ungrounded, but
         # check_direction=false means field mention is sufficient
         result = is_field_grounded(
-            "alerts", False, "yes I want alerts", prop,
+            "alerts",
+            False,
+            "yes I want alerts",
+            prop,
         )
         assert result.grounded is True
 
@@ -391,6 +440,7 @@ class TestXExtractionOverrides:
 # ──────────────────────────────────────────────────────────────────
 # TestGroundExtraction — bulk check
 # ──────────────────────────────────────────────────────────────────
+
 
 class TestGroundExtraction:
     """Bulk extraction grounding via ground_extraction()."""
@@ -472,7 +522,10 @@ class TestGroundExtraction:
         cfg = GroundingConfig(stopwords=custom_sw)
         extracted = {"topic": "python"}
         results = ground_extraction(
-            extracted, "tell me about something", schema, config=cfg,
+            extracted,
+            "tell me about something",
+            schema,
+            config=cfg,
         )
         # "python" is now a stopword → value_words is empty → trusted
         assert results["topic"].grounded is True
@@ -491,7 +544,10 @@ class TestGroundExtraction:
         )
         extracted = {"subject": ""}
         results = ground_extraction(
-            extracted, "purge the subject", schema, config=cfg,
+            extracted,
+            "purge the subject",
+            schema,
+            config=cfg,
         )
         assert results["subject"].grounded is True
 
@@ -499,6 +555,7 @@ class TestGroundExtraction:
 # ──────────────────────────────────────────────────────────────────
 # TestUtilities
 # ──────────────────────────────────────────────────────────────────
+
 
 class TestUtilities:
     """Text utility functions."""
@@ -548,13 +605,17 @@ class TestUtilities:
         kw = {"alerts"}
         # "no" is 1 word from "alerts"
         assert has_negation(
-            "no alerts please", DEFAULT_NEGATION_KEYWORDS,
-            field_keywords=kw, proximity=2,
+            "no alerts please",
+            DEFAULT_NEGATION_KEYWORDS,
+            field_keywords=kw,
+            proximity=2,
         )
         # "no" is 5 words from "alerts" — outside proximity 2
         assert not has_negation(
-            "no I really do want alerts", DEFAULT_NEGATION_KEYWORDS,
-            field_keywords=kw, proximity=2,
+            "no I really do want alerts",
+            DEFAULT_NEGATION_KEYWORDS,
+            field_keywords=kw,
+            proximity=2,
         )
 
     def test_detect_boolean_signal_affirmative(self) -> None:
@@ -592,6 +653,7 @@ class TestUtilities:
 # TestGroundingConfig
 # ──────────────────────────────────────────────────────────────────
 
+
 class TestGroundingConfig:
     """GroundingConfig defaults and customization."""
 
@@ -624,8 +686,10 @@ class TestFieldGroundingResult:
 
     def test_attributes(self) -> None:
         r = FieldGroundingResult(
-            field="color", grounded=True,
-            reason="enum match", strategy="enum",
+            field="color",
+            grounded=True,
+            reason="enum match",
+            strategy="enum",
         )
         assert r.field == "color"
         assert r.grounded is True
@@ -634,7 +698,10 @@ class TestFieldGroundingResult:
 
     def test_frozen(self) -> None:
         r = FieldGroundingResult(
-            field="x", grounded=False, reason="no", strategy="skip",
+            field="x",
+            grounded=False,
+            reason="no",
+            strategy="skip",
         )
         with pytest.raises(AttributeError):
             r.grounded = True  # type: ignore[misc]

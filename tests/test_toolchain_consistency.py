@@ -26,6 +26,7 @@ file is worth writing.
 from __future__ import annotations
 
 import configparser
+import json
 import re
 import subprocess
 from pathlib import Path, PurePosixPath
@@ -117,7 +118,9 @@ def test_workspace_tests_are_reachable():
     parser.read(ROOT / "pytest.ini")
     testpaths = parser.get("pytest", "testpaths", fallback="").split()
     if not any((ROOT / p).resolve() == here for p in testpaths):
-        violations.append(f"pytest.ini: testpaths = {' '.join(testpaths)!r} does not cover {_rel(here)}")
+        violations.append(
+            f"pytest.ini: testpaths = {' '.join(testpaths)!r} does not cover {_rel(here)}"
+        )
 
     collected = subprocess.run(
         [str(ROOT / "bin" / "test.sh"), "-n", "workspace", "--", "--collect-only", "-q"],
@@ -929,6 +932,55 @@ def _default_validate_targets() -> list[str]:
     return _validate_targets_for()
 
 
+def _format_targets_for(script: str, *args: str) -> list[str]:
+    """What ``script`` resolves as the formatter's population, for these arguments.
+
+    Asked rather than parsed, for the reason ``_validate_targets_for`` is. The
+    formatter has its own list because its declared coverage is not the
+    linter's, so a caller cannot substitute one for the other.
+    """
+    listing = subprocess.run(
+        [str(ROOT / "bin" / script), *args, "--print-format-targets"],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout
+    return listing.split()
+
+
+def _enforced_format_cells() -> list[str]:
+    """Every path the quality contract holds to a formatting ceiling."""
+    contract = json.loads((ROOT / ".dataknobs" / "quality-contract.json").read_text("utf-8"))
+    return [
+        cell["path"] for cell in contract["tools"]["format"]["cells"] if cell["tier"] == "enforced"
+    ]
+
+
+def _cell_is_covered(cell: str, targets: set[str]) -> bool:
+    """Whether some target reaches the files ``cell`` names.
+
+    A cell is a glob over directories; a target is one of those directories, or
+    an ancestor of it. Compared by expansion rather than by string, because
+    ``packages/*/tests`` and ``packages/bots/tests`` are the same claim written
+    two ways and only one of them is what a script emits.
+
+    Named at length rather than ``_covers``, which is taken. The first draft of
+    this reused that name and, being defined later, silently replaced it — so
+    the CI-scheduling guard above began asking a question about formatter
+    targets and reported every guarded file untriggered. Ruff does not flag it
+    (F811 wants the earlier binding unused, and that one is called), so the
+    only thing that caught it was the suite this file belongs to.
+    """
+    expanded = {_rel(path) for path in ROOT.glob(cell)} if "*" in cell else {cell}
+    if not expanded:
+        return True  # A cell naming nothing on disk cannot be uncovered.
+    return all(
+        any(match == target or match.startswith(f"{target}/") for target in targets)
+        for match in expanded
+    )
+
+
 #: What the default target set must contain, stated here rather than derived.
 #:
 #: This is the one duplication in this file that is load-bearing, and it is the
@@ -1029,6 +1081,113 @@ def test_the_default_target_set_still_contains_what_it_must():
     )
 
 
+def test_every_formatting_ceiling_is_reachable_by_the_check_and_by_the_fix() -> None:
+    """The formatter's two entry points must span what the contract enforces.
+
+    ``test_remediation_paths`` pins *which* scripts may run the formatter. This
+    is the other half — whether the ones that may, reach far enough — and it is
+    the half that was missing while a docstring there said it existed.
+
+    The gap it was written against: the format check iterated the *linter's*
+    target set. That set omits every cell whose ruff tier is deferred, and the
+    contract enforces ``format`` at ceiling 0 on all ten of its cells. So
+    ``validate.sh`` opened 597 of 1,471 files and printed "Formatting is clean"
+    over the other 874, while ``fix.sh`` could not repair 42 of them at all —
+    a finding the gate reports and no local command can clear.
+
+    Both directions matter and neither implies the other. A check that reads
+    less than the contract enforces is a green verdict over unexamined files;
+    a fix that reaches less than the check flags is a red gate with no remedy.
+    """
+    cells = _enforced_format_cells()
+    assert cells, "the contract enforces no formatting ceiling, so this proves nothing"
+
+    for script, role in (
+        ("validate.sh", "checks formatting"),
+        ("fix.sh", "repairs what the check reports"),
+    ):
+        targets = set(_format_targets_for(script))
+        uncovered = [cell for cell in cells if not _cell_is_covered(cell, targets)]
+        assert not uncovered, (
+            f"bin/{script} {role} over {sorted(targets)}, which does not reach "
+            f"{uncovered}. The quality contract holds those cells to a "
+            "formatting ceiling of 0, so a file arriving unformatted there "
+            f"fails `dk pr` while bin/{script} says nothing about it."
+        )
+
+
+def test_the_named_opt_in_asks_for_the_format_target_set_rather_than_restating_it() -> None:
+    """The third owner, which cannot be asked and so is read instead.
+
+    ``bin/dk format`` runs the formatter directly and prints no target list, so
+    the check above cannot interrogate it. Its whole history is this defect:
+    it formatted ``packages/*/src`` alone, was widened once to add the workspace
+    set, and was still narrower than the check both times. A third answer to
+    *which code do we format* is what the single declaration exists to prevent.
+    """
+    source = (ROOT / "bin" / "dk").read_text("utf-8")
+    branch = source[source.index("format|fmt)") :]
+    branch = branch[: branch.index("\n            ;;")]
+
+    # Reading the branch alone proved it *named* the helper, not that the name
+    # resolves. bin/dk invokes package-discovery.sh rather than sourcing it, so
+    # each helper needs a wrapper here; the first draft of this called
+    # format_targets without one and would have died with command-not-found on
+    # every run, with this test green. Asked of the real script for that reason.
+    resolved = subprocess.run(
+        ["bash", "-c", f'source "{ROOT}/bin/dk" 2>/dev/null; format_targets'],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert resolved.returncode == 0 and resolved.stdout.split(), (
+        "bin/dk names format_targets but cannot run it: "
+        f"exit {resolved.returncode}, stdout {resolved.stdout!r}, "
+        f"stderr {resolved.stderr.strip()[:200]!r}. It invokes "
+        "package-discovery.sh rather than sourcing it, so the helper needs a "
+        "wrapper in bin/dk."
+    )
+
+    assert "$(format_targets)" in branch, (
+        "bin/dk's format branch no longer asks package-discovery.sh for the "
+        "target set. Restating it here is how this command came to format less "
+        "than bin/validate.sh checks, twice."
+    )
+    restated = [
+        line
+        for line in branch.splitlines()
+        if "packages/" in line and not line.lstrip().startswith("#")
+    ]
+    assert not restated, (
+        f"bin/dk's format branch names package paths directly: {restated}. "
+        "Those are format_targets' answer to give."
+    )
+
+
+def test_the_formatter_population_is_not_the_linters() -> None:
+    """Non-vacuity: the two sets must actually differ, or the guard above is free.
+
+    If the formatter's list were ever made equal to the linter's again, every
+    assertion above would still pass on the day the linter's list happened to
+    be wide enough — and would start failing later for a reason with nothing to
+    do with the formatter. Stating the difference keeps the guard anchored to
+    why the two lists exist separately.
+
+    This fails, correctly, on the day ``packages/*/tests`` graduates out of the
+    linter's deferred tier and the two populations legitimately converge. At
+    that point delete it; the check above is what carries the property.
+    """
+    linted = set(_validate_targets_for())
+    formatted = set(_format_targets_for("validate.sh"))
+    assert formatted - linted, (
+        "the formatter now checks exactly what the linter does. If the deferred "
+        "ruff cells were promoted, that is correct and this guard has expired — "
+        "delete it. Otherwise the format step has been pointed back at "
+        "VALIDATE_TARGETS and 874 files are unchecked again."
+    )
+
+
 def test_the_gate_asks_for_the_workspace_target_set_rather_than_restating_it():
     """A second copy of the target list is a second thing to forget.
 
@@ -1053,9 +1212,7 @@ def test_the_gate_asks_for_the_workspace_target_set_rather_than_restating_it():
     )
 
     literal = sorted(
-        value
-        for value in assignments
-        if value and "$" not in value and not value.startswith("-")
+        value for value in assignments if value and "$" not in value and not value.startswith("-")
     )
     assert not literal, (
         f"bin/run-quality-checks.sh passes {literal} to validate.sh as a literal "
@@ -1070,9 +1227,7 @@ def test_the_gate_asks_for_the_workspace_target_set_rather_than_restating_it():
     # trigger, so it marked all ten packages changed and took that branch — which
     # means the change that started linting bin/ recorded a passing validation
     # without linting bin/.
-    silent = sorted(
-        value for value in assignments if value and "--workspace" not in value
-    )
+    silent = sorted(value for value in assignments if value and "--workspace" not in value)
     assert not silent, (
         f"bin/run-quality-checks.sh assigns VALIDATE_ARGS={silent} without "
         "--workspace, so that branch validates package sources alone and the "
@@ -1082,8 +1237,7 @@ def test_the_gate_asks_for_the_workspace_target_set_rather_than_restating_it():
     )
 
     sources = {
-        name: (ROOT / name).read_text(encoding="utf-8")
-        for name in WORKSPACE_TARGET_CONSUMERS
+        name: (ROOT / name).read_text(encoding="utf-8") for name in WORKSPACE_TARGET_CONSUMERS
     }
 
     #: Delegation is only "not keeping your own copy" if what it delegates to is
@@ -1103,8 +1257,7 @@ def test_the_gate_asks_for_the_workspace_target_set_rather_than_restating_it():
     unread = sorted(
         name
         for name, text in sources.items()
-        if not WORKSPACE_TARGETS_CALL.search(text)
-        and not WORKSPACE_TARGETS_DELEGATION.search(text)
+        if not WORKSPACE_TARGETS_CALL.search(text) and not WORKSPACE_TARGETS_DELEGATION.search(text)
     )
     assert not unread, (
         f"{unread} build a default set of things to check without calling "
@@ -1210,6 +1363,7 @@ def test_the_print_check_recognises_test_files_by_name_not_by_substring():
         "glob before, which is how they came to disagree; a branch that stops "
         "consulting the shared predicate has silently grown its own answer again."
     )
+
 
 def test_the_print_check_examines_shipped_modules_under_a_testing_package(tmp_path):
     """The predicate being right does not mean the directory walk uses it.
@@ -1504,9 +1658,8 @@ def test_mypy_configs_declare_the_same_search_path():
         if declared[name] != reference
     ]
 
-    assert not violations, (
-        f"mypy search paths disagree with {names[0]}:\n"
-        + "\n".join(f"  - {v}" for v in violations)
+    assert not violations, f"mypy search paths disagree with {names[0]}:\n" + "\n".join(
+        f"  - {v}" for v in violations
     )
 
 
@@ -1672,9 +1825,10 @@ def test_every_state_that_should_validate_something_does():
             ["bash", "-c", script], capture_output=True, text=True, check=True
         ).stdout.strip()
         if (verdict == "VALIDATES") != must_validate:
-            wrong.append(f"{label}: expected {'to validate' if must_validate else 'a skip'}, got {verdict}")
+            wrong.append(
+                f"{label}: expected {'to validate' if must_validate else 'a skip'}, got {verdict}"
+            )
 
-    assert not wrong, (
-        "bin/run-quality-checks.sh decides the wrong validation scope:\n"
-        + "\n".join(f"  - {item}" for item in wrong)
+    assert not wrong, "bin/run-quality-checks.sh decides the wrong validation scope:\n" + "\n".join(
+        f"  - {item}" for item in wrong
     )

@@ -8,6 +8,7 @@ Fix: apply quote_ident() to each column name.  The extract of _psql_schema_line 
 _build_insert_columns as @staticmethods makes the SQL-building logic unit-testable
 without a live postgres connection.
 """
+
 import numpy as np
 import pandas as pd
 import pytest

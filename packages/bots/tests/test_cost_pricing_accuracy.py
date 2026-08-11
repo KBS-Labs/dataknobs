@@ -81,9 +81,7 @@ class TestPricingComesFromTheProvider:
         mw = CostTrackingMiddleware()
         pricing = ModelPricing(input_per_mtok=1.1, output_per_mtok=4.4)
 
-        cost = mw._calculate_cost(
-            "openai", "o1-mini", 1_000_000, 1_000_000, pricing=pricing
-        )
+        cost = mw._calculate_cost("openai", "o1-mini", 1_000_000, 1_000_000, pricing=pricing)
 
         assert cost == pytest.approx(5.5)
 
@@ -96,9 +94,7 @@ class TestPricingComesFromTheProvider:
         mw = CostTrackingMiddleware()
         pricing = ModelPricing(input_per_mtok=1.25, output_per_mtok=10.0)
 
-        cost = mw._calculate_cost(
-            "openai", "gpt-5", 1_000_000, 0, pricing=pricing
-        )
+        cost = mw._calculate_cost("openai", "gpt-5", 1_000_000, 0, pricing=pricing)
 
         assert cost == pytest.approx(1.25)
 
@@ -114,9 +110,7 @@ class TestPricingComesFromTheProvider:
         )
         catalog = ModelPricing(input_per_mtok=0.15, output_per_mtok=0.6)
 
-        cost = mw._calculate_cost(
-            "openai", "gpt-4o-mini", 1000, 0, pricing=catalog
-        )
+        cost = mw._calculate_cost("openai", "gpt-4o-mini", 1000, 0, pricing=catalog)
 
         assert cost == pytest.approx(0.001)
 
@@ -220,12 +214,8 @@ class TestSubstringFallbackPicksTheClosestModel:
         assert cost == 0.0
         assert ("acme", "gpt-4") in mw._warned_misses
 
-    def test_an_exact_match_is_unaffected(
-        self, mw: CostTrackingMiddleware
-    ) -> None:
-        assert mw._calculate_cost("acme", "gpt-4o-mini", 1000, 0) == (
-            pytest.approx(0.15)
-        )
+    def test_an_exact_match_is_unaffected(self, mw: CostTrackingMiddleware) -> None:
+        assert mw._calculate_cost("acme", "gpt-4o-mini", 1000, 0) == (pytest.approx(0.15))
 
 
 # ---------------------------------------------------------------------------

@@ -145,9 +145,7 @@ class TestConfigTemplate:
 class TestConfigTemplateRegistry:
     """Tests for ConfigTemplateRegistry."""
 
-    def _make_template(
-        self, name: str, tags: list[str] | None = None
-    ) -> ConfigTemplate:
+    def _make_template(self, name: str, tags: list[str] | None = None) -> ConfigTemplate:
         return ConfigTemplate(
             name=name,
             description=f"Template {name}",

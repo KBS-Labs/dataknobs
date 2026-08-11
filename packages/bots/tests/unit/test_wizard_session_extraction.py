@@ -41,15 +41,9 @@ class TestBuildWizardContext:
         conversation_manager: ConversationManager,
     ) -> None:
         """Test with one previous user message plus current."""
-        await conversation_manager.add_message(
-            role="user", content="I want to create a math tutor"
-        )
-        await conversation_manager.add_message(
-            role="assistant", content="Great choice!"
-        )
-        await conversation_manager.add_message(
-            role="user", content="Call it Algebra Ace"
-        )
+        await conversation_manager.add_message(role="user", content="I want to create a math tutor")
+        await conversation_manager.add_message(role="assistant", content="Great choice!")
+        await conversation_manager.add_message(role="user", content="Call it Algebra Ace")
 
         wizard_state = WizardState(current_stage="configure_identity")
 
@@ -69,17 +63,13 @@ class TestBuildWizardContext:
         conversation_manager: ConversationManager,
     ) -> None:
         """Test with multiple previous user messages."""
-        await conversation_manager.add_message(
-            role="user", content="Create a tutor for algebra"
-        )
+        await conversation_manager.add_message(role="user", content="Create a tutor for algebra")
         await conversation_manager.add_message(role="assistant", content="Great!")
         await conversation_manager.add_message(
             role="user", content="Call it Algebra Ace with ID algebra-ace"
         )
         await conversation_manager.add_message(role="assistant", content="Got it!")
-        await conversation_manager.add_message(
-            role="user", content="Use Claude for the LLM"
-        )
+        await conversation_manager.add_message(role="user", content="Use Claude for the LLM")
 
         wizard_state = WizardState(current_stage="configure_llm")
 
@@ -152,9 +142,7 @@ class TestDetectConflicts:
 
         assert conflicts == []
 
-    def test_detects_simple_conflict(
-        self, wizard_reasoning: WizardReasoning
-    ) -> None:
+    def test_detects_simple_conflict(self, wizard_reasoning: WizardReasoning) -> None:
         """Test detecting a simple value conflict."""
         existing = {"name": "Old Name"}
         new = {"name": "New Name"}
@@ -166,9 +154,7 @@ class TestDetectConflicts:
         assert conflicts[0]["previous"] == "Old Name"
         assert conflicts[0]["new"] == "New Name"
 
-    def test_detects_multiple_conflicts(
-        self, wizard_reasoning: WizardReasoning
-    ) -> None:
+    def test_detects_multiple_conflicts(self, wizard_reasoning: WizardReasoning) -> None:
         """Test detecting multiple conflicting values."""
         existing = {"name": "Old Name", "subject": "math", "llm": "openai"}
         new = {"name": "New Name", "llm": "anthropic"}
@@ -189,9 +175,7 @@ class TestDetectConflicts:
 
         assert conflicts == []
 
-    def test_ignores_internal_fields(
-        self, wizard_reasoning: WizardReasoning
-    ) -> None:
+    def test_ignores_internal_fields(self, wizard_reasoning: WizardReasoning) -> None:
         """Test that fields starting with _ are ignored."""
         existing = {"_internal": "old"}
         new = {"_internal": "new"}
@@ -200,9 +184,7 @@ class TestDetectConflicts:
 
         assert conflicts == []
 
-    def test_no_conflict_when_values_match(
-        self, wizard_reasoning: WizardReasoning
-    ) -> None:
+    def test_no_conflict_when_values_match(self, wizard_reasoning: WizardReasoning) -> None:
         """Test that identical values don't count as conflicts."""
         existing = {"name": "Same Name"}
         new = {"name": "Same Name"}
@@ -211,9 +193,7 @@ class TestDetectConflicts:
 
         assert conflicts == []
 
-    def test_conflict_with_different_types(
-        self, wizard_reasoning: WizardReasoning
-    ) -> None:
+    def test_conflict_with_different_types(self, wizard_reasoning: WizardReasoning) -> None:
         """Test conflict detection with different value types."""
         existing = {"enabled": True}
         new = {"enabled": False}
@@ -227,9 +207,7 @@ class TestDetectConflicts:
 class TestExtractionScopeConfiguration:
     """Tests for extraction scope configuration."""
 
-    def test_default_extraction_scope(
-        self, simple_wizard_config: dict
-    ) -> None:
+    def test_default_extraction_scope(self, simple_wizard_config: dict) -> None:
         """Test that default extraction scope is wizard_session."""
         loader = WizardConfigLoader()
         wizard_fsm = loader.load_from_dict(simple_wizard_config)
@@ -237,9 +215,7 @@ class TestExtractionScopeConfiguration:
 
         assert reasoning._extraction._extraction_scope == "wizard_session"
 
-    def test_custom_extraction_scope(
-        self, simple_wizard_config: dict
-    ) -> None:
+    def test_custom_extraction_scope(self, simple_wizard_config: dict) -> None:
         """Test setting custom extraction scope."""
         loader = WizardConfigLoader()
         wizard_fsm = loader.load_from_dict(simple_wizard_config)
@@ -250,9 +226,7 @@ class TestExtractionScopeConfiguration:
 
         assert reasoning._extraction._extraction_scope == "current_message"
 
-    def test_default_conflict_strategy(
-        self, simple_wizard_config: dict
-    ) -> None:
+    def test_default_conflict_strategy(self, simple_wizard_config: dict) -> None:
         """Test that default conflict strategy is latest_wins."""
         loader = WizardConfigLoader()
         wizard_fsm = loader.load_from_dict(simple_wizard_config)
@@ -298,12 +272,8 @@ class TestExtractionScopeFromSettings:
         # Create reasoning using from_config style settings access
         reasoning = WizardReasoning(
             wizard_fsm=wizard_fsm,
-            extraction_scope=wizard_fsm.settings.get(
-                "extraction_scope", "wizard_session"
-            ),
-            conflict_strategy=wizard_fsm.settings.get(
-                "conflict_strategy", "latest_wins"
-            ),
+            extraction_scope=wizard_fsm.settings.get("extraction_scope", "wizard_session"),
+            conflict_strategy=wizard_fsm.settings.get("conflict_strategy", "latest_wins"),
             log_conflicts=wizard_fsm.settings.get("log_conflicts", True),
         )
 
@@ -333,9 +303,7 @@ class TestWizardSessionExtractionIntegration:
         )
 
         # Simulate a conversation with multiple user messages
-        await manager.add_message(
-            role="user", content="I want to create a math tutor"
-        )
+        await manager.add_message(role="user", content="I want to create a math tutor")
         await manager.add_message(role="assistant", content="Great choice!")
         await manager.add_message(role="user", content="Current question")
         manager.metadata["wizard"] = {
@@ -373,9 +341,7 @@ class TestWizardSessionExtractionIntegration:
             extraction_scope="current_message",
         )
 
-        await manager.add_message(
-            role="user", content="Previous message with info"
-        )
+        await manager.add_message(role="user", content="Previous message with info")
         await manager.add_message(role="user", content="Current message only")
 
         provider.set_responses(["Response"])
@@ -389,9 +355,7 @@ class TestWizardSessionExtractionIntegration:
 class TestConflictLogging:
     """Tests for conflict logging behavior."""
 
-    def test_detect_conflicts_returns_all_info(
-        self, wizard_reasoning: WizardReasoning
-    ) -> None:
+    def test_detect_conflicts_returns_all_info(self, wizard_reasoning: WizardReasoning) -> None:
         """Test that conflict detection returns complete information."""
         existing = {"name": "Old", "subject": "Math"}
         new = {"name": "New", "subject": "Science"}
@@ -404,9 +368,7 @@ class TestConflictLogging:
             assert "previous" in conflict
             assert "new" in conflict
 
-    def test_empty_existing_data_no_conflicts(
-        self, wizard_reasoning: WizardReasoning
-    ) -> None:
+    def test_empty_existing_data_no_conflicts(self, wizard_reasoning: WizardReasoning) -> None:
         """Test that empty existing data produces no conflicts."""
         existing: dict = {}
         new = {"name": "New Value"}
@@ -415,9 +377,7 @@ class TestConflictLogging:
 
         assert conflicts == []
 
-    def test_empty_new_data_no_conflicts(
-        self, wizard_reasoning: WizardReasoning
-    ) -> None:
+    def test_empty_new_data_no_conflicts(self, wizard_reasoning: WizardReasoning) -> None:
         """Test that empty new data produces no conflicts."""
         existing = {"name": "Existing Value"}
         new: dict = {}

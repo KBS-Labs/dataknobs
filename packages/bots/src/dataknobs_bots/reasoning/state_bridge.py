@@ -99,9 +99,7 @@ class StateBridge(Protocol, Generic[InboxT_co, OutboxT_contra]):
 
     def read_inbox(self, host: Any, key: str) -> InboxT_co | None: ...
 
-    def write_outbox(
-        self, host: Any, key: str, value: OutboxT_contra
-    ) -> None: ...
+    def write_outbox(self, host: Any, key: str, value: OutboxT_contra) -> None: ...
 
 
 def _host_metadata(host: Any) -> dict[str, Any]:
@@ -187,8 +185,7 @@ class BiDirectionalBridge(Generic[_InboxT, _OutboxT]):
 
     def __init__(
         self,
-        merge_fn: Callable[[dict[str, Any], Mapping[str, Any]], None]
-        | None = None,
+        merge_fn: Callable[[dict[str, Any], Mapping[str, Any]], None] | None = None,
     ) -> None:
         self._merge_fn = merge_fn
 
@@ -249,9 +246,7 @@ class SubsetBridge(Generic[_InboxT, _OutboxT]):
         # Normalize: a scope projector exposes `.project`; a bare callable
         # is used directly. Duck-typed — no import of the projector layer.
         proj_method = getattr(project, "project", None)
-        self._project: Callable[[Any], _OutboxT] = (
-            proj_method if callable(proj_method) else project
-        )
+        self._project: Callable[[Any], _OutboxT] = proj_method if callable(proj_method) else project
 
     def read_inbox(self, host: Any, key: str) -> _InboxT | None:
         return _host_metadata(host).pop(key, None)

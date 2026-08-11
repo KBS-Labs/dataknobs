@@ -7,6 +7,7 @@ Args:
         ``{intent_list}``, ``{extract_intents}`` placeholders.
         Defaults to :data:`DEFAULT_LLM_PROMPT_TEMPLATE`.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -35,9 +36,7 @@ class LLMIntentClassifier(IntentClassifier):
         prompt_template: str | None = None,
     ) -> None:
         self._llm = llm
-        self._prompt_template = (
-            prompt_template or DEFAULT_LLM_PROMPT_TEMPLATE
-        )
+        self._prompt_template = prompt_template or DEFAULT_LLM_PROMPT_TEMPLATE
 
     async def classify(
         self,
@@ -50,8 +49,10 @@ class LLMIntentClassifier(IntentClassifier):
         provider = llm or self._llm
         if provider is None:
             return IntentMatchResult(
-                intent=None, extracted=None,
-                rule_based=False, raw_reply=message,
+                intent=None,
+                extracted=None,
+                rule_based=False,
+                raw_reply=message,
             )
 
         # Preserve caller order for prompt reproducibility: prompt
@@ -74,9 +75,7 @@ class LLMIntentClassifier(IntentClassifier):
         prompt = self._prompt_template.format(
             message=message,
             intent_list=", ".join(f'"{n}"' for n in ordered_names),
-            extract_intents=", ".join(
-                f'"{n}"' for n in extract_intent_names
-            ),
+            extract_intents=", ".join(f'"{n}"' for n in extract_intent_names),
         )
         try:
             response = await provider.complete(
@@ -95,19 +94,23 @@ class LLMIntentClassifier(IntentClassifier):
             # `intent=None`; the warning makes the silent absorption
             # auditable.
             logger.warning(
-                "LLMIntentClassifier absorbing provider error "
-                "(%s); returning no-match. exc=%s",
-                type(exc).__name__, exc,
+                "LLMIntentClassifier absorbing provider error (%s); returning no-match. exc=%s",
+                type(exc).__name__,
+                exc,
             )
             return IntentMatchResult(
-                intent=None, extracted=None,
-                rule_based=False, raw_reply=message,
+                intent=None,
+                extracted=None,
+                rule_based=False,
+                raw_reply=message,
             )
 
         if not response or not response.content:
             return IntentMatchResult(
-                intent=None, extracted=None,
-                rule_based=False, raw_reply=message,
+                intent=None,
+                extracted=None,
+                rule_based=False,
+                raw_reply=message,
             )
 
         raw = response.content.strip()
@@ -137,12 +140,16 @@ class LLMIntentClassifier(IntentClassifier):
             # ``string`` property) require ``str`` or ``None``.
             extracted_str = _coerce_extracted(extracted)
             return IntentMatchResult(
-                intent=spec, extracted=extracted_str,
-                rule_based=False, raw_reply=message,
+                intent=spec,
+                extracted=extracted_str,
+                rule_based=False,
+                raw_reply=message,
             )
         return IntentMatchResult(
-            intent=None, extracted=None,
-            rule_based=False, raw_reply=message,
+            intent=None,
+            extracted=None,
+            rule_based=False,
+            raw_reply=message,
         )
 
 
@@ -173,8 +180,7 @@ def _coerce_extracted(value: Any) -> str | None:
     if isinstance(value, (list, tuple)) and len(value) == 1:
         return _coerce_extracted(value[0])
     logger.debug(
-        "LLMIntentClassifier dropping non-coercible extracted value "
-        "of type %s",
+        "LLMIntentClassifier dropping non-coercible extracted value of type %s",
         type(value).__name__,
     )
     return None

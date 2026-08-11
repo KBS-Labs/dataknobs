@@ -25,6 +25,7 @@ STATS=false
 ALL_ERRORS=false
 WORKSPACE_ONLY=false
 PRINT_TARGETS=false
+PRINT_FORMAT_TARGETS=false
 
 # Usage function
 usage() {
@@ -52,6 +53,10 @@ usage() {
     echo "      --print-targets   Print the resolved target list and exit, running"
     echo "                        no checks. What the target set IS, for callers"
     echo "                        that would otherwise have to re-derive it"
+    echo "      --print-format-targets"
+    echo "                        The same, for the formatter. A separate list"
+    echo "                        because the formatter's declared coverage is"
+    echo "                        wider than the linter's — see the format step"
     echo "  -h, --help            Show this help message"
     echo ""
     echo "Examples:"
@@ -92,6 +97,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --print-targets)
             PRINT_TARGETS=true
+            shift
+            ;;
+        --print-format-targets)
+            PRINT_FORMAT_TARGETS=true
             shift
             ;;
         -h|--help)
@@ -211,6 +220,51 @@ fi
 # the appends as text and so crediting targets that a conditional could skip.
 if [[ "$PRINT_TARGETS" == true ]]; then
     printf '%s\n' "${VALIDATE_TARGETS[@]}"
+    exit 0
+fi
+
+# The formatter's population, resolved the same way and kept separate.
+#
+# It is not VALIDATE_TARGETS. That set is the *linter's*, and it deliberately
+# omits every cell whose ruff tier is deferred — packages/*/tests among them.
+# The quality contract enforces `format` at ceiling 0 on all ten of its cells,
+# so borrowing the linter's list here checked 597 of 1,471 files and printed a
+# clean verdict over the other 874.
+#
+# Composed from format_subdirs rather than restated, so a directory added to
+# the formatter's coverage arrives here, in fix.sh and in `dk format` at once.
+#
+# Derived from VALIDATE_TARGETS rather than resolved a second time, so the two
+# cannot disagree about which packages are in scope: each `packages/<pkg>/src`
+# the package loop contributed widens to that package's whole format set, and
+# everything else — a directory or file the caller named, the workspace set —
+# passes through as given. A path the caller named directly is not widened,
+# because naming one is the statement that it is what should be read.
+FORMAT_TARGETS=()
+for target in "${VALIDATE_TARGETS[@]}"; do
+    _widened=false
+    for package in ${VALIDATE_PACKAGES[@]+"${VALIDATE_PACKAGES[@]}"}; do
+        if [[ "$target" == "packages/$package/src" ]]; then
+            for _subdir in $(format_subdirs); do
+                if [[ -d "packages/$package/$_subdir" ]]; then
+                    FORMAT_TARGETS+=("packages/$package/$_subdir")
+                fi
+            done
+            _widened=true
+            break
+        fi
+    done
+    # `if` rather than `[[ ... ]] && ...`: as the last command in the loop body
+    # that form makes the loop's status the test's, so a final iteration that
+    # widened would leave the `for` returning 1 and errexit would abort a run
+    # scoped to a single package.
+    if [[ "$_widened" == false ]]; then
+        FORMAT_TARGETS+=("$target")
+    fi
+done
+
+if [[ "$PRINT_FORMAT_TARGETS" == true ]]; then
+    printf '%s\n' "${FORMAT_TARGETS[@]}"
     exit 0
 fi
 
@@ -370,9 +424,42 @@ for target in "${VALIDATE_TARGETS[@]}"; do
     fi
 done
 
-# 3. Check imports (only for packages)
+# 3. Check formatting
+#
+# The formatter has been configured in pyproject.toml and named in the published
+# docs since the beginning, and until now nothing ran it: 1,128 of 1,471 tracked
+# files were unformatted while the docs told contributors it was the standard.
+# This is the step that makes the declaration true.
+#
+# Always with --config, and no --all-errors branch. The formatter has no
+# equivalent of "show me the suppressed findings too" -- there is one formatted
+# form -- so the two-branch shape the linter carries above would offer a choice
+# between the real answer and a differently-configured one.
+echo -e "\n${BLUE}3. Checking code formatting...${NC}"
+
+for target in "${FORMAT_TARGETS[@]}"; do
+    echo -e "${YELLOW}  Checking $target...${NC}"
+
+    if [[ "$FIX" == true ]]; then
+        if uv run ruff format "$target" --config "$ROOT_DIR/pyproject.toml"; then
+            echo -e "${GREEN}    ✓ Formatting applied${NC}"
+        else
+            echo -e "${RED}    ✗ Formatter failed${NC}"
+            FAILED=true
+        fi
+    else
+        if uv run ruff format --check "$target" --config "$ROOT_DIR/pyproject.toml"; then
+            echo -e "${GREEN}    ✓ Formatting is clean${NC}"
+        else
+            echo -e "${RED}    ✗ Files need formatting — run with -f, or bin/fix.sh${NC}"
+            FAILED=true
+        fi
+    fi
+done
+
+# 4. Check imports (only for packages)
 if [[ ${#VALIDATE_PACKAGES[@]} -gt 0 ]]; then
-    echo -e "\n${BLUE}3. Checking imports...${NC}"
+    echo -e "\n${BLUE}4. Checking imports...${NC}"
     for package in "${VALIDATE_PACKAGES[@]}"; do
         echo -e "${YELLOW}  Checking $package...${NC}"
 
@@ -417,9 +504,9 @@ run_mypy() {
     return "$rc"
 }
 
-# 4. Type checking with mypy (unless quick mode)
+# 5. Type checking with mypy (unless quick mode)
 if [[ "$QUICK" != true ]]; then
-    echo -e "\n${BLUE}4. Running mypy type checking...${NC}"
+    echo -e "\n${BLUE}5. Running mypy type checking...${NC}"
     for target in "${VALIDATE_TARGETS[@]}"; do
         echo -e "${YELLOW}  Checking $target...${NC}"
         
@@ -449,8 +536,8 @@ if [[ "$QUICK" != true ]]; then
     done
 fi
 
-# 5. Check for common issues
-echo -e "\n${BLUE}5. Checking for common issues...${NC}"
+# 6. Check for common issues
+echo -e "\n${BLUE}6. Checking for common issues...${NC}"
 
 # Check for print statements (with exceptions for legitimate uses)
 echo -e "${YELLOW}  Checking for print statements...${NC}"

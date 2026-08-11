@@ -137,19 +137,21 @@ class TestHybridReasoningConfig:
         assert isinstance(config.grounded, GroundedReasoningConfig)
 
     def test_from_dict_with_values(self) -> None:
-        config = HybridReasoningConfig.from_dict({
-            "grounded": {
-                "intent": {"mode": "static", "text_queries": ["test"]},
-                "retrieval": {"top_k": 10},
-            },
-            "react": {
-                "max_iterations": 3,
-                "verbose": True,
-                "store_trace": True,
-            },
-            "store_provenance": False,
-            "greeting_template": "Hello!",
-        })
+        config = HybridReasoningConfig.from_dict(
+            {
+                "grounded": {
+                    "intent": {"mode": "static", "text_queries": ["test"]},
+                    "retrieval": {"top_k": 10},
+                },
+                "react": {
+                    "max_iterations": 3,
+                    "verbose": True,
+                    "store_trace": True,
+                },
+                "store_provenance": False,
+                "greeting_template": "Hello!",
+            }
+        )
         assert config.react_max_iterations == 3
         assert config.react_verbose is True
         assert config.react_store_trace is True
@@ -186,7 +188,9 @@ class TestHybridReasoningConstruction:
                 return "test"
 
             async def query(
-                self, intent: RetrievalIntent, **kwargs: Any,
+                self,
+                intent: RetrievalIntent,
+                **kwargs: Any,
             ) -> list[SourceResult]:
                 return []
 
@@ -232,7 +236,8 @@ class TestHybridEnvelopeForwarding:
             prompt_envelope=PromptEnvelope(PromptEnvelopeStyle.XML),
         )
         prompt = strategy.grounded_strategy.build_synthesis_system_prompt(
-            "KB content here", "Original system prompt",
+            "KB content here",
+            "Original system prompt",
         )
         assert "<knowledge_base>\nKB content here\n</knowledge_base>" in prompt
         assert "## Knowledge base" not in prompt
@@ -247,7 +252,8 @@ class TestHybridEnvelopeForwarding:
             prompt_envelope=PromptEnvelope(PromptEnvelopeStyle.PROSE),
         )
         prompt = strategy.grounded_strategy.build_synthesis_system_prompt(
-            "KB content here", "Original system prompt",
+            "KB content here",
+            "Original system prompt",
         )
         assert "Knowledge base:\n\nKB content here" in prompt
         assert "## Knowledge base" not in prompt
@@ -258,7 +264,8 @@ class TestHybridEnvelopeForwarding:
         config = HybridReasoningConfig.from_dict({})
         strategy = HybridReasoning(config=config)
         prompt = strategy.grounded_strategy.build_synthesis_system_prompt(
-            "KB content here", "Original system prompt",
+            "KB content here",
+            "Original system prompt",
         )
         assert "## Knowledge base\n\nKB content here" in prompt
         assert "<knowledge_base>" not in prompt
@@ -278,7 +285,8 @@ class TestHybridEnvelopeForwarding:
         )
         assert isinstance(strategy, HybridReasoning)
         prompt = strategy.grounded_strategy.build_synthesis_system_prompt(
-            "KB content here", "Original system prompt",
+            "KB content here",
+            "Original system prompt",
         )
         assert "<knowledge_base>\nKB content here\n</knowledge_base>" in prompt
 
@@ -475,7 +483,8 @@ class TestHybridStreaming:
 
             chunks: list[str] = []
             async for chunk in harness.bot.stream_chat(
-                "How does OAuth work?", harness.context,
+                "How does OAuth work?",
+                harness.context,
             ):
                 delta = getattr(chunk, "delta", None) or ""
                 if delta:
@@ -504,7 +513,8 @@ class TestHybridStreaming:
 
             chunks: list[str] = []
             async for chunk in harness.bot.stream_chat(
-                "Calculate 2+2", harness.context,
+                "Calculate 2+2",
+                harness.context,
             ):
                 delta = getattr(chunk, "delta", None) or ""
                 if delta:
@@ -640,14 +650,18 @@ class TestHybridGreeting:
 
     @pytest.mark.asyncio
     async def test_greet_with_greeting_template(self) -> None:
-        config = HybridReasoningConfig.from_dict({
-            "greeting_template": "Hello, {{ user_name }}!",
-        })
+        config = HybridReasoningConfig.from_dict(
+            {
+                "greeting_template": "Hello, {{ user_name }}!",
+            }
+        )
         strategy = HybridReasoning(config=config)
         manager = StubManager()
 
         result = await strategy.greet(
-            manager, None, initial_context={"user_name": "Alice"},
+            manager,
+            None,
+            initial_context={"user_name": "Alice"},
         )
         assert result is not None
         assert "Alice" in result.content
@@ -757,7 +771,8 @@ class TestHybridCompositionAPI:
             harness.bot.reasoning_strategy.set_knowledge_base(kb)
             chunks = []
             async for chunk in harness.bot.stream_chat(
-                "How does OAuth work?", harness.context,
+                "How does OAuth work?",
+                harness.context,
             ):
                 chunks.append(chunk)
 

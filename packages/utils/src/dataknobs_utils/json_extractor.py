@@ -112,9 +112,7 @@ class JSONExtractor:
 
         return extracted_jsons
 
-    def _try_parse_candidates(
-        self, candidates: list[tuple[str, bool]]
-    ) -> list[dict[str, Any]]:
+    def _try_parse_candidates(self, candidates: list[tuple[str, bool]]) -> list[dict[str, Any]]:
         """Attempt to parse a list of candidate JSON text fragments.
 
         Tries ``json.loads`` on each candidate, falling back to
@@ -143,9 +141,7 @@ class JSONExtractor:
                         json_obj = json.loads(fixed_json)
                         self.fixed_jsons.append(json_obj)
                         extracted.append(json_obj)
-                        self.non_json_text = self.non_json_text.replace(
-                            json_text, "", 1
-                        )
+                        self.non_json_text = self.non_json_text.replace(json_text, "", 1)
                     except json.JSONDecodeError:
                         pass
 

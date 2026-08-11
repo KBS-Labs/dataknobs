@@ -70,9 +70,7 @@ def _resolve_knowledge_dir(
     return None
 
 
-def _scan_source_dir(
-    source_path: str, patterns: Sequence[str]
-) -> tuple[Path, bool, list[str]]:
+def _scan_source_dir(source_path: str, patterns: Sequence[str]) -> tuple[Path, bool, list[str]]:
     """Resolve, stat, and glob a knowledge-source directory (blocking).
 
     Returns ``(resolved_path, is_dir, sorted_file_names)``. The blocking
@@ -125,9 +123,7 @@ def _safe_join(base: Path, *parts: str) -> Path | None:
     candidate = base.joinpath(*parts)
     base_norm = os.path.normpath(base)
     candidate_norm = os.path.normpath(candidate)
-    if candidate_norm != base_norm and not candidate_norm.startswith(
-        base_norm + os.sep
-    ):
+    if candidate_norm != base_norm and not candidate_norm.startswith(base_norm + os.sep):
         return None
     return Path(candidate_norm)
 
@@ -151,8 +147,7 @@ class CheckKnowledgeSourceTool(ContextAwareTool):
         return {
             "name": "check_knowledge_source",
             "description": (
-                "Check if a knowledge source directory exists and "
-                "contains usable files."
+                "Check if a knowledge source directory exists and contains usable files."
             ),
             "tags": ("configbot", "kb"),
         }
@@ -210,9 +205,7 @@ class CheckKnowledgeSourceTool(ContextAwareTool):
         patterns = file_patterns or _DEFAULT_GLOB_PATTERNS
 
         # Resolve + stat + glob are blocking disk I/O; run them off the loop.
-        path, is_dir, found_files = await asyncio.to_thread(
-            _scan_source_dir, source_path, patterns
-        )
+        path, is_dir, found_files = await asyncio.to_thread(_scan_source_dir, source_path, patterns)
         if not is_dir:
             wizard_data["source_verified"] = False
             wizard_data["files_found"] = []
@@ -239,9 +232,7 @@ class CheckKnowledgeSourceTool(ContextAwareTool):
         existing_paths = {r.get("path") for r in resources}
         for fname in found_files:
             if fname not in existing_paths:
-                resources.append(
-                    {"path": fname, "type": "file", "source": str(path / fname)}
-                )
+                resources.append({"path": fname, "type": "file", "source": str(path / fname)})
 
         logger.debug(
             "Checked knowledge source: %s (%d files)",
@@ -272,8 +263,7 @@ class ListKBResourcesTool(ContextAwareTool):
         return {
             "name": "list_kb_resources",
             "description": (
-                "List the knowledge base resources added to the "
-                "current bot configuration."
+                "List the knowledge base resources added to the current bot configuration."
             ),
             "tags": ("configbot", "kb"),
         }
@@ -345,9 +335,7 @@ class AddKBResourceTool(ContextAwareTool):
         """Return catalog metadata for this tool class."""
         return {
             "name": "add_kb_resource",
-            "description": (
-                "Add a resource to the bot's knowledge base."
-            ),
+            "description": ("Add a resource to the bot's knowledge base."),
             "tags": ("configbot", "kb"),
         }
 
@@ -390,9 +378,7 @@ class AddKBResourceTool(ContextAwareTool):
                 },
                 "content": {
                     "type": "string",
-                    "description": (
-                        "Inline content to write (only for resource_type='inline')"
-                    ),
+                    "description": ("Inline content to write (only for resource_type='inline')"),
                 },
                 "description": {
                     "type": "string",
@@ -426,9 +412,7 @@ class AddKBResourceTool(ContextAwareTool):
             Dict with add result.
         """
         wizard_data = _get_wizard_data_ref(context)
-        resources: list[dict[str, Any]] = wizard_data.setdefault(
-            "_kb_resources", []
-        )
+        resources: list[dict[str, Any]] = wizard_data.setdefault("_kb_resources", [])
 
         # Check for duplicate
         existing_paths = {r["path"] for r in resources}
@@ -467,14 +451,11 @@ class AddKBResourceTool(ContextAwareTool):
                 return {
                     "success": False,
                     "error": (
-                        f"Invalid resource path '{path}': resolves outside "
-                        "the knowledge directory"
+                        f"Invalid resource path '{path}': resolves outside the knowledge directory"
                     ),
                 }
             # mkdir + write are blocking disk I/O; run them off the loop.
-            await asyncio.to_thread(
-                _write_text_with_parents, target_path, content
-            )
+            await asyncio.to_thread(_write_text_with_parents, target_path, content)
             resource["source"] = str(target_path)
             logger.debug(
                 "Wrote inline resource: %s",
@@ -510,10 +491,7 @@ class RemoveKBResourceTool(ContextAwareTool):
         """Return catalog metadata for this tool class."""
         return {
             "name": "remove_kb_resource",
-            "description": (
-                "Remove a resource from the bot's knowledge base "
-                "resource list."
-            ),
+            "description": ("Remove a resource from the bot's knowledge base resource list."),
             "tags": ("configbot", "kb"),
         }
 
@@ -521,10 +499,7 @@ class RemoveKBResourceTool(ContextAwareTool):
         """Initialize the tool."""
         super().__init__(
             name="remove_kb_resource",
-            description=(
-                "Remove a resource from the bot's knowledge base "
-                "resource list."
-            ),
+            description=("Remove a resource from the bot's knowledge base resource list."),
         )
 
     @property
@@ -611,9 +586,7 @@ class IngestKnowledgeBaseTool(ContextAwareTool):
         """Return catalog metadata for this tool class."""
         return {
             "name": "ingest_knowledge_base",
-            "description": (
-                "Finalize and ingest the knowledge base resources."
-            ),
+            "description": ("Finalize and ingest the knowledge base resources."),
             "tags": ("configbot", "kb"),
         }
 
@@ -670,10 +643,7 @@ class IngestKnowledgeBaseTool(ContextAwareTool):
 
         # Fallback: if no explicit resources, use auto-discovered files
         if not resources and wizard_data.get("files_found"):
-            resources = [
-                {"path": f, "type": "file"}
-                for f in wizard_data["files_found"]
-            ]
+            resources = [{"path": f, "type": "file"} for f in wizard_data["files_found"]]
 
         if not resources:
             return {
@@ -694,8 +664,7 @@ class IngestKnowledgeBaseTool(ContextAwareTool):
             return {
                 "success": False,
                 "error": (
-                    f"Invalid domain_id '{domain_id}': resolves outside the "
-                    "knowledge directory"
+                    f"Invalid domain_id '{domain_id}': resolves outside the knowledge directory"
                 ),
             }
         manifest = {

@@ -140,9 +140,7 @@ class _BedrockSession:
 
 
 def _bedrock_provider(exc: Exception) -> BedrockProvider:
-    provider = BedrockProvider(
-        LLMConfig(provider="bedrock", model="anthropic.claude-3-sonnet")
-    )
+    provider = BedrockProvider(LLMConfig(provider="bedrock", model="anthropic.claude-3-sonnet"))
     provider._session = _BedrockSession(exc)
     provider._is_initialized = True
     return provider
@@ -166,9 +164,7 @@ def _ollama_provider(session: Any) -> OllamaProvider:
 
 
 def _hf_provider(session: Any) -> HuggingFaceProvider:
-    provider = HuggingFaceProvider(
-        LLMConfig(provider="huggingface", model="gpt2", api_key="test")
-    )
+    provider = HuggingFaceProvider(LLMConfig(provider="huggingface", model="gpt2", api_key="test"))
     provider._session = session
     provider._is_initialized = True
     return provider
@@ -182,9 +178,7 @@ def _bad_request_response(body: str) -> FakeResponse:
     carries no marker, so overflow is detected only once the body is folded in
     (and a non-overflow body stays a plain ``ValidationError``).
     """
-    return FakeResponse(
-        400, text=body, raise_exc=make_client_response_error(400, "Bad Request")
-    )
+    return FakeResponse(400, text=body, raise_exc=make_client_response_error(400, "Bad Request"))
 
 
 # ---------------------------------------------------------------------------
@@ -255,8 +249,7 @@ class TestContextLengthTranslation:
         provider = _base_provider()
         err = provider._dataknobs_error_for_status(
             400,
-            "Anthropic API error: prompt is too long: "
-            "215334 tokens > 200000 maximum",
+            "Anthropic API error: prompt is too long: 215334 tokens > 200000 maximum",
         )
         assert isinstance(err, ContextLengthExceededError)
 
@@ -307,9 +300,7 @@ class TestAiohttpProviderContextLength:
         response = _bad_request_response(
             '{"error":"input is too long for this model\'s context window"}'
         )
-        provider = _ollama_provider(
-            FakeSession([FakeSession.responding(response)])
-        )
+        provider = _ollama_provider(FakeSession([FakeSession.responding(response)]))
         with pytest.raises(ContextLengthExceededError) as excinfo:
             await provider.complete("hi")
         # Backward compatibility + original error preserved on __cause__.
@@ -322,23 +313,15 @@ class TestAiohttpProviderContextLength:
         Pins that folding the body did not widen the net — an unrelated Ollama
         400 (a rejected option) must not be misclassified as overflow.
         """
-        response = _bad_request_response(
-            '{"error":"invalid options: temperature must be <= 2"}'
-        )
-        provider = _ollama_provider(
-            FakeSession([FakeSession.responding(response)])
-        )
+        response = _bad_request_response('{"error":"invalid options: temperature must be <= 2"}')
+        provider = _ollama_provider(FakeSession([FakeSession.responding(response)]))
         with pytest.raises(ValidationError) as excinfo:
             await provider.complete("hi")
         assert not isinstance(excinfo.value, ContextLengthExceededError)
 
     async def test_huggingface_context_length_via_body_marker(self) -> None:
-        response = _bad_request_response(
-            '{"error":"Input validation error: prompt is too long"}'
-        )
-        provider = _hf_provider(
-            FakeSession([FakeSession.responding(response)])
-        )
+        response = _bad_request_response('{"error":"Input validation error: prompt is too long"}')
+        provider = _hf_provider(FakeSession([FakeSession.responding(response)]))
         with pytest.raises(ContextLengthExceededError) as excinfo:
             await provider.complete("hi")
         assert isinstance(excinfo.value, ValidationError)
@@ -356,9 +339,7 @@ class TestExports:
     def test_top_level_and_module_exports_are_the_same_type(self) -> None:
         import dataknobs_llm
 
-        assert dataknobs_llm.ContextLengthExceededError is (
-            ContextLengthExceededError
-        )
+        assert dataknobs_llm.ContextLengthExceededError is (ContextLengthExceededError)
 
     def test_is_a_validation_error_subclass(self) -> None:
         assert issubclass(ContextLengthExceededError, ValidationError)
@@ -390,20 +371,12 @@ class TestIsContextLengthError:
         )
 
     def test_not_fired_on_400_unrelated_message(self) -> None:
-        assert (
-            LLMProvider._is_context_length_error(400, "invalid temperature")
-            is False
-        )
+        assert LLMProvider._is_context_length_error(400, "invalid temperature") is False
 
     @pytest.mark.parametrize("status", [429, 401, 500, None])
     def test_status_gate_first(self, status: int | None) -> None:
         """Only a 400 qualifies — a marker in a 429/401/500 message never fires."""
-        assert (
-            LLMProvider._is_context_length_error(
-                status, "prompt is too long"
-            )
-            is False
-        )
+        assert LLMProvider._is_context_length_error(status, "prompt is too long") is False
 
 
 class TestStatusDispatchContextLength:
@@ -416,9 +389,7 @@ class TestStatusDispatchContextLength:
 
     def test_overflow_code_becomes_context_length_error(self) -> None:
         provider = _base_provider()
-        err = provider._dataknobs_error_for_status(
-            400, "opaque", code="context_length_exceeded"
-        )
+        err = provider._dataknobs_error_for_status(400, "opaque", code="context_length_exceeded")
         assert isinstance(err, ContextLengthExceededError)
 
     def test_plain_400_stays_validation_error(self) -> None:
@@ -431,7 +402,5 @@ class TestStatusDispatchContextLength:
         from dataknobs_common.exceptions import RateLimitError
 
         provider = _base_provider()
-        err = provider._dataknobs_error_for_status(
-            429, "prompt is too long", retry_after=1.0
-        )
+        err = provider._dataknobs_error_for_status(429, "prompt is too long", retry_after=1.0)
         assert type(err) is RateLimitError

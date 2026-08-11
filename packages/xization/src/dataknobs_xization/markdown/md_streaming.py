@@ -10,7 +10,12 @@ from typing import Iterator, TextIO
 
 from dataknobs_structures.tree import Tree
 
-from dataknobs_xization.markdown.md_chunker import Chunk, ChunkFormat, HeadingInclusion, MarkdownChunker
+from dataknobs_xization.markdown.md_chunker import (
+    Chunk,
+    ChunkFormat,
+    HeadingInclusion,
+    MarkdownChunker,
+)
 from dataknobs_xization.markdown.md_parser import MarkdownNode, MarkdownParser
 
 
@@ -86,7 +91,7 @@ class StreamingMarkdownProcessor:
         Yields:
             Chunk objects
         """
-        with open(file_path, encoding='utf-8') as f:
+        with open(file_path, encoding="utf-8") as f:
             yield from self.process_stream(f)
 
     def process_string(self, content: str) -> Iterator[Chunk]:
@@ -191,9 +196,7 @@ class AdaptiveStreamingProcessor(StreamingMarkdownProcessor):
                     line_number=line_number,
                 )
 
-                current_parent, _ = self.parser._find_heading_parent(
-                    root, current_parent, level
-                )
+                current_parent, _ = self.parser._find_heading_parent(root, current_parent, level)
 
                 heading_node = current_parent.add_child(node_data)
                 current_parent = heading_node
@@ -201,7 +204,7 @@ class AdaptiveStreamingProcessor(StreamingMarkdownProcessor):
             else:
                 # Body text
                 node_data = MarkdownNode(
-                    text=line.rstrip('\n'),
+                    text=line.rstrip("\n"),
                     level=0,
                     node_type="body",
                     line_number=line_number,

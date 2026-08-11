@@ -17,6 +17,7 @@ logger = logging.getLogger(__name__)
 # Chunker registry
 # ---------------------------------------------------------------------------
 
+
 def _register_builtins(registry: PluginRegistry[Chunker]) -> None:
     """Lazily register built-in chunkers on first access."""
     from dataknobs_xization.chunking.markdown import MarkdownTreeChunker
@@ -38,6 +39,7 @@ chunker_registry: PluginRegistry[Chunker] = PluginRegistry(
 # ---------------------------------------------------------------------------
 # Transform registry
 # ---------------------------------------------------------------------------
+
 
 def _register_builtin_transforms(registry: PluginRegistry[ChunkTransform]) -> None:
     """Lazily register built-in transforms on first access."""
@@ -65,6 +67,7 @@ transform_registry: PluginRegistry[ChunkTransform] = PluginRegistry(
 # ---------------------------------------------------------------------------
 # Dotted import resolution
 # ---------------------------------------------------------------------------
+
 
 def _looks_like_a_dotted_path(key: str) -> bool:
     """Whether *key* names a class to import rather than a registry entry.
@@ -107,6 +110,7 @@ def _ensure_registered(
 # ---------------------------------------------------------------------------
 # Factory functions
 # ---------------------------------------------------------------------------
+
 
 def create_chunker(config: dict[str, Any] | None = None) -> Chunker:
     """Create a chunker from configuration.
@@ -178,17 +182,14 @@ def _build_transforms(
     for entry in transforms_config:
         if not isinstance(entry, dict) or len(entry) != 1:
             raise ValueError(
-                f"Each transform entry must be a dict with exactly one key, "
-                f"got: {entry!r}"
+                f"Each transform entry must be a dict with exactly one key, got: {entry!r}"
             )
         key, transform_config = next(iter(entry.items()))
         if not isinstance(transform_config, dict):
             transform_config = {}
 
         _ensure_registered(transform_registry, key, ChunkTransform)
-        transform = transform_registry.create(
-            config={"transform": key, **transform_config}
-        )
+        transform = transform_registry.create(config={"transform": key, **transform_config})
         transforms.append(transform)
     return transforms
 

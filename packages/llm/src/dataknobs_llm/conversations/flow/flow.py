@@ -17,11 +17,7 @@ class TransitionCondition(ABC):
     """
 
     @abstractmethod
-    async def evaluate(
-        self,
-        response: str,
-        context: Dict[str, Any]
-    ) -> bool:
+    async def evaluate(self, response: str, context: Dict[str, Any]) -> bool:
         """Evaluate if this transition should be taken.
 
         Args:
@@ -86,9 +82,7 @@ class FlowState:
         # Ensure all transitions have corresponding conditions
         for cond_name in self.transitions.keys():
             if cond_name not in self.transition_conditions:
-                raise ValueError(
-                    f"Transition '{cond_name}' has no corresponding condition"
-                )
+                raise ValueError(f"Transition '{cond_name}' has no corresponding condition")
 
 
 @dataclass
@@ -138,9 +132,7 @@ class ConversationFlow:
             raise ValueError("Flow must have at least one state")
 
         if self.initial_state not in self.states:
-            raise ValueError(
-                f"initial_state '{self.initial_state}' not found in states"
-            )
+            raise ValueError(f"initial_state '{self.initial_state}' not found in states")
 
         # Validate all transition targets exist
         for state_name, state in self.states.items():

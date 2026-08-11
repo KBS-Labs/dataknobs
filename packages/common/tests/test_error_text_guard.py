@@ -151,9 +151,7 @@ def test_an_explicit_unbounded_types_still_overrides_the_default(tmp_path):
         '        raise ConfigError(f"failed: {e}") from e\n',
     )
 
-    assert_no_broad_except_in_error_text(
-        path, error_names=_ERRORS, unbounded_types={"Exception"}
-    )
+    assert_no_broad_except_in_error_text(path, error_names=_ERRORS, unbounded_types={"Exception"})
 
 
 def test_flags_a_qualified_broad_except(tmp_path):
@@ -474,9 +472,7 @@ class TestIgnoreEntries:
             '        raise ConfigurationError(f"failed: {e}") from e\n',
         )
 
-        assert_no_broad_except_in_error_text(
-            path, error_names=_ERRORS, ignore={"sample.py:5"}
-        )
+        assert_no_broad_except_in_error_text(path, error_names=_ERRORS, ignore={"sample.py:5"})
 
     def test_a_path_qualified_entry_matches(self, tmp_path):
         """The docstring promises a path suffix; a basename-only match broke it.
@@ -496,9 +492,7 @@ class TestIgnoreEntries:
             encoding="utf-8",
         )
 
-        assert_no_broad_except_in_error_text(
-            tmp_path, error_names=_ERRORS, ignore={"pkg/mod.py:5"}
-        )
+        assert_no_broad_except_in_error_text(tmp_path, error_names=_ERRORS, ignore={"pkg/mod.py:5"})
 
     def test_an_entry_that_matches_nothing_fails(self, tmp_path):
         """A suppression for a site that moved is a hole, reported as one."""
@@ -512,9 +506,7 @@ class TestIgnoreEntries:
         )
 
         with pytest.raises(AssertionError) as excinfo:
-            assert_no_broad_except_in_error_text(
-                path, error_names=_ERRORS, ignore={"sample.py:99"}
-            )
+            assert_no_broad_except_in_error_text(path, error_names=_ERRORS, ignore={"sample.py:99"})
 
         assert "sample.py:99" in str(excinfo.value)
 

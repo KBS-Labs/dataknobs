@@ -188,9 +188,7 @@ def _resolve_vector_store_config_cls(
 # makes the ``vector_store`` binding resolvable, and any parent config that
 # holds a vector-store section already depends on this package. ``override``
 # keeps re-import idempotent.
-config_registries.register(
-    "vector_store", _resolve_vector_store_config_cls, allow_overwrite=True
-)
+config_registries.register("vector_store", _resolve_vector_store_config_cls, allow_overwrite=True)
 
 
 __all__ = [

@@ -43,9 +43,7 @@ class StorageConfig(StructuredConfig):
     retention_policy: dict[str, Any] = field(default_factory=dict)
     compression: bool = False
     batch_size: int = 100
-    mode_specific_config: dict[DataHandlingMode, dict[str, Any]] = field(
-        default_factory=dict
-    )
+    mode_specific_config: dict[DataHandlingMode, dict[str, Any]] = field(default_factory=dict)
 
     def get_mode_config(self, mode: DataHandlingMode) -> dict[str, Any]:
         """Get configuration for a specific data mode.

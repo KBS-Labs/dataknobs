@@ -56,9 +56,9 @@ RUBRIC_CLASSIFICATION: PromptTemplateDict = {
         "Description: {criterion_description}\n\n"
         "Classify the content into exactly one of these levels:\n"
         "{level_descriptions}\n\n"
-        "Respond with a JSON object containing a single field \"level_id\" "
+        'Respond with a JSON object containing a single field "level_id" '
         "set to one of: {valid_ids}\n"
-        "Example: {{\"level_id\": \"{example_level_id}\"}}\n"
+        'Example: {{"level_id": "{example_level_id}"}}\n'
         "Do not include any other text."
     ),
     "template_syntax": "format",

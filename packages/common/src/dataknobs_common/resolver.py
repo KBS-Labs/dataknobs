@@ -477,15 +477,11 @@ def _make_composite_resolver(config: dict[str, Any]) -> ResourceResolver[Any, An
 def _make_defaulting_resolver(
     config: dict[str, Any],
 ) -> ResourceResolver[Any, Any]:
-    return DefaultingResolver(
-        inner=config["inner"], default=config["default"]
-    )
+    return DefaultingResolver(inner=config["inner"], default=config["default"])
 
 
 def _make_cached_resolver(config: dict[str, Any]) -> ResourceResolver[Any, Any]:
-    return CachedResolver(
-        inner=config["inner"], max_size=config.get("max_size", 128)
-    )
+    return CachedResolver(inner=config["inner"], max_size=config.get("max_size", 128))
 
 
 def _make_null_resolver(config: dict[str, Any]) -> ResourceResolver[Any, Any]:

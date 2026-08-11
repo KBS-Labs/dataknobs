@@ -204,14 +204,10 @@ async def test_concurrent_put_and_get(s3_kb_config) -> None:
         for i, p in enumerate(paths):
             await backend.put_file("d", p, f"body-{i}".encode())
 
-        results = await asyncio.gather(
-            *(backend.get_file("d", p) for p in paths)
-        )
+        results = await asyncio.gather(*(backend.get_file("d", p) for p in paths))
         assert results == [f"body-{i}".encode() for i in range(10)]
 
-        exists = await asyncio.gather(
-            *(backend.file_exists("d", p) for p in paths)
-        )
+        exists = await asyncio.gather(*(backend.file_exists("d", p) for p in paths))
         assert all(exists)
     finally:
         await backend.close()

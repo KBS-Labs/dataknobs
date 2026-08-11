@@ -14,7 +14,7 @@ def test_flow_state_creation():
     state = FlowState(
         prompt_name="test_prompt",
         transitions={"next": "other_state"},
-        transition_conditions={"next": always()}
+        transition_conditions={"next": always()},
     )
 
     assert state.prompt_name == "test_prompt"
@@ -29,7 +29,7 @@ def test_flow_state_validation():
         FlowState(
             prompt_name="test",
             transitions={"next": "other"},
-            transition_conditions={}  # Missing condition!
+            transition_conditions={},  # Missing condition!
         )
 
 
@@ -42,19 +42,15 @@ def test_conversation_flow_creation():
             "start": FlowState(
                 prompt_name="greeting",
                 transitions={"continue": "middle"},
-                transition_conditions={"continue": always()}
+                transition_conditions={"continue": always()},
             ),
             "middle": FlowState(
                 prompt_name="question",
                 transitions={"done": "end"},
-                transition_conditions={"done": always()}
+                transition_conditions={"done": always()},
             ),
-            "end": FlowState(
-                prompt_name="goodbye",
-                transitions={},
-                transition_conditions={}
-            )
-        }
+            "end": FlowState(prompt_name="goodbye", transitions={}, transition_conditions={}),
+        },
     )
 
     assert flow.name == "test_flow"
@@ -70,12 +66,8 @@ def test_conversation_flow_validation():
             name="test",
             initial_state="nonexistent",
             states={
-                "start": FlowState(
-                    prompt_name="test",
-                    transitions={},
-                    transition_conditions={}
-                )
-            }
+                "start": FlowState(prompt_name="test", transitions={}, transition_conditions={})
+            },
         )
 
     # Invalid transition target
@@ -87,9 +79,9 @@ def test_conversation_flow_validation():
                 "start": FlowState(
                     prompt_name="test",
                     transitions={"next": "nonexistent"},
-                    transition_conditions={"next": always()}
+                    transition_conditions={"next": always()},
                 )
-            }
+            },
         )
 
 
@@ -98,13 +90,7 @@ def test_get_state():
     flow = ConversationFlow(
         name="test",
         initial_state="start",
-        states={
-            "start": FlowState(
-                prompt_name="test",
-                transitions={},
-                transition_conditions={}
-            )
-        }
+        states={"start": FlowState(prompt_name="test", transitions={}, transition_conditions={})},
     )
 
     state = flow.get_state("start")
@@ -123,19 +109,11 @@ def test_get_reachable_states():
             "start": FlowState(
                 prompt_name="test",
                 transitions={"a": "state_a", "b": "state_b"},
-                transition_conditions={"a": always(), "b": always()}
+                transition_conditions={"a": always(), "b": always()},
             ),
-            "state_a": FlowState(
-                prompt_name="a",
-                transitions={},
-                transition_conditions={}
-            ),
-            "state_b": FlowState(
-                prompt_name="b",
-                transitions={},
-                transition_conditions={}
-            )
-        }
+            "state_a": FlowState(prompt_name="a", transitions={}, transition_conditions={}),
+            "state_b": FlowState(prompt_name="b", transitions={}, transition_conditions={}),
+        },
     )
 
     reachable = flow.get_reachable_states("start")
@@ -149,17 +127,9 @@ def test_validate_flow():
         name="test",
         initial_state="start",
         states={
-            "start": FlowState(
-                prompt_name="test",
-                transitions={},
-                transition_conditions={}
-            ),
-            "unreachable": FlowState(
-                prompt_name="test2",
-                transitions={},
-                transition_conditions={}
-            )
-        }
+            "start": FlowState(prompt_name="test", transitions={}, transition_conditions={}),
+            "unreachable": FlowState(prompt_name="test2", transitions={}, transition_conditions={}),
+        },
     )
 
     warnings = flow.validate_flow()
@@ -173,7 +143,7 @@ def test_flow_with_max_loops():
         prompt_name="test",
         transitions={"loop": "test"},
         transition_conditions={"loop": always()},
-        max_loops=3
+        max_loops=3,
     )
 
     assert state.max_loops == 3

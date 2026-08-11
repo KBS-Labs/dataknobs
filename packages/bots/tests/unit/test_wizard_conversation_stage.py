@@ -73,7 +73,8 @@ def conversation_wizard_config() -> dict:
 
 @pytest.fixture
 def conversation_reasoning(
-    conversation_wizard_config: dict, wizard_loader: WizardConfigLoader) -> WizardReasoning:
+    conversation_wizard_config: dict, wizard_loader: WizardConfigLoader
+) -> WizardReasoning:
     """WizardReasoning with conversation stage config."""
     fsm = wizard_loader.load_from_dict(conversation_wizard_config)
     return WizardReasoning(wizard_fsm=fsm, strict_validation=False)
@@ -168,9 +169,7 @@ class TestMessageInjection:
                     "transitions": [
                         {
                             "target": "end",
-                            "condition": (
-                                "'magic' in data.get('_message', '').lower()"
-                            ),
+                            "condition": ("'magic' in data.get('_message', '').lower()"),
                         },
                     ],
                 },
@@ -267,9 +266,7 @@ class TestConversationMode:
 
         # Send multiple messages - none should trigger clarification
         for i in range(5):
-            await manager.add_message(
-                role="user", content=f"Random message {i}"
-            )
+            await manager.add_message(role="user", content=f"Random message {i}")
             provider.set_responses([f"Response {i}"])
             await conversation_reasoning.generate(manager, llm=None)
 
@@ -286,7 +283,9 @@ class TestIntentDetection:
     """Tests for _detect_intent method."""
 
     @pytest.fixture
-    def reasoning(self, conversation_wizard_config: dict, wizard_loader: WizardConfigLoader) -> WizardReasoning:
+    def reasoning(
+        self, conversation_wizard_config: dict, wizard_loader: WizardConfigLoader
+    ) -> WizardReasoning:
         fsm = wizard_loader.load_from_dict(conversation_wizard_config)
         return WizardReasoning(wizard_fsm=fsm, strict_validation=False)
 
@@ -308,9 +307,7 @@ class TestIntentDetection:
         assert state.data["_intent"] == "quiz"
 
     @pytest.mark.asyncio
-    async def test_keyword_intent_case_insensitive(
-        self, reasoning: WizardReasoning
-    ) -> None:
+    async def test_keyword_intent_case_insensitive(self, reasoning: WizardReasoning) -> None:
         """Keyword matching is case-insensitive."""
         state = WizardState(current_stage="chat")
         stage = {
@@ -324,9 +321,7 @@ class TestIntentDetection:
         assert state.data["_intent"] == "greet"
 
     @pytest.mark.asyncio
-    async def test_keyword_intent_no_match(
-        self, reasoning: WizardReasoning
-    ) -> None:
+    async def test_keyword_intent_no_match(self, reasoning: WizardReasoning) -> None:
         """No intent set when no keywords match."""
         state = WizardState(current_stage="chat")
         stage = {
@@ -340,9 +335,7 @@ class TestIntentDetection:
         assert "_intent" not in state.data
 
     @pytest.mark.asyncio
-    async def test_keyword_first_match_wins(
-        self, reasoning: WizardReasoning
-    ) -> None:
+    async def test_keyword_first_match_wins(self, reasoning: WizardReasoning) -> None:
         """First matching intent in list wins."""
         state = WizardState(current_stage="chat")
         stage = {
@@ -359,9 +352,7 @@ class TestIntentDetection:
         assert state.data["_intent"] == "first"
 
     @pytest.mark.asyncio
-    async def test_intent_cleared_each_turn(
-        self, reasoning: WizardReasoning
-    ) -> None:
+    async def test_intent_cleared_each_turn(self, reasoning: WizardReasoning) -> None:
         """Previous _intent is cleared before detection runs."""
         state = WizardState(current_stage="chat", data={"_intent": "old_intent"})
         stage = {
@@ -376,9 +367,7 @@ class TestIntentDetection:
         assert "_intent" not in state.data
 
     @pytest.mark.asyncio
-    async def test_no_intent_config_is_noop(
-        self, reasoning: WizardReasoning
-    ) -> None:
+    async def test_no_intent_config_is_noop(self, reasoning: WizardReasoning) -> None:
         """No intent_detection config means no _intent is set."""
         state = WizardState(current_stage="chat", data={"existing": "data"})
         stage = {}
@@ -388,15 +377,11 @@ class TestIntentDetection:
         assert state.data["existing"] == "data"
 
     @pytest.mark.asyncio
-    async def test_llm_intent_detection(
-        self, reasoning: WizardReasoning
-    ) -> None:
+    async def test_llm_intent_detection(self, reasoning: WizardReasoning) -> None:
         """LLM method classifies intent via LLM call."""
         from dataknobs_llm.llm.providers.echo import EchoProvider
 
-        llm = EchoProvider(
-            {"provider": "echo", "model": "echo", "options": {"echo_prefix": ""}}
-        )
+        llm = EchoProvider({"provider": "echo", "model": "echo", "options": {"echo_prefix": ""}})
         llm.set_responses(["start_quiz"])
 
         state = WizardState(current_stage="chat")
@@ -420,15 +405,11 @@ class TestIntentDetection:
         assert state.data["_intent"] == "start_quiz"
 
     @pytest.mark.asyncio
-    async def test_llm_intent_invalid_response(
-        self, reasoning: WizardReasoning
-    ) -> None:
+    async def test_llm_intent_invalid_response(self, reasoning: WizardReasoning) -> None:
         """LLM returning invalid intent ID results in no intent set."""
         from dataknobs_llm.llm.providers.echo import EchoProvider
 
-        llm = EchoProvider(
-            {"provider": "echo", "model": "echo", "options": {"echo_prefix": ""}}
-        )
+        llm = EchoProvider({"provider": "echo", "model": "echo", "options": {"echo_prefix": ""}})
         llm.set_responses(["invalid_intent_id"])
 
         state = WizardState(current_stage="chat")
@@ -445,15 +426,11 @@ class TestIntentDetection:
         assert "_intent" not in state.data
 
     @pytest.mark.asyncio
-    async def test_llm_intent_none_response(
-        self, reasoning: WizardReasoning
-    ) -> None:
+    async def test_llm_intent_none_response(self, reasoning: WizardReasoning) -> None:
         """LLM returning 'none' results in no intent set."""
         from dataknobs_llm.llm.providers.echo import EchoProvider
 
-        llm = EchoProvider(
-            {"provider": "echo", "model": "echo", "options": {"echo_prefix": ""}}
-        )
+        llm = EchoProvider({"provider": "echo", "model": "echo", "options": {"echo_prefix": ""}})
         llm.set_responses(["none"])
 
         state = WizardState(current_stage="chat")
@@ -481,7 +458,9 @@ class TestStructuredStageIntentDetection:
     @pytest.mark.asyncio
     async def test_structured_stage_runs_intent_detection(
         self,
-        conversation_manager_pair: tuple[ConversationManager, EchoProvider], wizard_loader: WizardConfigLoader) -> None:
+        conversation_manager_pair: tuple[ConversationManager, EchoProvider],
+        wizard_loader: WizardConfigLoader,
+    ) -> None:
         """Structured stage with intent_detection runs detection after extraction."""
         manager, provider = conversation_manager_pair
 
@@ -566,7 +545,9 @@ class TestStageModeMeta:
     @pytest.mark.asyncio
     async def test_structured_stage_mode_default(
         self,
-        conversation_manager_pair: tuple[ConversationManager, EchoProvider], wizard_loader: WizardConfigLoader) -> None:
+        conversation_manager_pair: tuple[ConversationManager, EchoProvider],
+        wizard_loader: WizardConfigLoader,
+    ) -> None:
         """Structured stage returns stage_mode='structured' (default)."""
         manager, provider = conversation_manager_pair
 
@@ -626,7 +607,9 @@ class TestConfigLoaderConversation:
         meta = fsm.current_metadata
         assert meta["mode"] == "conversation"
 
-    def test_intent_detection_preserved_in_metadata(self, wizard_loader: WizardConfigLoader) -> None:
+    def test_intent_detection_preserved_in_metadata(
+        self, wizard_loader: WizardConfigLoader
+    ) -> None:
         """intent_detection config is preserved in stage metadata."""
         intent_config = {
             "method": "keyword",
@@ -698,7 +681,9 @@ class TestConversationRoundTrip:
     async def test_data_preserved_across_conversation_detour(
         self,
         roundtrip_wizard_config: dict,
-        conversation_manager_pair: tuple[ConversationManager, EchoProvider], wizard_loader: WizardConfigLoader) -> None:
+        conversation_manager_pair: tuple[ConversationManager, EchoProvider],
+        wizard_loader: WizardConfigLoader,
+    ) -> None:
         """Partially collected data survives a conversation detour and back."""
         manager, provider = conversation_manager_pair
 
@@ -715,9 +700,7 @@ class TestConversationRoundTrip:
         assert state["current_stage"] == "help_chat"
 
         # Turn 2: User asks a question in conversation mode
-        await manager.add_message(
-            role="user", content="What topics are available?"
-        )
+        await manager.add_message(role="user", content="What topics are available?")
         provider.set_responses(["We have math and science!"])
 
         await reasoning.generate(manager, llm=None)
@@ -726,9 +709,7 @@ class TestConversationRoundTrip:
         assert state["current_stage"] == "help_chat"
 
         # Turn 3: User says "let's continue" to go back
-        await manager.add_message(
-            role="user", content="OK let's continue with setup"
-        )
+        await manager.add_message(role="user", content="OK let's continue with setup")
         provider.set_responses(["Great, let's continue!"])
 
         await reasoning.generate(manager, llm=None)

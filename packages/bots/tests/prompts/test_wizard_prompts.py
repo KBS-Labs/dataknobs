@@ -23,7 +23,6 @@ def _make_library() -> ConfigPromptLibrary:
 
 
 class TestWizardPromptKeys:
-
     def test_all_clarification_keys_present(self) -> None:
         expected = [
             "wizard.clarification",
@@ -92,7 +91,6 @@ class TestWizardPromptKeys:
 
 
 class TestWizardMetaPromptComposition:
-
     def test_clarification_meta_renders(self) -> None:
         library = _make_library()
         renderer = TemplateRenderer(default_mode=TemplateMode.JINJA2)
@@ -172,7 +170,6 @@ class TestWizardMetaPromptComposition:
 
 
 class TestMemoryPromptKeys:
-
     def test_summary_key_present(self) -> None:
         assert "memory.summary" in MEMORY_PROMPT_KEYS
 
@@ -192,7 +189,6 @@ class TestMemoryPromptKeys:
 
 
 class TestRubricPromptKeys:
-
     def test_all_keys_present(self) -> None:
         expected = [
             "rubric.feedback_summary.system",

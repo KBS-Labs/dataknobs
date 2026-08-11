@@ -88,10 +88,12 @@ class TestTransitionSignalSync:
         """Signal that doesn't match any arc falls through to normal eval."""
         config = _make_config()
         with create_advanced_fsm(config) as fsm:
-            context = fsm.create_context({
-                "value": 1,
-                "_transition_signal": "nonexistent_state",
-            })
+            context = fsm.create_context(
+                {
+                    "value": 1,
+                    "_transition_signal": "nonexistent_state",
+                }
+            )
 
             result = fsm.execute_step_sync(context)
 
@@ -177,10 +179,12 @@ class TestTransitionSignalAsync:
         """Unmatched signal falls through to normal eval in async path."""
         config = _make_config()
         with create_advanced_fsm(config) as fsm:
-            context = fsm.create_context({
-                "value": 1,
-                "_transition_signal": "nonexistent_state",
-            })
+            context = fsm.create_context(
+                {
+                    "value": 1,
+                    "_transition_signal": "nonexistent_state",
+                }
+            )
 
             result = await fsm.execute_step_async(context)
 
@@ -254,17 +258,18 @@ class TestTransitionSignalSkipsConditions:
             config,
             custom_functions={"block": always_false},
         ) as fsm:
-
             # Without signal: no transitions available (pre-test blocks)
             context_no_signal = fsm.create_context({"value": 1})
             result = fsm.execute_step_sync(context_no_signal)
             assert result.to_state == "start"  # Stayed in start
 
             # With signal: arc selected despite failing pre-test
-            context_with_signal = fsm.create_context({
-                "value": 1,
-                "_transition_signal": "end",
-            })
+            context_with_signal = fsm.create_context(
+                {
+                    "value": 1,
+                    "_transition_signal": "end",
+                }
+            )
             result = fsm.execute_step_sync(context_with_signal)
             assert result.success
             assert result.to_state == "end"

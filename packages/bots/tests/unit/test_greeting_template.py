@@ -52,12 +52,11 @@ class TestSimpleReasoningGreeting:
     ) -> None:
         """initial_context variables are available in the template."""
         manager, provider = conversation_manager_pair
-        strategy = SimpleReasoning(
-            greeting_template="Hello {{ user_name }}! Welcome to {{ app }}."
-        )
+        strategy = SimpleReasoning(greeting_template="Hello {{ user_name }}! Welcome to {{ app }}.")
 
         response = await strategy.greet(
-            manager, llm=None,
+            manager,
+            llm=None,
             initial_context={"user_name": "Alice", "app": "DataKnobs"},
         )
 
@@ -103,12 +102,11 @@ class TestReActReasoningGreeting:
     ) -> None:
         """ReActReasoning also supports greeting_template."""
         manager, provider = conversation_manager_pair
-        strategy = ReActReasoning(
-            greeting_template="Hello {{ user }}! I can help with tools."
-        )
+        strategy = ReActReasoning(greeting_template="Hello {{ user }}! I can help with tools.")
 
         response = await strategy.greet(
-            manager, llm=None,
+            manager,
+            llm=None,
             initial_context={"user": "Bob"},
         )
 

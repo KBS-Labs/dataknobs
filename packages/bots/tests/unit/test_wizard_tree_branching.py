@@ -25,17 +25,14 @@ from dataknobs_llm.llm.providers.echo import EchoProvider
 # ---------------------------------------------------------------------------
 
 
-def _find_stage_assistant_nodes(
-    manager: ConversationManager, stage_name: str
-) -> list:
+def _find_stage_assistant_nodes(manager: ConversationManager, stage_name: str) -> list:
     """Find all assistant nodes in the tree for a given wizard stage."""
     tree = manager.state.message_tree
     return tree.find_nodes(
         lambda n: (
             isinstance(n.data, ConversationNode)
             and n.data.message.role == "assistant"
-            and n.data.metadata.get("wizard", {}).get("current_stage")
-            == stage_name
+            and n.data.metadata.get("wizard", {}).get("current_stage") == stage_name
         ),
     )
 
@@ -44,17 +41,10 @@ def _get_assistant_node_ids(manager: ConversationManager) -> list[str]:
     """Collect node_ids for assistant messages in the tree (BFS order)."""
     tree = manager.state.message_tree
     nodes = tree.find_nodes(
-        lambda n: (
-            isinstance(n.data, ConversationNode)
-            and n.data.message.role == "assistant"
-        ),
+        lambda n: isinstance(n.data, ConversationNode) and n.data.message.role == "assistant",
         traversal="bfs",
     )
-    return [
-        n.data.node_id
-        for n in nodes
-        if isinstance(n.data, ConversationNode)
-    ]
+    return [n.data.node_id for n in nodes if isinstance(n.data, ConversationNode)]
 
 
 def _get_node_path(
@@ -108,9 +98,7 @@ def template_wizard_config() -> dict:
                 "transitions": [
                     {
                         "target": "topic",
-                        "condition": (
-                            "'advance' in data.get('_message', '').lower()"
-                        ),
+                        "condition": ("'advance' in data.get('_message', '').lower()"),
                     },
                 ],
             },
@@ -121,9 +109,7 @@ def template_wizard_config() -> dict:
                 "transitions": [
                     {
                         "target": "summary",
-                        "condition": (
-                            "'advance' in data.get('_message', '').lower()"
-                        ),
+                        "condition": ("'advance' in data.get('_message', '').lower()"),
                     },
                 ],
             },
@@ -180,9 +166,7 @@ class TestFirstVisitNoBranching:
         # Each stage visited exactly once
         for stage_name in ("greeting", "topic", "summary"):
             nodes = _find_stage_assistant_nodes(manager, stage_name)
-            assert len(nodes) == 1, (
-                f"Expected 1 node for stage '{stage_name}', got {len(nodes)}"
-            )
+            assert len(nodes) == 1, f"Expected 1 node for stage '{stage_name}', got {len(nodes)}"
 
 
 class TestRestartCreatesSiblingBranch:
@@ -333,22 +317,22 @@ class TestPostRestartStagesIsolatedFromOldBranch:
 
         # Classify topic nodes by which greeting branch they descend from
         run1_topics = [
-            n for n in topic_nodes
+            n
+            for n in topic_nodes
             if isinstance(n.data, ConversationNode)
             and _is_descendant_of(n.data.node_id, run1_greeting_id)
         ]
         run2_topics = [
-            n for n in topic_nodes
+            n
+            for n in topic_nodes
             if isinstance(n.data, ConversationNode)
             and _is_descendant_of(n.data.node_id, run2_greeting_id)
         ]
         assert len(run1_topics) == 1, (
-            f"Expected 1 topic under Run-1 greeting ({run1_greeting_id}), "
-            f"got {len(run1_topics)}"
+            f"Expected 1 topic under Run-1 greeting ({run1_greeting_id}), got {len(run1_topics)}"
         )
         assert len(run2_topics) == 1, (
-            f"Expected 1 topic under Run-2 greeting ({run2_greeting_id}), "
-            f"got {len(run2_topics)}"
+            f"Expected 1 topic under Run-2 greeting ({run2_greeting_id}), got {len(run2_topics)}"
         )
 
         # Run-1 and Run-2 topic nodes must NOT share a parent
@@ -361,13 +345,13 @@ class TestPostRestartStagesIsolatedFromOldBranch:
         run2_topic_id = run2_topics[0].data.node_id
         assert isinstance(run2_topic_id, str)
         run2_summaries = [
-            n for n in summary_nodes
+            n
+            for n in summary_nodes
             if isinstance(n.data, ConversationNode)
             and _is_descendant_of(n.data.node_id, run2_topic_id)
         ]
         assert len(run2_summaries) == 1, (
-            f"Expected 1 summary under Run-2 topic ({run2_topic_id}), "
-            f"got {len(run2_summaries)}"
+            f"Expected 1 summary under Run-2 topic ({run2_topic_id}), got {len(run2_summaries)}"
         )
 
 
@@ -422,7 +406,8 @@ class TestWithinRunRevisitStillBranchesAfterRestart:
 
         topic_nodes = _find_stage_assistant_nodes(manager, "topic")
         run1_descendant_topics = [
-            n for n in topic_nodes
+            n
+            for n in topic_nodes
             if isinstance(n.data, ConversationNode)
             and _is_descendant_of(n.data.node_id, run1_greeting_id)
         ]
@@ -474,16 +459,11 @@ class TestLinearizedContextExcludesOldBranch:
         # Every assistant node with wizard metadata in the path must be
         # either the Run-2 greeting itself OR a descendant of it.
         stage_nodes_in_path = [
-            (nid, stage)
-            for (nid, role, stage) in path
-            if stage is not None and role == "assistant"
+            (nid, stage) for (nid, role, stage) in path if stage is not None and role == "assistant"
         ]
 
         for nid, stage in stage_nodes_in_path:
-            on_run2_branch = (
-                nid == run2_greeting_id
-                or _is_descendant_of(nid, run2_greeting_id)
-            )
+            on_run2_branch = nid == run2_greeting_id or _is_descendant_of(nid, run2_greeting_id)
             assert on_run2_branch, (
                 f"Linearized path contains assistant node '{nid}' "
                 f"(stage={stage}) which is NOT on Run-2's branch "

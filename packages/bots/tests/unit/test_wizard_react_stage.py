@@ -72,9 +72,7 @@ class ValidateConfigTool(Tool):
     def schema(self) -> dict[str, Any]:
         return {
             "type": "object",
-            "properties": {
-                "strict": {"type": "boolean", "default": False}
-            },
+            "properties": {"strict": {"type": "boolean", "default": False}},
         }
 
     async def execute(self, **kwargs: Any) -> dict[str, Any]:
@@ -208,9 +206,7 @@ class TestResolveStageStrategy:
         strategy = reasoning._resolve_stage_strategy(stage)
         assert isinstance(strategy, ReActReasoning)
 
-    def test_case_insensitive_reasoning_value(
-        self, react_wizard_config: dict[str, Any]
-    ) -> None:
+    def test_case_insensitive_reasoning_value(self, react_wizard_config: dict[str, Any]) -> None:
         """Reasoning value is case-insensitive."""
         from dataknobs_bots.reasoning.react import ReActReasoning
 
@@ -238,9 +234,7 @@ class TestResolveStageStrategy:
 class TestGetMaxIterations:
     """Tests for _get_max_iterations method."""
 
-    def test_get_max_iterations_from_stage(
-        self, react_wizard_config: dict[str, Any]
-    ) -> None:
+    def test_get_max_iterations_from_stage(self, react_wizard_config: dict[str, Any]) -> None:
         """Max iterations from stage config."""
         loader = WizardConfigLoader()
         wizard_fsm = loader.load_from_dict(react_wizard_config)
@@ -252,9 +246,7 @@ class TestGetMaxIterations:
         stage = {"name": "review", "max_iterations": 2}
         assert reasoning._get_max_iterations(stage) == 2
 
-    def test_get_max_iterations_default_fallback(
-        self, react_wizard_config: dict[str, Any]
-    ) -> None:
+    def test_get_max_iterations_default_fallback(self, react_wizard_config: dict[str, Any]) -> None:
         """Max iterations falls back to default when not set."""
         loader = WizardConfigLoader()
         wizard_fsm = loader.load_from_dict(react_wizard_config)
@@ -301,7 +293,12 @@ class TestStrategyStageResponse:
         assert strategy is not None, "Expected a non-single strategy"
         state = WizardState(current_stage=stage.get("name", "test"), data={})
         response, *_ = await reasoning._strategy_stage_response(
-            strategy, manager, "Test prompt", stage, state, tools,
+            strategy,
+            manager,
+            "Test prompt",
+            stage,
+            state,
+            tools,
         )
         return response
 
@@ -321,13 +318,14 @@ class TestStrategyStageResponse:
 
         await manager.add_message(role="user", content="Show me the config")
 
-        provider.set_responses([
-            text_response("Here's your config summary.")
-        ])
+        provider.set_responses([text_response("Here's your config summary.")])
 
         stage = {"name": "review", "reasoning": "react", "max_iterations": 3}
         response = await self._run_strategy_response(
-            reasoning, manager, stage, [preview_tool],
+            reasoning,
+            manager,
+            stage,
+            [preview_tool],
         )
 
         assert response.content == "Here's your config summary."
@@ -349,14 +347,19 @@ class TestStrategyStageResponse:
 
         await manager.add_message(role="user", content="Preview the config")
 
-        provider.set_responses([
-            tool_call_response("preview_config", {"format": "yaml"}),
-            text_response("I've previewed your config. It looks good!"),
-        ])
+        provider.set_responses(
+            [
+                tool_call_response("preview_config", {"format": "yaml"}),
+                text_response("I've previewed your config. It looks good!"),
+            ]
+        )
 
         stage = {"name": "review", "reasoning": "react", "max_iterations": 3}
         response = await self._run_strategy_response(
-            reasoning, manager, stage, [preview_tool],
+            reasoning,
+            manager,
+            stage,
+            [preview_tool],
         )
 
         assert preview_tool.call_count == 1
@@ -379,15 +382,20 @@ class TestStrategyStageResponse:
 
         await manager.add_message(role="user", content="Preview and validate")
 
-        provider.set_responses([
-            tool_call_response("preview_config", {}),
-            tool_call_response("validate_config", {}),
-            text_response("Config previewed and validated!"),
-        ])
+        provider.set_responses(
+            [
+                tool_call_response("preview_config", {}),
+                tool_call_response("validate_config", {}),
+                text_response("Config previewed and validated!"),
+            ]
+        )
 
         stage = {"name": "review", "reasoning": "react", "max_iterations": 5}
         response = await self._run_strategy_response(
-            reasoning, manager, stage, [preview_tool, validate_tool],
+            reasoning,
+            manager,
+            stage,
+            [preview_tool, validate_tool],
         )
 
         assert preview_tool.call_count == 1
@@ -410,15 +418,20 @@ class TestStrategyStageResponse:
 
         await manager.add_message(role="user", content="Preview endlessly")
 
-        provider.set_responses([
-            tool_call_response("preview_config", {"format": "yaml"}),
-            tool_call_response("preview_config", {"format": "json"}),
-            text_response("Final response after max iterations"),
-        ])
+        provider.set_responses(
+            [
+                tool_call_response("preview_config", {"format": "yaml"}),
+                tool_call_response("preview_config", {"format": "json"}),
+                text_response("Final response after max iterations"),
+            ]
+        )
 
         stage = {"name": "review", "reasoning": "react", "max_iterations": 2}
         response = await self._run_strategy_response(
-            reasoning, manager, stage, [preview_tool],
+            reasoning,
+            manager,
+            stage,
+            [preview_tool],
         )
 
         assert preview_tool.call_count == 2
@@ -440,15 +453,20 @@ class TestStrategyStageResponse:
 
         await manager.add_message(role="user", content="Preview config")
 
-        provider.set_responses([
-            tool_call_response("preview_config", {"format": "yaml"}),
-            tool_call_response("preview_config", {"format": "yaml"}),
-            text_response("Done after duplicate detection"),
-        ])
+        provider.set_responses(
+            [
+                tool_call_response("preview_config", {"format": "yaml"}),
+                tool_call_response("preview_config", {"format": "yaml"}),
+                text_response("Done after duplicate detection"),
+            ]
+        )
 
         stage = {"name": "review", "reasoning": "react", "max_iterations": 5}
         response = await self._run_strategy_response(
-            reasoning, manager, stage, [preview_tool],
+            reasoning,
+            manager,
+            stage,
+            [preview_tool],
         )
 
         assert preview_tool.call_count == 1
@@ -467,30 +485,32 @@ class TestStrategyStageResponse:
         loader = WizardConfigLoader()
         wizard_fsm = loader.load_from_dict(react_wizard_config)
         reasoning = WizardReasoning(
-            wizard_fsm=wizard_fsm, default_store_trace=True,
+            wizard_fsm=wizard_fsm,
+            default_store_trace=True,
         )
 
         await manager.add_message(role="user", content="Preview the config")
 
-        provider.set_responses([
-            tool_call_response("preview_config", {"format": "yaml"}),
-            text_response("Here is the preview."),
-        ])
+        provider.set_responses(
+            [
+                tool_call_response("preview_config", {"format": "yaml"}),
+                text_response("Here is the preview."),
+            ]
+        )
 
         stage = {"name": "review", "reasoning": "react", "max_iterations": 3}
         await self._run_strategy_response(
-            reasoning, manager, stage, [preview_tool],
+            reasoning,
+            manager,
+            stage,
+            [preview_tool],
         )
 
         trace = manager.metadata.get("reasoning_trace")
         assert trace is not None, "reasoning_trace not stored in metadata"
         assert len(trace) >= 1, "trace should have at least one iteration"
 
-        tool_names = [
-            tc["name"]
-            for step in trace
-            for tc in step.get("tool_calls", [])
-        ]
+        tool_names = [tc["name"] for step in trace for tc in step.get("tool_calls", [])]
         assert "preview_config" in tool_names
 
     @pytest.mark.asyncio
@@ -509,14 +529,19 @@ class TestStrategyStageResponse:
 
         await manager.add_message(role="user", content="Preview the config")
 
-        provider.set_responses([
-            tool_call_response("preview_config", {"format": "yaml"}),
-            text_response("Here is the preview."),
-        ])
+        provider.set_responses(
+            [
+                tool_call_response("preview_config", {"format": "yaml"}),
+                text_response("Here is the preview."),
+            ]
+        )
 
         stage = {"name": "review", "reasoning": "react", "max_iterations": 3}
         await self._run_strategy_response(
-            reasoning, manager, stage, [preview_tool],
+            reasoning,
+            manager,
+            stage,
+            [preview_tool],
         )
 
         trace = manager.metadata.get("reasoning_trace")
@@ -538,17 +563,24 @@ class TestStrategyStageResponse:
 
         await manager.add_message(role="user", content="Preview the config")
 
-        provider.set_responses([
-            tool_call_response("preview_config", {"format": "yaml"}),
-            text_response("Here is the preview."),
-        ])
+        provider.set_responses(
+            [
+                tool_call_response("preview_config", {"format": "yaml"}),
+                text_response("Here is the preview."),
+            ]
+        )
 
         stage = {
-            "name": "review", "reasoning": "react",
-            "max_iterations": 3, "store_trace": True,
+            "name": "review",
+            "reasoning": "react",
+            "max_iterations": 3,
+            "store_trace": True,
         }
         await self._run_strategy_response(
-            reasoning, manager, stage, [preview_tool],
+            reasoning,
+            manager,
+            stage,
+            [preview_tool],
         )
 
         trace = manager.metadata.get("reasoning_trace")
@@ -568,32 +600,35 @@ class TestStrategyStageResponse:
         loader = WizardConfigLoader()
         wizard_fsm = loader.load_from_dict(react_wizard_config)
         reasoning = WizardReasoning(
-            wizard_fsm=wizard_fsm, default_verbose=True,
+            wizard_fsm=wizard_fsm,
+            default_verbose=True,
         )
 
         await manager.add_message(role="user", content="Preview the config")
 
-        provider.set_responses([
-            tool_call_response("preview_config", {"format": "yaml"}),
-            text_response("Done."),
-        ])
+        provider.set_responses(
+            [
+                tool_call_response("preview_config", {"format": "yaml"}),
+                text_response("Done."),
+            ]
+        )
 
         stage = {"name": "review", "reasoning": "react", "max_iterations": 3}
 
         react_logger = "dataknobs_bots.reasoning.react"
         with caplog.at_level(logging.DEBUG, logger=react_logger):
             response = await self._run_strategy_response(
-                reasoning, manager, stage, [preview_tool],
+                reasoning,
+                manager,
+                stage,
+                [preview_tool],
             )
 
         assert response is not None
         react_debug_msgs = [
-            r for r in caplog.records
-            if r.name == react_logger and r.levelno == logging.DEBUG
+            r for r in caplog.records if r.name == react_logger and r.levelno == logging.DEBUG
         ]
-        assert len(react_debug_msgs) > 0, (
-            "verbose=True should produce DEBUG-level logs from ReAct"
-        )
+        assert len(react_debug_msgs) > 0, "verbose=True should produce DEBUG-level logs from ReAct"
 
     @pytest.mark.asyncio
     async def test_react_stage_verbose_per_stage_override(
@@ -612,30 +647,34 @@ class TestStrategyStageResponse:
 
         await manager.add_message(role="user", content="Preview the config")
 
-        provider.set_responses([
-            tool_call_response("preview_config", {"format": "yaml"}),
-            text_response("Done."),
-        ])
+        provider.set_responses(
+            [
+                tool_call_response("preview_config", {"format": "yaml"}),
+                text_response("Done."),
+            ]
+        )
 
         stage = {
-            "name": "review", "reasoning": "react",
-            "max_iterations": 3, "verbose": True,
+            "name": "review",
+            "reasoning": "react",
+            "max_iterations": 3,
+            "verbose": True,
         }
 
         react_logger = "dataknobs_bots.reasoning.react"
         with caplog.at_level(logging.DEBUG, logger=react_logger):
             response = await self._run_strategy_response(
-                reasoning, manager, stage, [preview_tool],
+                reasoning,
+                manager,
+                stage,
+                [preview_tool],
             )
 
         assert response is not None
         react_debug_msgs = [
-            r for r in caplog.records
-            if r.name == react_logger and r.levelno == logging.DEBUG
+            r for r in caplog.records if r.name == react_logger and r.levelno == logging.DEBUG
         ]
-        assert len(react_debug_msgs) > 0, (
-            "stage-level verbose=True should produce DEBUG-level logs"
-        )
+        assert len(react_debug_msgs) > 0, "stage-level verbose=True should produce DEBUG-level logs"
 
     @pytest.mark.asyncio
     async def test_react_stage_verbose_no_debug_by_default(
@@ -654,22 +693,26 @@ class TestStrategyStageResponse:
 
         await manager.add_message(role="user", content="Preview the config")
 
-        provider.set_responses([
-            tool_call_response("preview_config", {"format": "yaml"}),
-            text_response("Done."),
-        ])
+        provider.set_responses(
+            [
+                tool_call_response("preview_config", {"format": "yaml"}),
+                text_response("Done."),
+            ]
+        )
 
         stage = {"name": "review", "reasoning": "react", "max_iterations": 3}
 
         react_logger = "dataknobs_bots.reasoning.react"
         with caplog.at_level(logging.DEBUG, logger=react_logger):
             await self._run_strategy_response(
-                reasoning, manager, stage, [preview_tool],
+                reasoning,
+                manager,
+                stage,
+                [preview_tool],
             )
 
         react_debug_msgs = [
-            r for r in caplog.records
-            if r.name == react_logger and r.levelno == logging.DEBUG
+            r for r in caplog.records if r.name == react_logger and r.levelno == logging.DEBUG
         ]
         assert len(react_debug_msgs) == 0, (
             "verbose=False (default) should not produce DEBUG-level logs"
@@ -684,9 +727,7 @@ class TestStrategyStageResponse:
 class TestReactConfigLoading:
     """Tests for loading ReAct config from wizard YAML."""
 
-    def test_stage_reasoning_loaded_from_config(
-        self, react_wizard_config: dict[str, Any]
-    ) -> None:
+    def test_stage_reasoning_loaded_from_config(self, react_wizard_config: dict[str, Any]) -> None:
         """Stage reasoning setting is loaded from config."""
         loader = WizardConfigLoader()
         wizard_fsm = loader.load_from_dict(react_wizard_config)
@@ -722,9 +763,7 @@ class TestReactConfigLoading:
                 "tool_reasoning": "react",
                 "max_tool_iterations": 7,
             },
-            "stages": [
-                {"name": "start", "is_start": True, "is_end": True, "prompt": "Done"}
-            ],
+            "stages": [{"name": "start", "is_start": True, "is_end": True, "prompt": "Done"}],
         }
 
         loader = WizardConfigLoader()

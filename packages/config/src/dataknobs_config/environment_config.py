@@ -368,13 +368,9 @@ class EnvironmentConfig:
         try:
             return load_yaml_or_json(path)
         except ConfigLoadError as e:
-            raise EnvironmentConfigError(
-                f"Failed to load environment config {path}: {e}"
-            ) from e
+            raise EnvironmentConfigError(f"Failed to load environment config {path}: {e}") from e
         except OSError as e:
-            raise EnvironmentConfigError(
-                f"Failed to read environment config {path}: {e}"
-            ) from e
+            raise EnvironmentConfigError(f"Failed to read environment config {path}: {e}") from e
 
     def get_resource(
         self,
@@ -579,9 +575,7 @@ class EnvironmentConfig:
         # Deep merge resources. Copied structurally, like every other hand-out
         # from this class: a one-level copy would leave each nested section of
         # the result aliasing one of the two inputs, both of which outlive it.
-        merged_resources: dict[str, dict[str, dict[str, Any]]] = (
-            _copy_structure(self.resources)
-        )
+        merged_resources: dict[str, dict[str, dict[str, Any]]] = _copy_structure(self.resources)
 
         # Merge in other's resources
         for rtype, resources in other.resources.items():
@@ -590,9 +584,7 @@ class EnvironmentConfig:
             for name, config in resources.items():
                 if name in merged_resources[rtype]:
                     # Merge configs
-                    merged_resources[rtype][name].update(
-                        _copy_structure(config)
-                    )
+                    merged_resources[rtype][name].update(_copy_structure(config))
                 else:
                     merged_resources[rtype][name] = _copy_structure(config)
 

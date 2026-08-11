@@ -136,8 +136,7 @@ def pair_orphan_tool_calls(messages: list[LLMMessage]) -> list[LLMMessage]:
     answered: set[str] = {
         key
         for m in messages
-        if m.role == "tool"
-        and (key := (m.tool_call_id or m.name)) is not None
+        if m.role == "tool" and (key := (m.tool_call_id or m.name)) is not None
     }
     # Canonical signatures of the calls that DID get answered, so an orphan
     # repeating one is recognized as the abandoned half of a duplicate break.

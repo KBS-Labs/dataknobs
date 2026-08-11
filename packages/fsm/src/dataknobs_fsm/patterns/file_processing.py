@@ -30,6 +30,7 @@ from ..functions.library.validators import build_gate_arcs, build_record_validat
 
 class FileFormat(Enum):
     """Supported file formats."""
+
     JSON = "json"
     CSV = "csv"
     XML = "xml"
@@ -40,6 +41,7 @@ class FileFormat(Enum):
 
 class ProcessingMode(Enum):
     """File processing modes."""
+
     STREAM = "stream"  # Process file as stream
     BATCH = "batch"  # Process in batches
     WHOLE = "whole"  # Load entire file
@@ -48,6 +50,7 @@ class ProcessingMode(Enum):
 @dataclass(frozen=True)
 class FileProcessingConfig(StructuredConfig):
     """Configuration for file processing."""
+
     input_path: str
     output_path: str | None = None
     format: FileFormat | None = None  # Auto-detect if not specified
@@ -55,25 +58,23 @@ class FileProcessingConfig(StructuredConfig):
     chunk_size: int = 1000
     parallel_chunks: int = 4
     encoding: str = "utf-8"
-    
+
     # Processing options. ``validation_schema`` accepts any form
     # :func:`build_record_validator` understands: a friendly dict schema
     # (the serializable, config-authored default), a library
     # :class:`IValidationFunction`, or a callable ``record -> bool`` predicate.
     # The dict form round-trips through the frozen config; the validator /
     # callable forms are in-process only (like ``transformations``/``filters``).
-    validation_schema: (
-        Dict[str, Any] | IValidationFunction | Callable[..., Any] | None
-    ) = None
+    validation_schema: Dict[str, Any] | IValidationFunction | Callable[..., Any] | None = None
     transformations: List[Callable] | None = None
     filters: List[Callable] | None = None
     aggregations: Dict[str, Callable] | None = None
-    
+
     # Output options
     output_format: FileFormat | None = None
     compression: str | None = None  # gzip, bz2, etc.
     partition_by: str | None = None  # Field to partition output
-    
+
     # Format-specific configs
     json_config: Dict[str, Any] = field(default_factory=dict)
     log_config: Dict[str, Any] = field(default_factory=dict)
@@ -106,16 +107,13 @@ class _FileTransform(ITransformFunction):
     def __init__(self, transformations: List[Callable]) -> None:
         self._transformations = transformations or []
 
-    def transform(
-        self, data: Dict[str, Any], context: Any = None
-    ) -> Dict[str, Any]:
+    def transform(self, data: Dict[str, Any], context: Any = None) -> Dict[str, Any]:
         result = data
         for index, fn in enumerate(self._transformations):
             out = fn(result)
             if not isinstance(out, dict):
                 raise TransformError(
-                    f"File transformation #{index} must return a dict, got "
-                    f"{type(out).__name__}"
+                    f"File transformation #{index} must return a dict, got {type(out).__name__}"
                 )
             result = out
         return result
@@ -137,9 +135,7 @@ class _FileAggregator(ITransformFunction):
     def __init__(self, aggregations: Dict[str, Callable]) -> None:
         self._aggregations = aggregations or {}
 
-    def transform(
-        self, data: Dict[str, Any], context: Any = None
-    ) -> Dict[str, Any]:
+    def transform(self, data: Dict[str, Any], context: Any = None) -> Dict[str, Any]:
         return {name: fn(data) for name, fn in self._aggregations.items()}
 
     def get_transform_description(self) -> str:
@@ -181,13 +177,13 @@ class FileProcessor(StructuredConfigConsumer[FileProcessingConfig]):
         self._detect_format()
         self._fsm = self._build_fsm()
         self._metrics = {
-            'lines_read': 0,
-            'records_processed': 0,
-            'records_written': 0,
-            'errors': 0,
-            'skipped': 0
+            "lines_read": 0,
+            "records_processed": 0,
+            "records_written": 0,
+            "errors": 0,
+            "skipped": 0,
         }
-        
+
     def _detect_format(self) -> None:
         """Resolve the effective input/output formats onto the processor.
 
@@ -204,13 +200,13 @@ class FileProcessor(StructuredConfigConsumer[FileProcessingConfig]):
             ext = path.suffix.lower()
 
             format_map = {
-                '.json': FileFormat.JSON,
-                '.jsonl': FileFormat.JSON,
-                '.csv': FileFormat.CSV,
-                '.tsv': FileFormat.CSV,
-                '.xml': FileFormat.XML,
-                '.parquet': FileFormat.PARQUET,
-                '.txt': FileFormat.TEXT
+                ".json": FileFormat.JSON,
+                ".jsonl": FileFormat.JSON,
+                ".csv": FileFormat.CSV,
+                ".tsv": FileFormat.CSV,
+                ".xml": FileFormat.XML,
+                ".parquet": FileFormat.PARQUET,
+                ".txt": FileFormat.TEXT,
             }
 
             resolved_format = format_map.get(ext, FileFormat.BINARY)
@@ -260,10 +256,10 @@ class FileProcessor(StructuredConfigConsumer[FileProcessingConfig]):
 
         active = self._active_stages()
         fsm_config = {
-            'name': 'File_Processor',
-            'data_mode': data_mode.value,
-            'states': self._build_states(active),
-            'arcs': self._build_arcs(active),
+            "name": "File_Processor",
+            "data_mode": data_mode.value,
+            "states": self._build_states(active),
+            "arcs": self._build_arcs(active),
         }
 
         return AsyncSimpleFSM(
@@ -280,16 +276,16 @@ class FileProcessor(StructuredConfigConsumer[FileProcessingConfig]):
         directly to one another in :meth:`_build_arcs`, so a disabled stage is
         simply absent from the chain (never a dead-end).
         """
-        stages = ['parse']
+        stages = ["parse"]
         if self.config.validation_schema:
-            stages.append('validate')
+            stages.append("validate")
         if self.config.filters:
-            stages.append('filter')
+            stages.append("filter")
         if self.config.transformations:
-            stages.append('transform')
+            stages.append("transform")
         if self.config.aggregations:
-            stages.append('aggregate')
-        stages.append('write')
+            stages.append("aggregate")
+        stages.append("write")
         return stages
 
     def _build_states(self, active: List[str]) -> List[Dict[str, Any]]:
@@ -301,35 +297,31 @@ class FileProcessor(StructuredConfigConsumer[FileProcessingConfig]):
         enabled) set ``emit_output=False`` so the records they hold are kept out
         of the output in every mode.
         """
-        states: List[Dict[str, Any]] = [{'name': 'read', 'is_start': True}]
+        states: List[Dict[str, Any]] = [{"name": "read", "is_start": True}]
         for stage in active:
-            if stage == 'transform':
-                states.append({
-                    'name': 'transform',
-                    'functions': {
-                        'transform': {'type': 'registered', 'name': 'transform'}
-                    },
-                })
-            elif stage == 'aggregate':
-                states.append({
-                    'name': 'aggregate',
-                    'functions': {
-                        'transform': {'type': 'registered', 'name': 'aggregate'}
-                    },
-                })
+            if stage == "transform":
+                states.append(
+                    {
+                        "name": "transform",
+                        "functions": {"transform": {"type": "registered", "name": "transform"}},
+                    }
+                )
+            elif stage == "aggregate":
+                states.append(
+                    {
+                        "name": "aggregate",
+                        "functions": {"transform": {"type": "registered", "name": "aggregate"}},
+                    }
+                )
             else:
-                states.append({'name': stage})
-        states.append({'name': 'complete', 'is_end': True})
-        if 'filter' in active:
-            states.append(
-                {'name': 'filtered', 'is_end': True, 'emit_output': False}
-            )
-        if 'validate' in active:
-            states.append(
-                {'name': 'error', 'is_end': True, 'emit_output': False}
-            )
+                states.append({"name": stage})
+        states.append({"name": "complete", "is_end": True})
+        if "filter" in active:
+            states.append({"name": "filtered", "is_end": True, "emit_output": False})
+        if "validate" in active:
+            states.append({"name": "error", "is_end": True, "emit_output": False})
         return states
-        
+
     def _build_arcs(self, active: List[str]) -> List[Dict[str, Any]]:
         """Connect the enabled stages into one chain to ``write -> complete``.
 
@@ -344,29 +336,35 @@ class FileProcessor(StructuredConfigConsumer[FileProcessingConfig]):
         declaration order. ``transform`` / ``aggregate`` apply their registered
         state transform on entry, then take a plain forward arc.
         """
-        arcs: List[Dict[str, Any]] = [
-            {'from': 'read', 'to': active[0], 'name': 'read_line'}
-        ]
+        arcs: List[Dict[str, Any]] = [{"from": "read", "to": active[0], "name": "read_line"}]
         for index, stage in enumerate(active):
-            nxt = active[index + 1] if index + 1 < len(active) else 'complete'
-            if stage == 'validate':
-                arcs.extend(build_gate_arcs(
-                    from_state='validate', condition_name='validate_check',
-                    pass_to=nxt, reject_to='error',
-                    pass_name='valid', reject_name='invalid',
-                ))
-            elif stage == 'filter':
-                arcs.extend(build_gate_arcs(
-                    from_state='filter', condition_name='filter_pass',
-                    pass_to=nxt, reject_to='filtered',
-                    pass_name='passed', reject_name='filtered_out',
-                ))
-            else:
-                arcs.append(
-                    {'from': stage, 'to': nxt, 'name': f'{stage}_done'}
+            nxt = active[index + 1] if index + 1 < len(active) else "complete"
+            if stage == "validate":
+                arcs.extend(
+                    build_gate_arcs(
+                        from_state="validate",
+                        condition_name="validate_check",
+                        pass_to=nxt,
+                        reject_to="error",
+                        pass_name="valid",
+                        reject_name="invalid",
+                    )
                 )
+            elif stage == "filter":
+                arcs.extend(
+                    build_gate_arcs(
+                        from_state="filter",
+                        condition_name="filter_pass",
+                        pass_to=nxt,
+                        reject_to="filtered",
+                        pass_name="passed",
+                        reject_name="filtered_out",
+                    )
+                )
+            else:
+                arcs.append({"from": stage, "to": nxt, "name": f"{stage}_done"})
         return arcs
-    
+
     def _build_custom_functions(self) -> Dict[str, Any]:
         """Build the registered functions the FSM references by name.
 
@@ -385,17 +383,15 @@ class FileProcessor(StructuredConfigConsumer[FileProcessingConfig]):
         """
         functions: Dict[str, Any] = {}
         if self.config.transformations:
-            functions['transform'] = _FileTransform(self.config.transformations)
+            functions["transform"] = _FileTransform(self.config.transformations)
         if self.config.aggregations:
-            functions['aggregate'] = _FileAggregator(self.config.aggregations)
+            functions["aggregate"] = _FileAggregator(self.config.aggregations)
         if self.config.filters:
-            functions['filter_pass'] = _make_filter(self.config.filters)
+            functions["filter_pass"] = _make_filter(self.config.filters)
         if self.config.validation_schema:
-            functions['validate_check'] = build_record_validator(
-                self.config.validation_schema
-            )
+            functions["validate_check"] = build_record_validator(self.config.validation_schema)
         return functions
-        
+
     async def process(self) -> Dict[str, Any]:
         """Process the file.
 
@@ -423,7 +419,7 @@ class FileProcessor(StructuredConfigConsumer[FileProcessingConfig]):
             return await self._process_batch()
         else:
             return await self._process_whole()
-            
+
     async def _process_stream(self) -> Dict[str, Any]:
         """Process file as stream.
 
@@ -439,14 +435,12 @@ class FileProcessor(StructuredConfigConsumer[FileProcessingConfig]):
         populate, so every mode returns the same shape.
         """
         input_format = (
-            _STREAM_FORMAT_TOKENS.get(self._format, 'auto')
-            if self.config.format
-            else 'auto'
+            _STREAM_FORMAT_TOKENS.get(self._format, "auto") if self.config.format else "auto"
         )
         output_format = (
-            _STREAM_FORMAT_TOKENS.get(self._output_format, 'auto')
+            _STREAM_FORMAT_TOKENS.get(self._output_format, "auto")
             if self.config.output_format
-            else 'auto'
+            else "auto"
         )
 
         result = await self._fsm.process_stream(
@@ -469,25 +463,23 @@ class FileProcessor(StructuredConfigConsumer[FileProcessingConfig]):
         # excluding both failures and rejections — the same as
         # ``_account_result``. ``lines_read`` is not tracked on the streaming
         # path (the executor reads internally) and stays 0.
-        failed = result.get('failed', 0)
-        written = result.get('emitted', 0)
-        excluded_by_state: Dict[str, int] = result.get('excluded_by_state', {})
+        failed = result.get("failed", 0)
+        written = result.get("emitted", 0)
+        excluded_by_state: Dict[str, int] = result.get("excluded_by_state", {})
         rejected = sum(
-            count
-            for state, count in excluded_by_state.items()
-            if self._is_error_terminal(state)
+            count for state, count in excluded_by_state.items() if self._is_error_terminal(state)
         )
         skipped = sum(
             count
             for state, count in excluded_by_state.items()
             if not self._is_error_terminal(state)
         )
-        self._metrics['records_written'] = written
-        self._metrics['skipped'] = skipped
-        self._metrics['errors'] = failed + rejected
-        self._metrics['records_processed'] = written + skipped
+        self._metrics["records_written"] = written
+        self._metrics["skipped"] = skipped
+        self._metrics["errors"] = failed + rejected
+        self._metrics["records_processed"] = written + skipped
         return self._metrics
-        
+
     async def _process_batch(self) -> Dict[str, Any]:
         """Process the file in batches.
 
@@ -521,7 +513,7 @@ class FileProcessor(StructuredConfigConsumer[FileProcessingConfig]):
     #: can override it. Single source of truth shared by the batch/whole
     #: (:meth:`_account_result`) and streaming (:meth:`_process_stream`)
     #: accounting paths so they classify non-emitting terminals identically.
-    _ERROR_TERMINAL_STATE: ClassVar[str] = 'error'
+    _ERROR_TERMINAL_STATE: ClassVar[str] = "error"
 
     def _is_error_terminal(self, final_state: str | None) -> bool:
         """Whether a non-emitting ``final_state`` counts as an error (vs skipped)."""
@@ -544,9 +536,7 @@ class FileProcessor(StructuredConfigConsumer[FileProcessingConfig]):
         state_def = self._fsm.get_state(final_state)
         return getattr(state_def, "emit_output", True) if state_def else True
 
-    def _account_result(
-        self, result: Dict[str, Any], emitted: List[Dict[str, Any]]
-    ) -> None:
+    def _account_result(self, result: Dict[str, Any], emitted: List[Dict[str, Any]]) -> None:
         """Update metrics for one FSM result and collect emitted records.
 
         Emission is decided by the final state's ``emit_output`` flag (via
@@ -559,21 +549,21 @@ class FileProcessor(StructuredConfigConsumer[FileProcessingConfig]):
         the results to write so the output is produced in a single pass (the
         writer truncates).
         """
-        if not result['success']:
-            self._metrics['errors'] += 1
+        if not result["success"]:
+            self._metrics["errors"] += 1
             return
-        final_state = result.get('final_state')
+        final_state = result.get("final_state")
         if self._should_emit(final_state):
-            self._metrics['records_processed'] += 1
-            self._metrics['records_written'] += 1
+            self._metrics["records_processed"] += 1
+            self._metrics["records_written"] += 1
             emitted.append(result)
         elif self._is_error_terminal(final_state):
-            self._metrics['errors'] += 1
+            self._metrics["errors"] += 1
         else:
             # Non-emitting terminal (e.g. ``filtered``): processed, not written.
-            self._metrics['records_processed'] += 1
-            self._metrics['skipped'] += 1
-        
+            self._metrics["records_processed"] += 1
+            self._metrics["skipped"] += 1
+
     async def _process_whole(self) -> Dict[str, Any]:
         """Process entire file at once."""
         # Read entire file off the event loop (blocking whole-file read).
@@ -582,15 +572,17 @@ class FileProcessor(StructuredConfigConsumer[FileProcessingConfig]):
         # Parse content
         if self._format == FileFormat.JSON:
             import json
+
             data = json.loads(content)
         elif self._format == FileFormat.CSV:
             import csv
             from io import StringIO
+
             reader = csv.DictReader(StringIO(content))
             data = list(reader)
         else:
-            data = {'content': content}
-            
+            data = {"content": content}
+
         # Process data
         if isinstance(data, list):
             results = await self._fsm.process_batch(data)
@@ -629,19 +621,20 @@ class FileProcessor(StructuredConfigConsumer[FileProcessingConfig]):
         batch: List[Dict[str, Any]] = []
         with open(self.config.input_path, encoding=self.config.encoding) as f:
             for line in f:
-                self._metrics['lines_read'] += 1
+                self._metrics["lines_read"] += 1
 
                 # Parse line based on format
                 if self._format == FileFormat.JSON:
                     import json
+
                     try:
                         record = json.loads(line)
                         batch.append(record)
                     except json.JSONDecodeError:
-                        self._metrics['errors'] += 1
+                        self._metrics["errors"] += 1
                         continue
                 else:
-                    batch.append({'line': line.strip()})
+                    batch.append({"line": line.strip()})
 
                 if len(batch) >= self.config.chunk_size:
                     yield batch
@@ -657,42 +650,45 @@ class FileProcessor(StructuredConfigConsumer[FileProcessingConfig]):
         :func:`asyncio.to_thread` so the blocking ``open`` + write never
         stalls the event loop.
         """
-        output_data = [r['data'] for r in results if r['success']]
+        output_data = [r["data"] for r in results if r["success"]]
         await asyncio.to_thread(self._write_output_sync, output_data)
 
     def _write_output_sync(self, output_data: List[Dict[str, Any]]) -> None:
         """Synchronous output write — run via ``to_thread``."""
-        with open(self.config.output_path, 'w', encoding=self.config.encoding) as f:  # type: ignore
+        with open(self.config.output_path, "w", encoding=self.config.encoding) as f:  # type: ignore
             if self._output_format == FileFormat.JSON:
                 import json
+
                 json.dump(output_data, f, indent=2)
             elif self._output_format == FileFormat.CSV:
                 import csv
+
                 if output_data:
                     writer = csv.DictWriter(f, fieldnames=output_data[0].keys())
                     writer.writeheader()
                     writer.writerows(output_data)
             else:
                 for item in output_data:
-                    f.write(str(item) + '\n')
+                    f.write(str(item) + "\n")
 
 
 # Factory functions for common file processing patterns
+
 
 def create_csv_processor(
     input_file: str,
     output_file: str | None = None,
     transformations: List[Callable] | None = None,
-    filters: List[Callable] | None = None
+    filters: List[Callable] | None = None,
 ) -> FileProcessor:
     """Create CSV file processor.
-    
+
     Args:
         input_file: Input CSV file path
         output_file: Optional output file path
         transformations: Data transformations
         filters: Row filters
-        
+
     Returns:
         Configured FileProcessor
     """
@@ -702,9 +698,9 @@ def create_csv_processor(
         format=FileFormat.CSV,
         mode=ProcessingMode.STREAM,
         transformations=transformations,
-        filters=filters
+        filters=filters,
     )
-    
+
     return FileProcessor(config)
 
 
@@ -712,16 +708,16 @@ def create_json_stream_processor(
     input_file: str,
     output_file: str | None = None,
     validation_schema: Dict[str, Any] | None = None,
-    chunk_size: int = 1000
+    chunk_size: int = 1000,
 ) -> FileProcessor:
     """Create JSON lines stream processor.
-    
+
     Args:
         input_file: Input JSONL file path
         output_file: Optional output file path
         validation_schema: JSON schema for validation
         chunk_size: Processing chunk size
-        
+
     Returns:
         Configured FileProcessor
     """
@@ -731,9 +727,9 @@ def create_json_stream_processor(
         format=FileFormat.JSON,
         mode=ProcessingMode.STREAM,
         chunk_size=chunk_size,
-        validation_schema=validation_schema
+        validation_schema=validation_schema,
     )
-    
+
     return FileProcessor(config)
 
 
@@ -741,40 +737,42 @@ def create_log_analyzer(
     log_file: str,
     output_file: str | None = None,
     patterns: List[str] | None = None,
-    aggregations: Dict[str, Callable] | None = None
+    aggregations: Dict[str, Callable] | None = None,
 ) -> FileProcessor:
     """Create log file analyzer.
-    
+
     Args:
         log_file: Log file path
         output_file: Optional analysis output
         patterns: Regex patterns to extract
         aggregations: Aggregation functions
-        
+
     Returns:
         Configured FileProcessor
     """
     # Create pattern extractors
     transformations = []
     if patterns:
+
         def extract_patterns(data):
             result = data.copy()
             for pattern in patterns:
-                match = re.search(pattern, data.get('line', ''))
+                match = re.search(pattern, data.get("line", ""))
                 if match:
                     result.update(match.groupdict())
             return result
+
         transformations.append(extract_patterns)
-        
+
     config = FileProcessingConfig(
         input_path=log_file,
         output_path=output_file,
         format=FileFormat.TEXT,
         mode=ProcessingMode.STREAM,
         transformations=transformations,
-        aggregations=aggregations
+        aggregations=aggregations,
     )
-    
+
     return FileProcessor(config)
 
 
@@ -783,17 +781,17 @@ def create_file_processor(
     output_path: str,
     pattern: str = "*",
     mode: ProcessingMode = ProcessingMode.WHOLE,
-    transformations: List[Callable] | None = None
+    transformations: List[Callable] | None = None,
 ) -> FileProcessor:
     """Create generic file processor.
-    
+
     Args:
         input_path: Input directory or file
-        output_path: Output directory or file  
+        output_path: Output directory or file
         pattern: File pattern to match (currently unused)
         mode: Processing mode
         transformations: Data transformation functions
-        
+
     Returns:
         Configured FileProcessor
     """
@@ -803,58 +801,49 @@ def create_file_processor(
         output_path=output_path,
         format=FileFormat.TEXT,
         mode=mode,
-        transformations=transformations or []
+        transformations=transformations or [],
     )
-    
+
     return FileProcessor(config)
 
 
 def create_json_processor(
-    input_path: str,
-    output_path: str,
-    pretty_print: bool = False,
-    array_processing: bool = False
+    input_path: str, output_path: str, pretty_print: bool = False, array_processing: bool = False
 ) -> FileProcessor:
     """Create JSON file processor.
-    
+
     Args:
         input_path: Input directory
         output_path: Output directory
         pretty_print: Whether to pretty print JSON
         array_processing: Process as JSON arrays
-        
+
     Returns:
-        Configured FileProcessor  
+        Configured FileProcessor
     """
     config = FileProcessingConfig(
         input_path=input_path,
         output_path=output_path,
         format=FileFormat.JSON,
         mode=ProcessingMode.WHOLE,
-        json_config={
-            'pretty_print': pretty_print,
-            'array_processing': array_processing
-        }
+        json_config={"pretty_print": pretty_print, "array_processing": array_processing},
     )
-    
+
     return FileProcessor(config)
 
 
 def create_log_processor(
-    input_path: str,
-    output_path: str,
-    parse_timestamps: bool = False,
-    extract_errors: bool = False
+    input_path: str, output_path: str, parse_timestamps: bool = False, extract_errors: bool = False
 ) -> FileProcessor:
     """Create log file processor.
-    
+
     Args:
         input_path: Input directory
         output_path: Output directory
         pattern: Log file pattern
         parse_timestamps: Whether to parse timestamps
         extract_errors: Whether to extract error entries
-        
+
     Returns:
         Configured FileProcessor
     """
@@ -863,29 +852,23 @@ def create_log_processor(
         output_path=output_path,
         format=FileFormat.TEXT,
         mode=ProcessingMode.STREAM,
-        log_config={
-            'parse_timestamps': parse_timestamps,
-            'extract_errors': extract_errors
-        }
+        log_config={"parse_timestamps": parse_timestamps, "extract_errors": extract_errors},
     )
-    
+
     return FileProcessor(config)
 
 
 def create_batch_file_processor(
-    input_paths: List[str],
-    output_path: str,
-    patterns: List[str],
-    batch_size: int = 10
+    input_paths: List[str], output_path: str, patterns: List[str], batch_size: int = 10
 ) -> FileProcessor:
     """Create batch file processor.
-    
+
     Args:
         input_paths: List of input directories
         output_path: Output directory
         patterns: File patterns to match
         batch_size: Batch processing size
-        
+
     Returns:
         Configured FileProcessor
     """

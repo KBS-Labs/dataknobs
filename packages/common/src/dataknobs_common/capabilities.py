@@ -93,39 +93,53 @@ class Capability(str, Enum):
     STATE_BRIDGE_BIDIRECTIONAL = "state_bridge_bidirectional"
 
 
-CAPABILITY_FAMILIES: Mapping[str, frozenset[Capability]] = MappingProxyType({
-    "tenancy": frozenset({
-        Capability.TENANT_SCOPED_CHUNKS,
-        Capability.TENANT_SCOPED_LOCKS,
-        Capability.TENANT_SCOPED_STATE,
-        Capability.PER_TENANT_RATE_LIMITS,
-    }),
-    "observability": frozenset({
-        Capability.EVENT_BUS_EMISSION,
-        Capability.CALLBACK_REGISTRY,
-        Capability.METRICS_EMISSION,
-        Capability.INGEST_EVENT_PUBLICATION,
-        Capability.BACKEND_STATE_OBSERVABILITY,
-        Capability.EXECUTION_TRACKING,
-    }),
-    "consistency": frozenset({
-        Capability.SNAPSHOT_ISOLATION,
-        Capability.CONDITIONAL_WRITE,
-        Capability.STREAMING_READS,
-        Capability.STREAMING_WRITES,
-    }),
-    "composition": frozenset({
-        Capability.KEY_PATTERN_FILTERING,
-        Capability.CHANGE_SUBSCRIPTION,
-    }),
-    "scope_projection": frozenset({
-        Capability.SCOPE_PROJECTOR_READ_ONLY,
-    }),
-    "state_bridge": frozenset({
-        Capability.STATE_BRIDGE_INBOX_ONLY,
-        Capability.STATE_BRIDGE_BIDIRECTIONAL,
-    }),
-})
+CAPABILITY_FAMILIES: Mapping[str, frozenset[Capability]] = MappingProxyType(
+    {
+        "tenancy": frozenset(
+            {
+                Capability.TENANT_SCOPED_CHUNKS,
+                Capability.TENANT_SCOPED_LOCKS,
+                Capability.TENANT_SCOPED_STATE,
+                Capability.PER_TENANT_RATE_LIMITS,
+            }
+        ),
+        "observability": frozenset(
+            {
+                Capability.EVENT_BUS_EMISSION,
+                Capability.CALLBACK_REGISTRY,
+                Capability.METRICS_EMISSION,
+                Capability.INGEST_EVENT_PUBLICATION,
+                Capability.BACKEND_STATE_OBSERVABILITY,
+                Capability.EXECUTION_TRACKING,
+            }
+        ),
+        "consistency": frozenset(
+            {
+                Capability.SNAPSHOT_ISOLATION,
+                Capability.CONDITIONAL_WRITE,
+                Capability.STREAMING_READS,
+                Capability.STREAMING_WRITES,
+            }
+        ),
+        "composition": frozenset(
+            {
+                Capability.KEY_PATTERN_FILTERING,
+                Capability.CHANGE_SUBSCRIPTION,
+            }
+        ),
+        "scope_projection": frozenset(
+            {
+                Capability.SCOPE_PROJECTOR_READ_ONLY,
+            }
+        ),
+        "state_bridge": frozenset(
+            {
+                Capability.STATE_BRIDGE_INBOX_ONLY,
+                Capability.STATE_BRIDGE_BIDIRECTIONAL,
+            }
+        ),
+    }
+)
 """Family → capability-member mapping. Family membership is
 informational only — :meth:`CapabilityMixin.supports` does not honor
 family hierarchies. Useful for consumers wanting "all tenancy
@@ -191,9 +205,7 @@ class CapabilityMixin:
 
     def supports(self, capability: CapabilityLike) -> bool:
         normalized = _normalize_capability(capability)
-        return normalized in {
-            _normalize_capability(c) for c in self.instance_capabilities()
-        }
+        return normalized in {_normalize_capability(c) for c in self.instance_capabilities()}
 
 
 class DynamicCapabilityMixin(CapabilityMixin):

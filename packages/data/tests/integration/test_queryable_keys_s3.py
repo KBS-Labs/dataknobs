@@ -75,13 +75,15 @@ def _ids(records: list[Record]) -> set[str]:
 
 def test_sync_id_prefix_and_operators(sync_db: SyncS3Database) -> None:
     assert _ids(
-        sync_db.search(Query(filters=[Filter("id", Operator.STARTS_WITH, "artifacts/alice/report/")]))
+        sync_db.search(
+            Query(filters=[Filter("id", Operator.STARTS_WITH, "artifacts/alice/report/")])
+        )
     ) == {"artifacts/alice/report/final", "artifacts/alice/report/draft"}
     assert _ids(sync_db.search(Query(filters=[Filter("id", Operator.EQ, "a_b/1")]))) == {"a_b/1"}
     # Literal prefix: the '_' does not act as a wildcard, so axb/1 is excluded.
-    assert _ids(
-        sync_db.search(Query(filters=[Filter("id", Operator.STARTS_WITH, "a_b/")]))
-    ) == {"a_b/1"}
+    assert _ids(sync_db.search(Query(filters=[Filter("id", Operator.STARTS_WITH, "a_b/")]))) == {
+        "a_b/1"
+    }
 
 
 async def test_async_id_resolves_to_storage_key(async_db: AsyncS3Database) -> None:
@@ -92,15 +94,11 @@ async def test_async_id_resolves_to_storage_key(async_db: AsyncS3Database) -> No
     """
     with assert_no_blocking():
         eq = await async_db.search(Query(filters=[Filter("id", Operator.EQ, "a_b/1")]))
-        in_ = await async_db.search(
-            Query(filters=[Filter("id", Operator.IN, ["a_b/1", "axb/1"])])
-        )
+        in_ = await async_db.search(Query(filters=[Filter("id", Operator.IN, ["a_b/1", "axb/1"])]))
         prefix = await async_db.search(
             Query(filters=[Filter("id", Operator.STARTS_WITH, "artifacts/alice/report/")])
         )
-        literal = await async_db.search(
-            Query(filters=[Filter("id", Operator.STARTS_WITH, "a_b/")])
-        )
+        literal = await async_db.search(Query(filters=[Filter("id", Operator.STARTS_WITH, "a_b/")]))
     assert _ids(eq) == {"a_b/1"}
     assert _ids(in_) == {"a_b/1", "axb/1"}
     assert _ids(prefix) == {"artifacts/alice/report/final", "artifacts/alice/report/draft"}
@@ -116,9 +114,7 @@ async def test_async_previously_dropped_operators_now_honored(
     through as a match. Delegating to ``Filter.matches`` honors them.
     """
     with assert_no_blocking():
-        between = await async_db.search(
-            Query(filters=[Filter("n", Operator.BETWEEN, [5, 5])])
-        )
+        between = await async_db.search(Query(filters=[Filter("n", Operator.BETWEEN, [5, 5])]))
         exists = await async_db.search(
             Query(filters=[Filter("missing_field", Operator.EXISTS, None)])
         )

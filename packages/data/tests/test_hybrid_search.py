@@ -124,14 +124,12 @@ class TestReciprocalRankFusion:
 
         # Equal weights
         fused_equal = reciprocal_rank_fusion(
-            text_results, vector_results,
-            k=60, text_weight=1.0, vector_weight=1.0
+            text_results, vector_results, k=60, text_weight=1.0, vector_weight=1.0
         )
 
         # Heavy vector weight
         fused_vector = reciprocal_rank_fusion(
-            text_results, vector_results,
-            k=60, text_weight=0.1, vector_weight=1.0
+            text_results, vector_results, k=60, text_weight=0.1, vector_weight=1.0
         )
 
         # With heavy vector weight, doc2 should score higher
@@ -162,14 +160,10 @@ class TestReciprocalRankFusion:
         vector_results = [("doc2", 0.9)]
 
         # Lower k = more emphasis on top ranks
-        fused_low_k = dict(reciprocal_rank_fusion(
-            text_results, vector_results, k=10
-        ))
+        fused_low_k = dict(reciprocal_rank_fusion(text_results, vector_results, k=10))
 
         # Higher k = more even distribution
-        fused_high_k = dict(reciprocal_rank_fusion(
-            text_results, vector_results, k=100
-        ))
+        fused_high_k = dict(reciprocal_rank_fusion(text_results, vector_results, k=100))
 
         # With lower k, the contribution per rank is higher
         # Both should be equal since both are rank 1, but ratio changes
@@ -189,8 +183,7 @@ class TestWeightedScoreFusion:
         vector_results = [("doc2", 0.9), ("doc3", 0.7)]
 
         fused = weighted_score_fusion(
-            text_results, vector_results,
-            text_weight=0.5, vector_weight=0.5
+            text_results, vector_results, text_weight=0.5, vector_weight=0.5
         )
 
         # doc2 appears in both, should have combined score
@@ -205,8 +198,7 @@ class TestWeightedScoreFusion:
 
         # Heavy text weight
         fused = weighted_score_fusion(
-            text_results, vector_results,
-            text_weight=0.8, vector_weight=0.2
+            text_results, vector_results, text_weight=0.8, vector_weight=0.2
         )
         fused_dict = dict(fused)
 
@@ -219,9 +211,7 @@ class TestWeightedScoreFusion:
         vector_results = [("doc1", 0.5)]
 
         fused = weighted_score_fusion(
-            text_results, vector_results,
-            text_weight=0.5, vector_weight=0.5,
-            normalize_scores=False
+            text_results, vector_results, text_weight=0.5, vector_weight=0.5, normalize_scores=False
         )
         fused_dict = dict(fused)
 
@@ -239,8 +229,7 @@ class TestWeightedScoreFusion:
         vector_results = [("doc3", 0.5)]
 
         fused = weighted_score_fusion(
-            text_results, vector_results,
-            text_weight=0.5, vector_weight=0.5
+            text_results, vector_results, text_weight=0.5, vector_weight=0.5
         )
 
         scores = [score for _, score in fused]
@@ -252,6 +241,7 @@ class TestHybridSearchResult:
 
     def test_basic_creation(self):
         """Test creating a HybridSearchResult."""
+
         # Create a mock record
         class MockRecord:
             id = "test-id"
@@ -273,6 +263,7 @@ class TestHybridSearchResult:
 
     def test_optional_scores(self):
         """Test HybridSearchResult with optional scores."""
+
         class MockRecord:
             id = "test-id"
 
@@ -288,6 +279,7 @@ class TestHybridSearchResult:
 
     def test_sorting(self):
         """Test that HybridSearchResult can be sorted by score."""
+
         class MockRecord:
             def __init__(self, id):
                 self.id = id
@@ -307,6 +299,7 @@ class TestHybridSearchResult:
 
     def test_repr(self):
         """Test string representation."""
+
         class MockRecord:
             id = "test-123"
 
@@ -325,6 +318,7 @@ class TestHybridSearchResult:
 
     def test_metadata(self):
         """Test HybridSearchResult with metadata."""
+
         class MockRecord:
             id = "test-id"
 

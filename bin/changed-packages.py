@@ -466,9 +466,7 @@ def detect_changes(base_ref: str = "main") -> dict[str, Any]:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(
-        description="Detect changed packages for targeted testing"
-    )
+    parser = argparse.ArgumentParser(description="Detect changed packages for targeted testing")
     parser.add_argument(
         "--base-ref",
         default="main",

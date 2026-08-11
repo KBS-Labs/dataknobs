@@ -155,9 +155,7 @@ def diff_limits(
     return drift
 
 
-def render_resource(
-    limits: dict[str, _ModelLimits], *, verified_date: str
-) -> str:
+def render_resource(limits: dict[str, _ModelLimits], *, verified_date: str) -> str:
     """Render the full resource file text from ``limits`` (nested, sorted).
 
     Each model renders its present ceilings (``max_tokens`` / ``max_input_tokens``);
@@ -203,11 +201,7 @@ _ModelModalities = dict[str, bool]
 
 def _bedrock_resource_path() -> Path:
     """Filesystem path of the bundled Bedrock resource."""
-    ref = (
-        importlib.resources.files("dataknobs_llm.llm.providers")
-        / "data"
-        / "bedrock_models.yaml"
-    )
+    ref = importlib.resources.files("dataknobs_llm.llm.providers") / "data" / "bedrock_models.yaml"
     return Path(str(ref))
 
 
@@ -386,8 +380,7 @@ _PROVIDER_BINDINGS: dict[str, _ProviderBinding] = {
 def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         prog="dataknobs_llm.tooling.model_limits",
-        description="Reconcile a provider's bundled model resource against its "
-        "live catalog.",
+        description="Reconcile a provider's bundled model resource against its live catalog.",
     )
     parser.add_argument(
         "--provider",
@@ -399,8 +392,7 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     group.add_argument(
         "--check",
         action="store_true",
-        help="Diff the resource against live values; exit non-zero on drift "
-        "(default).",
+        help="Diff the resource against live values; exit non-zero on drift (default).",
     )
     group.add_argument(
         "--update",
@@ -427,11 +419,7 @@ def main(
     """
     args = _parse_args(argv)
     binding = _PROVIDER_BINDINGS[args.provider]
-    path = (
-        Path(resource_path)
-        if resource_path is not None
-        else binding.resource_path()
-    )
+    path = Path(resource_path) if resource_path is not None else binding.resource_path()
 
     if client is None:
         skip = binding.gate()
@@ -455,9 +443,7 @@ def main(
     try:
         live = asyncio.run(binding.fetch(client))
     except binding.skip_errors() as exc:  # credentials / permission → clean no-op
-        print(
-            f"model_limits: skipped -- {binding.name} catalog unavailable ({exc})."
-        )
+        print(f"model_limits: skipped -- {binding.name} catalog unavailable ({exc}).")
         return 0
 
     if args.update:

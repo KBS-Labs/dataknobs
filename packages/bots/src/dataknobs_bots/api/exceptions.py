@@ -242,9 +242,7 @@ def _disclosure_label(message: bool, context: bool) -> str:
     alone cannot answer "the client reports an empty error — is that the
     policy or a bug?". This puts the answer on the same line.
     """
-    shown = [
-        half for half, on in (("message", message), ("context", context)) if on
-    ]
+    shown = [half for half, on in (("message", message), ("context", context)) if on]
     return "+".join(shown) if shown else "nothing"
 
 
@@ -599,85 +597,87 @@ class ErrorPolicy(NamedTuple):
 #: already registered, since ``resolve_error_policy`` reads it per request. The
 #: supported route is ``register_exception_handlers(error_policy=...)``, which
 #: is per app.
-DEFAULT_ERROR_POLICY: Mapping[type[DataknobsError], ErrorPolicy] = MappingProxyType({
-    # --- fully disclosed: message and context are both authored for the caller
-    # context: field names and offending values -- the caller's own input.
-    CommonValidationError: ErrorPolicy(422, True, True),
-    # context: `scope`, which the caller must act on, and `user_id`. That id is
-    # the caller's own, so returning it to them discloses nothing new -- unless
-    # a route attempts access on behalf of a third party, where it would.
-    CommonConsentRequiredError: ErrorPolicy(403, True, True),
-    # context: expected and actual versions -- what the caller retries against.
-    CommonConcurrencyError: ErrorPolicy(409, True, True),
-    # The one row here that overrides an inherited status rather than declaring
-    # a base's. `InvalidTransitionError` is an `OperationError`, which is right
-    # for a library -- an invalid transition is permanent, so retry logic keyed
-    # on that base correctly declines to re-attempt it -- but it inherited 500,
-    # blaming the server for the caller's mistake. "Cannot go from `draft` to
-    # `shipped`" is the textbook 409: the request conflicts with the resource's
-    # current state and would succeed in another one. Rebasing the type onto
-    # `ConcurrencyError` would have bought the same status and broken the retry
-    # semantics, which is exactly the split this table exists to express.
-    # context: entity, current and target status, and `allowed` -- the remedy.
-    InvalidTransitionError: ErrorPolicy(409, True, True),
-    # context: category, limit, interval. Also carries the `retry_after` hint,
-    # which reaches the client as a header as well (see `_retry_after_headers`).
-    CommonRateLimitError: ErrorPolicy(429, True, True),
-    # --- message only: the diagnostic is the caller's, the context is not ---
-    # message: "Item not found: <the key the caller asked for>". context:
-    # `available_keys`, the registry's entire keyspace -- a "did you mean" for
-    # a library caller and an inventory listing for an HTTP one.
-    CommonNotFoundError: ErrorPolicy(404, True, False),
-    # message: that something timed out, and usually after how long. context:
-    # the timeout value -- but this type's own documented example puts the SQL
-    # query there too, so a raiser following it disclosed the query.
-    CommonTimeoutError: ErrorPolicy(504, True, False),
-    # Masked, and the one row where that is a judgement call rather than a
-    # reading of the type. Most config diagnostics are authored -- a key name,
-    # a sorted list of the valid ones -- and are exactly what a deployment
-    # wants back. But this type is also where the funnels that wrap a
-    # third-party *constructor* or *module import* land, and that text is
-    # unbounded: a database or cache client raises with its connection URL,
-    # credentials included. Those funnels are bounded in-tree (they name the
-    # class path and the exception type, and let `__cause__` carry the rest),
-    # yet a deployment cannot audit its consumers' raise sites, and this
-    # package builds bots lazily on the request path. So the default is
-    # closed and the diagnostic goes to the log. Turn it back on per app --
-    # `error_policy={ConfigurationError: ErrorPolicy(500, True, True)}` --
-    # when the route is not public. The status stays 500 either way: a bad
-    # config is a server-side fault however readable we make it.
-    CommonConfigurationError: ErrorPolicy(500, False, False),
-    # The two dotted-path types are the *bounded* case the row above is
-    # cautious about: their messages are built by the resolver from the ref,
-    # a `reason` enum member, and module symbol names — never from the caught
-    # exception, whose text stays on `__cause__` (pinned by a test in
-    # `common`). So the argument that masks their parent does not reach them.
-    #
-    # They stay masked anyway, for a different reason. The missing-attribute
-    # message enumerates the target module's public callables, which is a
-    # "did you mean" for a library caller and an inventory of a deployment's
-    # internals for an HTTP one — the same reading that masks
-    # `NotFoundError`'s context, arriving here in the message instead. And
-    # the module named is one the *deployment's* config chose, not one the
-    # caller asked for, so there is no sense in which it is already theirs.
-    #
-    # Rows rather than inheritance because the guard requires the decision to
-    # be made rather than defaulted, and because "same as the parent, for
-    # different reasons" is worth writing down.
-    DottedPathError: ErrorPolicy(500, False, False),
-    # context carries `expected`, a live class object naming an internal
-    # base — masked for that as much as for the message.
-    DottedPathTypeError: ErrorPolicy(500, False, False),
-    # --- fully masked: the message may embed infrastructure detail ---
-    # e.g. a connection string, with credentials, from a failed connect.
-    CommonResourceError: ErrorPolicy(503, False, False),
-    CommonSerializationError: ErrorPolicy(500, False, False),
-    CommonOperationError: ErrorPolicy(500, False, False),
-    # Terminal fallback. Here as a row rather than a `.get` default so the
-    # exhaustiveness guard has nothing to special-case and a consumer can
-    # override it like any other entry.
-    DataknobsError: ErrorPolicy(500, False, False),
-})
+DEFAULT_ERROR_POLICY: Mapping[type[DataknobsError], ErrorPolicy] = MappingProxyType(
+    {
+        # --- fully disclosed: message and context are both authored for the caller
+        # context: field names and offending values -- the caller's own input.
+        CommonValidationError: ErrorPolicy(422, True, True),
+        # context: `scope`, which the caller must act on, and `user_id`. That id is
+        # the caller's own, so returning it to them discloses nothing new -- unless
+        # a route attempts access on behalf of a third party, where it would.
+        CommonConsentRequiredError: ErrorPolicy(403, True, True),
+        # context: expected and actual versions -- what the caller retries against.
+        CommonConcurrencyError: ErrorPolicy(409, True, True),
+        # The one row here that overrides an inherited status rather than declaring
+        # a base's. `InvalidTransitionError` is an `OperationError`, which is right
+        # for a library -- an invalid transition is permanent, so retry logic keyed
+        # on that base correctly declines to re-attempt it -- but it inherited 500,
+        # blaming the server for the caller's mistake. "Cannot go from `draft` to
+        # `shipped`" is the textbook 409: the request conflicts with the resource's
+        # current state and would succeed in another one. Rebasing the type onto
+        # `ConcurrencyError` would have bought the same status and broken the retry
+        # semantics, which is exactly the split this table exists to express.
+        # context: entity, current and target status, and `allowed` -- the remedy.
+        InvalidTransitionError: ErrorPolicy(409, True, True),
+        # context: category, limit, interval. Also carries the `retry_after` hint,
+        # which reaches the client as a header as well (see `_retry_after_headers`).
+        CommonRateLimitError: ErrorPolicy(429, True, True),
+        # --- message only: the diagnostic is the caller's, the context is not ---
+        # message: "Item not found: <the key the caller asked for>". context:
+        # `available_keys`, the registry's entire keyspace -- a "did you mean" for
+        # a library caller and an inventory listing for an HTTP one.
+        CommonNotFoundError: ErrorPolicy(404, True, False),
+        # message: that something timed out, and usually after how long. context:
+        # the timeout value -- but this type's own documented example puts the SQL
+        # query there too, so a raiser following it disclosed the query.
+        CommonTimeoutError: ErrorPolicy(504, True, False),
+        # Masked, and the one row where that is a judgement call rather than a
+        # reading of the type. Most config diagnostics are authored -- a key name,
+        # a sorted list of the valid ones -- and are exactly what a deployment
+        # wants back. But this type is also where the funnels that wrap a
+        # third-party *constructor* or *module import* land, and that text is
+        # unbounded: a database or cache client raises with its connection URL,
+        # credentials included. Those funnels are bounded in-tree (they name the
+        # class path and the exception type, and let `__cause__` carry the rest),
+        # yet a deployment cannot audit its consumers' raise sites, and this
+        # package builds bots lazily on the request path. So the default is
+        # closed and the diagnostic goes to the log. Turn it back on per app --
+        # `error_policy={ConfigurationError: ErrorPolicy(500, True, True)}` --
+        # when the route is not public. The status stays 500 either way: a bad
+        # config is a server-side fault however readable we make it.
+        CommonConfigurationError: ErrorPolicy(500, False, False),
+        # The two dotted-path types are the *bounded* case the row above is
+        # cautious about: their messages are built by the resolver from the ref,
+        # a `reason` enum member, and module symbol names — never from the caught
+        # exception, whose text stays on `__cause__` (pinned by a test in
+        # `common`). So the argument that masks their parent does not reach them.
+        #
+        # They stay masked anyway, for a different reason. The missing-attribute
+        # message enumerates the target module's public callables, which is a
+        # "did you mean" for a library caller and an inventory of a deployment's
+        # internals for an HTTP one — the same reading that masks
+        # `NotFoundError`'s context, arriving here in the message instead. And
+        # the module named is one the *deployment's* config chose, not one the
+        # caller asked for, so there is no sense in which it is already theirs.
+        #
+        # Rows rather than inheritance because the guard requires the decision to
+        # be made rather than defaulted, and because "same as the parent, for
+        # different reasons" is worth writing down.
+        DottedPathError: ErrorPolicy(500, False, False),
+        # context carries `expected`, a live class object naming an internal
+        # base — masked for that as much as for the message.
+        DottedPathTypeError: ErrorPolicy(500, False, False),
+        # --- fully masked: the message may embed infrastructure detail ---
+        # e.g. a connection string, with credentials, from a failed connect.
+        CommonResourceError: ErrorPolicy(503, False, False),
+        CommonSerializationError: ErrorPolicy(500, False, False),
+        CommonOperationError: ErrorPolicy(500, False, False),
+        # Terminal fallback. Here as a row rather than a `.get` default so the
+        # exhaustiveness guard has nothing to special-case and a consumer can
+        # override it like any other entry.
+        DataknobsError: ErrorPolicy(500, False, False),
+    }
+)
 
 
 def resolve_error_policy(

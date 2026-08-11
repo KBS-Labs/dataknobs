@@ -18,7 +18,7 @@ class TestPropertiesHandle:
             resource_name="test_resource",
             owner_id="test_owner",
             instance_id="instance_1",
-            properties=initial_props
+            properties=initial_props,
         )
 
         assert handle.resource_name == "test_resource"
@@ -37,7 +37,7 @@ class TestPropertiesHandle:
             resource_name="test",
             owner_id="owner",
             instance_id="inst1",
-            properties={"key1": "value1", "key2": 42}
+            properties={"key1": "value1", "key2": 42},
         )
 
         # Test existing key
@@ -56,7 +56,7 @@ class TestPropertiesHandle:
             resource_name="test",
             owner_id="owner",
             instance_id="inst1",
-            properties={"key1": "value1"}
+            properties={"key1": "value1"},
         )
 
         # Set new value
@@ -85,7 +85,7 @@ class TestPropertiesHandle:
             resource_name="test",
             owner_id="owner",
             instance_id="inst1",
-            properties={"key1": "value1"}
+            properties={"key1": "value1"},
         )
 
         updates = {"key2": "value2", "key3": 3, "key1": "updated"}
@@ -102,7 +102,7 @@ class TestPropertiesHandle:
             resource_name="test",
             owner_id="owner",
             instance_id="inst1",
-            properties={"key1": "value1", "key2": "value2"}
+            properties={"key1": "value1", "key2": "value2"},
         )
 
         # Delete existing key
@@ -128,7 +128,7 @@ class TestPropertiesHandle:
             resource_name="test",
             owner_id="owner",
             instance_id="inst1",
-            properties={"key1": "value1", "key2": "value2"}
+            properties={"key1": "value1", "key2": "value2"},
         )
 
         handle.clear()
@@ -142,7 +142,7 @@ class TestPropertiesHandle:
             resource_name="test",
             owner_id="owner",
             instance_id="inst1",
-            properties={"key1": "value1"}
+            properties={"key1": "value1"},
         )
 
         handle.set("key2", "value2")
@@ -170,7 +170,7 @@ class TestPropertiesResource:
             name="test_resource",
             initial_properties=initial_props,
             max_instances=5,
-            track_history=True
+            track_history=True,
         )
 
         assert resource.name == "test_resource"
@@ -182,10 +182,7 @@ class TestPropertiesResource:
 
     def test_resource_acquire_basic(self):
         """Test basic resource acquisition."""
-        resource = PropertiesResource(
-            name="test_resource",
-            initial_properties={"key1": "value1"}
-        )
+        resource = PropertiesResource(name="test_resource", initial_properties={"key1": "value1"})
 
         handle = resource.acquire(owner_id="test_owner")
 
@@ -199,14 +196,10 @@ class TestPropertiesResource:
 
     def test_resource_acquire_with_properties(self):
         """Test resource acquisition with additional properties."""
-        resource = PropertiesResource(
-            name="test_resource",
-            initial_properties={"key1": "initial"}
-        )
+        resource = PropertiesResource(name="test_resource", initial_properties={"key1": "initial"})
 
         handle = resource.acquire(
-            owner_id="test_owner",
-            properties={"key2": "added", "key1": "overridden"}
+            owner_id="test_owner", properties={"key2": "added", "key1": "overridden"}
         )
 
         assert handle.properties["key1"] == "overridden"
@@ -214,10 +207,7 @@ class TestPropertiesResource:
 
     def test_resource_acquire_max_instances(self):
         """Test resource acquisition with max instances limit."""
-        resource = PropertiesResource(
-            name="test_resource",
-            max_instances=2
-        )
+        resource = PropertiesResource(name="test_resource", max_instances=2)
 
         # Acquire max instances
         handle1 = resource.acquire(owner_id="owner1")
@@ -313,10 +303,7 @@ class TestPropertiesResource:
 
     def test_resource_history_tracking(self):
         """Test resource history tracking."""
-        resource = PropertiesResource(
-            name="test_resource",
-            track_history=True
-        )
+        resource = PropertiesResource(name="test_resource", track_history=True)
 
         handle = resource.acquire(owner_id="owner1", properties={"key": "value"})
         handle.set("new_key", "new_value")
@@ -336,10 +323,7 @@ class TestPropertiesResource:
 
     def test_resource_no_history_tracking(self):
         """Test resource without history tracking."""
-        resource = PropertiesResource(
-            name="test_resource",
-            track_history=False
-        )
+        resource = PropertiesResource(name="test_resource", track_history=False)
 
         handle = resource.acquire(owner_id="owner1")
         assert len(resource._acquisition_history) == 0
@@ -349,10 +333,7 @@ class TestPropertiesResource:
 
     def test_resource_get_stats(self):
         """Test getting resource statistics."""
-        resource = PropertiesResource(
-            name="test_resource",
-            max_instances=10
-        )
+        resource = PropertiesResource(name="test_resource", max_instances=10)
 
         handle1 = resource.acquire(owner_id="owner1")
         handle2 = resource.acquire(owner_id="owner2")
@@ -370,10 +351,7 @@ class TestPropertiesResource:
 
     def test_resource_reset(self):
         """Test resetting resource."""
-        resource = PropertiesResource(
-            name="test_resource",
-            track_history=True
-        )
+        resource = PropertiesResource(name="test_resource", track_history=True)
 
         # Create some state
         handle1 = resource.acquire(owner_id="owner1")
@@ -394,10 +372,7 @@ class TestPropertiesResource:
 
     def test_resource_repr(self):
         """Test resource string representation."""
-        resource = PropertiesResource(
-            name="test_resource",
-            max_instances=5
-        )
+        resource = PropertiesResource(name="test_resource", max_instances=5)
 
         resource.acquire(owner_id="owner1")
         resource.acquire(owner_id="owner2")

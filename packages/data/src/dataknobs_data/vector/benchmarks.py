@@ -43,17 +43,17 @@ class BenchmarkResult:
             f"Vectors: {self.num_vectors:,}",
             f"Dimensions: {self.vector_dim}",
             f"Duration: {self.duration:.3f}s",
-            f"Throughput: {self.throughput:.0f} vectors/s"
+            f"Throughput: {self.throughput:.0f} vectors/s",
         ]
 
         if self.latency_p50 is not None:
-            lines.append(f"Latency P50: {self.latency_p50*1000:.2f}ms")
+            lines.append(f"Latency P50: {self.latency_p50 * 1000:.2f}ms")
         if self.latency_p95 is not None:
-            lines.append(f"Latency P95: {self.latency_p95*1000:.2f}ms")
+            lines.append(f"Latency P95: {self.latency_p95 * 1000:.2f}ms")
         if self.latency_p99 is not None:
-            lines.append(f"Latency P99: {self.latency_p99*1000:.2f}ms")
+            lines.append(f"Latency P99: {self.latency_p99 * 1000:.2f}ms")
         if self.memory_used is not None:
-            lines.append(f"Memory: {self.memory_used / (1024*1024):.1f}MB")
+            lines.append(f"Memory: {self.memory_used / (1024 * 1024):.1f}MB")
 
         return "\n".join(lines)
 
@@ -63,7 +63,7 @@ class VectorStoreBenchmark:
 
     def __init__(self, store: VectorStore):
         """Initialize benchmark with a vector store.
-        
+
         Args:
             store: Vector store to benchmark
         """
@@ -72,18 +72,15 @@ class VectorStoreBenchmark:
         self.rng = np.random.default_rng()  # Create RNG once for all benchmarks
 
     async def benchmark_indexing(
-        self,
-        num_vectors: int = 10000,
-        vector_dim: int = 128,
-        batch_size: int = 100
+        self, num_vectors: int = 10000, vector_dim: int = 128, batch_size: int = 100
     ) -> BenchmarkResult:
         """Benchmark vector indexing performance.
-        
+
         Args:
             num_vectors: Number of vectors to index
             vector_dim: Dimension of vectors
             batch_size: Batch size for indexing
-            
+
         Returns:
             Benchmark results
         """
@@ -101,9 +98,7 @@ class VectorStoreBenchmark:
         for i in range(0, num_vectors, batch_size):
             batch_end = min(i + batch_size, num_vectors)
             await self.store.add_vectors(
-                vectors[i:batch_end],
-                ids=ids[i:batch_end],
-                metadata=metadata[i:batch_end]
+                vectors[i:batch_end], ids=ids[i:batch_end], metadata=metadata[i:batch_end]
             )
 
         duration = time.time() - start_time
@@ -115,25 +110,22 @@ class VectorStoreBenchmark:
             vector_dim=vector_dim,
             duration=duration,
             throughput=throughput,
-            metadata={"batch_size": batch_size}
+            metadata={"batch_size": batch_size},
         )
 
         self.results.append(result)
         return result
 
     async def benchmark_search(
-        self,
-        num_queries: int = 1000,
-        k: int = 10,
-        vector_dim: int = 128
+        self, num_queries: int = 1000, k: int = 10, vector_dim: int = 128
     ) -> BenchmarkResult:
         """Benchmark vector search performance.
-        
+
         Args:
             num_queries: Number of search queries
             k: Number of results per query
             vector_dim: Dimension of query vectors
-            
+
         Returns:
             Benchmark results
         """
@@ -169,23 +161,21 @@ class VectorStoreBenchmark:
             latency_p50=p50,
             latency_p95=p95,
             latency_p99=p99,
-            metadata={"num_queries": num_queries, "k": k}
+            metadata={"num_queries": num_queries, "k": k},
         )
 
         self.results.append(result)
         return result
 
     async def benchmark_update(
-        self,
-        num_updates: int = 1000,
-        vector_dim: int = 128
+        self, num_updates: int = 1000, vector_dim: int = 128
     ) -> BenchmarkResult:
         """Benchmark vector update performance.
-        
+
         Args:
             num_updates: Number of vectors to update
             vector_dim: Dimension of vectors
-            
+
         Returns:
             Benchmark results
         """
@@ -216,21 +206,18 @@ class VectorStoreBenchmark:
             num_vectors=num_updates,
             vector_dim=vector_dim,
             duration=duration,
-            throughput=throughput
+            throughput=throughput,
         )
 
         self.results.append(result)
         return result
 
-    async def benchmark_delete(
-        self,
-        num_deletes: int = 1000
-    ) -> BenchmarkResult:
+    async def benchmark_delete(self, num_deletes: int = 1000) -> BenchmarkResult:
         """Benchmark vector deletion performance.
-        
+
         Args:
             num_deletes: Number of vectors to delete
-            
+
         Returns:
             Benchmark results
         """
@@ -254,25 +241,22 @@ class VectorStoreBenchmark:
             num_vectors=deleted,
             vector_dim=0,
             duration=duration,
-            throughput=throughput
+            throughput=throughput,
         )
 
         self.results.append(result)
         return result
 
     async def benchmark_concurrent_operations(
-        self,
-        num_workers: int = 10,
-        operations_per_worker: int = 100,
-        vector_dim: int = 128
+        self, num_workers: int = 10, operations_per_worker: int = 100, vector_dim: int = 128
     ) -> BenchmarkResult:
         """Benchmark concurrent operations.
-        
+
         Args:
             num_workers: Number of concurrent workers
             operations_per_worker: Operations per worker
             vector_dim: Dimension of vectors
-            
+
         Returns:
             Benchmark results
         """
@@ -288,9 +272,7 @@ class VectorStoreBenchmark:
                     # Add vector
                     vector = self.rng.random(vector_dim, dtype=np.float32)
                     await self.store.add_vectors(
-                        vector,
-                        ids=[f"w{worker_id}_v{i}"],
-                        metadata=[{"worker": worker_id}]
+                        vector, ids=[f"w{worker_id}_v{i}"], metadata=[{"worker": worker_id}]
                     )
                 else:
                     # Search
@@ -320,24 +302,22 @@ class VectorStoreBenchmark:
             metadata={
                 "num_workers": num_workers,
                 "ops_per_worker": operations_per_worker,
-                "avg_worker_time": avg_worker_time
-            }
+                "avg_worker_time": avg_worker_time,
+            },
         )
 
         self.results.append(result)
         return result
 
     async def run_full_benchmark(
-        self,
-        vector_dims: list[int] | None = None,
-        num_vectors_list: list[int] | None = None
+        self, vector_dims: list[int] | None = None, num_vectors_list: list[int] | None = None
     ) -> list[BenchmarkResult]:
         """Run a complete benchmark suite.
-        
+
         Args:
             vector_dims: List of vector dimensions to test
             num_vectors_list: List of vector counts to test
-            
+
         Returns:
             List of all benchmark results
         """
@@ -367,7 +347,7 @@ class VectorStoreBenchmark:
 
     def generate_report(self) -> str:
         """Generate a benchmark report.
-        
+
         Returns:
             Formatted report string
         """
@@ -399,7 +379,7 @@ class ComparativeBenchmark:
 
     def __init__(self, stores: dict[str, VectorStore]):
         """Initialize with multiple stores to compare.
-        
+
         Args:
             stores: Dictionary of store name to store instance
         """
@@ -407,16 +387,14 @@ class ComparativeBenchmark:
         self.results: dict[str, list[BenchmarkResult]] = {}
 
     async def compare_indexing(
-        self,
-        num_vectors: int = 10000,
-        vector_dim: int = 128
+        self, num_vectors: int = 10000, vector_dim: int = 128
     ) -> dict[str, BenchmarkResult]:
         """Compare indexing performance across stores.
-        
+
         Args:
             num_vectors: Number of vectors to index
             vector_dim: Dimension of vectors
-            
+
         Returns:
             Dictionary of store name to results
         """
@@ -435,18 +413,15 @@ class ComparativeBenchmark:
         return comparison
 
     async def compare_search(
-        self,
-        num_queries: int = 1000,
-        k: int = 10,
-        vector_dim: int = 128
+        self, num_queries: int = 1000, k: int = 10, vector_dim: int = 128
     ) -> dict[str, BenchmarkResult]:
         """Compare search performance across stores.
-        
+
         Args:
             num_queries: Number of queries
             k: Results per query
             vector_dim: Query vector dimension
-            
+
         Returns:
             Dictionary of store name to results
         """
@@ -466,7 +441,7 @@ class ComparativeBenchmark:
 
     def generate_comparison_report(self) -> str:
         """Generate a comparison report.
-        
+
         Returns:
             Formatted comparison report
         """
@@ -491,12 +466,16 @@ class ComparativeBenchmark:
             for store_name, store_results in self.results.items():
                 for result in store_results:
                     if result.operation == operation:
-                        table_data.append([
-                            store_name,
-                            f"{result.throughput:.0f} vec/s",
-                            f"{result.duration:.3f}s",
-                            f"{result.latency_p50*1000:.1f}ms" if result.latency_p50 else "N/A"
-                        ])
+                        table_data.append(
+                            [
+                                store_name,
+                                f"{result.throughput:.0f} vec/s",
+                                f"{result.duration:.3f}s",
+                                f"{result.latency_p50 * 1000:.1f}ms"
+                                if result.latency_p50
+                                else "N/A",
+                            ]
+                        )
 
             # Format table
             if table_data:

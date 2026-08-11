@@ -98,8 +98,7 @@ class JinjaInputsProjector:
                 if self._strict:
                     raise
                 logger.warning(
-                    "Skipping declarative input %r: expression %r failed "
-                    "to evaluate",
+                    "Skipping declarative input %r: expression %r failed to evaluate",
                     name,
                     expression,
                     exc_info=True,

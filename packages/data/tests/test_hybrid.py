@@ -263,8 +263,10 @@ class TestWeightedScoreFusion:
         vector_results = [("doc1", 0.9), ("doc3", 0.7)]
 
         fused = weighted_score_fusion(
-            text_results, vector_results,
-            text_weight=0.5, vector_weight=0.5,
+            text_results,
+            vector_results,
+            text_weight=0.5,
+            vector_weight=0.5,
             normalize_scores=False,
         )
         scores = dict(fused)
@@ -278,8 +280,10 @@ class TestWeightedScoreFusion:
         vector_results = [("doc1", 0.9), ("doc2", 0.5)]
 
         fused = weighted_score_fusion(
-            text_results, vector_results,
-            text_weight=0.5, vector_weight=0.5,
+            text_results,
+            vector_results,
+            text_weight=0.5,
+            vector_weight=0.5,
             normalize_scores=True,
         )
         scores = dict(fused)
@@ -297,16 +301,20 @@ class TestWeightedScoreFusion:
 
         # All weight on text
         fused_text = weighted_score_fusion(
-            text_results, vector_results,
-            text_weight=1.0, vector_weight=0.0,
+            text_results,
+            vector_results,
+            text_weight=1.0,
+            vector_weight=0.0,
             normalize_scores=False,
         )
         assert dict(fused_text)["doc1"] == 1.0
 
         # All weight on vector
         fused_vector = weighted_score_fusion(
-            text_results, vector_results,
-            text_weight=0.0, vector_weight=1.0,
+            text_results,
+            vector_results,
+            text_weight=0.0,
+            vector_weight=1.0,
             normalize_scores=False,
         )
         assert dict(fused_vector)["doc1"] == 0.0

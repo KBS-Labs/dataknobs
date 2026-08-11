@@ -66,11 +66,13 @@ class TestCallTracker:
     async def test_sequential_indexing_across_collections(self) -> None:
         """Global call_index continues across multiple collect_new_calls()."""
         main = _make_capturing("main")
-        main._delegate.set_responses([
-            text_response("First"),
-            text_response("Second"),
-            text_response("Third"),
-        ])
+        main._delegate.set_responses(
+            [
+                text_response("First"),
+                text_response("Second"),
+                text_response("Third"),
+            ]
+        )
         tracker = CallTracker(main=main)
 
         await main.complete("A")
@@ -98,10 +100,12 @@ class TestCallTracker:
     async def test_no_duplicate_calls(self) -> None:
         """Previously collected calls are not returned again."""
         main = _make_capturing("main")
-        main._delegate.set_responses([
-            text_response("First"),
-            text_response("Second"),
-        ])
+        main._delegate.set_responses(
+            [
+                text_response("First"),
+                text_response("Second"),
+            ]
+        )
         tracker = CallTracker(main=main)
 
         await main.complete("A")
@@ -139,10 +143,12 @@ class TestCallTracker:
     async def test_pre_existing_calls_ignored(self) -> None:
         """Calls made before tracker creation are not collected."""
         main = _make_capturing("main")
-        main._delegate.set_responses([
-            text_response("Before"),
-            text_response("After"),
-        ])
+        main._delegate.set_responses(
+            [
+                text_response("Before"),
+                text_response("After"),
+            ]
+        )
 
         # Make a call before creating the tracker
         await main.complete("Pre-existing")

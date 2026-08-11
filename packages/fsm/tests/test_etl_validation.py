@@ -57,9 +57,7 @@ def _build_etl(
     # ``reject_counts_as_error`` is forwarded only when non-default so the
     # core gate tests construct against the pre-fix config too (reproduce-first:
     # they must fail on "validation_schema ignored", not on an unknown kwarg).
-    extra = (
-        {"reject_counts_as_error": True} if reject_counts_as_error else {}
-    )
+    extra = {"reject_counts_as_error": True} if reject_counts_as_error else {}
     return DatabaseETL(
         ETLConfig(
             source_db={"type": "file", "path": src},
@@ -126,9 +124,7 @@ async def test_library_validation_function_form(tmp_path: Path) -> None:
     tgt = str(tmp_path / "target.json")
     await _seed_source(src, _MIXED_ROWS)
 
-    etl = _build_etl(
-        src, tgt, validation_schema=RangeValidator({"age": {"min": 18}})
-    )
+    etl = _build_etl(src, tgt, validation_schema=RangeValidator({"age": {"min": 18}}))
     metrics = await etl.run()
 
     assert {r["id"] for r in await _read_target(tgt)} == {"1", "3"}
@@ -143,9 +139,7 @@ async def test_callable_predicate_form(tmp_path: Path) -> None:
     tgt = str(tmp_path / "target.json")
     await _seed_source(src, _MIXED_ROWS)
 
-    etl = _build_etl(
-        src, tgt, validation_schema=lambda r: r.get("age", 0) >= 18
-    )
+    etl = _build_etl(src, tgt, validation_schema=lambda r: r.get("age", 0) >= 18)
     metrics = await etl.run()
 
     assert {r["id"] for r in await _read_target(tgt)} == {"1", "3"}
@@ -204,9 +198,9 @@ async def test_no_double_counting_and_non_blocking(tmp_path: Path) -> None:
     with assert_no_blocking():
         metrics = await etl.run()
 
-    assert metrics["extracted"] == (
-        metrics["loaded"] + metrics["rejected"] + metrics["errors"]
-    ), metrics
+    assert metrics["extracted"] == (metrics["loaded"] + metrics["rejected"] + metrics["errors"]), (
+        metrics
+    )
 
 
 @pytest.mark.asyncio
@@ -326,7 +320,6 @@ def test_validation_resources_without_schema_is_rejected() -> None:
             target_table="records",
             key_columns=["id"],
             validation_resources={
-                "ref_db": {"type": "async_database",
-                           "config": {"type": "file", "path": "r.json"}},
+                "ref_db": {"type": "async_database", "config": {"type": "file", "path": "r.json"}},
             },
         )

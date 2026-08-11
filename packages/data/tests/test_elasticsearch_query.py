@@ -43,6 +43,7 @@ from dataknobs_data.query_logic import FilterCondition, LogicCondition, LogicOpe
 
 # --- equality / inequality -------------------------------------------------
 
+
 def test_eq_string_uses_keyword() -> None:
     assert build_filter_es_query(Filter("name", Operator.EQ, "alice")) == {
         "term": {"data.name.keyword": "alice"}
@@ -50,9 +51,7 @@ def test_eq_string_uses_keyword() -> None:
 
 
 def test_eq_int_uses_base_field() -> None:
-    assert build_filter_es_query(Filter("age", Operator.EQ, 30)) == {
-        "term": {"data.age": 30}
-    }
+    assert build_filter_es_query(Filter("age", Operator.EQ, 30)) == {"term": {"data.age": 30}}
 
 
 def test_eq_bool_passes_native_value() -> None:
@@ -71,6 +70,7 @@ def test_neq_wraps_in_must_not() -> None:
 
 # --- range -----------------------------------------------------------------
 
+
 @pytest.mark.parametrize(
     ("op", "es_op"),
     [
@@ -81,9 +81,7 @@ def test_neq_wraps_in_must_not() -> None:
     ],
 )
 def test_range_operators(op: Operator, es_op: str) -> None:
-    assert build_filter_es_query(Filter("age", op, 21)) == {
-        "range": {"data.age": {es_op: 21}}
-    }
+    assert build_filter_es_query(Filter("age", op, 21)) == {"range": {"data.age": {es_op: 21}}}
 
 
 def test_between() -> None:
@@ -100,6 +98,7 @@ def test_not_between_wraps_in_must_not() -> None:
 
 # --- LIKE: SQL-wildcard AND case-insensitive -------------------------------
 
+
 def test_like_translates_sql_wildcards_case_insensitive() -> None:
     # % -> *, _ -> ?, on the .keyword sub-field, case-insensitive — matching
     # the in-memory (re.IGNORECASE, anchored) and SQL LIKE backends. NOT the
@@ -113,9 +112,7 @@ def test_not_like_wraps_case_insensitive_wildcard() -> None:
     assert build_filter_es_query(Filter("f", Operator.NOT_LIKE, "a_b%")) == {
         "bool": {
             "must_not": {
-                "wildcard": {
-                    "data.f.keyword": {"value": "a?b*", "case_insensitive": True}
-                }
+                "wildcard": {"data.f.keyword": {"value": "a?b*", "case_insensitive": True}}
             }
         }
     }
@@ -133,9 +130,7 @@ def test_not_like_wraps_case_insensitive_wildcard() -> None:
         ("a%_*", "a*?\\*"),  # % -> * , _ -> ? , literal * -> \*
     ],
 )
-def test_like_escapes_literal_lucene_metacharacters(
-    sql_pattern: str, es_value: str
-) -> None:
+def test_like_escapes_literal_lucene_metacharacters(sql_pattern: str, es_value: str) -> None:
     # Reproduce-first for the escaping gap: without escaping, a literal '*' in
     # a SQL LIKE pattern became an ES wildcard matching anything.
     assert build_filter_es_query(Filter("f", Operator.LIKE, sql_pattern)) == {
@@ -152,6 +147,7 @@ def test_like_non_string_pattern_raises() -> None:
 
 # --- membership ------------------------------------------------------------
 
+
 def test_in_string_list_uses_keyword() -> None:
     assert build_filter_es_query(Filter("status", Operator.IN, ["a", "b"])) == {
         "terms": {"data.status.keyword": ["a", "b"]}
@@ -159,9 +155,7 @@ def test_in_string_list_uses_keyword() -> None:
 
 
 def test_in_int_list_uses_base_field() -> None:
-    assert build_filter_es_query(Filter("n", Operator.IN, [1, 2])) == {
-        "terms": {"data.n": [1, 2]}
-    }
+    assert build_filter_es_query(Filter("n", Operator.IN, [1, 2])) == {"terms": {"data.n": [1, 2]}}
 
 
 def test_not_in_wraps_in_must_not() -> None:
@@ -172,10 +166,9 @@ def test_not_in_wraps_in_must_not() -> None:
 
 # --- existence -------------------------------------------------------------
 
+
 def test_exists() -> None:
-    assert build_filter_es_query(Filter("f", Operator.EXISTS)) == {
-        "exists": {"field": "data.f"}
-    }
+    assert build_filter_es_query(Filter("f", Operator.EXISTS)) == {"exists": {"field": "data.f"}}
 
 
 def test_not_exists_wraps_in_must_not() -> None:
@@ -185,6 +178,7 @@ def test_not_exists_wraps_in_must_not() -> None:
 
 
 # --- regex / prefix --------------------------------------------------------
+
 
 def test_regex_uses_keyword_full_value() -> None:
     # REGEX targets the .keyword sub-field (full, un-analyzed value), NOT the
@@ -214,6 +208,7 @@ def test_starts_with_is_case_sensitive_prefix() -> None:
 
 # --- the id field is a full first-class query target -----------------------
 
+
 @pytest.mark.parametrize(
     ("filter_obj", "expected"),
     [
@@ -242,14 +237,13 @@ def test_starts_with_is_case_sensitive_prefix() -> None:
         (Filter("id", Operator.EXISTS), {"exists": {"field": "id"}}),
     ],
 )
-def test_id_targets_top_level_keyword(
-    filter_obj: Filter, expected: dict
-) -> None:
+def test_id_targets_top_level_keyword(filter_obj: Filter, expected: dict) -> None:
     # Never _id, never data.id — the top-level ``id`` keyword uniformly.
     assert build_filter_es_query(filter_obj) == expected
 
 
 # --- outer bool wrapper ----------------------------------------------------
+
 
 def test_bool_query_empty_is_match_all() -> None:
     assert build_bool_query([]) == {"match_all": {}}
@@ -268,6 +262,7 @@ def test_bool_query_wraps_clauses_in_must() -> None:
 
 
 # --- ComplexQuery condition tree -------------------------------------------
+
 
 def test_complex_and_or_not_tree() -> None:
     condition = LogicCondition(
@@ -332,19 +327,20 @@ def test_complex_single_clause_or_collapses() -> None:
 @pytest.mark.parametrize("logic_op", [LogicOperator.AND, LogicOperator.OR])
 def test_complex_empty_branch_is_match_all(logic_op: LogicOperator) -> None:
     # An empty AND/OR branch is match_all — a no-constraint branch matches all.
-    assert build_complex_es_query(
-        LogicCondition(operator=logic_op, conditions=[])
-    ) == {"match_all": {}}
+    assert build_complex_es_query(LogicCondition(operator=logic_op, conditions=[])) == {
+        "match_all": {}
+    }
 
 
 def test_complex_empty_not_is_match_all() -> None:
     # A NOT with no inner condition has nothing to negate -> match_all.
-    assert build_complex_es_query(
-        LogicCondition(operator=LogicOperator.NOT, conditions=[])
-    ) == {"match_all": {}}
+    assert build_complex_es_query(LogicCondition(operator=LogicOperator.NOT, conditions=[])) == {
+        "match_all": {}
+    }
 
 
 # --- unsupported operator / malformed value fail loud ----------------------
+
 
 def test_unsupported_operator_raises() -> None:
     # A translator that cannot express a filter must fail loud, not silently
@@ -368,6 +364,7 @@ def test_between_malformed_bounds_raise(op: Operator, bad_value: object) -> None
 # regression in the escaping or field-path logic points at the helper, not a
 # downstream operator clause.
 
+
 @pytest.mark.parametrize(
     ("sql_pattern", "es_value"),
     [
@@ -382,9 +379,7 @@ def test_between_malformed_bounds_raise(op: Operator, bad_value: object) -> None
         ("\\%", "\\\\*"),  # backslash escaped first, then % -> *
     ],
 )
-def test_sql_wildcard_to_es_translates_and_escapes(
-    sql_pattern: str, es_value: str
-) -> None:
+def test_sql_wildcard_to_es_translates_and_escapes(sql_pattern: str, es_value: str) -> None:
     assert _sql_wildcard_to_es(sql_pattern) == es_value
 
 
@@ -438,7 +433,5 @@ def test_field_path_string_equality_uses_keyword() -> None:
         (Operator.EXISTS, None),  # existence targets the base field
     ],
 )
-def test_field_path_non_string_and_range_use_base(
-    op: Operator, value: object
-) -> None:
+def test_field_path_non_string_and_range_use_base(op: Operator, value: object) -> None:
     assert _field_path(Filter("f", op, value)) == "data.f"

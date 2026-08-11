@@ -80,9 +80,9 @@ class TestBackoffDelayCalculation:
             backoff_multiplier=2.0,
         )
         executor = RetryExecutor(config)
-        assert executor._calculate_delay(1) == 1.0   # 1.0 * 2^0
-        assert executor._calculate_delay(2) == 2.0   # 1.0 * 2^1
-        assert executor._calculate_delay(3) == 4.0   # 1.0 * 2^2
+        assert executor._calculate_delay(1) == 1.0  # 1.0 * 2^0
+        assert executor._calculate_delay(2) == 2.0  # 1.0 * 2^1
+        assert executor._calculate_delay(3) == 4.0  # 1.0 * 2^2
 
     def test_jitter_delay_stays_within_bounds(self):
         config = RetryConfig(
@@ -888,9 +888,7 @@ class TestExecuteSync:
     def test_sleeps_between_attempts(self, monkeypatch):
         """A positive initial_delay sleeps once per retry, via time.sleep."""
         sleeps: list[float] = []
-        monkeypatch.setattr(
-            "dataknobs_common.retry.time.sleep", lambda d: sleeps.append(d)
-        )
+        monkeypatch.setattr("dataknobs_common.retry.time.sleep", lambda d: sleeps.append(d))
         config = RetryConfig(
             max_attempts=3,
             initial_delay=0.5,
@@ -1075,9 +1073,7 @@ class TestRetryConfigStructured:
 
     def test_roundtrip_with_exception_type(self):
         """Callable / type fields round-trip by identity (deepcopy-atomic)."""
-        assert_structured_config_roundtrip(
-            RetryConfig(retry_on_exceptions=[ValueError])
-        )
+        assert_structured_config_roundtrip(RetryConfig(retry_on_exceptions=[ValueError]))
 
     def test_roundtrip_with_exception_predicate(self):
         """The value predicate round-trips by identity like the other callable

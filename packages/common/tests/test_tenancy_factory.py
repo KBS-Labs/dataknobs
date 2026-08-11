@@ -54,16 +54,12 @@ def test_create_infers_shared_corpus_from_corpus_id() -> None:
 
 def test_create_explicit_kind_overrides_inference() -> None:
     # tenant_id present would infer "bound", but explicit "single" wins.
-    ctx = create_tenant_context(
-        {"kind": "single", "domain_id": "kb", "tenant_id": "ignored"}
-    )
+    ctx = create_tenant_context({"kind": "single", "domain_id": "kb", "tenant_id": "ignored"})
     assert ctx == SingleTenantContext("kb")
 
 
 def test_create_ignores_extra_keys() -> None:
-    ctx = create_tenant_context(
-        {"domain_id": "kb", "tenant_id": "acme", "unrelated": "x"}
-    )
+    ctx = create_tenant_context({"domain_id": "kb", "tenant_id": "acme", "unrelated": "x"})
     assert ctx == BoundTenantContext("acme", "kb")
 
 
@@ -87,16 +83,12 @@ def test_create_bound_requires_tenant_id() -> None:
 
 def test_create_prefixed_requires_pattern() -> None:
     with pytest.raises(ValueError, match="prefix_pattern"):
-        create_tenant_context(
-            {"kind": "prefixed", "domain_id": "kb", "tenant_id": "acme"}
-        )
+        create_tenant_context({"kind": "prefixed", "domain_id": "kb", "tenant_id": "acme"})
 
 
 def test_create_shared_corpus_requires_corpus_id() -> None:
     with pytest.raises(ValueError, match="shared_corpus_id"):
-        create_tenant_context(
-            {"kind": "shared_corpus", "domain_id": "kb", "tenant_id": "acme"}
-        )
+        create_tenant_context({"kind": "shared_corpus", "domain_id": "kb", "tenant_id": "acme"})
 
 
 def test_create_rejects_ambiguous_inference() -> None:
@@ -120,9 +112,7 @@ def test_env_single_from_domain_only() -> None:
 
 
 def test_env_bound_from_tenant_id() -> None:
-    ctx = tenant_context_from_env(
-        environ={"DOMAIN_ID": "kb", "TENANT_ID": "acme"}
-    )
+    ctx = tenant_context_from_env(environ={"DOMAIN_ID": "kb", "TENANT_ID": "acme"})
     assert ctx == BoundTenantContext("acme", "kb")
 
 

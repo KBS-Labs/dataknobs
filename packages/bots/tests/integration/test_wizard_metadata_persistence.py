@@ -64,9 +64,7 @@ async def conversation_storage() -> DataknobsConversationStorage:
 @pytest_asyncio.fixture
 async def echo_provider() -> EchoProvider:
     """EchoProvider with empty prefix for predictable content."""
-    return EchoProvider(
-        {"provider": "echo", "model": "echo-test", "options": {"echo_prefix": ""}}
-    )
+    return EchoProvider({"provider": "echo", "model": "echo-test", "options": {"echo_prefix": ""}})
 
 
 @pytest_asyncio.fixture
@@ -206,14 +204,14 @@ class TestWizardMetadataPersistence:
         await reasoning._save_wizard_state(conversation_manager, state)
 
         # User asks a question — triggers llm_assist path
-        await conversation_manager.add_message(
-            role="user", content="What topics can I choose?"
-        )
+        await conversation_manager.add_message(role="user", content="What topics can I choose?")
 
         # Script EchoProvider for the assist response
-        echo_provider.set_responses([
-            text_response("You can choose any science topic!"),
-        ])
+        echo_provider.set_responses(
+            [
+                text_response("You can choose any science topic!"),
+            ]
+        )
 
         stage = fsm.current_metadata
         response = await reasoning._generate_stage_response(
@@ -239,13 +237,13 @@ class TestWizardMetadataPersistence:
         state = reasoning._get_wizard_state(conversation_manager)
         await reasoning._save_wizard_state(conversation_manager, state)
 
-        await conversation_manager.add_message(
-            role="user", content="I want to learn about physics"
-        )
+        await conversation_manager.add_message(role="user", content="I want to learn about physics")
 
-        echo_provider.set_responses([
-            text_response("Great choice! Tell me more about what interests you."),
-        ])
+        echo_provider.set_responses(
+            [
+                text_response("Great choice! Tell me more about what interests you."),
+            ]
+        )
 
         stage = fsm.current_metadata
         response = await reasoning._generate_stage_response(
@@ -271,17 +269,17 @@ class TestWizardMetadataPersistence:
         state = reasoning._get_wizard_state(conversation_manager)
         await reasoning._save_wizard_state(conversation_manager, state)
 
-        await conversation_manager.add_message(
-            role="user", content="Look up astronomy for me"
-        )
+        await conversation_manager.add_message(role="user", content="Look up astronomy for me")
 
         lookup_tool = LookupTool()
 
         # Script: one tool call, then a final text response
-        echo_provider.set_responses([
-            tool_call_response("lookup", {}),
-            text_response("I looked it up — astronomy is fascinating!"),
-        ])
+        echo_provider.set_responses(
+            [
+                tool_call_response("lookup", {}),
+                text_response("I looked it up — astronomy is fascinating!"),
+            ]
+        )
 
         stage = fsm.current_metadata
         response = await reasoning._generate_stage_response(
@@ -311,17 +309,17 @@ class TestWizardMetadataPersistence:
         state = reasoning._get_wizard_state(conversation_manager)
         await reasoning._save_wizard_state(conversation_manager, state)
 
-        await conversation_manager.add_message(
-            role="user", content="Look up everything"
-        )
+        await conversation_manager.add_message(role="user", content="Look up everything")
 
         lookup_tool = LookupTool()
 
         # Script: one tool call (hits max_iterations=1), then forced text response
-        echo_provider.set_responses([
-            tool_call_response("lookup", {}),
-            text_response("Done after max iterations."),
-        ])
+        echo_provider.set_responses(
+            [
+                tool_call_response("lookup", {}),
+                text_response("Done after max iterations."),
+            ]
+        )
 
         stage = fsm.current_metadata
         response = await reasoning._generate_stage_response(
@@ -349,13 +347,13 @@ class TestWizardMetadataPersistence:
         state.data["topic"] = "chemistry"
         await reasoning._save_wizard_state(conversation_manager, state)
 
-        await conversation_manager.add_message(
-            role="user", content="chemistry"
-        )
+        await conversation_manager.add_message(role="user", content="chemistry")
 
-        echo_provider.set_responses([
-            text_response("Chemistry is a great topic!"),
-        ])
+        echo_provider.set_responses(
+            [
+                text_response("Chemistry is a great topic!"),
+            ]
+        )
 
         stage = fsm.current_metadata
         await reasoning._generate_stage_response(
@@ -369,9 +367,7 @@ class TestWizardMetadataPersistence:
         assert loaded is not None
 
         # Find the assistant node in the loaded conversation
-        assistant_nodes = [
-            n for n in loaded.get_current_nodes() if n.message.role == "assistant"
-        ]
+        assistant_nodes = [n for n in loaded.get_current_nodes() if n.message.role == "assistant"]
         assert len(assistant_nodes) >= 1
 
         last_node = assistant_nodes[-1]

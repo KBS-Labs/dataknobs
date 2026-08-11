@@ -52,9 +52,7 @@ def provider(echo_config: dict) -> EchoProvider:
 def _create_test_prompts(prompt_dir: Path) -> None:
     system_dir = prompt_dir / "system"
     system_dir.mkdir(parents=True, exist_ok=True)
-    (system_dir / "test.yaml").write_text(
-        yaml.dump({"template": "You are a test assistant"})
-    )
+    (system_dir / "test.yaml").write_text(yaml.dump({"template": "You are a test assistant"}))
 
 
 @pytest.fixture
@@ -123,14 +121,14 @@ class TestEchoStreamToolCalls:
     @pytest.mark.asyncio
     async def test_tool_calls_on_final_chunk(self, provider: EchoProvider) -> None:
         """Streaming a tool_call_response should carry tool_calls on the final chunk."""
-        provider.set_responses([
-            tool_call_response("get_weather", {"city": "NYC"}, content="Checking weather"),
-        ])
+        provider.set_responses(
+            [
+                tool_call_response("get_weather", {"city": "NYC"}, content="Checking weather"),
+            ]
+        )
 
         chunks: list[LLMStreamResponse] = []
-        async for chunk in provider.stream_complete(
-            "What's the weather?", tools=_DUMMY_TOOLS
-        ):
+        async for chunk in provider.stream_complete("What's the weather?", tools=_DUMMY_TOOLS):
             chunks.append(chunk)
 
         assert len(chunks) > 0
@@ -147,9 +145,11 @@ class TestEchoStreamToolCalls:
     @pytest.mark.asyncio
     async def test_finish_reason_preserved(self, provider: EchoProvider) -> None:
         """finish_reason from the underlying response should propagate."""
-        provider.set_responses([
-            tool_call_response("search", {"q": "test"}),
-        ])
+        provider.set_responses(
+            [
+                tool_call_response("search", {"q": "test"}),
+            ]
+        )
 
         chunks = [c async for c in provider.stream_complete("search", tools=_DUMMY_TOOLS)]
         final = chunks[-1]
@@ -175,9 +175,11 @@ class TestEchoStreamEmptyContent:
     @pytest.mark.asyncio
     async def test_empty_content_tool_call(self, provider: EchoProvider) -> None:
         """A tool_call_response with content='' should yield exactly one final chunk."""
-        provider.set_responses([
-            tool_call_response("do_thing", {"x": 1}, content=""),
-        ])
+        provider.set_responses(
+            [
+                tool_call_response("do_thing", {"x": 1}, content=""),
+            ]
+        )
 
         chunks = [c async for c in provider.stream_complete("trigger", tools=_DUMMY_TOOLS)]
         assert len(chunks) == 1
@@ -245,9 +247,11 @@ class TestManagerStreamTreePreservation:
     @pytest.mark.asyncio
     async def test_tool_calls_on_tree_node(self, manager_components: dict) -> None:
         llm: EchoProvider = manager_components["llm"]
-        llm.set_responses([
-            tool_call_response("search", {"query": "python"}, content="searching"),
-        ])
+        llm.set_responses(
+            [
+                tool_call_response("search", {"query": "python"}, content="searching"),
+            ]
+        )
         mgr = await _make_manager(manager_components)
 
         _ = [c async for c in mgr.stream_complete(tools=_DUMMY_TOOLS)]
@@ -261,13 +265,13 @@ class TestManagerStreamTreePreservation:
         assert tool_calls[0].parameters == {"query": "python"}
 
     @pytest.mark.asyncio
-    async def test_tool_calls_on_assistant_message(
-        self, manager_components: dict
-    ) -> None:
+    async def test_tool_calls_on_assistant_message(self, manager_components: dict) -> None:
         llm: EchoProvider = manager_components["llm"]
-        llm.set_responses([
-            tool_call_response("calc", {"expr": "2+2"}, content="calculating"),
-        ])
+        llm.set_responses(
+            [
+                tool_call_response("calc", {"expr": "2+2"}, content="calculating"),
+            ]
+        )
         mgr = await _make_manager(manager_components)
 
         _ = [c async for c in mgr.stream_complete(tools=_DUMMY_TOOLS)]
@@ -289,9 +293,11 @@ class TestManagerCompleteRegression:
     @pytest.mark.asyncio
     async def test_complete_with_tool_calls(self, manager_components: dict) -> None:
         llm: EchoProvider = manager_components["llm"]
-        llm.set_responses([
-            tool_call_response("search", {"q": "test"}, content="result"),
-        ])
+        llm.set_responses(
+            [
+                tool_call_response("search", {"q": "test"}, content="result"),
+            ]
+        )
         mgr = await _make_manager(manager_components)
 
         response = await mgr.complete(tools=_DUMMY_TOOLS)
@@ -329,26 +335,24 @@ class TestCompletionPathParity:
         llm: EchoProvider = manager_components["llm"]
 
         # --- complete() path ---
-        llm.set_responses([
-            tool_call_response(
-                "search", {"q": "test"}, content="found", tool_id="tc-fixed"
-            ),
-        ])
+        llm.set_responses(
+            [
+                tool_call_response("search", {"q": "test"}, content="found", tool_id="tc-fixed"),
+            ]
+        )
         mgr1 = await _make_manager(manager_components)
         await mgr1.complete(tools=_DUMMY_TOOLS)
         node1 = mgr1.state.get_current_node()
         assert node1 is not None
 
         # --- stream_complete() path --- (fresh manager)
-        llm.set_responses([
-            tool_call_response(
-                "search", {"q": "test"}, content="found", tool_id="tc-fixed"
-            ),
-        ])
-        # Need a new storage to avoid collision
-        manager_components["storage"] = DataknobsConversationStorage(
-            AsyncMemoryDatabase()
+        llm.set_responses(
+            [
+                tool_call_response("search", {"q": "test"}, content="found", tool_id="tc-fixed"),
+            ]
         )
+        # Need a new storage to avoid collision
+        manager_components["storage"] = DataknobsConversationStorage(AsyncMemoryDatabase())
         mgr2 = await _make_manager(manager_components)
         _ = [c async for c in mgr2.stream_complete(tools=_DUMMY_TOOLS)]
         node2 = mgr2.state.get_current_node()
@@ -375,9 +379,7 @@ class TestStreamResponseModelField:
         assert chunk.model is None
 
     def test_model_set_on_final_chunk(self) -> None:
-        chunk = LLMStreamResponse(
-            delta="", is_final=True, finish_reason="stop", model="gpt-4"
-        )
+        chunk = LLMStreamResponse(delta="", is_final=True, finish_reason="stop", model="gpt-4")
         assert chunk.model == "gpt-4"
 
     @pytest.mark.asyncio
@@ -396,23 +398,25 @@ class TestStreamResponseModelField:
     @pytest.mark.asyncio
     async def test_echo_empty_content_sets_model(self, provider: EchoProvider) -> None:
         """Empty-content responses should also carry model on the final chunk."""
-        provider.set_responses([
-            tool_call_response("do_thing", {"x": 1}, content=""),
-        ])
+        provider.set_responses(
+            [
+                tool_call_response("do_thing", {"x": 1}, content=""),
+            ]
+        )
 
         chunks = [c async for c in provider.stream_complete("trigger", tools=_DUMMY_TOOLS)]
         assert len(chunks) == 1
         assert chunks[0].model is not None
 
     @pytest.mark.asyncio
-    async def test_manager_uses_model_from_stream(
-        self, manager_components: dict
-    ) -> None:
+    async def test_manager_uses_model_from_stream(self, manager_components: dict) -> None:
         """ConversationManager should use the model from the final chunk."""
         llm: EchoProvider = manager_components["llm"]
-        llm.set_responses([
-            text_response("hi", model="streamed-model"),
-        ])
+        llm.set_responses(
+            [
+                text_response("hi", model="streamed-model"),
+            ]
+        )
         mgr = await _make_manager(manager_components)
 
         _ = [c async for c in mgr.stream_complete()]

@@ -265,9 +265,7 @@ class BotResourceResolver:
         Returns:
             Initialized AsyncLLMProvider instance
         """
-        llm = self._resolver.resolve(
-            "llm_providers", name, use_cache=use_cache, **overrides
-        )
+        llm = self._resolver.resolve("llm_providers", name, use_cache=use_cache, **overrides)
         await llm.initialize()
         return llm
 
@@ -287,9 +285,7 @@ class BotResourceResolver:
         Returns:
             Initialized database backend instance
         """
-        db = self._resolver.resolve(
-            "databases", name, use_cache=use_cache, **overrides
-        )
+        db = self._resolver.resolve("databases", name, use_cache=use_cache, **overrides)
         if hasattr(db, "connect"):
             await db.connect()
         return db
@@ -310,9 +306,7 @@ class BotResourceResolver:
         Returns:
             Initialized VectorStore instance
         """
-        vs = self._resolver.resolve(
-            "vector_stores", name, use_cache=use_cache, **overrides
-        )
+        vs = self._resolver.resolve("vector_stores", name, use_cache=use_cache, **overrides)
         if hasattr(vs, "initialize"):
             await vs.initialize()
         return vs

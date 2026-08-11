@@ -38,11 +38,13 @@ class TestConfigCapabilityOverrides:
         }
 
     def _make_config(self, provider: str, model: str, capabilities: list[str]):
-        return LLMConfig.from_dict({
-            "provider": provider,
-            "model": model,
-            "capabilities": capabilities,
-        })
+        return LLMConfig.from_dict(
+            {
+                "provider": provider,
+                "model": model,
+                "capabilities": capabilities,
+            }
+        )
 
     def test_echo_respects_config_overrides(self):
         config = self._make_config("echo", "test", ["text_generation", "json_mode"])
@@ -85,20 +87,24 @@ class TestNoneFiltering:
 
     def test_huggingface_no_none_in_capabilities(self):
         """HuggingFace was returning [TEXT_GENERATION, None] for non-embedding models."""
-        config = LLMConfig.from_dict({
-            "provider": "huggingface",
-            "model": "gpt2",
-        })
+        config = LLMConfig.from_dict(
+            {
+                "provider": "huggingface",
+                "model": "gpt2",
+            }
+        )
         provider = HuggingFaceProvider(config)
         caps = provider.get_capabilities()
         assert None not in caps
         assert ModelCapability.TEXT_GENERATION in caps
 
     def test_huggingface_embedding_model(self):
-        config = LLMConfig.from_dict({
-            "provider": "huggingface",
-            "model": "text-embedding-base",
-        })
+        config = LLMConfig.from_dict(
+            {
+                "provider": "huggingface",
+                "model": "text-embedding-base",
+            }
+        )
         provider = HuggingFaceProvider(config)
         caps = provider.get_capabilities()
         assert None not in caps

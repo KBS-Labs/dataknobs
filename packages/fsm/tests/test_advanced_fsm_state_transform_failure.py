@@ -43,9 +43,7 @@ def _state_fail_config() -> dict:
                     {"name": "start", "is_start": True},
                     {
                         "name": "middle",
-                        "functions": {
-                            "transform": {"type": "registered", "name": "boom_state"}
-                        },
+                        "functions": {"transform": {"type": "registered", "name": "boom_state"}},
                     },
                     {"name": "done", "is_end": True},
                 ],
@@ -140,16 +138,12 @@ def test_step_run_on_failure_state_runs_and_surfaces_accumulated_failure() -> No
                     {"name": "start", "is_start": True},
                     {
                         "name": "fail",
-                        "functions": {
-                            "transform": {"type": "registered", "name": "boom_state"}
-                        },
+                        "functions": {"transform": {"type": "registered", "name": "boom_state"}},
                     },
                     {
                         "name": "cleanup",
                         "run_on_failure": True,
-                        "functions": {
-                            "transform": {"type": "registered", "name": "spy_cleanup"}
-                        },
+                        "functions": {"transform": {"type": "registered", "name": "spy_cleanup"}},
                     },
                     {"name": "done", "is_end": True},
                 ],

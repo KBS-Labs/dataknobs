@@ -39,6 +39,7 @@ logger = logging.getLogger(__name__)
 
 class ETLMode(Enum):
     """ETL processing modes."""
+
     FULL_REFRESH = "full"  # Replace all data
     INCREMENTAL = "incremental"  # Process only new/changed data
     UPSERT = "upsert"  # Update existing, insert new
@@ -48,6 +49,7 @@ class ETLMode(Enum):
 @dataclass(frozen=True)
 class ETLConfig(StructuredConfig):
     """Configuration for ETL pipeline."""
+
     source_db: Dict[str, Any]  # Source database config
     target_db: Dict[str, Any]  # Target database config
     mode: ETLMode = ETLMode.FULL_REFRESH
@@ -55,7 +57,7 @@ class ETLConfig(StructuredConfig):
     parallel_workers: int = 4
     error_threshold: float = 0.05  # Max 5% errors
     checkpoint_interval: int = 10000  # Checkpoint every N records
-    
+
     # Optional configurations
     source_query: str | None = "SELECT * FROM source_table"
     target_table: str = "target_table"
@@ -71,9 +73,7 @@ class ETLConfig(StructuredConfig):
     # and counted in ``rejected`` (not ``errors``). The dict form round-trips
     # through the frozen config; the validator / callable forms are in-process
     # only (like ``transformations``).
-    validation_schema: (
-        Dict[str, Any] | IValidationFunction | Callable[..., Any] | None
-    ) = None
+    validation_schema: Dict[str, Any] | IValidationFunction | Callable[..., Any] | None = None
     # When ``True``, validation rejections count toward ``error_threshold`` (a
     # strict data-quality gate: too many invalid rows aborts the run). Default
     # ``False`` — validation is a filter, not a pipeline outage, so rejections
@@ -99,9 +99,7 @@ class ETLConfig(StructuredConfig):
     # passthrough. The dict forms round-trip through the frozen config; the
     # validator / callable / instance forms are in-process only (like
     # ``transformations``).
-    enrichment_sources: (
-        List[Dict[str, Any] | ITransformFunction | Callable[..., Any]] | None
-    ) = None
+    enrichment_sources: List[Dict[str, Any] | ITransformFunction | Callable[..., Any]] | None = None
     # Policy when a reference-table lookup finds no matching row: ``"ignore"``
     # (default — pass the record through unchanged; enrichment is best-effort and
     # a missing reference is not a pipeline outage), ``"null"`` (set the looked-up
@@ -192,10 +190,7 @@ class ETLConfig(StructuredConfig):
                         "every reference column with overwrite can clobber the "
                         "record's own key columns."
                     )
-                if (
-                    self.enrichment_on_missing == "null"
-                    and "fields" not in source
-                ):
+                if self.enrichment_on_missing == "null" and "fields" not in source:
                     raise InvalidConfigurationError(
                         "enrichment_on_missing='null' requires each 'database' "
                         "source to name 'fields' — there are no fields to set to "
@@ -239,8 +234,7 @@ async def _apply_record_steps(
             out = await out
         if not isinstance(out, dict):
             raise TransformError(
-                f"ETL {label} #{index} must return a dict, got "
-                f"{type(out).__name__}"
+                f"ETL {label} #{index} must return a dict, got {type(out).__name__}"
             )
         result = out
     return result
@@ -272,20 +266,15 @@ class _ETLTransform(ITransformFunction):
         # ``(record, context)`` shape, preserving the historical record-only
         # call (the context is ignored) so transformation arity is unchanged.
         self._steps: List[Callable[..., Any]] = [
-            (lambda record, _context, fn=fn: fn(record))
-            for fn in self._transformations
+            (lambda record, _context, fn=fn: fn(record)) for fn in self._transformations
         ]
 
-    async def transform(
-        self, data: Dict[str, Any], context: Any = None
-    ) -> Dict[str, Any]:
+    async def transform(self, data: Dict[str, Any], context: Any = None) -> Dict[str, Any]:
         result = dict(data)
         for old_name, new_name in self._field_mappings.items():
             if old_name in result:
                 result[new_name] = result.pop(old_name)
-        return await _apply_record_steps(
-            self._steps, result, context, label="transformation"
-        )
+        return await _apply_record_steps(self._steps, result, context, label="transformation")
 
     def get_transform_description(self) -> str:
         return (
@@ -309,12 +298,8 @@ class _ETLEnrich(ITransformFunction):
     def __init__(self, enrichers: List[Callable[..., Any]]) -> None:
         self._enrichers = enrichers
 
-    async def transform(
-        self, data: Dict[str, Any], context: Any = None
-    ) -> Dict[str, Any]:
-        return await _apply_record_steps(
-            self._enrichers, data, context, label="enrichment"
-        )
+    async def transform(self, data: Dict[str, Any], context: Any = None) -> Dict[str, Any]:
+        return await _apply_record_steps(self._enrichers, data, context, label="enrichment")
 
     def get_transform_description(self) -> str:
         return f"Apply {len(self._enrichers)} enrichment(s)"
@@ -343,12 +328,12 @@ class DatabaseETL(StructuredConfigConsumer[ETLConfig]):
         across successive runs of the same pipeline instance.
         """
         self._metrics = {
-            'extracted': 0,
-            'transformed': 0,
-            'loaded': 0,
-            'rejected': 0,
-            'errors': 0,
-            'skipped': 0
+            "extracted": 0,
+            "transformed": 0,
+            "loaded": 0,
+            "rejected": 0,
+            "errors": 0,
+            "skipped": 0,
         }
 
     def _build_fsm(self) -> AsyncSimpleFSM:
@@ -362,15 +347,15 @@ class DatabaseETL(StructuredConfigConsumer[ETLConfig]):
         # run()._extract_batches, so a registered source resource would only
         # eagerly open a (sync) backend at construction for no benefit.
         resources = [
-            {'name': 'target_db', 'type': 'async_database', 'config': self.config.target_db}
+            {"name": "target_db", "type": "async_database", "config": self.config.target_db}
         ]
-        
+
         # Register resources the validation gate needs (e.g. a reference table)
         # so the `valid` arc can acquire and inject them into the condition's
         # function context. Bound on the arc below (role == name).
         if self.config.validation_resources:
             for res_name, decl in self.config.validation_resources.items():
-                resources.append({'name': res_name, **decl})
+                resources.append({"name": res_name, **decl})
 
         # Register the reference-lookup enrichment resources and collect their
         # names so they can be declared ON the enrich state (the engine injects a
@@ -385,67 +370,54 @@ class DatabaseETL(StructuredConfigConsumer[ETLConfig]):
         enrich_resource_names: List[str] = []
         if self.config.enrichment_sources:
             for i, source in enumerate(self.config.enrichment_sources):
-                if isinstance(source, Mapping) and 'database' in source:
-                    name = f'enrichment_db_{i}'
-                    resources.append({
-                        'name': name,
-                        'type': 'async_database',
-                        'config': source['database'],
-                    })
+                if isinstance(source, Mapping) and "database" in source:
+                    name = f"enrichment_db_{i}"
+                    resources.append(
+                        {
+                            "name": name,
+                            "type": "async_database",
+                            "config": source["database"],
+                        }
+                    )
                     enrich_resource_names.append(name)
 
         # Route through `enrich` only when enrichment is configured (otherwise
         # the enrich state is an unreferenced passthrough, byte-identical to the
         # pre-wiring behavior). When configured, the enrich state runs the
         # registered `_ETLEnrich` transform over its declared resources.
-        post_transform = 'enrich' if self.config.enrichment_sources else 'load'
+        post_transform = "enrich" if self.config.enrichment_sources else "load"
 
         states: List[Dict[str, Any]] = [
+            {"name": "extract", "is_start": True, "resources": []},
+            {"name": "validate", "resources": []},
             {
-                'name': 'extract',
-                'is_start': True,
-                'resources': []
-            },
-            {
-                'name': 'validate',
-                'resources': []
-            },
-            {
-                'name': 'transform',
-                'resources': [],
-                'functions': {
-                    'transform': {'type': 'registered', 'name': 'transform'}
-                }
+                "name": "transform",
+                "resources": [],
+                "functions": {"transform": {"type": "registered", "name": "transform"}},
             },
             # The enrich state runs the registered `_ETLEnrich` transform over
             # its declared enrichment resources, but only when enrichment is
             # configured; otherwise it stays an unreferenced passthrough (no
             # functions, no resources) and `transform` routes straight to `load`.
             {
-                'name': 'enrich',
-                'resources': enrich_resource_names,
+                "name": "enrich",
+                "resources": enrich_resource_names,
                 **(
-                    {'functions': {
-                        'transform': {'type': 'registered', 'name': 'enrich'}
-                    }}
-                    if self.config.enrichment_sources else {}
+                    {"functions": {"transform": {"type": "registered", "name": "enrich"}}}
+                    if self.config.enrichment_sources
+                    else {}
                 ),
             },
             {
-                'name': 'load',
-                'resources': ['target_db'],
-                'functions': {
-                    'transform': {'type': 'registered', 'name': 'load'}
-                }
+                "name": "load",
+                "resources": ["target_db"],
+                "functions": {"transform": {"type": "registered", "name": "load"}},
             },
-            {
-                'name': 'complete',
-                'is_end': True
-            }
+            {"name": "complete", "is_end": True},
         ]
 
         arcs: List[Dict[str, Any]] = [
-            {'from': 'extract', 'to': 'validate', 'name': 'extracted'},
+            {"from": "extract", "to": "validate", "name": "extracted"},
         ]
 
         # Wire `validate` as a real gate only when a schema is configured. The
@@ -460,38 +432,38 @@ class DatabaseETL(StructuredConfigConsumer[ETLConfig]):
         # (if any) is bound on the `valid` arc so a resource-reading predicate
         # can resolve its reference resource.
         if self.config.validation_schema:
-            arcs.extend(build_gate_arcs(
-                from_state='validate',
-                condition_name='validate_check',
-                pass_to='transform',
-                reject_to='rejected',
-                pass_name='valid',
-                reject_name='invalid',
-                resources={
-                    name: name for name in self.config.validation_resources
-                } if self.config.validation_resources else None,
-            ))
-            states.append(
-                {'name': 'rejected', 'is_end': True, 'emit_output': False}
+            arcs.extend(
+                build_gate_arcs(
+                    from_state="validate",
+                    condition_name="validate_check",
+                    pass_to="transform",
+                    reject_to="rejected",
+                    pass_name="valid",
+                    reject_name="invalid",
+                    resources={name: name for name in self.config.validation_resources}
+                    if self.config.validation_resources
+                    else None,
+                )
             )
+            states.append({"name": "rejected", "is_end": True, "emit_output": False})
         else:
-            arcs.append(
-                {'from': 'validate', 'to': 'transform', 'name': 'valid'}
-            )
+            arcs.append({"from": "validate", "to": "transform", "name": "valid"})
 
-        arcs.extend([
-            {'from': 'transform', 'to': post_transform, 'name': 'transformed'},
-            {'from': 'enrich', 'to': 'load', 'name': 'enriched'},
-            {'from': 'load', 'to': 'complete', 'name': 'loaded'},
-        ])
+        arcs.extend(
+            [
+                {"from": "transform", "to": post_transform, "name": "transformed"},
+                {"from": "enrich", "to": "load", "name": "enriched"},
+                {"from": "load", "to": "complete", "name": "loaded"},
+            ]
+        )
 
         # Create FSM configuration
         fsm_config = {
-            'name': 'ETL_Pipeline',
-            'data_mode': DataHandlingMode.COPY.value,  # Use COPY for data isolation
-            'resources': resources,
-            'states': states,
-            'arcs': arcs,
+            "name": "ETL_Pipeline",
+            "data_mode": DataHandlingMode.COPY.value,  # Use COPY for data isolation
+            "resources": resources,
+            "states": states,
+            "arcs": arcs,
         }
 
         # Wire the per-record functions through the proven custom_functions
@@ -504,7 +476,7 @@ class DatabaseETL(StructuredConfigConsumer[ETLConfig]):
             data_mode=DataHandlingMode.COPY,
             custom_functions=self._build_custom_functions(),
         )
-        
+
     def _build_custom_functions(self) -> Dict[str, Callable]:
         """Build the registered functions the ETL FSM references by name.
 
@@ -534,30 +506,28 @@ class DatabaseETL(StructuredConfigConsumer[ETLConfig]):
         state's ``functions`` block / arc condition.
         """
         functions: Dict[str, Callable] = {
-            'transform': _ETLTransform(
+            "transform": _ETLTransform(
                 self.config.field_mappings,
                 self.config.transformations,
             ),
-            'load': DatabaseUpsert(
-                resource_name='target_db',
+            "load": DatabaseUpsert(
+                resource_name="target_db",
                 table=self.config.target_table,
-                key_columns=self.config.key_columns or ['id'],
+                key_columns=self.config.key_columns or ["id"],
             ),
         }
         if self.config.validation_schema:
-            functions['validate_check'] = build_record_validator(
-                self.config.validation_schema
-            )
+            functions["validate_check"] = build_record_validator(self.config.validation_schema)
         if self.config.enrichment_sources:
-            functions['enrich'] = _ETLEnrich([
-                self._build_enricher(source, i)
-                for i, source in enumerate(self.config.enrichment_sources)
-            ])
+            functions["enrich"] = _ETLEnrich(
+                [
+                    self._build_enricher(source, i)
+                    for i, source in enumerate(self.config.enrichment_sources)
+                ]
+            )
         return functions
 
-    def _build_enricher(
-        self, source: Any, index: int
-    ) -> Callable[..., Any]:
+    def _build_enricher(self, source: Any, index: int) -> Callable[..., Any]:
         """Build one normalized enricher for an ``enrichment_sources`` element.
 
         A ``database`` reference-lookup element is rewritten to the library
@@ -569,31 +539,24 @@ class DatabaseETL(StructuredConfigConsumer[ETLConfig]):
         map, ``ITransformFunction``, callable) pass straight through to
         :func:`build_record_enricher`.
         """
-        if isinstance(source, Mapping) and 'database' in source:
+        if isinstance(source, Mapping) and "database" in source:
             lookup_spec = {
-                'resource': f'enrichment_db_{index}',
-                'match': source['match'],
+                "resource": f"enrichment_db_{index}",
+                "match": source["match"],
             }
-            if 'fields' in source:
-                lookup_spec['fields'] = source['fields']
-            if 'overwrite' in source:
-                lookup_spec['overwrite'] = source['overwrite']
-            return build_record_enricher(
-                lookup_spec, on_missing=self.config.enrichment_on_missing
-            )
-        return build_record_enricher(
-            source, on_missing=self.config.enrichment_on_missing
-        )
-        
-    async def run(
-        self,
-        checkpoint_id: str | None = None
-    ) -> Dict[str, Any]:
+            if "fields" in source:
+                lookup_spec["fields"] = source["fields"]
+            if "overwrite" in source:
+                lookup_spec["overwrite"] = source["overwrite"]
+            return build_record_enricher(lookup_spec, on_missing=self.config.enrichment_on_missing)
+        return build_record_enricher(source, on_missing=self.config.enrichment_on_missing)
+
+    async def run(self, checkpoint_id: str | None = None) -> Dict[str, Any]:
         """Run ETL pipeline.
-        
+
         Args:
             checkpoint_id: Optional checkpoint to resume from
-            
+
         Returns:
             ETL execution metrics
         """
@@ -614,8 +577,8 @@ class DatabaseETL(StructuredConfigConsumer[ETLConfig]):
                 await self._load_checkpoint(checkpoint_id)
 
             source_db = await AsyncDatabase.from_backend(
-                self.config.source_db['type'],
-                self.config.source_db  # type: ignore
+                self.config.source_db["type"],
+                self.config.source_db,  # type: ignore
             )
 
             # Determine extraction strategy
@@ -623,19 +586,19 @@ class DatabaseETL(StructuredConfigConsumer[ETLConfig]):
                 query = self._get_incremental_query()
             else:
                 query = self.config.source_query or Query()
-                
+
             # Process in batches
             async for batch in self._extract_batches(source_db, query):  # type: ignore
                 # Process batch through FSM
                 results = await self._fsm.process_batch(
                     data=batch,  # type: ignore
                     batch_size=self.config.batch_size,
-                    max_workers=self.config.parallel_workers
+                    max_workers=self.config.parallel_workers,
                 )
-                
+
                 # Update metrics
                 self._update_metrics(results)
-                
+
                 # Check error threshold
                 if self._check_error_threshold():
                     # Report rejections too when they count toward the threshold,
@@ -645,11 +608,11 @@ class DatabaseETL(StructuredConfigConsumer[ETLConfig]):
                     if self.config.reject_counts_as_error:
                         detail += f", {self._metrics['rejected']} rejected"
                     raise ETLError(f"Error threshold exceeded: {detail}")
-                    
+
                 # Checkpoint if needed
                 if self._should_checkpoint():
                     await self._save_checkpoint()
-                    
+
         finally:
             # Close the source and the FSM independently so a failing source
             # close still flushes and closes the FSM's async target_db adapter
@@ -663,18 +626,16 @@ class DatabaseETL(StructuredConfigConsumer[ETLConfig]):
             await self._fsm.close()
 
         return self._metrics
-        
+
     async def _extract_batches(
-        self,
-        db: AsyncDatabase,
-        query: Query
+        self, db: AsyncDatabase, query: Query
     ) -> AsyncIterator[List[Dict[str, Any]]]:
         """Extract data in batches.
-        
+
         Args:
             db: Source database
             query: Extraction query
-            
+
         Yields:
             Batches of records
         """
@@ -684,20 +645,20 @@ class DatabaseETL(StructuredConfigConsumer[ETLConfig]):
             if len(batch) >= self.config.batch_size:
                 yield batch
                 batch = []
-                
+
         if batch:
             yield batch
-            
+
     def _get_incremental_query(self) -> Query:
         """Get query for incremental extraction."""
         # Get last processed timestamp from checkpoint
-        last_timestamp = self._checkpoint_data.get('last_timestamp')
-        
+        last_timestamp = self._checkpoint_data.get("last_timestamp")
+
         if last_timestamp:
-            return Query().filter('updated_at', '>', last_timestamp)
+            return Query().filter("updated_at", ">", last_timestamp)
         else:
             return Query()
-            
+
     def _update_metrics(self, results: List[Dict[str, Any]]) -> None:
         """Update execution metrics by classifying each record's terminal.
 
@@ -723,21 +684,19 @@ class DatabaseETL(StructuredConfigConsumer[ETLConfig]):
         ``reject_counts_as_error`` is set — see :meth:`_check_error_threshold`).
         """
         for result in results:
-            if result['success'] and result['final_state'] == 'complete':
-                self._metrics['transformed'] += 1
-                self._metrics['loaded'] += 1
-            elif result['success'] and result['final_state'] == 'rejected':
-                self._metrics['rejected'] += 1
+            if result["success"] and result["final_state"] == "complete":
+                self._metrics["transformed"] += 1
+                self._metrics["loaded"] += 1
+            elif result["success"] and result["final_state"] == "rejected":
+                self._metrics["rejected"] += 1
             else:
-                self._metrics['errors'] += 1
+                self._metrics["errors"] += 1
 
         # ``extracted`` is the count of records actually processed this run
         # (every record ends loaded, rejected, or errored); it is recomputed
         # from outcomes rather than counted at the source.
-        self._metrics['extracted'] = (
-            self._metrics['loaded']
-            + self._metrics['rejected']
-            + self._metrics['errors']
+        self._metrics["extracted"] = (
+            self._metrics["loaded"] + self._metrics["rejected"] + self._metrics["errors"]
         )
 
     def _check_error_threshold(self) -> bool:
@@ -748,66 +707,61 @@ class DatabaseETL(StructuredConfigConsumer[ETLConfig]):
         record (a data-quality outcome), not an error, so it does not abort the
         run.
         """
-        if self._metrics['extracted'] == 0:
+        if self._metrics["extracted"] == 0:
             return False
 
-        failures = self._metrics['errors']
+        failures = self._metrics["errors"]
         if self.config.reject_counts_as_error:
-            failures += self._metrics['rejected']
-        error_rate = failures / self._metrics['extracted']
+            failures += self._metrics["rejected"]
+        error_rate = failures / self._metrics["extracted"]
         return error_rate > self.config.error_threshold
-        
+
     def _should_checkpoint(self) -> bool:
         """Check if checkpoint should be saved."""
-        return self._metrics['extracted'] % self.config.checkpoint_interval == 0
-        
+        return self._metrics["extracted"] % self.config.checkpoint_interval == 0
+
     async def _save_checkpoint(self) -> str:
         """Save checkpoint for resume capability."""
         import hashlib
         import json
         from datetime import datetime
-        
+
         checkpoint = {
-            'timestamp': datetime.now().isoformat(),
-            'metrics': self._metrics,
-            'config': {
-                'mode': self.config.mode.value,
-                'batch_size': self.config.batch_size
-            },
-            'position': self._metrics['extracted']
+            "timestamp": datetime.now().isoformat(),
+            "metrics": self._metrics,
+            "config": {"mode": self.config.mode.value, "batch_size": self.config.batch_size},
+            "position": self._metrics["extracted"],
         }
-        
+
         # Generate checkpoint ID
-        checkpoint_id = hashlib.md5(
-            json.dumps(checkpoint).encode()
-        ).hexdigest()[:8]
-        
+        checkpoint_id = hashlib.md5(json.dumps(checkpoint).encode()).hexdigest()[:8]
+
         # Save to storage (simplified - would use persistent storage)
         self._checkpoint_data[checkpoint_id] = checkpoint
-        
+
         return checkpoint_id
-        
+
     async def _load_checkpoint(self, checkpoint_id: str) -> None:
         """Load checkpoint data."""
         if checkpoint_id in self._checkpoint_data:
             checkpoint = self._checkpoint_data[checkpoint_id]
-            self._metrics = checkpoint['metrics']
+            self._metrics = checkpoint["metrics"]
 
 
 def create_etl_pipeline(
     source: Union[str, Dict[str, Any]],
     target: Union[str, Dict[str, Any]],
     mode: ETLMode = ETLMode.FULL_REFRESH,
-    **kwargs
+    **kwargs,
 ) -> DatabaseETL:
     """Factory function to create ETL pipeline.
-    
+
     Args:
         source: Source database configuration or connection string
         target: Target database configuration or connection string
         mode: ETL mode
         **kwargs: Additional configuration options
-        
+
     Returns:
         Configured DatabaseETL instance
     """
@@ -816,68 +770,52 @@ def create_etl_pipeline(
         source = _parse_connection_string(source)
     if isinstance(target, str):
         target = _parse_connection_string(target)
-        
-    config = ETLConfig(
-        source_db=source,
-        target_db=target,
-        mode=mode,
-        **kwargs
-    )
-    
+
+    config = ETLConfig(source_db=source, target_db=target, mode=mode, **kwargs)
+
     return DatabaseETL(config)
 
 
 def _parse_connection_string(conn_str: str) -> Dict[str, Any]:
     """Parse database connection string.
-    
+
     Args:
         conn_str: Connection string
-        
+
     Returns:
         AsyncDatabase configuration dictionary
     """
     # Simplified parsing - real implementation would be more robust
-    if conn_str.startswith('postgresql://'):
-        return {
-            'type': 'postgres',
-            'connection_string': conn_str
-        }
-    elif conn_str.startswith('mongodb://'):
-        return {
-            'type': 'mongodb',
-            'connection_string': conn_str
-        }
-    elif conn_str.startswith('sqlite://'):
-        return {
-            'type': 'sqlite',
-            'path': conn_str.replace('sqlite://', '')
-        }
+    if conn_str.startswith("postgresql://"):
+        return {"type": "postgres", "connection_string": conn_str}
+    elif conn_str.startswith("mongodb://"):
+        return {"type": "mongodb", "connection_string": conn_str}
+    elif conn_str.startswith("sqlite://"):
+        return {"type": "sqlite", "path": conn_str.replace("sqlite://", "")}
     else:
         raise ValueError(f"Unsupported connection string: {conn_str}")
 
 
 # Pre-configured ETL patterns
 
+
 def create_database_sync(
     source: Dict[str, Any],
     target: Dict[str, Any],
-    sync_interval: int = 300  # 5 minutes
+    sync_interval: int = 300,  # 5 minutes
 ) -> DatabaseETL:
     """Create database synchronization pipeline.
-    
+
     Args:
         source: Source database config
         target: Target database config
         sync_interval: Sync interval in seconds
-        
+
     Returns:
         AsyncDatabase sync ETL pipeline
     """
     return create_etl_pipeline(
-        source=source,
-        target=target,
-        mode=ETLMode.INCREMENTAL,
-        checkpoint_interval=1000
+        source=source, target=target, mode=ETLMode.INCREMENTAL, checkpoint_interval=1000
     )
 
 
@@ -885,16 +823,16 @@ def create_data_migration(
     source: Dict[str, Any],
     target: Dict[str, Any],
     field_mappings: Dict[str, str] | None = None,
-    transformations: List[Callable] | None = None
+    transformations: List[Callable] | None = None,
 ) -> DatabaseETL:
     """Create data migration pipeline.
-    
+
     Args:
         source: Source database config
         target: Target database config
         field_mappings: Field name mappings
         transformations: Data transformation functions
-        
+
     Returns:
         Data migration ETL pipeline
     """
@@ -905,35 +843,35 @@ def create_data_migration(
         field_mappings=field_mappings,
         transformations=transformations,
         batch_size=5000,
-        parallel_workers=8
+        parallel_workers=8,
     )
 
 
 def create_data_warehouse_load(
     sources: List[Dict[str, Any]],
     warehouse: Dict[str, Any],
-    aggregations: List[Callable] | None = None
+    aggregations: List[Callable] | None = None,
 ) -> List[DatabaseETL]:
     """Create data warehouse loading pipelines.
-    
+
     Args:
         sources: List of source database configs
         warehouse: Data warehouse config
         aggregations: Aggregation functions
-        
+
     Returns:
         List of ETL pipelines for each source
     """
     pipelines = []
-    
+
     for source in sources:
         pipeline = create_etl_pipeline(
             source=source,
             target=warehouse,
             mode=ETLMode.APPEND,
             transformations=aggregations,
-            batch_size=10000
+            batch_size=10000,
         )
         pipelines.append(pipeline)
-        
+
     return pipelines

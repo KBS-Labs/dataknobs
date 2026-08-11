@@ -15,9 +15,11 @@ from dataknobs_common.capabilities import (
 
 
 class _MinimalConforming(CapabilityMixin):
-    SUPPORTED_CAPABILITIES: ClassVar[frozenset[Capability]] = frozenset({
-        Capability.STREAMING_READS,
-    })
+    SUPPORTED_CAPABILITIES: ClassVar[frozenset[Capability]] = frozenset(
+        {
+            Capability.STREAMING_READS,
+        }
+    )
 
 
 class _MissingMethods:
@@ -34,9 +36,7 @@ def test_protocol_rejects_missing_methods() -> None:
 
 def test_supported_capabilities_classmethod_invocable_on_class() -> None:
     """Classmethod query works without instantiation."""
-    assert (
-        Capability.STREAMING_READS in _MinimalConforming.supported_capabilities()
-    )
+    assert Capability.STREAMING_READS in _MinimalConforming.supported_capabilities()
 
 
 def test_conditional_write_member_and_family() -> None:

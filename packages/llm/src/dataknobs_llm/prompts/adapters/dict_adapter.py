@@ -31,10 +31,7 @@ class DictResourceAdapter(ResourceAdapter):
     """
 
     def __init__(
-        self,
-        data: Dict[str, Any],
-        name: str = "dict_adapter",
-        case_sensitive: bool = False
+        self, data: Dict[str, Any], name: str = "dict_adapter", case_sensitive: bool = False
     ):
         """Initialize dictionary adapter.
 
@@ -48,10 +45,7 @@ class DictResourceAdapter(ResourceAdapter):
         self._case_sensitive = case_sensitive
 
     def get_value(
-        self,
-        key: str,
-        default: Any = None,
-        context: Dict[str, Any] | None = None
+        self, key: str, default: Any = None, context: Dict[str, Any] | None = None
     ) -> Any:
         """Retrieve a value by key from the dictionary.
 
@@ -67,8 +61,8 @@ class DictResourceAdapter(ResourceAdapter):
             Value at the key, or default if not found
         """
         # Handle dot notation for nested keys
-        if '.' in key:
-            parts = key.split('.')
+        if "." in key:
+            parts = key.split(".")
             value = self._data
             for part in parts:
                 if isinstance(value, dict) and part in value:
@@ -80,11 +74,7 @@ class DictResourceAdapter(ResourceAdapter):
             return self._data.get(key, default)
 
     def search(
-        self,
-        query: str,
-        k: int = 5,
-        filters: Dict[str, Any] | None = None,
-        **kwargs: Any
+        self, query: str, k: int = 5, filters: Dict[str, Any] | None = None, **kwargs: Any
     ) -> List[Dict[str, Any]]:
         """Perform text-based search across dictionary values.
 
@@ -123,9 +113,7 @@ class DictResourceAdapter(ResourceAdapter):
                 score = 1.0 if search_query == search_value else 0.8
 
                 result = BaseSearchLogic.format_search_result(
-                    value_str,
-                    score=score,
-                    metadata={"key": key}
+                    value_str, score=score, metadata={"key": key}
                 )
                 result["key"] = key  # Add key to top level for easier access
                 results.append(result)
@@ -138,21 +126,18 @@ class DictResourceAdapter(ResourceAdapter):
             results = BaseSearchLogic.filter_results(results, filters=filters)
 
         # Apply min_score filter if provided
-        min_score = kwargs.get('min_score', 0.0)
+        min_score = kwargs.get("min_score", 0.0)
         if min_score > 0:
             results = BaseSearchLogic.filter_results(results, min_score=min_score)
 
         # Deduplicate if requested
-        if kwargs.get('deduplicate', False):
-            results = BaseSearchLogic.deduplicate_results(results, key='content')
+        if kwargs.get("deduplicate", False):
+            results = BaseSearchLogic.deduplicate_results(results, key="content")
 
         return results[:k]
 
     def _flatten_dict(
-        self,
-        data: Dict[str, Any],
-        parent_key: str = '',
-        separator: str = '.'
+        self, data: Dict[str, Any], parent_key: str = "", separator: str = "."
     ) -> Dict[str, Any]:
         """Flatten nested dictionary with dot notation keys.
 
@@ -190,10 +175,7 @@ class AsyncDictResourceAdapter(AsyncResourceAdapter):
     """
 
     def __init__(
-        self,
-        data: Dict[str, Any],
-        name: str = "async_dict_adapter",
-        case_sensitive: bool = False
+        self, data: Dict[str, Any], name: str = "async_dict_adapter", case_sensitive: bool = False
     ):
         """Initialize async dictionary adapter.
 
@@ -207,18 +189,15 @@ class AsyncDictResourceAdapter(AsyncResourceAdapter):
         self._case_sensitive = case_sensitive
 
     async def get_value(
-        self,
-        key: str,
-        default: Any = None,
-        context: Dict[str, Any] | None = None
+        self, key: str, default: Any = None, context: Dict[str, Any] | None = None
     ) -> Any:
         """Retrieve a value by key from the dictionary (async).
 
         See DictResourceAdapter.get_value for details.
         """
         # Handle dot notation for nested keys
-        if '.' in key:
-            parts = key.split('.')
+        if "." in key:
+            parts = key.split(".")
             value = self._data
             for part in parts:
                 if isinstance(value, dict) and part in value:
@@ -230,11 +209,7 @@ class AsyncDictResourceAdapter(AsyncResourceAdapter):
             return self._data.get(key, default)
 
     async def search(
-        self,
-        query: str,
-        k: int = 5,
-        filters: Dict[str, Any] | None = None,
-        **kwargs: Any
+        self, query: str, k: int = 5, filters: Dict[str, Any] | None = None, **kwargs: Any
     ) -> List[Dict[str, Any]]:
         """Perform text-based search across dictionary values (async).
 
@@ -255,9 +230,7 @@ class AsyncDictResourceAdapter(AsyncResourceAdapter):
                 score = 1.0 if search_query == search_value else 0.8
 
                 result = BaseSearchLogic.format_search_result(
-                    value_str,
-                    score=score,
-                    metadata={"key": key}
+                    value_str, score=score, metadata={"key": key}
                 )
                 result["key"] = key
                 results.append(result)
@@ -270,21 +243,18 @@ class AsyncDictResourceAdapter(AsyncResourceAdapter):
             results = BaseSearchLogic.filter_results(results, filters=filters)
 
         # Apply min_score filter if provided
-        min_score = kwargs.get('min_score', 0.0)
+        min_score = kwargs.get("min_score", 0.0)
         if min_score > 0:
             results = BaseSearchLogic.filter_results(results, min_score=min_score)
 
         # Deduplicate if requested
-        if kwargs.get('deduplicate', False):
-            results = BaseSearchLogic.deduplicate_results(results, key='content')
+        if kwargs.get("deduplicate", False):
+            results = BaseSearchLogic.deduplicate_results(results, key="content")
 
         return results[:k]
 
     def _flatten_dict(
-        self,
-        data: Dict[str, Any],
-        parent_key: str = '',
-        separator: str = '.'
+        self, data: Dict[str, Any], parent_key: str = "", separator: str = "."
     ) -> Dict[str, Any]:
         """Flatten nested dictionary with dot notation keys.
 

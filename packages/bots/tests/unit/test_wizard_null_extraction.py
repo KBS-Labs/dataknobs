@@ -37,8 +37,7 @@ def _null_test_config() -> dict:
         .field("llm_provider", field_type="string", required=True)
         .transition(
             "done",
-            "data.get('intent') and data.get('domain_name') "
-            "and data.get('llm_provider')",
+            "data.get('intent') and data.get('domain_name') and data.get('llm_provider')",
         )
         .stage("done", is_end=True, prompt="All done!")
         .build()
@@ -104,9 +103,7 @@ class TestNullExtractionHandling:
             ],
         ) as harness:
             await harness.chat("I want to create a bot")
-            assert harness.wizard_data.get("intent") == "create", (
-                "Non-null value must be stored"
-            )
+            assert harness.wizard_data.get("intent") == "create", "Non-null value must be stored"
             assert "domain_name" not in harness.wizard_data, (
                 "Null extraction must not store key in wizard state"
             )
@@ -254,9 +251,7 @@ class TestHasHelper:
             {"a": False},
         )
 
-    def test_has_combined_with_data_get(
-        self, reasoning: WizardReasoning
-    ) -> None:
+    def test_has_combined_with_data_get(self, reasoning: WizardReasoning) -> None:
         """has() can be combined with data.get() in the same condition."""
         assert reasoning._evaluate_condition(
             "has('flag') and data.get('name')",

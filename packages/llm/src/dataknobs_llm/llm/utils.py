@@ -31,6 +31,7 @@ class MessageTemplate:
        - Whitespace-aware substitution
        - Example: "Hello {{name}}((, you have {{count}} messages))"
     """
+
     template: str
     variables: List[str] = field(default_factory=list)
     strategy: TemplateStrategy = TemplateStrategy.SIMPLE
@@ -40,11 +41,14 @@ class MessageTemplate:
         if not self.variables:
             if self.strategy == TemplateStrategy.SIMPLE:
                 # Extract {variable} patterns (single braces)
-                self.variables = re.findall(r'\{(\w+)\}', self.template)
+                self.variables = re.findall(r"\{(\w+)\}", self.template)
             elif self.strategy == TemplateStrategy.CONDITIONAL:
                 # Extract {{variable}} patterns (double braces)
                 # Extract just the variable names (group 2 from the regex)
-                self.variables = [match.group(2) for match in re.finditer(r'\{\{(\s*)(\w+)(\s*)\}\}', self.template)]
+                self.variables = [
+                    match.group(2)
+                    for match in re.finditer(r"\{\{(\s*)(\w+)(\s*)\}\}", self.template)
+                ]
                 # Remove duplicates while preserving order
                 seen = set()
                 unique_vars = []
@@ -80,7 +84,7 @@ class MessageTemplate:
         else:
             raise ValueError(f"Unknown template strategy: {self.strategy}")
 
-    def partial(self, **kwargs: Any) -> 'MessageTemplate':
+    def partial(self, **kwargs: Any) -> "MessageTemplate":
         """Create partial template with some variables filled.
 
         Args:
@@ -96,7 +100,7 @@ class MessageTemplate:
 
             for key, value in kwargs.items():
                 if key in new_variables:
-                    new_template = new_template.replace(f'{{{key}}}', str(value))
+                    new_template = new_template.replace(f"{{{key}}}", str(value))
                     new_variables.remove(key)
 
             return MessageTemplate(new_template, new_variables, self.strategy)
@@ -113,12 +117,8 @@ class MessageTemplate:
                 if key in new_variables:
                     # Replace {{var}} with the value, but keep it as a literal
                     # We do this by using a placeholder that won't match the patterns
-                    pattern = r'\{\{\s*' + key + r'\s*\}\}'
-                    new_template = re.sub(
-                        pattern,
-                        str(value),
-                        new_template
-                    )
+                    pattern = r"\{\{\s*" + key + r"\s*\}\}"
+                    new_template = re.sub(pattern, str(value), new_template)
                     new_variables.remove(key)
 
             return MessageTemplate(new_template, new_variables, self.strategy)
@@ -127,7 +127,9 @@ class MessageTemplate:
             raise ValueError(f"Unknown template strategy: {self.strategy}")
 
     @classmethod
-    def from_conditional(cls, template: str, variables: List[str] | None = None) -> 'MessageTemplate':
+    def from_conditional(
+        cls, template: str, variables: List[str] | None = None
+    ) -> "MessageTemplate":
         """Create a MessageTemplate using the CONDITIONAL strategy.
 
         Convenience method for creating templates with advanced conditional rendering.
@@ -150,81 +152,74 @@ class MessageTemplate:
             # "Hello Bob"
             ```
         """
-        return cls(template=template, variables=variables or [], strategy=TemplateStrategy.CONDITIONAL)
+        return cls(
+            template=template, variables=variables or [], strategy=TemplateStrategy.CONDITIONAL
+        )
 
 
 class MessageBuilder:
     """Builder for constructing message sequences."""
-    
+
     def __init__(self):
         self.messages = []
-        
-    def system(self, content: str) -> 'MessageBuilder':
+
+    def system(self, content: str) -> "MessageBuilder":
         """Add system message.
-        
+
         Args:
             content: Message content
-            
+
         Returns:
             Self for chaining
         """
-        self.messages.append(LLMMessage(role='system', content=content))
+        self.messages.append(LLMMessage(role="system", content=content))
         return self
-        
-    def user(self, content: str) -> 'MessageBuilder':
+
+    def user(self, content: str) -> "MessageBuilder":
         """Add user message.
-        
+
         Args:
             content: Message content
-            
+
         Returns:
             Self for chaining
         """
-        self.messages.append(LLMMessage(role='user', content=content))
+        self.messages.append(LLMMessage(role="user", content=content))
         return self
-        
-    def assistant(self, content: str) -> 'MessageBuilder':
+
+    def assistant(self, content: str) -> "MessageBuilder":
         """Add assistant message.
-        
+
         Args:
             content: Message content
-            
+
         Returns:
             Self for chaining
         """
-        self.messages.append(LLMMessage(role='assistant', content=content))
+        self.messages.append(LLMMessage(role="assistant", content=content))
         return self
-        
+
     def function(
-        self,
-        name: str,
-        content: str,
-        function_call: Dict[str, Any] | None = None
-    ) -> 'MessageBuilder':
+        self, name: str, content: str, function_call: Dict[str, Any] | None = None
+    ) -> "MessageBuilder":
         """Add function message.
-        
+
         Args:
             name: Function name
             content: Function result
             function_call: Function call details
-            
+
         Returns:
             Self for chaining
         """
-        self.messages.append(LLMMessage(
-            role='function',
-            name=name,
-            content=content,
-            function_call=function_call
-        ))
+        self.messages.append(
+            LLMMessage(role="function", name=name, content=content, function_call=function_call)
+        )
         return self
-        
+
     def from_template(
-        self,
-        role: str,
-        template: MessageTemplate,
-        **kwargs: Any
-    ) -> 'MessageBuilder':
+        self, role: str, template: MessageTemplate, **kwargs: Any
+    ) -> "MessageBuilder":
         """Add message from template.
 
         Args:
@@ -238,18 +233,18 @@ class MessageBuilder:
         content = template.format(**kwargs)
         self.messages.append(LLMMessage(role=role, content=content))
         return self
-        
+
     def build(self) -> List[LLMMessage]:
         """Build message list.
-        
+
         Returns:
             List of messages
         """
         return self.messages.copy()
-        
-    def clear(self) -> 'MessageBuilder':
+
+    def clear(self) -> "MessageBuilder":
         """Clear all messages.
-        
+
         Returns:
             Self for chaining
         """
@@ -259,27 +254,27 @@ class MessageBuilder:
 
 class ResponseParser:
     """Parser for LLM responses."""
-    
+
     @staticmethod
     def extract_json(response: Union[str, LLMResponse]) -> Dict[str, Any] | None:
         """Extract JSON from response.
-        
+
         Args:
             response: LLM response
-            
+
         Returns:
             Extracted JSON or None
         """
         text = response.content if isinstance(response, LLMResponse) else response
-        
+
         # Try to find JSON in the text
         json_patterns = [
-            r'\{[^}]*\}',  # Simple object
-            r'\[[^\]]*\]',  # Array
-            r'```json\s*(.*?)\s*```',  # Markdown code block
-            r'```\s*(.*?)\s*```',  # Generic code block
+            r"\{[^}]*\}",  # Simple object
+            r"\[[^\]]*\]",  # Array
+            r"```json\s*(.*?)\s*```",  # Markdown code block
+            r"```\s*(.*?)\s*```",  # Generic code block
         ]
-        
+
         for pattern in json_patterns:
             matches = re.findall(pattern, text, re.DOTALL)
             for match in matches:
@@ -287,121 +282,109 @@ class ResponseParser:
                     return json.loads(match)
                 except json.JSONDecodeError:
                     continue
-                    
+
         # Try parsing the entire text as JSON
         try:
             return json.loads(text)
         except json.JSONDecodeError:
             return None
-            
+
     @staticmethod
-    def extract_code(
-        response: Union[str, LLMResponse],
-        language: str | None = None
-    ) -> List[str]:
+    def extract_code(response: Union[str, LLMResponse], language: str | None = None) -> List[str]:
         """Extract code blocks from response.
-        
+
         Args:
             response: LLM response
             language: Optional language filter
-            
+
         Returns:
             List of code blocks
         """
         text = response.content if isinstance(response, LLMResponse) else response
-        
+
         if language:
             # Language-specific code blocks
-            pattern = rf'```{language}\s*(.*?)\s*```'
+            pattern = rf"```{language}\s*(.*?)\s*```"
         else:
             # All code blocks
-            pattern = r'```(?:\w+)?\s*(.*?)\s*```'
-            
+            pattern = r"```(?:\w+)?\s*(.*?)\s*```"
+
         matches = re.findall(pattern, text, re.DOTALL)
         return [m.strip() for m in matches]
-        
+
     @staticmethod
-    def extract_list(
-        response: Union[str, LLMResponse],
-        numbered: bool = False
-    ) -> List[str]:
+    def extract_list(response: Union[str, LLMResponse], numbered: bool = False) -> List[str]:
         """Extract list items from response.
-        
+
         Args:
             response: LLM response
             numbered: Whether to look for numbered lists
-            
+
         Returns:
             List of items
         """
         text = response.content if isinstance(response, LLMResponse) else response
-        
+
         if numbered:
             # Numbered list (1. item, 2. item, etc.)
-            pattern = r'^\d+\.\s+(.+)$'
+            pattern = r"^\d+\.\s+(.+)$"
         else:
             # Bullet points (-, *, •)
-            pattern = r'^[-*•]\s+(.+)$'
-            
+            pattern = r"^[-*•]\s+(.+)$"
+
         matches = re.findall(pattern, text, re.MULTILINE)
         return [m.strip() for m in matches]
-        
+
     @staticmethod
-    def extract_sections(
-        response: Union[str, LLMResponse]
-    ) -> Dict[str, str]:
+    def extract_sections(response: Union[str, LLMResponse]) -> Dict[str, str]:
         """Extract sections from response.
-        
+
         Args:
             response: LLM response
-            
+
         Returns:
             Dictionary of section name to content
         """
         text = response.content if isinstance(response, LLMResponse) else response
-        
+
         # Split by headers (# Header, ## Header, etc.)
         sections = {}
-        current_section = 'main'
+        current_section = "main"
         current_content = []
-        
-        for line in text.split('\n'):
-            header_match = re.match(r'^#+\s+(.+)$', line)
+
+        for line in text.split("\n"):
+            header_match = re.match(r"^#+\s+(.+)$", line)
             if header_match:
                 # Save previous section
                 if current_content:
-                    sections[current_section] = '\n'.join(current_content).strip()
+                    sections[current_section] = "\n".join(current_content).strip()
                 # Start new section
                 current_section = header_match.group(1).strip()
                 current_content = []
             else:
                 current_content.append(line)
-                
+
         # Save last section
         if current_content:
-            sections[current_section] = '\n'.join(current_content).strip()
-            
+            sections[current_section] = "\n".join(current_content).strip()
+
         return sections
 
 
 class TokenCounter:
     """Estimate token counts for different models."""
-    
+
     # Approximate tokens per character for different models
     TOKENS_PER_CHAR = {
-        'gpt-4': 0.25,
-        'gpt-3.5': 0.25,
-        'claude': 0.25,
-        'llama': 0.3,
-        'default': 0.25
+        "gpt-4": 0.25,
+        "gpt-3.5": 0.25,
+        "claude": 0.25,
+        "llama": 0.3,
+        "default": 0.25,
     }
-    
+
     @classmethod
-    def estimate_tokens(
-        cls,
-        text: str | None,
-        model: str = 'default'
-    ) -> int:
+    def estimate_tokens(cls, text: str | None, model: str = "default") -> int:
         """Estimate token count for text.
 
         Args:
@@ -416,7 +399,7 @@ class TokenCounter:
             return 0
 
         # Find matching model pattern
-        ratio = cls.TOKENS_PER_CHAR['default']
+        ratio = cls.TOKENS_PER_CHAR["default"]
         for pattern, r in cls.TOKENS_PER_CHAR.items():
             if pattern in model.lower():
                 ratio = r
@@ -424,19 +407,15 @@ class TokenCounter:
 
         # Estimate based on character count
         return int(len(text) * ratio)
-        
+
     @classmethod
-    def estimate_messages_tokens(
-        cls,
-        messages: List[LLMMessage],
-        model: str = 'default'
-    ) -> int:
+    def estimate_messages_tokens(cls, messages: List[LLMMessage], model: str = "default") -> int:
         """Estimate token count for messages.
-        
+
         Args:
             messages: List of messages
             model: Model name
-            
+
         Returns:
             Estimated token count
         """
@@ -463,21 +442,16 @@ class TokenCounter:
                 total += cls.estimate_tokens(serialized, model)
 
         return total
-        
+
     @classmethod
-    def fits_in_context(
-        cls,
-        text: str,
-        model: str,
-        max_tokens: int
-    ) -> bool:
+    def fits_in_context(cls, text: str, model: str, max_tokens: int) -> bool:
         """Check if text fits in context window.
-        
+
         Args:
             text: Input text
             model: Model name
             max_tokens: Maximum token limit
-            
+
         Returns:
             True if fits
         """
@@ -504,12 +478,12 @@ class CostCalculator:
     #: / use ``provider.estimate_cost``). Kept small and back-compatible so the
     #: provider-less :meth:`calculate_cost` / :meth:`estimate_cost` calls still work.
     PRICING: dict[str, ModelPricing] = {
-        'gpt-4': ModelPricing(input_per_mtok=30.0, output_per_mtok=60.0),
-        'gpt-4-32k': ModelPricing(input_per_mtok=60.0, output_per_mtok=120.0),
-        'gpt-3.5-turbo': ModelPricing(input_per_mtok=1.5, output_per_mtok=2.0),
-        'claude-3-opus': ModelPricing(input_per_mtok=15.0, output_per_mtok=75.0),
-        'claude-3-sonnet': ModelPricing(input_per_mtok=3.0, output_per_mtok=15.0),
-        'claude-3-haiku': ModelPricing(input_per_mtok=0.25, output_per_mtok=1.25),
+        "gpt-4": ModelPricing(input_per_mtok=30.0, output_per_mtok=60.0),
+        "gpt-4-32k": ModelPricing(input_per_mtok=60.0, output_per_mtok=120.0),
+        "gpt-3.5-turbo": ModelPricing(input_per_mtok=1.5, output_per_mtok=2.0),
+        "claude-3-opus": ModelPricing(input_per_mtok=15.0, output_per_mtok=75.0),
+        "claude-3-sonnet": ModelPricing(input_per_mtok=3.0, output_per_mtok=15.0),
+        "claude-3-haiku": ModelPricing(input_per_mtok=0.25, output_per_mtok=1.25),
     }
 
     @classmethod
@@ -524,9 +498,7 @@ class CostCalculator:
         return None
 
     @staticmethod
-    def cost_from_tokens(
-        pricing: ModelPricing, input_tokens: int, output_tokens: int
-    ) -> float:
+    def cost_from_tokens(pricing: ModelPricing, input_tokens: int, output_tokens: int) -> float:
         """Compute USD cost from a :class:`ModelPricing` (per-Mtok) + token counts.
 
         The public entry point for callers that hold **token counts** rather
@@ -585,16 +557,13 @@ class CostCalculator:
             return None
         return cls.cost_from_tokens(
             pricing,
-            response.usage.get('prompt_tokens', 0),
-            response.usage.get('completion_tokens', 0),
+            response.usage.get("prompt_tokens", 0),
+            response.usage.get("completion_tokens", 0),
         )
 
     @classmethod
     def estimate_cost(
-        cls,
-        text: str,
-        model: str,
-        expected_output_tokens: int = 100
+        cls, text: str, model: str, expected_output_tokens: int = 100
     ) -> float | None:
         """Estimate cost for a text completion from the fallback pricing table.
 
@@ -614,9 +583,7 @@ class CostCalculator:
         return cls.cost_from_tokens(pricing, input_tokens, expected_output_tokens)
 
 
-def chain_prompts(
-    *templates: MessageTemplate
-) -> MessageTemplate:
+def chain_prompts(*templates: MessageTemplate) -> MessageTemplate:
     """Chain multiple message templates.
 
     All templates must use the same strategy. The combined template
@@ -642,7 +609,7 @@ def chain_prompts(
             "All templates must use the same TemplateStrategy."
         )
 
-    combined_template = '\n\n'.join(t.template for t in templates)
+    combined_template = "\n\n".join(t.template for t in templates)
     combined_variables = []
     seen = set()
 
@@ -658,8 +625,8 @@ def chain_prompts(
 def create_few_shot_prompt(
     instruction: str,
     examples: List[Dict[str, str]],
-    query_key: str = 'input',
-    response_key: str = 'output'
+    query_key: str = "input",
+    response_key: str = "output",
 ) -> MessageTemplate:
     """Create few-shot learning prompt.
 
@@ -672,18 +639,18 @@ def create_few_shot_prompt(
     Returns:
         Few-shot prompt template
     """
-    template_parts = [instruction, '']
+    template_parts = [instruction, ""]
 
     # Add examples
     for i, example in enumerate(examples, 1):
         template_parts.append(f"Example {i}:")
         template_parts.append(f"Input: {example[query_key]}")
         template_parts.append(f"Output: {example[response_key]}")
-        template_parts.append('')
+        template_parts.append("")
 
     # Add query placeholder
     template_parts.append("Now, process this input:")
     template_parts.append("Input: {query}")
     template_parts.append("Output:")
 
-    return MessageTemplate('\n'.join(template_parts), ['query'])
+    return MessageTemplate("\n".join(template_parts), ["query"])

@@ -36,7 +36,7 @@ class AnnotationsMetaData(dk_doc.MetaData):
         ann_type_col: str = KEY_ANN_TYPE_COL,
         sort_fields: List[str] = (KEY_START_POS_COL, KEY_END_POS_COL),
         sort_fields_ascending: List[bool] = (True, False),
-        **kwargs: Any
+        **kwargs: Any,
     ):
         """Initialize with key (and more) column names and info.
 
@@ -816,9 +816,9 @@ class AnnotationsGroupList:
     def __init__(
         self,
         groups: List[AnnotationsGroup] = None,
-        accept_fn: Callable[["AnnotationsGroupList", AnnotationsGroup], bool] = lambda lst, g: lst.size
-        == 0
-        or not g.is_subset_of_any(lst.groups),
+        accept_fn: Callable[["AnnotationsGroupList", AnnotationsGroup], bool] = lambda lst, g: (
+            lst.size == 0 or not g.is_subset_of_any(lst.groups)
+        ),
     ):
         """Initialize AnnotationsGroupList.
 
@@ -1116,11 +1116,7 @@ class Annotator(ABC):
         self.name = name
 
     @abstractmethod
-    def annotate_input(
-        self,
-        text_obj: AnnotatedText,
-        **kwargs: Any
-    ) -> Annotations:
+    def annotate_input(self, text_obj: AnnotatedText, **kwargs: Any) -> Annotations:
         """Annotate this instance's text, additively updating its annotations.
 
         Args:
@@ -1136,11 +1132,7 @@ class Annotator(ABC):
 class BasicAnnotator(Annotator):
     """Class for extracting basic (possibly multi -level or -part) entities."""
 
-    def annotate_input(
-        self,
-        text_obj: AnnotatedText,
-        **kwargs: Any
-    ) -> Annotations:
+    def annotate_input(self, text_obj: AnnotatedText, **kwargs: Any) -> Annotations:
         """Annotate the text obj, additively updating the annotations.
 
         Args:
@@ -1175,11 +1167,7 @@ class BasicAnnotator(Annotator):
 class SyntacticParser(BasicAnnotator):
     """Class for creating syntactic annotations for an input."""
 
-    def annotate_input(
-        self,
-        text_obj: AnnotatedText,
-        **kwargs: Any
-    ) -> Annotations:
+    def annotate_input(self, text_obj: AnnotatedText, **kwargs: Any) -> Annotations:
         """Annotate the text, additively updating the annotations.
 
         Args:
@@ -1264,7 +1252,7 @@ class EntityAnnotator(BasicAnnotator):
         annot_mask_cols: Set[str] = None,
         merge_strategies: Dict[str, MergeStrategy] = None,
         largest_only: bool = True,
-        **kwargs: Any
+        **kwargs: Any,
     ) -> Annotations:
         """Annotate the text object (optionally) after masking out previously
         annotated spans, additively updating the annotations in the text
@@ -1430,10 +1418,7 @@ class CompoundAnnotator(Annotator):
         self.kernel = kernel
 
     def annotate_input(
-        self,
-        text_obj: AnnotatedText,
-        reset: bool = True,
-        **kwargs: Any
+        self, text_obj: AnnotatedText, reset: bool = True, **kwargs: Any
     ) -> Annotations:
         """Annotate the text.
 

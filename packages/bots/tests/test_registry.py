@@ -498,9 +498,7 @@ class TestBotRegistry:
             await registry.get_bot("client-2")
 
             # At least one of the earlier bots should have been evicted and closed
-            evicted = [
-                b for b in [bot0, bot1] if b.llm._is_initialized is False
-            ]
+            evicted = [b for b in [bot0, bot1] if b.llm._is_initialized is False]
             assert len(evicted) > 0, "Expected at least one evicted bot to be closed"
         finally:
             await registry.close()

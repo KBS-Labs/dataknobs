@@ -210,8 +210,7 @@ class WizardRenderer:
         try:
             text = template_str
             logger.debug(
-                "Template render: stage='%s', template_len=%d, "
-                "mixed_mode=%s",
+                "Template render: stage='%s', template_len=%d, mixed_mode=%s",
                 stage.get("name", "unknown"),
                 len(template_str),
                 mixed_mode,
@@ -225,14 +224,16 @@ class WizardRenderer:
                 template_params = self.build_template_params(stage, state)
                 # Enrich with extra_context keys that are author-controlled
                 if extra_context:
-                    template_params = {**template_params, **{
-                        k: v for k, v in extra_context.items()
-                        if k in template_params
-                    }}
+                    template_params = {
+                        **template_params,
+                        **{k: v for k, v in extra_context.items() if k in template_params},
+                    }
                 text = render_conditional_template(text, template_params)
 
             full_context = self.build_context(
-                stage, state, extra_context=extra_context,
+                stage,
+                state,
+                extra_context=extra_context,
             )
             template = self._jinja_env.from_string(text)
             return template.render(**full_context)
@@ -240,8 +241,7 @@ class WizardRenderer:
         except TemplateError as exc:
             if fallback is not _SENTINEL:
                 logger.warning(
-                    "Template rendering failed for stage '%s': %s — "
-                    "returning fallback",
+                    "Template rendering failed for stage '%s': %s — returning fallback",
                     stage.get("name", "unknown"),
                     exc,
                 )
@@ -282,9 +282,7 @@ class WizardRenderer:
                 rendered.append(item)
                 continue
             try:
-                rendered.append(
-                    self._jinja_env.from_string(item).render(**context)
-                )
+                rendered.append(self._jinja_env.from_string(item).render(**context))
             except TemplateError:
                 rendered.append(item)
         return rendered

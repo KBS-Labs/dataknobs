@@ -626,9 +626,9 @@ class ValuesIndex:
     """
 
     def __init__(self) -> None:
-        self.path_values: Dict[str, Dict[Any, ValuePath]] = (
-            {}
-        )  # Dict[jq_path, Dict[value, ValuePath]]
+        self.path_values: Dict[
+            str, Dict[Any, ValuePath]
+        ] = {}  # Dict[jq_path, Dict[value, ValuePath]]
 
     def add(self, value: Any, jq_path: str, path: Tuple[Any, ...] | None = None) -> None:
         """Add a value occurrence to the index.

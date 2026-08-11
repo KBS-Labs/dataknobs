@@ -227,9 +227,7 @@ class ExtractionTracker:
         if len(self._history) > self._max_history:
             self._history.pop(0)
 
-    def query(
-        self, query: ExtractionHistoryQuery | None = None
-    ) -> list[ExtractionRecord]:
+    def query(self, query: ExtractionHistoryQuery | None = None) -> list[ExtractionRecord]:
         """Query extraction history.
 
         Args:
@@ -265,7 +263,7 @@ class ExtractionTracker:
             results = [r for r in results if r.timestamp <= query.until]
 
         if query.limit:
-            results = results[-query.limit:]
+            results = results[-query.limit :]
 
         return results
 
@@ -293,9 +291,7 @@ class ExtractionTracker:
             for error in record.validation_errors:
                 error_counts[error] = error_counts.get(error, 0) + 1
 
-        most_common_errors = sorted(
-            error_counts.items(), key=lambda x: x[1], reverse=True
-        )[:5]
+        most_common_errors = sorted(error_counts.items(), key=lambda x: x[1], reverse=True)[:5]
 
         # By schema
         by_schema: dict[str, int] = {}

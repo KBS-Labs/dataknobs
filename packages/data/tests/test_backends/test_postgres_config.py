@@ -42,9 +42,7 @@ def _clear_postgres_env(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_connection_string_and_individual_keys_equivalent() -> None:
     """Both input shapes resolve to the same consumed connection params."""
-    via_url = SyncPostgresDatabase(
-        {"connection_string": "postgresql://u:p@h:5433/db"}
-    )
+    via_url = SyncPostgresDatabase({"connection_string": "postgresql://u:p@h:5433/db"})
     via_keys = SyncPostgresDatabase(
         {
             "host": "h",
@@ -65,9 +63,7 @@ def test_connection_string_and_individual_keys_equivalent() -> None:
 def test_dialect_prefix_stripped() -> None:
     # A ``postgresql+asyncpg://`` driver prefix is handled by the
     # normalizer when it parses the URL into individual keys.
-    db = SyncPostgresDatabase(
-        {"connection_string": "postgresql+asyncpg://u:p@h/db"}
-    )
+    db = SyncPostgresDatabase({"connection_string": "postgresql+asyncpg://u:p@h/db"})
     assert db._conn_config["host"] == "h"
     assert db._conn_config["user"] == "u"
     assert db._conn_config["database"] == "db"
@@ -107,9 +103,7 @@ def test_empty_config_no_env_preserves_pre_connect_behavior() -> None:
 
 def test_async_postgres_connection_string_parsed_into_keys() -> None:
     """AsyncPostgresDatabase uses the same normalizer through the mixin."""
-    db = AsyncPostgresDatabase(
-        {"connection_string": "postgresql://u:p@h:5433/db"}
-    )
+    db = AsyncPostgresDatabase({"connection_string": "postgresql://u:p@h:5433/db"})
     # _pool_config is built from _conn_config in the constructor path,
     # so the individual keys must be populated.
     assert db._pool_config.host == "h"
@@ -121,9 +115,7 @@ def test_async_postgres_connection_string_parsed_into_keys() -> None:
 
 def test_async_postgres_individual_keys_match_connection_string() -> None:
     """Site 1 + Site 6 parity: same observable _pool_config for both shapes."""
-    via_url = AsyncPostgresDatabase(
-        {"connection_string": "postgresql://u:p@h:5433/db"}
-    )
+    via_url = AsyncPostgresDatabase({"connection_string": "postgresql://u:p@h:5433/db"})
     via_keys = AsyncPostgresDatabase(
         {
             "host": "h",

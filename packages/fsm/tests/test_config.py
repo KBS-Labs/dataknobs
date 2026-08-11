@@ -43,7 +43,7 @@ class TestConfigSchema:
                 ArcConfig(target="next_state"),
             ],
         )
-        
+
         assert config.name == "test_state"
         assert config.is_start is True
         assert len(config.arcs) == 1
@@ -58,7 +58,7 @@ class TestConfigSchema:
                 StateConfig(name="end", is_end=True, arcs=[]),
             ],
         )
-        
+
         assert config.name == "test_network"
         assert len(config.states) == 2
         assert config.states[0].is_start is True
@@ -103,7 +103,7 @@ class TestConfigSchema:
             ],
             main_network="main",
         )
-        
+
         assert config.name == "test_fsm"
         assert config.main_network == "main"
         assert len(config.networks) == 1
@@ -128,14 +128,14 @@ class TestConfigSchema:
             default=DataHandlingMode.REFERENCE,
             state_overrides={"state1": DataHandlingMode.COPY},
         )
-        
+
         assert config.default == DataHandlingMode.REFERENCE
         assert config.state_overrides["state1"] == DataHandlingMode.COPY
 
     def test_generate_json_schema(self):
         """Test JSON schema generation."""
         schema = generate_json_schema()
-        
+
         assert "properties" in schema
         assert "name" in schema["properties"]
         assert "networks" in schema["properties"]
@@ -155,7 +155,7 @@ class TestConfigSchema:
             ],
             "main_network": "main",
         }
-        
+
         config = validate_config(config_dict)
         assert isinstance(config, FSMConfig)
         assert config.name == "test"
@@ -166,7 +166,7 @@ class TestConfigSchema:
             "name": "test",
             # Missing required fields
         }
-        
+
         with pytest.raises(ValidationError):
             validate_config(config_dict)
 
@@ -274,7 +274,7 @@ class TestConfigLoader:
     def test_load_from_dict(self):
         """Test loading configuration from dictionary."""
         loader = ConfigLoader()
-        
+
         config_dict = {
             "name": "test",
             "networks": [
@@ -287,7 +287,7 @@ class TestConfigLoader:
             ],
             "main_network": "main",
         }
-        
+
         config = loader.load_from_dict(config_dict)
         assert isinstance(config, FSMConfig)
         assert config.name == "test"
@@ -306,14 +306,14 @@ class TestConfigLoader:
             ],
             "main_network": "main",
         }
-        
+
         config_file = tmp_path / "config.json"
         with open(config_file, "w") as f:
             json.dump(config_dict, f)
-        
+
         loader = ConfigLoader()
         config = loader.load_from_file(config_file)
-        
+
         assert isinstance(config, FSMConfig)
         assert config.name == "test"
 
@@ -331,21 +331,21 @@ class TestConfigLoader:
             ],
             "main_network": "main",
         }
-        
+
         config_file = tmp_path / "config.yaml"
         with open(config_file, "w") as f:
             yaml.dump(config_dict, f)
-        
+
         loader = ConfigLoader()
         config = loader.load_from_file(config_file)
-        
+
         assert isinstance(config, FSMConfig)
         assert config.name == "test"
 
     def test_load_nonexistent_file(self):
         """Test loading nonexistent file raises error."""
         loader = ConfigLoader()
-        
+
         with pytest.raises(FileNotFoundError):
             loader.load_from_file("nonexistent.json")
 
@@ -353,9 +353,9 @@ class TestConfigLoader:
         """Test environment variable resolution."""
         monkeypatch.setenv("TEST_VAR", "test_value")
         monkeypatch.setenv("FSM_PORT", "5432")
-        
+
         loader = ConfigLoader()
-        
+
         config_dict = {
             "name": "${TEST_VAR}",
             "metadata": {
@@ -372,7 +372,7 @@ class TestConfigLoader:
             ],
             "main_network": "main",
         }
-        
+
         config = loader.load_from_dict(config_dict)
         assert config.name == "test_value"
         assert config.metadata["port"] == "5432"
@@ -527,7 +527,7 @@ class TestConfigLoader:
     def test_load_from_template(self):
         """Test loading configuration from template."""
         loader = ConfigLoader()
-        
+
         # Need to provide full configuration when using template
         config = loader.load_from_template(
             UseCaseTemplate.DATABASE_ETL,
@@ -544,14 +544,14 @@ class TestConfigLoader:
                 "main_network": "main",
             },
         )
-        
+
         assert isinstance(config, FSMConfig)
         assert config.data_mode.default == DataHandlingMode.COPY
 
     def test_merge_configs(self):
         """Test merging multiple configurations."""
         loader = ConfigLoader()
-        
+
         config1 = FSMConfig(
             name="test1",
             networks=[
@@ -562,7 +562,7 @@ class TestConfigLoader:
             ],
             main_network="main",
         )
-        
+
         config2 = FSMConfig(
             name="test2",
             version="2.0.0",
@@ -574,7 +574,7 @@ class TestConfigLoader:
             ],
             main_network="main",
         )
-        
+
         merged = loader.merge_configs(config1, config2)
         assert merged.name == "test2"
         assert merged.version == "2.0.0"
@@ -730,22 +730,23 @@ class TestFSMBuilder:
             ],
             main_network="main",
         )
-        
+
         builder = FSMBuilder()
         fsm = builder.build(config)
-        
+
         assert fsm.config == config
         assert "main" in fsm.networks
         assert fsm.main_network.name == "main"
 
     def test_register_custom_function(self):
         """Test registering custom functions."""
+
         def custom_validator(data):
             return "test" in data
-        
+
         builder = FSMBuilder()
         builder.register_function("custom_validator", custom_validator)
-        
+
         assert builder._function_manager.has_function("custom_validator")
 
     def test_build_with_resources(self):
@@ -774,13 +775,13 @@ class TestFSMBuilder:
             ],
             main_network="main",
         )
-        
+
         builder = FSMBuilder()
         # Test that building with valid resources works
         fsm = builder.build(config)
         assert fsm is not None
         assert fsm.name == "test"
-        
+
         # Test that custom resource without class raises error
         invalid_config = FSMConfig(
             name="test",
@@ -805,7 +806,7 @@ class TestFSMBuilder:
             ],
             main_network="main",
         )
-        
+
         with pytest.raises(ValueError, match="Custom resource requires 'class'"):
             builder.build(invalid_config)
 
@@ -828,7 +829,7 @@ class TestFSMBuilder:
             ],
             main_network="main",
         )
-        
+
         builder = FSMBuilder()
         fsm = builder.build(config)  # Should not raise
         assert fsm.validate()
@@ -892,21 +893,21 @@ def test_full_config_workflow(sample_config_dict, tmp_path):
     config_file = tmp_path / "config.yaml"
     with open(config_file, "w") as f:
         yaml.dump(sample_config_dict, f)
-    
+
     # Load from file
     loader = ConfigLoader()
     config = loader.load_from_file(config_file)
-    
+
     # Validate
     assert config.name == "sample_fsm"
     assert config.data_mode.default == DataHandlingMode.COPY
     assert len(config.networks) == 1
     assert len(config.resources) == 1
-    
+
     # Build FSM
     builder = FSMBuilder()
     fsm = builder.build(config)
-    
+
     # Verify FSM was built correctly
     assert fsm is not None
     assert fsm.config == config

@@ -30,9 +30,7 @@ class TurnTrackingMiddleware(Middleware):
     async def after_turn(self, turn: TurnState) -> None:
         self.turns.append(turn)
 
-    async def on_tool_executed(
-        self, execution: ToolExecution, context: BotContext
-    ) -> None:
+    async def on_tool_executed(self, execution: ToolExecution, context: BotContext) -> None:
         self.tool_executions.append(execution)
 
 
@@ -112,17 +110,13 @@ class TestToolExecution:
     """ToolExecution records a single tool invocation."""
 
     def test_success(self) -> None:
-        ex = ToolExecution(
-            tool_name="search", parameters={"q": "test"}, result="found it"
-        )
+        ex = ToolExecution(tool_name="search", parameters={"q": "test"}, result="found it")
         assert ex.tool_name == "search"
         assert ex.error is None
         assert ex.duration_ms is None
 
     def test_failure(self) -> None:
-        ex = ToolExecution(
-            tool_name="search", parameters={"q": "test"}, error="not found"
-        )
+        ex = ToolExecution(tool_name="search", parameters={"q": "test"}, error="not found")
         assert ex.error == "not found"
         assert ex.result is None
 
@@ -168,9 +162,7 @@ class TestAfterTurnMiddleware:
             middleware=[tracker],
         ) as harness:
             chunks = []
-            async for chunk in harness.bot.stream_chat(
-                "Hello", harness.context
-            ):
+            async for chunk in harness.bot.stream_chat("Hello", harness.context):
                 chunks.append(chunk.delta)
 
         assert len(tracker.turns) == 1
@@ -259,9 +251,7 @@ class TestProviderAxesAreReadFromTheProvider:
             message="hi",
             context=None,  # type: ignore[arg-type]
         )
-        turn.populate_from_response(
-            LLMResponse(content="ok", model="test-model"), provider
-        )
+        turn.populate_from_response(LLMResponse(content="ok", model="test-model"), provider)
         return turn
 
     def test_a_declared_implementation_name_is_honored(self) -> None:
@@ -278,9 +268,7 @@ class TestProviderAxesAreReadFromTheProvider:
             def impl_name(self) -> str:
                 return "AcmeGateway(EchoProvider)"
 
-        turn = self._populate(
-            RelabelledProvider({"provider": "echo", "model": "test-model"})
-        )
+        turn = self._populate(RelabelledProvider({"provider": "echo", "model": "test-model"}))
 
         assert turn.provider_impl == "AcmeGateway(EchoProvider)"
 
@@ -341,9 +329,7 @@ class TestOnToolExecuted:
 
         class GreetTool(Tool):
             def __init__(self) -> None:
-                super().__init__(
-                    name="greet_tool", description="Greets a person"
-                )
+                super().__init__(name="greet_tool", description="Greets a person")
 
             @property
             def schema(self) -> dict[str, Any]:
@@ -448,9 +434,7 @@ class TestMiddlewareBackwardCompatibility:
         class LegacyMiddleware(Middleware):
             """Middleware using only legacy hooks (still supported)."""
 
-            async def before_message(
-                self, message: str, context: BotContext
-            ) -> None:
+            async def before_message(self, message: str, context: BotContext) -> None:
                 pass
 
             async def after_message(
@@ -464,9 +448,7 @@ class TestMiddlewareBackwardCompatibility:
 
         # Unified hooks should be inherited no-ops
         await mw.after_turn(turn)
-        await mw.on_tool_executed(
-            ToolExecution(tool_name="test", parameters={}), ctx
-        )
+        await mw.on_tool_executed(ToolExecution(tool_name="test", parameters={}), ctx)
         result = await mw.on_turn_start(turn)
         assert result is None
 
@@ -598,9 +580,7 @@ class TestMessageTransform:
         """Transformed message is what the LLM sees."""
         from dataknobs_bots.testing import BotTestHarness
 
-        transform = MessageTransformMiddleware(
-            transform_fn=lambda msg: msg.upper()
-        )
+        transform = MessageTransformMiddleware(transform_fn=lambda msg: msg.upper())
         tracker = TurnTrackingMiddleware()
 
         async with await BotTestHarness.create(
@@ -675,9 +655,7 @@ class TestLLMMiddlewareBridge:
         ) as harness:
             # Create the manager via a first chat, then inject LLM-layer MW
             await harness.chat("Setup turn")
-            manager = harness.bot.get_conversation_manager(
-                harness.context.conversation_id
-            )
+            manager = harness.bot.get_conversation_manager(harness.context.conversation_id)
             manager.middleware.append(SpyConvMiddleware())
 
             # Second chat — spy should see plugin_data
@@ -711,9 +689,7 @@ class TestLLMMiddlewareBridge:
         ) as harness:
             # Create the manager via a first chat, then inject LLM-layer MW
             await harness.chat("Setup turn")
-            manager = harness.bot.get_conversation_manager(
-                harness.context.conversation_id
-            )
+            manager = harness.bot.get_conversation_manager(harness.context.conversation_id)
             manager.middleware.append(WriterConvMiddleware())
 
             await harness.chat("Write test")

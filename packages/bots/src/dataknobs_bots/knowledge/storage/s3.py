@@ -101,14 +101,16 @@ class S3KnowledgeBackend(KnowledgeResourceBackendMixin):
     # set (does not replace it).
     SUPPORTED_CAPABILITIES: ClassVar[frozenset[CapabilityLike]] = (
         KnowledgeResourceBackendMixin.SUPPORTED_CAPABILITIES
-        | frozenset({
-            Capability.TENANT_SCOPED_STATE,
-            Capability.SNAPSHOT_ISOLATION,
-            # Conditional metadata writes use S3's server-enforced
-            # If-Match precondition on the metadata object's ETag — the
-            # race-free CAS primitive for many replicas over one bucket.
-            Capability.CONDITIONAL_WRITE,
-        })
+        | frozenset(
+            {
+                Capability.TENANT_SCOPED_STATE,
+                Capability.SNAPSHOT_ISOLATION,
+                # Conditional metadata writes use S3's server-enforced
+                # If-Match precondition on the metadata object's ETag — the
+                # race-free CAS primitive for many replicas over one bucket.
+                Capability.CONDITIONAL_WRITE,
+            }
+        )
     )
 
     def __init__(
@@ -202,9 +204,7 @@ class S3KnowledgeBackend(KnowledgeResourceBackendMixin):
             bucket=config["bucket"],
             prefix=config.get("prefix", "knowledge/"),
             session_config=AwsSessionConfig.from_dict(config),
-            change_detection_mode=config.get(
-                "change_detection_mode", "snapshot"
-            ),
+            change_detection_mode=config.get("change_detection_mode", "snapshot"),
         )
 
     @property
@@ -278,9 +278,7 @@ class S3KnowledgeBackend(KnowledgeResourceBackendMixin):
             return f"{self._prefix}{domain_id}/{self.CONTENT_DIR}/{path}"
         return f"{self._prefix}{domain_id}/"
 
-    def _metadata_key(
-        self, domain_id: str, ctx: TenantContext | None = None
-    ) -> str:
+    def _metadata_key(self, domain_id: str, ctx: TenantContext | None = None) -> str:
         """Get the S3 key for a KB's metadata file.
 
         With ``ctx=None`` this is the pre-tenancy key
@@ -288,10 +286,7 @@ class S3KnowledgeBackend(KnowledgeResourceBackendMixin):
         ``ctx.state_key_prefix()`` between the backend prefix and the
         domain, isolating per-tenant ingest **state**.
         """
-        return (
-            f"{self._prefix}{self._state_prefix(ctx)}"
-            f"{domain_id}/{self.METADATA_FILE}"
-        )
+        return f"{self._prefix}{self._state_prefix(ctx)}{domain_id}/{self.METADATA_FILE}"
 
     def _snapshot_key(
         self,
@@ -326,25 +321,16 @@ class S3KnowledgeBackend(KnowledgeResourceBackendMixin):
         """
         domain_segment = domain_id if domain_id else "*"
         if kind is KnowledgeKeyKind.CONTENT:
-            return (
-                f"{self._prefix}{domain_segment}/{self.CONTENT_DIR}/*"
-            )
+            return f"{self._prefix}{domain_segment}/{self.CONTENT_DIR}/*"
         if kind is KnowledgeKeyKind.METADATA:
-            return (
-                f"{self._prefix}{domain_segment}/{self.METADATA_FILE}"
-            )
+            return f"{self._prefix}{domain_segment}/{self.METADATA_FILE}"
         if kind is KnowledgeKeyKind.SNAPSHOT:
-            return (
-                f"{self._prefix}{domain_segment}/{self.SNAPSHOTS_DIR}/*"
-            )
+            return f"{self._prefix}{domain_segment}/{self.SNAPSHOTS_DIR}/*"
         raise ValueError(
-            f"key_pattern is not defined for kind {kind!r} "
-            f"(only CONTENT / METADATA / SNAPSHOT)"
+            f"key_pattern is not defined for kind {kind!r} (only CONTENT / METADATA / SNAPSHOT)"
         )
 
-    async def _load_metadata(
-        self, domain_id: str, ctx: TenantContext | None = None
-    ) -> dict:
+    async def _load_metadata(self, domain_id: str, ctx: TenantContext | None = None) -> dict:
         """Load metadata from S3 (tenant-scoped via ``ctx``)."""
         if not self._session:
             raise RuntimeError("Backend not initialized")
@@ -366,9 +352,7 @@ class S3KnowledgeBackend(KnowledgeResourceBackendMixin):
         err = error.response.get("Error", {})
         if err.get("Code") == _PRECONDITION_FAILED_CODE:
             return True
-        status = error.response.get("ResponseMetadata", {}).get(
-            "HTTPStatusCode"
-        )
+        status = error.response.get("ResponseMetadata", {}).get("HTTPStatusCode")
         return status == _PRECONDITION_FAILED_STATUS
 
     async def _save_metadata(
@@ -400,9 +384,7 @@ class S3KnowledgeBackend(KnowledgeResourceBackendMixin):
         key = self._metadata_key(domain_id, ctx)
         body = json.dumps(metadata, indent=2, default=str).encode("utf-8")
         if expected_version is None:
-            async with self._session.client(
-                "s3", **self._client_kwargs
-            ) as s3:
+            async with self._session.client("s3", **self._client_kwargs) as s3:
                 await s3.put_object(
                     Bucket=self._bucket,
                     Key=key,
@@ -411,9 +393,7 @@ class S3KnowledgeBackend(KnowledgeResourceBackendMixin):
                 )
         else:
             try:
-                async with self._session.client(
-                    "s3", **self._client_kwargs
-                ) as s3:
+                async with self._session.client("s3", **self._client_kwargs) as s3:
                     await s3.put_object(
                         Bucket=self._bucket,
                         Key=key,
@@ -433,8 +413,7 @@ class S3KnowledgeBackend(KnowledgeResourceBackendMixin):
                 code = e.response.get("Error", {}).get("Code")
                 if self._is_precondition_failed(e) or code in _MISSING_KEY_CODES:
                     raise ConcurrencyError(
-                        "Knowledge-base state document was modified by a "
-                        "concurrent writer",
+                        "Knowledge-base state document was modified by a concurrent writer",
                         context={
                             "domain_id": domain_id,
                             "expected_version": expected_version,
@@ -486,9 +465,7 @@ class S3KnowledgeBackend(KnowledgeResourceBackendMixin):
         # Auto-detect content type. The first mimetypes lookup lazily
         # reads the system mime database from disk, so offload it.
         if content_type is None:
-            content_type = await asyncio.to_thread(
-                self._guess_content_type, path
-            )
+            content_type = await asyncio.to_thread(self._guess_content_type, path)
 
         # Calculate checksum
         checksum = hashlib.md5(data).hexdigest()
@@ -496,9 +473,7 @@ class S3KnowledgeBackend(KnowledgeResourceBackendMixin):
         # Upload file
         key = self._s3_key(domain_id, path)
         object_metadata = (
-            {"checksum": checksum}
-            if not metadata
-            else {**metadata, "checksum": checksum}
+            {"checksum": checksum} if not metadata else {**metadata, "checksum": checksum}
         )
         async with self._session.client("s3", **self._client_kwargs) as s3:
             await s3.put_object(
@@ -636,9 +611,7 @@ class S3KnowledgeBackend(KnowledgeResourceBackendMixin):
         logger.debug("Deleted file: s3://%s/%s", self._bucket, key)
         return True
 
-    async def list_files(
-        self, domain_id: str, prefix: str | None = None
-    ) -> list[KnowledgeFile]:
+    async def list_files(self, domain_id: str, prefix: str | None = None) -> list[KnowledgeFile]:
         """List all files in a knowledge base."""
         kb_metadata = await self._load_metadata(domain_id)
         files_dict = kb_metadata.get("files", {})
@@ -669,9 +642,7 @@ class S3KnowledgeBackend(KnowledgeResourceBackendMixin):
 
     # --- Knowledge Base Operations ---
 
-    async def create_kb(
-        self, domain_id: str, metadata: dict | None = None
-    ) -> KnowledgeBaseInfo:
+    async def create_kb(self, domain_id: str, metadata: dict | None = None) -> KnowledgeBaseInfo:
         """Create a new knowledge base."""
         if not self._session:
             raise RuntimeError("Backend not initialized")
@@ -728,9 +699,7 @@ class S3KnowledgeBackend(KnowledgeResourceBackendMixin):
         prefix = f"{self._prefix}{domain_id}/"
         async with self._session.client("s3", **self._client_kwargs) as s3:
             paginator = s3.get_paginator("list_objects_v2")
-            async for page in paginator.paginate(
-                Bucket=self._bucket, Prefix=prefix
-            ):
+            async for page in paginator.paginate(Bucket=self._bucket, Prefix=prefix):
                 contents = page.get("Contents", [])
                 if not contents:
                     continue
@@ -793,9 +762,7 @@ class S3KnowledgeBackend(KnowledgeResourceBackendMixin):
 
         key = self._metadata_key(domain_id, ctx)
         try:
-            async with self._session.client(
-                "s3", **self._client_kwargs
-            ) as s3:
+            async with self._session.client("s3", **self._client_kwargs) as s3:
                 response = await s3.head_object(Bucket=self._bucket, Key=key)
         except ClientError as e:
             if e.response.get("Error", {}).get("Code") in _MISSING_KEY_CODES:
@@ -834,18 +801,14 @@ class S3KnowledgeBackend(KnowledgeResourceBackendMixin):
         info_dict = kb_metadata.get("info", {"domain_id": domain_id})
         # Persist the string value so the JSON round-trips and
         # KnowledgeBaseInfo.from_dict rehydrates the enum.
-        info_dict["ingestion_status"] = normalize_ingestion_status(
-            status
-        ).value
+        info_dict["ingestion_status"] = normalize_ingestion_status(status).value
         info_dict["ingestion_error"] = error
         # Always written through: a non-SWAPPING transition passes the
         # default None and so clears any stale in-flight swap token.
         info_dict["generation"] = generation
         kb_metadata["info"] = info_dict
 
-        await self._save_metadata(
-            domain_id, kb_metadata, ctx, expected_version=expected_version
-        )
+        await self._save_metadata(domain_id, kb_metadata, ctx, expected_version=expected_version)
 
     # --- Change Detection ---
     #
@@ -863,10 +826,7 @@ class S3KnowledgeBackend(KnowledgeResourceBackendMixin):
     def _snapshot_from_metadata(metadata: dict) -> dict[str, str]:
         """Reconstruct a ``{path: checksum}`` map from a KB metadata dict."""
         files = metadata.get("files", {})
-        return {
-            path: info.get("checksum", "")
-            for path, info in files.items()
-        }
+        return {path: info.get("checksum", "") for path, info in files.items()}
 
     async def _record_snapshot(
         self,
@@ -895,9 +855,7 @@ class S3KnowledgeBackend(KnowledgeResourceBackendMixin):
             return
         if not self._session:
             raise RuntimeError("Backend not initialized")
-        snapshot = {
-            path: info.get("checksum", "") for path, info in files.items()
-        }
+        snapshot = {path: info.get("checksum", "") for path, info in files.items()}
         version = self._identity_of_snapshot(snapshot)
         if not version:
             return
@@ -938,9 +896,7 @@ class S3KnowledgeBackend(KnowledgeResourceBackendMixin):
         if not self._session:
             raise RuntimeError("Backend not initialized")
         if self._change_detection_mode == "s3_versioning":
-            return await self._load_snapshot_from_versions(
-                domain_id, version, ctx
-            )
+            return await self._load_snapshot_from_versions(domain_id, version, ctx)
         # snapshot mode
         try:
             async with self._session.client("s3", **self._client_kwargs) as s3:
@@ -952,8 +908,7 @@ class S3KnowledgeBackend(KnowledgeResourceBackendMixin):
         except ClientError as e:
             if e.response.get("Error", {}).get("Code") in _MISSING_KEY_CODES:
                 raise InvalidVersionError(
-                    f"Version {version!r} is not retained for domain "
-                    f"{domain_id!r}"
+                    f"Version {version!r} is not retained for domain {domain_id!r}"
                 ) from e
             raise
         data: dict[str, str] = json.loads(raw.decode("utf-8"))
@@ -981,9 +936,7 @@ class S3KnowledgeBackend(KnowledgeResourceBackendMixin):
         metadata_key = self._metadata_key(domain_id, ctx)
         async with self._session.client("s3", **self._client_kwargs) as s3:
             paginator = s3.get_paginator("list_object_versions")
-            async for page in paginator.paginate(
-                Bucket=self._bucket, Prefix=metadata_key
-            ):
+            async for page in paginator.paginate(Bucket=self._bucket, Prefix=metadata_key):
                 # DeleteMarkers are returned under "DeleteMarkers", not
                 # "Versions", so iterating "Versions" already excludes them
                 # (the metadata object is overwritten, never deleted, anyway).

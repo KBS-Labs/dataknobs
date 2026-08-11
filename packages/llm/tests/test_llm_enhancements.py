@@ -10,12 +10,7 @@ class TestLLMConfigClone:
 
     def test_clone_basic(self):
         """Test basic cloning without overrides."""
-        config = LLMConfig(
-            provider="openai",
-            model="gpt-4",
-            temperature=0.7,
-            max_tokens=1000
-        )
+        config = LLMConfig(provider="openai", model="gpt-4", temperature=0.7, max_tokens=1000)
 
         cloned = config.clone()
 
@@ -29,12 +24,7 @@ class TestLLMConfigClone:
 
     def test_clone_with_overrides(self):
         """Test cloning with field overrides."""
-        config = LLMConfig(
-            provider="openai",
-            model="gpt-4",
-            temperature=0.7,
-            max_tokens=1000
-        )
+        config = LLMConfig(provider="openai", model="gpt-4", temperature=0.7, max_tokens=1000)
 
         cloned = config.clone(temperature=1.2, max_tokens=500)
 
@@ -52,11 +42,7 @@ class TestLLMConfigClone:
 
     def test_clone_with_model_override(self):
         """Test cloning with model override."""
-        config = LLMConfig(
-            provider="openai",
-            model="gpt-4",
-            temperature=0.7
-        )
+        config = LLMConfig(provider="openai", model="gpt-4", temperature=0.7)
 
         cloned = config.clone(model="gpt-3.5-turbo")
 
@@ -71,15 +57,10 @@ class TestLLMConfigClone:
             temperature=0.7,
             max_tokens=1000,
             top_p=1.0,
-            frequency_penalty=0.0
+            frequency_penalty=0.0,
         )
 
-        cloned = config.clone(
-            temperature=0.9,
-            max_tokens=1500,
-            top_p=0.95,
-            frequency_penalty=0.5
-        )
+        cloned = config.clone(temperature=0.9, max_tokens=1500, top_p=0.95, frequency_penalty=0.5)
 
         assert cloned.temperature == 0.9
         assert cloned.max_tokens == 1500
@@ -92,11 +73,7 @@ class TestLLMConfigClone:
 
     def test_clone_with_enum_override(self):
         """Test cloning with enum field override."""
-        config = LLMConfig(
-            provider="openai",
-            model="gpt-4",
-            mode=CompletionMode.CHAT
-        )
+        config = LLMConfig(provider="openai", model="gpt-4", mode=CompletionMode.CHAT)
 
         cloned = config.clone(mode=CompletionMode.TEXT)
 
@@ -111,7 +88,7 @@ class TestLLMConfigClone:
             api_key="sk-test-key",
             api_base="https://custom.api.com",
             seed=42,
-            user_id="user-123"
+            user_id="user-123",
         )
 
         cloned = config.clone(temperature=0.9)
@@ -133,7 +110,7 @@ class TestCostTracking:
             model="gpt-4",
             usage={"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
             cost_usd=0.0015,
-            cumulative_cost_usd=0.0045
+            cumulative_cost_usd=0.0045,
         )
 
         assert response.cost_usd == 0.0015
@@ -141,10 +118,7 @@ class TestCostTracking:
 
     def test_response_without_cost(self):
         """Test creating response without cost tracking."""
-        response = LLMResponse(
-            content="Hello, world!",
-            model="gpt-4"
-        )
+        response = LLMResponse(content="Hello, world!", model="gpt-4")
 
         assert response.cost_usd is None
         assert response.cumulative_cost_usd is None
@@ -154,7 +128,7 @@ class TestCostTracking:
         response = LLMResponse(
             content="Hello, world!",
             model="gpt-4",
-            usage={"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}
+            usage={"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
         )
 
         assert response.cost_usd is None
@@ -168,11 +142,7 @@ class TestCostTracking:
 
     def test_response_with_partial_cost(self):
         """Test response with only cost_usd set."""
-        response = LLMResponse(
-            content="Hello, world!",
-            model="gpt-4",
-            cost_usd=0.0015
-        )
+        response = LLMResponse(content="Hello, world!", model="gpt-4", cost_usd=0.0015)
 
         assert response.cost_usd == 0.0015
         assert response.cumulative_cost_usd is None
@@ -185,7 +155,7 @@ class TestCostTracking:
             usage={"prompt_tokens": 10, "completion_tokens": 5},
             cost_usd=0.0015,
             cumulative_cost_usd=0.0045,
-            metadata={"custom_field": "value"}
+            metadata={"custom_field": "value"},
         )
 
         assert response.cost_usd == 0.0015
@@ -196,22 +166,13 @@ class TestCostTracking:
         """Test tracking cumulative cost across multiple responses."""
         responses = [
             LLMResponse(
-                content="First response",
-                model="gpt-4",
-                cost_usd=0.001,
-                cumulative_cost_usd=0.001
+                content="First response", model="gpt-4", cost_usd=0.001, cumulative_cost_usd=0.001
             ),
             LLMResponse(
-                content="Second response",
-                model="gpt-4",
-                cost_usd=0.002,
-                cumulative_cost_usd=0.003
+                content="Second response", model="gpt-4", cost_usd=0.002, cumulative_cost_usd=0.003
             ),
             LLMResponse(
-                content="Third response",
-                model="gpt-4",
-                cost_usd=0.0015,
-                cumulative_cost_usd=0.0045
+                content="Third response", model="gpt-4", cost_usd=0.0015, cumulative_cost_usd=0.0045
             ),
         ]
 
@@ -236,7 +197,7 @@ class TestLLMResponseFields:
             model="gpt-4",
             finish_reason="stop",
             usage={"total_tokens": 100},
-            created_at=now
+            created_at=now,
         )
 
         assert response.content == "Test content"
@@ -250,10 +211,7 @@ class TestLLMResponseFields:
         response = LLMResponse(
             content="",
             model="gpt-4",
-            function_call={
-                "name": "get_weather",
-                "arguments": '{"location": "San Francisco"}'
-            }
+            function_call={"name": "get_weather", "arguments": '{"location": "San Francisco"}'},
         )
 
         assert response.function_call is not None
@@ -264,10 +222,7 @@ class TestLLMResponseFields:
         response = LLMResponse(
             content="Test",
             model="gpt-4",
-            metadata={
-                "request_id": "req-123",
-                "environment": "production"
-            }
+            metadata={"request_id": "req-123", "environment": "production"},
         )
 
         assert response.metadata["request_id"] == "req-123"

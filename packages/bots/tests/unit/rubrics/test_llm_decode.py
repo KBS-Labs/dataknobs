@@ -20,12 +20,8 @@ from dataknobs_bots.rubrics.models import (
 
 # --- Fixtures ---
 
-FAIL_LEVEL = RubricLevel(
-    id="fail", label="Fail", description="Does not meet criteria", score=0.0
-)
-PASS_LEVEL = RubricLevel(
-    id="pass", label="Pass", description="Meets minimum criteria", score=0.7
-)
+FAIL_LEVEL = RubricLevel(id="fail", label="Fail", description="Does not meet criteria", score=0.0)
+PASS_LEVEL = RubricLevel(id="pass", label="Pass", description="Meets minimum criteria", score=0.7)
 EXCELLENT_LEVEL = RubricLevel(
     id="excellent", label="Excellent", description="Exceeds expectations", score=1.0
 )
@@ -102,9 +98,7 @@ class TestLLMDecodeScoring:
         provider = EchoProvider({"provider": "echo", "model": "test"})
         provider.set_responses([json.dumps({"level_id": "pass"})])
 
-        executor = RubricExecutor(
-            function_registry=FunctionRegistry(), llm=provider
-        )
+        executor = RubricExecutor(function_registry=FunctionRegistry(), llm=provider)
         rubric = _make_rubric([_make_llm_decode_criterion()])
         target = {"content": "This is some test content."}
 
@@ -123,9 +117,7 @@ class TestLLMDecodeScoring:
         provider = EchoProvider({"provider": "echo", "model": "test"})
         provider.set_responses(["excellent", "feedback summary"])
 
-        executor = RubricExecutor(
-            function_registry=FunctionRegistry(), llm=provider
-        )
+        executor = RubricExecutor(function_registry=FunctionRegistry(), llm=provider)
         rubric = _make_rubric([_make_llm_decode_criterion()])
         target = {"content": "Outstanding content."}
 
@@ -139,9 +131,7 @@ class TestLLMDecodeScoring:
         provider = EchoProvider({"provider": "echo", "model": "test"})
         provider.set_responses(["PASS", "feedback summary"])
 
-        executor = RubricExecutor(
-            function_registry=FunctionRegistry(), llm=provider
-        )
+        executor = RubricExecutor(function_registry=FunctionRegistry(), llm=provider)
         rubric = _make_rubric([_make_llm_decode_criterion()])
         target = {"content": "Some content."}
 
@@ -154,9 +144,7 @@ class TestLLMDecodeScoring:
         provider = EchoProvider({"provider": "echo", "model": "test"})
         provider.set_responses(["something completely unrelated", "feedback summary"])
 
-        executor = RubricExecutor(
-            function_registry=FunctionRegistry(), llm=provider
-        )
+        executor = RubricExecutor(function_registry=FunctionRegistry(), llm=provider)
         rubric = _make_rubric([_make_llm_decode_criterion()])
         target = {"content": "Test content."}
 
@@ -168,9 +156,7 @@ class TestLLMDecodeScoring:
 
     async def test_llm_not_configured_raises_error(self) -> None:
         """LLM_DECODE without LLM provider configured → error result."""
-        executor = RubricExecutor(
-            function_registry=FunctionRegistry(), llm=None
-        )
+        executor = RubricExecutor(function_registry=FunctionRegistry(), llm=None)
         rubric = _make_rubric([_make_llm_decode_criterion()])
 
         evaluation = await executor.evaluate(rubric, {})
@@ -189,9 +175,7 @@ class TestLLMDecodeScoring:
             levels=list(STANDARD_LEVELS),
             scoring_method=ScoringMethod(type=ScoringType.LLM_DECODE),
         )
-        executor = RubricExecutor(
-            function_registry=FunctionRegistry(), llm=provider
-        )
+        executor = RubricExecutor(function_registry=FunctionRegistry(), llm=provider)
         rubric = _make_rubric([criterion])
 
         evaluation = await executor.evaluate(rubric, {})
@@ -209,9 +193,7 @@ class TestLLMDecodeTemplateRendering:
         criterion = _make_llm_decode_criterion(
             decode_prompt="Title: {{ title }}, Words: {{ word_count }}",
         )
-        executor = RubricExecutor(
-            function_registry=FunctionRegistry(), llm=provider
-        )
+        executor = RubricExecutor(function_registry=FunctionRegistry(), llm=provider)
         rubric = _make_rubric([criterion])
         target = {"title": "My Doc", "word_count": 150}
 
@@ -232,9 +214,7 @@ class TestLLMDecodeTemplateRendering:
         criterion = _make_llm_decode_criterion(
             decode_prompt="Content: {{ missing_var }}",
         )
-        executor = RubricExecutor(
-            function_registry=FunctionRegistry(), llm=provider
-        )
+        executor = RubricExecutor(function_registry=FunctionRegistry(), llm=provider)
         rubric = _make_rubric([criterion])
 
         evaluation = await executor.evaluate(rubric, {"content": "test"})
@@ -254,17 +234,17 @@ class TestLLMDecodeOutputSchema:
             },
         }
         provider = EchoProvider({"provider": "echo", "model": "test"})
-        provider.set_responses([
-            json.dumps({"level_id": "excellent"}),
-            "feedback",
-        ])
+        provider.set_responses(
+            [
+                json.dumps({"level_id": "excellent"}),
+                "feedback",
+            ]
+        )
 
         criterion = _make_llm_decode_criterion(
             decode_output_schema=output_schema,
         )
-        executor = RubricExecutor(
-            function_registry=FunctionRegistry(), llm=provider
-        )
+        executor = RubricExecutor(function_registry=FunctionRegistry(), llm=provider)
         rubric = _make_rubric([criterion])
 
         evaluation = await executor.evaluate(rubric, {"content": "test"})
@@ -277,20 +257,18 @@ class TestLLMDecodeMixedCriteria:
     async def test_mixed_deterministic_and_llm_decode(self) -> None:
         """Rubric with both deterministic and LLM decode criteria."""
         provider = EchoProvider({"provider": "echo", "model": "test"})
-        provider.set_responses([
-            json.dumps({"level_id": "excellent"}),
-            "feedback",
-        ])
+        provider.set_responses(
+            [
+                json.dumps({"level_id": "excellent"}),
+                "feedback",
+            ]
+        )
 
         registry = FunctionRegistry()
         registry.register("test:has_title", score_has_title)
 
-        det_criterion = _make_deterministic_criterion(
-            "c1", "test:has_title", weight=0.5
-        )
-        llm_criterion = _make_llm_decode_criterion(
-            criterion_id="c2", weight=0.5
-        )
+        det_criterion = _make_deterministic_criterion("c1", "test:has_title", weight=0.5)
+        llm_criterion = _make_llm_decode_criterion(criterion_id="c2", weight=0.5)
         rubric = _make_rubric([det_criterion, llm_criterion])
 
         executor = RubricExecutor(function_registry=registry, llm=provider)
@@ -317,14 +295,14 @@ class TestLLMDecodeInvocationTracking:
     async def test_llm_invocation_recorded(self) -> None:
         """LLM invocation details are recorded in criterion result."""
         provider = EchoProvider({"provider": "echo", "model": "test"})
-        provider.set_responses([
-            json.dumps({"level_id": "pass"}),
-            "feedback",
-        ])
-
-        executor = RubricExecutor(
-            function_registry=FunctionRegistry(), llm=provider
+        provider.set_responses(
+            [
+                json.dumps({"level_id": "pass"}),
+                "feedback",
+            ]
         )
+
+        executor = RubricExecutor(function_registry=FunctionRegistry(), llm=provider)
         rubric = _make_rubric([_make_llm_decode_criterion()])
 
         evaluation = await executor.evaluate(rubric, {"content": "test"})
@@ -339,14 +317,14 @@ class TestLLMDecodeInvocationTracking:
     async def test_llm_invocation_serialization(self) -> None:
         """LLM invocation is included in to_dict/from_dict round-trip."""
         provider = EchoProvider({"provider": "echo", "model": "test"})
-        provider.set_responses([
-            json.dumps({"level_id": "pass"}),
-            "feedback",
-        ])
-
-        executor = RubricExecutor(
-            function_registry=FunctionRegistry(), llm=provider
+        provider.set_responses(
+            [
+                json.dumps({"level_id": "pass"}),
+                "feedback",
+            ]
         )
+
+        executor = RubricExecutor(function_registry=FunctionRegistry(), llm=provider)
         rubric = _make_rubric([_make_llm_decode_criterion()])
 
         evaluation = await executor.evaluate(rubric, {"content": "test"})
@@ -356,6 +334,7 @@ class TestLLMDecodeInvocationTracking:
         assert "llm_invocation" in result_dict
 
         from dataknobs_bots.rubrics.models import CriterionResult
+
         restored = CriterionResult.from_dict(result_dict)
         assert restored.llm_invocation is not None
         assert restored.llm_invocation["prompt_hash"] == result.llm_invocation["prompt_hash"]

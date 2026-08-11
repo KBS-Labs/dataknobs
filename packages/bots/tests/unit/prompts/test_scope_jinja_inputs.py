@@ -85,6 +85,7 @@ def test_conforms_to_scope_projector_protocol() -> None:
 
 # --- Security: default environment is sandboxed ----------------------- #
 
+
 def test_default_env_blocks_sandbox_escape() -> None:
     """With no env= supplied the default is a SandboxedEnvironment, so an
     attribute-traversal SSTI payload raises instead of leaking interpreter
@@ -114,6 +115,7 @@ def test_explicit_unsandboxed_env_is_caller_opt_in() -> None:
 
 
 # --- Error handling: strict vs graceful degradation ------------------- #
+
 
 def test_strict_true_propagates_failing_expression() -> None:
     """Default strict=True: a failing expression propagates."""

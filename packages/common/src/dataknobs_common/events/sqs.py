@@ -349,13 +349,8 @@ class SqsEventBus(StructuredConfigConsumer[SqsEventBusConfig]):
         )
 
         async with self._lock:
-            if (
-                not self._config.require_topic_attribute
-                and self._subscriptions
-            ):
-                existing_topics = sorted(
-                    {sub.topic for sub in self._subscriptions.values()}
-                )
+            if not self._config.require_topic_attribute and self._subscriptions:
+                existing_topics = sorted({sub.topic for sub in self._subscriptions.values()})
                 raise ValueError(
                     "SqsEventBus is in single-topic bridge mode "
                     "(require_topic_attribute=False) and already has a "
@@ -412,9 +407,7 @@ class SqsEventBus(StructuredConfigConsumer[SqsEventBusConfig]):
                 MessageAttributeNames=[self._config.topic_attribute],
             )
             for message in response.get("Messages", []):
-                await self._handle_message(
-                    message, subscription_id, topic, handler
-                )
+                await self._handle_message(message, subscription_id, topic, handler)
 
         await run_supervised_loop(
             _one,
@@ -422,9 +415,7 @@ class SqsEventBus(StructuredConfigConsumer[SqsEventBusConfig]):
             name=f"SqsEventBus poll {subscription_id[:8]}",
         )
 
-    def _extract_topic_attribute(
-        self, message: dict[str, Any]
-    ) -> str | None:
+    def _extract_topic_attribute(self, message: dict[str, Any]) -> str | None:
         """Pull the topic attribute's ``StringValue`` from an SQS message.
 
         Returns ``None`` when the attribute is absent (the message was
@@ -437,9 +428,7 @@ class SqsEventBus(StructuredConfigConsumer[SqsEventBusConfig]):
         value = topic_attr.get("StringValue")
         return value if isinstance(value, str) else None
 
-    async def _release_visibility(
-        self, receipt_handle: str | None
-    ) -> None:
+    async def _release_visibility(self, receipt_handle: str | None) -> None:
         """Return a message to the queue immediately (visibility 0).
 
         Best-effort: a benign expired / invalid-receipt-handle race
@@ -483,9 +472,7 @@ class SqsEventBus(StructuredConfigConsumer[SqsEventBusConfig]):
 
         if msg_topic is None:
             if not self._config.require_topic_attribute:
-                await self._dispatch_to_all(
-                    message, subscription_id, topic, receipt_handle
-                )
+                await self._dispatch_to_all(message, subscription_id, topic, receipt_handle)
                 return
             # Default mode: absent attribute is "not for this
             # subscription" → release (same outcome as a mismatched
@@ -499,9 +486,7 @@ class SqsEventBus(StructuredConfigConsumer[SqsEventBusConfig]):
             await self._release_visibility(receipt_handle)
             return
 
-        await self._dispatch_single(
-            message, subscription_id, topic, handler, receipt_handle
-        )
+        await self._dispatch_single(message, subscription_id, topic, handler, receipt_handle)
 
     async def _dispatch_single(
         self,
@@ -620,11 +605,7 @@ class SqsEventBus(StructuredConfigConsumer[SqsEventBusConfig]):
             # redeliveries) rather than auto-generated, so handlers can
             # use event.event_id for idempotency keys without breaking
             # on at-least-once redelivery of the same logical message.
-            payload = (
-                decoded
-                if isinstance(decoded, dict)
-                else {"body": decoded}
-            )
+            payload = decoded if isinstance(decoded, dict) else {"body": decoded}
             event_kwargs: dict[str, Any] = {
                 "type": EventType.CUSTOM,
                 "topic": receiving_topic,
@@ -653,8 +634,7 @@ class SqsEventBus(StructuredConfigConsumer[SqsEventBusConfig]):
             # snapshot. No handler available — delete the message so
             # it doesn't recirculate, and log for operator visibility.
             logger.debug(
-                "Fanout snapshot empty for SQS message %s "
-                "(concurrent unsubscribe race); deleting",
+                "Fanout snapshot empty for SQS message %s (concurrent unsubscribe race); deleting",
                 message_id,
             )
             if receipt_handle:

@@ -68,9 +68,7 @@ class TestRAGEmbeddingsConfig:
 
         kb = await RAGKnowledgeBase.from_config(config)
         try:
-            assert kb.embedding_provider.config.api_base == (
-                "https://proxy.example/v1"
-            )
+            assert kb.embedding_provider.config.api_base == ("https://proxy.example/v1")
             assert kb.embedding_provider.config.api_key == "sk-test-key"
         finally:
             await kb.close()

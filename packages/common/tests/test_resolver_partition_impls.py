@@ -152,9 +152,7 @@ def test_temporal_resolver_unsupported_bucket_raises_at_construction() -> None:
 
 
 def test_callable_partition_resolver_dispatches() -> None:
-    r = CallablePartitionResolver(
-        fn=lambda record: f"custom_{record.metadata.get('x', 'none')}"
-    )
+    r = CallablePartitionResolver(fn=lambda record: f"custom_{record.metadata.get('x', 'none')}")
     record = _FakeRecord(metadata={"x": "value"})
     assert r.resolve(record) == "custom_value"
 
@@ -176,10 +174,12 @@ def test_joining_partition_resolver_joins_with_unambiguous_separator() -> None:
         ],
         sep="::",
     )
-    record = _FakeRecord(metadata={
-        "tenant_id": "acme",
-        "ts": datetime(2026, 5, 1),
-    })
+    record = _FakeRecord(
+        metadata={
+            "tenant_id": "acme",
+            "ts": datetime(2026, 5, 1),
+        }
+    )
     assert r.resolve(record) == "acme::2026_q2"
 
 
@@ -191,10 +191,12 @@ def test_joining_partition_resolver_custom_separator() -> None:
         ],
         sep="/",
     )
-    record = _FakeRecord(metadata={
-        "tenant_id": "acme",
-        "content_type": "legal",
-    })
+    record = _FakeRecord(
+        metadata={
+            "tenant_id": "acme",
+            "content_type": "legal",
+        }
+    )
     assert r.resolve(record) == "acme/legal"
 
 

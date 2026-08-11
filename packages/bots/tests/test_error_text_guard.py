@@ -40,11 +40,9 @@ _ALLOWED = {
     # a helper it cannot look inside, so it assumes the worst. The helper
     # returns authored text plus collaborator *names* and a doc path, none of
     # which is the exception's own message.
-    "dataknobs_bots/reasoning/wizard_response.py:1680",
+    "dataknobs_bots/reasoning/wizard_response.py:1688",
 }
 
 
 def test_no_broad_except_feeds_a_rendered_error_message():
-    assert_no_broad_except_in_error_text(
-        _SRC, error_names=_RENDERED, ignore=_ALLOWED
-    )
+    assert_no_broad_except_in_error_text(_SRC, error_names=_RENDERED, ignore=_ALLOWED)

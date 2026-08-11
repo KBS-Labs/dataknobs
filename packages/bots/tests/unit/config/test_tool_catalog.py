@@ -201,20 +201,24 @@ class TestToolCatalog:
 
     def test_register_from_dict(self) -> None:
         catalog = ToolCatalog()
-        catalog.register_from_dict({
-            "name": "t",
-            "class_path": "m.T",
-            "tags": ["a"],
-        })
+        catalog.register_from_dict(
+            {
+                "name": "t",
+                "class_path": "m.T",
+                "tags": ["a"],
+            }
+        )
         entry = catalog.get("t")
         assert entry.tags == frozenset({"a"})
 
     def test_register_many_from_dicts(self) -> None:
         catalog = ToolCatalog()
-        catalog.register_many_from_dicts([
-            {"name": "t1", "class_path": "m.T1"},
-            {"name": "t2", "class_path": "m.T2"},
-        ])
+        catalog.register_many_from_dicts(
+            [
+                {"name": "t1", "class_path": "m.T1"},
+                {"name": "t2", "class_path": "m.T2"},
+            ]
+        )
         assert catalog.count() == 2
 
     def test_get_unknown_raises(self) -> None:
@@ -412,9 +416,7 @@ class TestSelfDescribingTools:
             )
             meta = tool_class.catalog_metadata()
             assert "name" in meta, f"{tool_class.__name__} metadata missing 'name'"
-            assert "description" in meta, (
-                f"{tool_class.__name__} metadata missing 'description'"
-            )
+            assert "description" in meta, f"{tool_class.__name__} metadata missing 'description'"
 
 
 # -- Dependency Validation Tests --
@@ -425,12 +427,8 @@ class TestDependencyValidation:
 
     def test_get_requirements(self) -> None:
         catalog = ToolCatalog()
-        catalog.register_tool(
-            name="t1", class_path="m.T1", requires=("a", "b")
-        )
-        catalog.register_tool(
-            name="t2", class_path="m.T2", requires=("b", "c")
-        )
+        catalog.register_tool(name="t1", class_path="m.T1", requires=("a", "b"))
+        catalog.register_tool(name="t2", class_path="m.T2", requires=("b", "c"))
         reqs = catalog.get_requirements(["t1", "t2"])
         assert reqs == frozenset({"a", "b", "c"})
 
@@ -442,19 +440,13 @@ class TestDependencyValidation:
 
     def test_check_requirements_satisfied(self) -> None:
         catalog = ToolCatalog()
-        catalog.register_tool(
-            name="t1", class_path="m.T1", requires=("knowledge_base",)
-        )
-        warnings = catalog.check_requirements(
-            ["t1"], {"knowledge_base": {"enabled": True}}
-        )
+        catalog.register_tool(name="t1", class_path="m.T1", requires=("knowledge_base",))
+        warnings = catalog.check_requirements(["t1"], {"knowledge_base": {"enabled": True}})
         assert warnings == []
 
     def test_check_requirements_missing(self) -> None:
         catalog = ToolCatalog()
-        catalog.register_tool(
-            name="t1", class_path="m.T1", requires=("knowledge_base",)
-        )
+        catalog.register_tool(name="t1", class_path="m.T1", requires=("knowledge_base",))
         warnings = catalog.check_requirements(["t1"], {})
         assert len(warnings) == 1
         assert "knowledge_base" in warnings[0]
@@ -467,9 +459,7 @@ class TestDependencyValidation:
             class_path="m.T1",
             requires=("knowledge_base", "vector_store"),
         )
-        warnings = catalog.check_requirements(
-            ["t1"], {"knowledge_base": True}
-        )
+        warnings = catalog.check_requirements(["t1"], {"knowledge_base": True})
         assert len(warnings) == 1
         assert "vector_store" in warnings[0]
 
@@ -484,9 +474,7 @@ class TestToolInstantiation:
         catalog = ToolCatalog()
         catalog.register_tool(
             name="check_knowledge_source",
-            class_path=(
-                "dataknobs_bots.tools.kb_tools.CheckKnowledgeSourceTool"
-            ),
+            class_path=("dataknobs_bots.tools.kb_tools.CheckKnowledgeSourceTool"),
         )
         tool = catalog.instantiate_tool("check_knowledge_source")
         assert tool.name == "check_knowledge_source"
@@ -505,9 +493,7 @@ class TestToolInstantiation:
         would no longer catch anything.
         """
         catalog = ToolCatalog()
-        catalog.register_tool(
-            name="broken", class_path="no_such_module_anywhere:Tool"
-        )
+        catalog.register_tool(name="broken", class_path="no_such_module_anywhere:Tool")
 
         with pytest.raises(DottedPathError) as excinfo:
             catalog.instantiate_tool("broken")
@@ -520,9 +506,7 @@ class TestToolInstantiation:
         catalog = ToolCatalog()
         catalog.register_tool(
             name="check_knowledge_source",
-            class_path=(
-                "dataknobs_bots.tools.kb_tools.CheckKnowledgeSourceTool"
-            ),
+            class_path=("dataknobs_bots.tools.kb_tools.CheckKnowledgeSourceTool"),
         )
         catalog.register_tool(
             name="list_kb_resources",
@@ -542,9 +526,7 @@ class TestToolInstantiation:
         )
         catalog.register_tool(
             name="check_knowledge_source",
-            class_path=(
-                "dataknobs_bots.tools.kb_tools.CheckKnowledgeSourceTool"
-            ),
+            class_path=("dataknobs_bots.tools.kb_tools.CheckKnowledgeSourceTool"),
         )
         registry = catalog.create_tool_registry(strict=False)
         # bad_tool skipped, check_knowledge_source succeeded
@@ -598,9 +580,7 @@ class TestDefaultCatalog:
         # All default catalog class paths should be importable
         for entry in default_catalog.list_items():
             resolved = resolve_callable(entry.class_path)
-            assert callable(resolved), (
-                f"Class path {entry.class_path} did not resolve to callable"
-            )
+            assert callable(resolved), f"Class path {entry.class_path} did not resolve to callable"
 
     def test_default_catalog_has_all_expected_tools(self) -> None:
         expected_names = {

@@ -19,11 +19,7 @@ class TestConfigPromptLibrary:
 
     def test_initialization_with_config(self):
         """Test initialization with configuration."""
-        config = {
-            "system": {
-                "greet": {"template": "Hello {{name}}!"}
-            }
-        }
+        config = {"system": {"greet": {"template": "Hello {{name}}!"}}}
         library = ConfigPromptLibrary(config)
         template = library.get_system_prompt("greet")
         assert template is not None
@@ -31,13 +27,7 @@ class TestConfigPromptLibrary:
 
     def test_system_prompt_simple(self):
         """Test loading simple system prompt."""
-        config = {
-            "system": {
-                "analyze": {
-                    "template": "Analyze {{code}}"
-                }
-            }
-        }
+        config = {"system": {"analyze": {"template": "Analyze {{code}}"}}}
         library = ConfigPromptLibrary(config)
         template = library.get_system_prompt("analyze")
 
@@ -47,12 +37,7 @@ class TestConfigPromptLibrary:
     def test_system_prompt_with_defaults(self):
         """Test system prompt with default values."""
         config = {
-            "system": {
-                "greet": {
-                    "template": "Hello {{name}}!",
-                    "defaults": {"name": "World"}
-                }
-            }
+            "system": {"greet": {"template": "Hello {{name}}!", "defaults": {"name": "World"}}}
         }
         library = ConfigPromptLibrary(config)
         template = library.get_system_prompt("greet")
@@ -66,10 +51,7 @@ class TestConfigPromptLibrary:
             "system": {
                 "analyze": {
                     "template": "Analyze {{code}}",
-                    "validation": {
-                        "level": "error",
-                        "required_params": ["code"]
-                    }
+                    "validation": {"level": "error", "required_params": ["code"]},
                 }
             }
         }
@@ -87,10 +69,7 @@ class TestConfigPromptLibrary:
             "system": {
                 "analyze": {
                     "template": "Analyze {{code}}",
-                    "metadata": {
-                        "author": "alice",
-                        "version": "1.0"
-                    }
+                    "metadata": {"author": "alice", "version": "1.0"},
                 }
             }
         }
@@ -103,11 +82,7 @@ class TestConfigPromptLibrary:
 
     def test_system_prompt_as_string(self):
         """Test system prompt defined as plain string."""
-        config = {
-            "system": {
-                "simple": "Just a template string"
-            }
-        }
+        config = {"system": {"simple": "Just a template string"}}
         library = ConfigPromptLibrary(config)
         template = library.get_system_prompt("simple")
 
@@ -125,13 +100,7 @@ class TestConfigUserPrompts:
 
     def test_user_prompt_simple(self):
         """Test simple user prompt."""
-        config = {
-            "user": {
-                "question": {
-                    "template": "What is {{topic}}?"
-                }
-            }
-        }
+        config = {"user": {"question": {"template": "What is {{topic}}?"}}}
         library = ConfigPromptLibrary(config)
         template = library.get_user_prompt("question")
 
@@ -144,7 +113,7 @@ class TestConfigUserPrompts:
             "user": {
                 "question": {"template": "First question about {{topic}}"},
                 "question_second": {"template": "Second question about {{topic}}"},
-                "question_third": {"template": "Third question about {{topic}}"}
+                "question_third": {"template": "Third question about {{topic}}"},
             }
         }
         library = ConfigPromptLibrary(config)
@@ -162,7 +131,7 @@ class TestConfigUserPrompts:
         config = {
             "user": {
                 "question": {"template": "Question {{n}}"},
-                "question_followup": {"template": "Question {{n}} follow-up"}
+                "question_followup": {"template": "Question {{n}} follow-up"},
             }
         }
         library = ConfigPromptLibrary(config)
@@ -177,10 +146,7 @@ class TestConfigUserPrompts:
         """Test user prompt with default values."""
         config = {
             "user": {
-                "ask": {
-                    "template": "Tell me about {{topic}}",
-                    "defaults": {"topic": "Python"}
-                }
+                "ask": {"template": "Tell me about {{topic}}", "defaults": {"topic": "Python"}}
             }
         }
         library = ConfigPromptLibrary(config)
@@ -204,7 +170,7 @@ class TestConfigMessageIndexes:
                 "conversation": {
                     "messages": [
                         {"role": "system", "content": "You are helpful"},
-                        {"role": "user", "content": "Hello"}
+                        {"role": "user", "content": "Hello"},
                     ]
                 }
             }
@@ -222,17 +188,15 @@ class TestConfigMessageIndexes:
         config = {
             "messages": {
                 "rag_conversation": {
-                    "messages": [
-                        {"role": "system", "content": "Context: {{RAG_CONTENT}}"}
-                    ],
+                    "messages": [{"role": "system", "content": "Context: {{RAG_CONTENT}}"}],
                     "rag_configs": [
                         {
                             "adapter_name": "docs",
                             "query": "{{user_query}}",
                             "k": 5,
-                            "placeholder": "RAG_CONTENT"
+                            "placeholder": "RAG_CONTENT",
                         }
-                    ]
+                    ],
                 }
             }
         }
@@ -251,7 +215,7 @@ class TestConfigMessageIndexes:
             "messages": {
                 "chat": {
                     "messages": [{"role": "user", "content": "Hi"}],
-                    "metadata": {"type": "greeting"}
+                    "metadata": {"type": "greeting"},
                 }
             }
         }
@@ -274,11 +238,7 @@ class TestConfigRAGConfigs:
         """Test simple RAG configuration."""
         config = {
             "rag": {
-                "docs_search": {
-                    "adapter_name": "documentation",
-                    "query": "{{user_query}}",
-                    "k": 3
-                }
+                "docs_search": {"adapter_name": "documentation", "query": "{{user_query}}", "k": 3}
             }
         }
         library = ConfigPromptLibrary(config)
@@ -296,7 +256,7 @@ class TestConfigRAGConfigs:
                 "filtered_search": {
                     "adapter_name": "docs",
                     "query": "search term",
-                    "filters": {"category": "api", "version": "1.0"}
+                    "filters": {"category": "api", "version": "1.0"},
                 }
             }
         }
@@ -316,7 +276,7 @@ class TestConfigRAGConfigs:
                     "query": "query",
                     "placeholder": "CUSTOM_CONTENT",
                     "header": "Relevant Documentation:",
-                    "item_template": "- {{content}}"
+                    "item_template": "- {{content}}",
                 }
             }
         }
@@ -373,11 +333,7 @@ class TestConfigLibraryMutability:
     def test_add_message_index(self):
         """Test adding message index to library."""
         library = ConfigPromptLibrary()
-        index = {
-            "messages": [
-                {"role": "user", "content": "Test"}
-            ]
-        }
+        index = {"messages": [{"role": "user", "content": "Test"}]}
 
         library.add_message_index("new_index", index)
         retrieved = library.get_message_index("new_index")
@@ -388,10 +344,7 @@ class TestConfigLibraryMutability:
     def test_add_rag_config(self):
         """Test adding RAG config to library."""
         library = ConfigPromptLibrary()
-        rag = {
-            "adapter_name": "test",
-            "query": "test query"
-        }
+        rag = {"adapter_name": "test", "query": "test query"}
 
         library.add_rag_config("new_rag", rag)
         retrieved = library.get_rag_config("new_rag")
@@ -415,14 +368,7 @@ class TestConfigLibraryEdgeCases:
     def test_validation_level_variations(self):
         """Test different ways to specify validation level."""
         # String level
-        config1 = {
-            "system": {
-                "test1": {
-                    "template": "Test",
-                    "validation": {"level": "warn"}
-                }
-            }
-        }
+        config1 = {"system": {"test1": {"template": "Test", "validation": {"level": "warn"}}}}
         library1 = ConfigPromptLibrary(config1)
         template1 = library1.get_system_prompt("test1")
         assert template1["validation"].level == ValidationLevel.WARN
@@ -430,10 +376,7 @@ class TestConfigLibraryEdgeCases:
         # ValidationLevel enum
         config2 = {
             "system": {
-                "test2": {
-                    "template": "Test",
-                    "validation": {"level": ValidationLevel.ERROR}
-                }
+                "test2": {"template": "Test", "validation": {"level": ValidationLevel.ERROR}}
             }
         }
         library2 = ConfigPromptLibrary(config2)
@@ -442,18 +385,8 @@ class TestConfigLibraryEdgeCases:
 
     def test_validation_config_object(self):
         """Test passing ValidationConfig object directly."""
-        validation = ValidationConfig(
-            level=ValidationLevel.ERROR,
-            required_params=["param1"]
-        )
-        config = {
-            "system": {
-                "test": {
-                    "template": "Test {{param1}}",
-                    "validation": validation
-                }
-            }
-        }
+        validation = ValidationConfig(level=ValidationLevel.ERROR, required_params=["param1"])
+        config = {"system": {"test": {"template": "Test {{param1}}", "validation": validation}}}
         library = ConfigPromptLibrary(config)
         template = library.get_system_prompt("test")
 

@@ -203,12 +203,14 @@ def cmd_chunk(args: argparse.Namespace) -> None:
     chunk_format = chunk_format_from_str(args.output_format)
 
     # Generate chunks
-    chunks = list(stream_markdown_string(
-        content,
-        max_chunk_size=args.max_size,
-        heading_inclusion=heading_inclusion,
-        chunk_format=chunk_format,
-    ))
+    chunks = list(
+        stream_markdown_string(
+            content,
+            max_chunk_size=args.max_size,
+            heading_inclusion=heading_inclusion,
+            chunk_format=chunk_format,
+        )
+    )
 
     # Output chunks
     with get_output_file(args.output) as out:

@@ -85,9 +85,7 @@ class TestLoaderValidation:
             loader.load_from_dict(config)
         assert any("unrecognized field 'extracts'" in r.message for r in caplog.records)
 
-    def test_missing_schema_and_template_warns(
-        self, caplog: pytest.LogCaptureFixture
-    ) -> None:
+    def test_missing_schema_and_template_warns(self, caplog: pytest.LogCaptureFixture) -> None:
         """Non-end stage with no schema and no response_template warns."""
         config = _two_stage_config(
             first_overrides={"schema": None},
@@ -97,10 +95,7 @@ class TestLoaderValidation:
         loader = WizardConfigLoader()
         with caplog.at_level(logging.WARNING):
             loader.load_from_dict(config)
-        assert any(
-            "no 'schema' and no 'response_template'" in r.message
-            for r in caplog.records
-        )
+        assert any("no 'schema' and no 'response_template'" in r.message for r in caplog.records)
 
     def test_english_condition_warns(self, caplog: pytest.LogCaptureFixture) -> None:
         """English-language condition generates a warning."""
@@ -114,13 +109,9 @@ class TestLoaderValidation:
         loader = WizardConfigLoader()
         with caplog.at_level(logging.WARNING):
             loader.load_from_dict(config)
-        assert any(
-            "appears to be natural language" in r.message for r in caplog.records
-        )
+        assert any("appears to be natural language" in r.message for r in caplog.records)
 
-    def test_python_format_syntax_warns(
-        self, caplog: pytest.LogCaptureFixture
-    ) -> None:
+    def test_python_format_syntax_warns(self, caplog: pytest.LogCaptureFixture) -> None:
         """Python ``{name}`` template syntax generates a warning."""
         config = _minimal_config(
             prompt="Hello {user_name}, welcome!",
@@ -128,9 +119,7 @@ class TestLoaderValidation:
         loader = WizardConfigLoader()
         with caplog.at_level(logging.WARNING):
             loader.load_from_dict(config)
-        assert any(
-            "Python format syntax" in r.message for r in caplog.records
-        )
+        assert any("Python format syntax" in r.message for r in caplog.records)
 
     def test_python_format_in_response_template_warns(
         self, caplog: pytest.LogCaptureFixture
@@ -142,13 +131,9 @@ class TestLoaderValidation:
         loader = WizardConfigLoader()
         with caplog.at_level(logging.WARNING):
             loader.load_from_dict(config)
-        assert any(
-            "Python format syntax" in r.message for r in caplog.records
-        )
+        assert any("Python format syntax" in r.message for r in caplog.records)
 
-    def test_valid_config_no_warnings(
-        self, caplog: pytest.LogCaptureFixture
-    ) -> None:
+    def test_valid_config_no_warnings(self, caplog: pytest.LogCaptureFixture) -> None:
         """A well-formed config produces no validation warnings."""
         config = _two_stage_config(
             first_overrides={
@@ -166,7 +151,8 @@ class TestLoaderValidation:
         with caplog.at_level(logging.WARNING):
             loader.load_from_dict(config)
         validation_warnings = [
-            r for r in caplog.records
+            r
+            for r in caplog.records
             if r.levelno == logging.WARNING
             and (
                 "unrecognized field" in r.message
@@ -177,9 +163,7 @@ class TestLoaderValidation:
         ]
         assert validation_warnings == []
 
-    def test_jinja2_syntax_not_flagged(
-        self, caplog: pytest.LogCaptureFixture
-    ) -> None:
+    def test_jinja2_syntax_not_flagged(self, caplog: pytest.LogCaptureFixture) -> None:
         """Proper Jinja2 ``{{ name }}`` is not flagged as Python format."""
         config = _minimal_config(
             response_template="Hello {{ user_name }}!",
@@ -187,13 +171,9 @@ class TestLoaderValidation:
         loader = WizardConfigLoader()
         with caplog.at_level(logging.WARNING):
             loader.load_from_dict(config)
-        assert not any(
-            "Python format syntax" in r.message for r in caplog.records
-        )
+        assert not any("Python format syntax" in r.message for r in caplog.records)
 
-    def test_conversation_mode_no_schema_no_warning(
-        self, caplog: pytest.LogCaptureFixture
-    ) -> None:
+    def test_conversation_mode_no_schema_no_warning(self, caplog: pytest.LogCaptureFixture) -> None:
         """Conversation-mode stages don't warn about missing schema."""
         config = _minimal_config(
             mode="conversation",
@@ -204,8 +184,7 @@ class TestLoaderValidation:
         with caplog.at_level(logging.WARNING):
             loader.load_from_dict(config)
         assert not any(
-            "no 'schema' and no 'response_template'" in r.message
-            for r in caplog.records
+            "no 'schema' and no 'response_template'" in r.message for r in caplog.records
         )
 
 
@@ -226,37 +205,29 @@ class TestBuilderValidation:
             .add_transition("step1", "step2")
         )
         result = builder.validate()
-        assert any(
-            "no schema and no response_template" in w for w in result.warnings
-        )
+        assert any("no schema and no response_template" in w for w in result.warnings)
 
     def test_python_format_template_warns(self) -> None:
         """response_template with ``{name}`` syntax produces a warning."""
-        builder = (
-            WizardConfigBuilder("test")
-            .add_structured_stage(
-                "step1",
-                "Hello",
-                is_start=True,
-                is_end=True,
-                response_template="Hi {name}!",
-            )
+        builder = WizardConfigBuilder("test").add_structured_stage(
+            "step1",
+            "Hello",
+            is_start=True,
+            is_end=True,
+            response_template="Hi {name}!",
         )
         result = builder.validate()
         assert any("Python format syntax" in w for w in result.warnings)
 
     def test_jinja2_template_no_warning(self) -> None:
         """response_template with Jinja2 syntax produces no format warning."""
-        builder = (
-            WizardConfigBuilder("test")
-            .add_structured_stage(
-                "step1",
-                "Hello",
-                is_start=True,
-                is_end=True,
-                response_template="Hi {{ name }}!",
-                schema={"type": "object", "properties": {"name": {"type": "string"}}},
-            )
+        builder = WizardConfigBuilder("test").add_structured_stage(
+            "step1",
+            "Hello",
+            is_start=True,
+            is_end=True,
+            response_template="Hi {{ name }}!",
+            schema={"type": "object", "properties": {"name": {"type": "string"}}},
         )
         result = builder.validate()
         assert not any("Python format syntax" in w for w in result.warnings)
@@ -279,8 +250,8 @@ class TestBuilderValidation:
         assert result.valid
         # Filter for only our new warnings
         relevant = [
-            w for w in result.warnings
-            if "no schema and no response_template" in w
-            or "Python format syntax" in w
+            w
+            for w in result.warnings
+            if "no schema and no response_template" in w or "Python format syntax" in w
         ]
         assert relevant == []

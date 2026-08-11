@@ -36,9 +36,7 @@ from dataknobs_llm.conversations import (
 )
 
 _BOT_MIDDLEWARE_CLASS = "dataknobs_bots.middleware.logging.LoggingMiddleware"
-_CONVERSATION_MIDDLEWARE_CLASS = (
-    "dataknobs_llm.conversations.HistoryRedactionMiddleware"
-)
+_CONVERSATION_MIDDLEWARE_CLASS = "dataknobs_llm.conversations.HistoryRedactionMiddleware"
 _FACTORY_LOGGER = "dataknobs_bots.middleware.factory"
 
 
@@ -85,9 +83,7 @@ def test_build_conversation_middleware_passes_params_to_the_ctor() -> None:
         [
             {
                 "class": _CONVERSATION_MIDDLEWARE_CLASS,
-                "params": {
-                    "redactions": [{"pattern": r"\d{3}", "replacement": "###"}]
-                },
+                "params": {"redactions": [{"pattern": r"\d{3}", "replacement": "###"}]},
             }
         ]
     )
@@ -275,13 +271,8 @@ def test_bot_module_binds_the_factory_functions_themselves() -> None:
     from dataknobs_bots.middleware import factory
 
     assert bot_base.build_middleware is factory.build_middleware
-    assert (
-        bot_base.build_conversation_middleware
-        is factory.build_conversation_middleware
-    )
-    assert (
-        bot_base.resolve_middleware_from_spec is factory.resolve_middleware_from_spec
-    )
+    assert bot_base.build_conversation_middleware is factory.build_conversation_middleware
+    assert bot_base.resolve_middleware_from_spec is factory.resolve_middleware_from_spec
 
 
 def test_private_aliases_match_the_public_functions() -> None:
@@ -292,9 +283,7 @@ def test_private_aliases_match_the_public_functions() -> None:
         "params": {"redactions": []},
     }
 
-    assert type(DynaBot._create_bot_middleware(bot_spec)) is type(
-        build_middleware([bot_spec])[0]
-    )
+    assert type(DynaBot._create_bot_middleware(bot_spec)) is type(build_middleware([bot_spec])[0])
     assert type(DynaBot._create_conversation_middleware(conv_spec)) is type(
         build_conversation_middleware([conv_spec])[0]
     )
@@ -357,14 +346,8 @@ def test_exported_from_the_top_level_package() -> None:
     from dataknobs_bots.middleware import factory
 
     assert dataknobs_bots.build_middleware is factory.build_middleware
-    assert (
-        dataknobs_bots.build_conversation_middleware
-        is factory.build_conversation_middleware
-    )
-    assert (
-        dataknobs_bots.resolve_middleware_from_spec
-        is factory.resolve_middleware_from_spec
-    )
+    assert dataknobs_bots.build_conversation_middleware is factory.build_conversation_middleware
+    assert dataknobs_bots.resolve_middleware_from_spec is factory.resolve_middleware_from_spec
 
     for name in (
         "build_middleware",

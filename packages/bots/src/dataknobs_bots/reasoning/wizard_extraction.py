@@ -159,9 +159,7 @@ class WizardExtractor:
         stage_name = stage.get("name", "unknown")
 
         # 1. Extract structured data from user input
-        extraction = await self._extract_data(
-            message, stage, llm, manager, state
-        )
+        extraction = await self._extract_data(message, stage, llm, manager, state)
 
         logger.debug(
             "Extraction for stage '%s': confidence=%.2f, data_keys=%s",
@@ -172,22 +170,21 @@ class WizardExtractor:
         if extraction.data:
             for key, value in extraction.data.items():
                 if not key.startswith("_"):
-                    logger.debug(
-                        "  Extracted %s = %r", key, str(value)[:100]
-                    )
+                    logger.debug("  Extracted %s = %r", key, str(value)[:100])
 
         new_data_keys: set[str] = set()
         ss = StageSchema.from_stage(stage)
 
         # 2. Normalize extracted data (type coercion)
         if ss.exists and extraction.data:
-            extraction.data = self._normalize_extracted_data(
-                extraction.data, ss
-            )
+            extraction.data = self._normalize_extracted_data(extraction.data, ss)
 
         # 3. Merge into wizard state (grounded merge)
         new_data_keys = self._merge_extraction_result(
-            extraction.data, state, stage, message,
+            extraction.data,
+            state,
+            stage,
+            message,
         )
 
         # 4. Apply schema defaults
@@ -208,8 +205,13 @@ class WizardExtractor:
         missing = self.check_required_fields_missing(state, stage)
         if missing:
             recovery = await self._run_recovery_pipeline(
-                extraction, state, stage,
-                message, llm, manager, new_data_keys,
+                extraction,
+                state,
+                stage,
+                message,
+                llm,
+                manager,
+                new_data_keys,
             )
             new_data_keys = recovery.new_data_keys
             extraction = recovery.extraction
@@ -290,13 +292,12 @@ class WizardExtractor:
             return
 
         from dataknobs_llm.intent import IntentSpec
+
         intent_specs = [
             IntentSpec(
                 name=i["id"],
                 target=i.get("target", ""),
-                keywords=(
-                    tuple(i["keywords"]) if i.get("keywords") else None
-                ),
+                keywords=(tuple(i["keywords"]) if i.get("keywords") else None),
                 extract=i.get("extract"),
             )
             for i in intent_config.get("intents", [])
@@ -368,7 +369,8 @@ class WizardExtractor:
 
         try:
             classifier = create_intent_classifier(
-                classifier_name, classifier_config,
+                classifier_name,
+                classifier_config,
             )
         except ValueError as exc:
             # Wizard semantics: an unknown classifier name in the YAML
@@ -387,13 +389,12 @@ class WizardExtractor:
         if not done_keywords:
             return False
         normalised = message.strip().lower()
-        return any(
-            normalised == kw.strip().lower() for kw in done_keywords
-        )
+        return any(normalised == kw.strip().lower() for kw in done_keywords)
 
     @staticmethod
     def classify_collection_intent(
-        message: str, stage: dict[str, Any],
+        message: str,
+        stage: dict[str, Any],
     ) -> str:
         """Classify user intent during a collection-mode stage.
 
@@ -529,7 +530,9 @@ class WizardExtractor:
         return stage.get("extraction_scope") or self._extraction_scope
 
     def needs_llm_extraction(
-        self, ss: StageSchema, stage: dict[str, Any],
+        self,
+        ss: StageSchema,
+        stage: dict[str, Any],
     ) -> bool:
         """Determine whether LLM extraction is needed for a schema.
 
@@ -581,7 +584,9 @@ class WizardExtractor:
         return True
 
     def apply_schema_defaults(
-        self, wizard_state: WizardState, stage: dict[str, Any],
+        self,
+        wizard_state: WizardState,
+        stage: dict[str, Any],
     ) -> set[str]:
         """Apply schema defaults to wizard data for unset properties.
 
@@ -661,8 +666,7 @@ class WizardExtractor:
         stage_name = stage.get("name", "unknown")
 
         logger.debug(
-            "Extraction start: stage='%s', has_schema=%s, "
-            "has_extractor=%s, input_len=%d",
+            "Extraction start: stage='%s', has_schema=%s, has_extractor=%s, input_len=%d",
             stage_name,
             ss.exists,
             self._extractor is not None,
@@ -675,9 +679,7 @@ class WizardExtractor:
                 "Extraction skip: stage='%s' has no schema, returning raw input",
                 stage_name,
             )
-            return SimpleExtractionResult(
-                data={"_raw_input": message}, confidence=1.0
-            )
+            return SimpleExtractionResult(data={"_raw_input": message}, confidence=1.0)
 
         # Verbatim capture: skip LLM extraction for trivial schemas
         # (single required string field, no constraints) or when
@@ -716,17 +718,15 @@ class WizardExtractor:
             # Build context from wizard session conversation.
             # For recent_messages scope, limit to last N user messages.
             max_msgs = (
-                self._recent_messages_count
-                if extraction_scope == "recent_messages"
-                else None
+                self._recent_messages_count if extraction_scope == "recent_messages" else None
             )
             wizard_context = self._build_wizard_context(
-                manager, wizard_state, max_messages=max_msgs,
+                manager,
+                wizard_state,
+                max_messages=max_msgs,
             )
             if wizard_context:
-                extraction_input = (
-                    f"{wizard_context}\n\nCurrent message: {message}"
-                )
+                extraction_input = f"{wizard_context}\n\nCurrent message: {message}"
                 logger.debug(
                     "Wizard session extraction: %d chars of context + current message",
                     len(wizard_context),
@@ -769,8 +769,7 @@ class WizardExtractor:
             )
 
             logger.debug(
-                "Extraction result: stage='%s', keys=%s, confidence=%.2f, "
-                "errors=%s",
+                "Extraction result: stage='%s', keys=%s, confidence=%.2f, errors=%s",
                 stage_name,
                 list(result.data.keys()) if result.data else [],
                 getattr(result, "confidence", -1.0),
@@ -784,8 +783,7 @@ class WizardExtractor:
                     if self._log_conflicts:
                         for conflict in conflicts:
                             logger.info(
-                                "Data conflict detected for field '%s': "
-                                "'%s' -> '%s' (using %s)",
+                                "Data conflict detected for field '%s': '%s' -> '%s' (using %s)",
                                 conflict["field"],
                                 conflict["previous"],
                                 conflict["new"],
@@ -800,9 +798,7 @@ class WizardExtractor:
 
         # Fallback: simple heuristic extraction
         # This is very basic - the extractor should be used for real scenarios
-        return SimpleExtractionResult(
-            data={"_raw_input": message}, confidence=0.5
-        )
+        return SimpleExtractionResult(data={"_raw_input": message}, confidence=0.5)
 
     # -----------------------------------------------------------------
     # Private — context building
@@ -972,9 +968,7 @@ class WizardExtractor:
                 stripped = value.strip()
                 if stripped.lstrip("-").isdigit():
                     normalized[field_name] = int(stripped)
-                    logger.debug(
-                        "Normalized %s: %r -> %d", field_name, value, int(stripped)
-                    )
+                    logger.debug("Normalized %s: %r -> %d", field_name, value, int(stripped))
 
             # --- Number (float) coercion ---
             elif declared_type == "number" and isinstance(value, str):
@@ -999,15 +993,11 @@ class WizardExtractor:
                 if isinstance(value, str):
                     value = [value]
                     normalized[field_name] = value
-                    logger.debug(
-                        "Normalized %s: wrapped string -> list", field_name
-                    )
+                    logger.debug("Normalized %s: wrapped string -> list", field_name)
 
                 # Expand "all"/"none" shortcuts when enum is defined
                 if isinstance(value, list) and enum_values:
-                    lower_items = {
-                        v.strip().lower() for v in value if isinstance(v, str)
-                    }
+                    lower_items = {v.strip().lower() for v in value if isinstance(v, str)}
                     if lower_items & self._ALL_KEYWORDS:
                         normalized[field_name] = list(enum_values)
                         logger.debug(
@@ -1017,9 +1007,7 @@ class WizardExtractor:
                         )
                     elif lower_items & self._NONE_KEYWORDS:
                         normalized[field_name] = []
-                        logger.debug(
-                            "Normalized %s: 'none' -> []", field_name
-                        )
+                        logger.debug("Normalized %s: 'none' -> []", field_name)
 
             # --- Enum normalization + rejection ---
             # Runs independently of type coercion above: a string field
@@ -1028,26 +1016,29 @@ class WizardExtractor:
             # entry exactly.  Normalization tries fuzzy matching;
             # rejection drops values that don't match any enum entry.
             current_value = normalized[field_name]
-            if (
-                "enum" in prop
-                and isinstance(current_value, str)
-            ):
+            if "enum" in prop and isinstance(current_value, str):
                 x_ext = prop.get("x-extraction", {})
                 should_normalize = x_ext.get(
-                    "normalize", self._enum_normalize,
+                    "normalize",
+                    self._enum_normalize,
                 )
                 if should_normalize:
                     threshold = x_ext.get(
-                        "normalize_threshold", self._normalize_threshold,
+                        "normalize_threshold",
+                        self._normalize_threshold,
                     )
                     match = _normalize_enum_value(
-                        current_value, prop["enum"], threshold=threshold,
+                        current_value,
+                        prop["enum"],
+                        threshold=threshold,
                     )
                     if match is not None and match != current_value:
                         normalized[field_name] = match
                         logger.debug(
                             "Normalized %s enum: %r -> %r",
-                            field_name, current_value, match,
+                            field_name,
+                            current_value,
+                            match,
                         )
 
                 # Reject values that are not valid enum entries.
@@ -1055,19 +1046,17 @@ class WizardExtractor:
                 # sees the normalized value.  When normalization is
                 # disabled, this acts as a strict enum membership check.
                 final_value = normalized[field_name]
-                if (
-                    final_value is not None
-                    and final_value not in prop["enum"]
-                ):
+                if final_value is not None and final_value not in prop["enum"]:
                     should_reject = x_ext.get(
-                        "reject_unmatched", self._reject_unmatched,
+                        "reject_unmatched",
+                        self._reject_unmatched,
                     )
                     if should_reject:
                         normalized[field_name] = None
                         logger.debug(
-                            "Rejected %s enum value %r: "
-                            "no match in %s",
-                            field_name, final_value,
+                            "Rejected %s enum value %r: no match in %s",
+                            field_name,
+                            final_value,
                             prop["enum"],
                         )
 
@@ -1082,18 +1071,24 @@ class WizardExtractor:
             prop = properties[field_name]
             declared_type = prop.get("type")
             if declared_type and not value_matches_schema_type(
-                value, declared_type,
+                value,
+                declared_type,
             ):
                 logger.debug(
                     "Type mismatch: %s expects %s, got %s (%r) — rejecting",
-                    field_name, declared_type, type(value).__name__, value,
+                    field_name,
+                    declared_type,
+                    type(value).__name__,
+                    value,
                 )
                 normalized[field_name] = None
 
         return normalized
 
     def validate_data(
-        self, data: dict[str, Any], ss: StageSchema,
+        self,
+        data: dict[str, Any],
+        ss: StageSchema,
     ) -> list[str]:
         """Validate extracted data against stage schema.
 
@@ -1120,9 +1115,7 @@ class WizardExtractor:
             if name in properties:
                 prop = properties[name]
                 if "enum" in prop and value not in prop["enum"]:
-                    errors.append(
-                        f"Invalid value for {name}: must be one of {prop['enum']}"
-                    )
+                    errors.append(f"Invalid value for {name}: must be one of {prop['enum']}")
 
         return errors
 
@@ -1163,11 +1156,13 @@ class WizardExtractor:
                 existing_value = existing_data[field_name]
                 # Only count as conflict if existing is non-None and different
                 if existing_value is not None and existing_value != new_value:
-                    conflicts.append({
-                        "field": field_name,
-                        "previous": existing_value,
-                        "new": new_value,
-                    })
+                    conflicts.append(
+                        {
+                            "field": field_name,
+                            "previous": existing_value,
+                            "new": new_value,
+                        }
+                    )
 
         return conflicts
 
@@ -1263,12 +1258,9 @@ class WizardExtractor:
                 # wizard-level composite filter if available, otherwise
                 # create a fresh grounding filter.  This overrides
                 # skip_builtin_grounding for this stage.
-                active_filter: MergeFilter | None = (
-                    self._merge_filter
-                    or SchemaGroundingFilter(
-                        overlap_threshold=self._grounding_overlap_threshold,
-                        expansion_config=self._expansion_config,
-                    )
+                active_filter: MergeFilter | None = self._merge_filter or SchemaGroundingFilter(
+                    overlap_threshold=self._grounding_overlap_threshold,
+                    expansion_config=self._expansion_config,
                 )
             else:
                 active_filter = None
@@ -1284,20 +1276,28 @@ class WizardExtractor:
                 existing = wizard_state.data.get(k)
                 prop_def = schema_props.get(k, {})
                 decision = active_filter.filter(
-                    k, v, existing, user_message, prop_def,
+                    k,
+                    v,
+                    existing,
+                    user_message,
+                    prop_def,
                     data_snapshot,
                 )
                 if decision.action == "reject":
                     logger.debug(
                         "Merge filter rejected %s=%r: %s",
-                        k, v, decision.reason,
+                        k,
+                        v,
+                        decision.reason,
                     )
                     continue
                 if decision.action == "transform":
                     v = decision.value
                     logger.debug(
                         "Merge filter transformed %s -> %r: %s",
-                        k, v, decision.reason,
+                        k,
+                        v,
+                        decision.reason,
                     )
             if k not in wizard_state.data or wizard_state.data[k] != v:
                 new_data_keys.add(k)
@@ -1346,14 +1346,16 @@ class WizardExtractor:
         for strategy in self._recovery_pipeline:
             # Check stop condition: all required fields satisfied
             missing = self.check_required_fields_missing(
-                wizard_state, stage,
+                wizard_state,
+                stage,
             )
             if not missing:
                 break
 
             if strategy == RECOVERY_DERIVATION:
                 derived = self.apply_field_derivations(
-                    wizard_state, stage,
+                    wizard_state,
+                    stage,
                 )
                 if derived:
                     new_data_keys |= derived
@@ -1364,7 +1366,9 @@ class WizardExtractor:
 
             elif strategy == RECOVERY_BOOLEAN:
                 recovered = self._run_boolean_recovery(
-                    wizard_state, stage, user_message,
+                    wizard_state,
+                    stage,
+                    user_message,
                 )
                 if recovered:
                     new_data_keys |= recovered
@@ -1375,8 +1379,12 @@ class WizardExtractor:
 
             elif strategy == RECOVERY_SCOPE_ESCALATION:
                 esc_result = await self._run_scope_escalation(
-                    extraction, wizard_state, stage,
-                    user_message, llm, manager,
+                    extraction,
+                    wizard_state,
+                    stage,
+                    user_message,
+                    llm,
+                    manager,
                 )
                 if esc_result.new_data_keys:
                     new_data_keys |= esc_result.new_data_keys
@@ -1385,16 +1393,18 @@ class WizardExtractor:
             elif strategy == RECOVERY_FOCUSED_RETRY:
                 if self._focused_retry_enabled:
                     retry_result = await self._run_focused_retry(
-                        wizard_state, stage,
-                        user_message, llm, manager,
+                        wizard_state,
+                        stage,
+                        user_message,
+                        llm,
+                        manager,
                     )
                     if retry_result.new_data_keys:
                         new_data_keys |= retry_result.new_data_keys
                         extraction = retry_result.extraction
                 else:
                     logger.debug(
-                        "Recovery pipeline: focused_retry in pipeline "
-                        "but not enabled -- skipping",
+                        "Recovery pipeline: focused_retry in pipeline but not enabled -- skipping",
                     )
 
             elif strategy == RECOVERY_CLARIFICATION:
@@ -1439,7 +1449,8 @@ class WizardExtractor:
             return RecoveryResult(new_data_keys=set(), extraction=extraction)
 
         missing = self.check_required_fields_missing(
-            wizard_state, stage,
+            wizard_state,
+            stage,
         )
         if not missing:
             return RecoveryResult(new_data_keys=set(), extraction=extraction)
@@ -1451,12 +1462,17 @@ class WizardExtractor:
             if self._scope_escalation_scope == "recent_messages"
             else None
         )
-        has_prior = bool(
-            self._build_wizard_context(
-                manager, wizard_state,
-                max_messages=guard_max,
+        has_prior = (
+            bool(
+                self._build_wizard_context(
+                    manager,
+                    wizard_state,
+                    max_messages=guard_max,
+                )
             )
-        ) if manager is not None else False
+            if manager is not None
+            else False
+        )
 
         if not has_prior:
             return RecoveryResult(new_data_keys=set(), extraction=extraction)
@@ -1487,10 +1503,14 @@ class WizardExtractor:
         ss_esc = StageSchema.from_stage(stage)
         if ss_esc.exists:
             escalated.data = self._normalize_extracted_data(
-                escalated.data, ss_esc,
+                escalated.data,
+                ss_esc,
             )
         escalated_keys = self._merge_extraction_result(
-            escalated.data, wizard_state, stage, user_message,
+            escalated.data,
+            wizard_state,
+            stage,
+            user_message,
         )
         if escalated_keys:
             return RecoveryResult(new_data_keys=escalated_keys, extraction=escalated)
@@ -1524,11 +1544,7 @@ class WizardExtractor:
 
         # Build focused schema with only the missing fields
         properties = ss.properties
-        focused_properties = {
-            f: properties[f]
-            for f in missing
-            if f in properties
-        }
+        focused_properties = {f: properties[f] for f in missing if f in properties}
         if not focused_properties:
             return RecoveryResult(new_data_keys=set())
 
@@ -1566,10 +1582,14 @@ class WizardExtractor:
                 continue
 
             retry_result.data = self._normalize_extracted_data(
-                retry_result.data, StageSchema.from_dict(focused_schema),
+                retry_result.data,
+                StageSchema.from_dict(focused_schema),
             )
             retry_keys = self._merge_extraction_result(
-                retry_result.data, wizard_state, stage, user_message,
+                retry_result.data,
+                wizard_state,
+                stage,
+                user_message,
             )
             if retry_keys:
                 logger.debug(
@@ -1665,9 +1685,7 @@ class WizardExtractor:
                         field_name,
                     )
                     continue
-                field_mentioned = any(
-                    word_in_text(w, msg_lower) for w in keywords
-                )
+                field_mentioned = any(word_in_text(w, msg_lower) for w in keywords)
                 if not field_mentioned:
                     logger.debug(
                         "Boolean recovery: skipping %s -- field keywords "
@@ -1679,22 +1697,22 @@ class WizardExtractor:
             # Resolve per-field signal overrides
             custom_aff = x_ext.get("affirmative_signals")
             aff_signals = (
-                frozenset(custom_aff) if custom_aff is not None
-                else _DEFAULT_AFFIRMATIVE_SIGNALS
+                frozenset(custom_aff) if custom_aff is not None else _DEFAULT_AFFIRMATIVE_SIGNALS
             )
             custom_aff_phrases = x_ext.get("affirmative_phrases")
             aff_phrases = (
-                tuple(custom_aff_phrases) if custom_aff_phrases is not None
+                tuple(custom_aff_phrases)
+                if custom_aff_phrases is not None
                 else _DEFAULT_AFFIRMATIVE_PHRASES
             )
             custom_neg = x_ext.get("negative_signals")
             neg_signals = (
-                frozenset(custom_neg) if custom_neg is not None
-                else _DEFAULT_NEGATIVE_SIGNALS
+                frozenset(custom_neg) if custom_neg is not None else _DEFAULT_NEGATIVE_SIGNALS
             )
             custom_neg_phrases = x_ext.get("negative_phrases")
             neg_phrases = (
-                tuple(custom_neg_phrases) if custom_neg_phrases is not None
+                tuple(custom_neg_phrases)
+                if custom_neg_phrases is not None
                 else _DEFAULT_NEGATIVE_PHRASES
             )
 
@@ -1711,7 +1729,8 @@ class WizardExtractor:
                 recovered.add(field_name)
                 logger.debug(
                     "Boolean recovery: %s -> %s (signal detection)",
-                    field_name, signal,
+                    field_name,
+                    signal,
                 )
 
         return recovered

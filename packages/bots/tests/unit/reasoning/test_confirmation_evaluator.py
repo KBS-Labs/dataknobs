@@ -22,6 +22,7 @@ from dataknobs_bots.reasoning.wizard_types import WizardState
 
 # ── Helpers ──────────────────────────────────────────────────────────
 
+
 def _make_stage(
     *,
     name: str = "gather",
@@ -59,6 +60,7 @@ def _make_state(
 
 
 # ── Tests ────────────────────────────────────────────────────────────
+
 
 class TestEvaluateNoResponseTemplate:
     """Without response_template, confirmation never fires."""
@@ -115,7 +117,8 @@ class TestFirstRender:
         is not set, no snapshot is saved."""
         evaluator = ConfirmationEvaluator()
         stage = _make_stage(
-            confirm_first_render=False, confirm_on_new_data=False,
+            confirm_first_render=False,
+            confirm_on_new_data=False,
         )
         state = _make_state({"value": "hello"})
 
@@ -132,7 +135,8 @@ class TestFirstRender:
         so a baseline exists for future diffs."""
         evaluator = ConfirmationEvaluator()
         stage = _make_stage(
-            confirm_first_render=False, confirm_on_new_data=True,
+            confirm_first_render=False,
+            confirm_on_new_data=True,
         )
         state = _make_state({"value": "hello"})
 
@@ -361,6 +365,7 @@ class TestSaveSnapshot:
 
 
 # ── advance() path snapshot test ─────────────────────────────────────
+
 
 def _make_reasoning(config: dict[str, Any]) -> WizardReasoning:
     """Create a WizardReasoning from a config dict."""

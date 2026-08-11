@@ -1,4 +1,5 @@
 """Debug the data generator."""
+
 from datetime import datetime
 import sys
 from pathlib import Path
@@ -11,30 +12,29 @@ from sensor_dashboard import SensorDataGenerator, SensorInfo
 def test_generator():
     """Test the continuous stream generator."""
     generator = SensorDataGenerator(seed=42)
-    
+
     sensor = SensorInfo(
         sensor_id="sensor_000",
-        sensor_type="TH100", 
+        sensor_type="TH100",
         location="room_a",
         installed=datetime.now(),
-        status="active"
+        status="active",
     )
-    
+
     print(f"Sensor status: {sensor.status}")
-    
+
     count = 0
     for reading in generator.generate_continuous_stream(
-        [sensor],
-        datetime(2025, 1, 17, 10, 0, 0),
-        duration_hours=1,
-        readings_per_hour=12
+        [sensor], datetime(2025, 1, 17, 10, 0, 0), duration_hours=1, readings_per_hour=12
     ):
         count += 1
         if count <= 3:
-            print(f"Reading {count}: sensor={reading.sensor_id}, time={reading.timestamp}, temp={reading.temperature}")
+            print(
+                f"Reading {count}: sensor={reading.sensor_id}, time={reading.timestamp}, temp={reading.temperature}"
+            )
         if count >= 12:
             break
-    
+
     print(f"Total readings generated: {count}")
 
 

@@ -33,9 +33,7 @@ def simple_wizard_config() -> dict:
                     "required": ["intent"],
                 },
                 "suggestions": ["Create something", "Edit something"],
-                "transitions": [
-                    {"target": "configure", "condition": "data.get('intent')"}
-                ],
+                "transitions": [{"target": "configure", "condition": "data.get('intent')"}],
             },
             {
                 "name": "configure",
@@ -55,9 +53,7 @@ def simple_wizard_config() -> dict:
 @pytest.fixture
 def wizard_config_file(simple_wizard_config: dict) -> Path:
     """Create a temporary wizard config file."""
-    with tempfile.NamedTemporaryFile(
-        mode="w", suffix=".yaml", delete=False
-    ) as f:
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
         yaml.dump(simple_wizard_config, f)
         return Path(f.name)
 
@@ -65,21 +61,27 @@ def wizard_config_file(simple_wizard_config: dict) -> Path:
 class TestWizardConfigLoader:
     """Tests for WizardConfigLoader."""
 
-    def test_load_from_dict(self, simple_wizard_config: dict, wizard_loader: WizardConfigLoader) -> None:
+    def test_load_from_dict(
+        self, simple_wizard_config: dict, wizard_loader: WizardConfigLoader
+    ) -> None:
         """Test loading wizard config from dict."""
         wizard_fsm = wizard_loader.load_from_dict(simple_wizard_config)
 
         assert wizard_fsm is not None
         assert wizard_fsm.current_stage == "welcome"
 
-    def test_load_from_file(self, wizard_config_file: Path, wizard_loader: WizardConfigLoader) -> None:
+    def test_load_from_file(
+        self, wizard_config_file: Path, wizard_loader: WizardConfigLoader
+    ) -> None:
         """Test loading wizard config from file."""
         wizard_fsm = wizard_loader.load(wizard_config_file)
 
         assert wizard_fsm is not None
         assert wizard_fsm.current_stage == "welcome"
 
-    def test_stage_metadata_extraction(self, simple_wizard_config: dict, wizard_loader: WizardConfigLoader) -> None:
+    def test_stage_metadata_extraction(
+        self, simple_wizard_config: dict, wizard_loader: WizardConfigLoader
+    ) -> None:
         """Test that stage metadata is correctly extracted."""
         wizard_fsm = wizard_loader.load_from_dict(simple_wizard_config)
 
@@ -99,7 +101,9 @@ class TestWizardConfigLoader:
         complete_meta = wizard_fsm._stage_metadata.get("complete", {})
         assert complete_meta.get("is_end") is True
 
-    def test_stage_schema_extraction(self, simple_wizard_config: dict, wizard_loader: WizardConfigLoader) -> None:
+    def test_stage_schema_extraction(
+        self, simple_wizard_config: dict, wizard_loader: WizardConfigLoader
+    ) -> None:
         """Test that schemas are correctly extracted."""
         wizard_fsm = wizard_loader.load_from_dict(simple_wizard_config)
 
@@ -119,7 +123,9 @@ class TestWizardConfigLoader:
         with pytest.raises(ValueError, match="must have 'stages' field"):
             wizard_loader.load_from_dict({"name": "test"})
 
-    def test_custom_functions(self, simple_wizard_config: dict, wizard_loader: WizardConfigLoader) -> None:
+    def test_custom_functions(
+        self, simple_wizard_config: dict, wizard_loader: WizardConfigLoader
+    ) -> None:
         """Test loading with custom functions."""
         custom_called = []
 
@@ -139,7 +145,8 @@ class TestConfirmOnNewDataLoader:
     """Tests for confirm_on_new_data flag in stage metadata loading."""
 
     def test_confirm_on_new_data_defaults_false(
-        self, simple_wizard_config: dict, wizard_loader: WizardConfigLoader) -> None:
+        self, simple_wizard_config: dict, wizard_loader: WizardConfigLoader
+    ) -> None:
         """confirm_on_new_data defaults to False when not set."""
         wizard_fsm = wizard_loader.load_from_dict(simple_wizard_config)
 
@@ -177,14 +184,17 @@ class TestConfirmFirstRenderLoader:
     """Tests for confirm_first_render flag in stage metadata loading."""
 
     def test_confirm_first_render_defaults_true(
-        self, simple_wizard_config: dict, wizard_loader: WizardConfigLoader) -> None:
+        self, simple_wizard_config: dict, wizard_loader: WizardConfigLoader
+    ) -> None:
         """confirm_first_render defaults to True when not set."""
         wizard_fsm = wizard_loader.load_from_dict(simple_wizard_config)
 
         welcome_meta = wizard_fsm.stages.get("welcome", {})
         assert welcome_meta.get("confirm_first_render") is True
 
-    def test_confirm_first_render_loaded_when_false(self, wizard_loader: WizardConfigLoader) -> None:
+    def test_confirm_first_render_loaded_when_false(
+        self, wizard_loader: WizardConfigLoader
+    ) -> None:
         """confirm_first_render=false survives the loader."""
         config: dict = {
             "name": "test-wizard",
@@ -214,7 +224,9 @@ class TestConfirmFirstRenderLoader:
 class TestCollectionModeMetadataLoader:
     """Tests that collection_mode and collection_config survive the loader."""
 
-    def test_collection_mode_loaded_into_stage_metadata(self, wizard_loader: WizardConfigLoader) -> None:
+    def test_collection_mode_loaded_into_stage_metadata(
+        self, wizard_loader: WizardConfigLoader
+    ) -> None:
         """collection_mode and collection_config must appear in stage metadata.
 
         This is the regression test for the bug where _extract_metadata()
@@ -273,7 +285,8 @@ class TestCollectionModeMetadataLoader:
         assert "done" in meta["collection_config"]["done_keywords"]
 
     def test_collection_mode_defaults_none_when_absent(
-        self, simple_wizard_config: dict, wizard_loader: WizardConfigLoader) -> None:
+        self, simple_wizard_config: dict, wizard_loader: WizardConfigLoader
+    ) -> None:
         """Stages without collection_mode get None (not missing key)."""
         wizard_fsm = wizard_loader.load_from_dict(simple_wizard_config)
 
@@ -285,7 +298,9 @@ class TestCollectionModeMetadataLoader:
 class TestWizardFSMOperations:
     """Tests for WizardFSM operations."""
 
-    def test_stage_getters(self, simple_wizard_config: dict, wizard_loader: WizardConfigLoader) -> None:
+    def test_stage_getters(
+        self, simple_wizard_config: dict, wizard_loader: WizardConfigLoader
+    ) -> None:
         """Test stage metadata getter methods."""
         wizard_fsm = wizard_loader.load_from_dict(simple_wizard_config)
 
@@ -298,7 +313,9 @@ class TestWizardFSMOperations:
         assert wizard_fsm.is_start_stage() is True
         assert wizard_fsm.is_end_stage() is False
 
-    def test_stage_getters_by_name(self, simple_wizard_config: dict, wizard_loader: WizardConfigLoader) -> None:
+    def test_stage_getters_by_name(
+        self, simple_wizard_config: dict, wizard_loader: WizardConfigLoader
+    ) -> None:
         """Test stage metadata getter methods with explicit stage name."""
         wizard_fsm = wizard_loader.load_from_dict(simple_wizard_config)
 
@@ -307,7 +324,9 @@ class TestWizardFSMOperations:
         assert wizard_fsm.can_skip("configure") is True
         assert wizard_fsm.is_end_stage("complete") is True
 
-    def test_serialize_restore(self, simple_wizard_config: dict, wizard_loader: WizardConfigLoader) -> None:
+    def test_serialize_restore(
+        self, simple_wizard_config: dict, wizard_loader: WizardConfigLoader
+    ) -> None:
         """Test state serialization and restoration."""
         wizard_fsm = wizard_loader.load_from_dict(simple_wizard_config)
 
@@ -356,9 +375,7 @@ class TestTransitionConditions:
                     "name": "start",
                     "is_start": True,
                     "prompt": "Enter a value",
-                    "transitions": [
-                        {"target": "end", "condition": "data.get('value')"}
-                    ],
+                    "transitions": [{"target": "end", "condition": "data.get('value')"}],
                 },
                 {"name": "end", "is_end": True, "prompt": "Done"},
             ],
@@ -383,8 +400,16 @@ class TestTransitionConditions:
                     "is_start": True,
                     "prompt": "Choose path",
                     "transitions": [
-                        {"target": "path_a", "condition": "data.get('choice') == 'a'", "priority": 0},
-                        {"target": "path_b", "condition": "data.get('choice') == 'b'", "priority": 1},
+                        {
+                            "target": "path_a",
+                            "condition": "data.get('choice') == 'a'",
+                            "priority": 0,
+                        },
+                        {
+                            "target": "path_b",
+                            "condition": "data.get('choice') == 'b'",
+                            "priority": 1,
+                        },
                         {"target": "default", "priority": 2},
                     ],
                 },
@@ -393,7 +418,6 @@ class TestTransitionConditions:
                 {"name": "default", "is_end": True, "prompt": "Default"},
             ],
         }
-
 
         # Test path A
         wizard_fsm = wizard_loader.load_from_dict(config)
@@ -454,7 +478,9 @@ class TestSubflowLoading:
         # The subflow registry should contain the child flow
         assert "child_flow" in wizard_fsm._subflow_registry
 
-    def test_subflow_from_file_path(self, tmp_path: Path, wizard_loader: WizardConfigLoader) -> None:
+    def test_subflow_from_file_path(
+        self, tmp_path: Path, wizard_loader: WizardConfigLoader
+    ) -> None:
         """Loads subflow from <name>.yaml alongside main config."""
         # Create subflow config file
         subflow_config = {
@@ -500,7 +526,9 @@ class TestSubflowLoading:
         assert wizard_fsm is not None
         assert "my_subflow" in wizard_fsm._subflow_registry
 
-    def test_subflow_from_subflows_directory(self, tmp_path: Path, wizard_loader: WizardConfigLoader) -> None:
+    def test_subflow_from_subflows_directory(
+        self, tmp_path: Path, wizard_loader: WizardConfigLoader
+    ) -> None:
         """Loads subflow from subflows/<name>.yaml subdirectory."""
         # Create subflows subdirectory
         subflows_dir = tmp_path / "subflows"
@@ -719,7 +747,8 @@ class TestTransformContextFactory:
     """Tests for transform_context_factory passthrough."""
 
     def test_factory_provided_at_construction(
-        self, simple_wizard_config: dict, wizard_loader: WizardConfigLoader) -> None:
+        self, simple_wizard_config: dict, wizard_loader: WizardConfigLoader
+    ) -> None:
         """Factory provided to load_from_dict flows through to WizardFSM."""
         called_with = []
 
@@ -728,12 +757,14 @@ class TestTransformContextFactory:
             return {"custom": True, "fsm_context": fn_ctx}
 
         wizard_fsm = wizard_loader.load_from_dict(
-            simple_wizard_config, transform_context_factory=my_factory,
+            simple_wizard_config,
+            transform_context_factory=my_factory,
         )
         assert wizard_fsm._transform_context_factory is my_factory
 
     def test_set_transform_context_factory_still_works(
-        self, simple_wizard_config: dict, wizard_loader: WizardConfigLoader) -> None:
+        self, simple_wizard_config: dict, wizard_loader: WizardConfigLoader
+    ) -> None:
         """Backward compat: set_transform_context_factory() post-construction."""
         wizard_fsm = wizard_loader.load_from_dict(simple_wizard_config)
 
@@ -744,7 +775,8 @@ class TestTransformContextFactory:
         assert wizard_fsm._transform_context_factory is my_factory
 
     def test_default_factory_produces_transform_context(
-        self, simple_wizard_config: dict, wizard_loader: WizardConfigLoader) -> None:
+        self, simple_wizard_config: dict, wizard_loader: WizardConfigLoader
+    ) -> None:
         """Default factory wraps FunctionContext in TransformContext."""
         from dataknobs_bots.artifacts.transforms import TransformContext
 
@@ -766,13 +798,16 @@ class TestTransformContextFactory:
         assert result.artifact_registry is None
 
     def test_factory_passed_through_load_file(
-        self, wizard_config_file: Path, wizard_loader: WizardConfigLoader) -> None:
+        self, wizard_config_file: Path, wizard_loader: WizardConfigLoader
+    ) -> None:
         """Factory flows through the load() file path too."""
+
         def my_factory(fn_ctx):
             return {"from_file": True}
 
         wizard_fsm = wizard_loader.load(
-            wizard_config_file, transform_context_factory=my_factory,
+            wizard_config_file,
+            transform_context_factory=my_factory,
         )
         assert wizard_fsm._transform_context_factory is my_factory
 

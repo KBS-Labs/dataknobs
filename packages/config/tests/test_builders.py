@@ -15,9 +15,7 @@ from dataknobs_config.examples import (
 class TestClassLoadingDisclosure:
     """``_load_class`` imports the module, and importing runs it."""
 
-    def test_a_module_that_fails_to_import_does_not_leak_its_message(
-        self, tmp_path, monkeypatch
-    ):
+    def test_a_module_that_fails_to_import_does_not_leak_its_message(self, tmp_path, monkeypatch):
         """The non-``ImportError`` branch catches arbitrary module-level code.
 
         A dotted class path resolves through ``importlib.import_module``, which
@@ -35,14 +33,11 @@ class TestClassLoadingDisclosure:
         package.mkdir()
         (package / "__init__.py").write_text("")
         (package / "boom.py").write_text(
-            'raise ValueError("connect failed: '
-            'postgresql://svc:hunter2@db.internal:5432/prod")\n'
+            'raise ValueError("connect failed: postgresql://svc:hunter2@db.internal:5432/prod")\n'
         )
         monkeypatch.syspath_prepend(str(tmp_path))
 
-        config = Config(
-            {"widget": [{"name": "w", "class": "leakypkg.boom.Widget"}]}
-        )
+        config = Config({"widget": [{"name": "w", "class": "leakypkg.boom.Widget"}]})
 
         with pytest.raises(ConfigError) as excinfo:
             config.build_object("xref:widget[w]")

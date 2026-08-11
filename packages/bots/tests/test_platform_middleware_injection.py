@@ -53,9 +53,7 @@ class RecordingMiddleware(Middleware):
 class RecordingConvMiddleware(ConversationMiddleware):
     """LLM-call middleware that records its tag on both onion legs."""
 
-    def __init__(
-        self, tag: str, req_sink: list[str], resp_sink: list[str]
-    ) -> None:
+    def __init__(self, tag: str, req_sink: list[str], resp_sink: list[str]) -> None:
         self.tag = tag
         self.req_sink = req_sink
         self.resp_sink = resp_sink
@@ -109,20 +107,14 @@ class TestPlatformMiddlewareBotTurn:
         probe = RecordingMiddleware("P", sink)
 
         bot = await DynaBot.from_config(
-            _base_config(
-                middleware=[
-                    {"class": _MW_CLASS, "params": {"tag": "A", "sink": sink}}
-                ]
-            ),
+            _base_config(middleware=[{"class": _MW_CLASS, "params": {"tag": "A", "sink": sink}}]),
             llm=_echo("ok"),
             platform_middleware=[probe],
         )
         async with bot:
             # Both middleware present; platform appended last.
             assert len(bot.middleware) == 2
-            assert all(
-                isinstance(mw, RecordingMiddleware) for mw in bot.middleware
-            )
+            assert all(isinstance(mw, RecordingMiddleware) for mw in bot.middleware)
             assert bot.middleware[-1] is probe
 
             await bot.chat("hi", _ctx())
@@ -209,11 +201,7 @@ class TestPlatformMiddlewareBotTurn:
         """
         sink: list[str] = []
         bot = await DynaBot.from_config(
-            _base_config(
-                middleware=[
-                    {"class": _MW_CLASS, "params": {"tag": "A", "sink": sink}}
-                ]
-            ),
+            _base_config(middleware=[{"class": _MW_CLASS, "params": {"tag": "A", "sink": sink}}]),
             llm=_echo("ok"),
         )
         async with bot:
@@ -238,11 +226,7 @@ class TestPlatformMiddlewareBotTurn:
         probe = RecordingMiddleware("P", sink)
 
         bot = await DynaBot.from_config(
-            _base_config(
-                middleware=[
-                    {"class": _MW_CLASS, "params": {"tag": "A", "sink": sink}}
-                ]
-            ),
+            _base_config(middleware=[{"class": _MW_CLASS, "params": {"tag": "A", "sink": sink}}]),
             llm=_echo("ok"),
             platform_middleware=[probe],
         )
@@ -291,11 +275,7 @@ class TestPlatformConversationMiddleware:
             ctx = _ctx("conv-cm-1")
             await bot.chat("hi", ctx)
             manager = bot.get_conversation_manager(ctx.conversation_id)
-            convo_mws = [
-                m
-                for m in manager.middleware
-                if isinstance(m, RecordingConvMiddleware)
-            ]
+            convo_mws = [m for m in manager.middleware if isinstance(m, RecordingConvMiddleware)]
             assert len(convo_mws) == 2
             assert convo_mws[-1] is probe
 
@@ -331,11 +311,7 @@ class TestPlatformConversationMiddleware:
             ctx = _ctx("conv-cm-2")
             await bot.chat("hi", ctx)
             manager = bot.get_conversation_manager(ctx.conversation_id)
-            convo_mws = [
-                m
-                for m in manager.middleware
-                if isinstance(m, RecordingConvMiddleware)
-            ]
+            convo_mws = [m for m in manager.middleware if isinstance(m, RecordingConvMiddleware)]
             assert convo_mws == [x, y]
 
         assert "CONFIG" not in req
@@ -407,9 +383,7 @@ class TestPrebuiltPathUnaffected:
         bot = DynaBot.from_components(
             llm=_echo("ok"),
             prompt_builder=AsyncPromptBuilder(CompositePromptLibrary()),
-            conversation_storage=DataknobsConversationStorage(
-                AsyncMemoryDatabase()
-            ),
+            conversation_storage=DataknobsConversationStorage(AsyncMemoryDatabase()),
             middleware=[caller_mw],
         )
         # The caller's list is used verbatim — no additive channel involved.
@@ -436,9 +410,7 @@ class TestHarnessPlatformPassThrough:
             bot_config=_base_config(
                 llm={"provider": "echo", "model": "test"},
                 reasoning={"strategy": "simple"},
-                middleware=[
-                    {"class": _MW_CLASS, "params": {"tag": "A", "sink": sink}}
-                ],
+                middleware=[{"class": _MW_CLASS, "params": {"tag": "A", "sink": sink}}],
             ),
             main_responses=["done"],
             platform_middleware=[probe],

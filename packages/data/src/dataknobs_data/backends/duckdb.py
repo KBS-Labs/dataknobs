@@ -75,9 +75,7 @@ class AsyncDuckDBDatabase(  # type: ignore[misc]
         ```
     """
 
-    CONFIG_CLS: ClassVar[type[AsyncDuckDBDatabaseConfig]] = (
-        AsyncDuckDBDatabaseConfig
-    )
+    CONFIG_CLS: ClassVar[type[AsyncDuckDBDatabaseConfig]] = AsyncDuckDBDatabaseConfig
 
     def _setup(self) -> None:
         """Derive backend attributes from the typed config.
@@ -101,13 +99,10 @@ class AsyncDuckDBDatabase(  # type: ignore[misc]
         self.query_builder = SQLQueryBuilder(
             self.table_name,
             dialect="duckdb",
-            param_style="qmark"  # DuckDB uses ? placeholders
+            param_style="qmark",  # DuckDB uses ? placeholders
         )
         self.serializer = SQLRecordSerializer()
-        self.table_manager = SQLTableManager(
-            self.table_name,
-            dialect="duckdb"
-        )
+        self.table_manager = SQLTableManager(self.table_name, dialect="duckdb")
 
         self.conn: duckdb.DuckDBPyConnection | None = None
         self._connected = False
@@ -121,16 +116,11 @@ class AsyncDuckDBDatabase(  # type: ignore[misc]
         # Create directory if needed for file-based database (off the loop).
         if self.db_path != ":memory:":
             db_file = Path(self.db_path)
-            await asyncio.to_thread(
-                db_file.parent.mkdir, parents=True, exist_ok=True
-            )
+            await asyncio.to_thread(db_file.parent.mkdir, parents=True, exist_ok=True)
 
         # Connect to database (in thread pool since DuckDB is sync)
         loop = asyncio.get_event_loop()
-        self.conn = await loop.run_in_executor(
-            self.executor,
-            self._connect_sync
-        )
+        self.conn = await loop.run_in_executor(self.executor, self._connect_sync)
 
         # Create table if it doesn't exist
         await self._ensure_table()
@@ -140,19 +130,13 @@ class AsyncDuckDBDatabase(  # type: ignore[misc]
 
     def _connect_sync(self) -> duckdb.DuckDBPyConnection:
         """Synchronous connection helper."""
-        return duckdb.connect(
-            self.db_path,
-            read_only=self.read_only
-        )
+        return duckdb.connect(self.db_path, read_only=self.read_only)
 
     async def close(self) -> None:
         """Close the database connection."""
         if self.conn:
             loop = asyncio.get_event_loop()
-            await loop.run_in_executor(
-                self.executor,
-                self.conn.close
-            )
+            await loop.run_in_executor(self.executor, self.conn.close)
             self.conn = None
             self._connected = False
             logger.info(f"Disconnected from async DuckDB database: {self.db_path}")
@@ -166,10 +150,7 @@ class AsyncDuckDBDatabase(  # type: ignore[misc]
             raise RuntimeError("Database not connected. Call connect() first.")
 
         loop = asyncio.get_event_loop()
-        await loop.run_in_executor(
-            self.executor,
-            self._ensure_table_sync
-        )
+        await loop.run_in_executor(self.executor, self._ensure_table_sync)
 
     def _ensure_table_sync(self) -> None:
         """Synchronous table creation/verification.
@@ -223,11 +204,7 @@ class AsyncDuckDBDatabase(  # type: ignore[misc]
         self._check_connection()
 
         loop = asyncio.get_event_loop()
-        return await loop.run_in_executor(
-            self.executor,
-            self._create_sync,
-            record
-        )
+        return await loop.run_in_executor(self.executor, self._create_sync, record)
 
     def _create_sync(self, record: Record) -> str:
         """Synchronous create implementation."""
@@ -259,11 +236,7 @@ class AsyncDuckDBDatabase(  # type: ignore[misc]
         self._check_connection()
 
         loop = asyncio.get_event_loop()
-        return await loop.run_in_executor(
-            self.executor,
-            self._read_sync,
-            id
-        )
+        return await loop.run_in_executor(self.executor, self._read_sync, id)
 
     def _read_sync(self, id: str) -> Record | None:
         """Synchronous read implementation."""
@@ -279,9 +252,7 @@ class AsyncDuckDBDatabase(  # type: ignore[misc]
                 return SQLQueryBuilder.row_to_record(row_dict)
         return None
 
-    async def update(
-        self, id: str, record: Record, *, expected_version: str | None = None
-    ) -> bool:
+    async def update(self, id: str, record: Record, *, expected_version: str | None = None) -> bool:
         """Update an existing record.
 
         Args:
@@ -313,9 +284,7 @@ class AsyncDuckDBDatabase(  # type: ignore[misc]
             expected_version,
         )
 
-    def _update_sync(
-        self, id: str, record: Record, expected_version: str | None = None
-    ) -> bool:
+    def _update_sync(self, id: str, record: Record, expected_version: str | None = None) -> bool:
         """Synchronous update implementation."""
         query, params = self.query_builder.build_update_query(id, record)
 
@@ -348,9 +317,7 @@ class AsyncDuckDBDatabase(  # type: ignore[misc]
             logger.warning(f"Update affected 0 rows for id={id}. Record may not exist.")
             return False
 
-    async def delete(
-        self, id: str, *, expected_version: str | None = None
-    ) -> bool:
+    async def delete(self, id: str, *, expected_version: str | None = None) -> bool:
         """Delete a record by ID.
 
         Args:
@@ -419,11 +386,7 @@ class AsyncDuckDBDatabase(  # type: ignore[misc]
         self._check_connection()
 
         loop = asyncio.get_event_loop()
-        return await loop.run_in_executor(
-            self.executor,
-            self._exists_sync,
-            id
-        )
+        return await loop.run_in_executor(self.executor, self._exists_sync, id)
 
     def _exists_sync(self, id: str) -> bool:
         """Synchronous exists implementation."""
@@ -445,11 +408,7 @@ class AsyncDuckDBDatabase(  # type: ignore[misc]
         self._check_connection()
 
         loop = asyncio.get_event_loop()
-        return await loop.run_in_executor(
-            self.executor,
-            self._search_sync,
-            query
-        )
+        return await loop.run_in_executor(self.executor, self._search_sync, query)
 
     def _search_sync(self, query: Query | ComplexQuery) -> list[Record]:
         """Synchronous search implementation."""
@@ -471,7 +430,7 @@ class AsyncDuckDBDatabase(  # type: ignore[misc]
             records.append(record)
 
         # Apply field projection if specified
-        if hasattr(query, 'fields') and query.fields:
+        if hasattr(query, "fields") and query.fields:
             records = [r.project(query.fields) for r in records]
 
         return records
@@ -488,11 +447,7 @@ class AsyncDuckDBDatabase(  # type: ignore[misc]
         self._check_connection()
 
         loop = asyncio.get_event_loop()
-        return await loop.run_in_executor(
-            self.executor,
-            self._count_sync,
-            query
-        )
+        return await loop.run_in_executor(self.executor, self._count_sync, query)
 
     def _count_sync(self, query: Query | None = None) -> int:
         """Synchronous count implementation."""
@@ -548,9 +503,7 @@ class AsyncDuckDBDatabase(  # type: ignore[misc]
         with self._lock:
             self.conn.rollback()
 
-    async def create_batch(
-        self, records: list[Record], *, _tx: Any = None
-    ) -> list[str]:
+    async def create_batch(self, records: list[Record], *, _tx: Any = None) -> list[str]:
         """Create multiple records efficiently.
 
         Args:
@@ -575,9 +528,7 @@ class AsyncDuckDBDatabase(  # type: ignore[misc]
             _tx is None,
         )
 
-    def _create_batch_sync(
-        self, records: list[Record], own_tx: bool = True
-    ) -> list[str]:
+    def _create_batch_sync(self, records: list[Record], own_tx: bool = True) -> list[str]:
         """Synchronous batch create implementation.
 
         Fails closed like ``create()``: a colliding id (or a within-batch
@@ -634,9 +585,7 @@ class AsyncDuckDBDatabase(  # type: ignore[misc]
                     self.conn.rollback()
                 raise
 
-    async def upsert_batch(
-        self, records: list[Record], *, _tx: Any = None
-    ) -> list[str]:
+    async def upsert_batch(self, records: list[Record], *, _tx: Any = None) -> list[str]:
         """Insert-or-overwrite multiple records efficiently in one statement.
 
         Uses ``INSERT ... ON CONFLICT (id) DO UPDATE``. Honors a caller-supplied
@@ -658,9 +607,7 @@ class AsyncDuckDBDatabase(  # type: ignore[misc]
             _tx is None,
         )
 
-    def _upsert_batch_sync(
-        self, records: list[Record], own_tx: bool = True
-    ) -> list[str]:
+    def _upsert_batch_sync(self, records: list[Record], own_tx: bool = True) -> list[str]:
         """Synchronous batch upsert implementation."""
         query, params, ids = self.query_builder.build_batch_upsert_query(
             records, id_factory=self._generate_id
@@ -694,11 +641,7 @@ class AsyncDuckDBDatabase(  # type: ignore[misc]
         self._check_connection()
 
         loop = asyncio.get_event_loop()
-        return await loop.run_in_executor(
-            self.executor,
-            self._update_batch_sync,
-            updates
-        )
+        return await loop.run_in_executor(self.executor, self._update_batch_sync, updates)
 
     def _update_batch_sync(self, updates: list[tuple[str, Record]]) -> list[bool]:
         """Synchronous batch update implementation."""
@@ -730,9 +673,7 @@ class AsyncDuckDBDatabase(  # type: ignore[misc]
                 self.conn.rollback()
                 raise
 
-    async def delete_batch(
-        self, ids: list[str], *, _tx: Any = None
-    ) -> list[bool]:
+    async def delete_batch(self, ids: list[str], *, _tx: Any = None) -> list[bool]:
         """Delete multiple records efficiently.
 
         Args:
@@ -761,7 +702,9 @@ class AsyncDuckDBDatabase(  # type: ignore[misc]
         with self._lock:
             # Check which IDs exist before deletion
             placeholders = ", ".join(["?" for _ in ids])
-            check_query = f"SELECT id FROM {self.table_manager.qualified_table} WHERE id IN ({placeholders})"
+            check_query = (
+                f"SELECT id FROM {self.table_manager.qualified_table} WHERE id IN ({placeholders})"
+            )
 
             rows = self.conn.execute(check_query, ids).fetchall()
             existing_ids = {row[0] for row in rows}
@@ -797,21 +740,18 @@ class AsyncDuckDBDatabase(  # type: ignore[misc]
         self._check_connection()
 
         loop = asyncio.get_event_loop()
-        return await loop.run_in_executor(
-            self.executor,
-            self._count_all_sync
-        )
+        return await loop.run_in_executor(self.executor, self._count_all_sync)
 
     def _count_all_sync(self) -> int:
         """Synchronous count all implementation."""
         with self._lock:
-            result = self.conn.execute(f"SELECT COUNT(*) FROM {self.table_manager.qualified_table}").fetchone()
+            result = self.conn.execute(
+                f"SELECT COUNT(*) FROM {self.table_manager.qualified_table}"
+            ).fetchone()
         return result[0] if result else 0
 
     async def stream_read(
-        self,
-        query: Query | None = None,
-        config: StreamConfig | None = None
+        self, query: Query | None = None, config: StreamConfig | None = None
     ) -> AsyncIterator[Record]:
         """Stream records from database.
 
@@ -848,9 +788,7 @@ class AsyncDuckDBDatabase(  # type: ignore[misc]
                 break
 
     async def stream_write(
-        self,
-        records: AsyncIterator[Record],
-        config: StreamConfig | None = None
+        self, records: AsyncIterator[Record], config: StreamConfig | None = None
     ) -> StreamResult:
         """Stream records into database.
 
@@ -923,9 +861,7 @@ class SyncDuckDBDatabase(  # type: ignore[misc]
         ```
     """
 
-    CONFIG_CLS: ClassVar[type[SyncDuckDBDatabaseConfig]] = (
-        SyncDuckDBDatabaseConfig
-    )
+    CONFIG_CLS: ClassVar[type[SyncDuckDBDatabaseConfig]] = SyncDuckDBDatabaseConfig
 
     def _setup(self) -> None:
         """Derive backend attributes from the typed config.
@@ -942,16 +878,9 @@ class SyncDuckDBDatabase(  # type: ignore[misc]
         self.auto_create_table = cfg.auto_create_table
 
         # Reuse SQL infrastructure
-        self.query_builder = SQLQueryBuilder(
-            self.table_name,
-            dialect="duckdb",
-            param_style="qmark"
-        )
+        self.query_builder = SQLQueryBuilder(self.table_name, dialect="duckdb", param_style="qmark")
         self.serializer = SQLRecordSerializer()
-        self.table_manager = SQLTableManager(
-            self.table_name,
-            dialect="duckdb"
-        )
+        self.table_manager = SQLTableManager(self.table_name, dialect="duckdb")
 
         self.conn: duckdb.DuckDBPyConnection | None = None
         self._connected = False
@@ -967,10 +896,7 @@ class SyncDuckDBDatabase(  # type: ignore[misc]
             db_file.parent.mkdir(parents=True, exist_ok=True)
 
         # Connect to database
-        self.conn = duckdb.connect(
-            self.db_path,
-            read_only=self.read_only
-        )
+        self.conn = duckdb.connect(self.db_path, read_only=self.read_only)
 
         # Create table if it doesn't exist
         self._ensure_table()
@@ -1069,9 +995,7 @@ class SyncDuckDBDatabase(  # type: ignore[misc]
             return SQLQueryBuilder.row_to_record(row_dict)
         return None
 
-    def update(
-        self, id: str, record: Record, *, expected_version: str | None = None
-    ) -> bool:
+    def update(self, id: str, record: Record, *, expected_version: str | None = None) -> bool:
         """Update an existing record.
 
         Args:
@@ -1198,7 +1122,7 @@ class SyncDuckDBDatabase(  # type: ignore[misc]
             records.append(record)
 
         # Apply field projection if specified
-        if hasattr(query, 'fields') and query.fields:
+        if hasattr(query, "fields") and query.fields:
             records = [r.project(query.fields) for r in records]
 
         return records
@@ -1256,9 +1180,7 @@ class SyncDuckDBDatabase(  # type: ignore[misc]
         except duckdb.ConstraintException as e:
             self.conn.rollback()
             if is_duplicate_key_error(e):
-                colliding = next(
-                    (r.id for r in records if r.id and self.exists(r.id)), ids[0]
-                )
+                colliding = next((r.id for r in records if r.id and self.exists(r.id)), ids[0])
                 raise DuplicateRecordError(colliding) from e
             raise constraint_violation_error() from e
         except Exception:
@@ -1312,7 +1234,9 @@ class SyncDuckDBDatabase(  # type: ignore[misc]
             # Check which records were actually updated
             update_ids = [record_id for record_id, _ in updates]
             placeholders = ", ".join(["?" for _ in update_ids])
-            check_query = f"SELECT id FROM {self.table_manager.qualified_table} WHERE id IN ({placeholders})"
+            check_query = (
+                f"SELECT id FROM {self.table_manager.qualified_table} WHERE id IN ({placeholders})"
+            )
 
             rows = self.conn.execute(check_query, update_ids).fetchall()
             existing_ids = {row[0] for row in rows}
@@ -1342,7 +1266,9 @@ class SyncDuckDBDatabase(  # type: ignore[misc]
 
         # Check which IDs exist before deletion
         placeholders = ", ".join(["?" for _ in ids])
-        check_query = f"SELECT id FROM {self.table_manager.qualified_table} WHERE id IN ({placeholders})"
+        check_query = (
+            f"SELECT id FROM {self.table_manager.qualified_table} WHERE id IN ({placeholders})"
+        )
 
         rows = self.conn.execute(check_query, ids).fetchall()
         existing_ids = {row[0] for row in rows}
@@ -1371,13 +1297,13 @@ class SyncDuckDBDatabase(  # type: ignore[misc]
         """Count all records in the database."""
         self._check_connection()
 
-        result = self.conn.execute(f"SELECT COUNT(*) FROM {self.table_manager.qualified_table}").fetchone()
+        result = self.conn.execute(
+            f"SELECT COUNT(*) FROM {self.table_manager.qualified_table}"
+        ).fetchone()
         return result[0] if result else 0
 
     def stream_read(
-        self,
-        query: Query | None = None,
-        config: StreamConfig | None = None
+        self, query: Query | None = None, config: StreamConfig | None = None
     ) -> Iterator[Record]:
         """Stream records from database.
 
@@ -1411,9 +1337,7 @@ class SyncDuckDBDatabase(  # type: ignore[misc]
                 break
 
     def stream_write(
-        self,
-        records: Iterator[Record],
-        config: StreamConfig | None = None
+        self, records: Iterator[Record], config: StreamConfig | None = None
     ) -> StreamResult:
         """Stream records into database.
 

@@ -57,9 +57,7 @@ class EmbeddingCache(ABC):
         """Store a vector in the cache."""
 
     @abstractmethod
-    async def get_batch(
-        self, model: str, texts: list[str]
-    ) -> list[list[float] | None]:
+    async def get_batch(self, model: str, texts: list[str]) -> list[list[float] | None]:
         """Retrieve cached vectors for a batch of texts.
 
         Returns a list parallel to *texts*: each element is either the
@@ -67,9 +65,7 @@ class EmbeddingCache(ABC):
         """
 
     @abstractmethod
-    async def put_batch(
-        self, model: str, texts: list[str], vectors: list[list[float]]
-    ) -> None:
+    async def put_batch(self, model: str, texts: list[str], vectors: list[list[float]]) -> None:
         """Store a batch of vectors in the cache."""
 
     @abstractmethod
@@ -116,14 +112,10 @@ class MemoryEmbeddingCache(EmbeddingCache):
     async def put(self, model: str, text: str, vector: list[float]) -> None:
         self._store[_cache_key(model, text)] = vector
 
-    async def get_batch(
-        self, model: str, texts: list[str]
-    ) -> list[list[float] | None]:
+    async def get_batch(self, model: str, texts: list[str]) -> list[list[float] | None]:
         return [self._store.get(_cache_key(model, t)) for t in texts]
 
-    async def put_batch(
-        self, model: str, texts: list[str], vectors: list[list[float]]
-    ) -> None:
+    async def put_batch(self, model: str, texts: list[str], vectors: list[list[float]]) -> None:
         for text, vector in zip(texts, vectors):
             self._store[_cache_key(model, text)] = vector
 
@@ -191,9 +183,7 @@ class SqliteEmbeddingCache(EmbeddingCache):
                 "Install it with: pip install 'dataknobs-llm[sqlite-cache]'"
             ) from None
 
-        await asyncio.to_thread(
-            self._db_path.parent.mkdir, parents=True, exist_ok=True
-        )
+        await asyncio.to_thread(self._db_path.parent.mkdir, parents=True, exist_ok=True)
         self._conn = await aiosqlite.connect(str(self._db_path))
         await self._conn.execute("PRAGMA journal_mode=WAL")
         await self._conn.execute(
@@ -249,28 +239,20 @@ class SqliteEmbeddingCache(EmbeddingCache):
         )
         await self._conn.commit()
 
-    async def get_batch(
-        self, model: str, texts: list[str]
-    ) -> list[list[float] | None]:
+    async def get_batch(self, model: str, texts: list[str]) -> list[list[float] | None]:
         self._check_open()
         keys = [_cache_key(model, t) for t in texts]
         placeholders = ",".join("?" * len(keys))
         cursor = await self._conn.execute(
-            f"SELECT cache_key, vector FROM embeddings "
-            f"WHERE cache_key IN ({placeholders})",
+            f"SELECT cache_key, vector FROM embeddings WHERE cache_key IN ({placeholders})",
             keys,
         )
         rows = {row[0]: _blob_to_vector(row[1]) for row in await cursor.fetchall()}
         return [rows.get(k) for k in keys]
 
-    async def put_batch(
-        self, model: str, texts: list[str], vectors: list[list[float]]
-    ) -> None:
+    async def put_batch(self, model: str, texts: list[str], vectors: list[list[float]]) -> None:
         self._check_open()
-        rows = [
-            (_cache_key(model, t), model, _vector_to_blob(v))
-            for t, v in zip(texts, vectors)
-        ]
+        rows = [(_cache_key(model, t), model, _vector_to_blob(v)) for t, v in zip(texts, vectors)]
         await self._conn.executemany(
             """
             INSERT OR REPLACE INTO embeddings (cache_key, model, vector)
@@ -545,15 +527,10 @@ async def create_caching_provider(
         cache: EmbeddingCache = MemoryEmbeddingCache()
     elif cache_backend == "sqlite":
         if cache_path is None:
-            raise ValueError(
-                "cache_path is required for the 'sqlite' cache backend"
-            )
+            raise ValueError("cache_path is required for the 'sqlite' cache backend")
         cache = SqliteEmbeddingCache(cache_path)
     else:
-        raise ValueError(
-            f"Unknown cache backend: {cache_backend!r}. "
-            f"Use 'sqlite' or 'memory'."
-        )
+        raise ValueError(f"Unknown cache backend: {cache_backend!r}. Use 'sqlite' or 'memory'.")
 
     provider = CachingEmbedProvider(inner, cache)
     await provider.initialize()

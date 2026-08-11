@@ -64,9 +64,7 @@ async def _make_store_and_embedder() -> tuple[Any, Any]:
     """Build an initialized in-memory vector store + echo embedder."""
     store = VectorStoreFactory().create(backend="memory", dimensions=8)
     await store.initialize()
-    provider = LLMProviderFactory(is_async=True).create(
-        {"provider": "echo", "model": "test"}
-    )
+    provider = LLMProviderFactory(is_async=True).create({"provider": "echo", "model": "test"})
     await provider.initialize()
     return store, provider
 
@@ -147,19 +145,13 @@ class TestExtensibility:
     """Custom backends register and dispatch through the public factory."""
 
     @pytest.mark.asyncio
-    async def test_custom_memory_backend_dispatches(
-        self, counting_backend: None
-    ) -> None:
+    async def test_custom_memory_backend_dispatches(self, counting_backend: None) -> None:
         assert is_memory_backend_registered("counting")
-        memory = await create_memory_from_config(
-            {"type": "counting", "label": "hello"}
-        )
+        memory = await create_memory_from_config({"type": "counting", "label": "hello"})
         assert isinstance(memory, _CountingMemory)
         assert memory.label == "hello"
 
-    def test_duplicate_registration_requires_override(
-        self, counting_backend: None
-    ) -> None:
+    def test_duplicate_registration_requires_override(self, counting_backend: None) -> None:
         from dataknobs_common.exceptions import OperationError
 
         with pytest.raises(OperationError, match="already registered"):
@@ -168,9 +160,7 @@ class TestExtensibility:
         register_memory_backend("counting", _build_counting, override=True)
 
     @pytest.mark.asyncio
-    async def test_custom_backend_used_in_composite(
-        self, counting_backend: None
-    ) -> None:
+    async def test_custom_backend_used_in_composite(self, counting_backend: None) -> None:
         """A custom backend works as a composite child (recursion path)."""
         memory = await create_memory_from_config(
             {
@@ -282,9 +272,7 @@ class TestCollaboratorThreading:
     async def test_summary_adopts_injected_llm(self) -> None:
         from dataknobs_llm.llm import LLMProviderFactory
 
-        provider = LLMProviderFactory(is_async=True).create(
-            {"provider": "echo", "model": "test"}
-        )
+        provider = LLMProviderFactory(is_async=True).create({"provider": "echo", "model": "test"})
         memory = await create_memory_from_config(
             {"type": "summary", "recent_window": 4}, llm_provider=provider
         )
@@ -341,9 +329,7 @@ class TestConfigRoundTrips:
         )
 
     def test_summary_config_roundtrip(self) -> None:
-        assert_structured_config_roundtrip(
-            SummaryMemoryConfig(recent_window=6, summary_prompt="x")
-        )
+        assert_structured_config_roundtrip(SummaryMemoryConfig(recent_window=6, summary_prompt="x"))
         assert_structured_config_roundtrip(
             SummaryMemoryConfig(llm={"provider": "echo", "model": "m"})
         )
@@ -410,9 +396,7 @@ class TestConfigRoundTrips:
 
     def test_composite_primary_alias(self) -> None:
         """The documented ``primary`` key maps to ``primary_index``."""
-        cfg = CompositeMemoryConfig.from_dict(
-            {"strategies": [{"type": "buffer"}], "primary": 3}
-        )
+        cfg = CompositeMemoryConfig.from_dict({"strategies": [{"type": "buffer"}], "primary": 3})
         assert cfg.primary_index == 3
 
     def test_grounded_source_config_roundtrip(self) -> None:
@@ -652,10 +636,7 @@ class TestSubsystemConfigRedaction:
         assert "postgresql://" not in rendered
         assert "'connection_string': '***'" in rendered
         # Display-only — the real value survives for the factory to consume.
-        assert (
-            cfg.to_dict()["vector_store"]["connection_string"]
-            == "postgresql://u:pw@h/db"
-        )
+        assert cfg.to_dict()["vector_store"]["connection_string"] == "postgresql://u:pw@h/db"
 
     def test_rag_embedding_api_key_masked(self) -> None:
         """An embedder credential nested in the raw ``embedding`` mapping."""

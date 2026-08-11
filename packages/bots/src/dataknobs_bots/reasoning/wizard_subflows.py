@@ -78,7 +78,9 @@ class SubflowManager:
     # -- Push / pop ----------------------------------------------------------
 
     def should_push(
-        self, wizard_state: WizardState, user_message: str,
+        self,
+        wizard_state: WizardState,
+        user_message: str,
     ) -> dict[str, Any] | None:
         """Check if the current transition should push a subflow.
 
@@ -108,7 +110,8 @@ class SubflowManager:
             # Evaluate condition if present
             condition = transition.get("condition")
             if condition and not self._evaluate_condition(
-                condition, wizard_state.data,
+                condition,
+                wizard_state.data,
             ):
                 continue
 
@@ -166,10 +169,12 @@ class SubflowManager:
 
         # Reset subflow FSM and set initial data
         subflow_fsm.restart()
-        subflow_fsm.restore({
-            "current_stage": subflow_fsm.current_stage,
-            "data": subflow_data,
-        })
+        subflow_fsm.restore(
+            {
+                "current_stage": subflow_fsm.current_stage,
+                "data": subflow_data,
+            }
+        )
 
         # Switch to subflow
         self._active_subflow_fsm = subflow_fsm
@@ -230,7 +235,8 @@ class SubflowManager:
         # Apply result mapping (subflow -> parent)
         parent_data = dict(subflow_context.parent_data)
         result_data = _apply_result_mapping(
-            wizard_state.data, subflow_context.result_mapping,
+            wizard_state.data,
+            subflow_context.result_mapping,
         )
         parent_data.update(result_data)
 
@@ -266,10 +272,12 @@ class SubflowManager:
 
         # Restore parent FSM state
         active_fsm = self.get_active_fsm()
-        active_fsm.restore({
-            "current_stage": return_stage,
-            "data": parent_data,
-        })
+        active_fsm.restore(
+            {
+                "current_stage": return_stage,
+                "data": parent_data,
+            }
+        )
 
         logger.info(
             "Popped subflow '%s': %s -> %s (depth=%d)",

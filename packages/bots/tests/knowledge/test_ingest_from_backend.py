@@ -36,9 +36,7 @@ async def _make_kb() -> RAGKnowledgeBase:
     )
 
 
-async def _collected_paths(
-    source: BackendDocumentSource, patterns: list[str]
-) -> list[str]:
+async def _collected_paths(source: BackendDocumentSource, patterns: list[str]) -> list[str]:
     out: list[str] = []
     async for ref in source.iter_files(patterns):
         out.append(ref.path)
@@ -53,9 +51,7 @@ async def populated_memory_backend() -> InMemoryKnowledgeBackend:
     await backend.put_file("d1", "intro.md", b"# Intro\n\nHello.\n")
     await backend.put_file("d1", "guide.md", b"# Guide\n\nBody.\n")
     await backend.put_file("d1", "drafts/skip.md", b"# Skip me\n")
-    await backend.put_file(
-        "d1", "data.jsonl", b'{"title": "A"}\n{"title": "B"}\n'
-    )
+    await backend.put_file("d1", "data.jsonl", b'{"title": "A"}\n{"title": "B"}\n')
     return backend
 
 
@@ -83,16 +79,12 @@ async def test_local_ingest_equivalent_to_load_from_directory(
         await backend.put_file("d1", src.name, src.read_bytes())
 
     kb_backend = await _make_kb()
-    backend_stats = await kb_backend.ingest_from_backend(
-        backend, "d1", config=config
-    )
+    backend_stats = await kb_backend.ingest_from_backend(backend, "d1", config=config)
     await backend.close()
 
     assert local_stats["total_files"] == backend_stats["total_files"]
     assert local_stats["total_chunks"] == backend_stats["total_chunks"]
-    assert (
-        local_stats["files_by_type"] == backend_stats["files_by_type"]
-    )
+    assert local_stats["files_by_type"] == backend_stats["files_by_type"]
 
 
 @pytest.mark.asyncio
@@ -114,13 +106,9 @@ async def test_ingest_from_memory_backend(
 async def test_ingest_respects_exclude_patterns(
     populated_memory_backend: InMemoryKnowledgeBackend,
 ) -> None:
-    config = KnowledgeBaseConfig(
-        name="t", exclude_patterns=["drafts/**"]
-    )
+    config = KnowledgeBaseConfig(name="t", exclude_patterns=["drafts/**"])
     kb = await _make_kb()
-    stats = await kb.ingest_from_backend(
-        populated_memory_backend, "d1", config=config
-    )
+    stats = await kb.ingest_from_backend(populated_memory_backend, "d1", config=config)
     # drafts/skip.md excluded → 2 markdown + 1 jsonl
     assert stats["total_files"] == 3
     assert stats["files_by_type"]["markdown"] == 2
@@ -136,9 +124,7 @@ async def test_ingest_respects_patterns(
         patterns=[FilePatternConfig(pattern="*.md")],
     )
     kb = await _make_kb()
-    stats = await kb.ingest_from_backend(
-        populated_memory_backend, "d1", config=config
-    )
+    stats = await kb.ingest_from_backend(populated_memory_backend, "d1", config=config)
     # Only intro.md and guide.md at the root (drafts/skip.md is nested)
     assert stats["total_files"] == 2
     assert stats["files_by_type"]["markdown"] == 2
@@ -155,9 +141,7 @@ async def test_ingest_progress_callback_invoked(
         recorded.append((path, n))
 
     kb = await _make_kb()
-    stats = await kb.ingest_from_backend(
-        populated_memory_backend, "d1", progress_callback=cb
-    )
+    stats = await kb.ingest_from_backend(populated_memory_backend, "d1", progress_callback=cb)
     assert len(recorded) == stats["total_files"]
     assert all(isinstance(p, str) and isinstance(n, int) for p, n in recorded)
 
@@ -175,9 +159,7 @@ async def test_ingest_reads_config_from_backend_metadata(
             "exclude_patterns": ["drafts/**"],
         }
     ).encode("utf-8")
-    await populated_memory_backend.put_file(
-        "d1", "_metadata/knowledge_base.json", payload
-    )
+    await populated_memory_backend.put_file("d1", "_metadata/knowledge_base.json", payload)
 
     kb = await _make_kb()
     stats = await kb.ingest_from_backend(populated_memory_backend, "d1")
@@ -260,9 +242,7 @@ async def test_pattern_intersection_across_local_and_backend(
 async def test_ingest_captures_errors_without_failing_batch(
     populated_memory_backend: InMemoryKnowledgeBackend,
 ) -> None:
-    await populated_memory_backend.put_file(
-        "d1", "broken.json", b"{ not valid json"
-    )
+    await populated_memory_backend.put_file("d1", "broken.json", b"{ not valid json")
     kb = await _make_kb()
     stats = await kb.ingest_from_backend(populated_memory_backend, "d1")
     # At least the broken file is listed as errored; everything else processed
@@ -302,9 +282,7 @@ async def test_ingest_raises_ingestion_config_error_on_non_dict(
     :meth:`KnowledgeBaseConfig._load_file`."""
     from dataknobs_xization.ingestion.config import IngestionConfigError
 
-    await populated_memory_backend.put_file(
-        "d1", "knowledge_base.json", b"[1, 2, 3]"
-    )
+    await populated_memory_backend.put_file("d1", "knowledge_base.json", b"[1, 2, 3]")
     kb = await _make_kb()
     with pytest.raises(IngestionConfigError, match="did not decode to a dict"):
         await kb.ingest_from_backend(populated_memory_backend, "d1")
@@ -357,24 +335,19 @@ async def test_ingest_isolates_per_file_embed_store_failures(
 
     real_embed_and_store = kb._embed_and_store_chunks  # type: ignore[attr-defined]
 
-    async def _flaky(
-        *args: Any, source_file: str = "", **kwargs: Any
-    ) -> int:
+    async def _flaky(*args: Any, source_file: str = "", **kwargs: Any) -> int:
         if "guide.md" in source_file:
             raise RuntimeError("simulated embed/store failure on guide.md")
-        return await real_embed_and_store(
-            *args, source_file=source_file, **kwargs
-        )
+        return await real_embed_and_store(*args, source_file=source_file, **kwargs)
 
     kb._embed_and_store_chunks = _flaky  # type: ignore[assignment,method-assign]
 
     stats = await kb.ingest_from_backend(populated_memory_backend, "d1")
 
     # guide.md shows up as an error but other files are still ingested.
-    assert any(
-        "guide.md" in e["file"] and "simulated" in e["error"]
-        for e in stats["errors"]
-    ), f"Expected guide.md to be flagged as errored; got {stats['errors']}"
+    assert any("guide.md" in e["file"] and "simulated" in e["error"] for e in stats["errors"]), (
+        f"Expected guide.md to be flagged as errored; got {stats['errors']}"
+    )
     # Exactly one file failed; the rest succeeded.
     failed = {Path(e["file"]).name for e in stats["errors"]}
     assert failed == {"guide.md"}

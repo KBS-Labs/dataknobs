@@ -211,12 +211,7 @@ class HTMLConverter:
                 h1.decompose()
 
         # Find the main content area, falling back to body or the whole document.
-        body = (
-            soup.find("main")
-            or soup.find("article")
-            or soup.find("body")
-            or soup
-        )
+        body = soup.find("main") or soup.find("article") or soup.find("body") or soup
 
         self._process_element(body, lines)
         return "\n".join(lines)
@@ -325,13 +320,13 @@ class HTMLConverter:
                         if isinstance(sub, Tag) and sub.name in ("ul", "ol"):
                             break
                         text_parts.append(
-                            self._inline_text(sub) if isinstance(sub, Tag)
-                            else str(sub)
+                            self._inline_text(sub) if isinstance(sub, Tag) else str(sub)
                         )
                     text = " ".join(t.strip() for t in text_parts if t.strip())
                     lines.append(f"{indent_str}{prefix} {text}")
                     self._process_list(
-                        nested_list, lines,
+                        nested_list,
+                        lines,
                         ordered=(nested_list.name == "ol"),
                         indent=indent + 1,
                     )
@@ -541,8 +536,7 @@ class HTMLConverter:
                     segment_parts.append(f"\x00HEADING:{heading_level}:{text}\x00")
                 # Page footer/header spans (class="grey") or page anchors — skip
                 elif child.name == "span" and (
-                    "grey" in (child.get("class") or [])
-                    or child.get("id", "").startswith("page-")
+                    "grey" in (child.get("class") or []) or child.get("id", "").startswith("page-")
                 ):
                     continue
                 # Links — extract text with href
@@ -707,13 +701,11 @@ class HTMLConverter:
         """Check if lines starting at index form an ASCII art block."""
         # Look for characteristic ASCII art patterns in a window.
         # Require at least 2 lines with box-drawing/arrow characters.
-        window = lines[start:start + 5]
+        window = lines[start : start + 5]
         art_lines = sum(1 for line in window if _ASCII_ART_RE.search(line))
         return art_lines >= 2
 
-    def _collect_ascii_art(
-        self, lines: list[str], start: int
-    ) -> tuple[list[str], int]:
+    def _collect_ascii_art(self, lines: list[str], start: int) -> tuple[list[str], int]:
         """Collect contiguous ASCII art lines."""
         block: list[str] = []
         i = start
@@ -752,9 +744,7 @@ class HTMLConverter:
 
         return block, i
 
-    def _collect_rfc_list(
-        self, lines: list[str], start: int
-    ) -> tuple[list[str], int]:
+    def _collect_rfc_list(self, lines: list[str], start: int) -> tuple[list[str], int]:
         """Collect RFC-style list items (lines starting with 'o  ')."""
         items: list[str] = []
         i = start
@@ -794,9 +784,7 @@ class HTMLConverter:
 
         return items, i
 
-    def _collect_paragraph(
-        self, lines: list[str], start: int
-    ) -> tuple[list[str], int]:
+    def _collect_paragraph(self, lines: list[str], start: int) -> tuple[list[str], int]:
         """Collect paragraph lines until a blank line or special element."""
         words: list[str] = []
         i = start
@@ -840,8 +828,11 @@ class HTMLConverter:
         """Render a YAML frontmatter block."""
         try:
             import yaml
+
             body = yaml.safe_dump(
-                metadata, default_flow_style=False, sort_keys=False,
+                metadata,
+                default_flow_style=False,
+                sort_keys=False,
             ).rstrip("\n")
             return f"---\n{body}\n---"
         except ImportError:

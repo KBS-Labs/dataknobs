@@ -56,9 +56,7 @@ class TestFileSystemLibraryInit:
     def test_custom_file_extensions(self, temp_prompts_dir):
         """Test initialization with custom file extensions."""
         library = FileSystemPromptLibrary(
-            temp_prompts_dir,
-            auto_load=False,
-            file_extensions=[".json"]
+            temp_prompts_dir, auto_load=False, file_extensions=[".json"]
         )
         assert library.file_extensions == [".json"]
 
@@ -72,7 +70,7 @@ class TestFileSystemSystemPrompts:
         prompt_data = {
             "template": "Analyze {{code}}",
             "defaults": {"language": "python"},
-            "metadata": {"author": "test"}
+            "metadata": {"author": "test"},
         }
         prompt_file.write_text(json.dumps(prompt_data))
 
@@ -87,10 +85,7 @@ class TestFileSystemSystemPrompts:
     def test_load_yaml_system_prompt(self, temp_prompts_dir):
         """Test loading system prompt from YAML file."""
         prompt_file = temp_prompts_dir / "system" / "greet.yaml"
-        prompt_data = {
-            "template": "Hello {{name}}!",
-            "defaults": {"name": "World"}
-        }
+        prompt_data = {"template": "Hello {{name}}!", "defaults": {"name": "World"}}
         prompt_file.write_text(yaml.dump(prompt_data))
 
         library = FileSystemPromptLibrary(temp_prompts_dir)
@@ -104,10 +99,7 @@ class TestFileSystemSystemPrompts:
         prompt_file = temp_prompts_dir / "system" / "validate.json"
         prompt_data = {
             "template": "Process {{input}}",
-            "validation": {
-                "level": "error",
-                "required_params": ["input"]
-            }
+            "validation": {"level": "error", "required_params": ["input"]},
         }
         prompt_file.write_text(json.dumps(prompt_data))
 
@@ -214,9 +206,9 @@ class TestFileSystemMessageIndexes:
         index_data = {
             "messages": [
                 {"role": "system", "content": "You are helpful"},
-                {"role": "user", "content": "Hello"}
+                {"role": "user", "content": "Hello"},
             ],
-            "metadata": {"type": "greeting"}
+            "metadata": {"type": "greeting"},
         }
         index_file.write_text(json.dumps(index_data))
 
@@ -232,16 +224,8 @@ class TestFileSystemMessageIndexes:
         """Test loading message index with RAG configs."""
         index_file = temp_prompts_dir / "messages" / "rag_chat.json"
         index_data = {
-            "messages": [
-                {"role": "system", "content": "Context: {{RAG_CONTENT}}"}
-            ],
-            "rag_configs": [
-                {
-                    "adapter_name": "docs",
-                    "query": "{{user_query}}",
-                    "k": 5
-                }
-            ]
+            "messages": [{"role": "system", "content": "Context: {{RAG_CONTENT}}"}],
+            "rag_configs": [{"adapter_name": "docs", "query": "{{user_query}}", "k": 5}],
         }
         index_file.write_text(json.dumps(index_data))
 
@@ -268,7 +252,7 @@ class TestFileSystemRAGConfigs:
             "adapter_name": "documentation",
             "query": "{{user_query}}",
             "k": 3,
-            "filters": {"category": "api"}
+            "filters": {"category": "api"},
         }
         rag_file.write_text(json.dumps(rag_data))
 
@@ -288,7 +272,7 @@ class TestFileSystemRAGConfigs:
             "query": "search",
             "placeholder": "CUSTOM_CONTENT",
             "header": "Documentation:",
-            "item_template": "- {{content}}"
+            "item_template": "- {{content}}",
         }
         rag_file.write_text(json.dumps(rag_data))
 
@@ -311,9 +295,7 @@ class TestFileSystemLibraryAutoLoad:
     def test_auto_load_true(self, temp_prompts_dir):
         """Test that auto_load=True loads prompts automatically."""
         # Create prompts
-        (temp_prompts_dir / "system" / "test.json").write_text(
-            json.dumps({"template": "Test"})
-        )
+        (temp_prompts_dir / "system" / "test.json").write_text(json.dumps({"template": "Test"}))
 
         library = FileSystemPromptLibrary(temp_prompts_dir, auto_load=True)
         assert library.get_system_prompt("test") is not None
@@ -321,9 +303,7 @@ class TestFileSystemLibraryAutoLoad:
     def test_auto_load_false(self, temp_prompts_dir):
         """Test that auto_load=False does not load prompts."""
         # Create prompts
-        (temp_prompts_dir / "system" / "test.json").write_text(
-            json.dumps({"template": "Test"})
-        )
+        (temp_prompts_dir / "system" / "test.json").write_text(json.dumps({"template": "Test"}))
 
         library = FileSystemPromptLibrary(temp_prompts_dir, auto_load=False)
         # Should not be loaded yet
@@ -388,6 +368,7 @@ class TestFileSystemLibraryEdgeCases:
         # Create YAML file (if PyYAML available)
         try:
             import yaml
+
             (temp_prompts_dir / "system" / "yaml_prompt.yaml").write_text(
                 yaml.dump({"template": "YAML prompt"})
             )

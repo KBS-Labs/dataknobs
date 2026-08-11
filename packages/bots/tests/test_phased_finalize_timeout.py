@@ -81,9 +81,7 @@ def _synthesis_delay(delay: float) -> Callable[[list[LLMMessage]], float]:
 
     def _fn(messages: list[LLMMessage]) -> float:
         is_synthesis = any(
-            getattr(m, "tool_calls", None)
-            or getattr(m, "role", None) == "tool"
-            for m in messages
+            getattr(m, "tool_calls", None) or getattr(m, "role", None) == "tool" for m in messages
         )
         return delay if is_synthesis else 0.0
 
@@ -118,9 +116,7 @@ async def test_phased_finalize_bounded_buffered(
         ],
         tools=[_EchoTool()],
     ) as harness:
-        harness.bot.llm.set_response_delay(
-            _synthesis_delay(_SLOW_SYNTHESIS_DELAY)
-        )
+        harness.bot.llm.set_response_delay(_synthesis_delay(_SLOW_SYNTHESIS_DELAY))
 
         with caplog.at_level(logging.WARNING):
             start = time.monotonic()
@@ -128,9 +124,7 @@ async def test_phased_finalize_bounded_buffered(
             elapsed = time.monotonic() - start
 
     # Bounded: nowhere near the 5s synthesis delay.
-    assert elapsed < _BOUNDED_CEILING, (
-        f"finalize was not bounded: {elapsed:.2f}s"
-    )
+    assert elapsed < _BOUNDED_CEILING, f"finalize was not bounded: {elapsed:.2f}s"
     # Degraded to the fallback, not the real (slow) synthesis text.
     assert result.response == _DEFAULT_TOOL_LOOP_TIMEOUT_MESSAGE
     assert "exceeded remaining tool loop budget" in caplog.text
@@ -148,18 +142,14 @@ async def test_phased_finalize_bounded_streaming(
         ],
         tools=[_EchoTool()],
     ) as harness:
-        harness.bot.llm.set_response_delay(
-            _synthesis_delay(_SLOW_SYNTHESIS_DELAY)
-        )
+        harness.bot.llm.set_response_delay(_synthesis_delay(_SLOW_SYNTHESIS_DELAY))
 
         with caplog.at_level(logging.WARNING):
             start = time.monotonic()
             result = await harness.stream_chat("please use the tool")
             elapsed = time.monotonic() - start
 
-    assert elapsed < _BOUNDED_CEILING, (
-        f"streaming finalize was not bounded: {elapsed:.2f}s"
-    )
+    assert elapsed < _BOUNDED_CEILING, f"streaming finalize was not bounded: {elapsed:.2f}s"
     # Only the graceful fallback chunk is yielded (the source never produced
     # one — it was cancelled at the deadline).
     assert result.chunks == [_DEFAULT_TOOL_LOOP_TIMEOUT_MESSAGE]
@@ -201,9 +191,7 @@ async def test_phased_finalize_stored_response_no_synthesis(
         main_responses=[text_response("direct answer, no tools")],
         tools=[_EchoTool()],
     ) as harness:
-        harness.bot.llm.set_response_delay(
-            _synthesis_delay(_SLOW_SYNTHESIS_DELAY)
-        )
+        harness.bot.llm.set_response_delay(_synthesis_delay(_SLOW_SYNTHESIS_DELAY))
         with caplog.at_level(logging.WARNING):
             start = time.monotonic()
             result = await harness.chat("just answer directly")
@@ -296,34 +284,26 @@ async def test_custom_tool_loop_timeout_message_surfaces(
     custom = "We ran out of time — please try again."
 
     async with await BotTestHarness.create(
-        bot_config=_react_config(
-            tool_loop_timeout=0.0, tool_loop_timeout_message=custom
-        ),
+        bot_config=_react_config(tool_loop_timeout=0.0, tool_loop_timeout_message=custom),
         main_responses=[
             tool_call_response("echo_tool", {"text": "hi"}),
             text_response("real synthesized answer"),
         ],
         tools=[_EchoTool()],
     ) as harness:
-        harness.bot.llm.set_response_delay(
-            _synthesis_delay(_SLOW_SYNTHESIS_DELAY)
-        )
+        harness.bot.llm.set_response_delay(_synthesis_delay(_SLOW_SYNTHESIS_DELAY))
         buffered = await harness.chat("please use the tool")
     assert buffered.response == custom
 
     async with await BotTestHarness.create(
-        bot_config=_react_config(
-            tool_loop_timeout=0.0, tool_loop_timeout_message=custom
-        ),
+        bot_config=_react_config(tool_loop_timeout=0.0, tool_loop_timeout_message=custom),
         main_responses=[
             tool_call_response("echo_tool", {"text": "hi"}),
             text_response("real synthesized answer"),
         ],
         tools=[_EchoTool()],
     ) as harness:
-        harness.bot.llm.set_response_delay(
-            _synthesis_delay(_SLOW_SYNTHESIS_DELAY)
-        )
+        harness.bot.llm.set_response_delay(_synthesis_delay(_SLOW_SYNTHESIS_DELAY))
         streaming = await harness.stream_chat("please use the tool")
     assert streaming.chunks == [custom]
 
@@ -368,9 +348,7 @@ async def test_bounded_finalize_stream_bounds_source_teardown() -> None:
     ) as harness:
         bot = harness.bot
         source = _HangingCloseStream()
-        turn = TurnState(
-            mode=TurnMode.STREAM, message="hi", context=harness.context
-        )
+        turn = TurnState(mode=TurnMode.STREAM, message="hi", context=harness.context)
 
         chunks: list[Any] = []
 

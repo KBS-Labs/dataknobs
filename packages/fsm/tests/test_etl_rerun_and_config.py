@@ -80,9 +80,7 @@ async def test_etl_is_rerunnable(tmp_path: Path) -> None:
 
     rows = await _read_target(tgt)
     persisted_ids = {r.get("id") for r in rows}
-    assert {"2", "3"} <= persisted_ids, (
-        f"second run's rows were not actually persisted: {rows}"
-    )
+    assert {"2", "3"} <= persisted_ids, f"second run's rows were not actually persisted: {rows}"
     assert all(r.get("tag") == "X" for r in rows if r.get("id") in {"2", "3"})
 
 

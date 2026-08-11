@@ -227,12 +227,8 @@ def test_make_pgvector_test_table_pre_drops_leaked_table(
     )
     try:
         cursor = conn.cursor()
-        cursor.execute(
-            f"DROP TABLE IF EXISTS public.{safe_sql_ident(table)} CASCADE"
-        )
-        cursor.execute(
-            f"CREATE TABLE public.{safe_sql_ident(table)} (id int)"
-        )
+        cursor.execute(f"DROP TABLE IF EXISTS public.{safe_sql_ident(table)} CASCADE")
+        cursor.execute(f"CREATE TABLE public.{safe_sql_ident(table)} (id int)")
         conn.commit()
         cursor.close()
     finally:
@@ -258,9 +254,7 @@ def test_make_pgvector_test_table_pre_drops_leaked_table(
     )
     try:
         cursor = conn.cursor()
-        cursor.execute(
-            f"CREATE TABLE public.{safe_sql_ident(table)} (id int)"
-        )
+        cursor.execute(f"CREATE TABLE public.{safe_sql_ident(table)} (id int)")
         conn.commit()
         cursor.close()
     finally:
@@ -324,9 +318,7 @@ def test_sweep_orphan_allowlist(monkeypatch, caplog, db, allowed):
 
 
 @requires_postgres
-def test_sweep_orphan_drops_only_test_tables(
-    postgres_connection_params, monkeypatch
-):
+def test_sweep_orphan_drops_only_test_tables(postgres_connection_params, monkeypatch):
     """Real sweep drops ``public.test_*`` and preserves non-test tables."""
     import uuid as _uuid
 
@@ -346,12 +338,8 @@ def test_sweep_orphan_drops_only_test_tables(
     )
     try:
         cursor = conn.cursor()
-        cursor.execute(
-            f"CREATE TABLE public.{safe_sql_ident(orphan)} (id int)"
-        )
-        cursor.execute(
-            f"CREATE TABLE public.{safe_sql_ident(keep)} (id int)"
-        )
+        cursor.execute(f"CREATE TABLE public.{safe_sql_ident(orphan)} (id int)")
+        cursor.execute(f"CREATE TABLE public.{safe_sql_ident(keep)} (id int)")
         conn.commit()
         cursor.close()
     finally:
@@ -372,9 +360,7 @@ def test_sweep_orphan_drops_only_test_tables(
         )
         try:
             cursor = conn.cursor()
-            cursor.execute(
-                f"DROP TABLE IF EXISTS public.{safe_sql_ident(keep)} CASCADE"
-            )
+            cursor.execute(f"DROP TABLE IF EXISTS public.{safe_sql_ident(keep)} CASCADE")
             conn.commit()
             cursor.close()
         finally:
@@ -407,10 +393,7 @@ def test_make_postgres_test_db_cleanup_on_exception(make_postgres_test_db):
     )
     try:
         cursor = conn.cursor()
-        cursor.execute(
-            f"CREATE TABLE {safe_sql_ident(schema)}."
-            f"{safe_sql_ident(table)} (id INT)"
-        )
+        cursor.execute(f"CREATE TABLE {safe_sql_ident(schema)}.{safe_sql_ident(table)} (id INT)")
         conn.commit()
         cursor.close()
     finally:
@@ -435,9 +418,7 @@ def test_make_postgres_test_db_cleanup_on_exception(make_postgres_test_db):
             (f"{schema}.{table}",),
         )
         result = cursor.fetchone()
-        assert result is not None and result[0] is None, (
-            f"Cleanup did not drop {schema}.{table}"
-        )
+        assert result is not None and result[0] is None, f"Cleanup did not drop {schema}.{table}"
         cursor.close()
     finally:
         conn.close()

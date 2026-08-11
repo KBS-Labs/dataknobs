@@ -283,8 +283,7 @@ async def test_async_subflow_releases_pushing_state_resources_on_pop() -> None:
         )
         # No live acquisitions should remain at all once the run has unwound.
         assert not fsm._resource_manager._resources, (
-            "State resources leaked after the run: "
-            f"{list(fsm._resource_manager._resources)}"
+            f"State resources leaked after the run: {list(fsm._resource_manager._resources)}"
         )
     finally:
         await fsm.close()
@@ -340,8 +339,7 @@ async def test_async_terminal_state_resources_released_at_completion() -> None:
             f"completion — the resource manager still lists owner(s) {owners!r}"
         )
         assert not fsm._resource_manager._resources, (
-            "State resources leaked after the run: "
-            f"{list(fsm._resource_manager._resources)}"
+            f"State resources leaked after the run: {list(fsm._resource_manager._resources)}"
         )
     finally:
         await fsm.close()

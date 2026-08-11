@@ -105,9 +105,11 @@ def build_source_result(
         metadata = metadata_fn(r)
     except Exception:
         logger.warning(
-            "Identity callable raised for %s in source '%s' "
-            "(query=%r); skipping record",
-            log_context, source_name, log_query, exc_info=True,
+            "Identity callable raised for %s in source '%s' (query=%r); skipping record",
+            log_context,
+            source_name,
+            log_query,
+            exc_info=True,
         )
         return None
     return SourceResult(
@@ -274,7 +276,9 @@ class VectorKnowledgeSource(GroundedSource):
 
         for tq in intent.text_queries:
             raw_results = await self._kb.query(
-                tq, k=top_k, filter_metadata=source_filters,
+                tq,
+                k=top_k,
+                filter_metadata=source_filters,
             )
 
             for r in raw_results:
@@ -292,7 +296,9 @@ class VectorKnowledgeSource(GroundedSource):
                     logger.warning(
                         "Identity callable raised for a result in "
                         "source '%s' (query=%r); skipping record",
-                        self._name, tq, exc_info=True,
+                        self._name,
+                        tq,
+                        exc_info=True,
                     )
                     continue
 

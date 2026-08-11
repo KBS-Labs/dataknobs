@@ -160,9 +160,7 @@ async def aiter_sync_in_thread(
             if callable(close):
                 close()
 
-    thread = threading.Thread(
-        target=_producer, name=_THREAD_NAME, daemon=True
-    )
+    thread = threading.Thread(target=_producer, name=_THREAD_NAME, daemon=True)
     thread.start()
 
     try:

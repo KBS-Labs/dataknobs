@@ -51,16 +51,18 @@ class TestStageSchema:
 
     def test_from_stage_with_properties(self) -> None:
         """Stage with populated schema."""
-        ss = StageSchema.from_stage({
-            "schema": {
-                "type": "object",
-                "properties": {
-                    "name": {"type": "string"},
-                    "age": {"type": "integer"},
+        ss = StageSchema.from_stage(
+            {
+                "schema": {
+                    "type": "object",
+                    "properties": {
+                        "name": {"type": "string"},
+                        "age": {"type": "integer"},
+                    },
+                    "required": ["name"],
                 },
-                "required": ["name"],
-            },
-        })
+            }
+        )
         assert ss.exists
         assert ss.required_fields == ["name"]
         assert ss.has_required_fields
@@ -77,35 +79,41 @@ class TestStageSchema:
 
     def test_can_satisfy_required_empty_required(self) -> None:
         """required: [] → vacuously True."""
-        ss = StageSchema.from_stage({
-            "schema": {
-                "type": "object",
-                "properties": {"opt": {"type": "string"}},
-                "required": [],
-            },
-        })
+        ss = StageSchema.from_stage(
+            {
+                "schema": {
+                    "type": "object",
+                    "properties": {"opt": {"type": "string"}},
+                    "required": [],
+                },
+            }
+        )
         assert ss.can_satisfy_required({}) is True
 
     def test_can_satisfy_required_all_present(self) -> None:
         """All required fields present → True."""
-        ss = StageSchema.from_stage({
-            "schema": {
-                "type": "object",
-                "properties": {"name": {"type": "string"}},
-                "required": ["name"],
-            },
-        })
+        ss = StageSchema.from_stage(
+            {
+                "schema": {
+                    "type": "object",
+                    "properties": {"name": {"type": "string"}},
+                    "required": ["name"],
+                },
+            }
+        )
         assert ss.can_satisfy_required({"name": "Alice"}) is True
 
     def test_can_satisfy_required_missing(self) -> None:
         """Required field missing → False."""
-        ss = StageSchema.from_stage({
-            "schema": {
-                "type": "object",
-                "properties": {"name": {"type": "string"}},
-                "required": ["name"],
-            },
-        })
+        ss = StageSchema.from_stage(
+            {
+                "schema": {
+                    "type": "object",
+                    "properties": {"name": {"type": "string"}},
+                    "required": ["name"],
+                },
+            }
+        )
         assert ss.can_satisfy_required({}) is False
         assert ss.can_satisfy_required({"name": None}) is False
 
@@ -116,28 +124,32 @@ class TestStageSchema:
 
     def test_missing_required_some_missing(self) -> None:
         """Some required fields missing."""
-        ss = StageSchema.from_stage({
-            "schema": {
-                "type": "object",
-                "properties": {
-                    "a": {"type": "string"},
-                    "b": {"type": "string"},
+        ss = StageSchema.from_stage(
+            {
+                "schema": {
+                    "type": "object",
+                    "properties": {
+                        "a": {"type": "string"},
+                        "b": {"type": "string"},
+                    },
+                    "required": ["a", "b"],
                 },
-                "required": ["a", "b"],
-            },
-        })
+            }
+        )
         assert ss.missing_required({"a": "val"}) == {"b"}
         assert ss.missing_required({"a": "v", "b": "v"}) == set()
         assert ss.missing_required({}) == {"a", "b"}
 
     def test_get_property_returns_empty_for_missing(self) -> None:
         """get_property for unknown field → empty dict."""
-        ss = StageSchema.from_stage({
-            "schema": {
-                "type": "object",
-                "properties": {"name": {"type": "string"}},
-            },
-        })
+        ss = StageSchema.from_stage(
+            {
+                "schema": {
+                    "type": "object",
+                    "properties": {"name": {"type": "string"}},
+                },
+            }
+        )
         assert ss.get_property("name") == {"type": "string"}
         assert ss.get_property("missing") == {}
 
@@ -309,8 +321,7 @@ class TestVacuousTruthOverride:
             await harness.greet()
             result = await harness.chat("Later")
             assert result.wizard_stage == "done", (
-                "Vacuous-truth override should fire for required=[] — "
-                "all(... for f in []) is True"
+                "Vacuous-truth override should fire for required=[] — all(... for f in []) is True"
             )
 
     @pytest.mark.asyncio
@@ -346,8 +357,7 @@ class TestVacuousTruthOverride:
             await harness.greet()
             result = await harness.chat("sdkjfhskdjfh")  # Gibberish
             assert result.wizard_stage == "done", (
-                "required=[] should override low confidence even with "
-                "extraction errors"
+                "required=[] should override low confidence even with extraction errors"
             )
 
 
@@ -431,8 +441,7 @@ class TestFirstRenderConfirmation:
 
             result = await harness.chat("Enable feature A")
             assert result.wizard_stage == "done", (
-                "With confirm_first_render=false, optional-fields stage "
-                "should advance immediately"
+                "With confirm_first_render=false, optional-fields stage should advance immediately"
             )
 
     @pytest.mark.asyncio
@@ -467,8 +476,7 @@ class TestFirstRenderConfirmation:
 
             result = await harness.chat("Later")
             assert result.wizard_stage == "done", (
-                "Empty extraction should not trigger confirmation — "
-                "new_data_keys is empty"
+                "Empty extraction should not trigger confirmation — new_data_keys is empty"
             )
 
 

@@ -182,9 +182,9 @@ async def submit_for_review(
     evaluations = await context.artifact_registry.submit_for_review(artifact_id)
 
     data["_evaluation_results"] = evaluations
-    data["_review_passed"] = all(
-        e.get("passed", False) for e in evaluations
-    ) if evaluations else True
+    data["_review_passed"] = (
+        all(e.get("passed", False) for e in evaluations) if evaluations else True
+    )
 
     logger.info(
         "Transform submit_for_review: artifact '%s' review_passed=%s",
@@ -378,9 +378,7 @@ async def create_corpus(
             hash_fields=dedup_config_dict.get("hash_fields", ["content"]),
             hash_algorithm=dedup_config_dict.get("hash_algorithm", "md5"),
             semantic_check=dedup_config_dict.get("semantic_check", False),
-            similarity_threshold=dedup_config_dict.get(
-                "similarity_threshold", 0.92
-            ),
+            similarity_threshold=dedup_config_dict.get("similarity_threshold", 0.92),
         )
         dedup_db = AsyncMemoryDatabase()
         dedup_checker = DedupChecker(db=dedup_db, config=dedup_cfg)
@@ -448,8 +446,7 @@ async def add_to_corpus(
             data[corpus_key] = corpus
         else:
             raise ValueError(
-                f"No corpus found at data['{corpus_key}'] "
-                "and no _corpus_id to load from"
+                f"No corpus found at data['{corpus_key}'] and no _corpus_id to load from"
             )
 
     content = data.get(content_key)
@@ -543,9 +540,7 @@ def _resolve_name(data: dict[str, Any], config: dict[str, Any]) -> str:
             template = env.from_string(name_template)
             return template.render(**data)
         except TemplateError:
-            logger.warning(
-                "Name template rendering failed, falling back to name_field"
-            )
+            logger.warning("Name template rendering failed, falling back to name_field")
 
     name_field = config.get("name_field", "name")
     return str(data.get(name_field, "Untitled"))

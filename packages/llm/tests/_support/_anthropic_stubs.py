@@ -49,6 +49,7 @@ def make_anthropic_response(
     faithfully reproducing the attribute-access interface of
     ``anthropic.types.Message``.
     """
+
     class Block:
         def __init__(self, **kwargs: object) -> None:
             self.__dict__.update(kwargs)
@@ -174,9 +175,7 @@ def _provider_with_capture(
     model: str, **config_kwargs: Any
 ) -> tuple[AnthropicProvider, _CaptureAnthropicClient]:
     """Build an initialised ``AnthropicProvider`` backed by a capture client."""
-    provider = AnthropicProvider(
-        LLMConfig(provider="anthropic", model=model, **config_kwargs)
-    )
+    provider = AnthropicProvider(LLMConfig(provider="anthropic", model=model, **config_kwargs))
     client = _CaptureAnthropicClient()
     provider._client = client
     provider._is_initialized = True

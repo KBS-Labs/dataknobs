@@ -179,9 +179,7 @@ class DotenvPostgresConnector:
             else pwd
         )
         self.port = (
-            int(os.getenv(
-                "POSTGRES_PORT", config.get("POSTGRES_PORT", 5432) if config else 5432
-            ))
+            int(os.getenv("POSTGRES_PORT", config.get("POSTGRES_PORT", 5432) if config else 5432))
             if port is None
             else port
         )

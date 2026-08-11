@@ -57,9 +57,7 @@ def labeled_wizard_reasoning(
 class TestBuildStagesRoadmap:
     """Tests for _build_stages_roadmap."""
 
-    def test_at_start(
-        self, labeled_wizard_reasoning: WizardReasoning
-    ) -> None:
+    def test_at_start(self, labeled_wizard_reasoning: WizardReasoning) -> None:
         """At start, only first stage is current, rest are pending."""
         state = WizardState(
             current_stage="welcome",
@@ -74,9 +72,7 @@ class TestBuildStagesRoadmap:
         assert roadmap[2]["status"] == "pending"
         assert roadmap[3]["status"] == "pending"
 
-    def test_linear_progression(
-        self, labeled_wizard_reasoning: WizardReasoning
-    ) -> None:
+    def test_linear_progression(self, labeled_wizard_reasoning: WizardReasoning) -> None:
         """Visited stages are completed, current is current, rest pending."""
         state = WizardState(
             current_stage="review",
@@ -90,9 +86,7 @@ class TestBuildStagesRoadmap:
         assert roadmap[2] == {"name": "review", "label": "Review", "status": "current"}
         assert roadmap[3] == {"name": "complete", "label": "Done", "status": "pending"}
 
-    def test_stage_labels_included(
-        self, labeled_wizard_reasoning: WizardReasoning
-    ) -> None:
+    def test_stage_labels_included(self, labeled_wizard_reasoning: WizardReasoning) -> None:
         """Labels from config are present in roadmap entries."""
         state = WizardState(
             current_stage="welcome",
@@ -104,9 +98,7 @@ class TestBuildStagesRoadmap:
         labels = [s["label"] for s in roadmap]
         assert labels == ["Welcome", "Configuration", "Review", "Done"]
 
-    def test_label_falls_back_to_name(
-        self, wizard_reasoning: WizardReasoning
-    ) -> None:
+    def test_label_falls_back_to_name(self, wizard_reasoning: WizardReasoning) -> None:
         """When no label is set, name is used as label."""
         state = WizardState(
             current_stage="welcome",

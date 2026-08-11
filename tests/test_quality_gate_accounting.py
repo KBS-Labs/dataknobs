@@ -136,13 +136,12 @@ def test_the_gate_scripts_still_look_the_way_this_guard_reads_them():
             "renamed or the script restructured. Fix this table, do not delete "
             "the guard."
         )
-        assert any(
-            script.failure in "\n".join(body) for _, _, body in sections
-        ), f"no section in {name} calls {script.failure} — the helper was renamed"
-        assert any(
-            any(_accounts(ln, script.verdict) for ln in body)
-            for _, _, body in sections
-        ), f"no section in {name} accounts for its outcome — {script.verdict} moved"
+        assert any(script.failure in "\n".join(body) for _, _, body in sections), (
+            f"no section in {name} calls {script.failure} — the helper was renamed"
+        )
+        assert any(any(_accounts(ln, script.verdict) for ln in body) for _, _, body in sections), (
+            f"no section in {name} accounts for its outcome — {script.verdict} moved"
+        )
 
 
 def test_every_check_that_reports_a_failure_can_fail_the_gate():
@@ -249,9 +248,7 @@ def test_a_helper_that_returns_its_outcome_has_it_caught():
                 if _drops_the_status(ln, name)
             ]
             if any(re.search(rf"\b{name}\b.*&\s*$", ln) for _, ln in calls):
-                assert any(
-                    re.match(r"^\s*wait\b", ln) and "||" in ln for ln in lines
-                ), (
+                assert any(re.match(r"^\s*wait\b", ln) and "||" in ln for ln in lines), (
                     f"{name} is backgrounded in {rel(script.path)}, but no "
                     "'wait' there catches a failing job — so the status of "
                     "every concurrent run is discarded"
@@ -322,11 +319,7 @@ def _block(opening: str, closing: str) -> str:
         "rather than letting it read an empty block"
     )
     stop = next(
-        (
-            i
-            for i, ln in enumerate(lines[start + 1 :], start + 1)
-            if re.match(closing, ln.strip())
-        ),
+        (i for i, ln in enumerate(lines[start + 1 :], start + 1) if re.match(closing, ln.strip())),
         None,
     )
     assert stop is not None, f"{opening!r} in {rel(GATE)} is never closed by {closing!r}"
@@ -386,8 +379,7 @@ def test_the_status_exception_tables_still_describe_the_gate():
         )
         absent = sorted(set(components) - reported)
         assert not absent, (
-            f"{name} is recorded as reported through {absent}, which the summary "
-            "does not contain"
+            f"{name} is recorded as reported through {absent}, which the summary does not contain"
         )
 
 
@@ -427,12 +419,8 @@ def _init_lines(lines: list[str]) -> frozenset[int]:
     An assignment here records nothing: it is the default a path that never
     touches the variable falls through to.
     """
-    start = next(
-        (i for i, ln in enumerate(lines) if "# Initialize status tracking" in ln), None
-    )
-    stop = next(
-        (i for i, ln in enumerate(lines) if "# How long each check took" in ln), None
-    )
+    start = next((i for i, ln in enumerate(lines) if "# Initialize status tracking" in ln), None)
+    stop = next((i for i, ln in enumerate(lines) if "# How long each check took" in ln), None)
     assert start is not None and stop is not None, (
         f"{rel(GATE)} no longer has the initialization block this guard reads "
         "between those two comments — re-point it rather than letting it read "
@@ -458,9 +446,7 @@ def _pr_only_lines(lines: list[str]) -> frozenset[int]:
                 gated.update(range(number, end))
                 break
         else:  # pragma: no cover - a block that never closes is a syntax error
-            raise AssertionError(
-                f"unterminated PR_MODE block at {rel(GATE)}:{number + 1}"
-            )
+            raise AssertionError(f"unterminated PR_MODE block at {rel(GATE)}:{number + 1}")
     return frozenset(gated)
 
 
@@ -502,9 +488,7 @@ def test_every_status_the_summary_records_is_measured_on_a_dev_run():
         for number, line in enumerate(lines):
             if number in init or number in pr_only:
                 continue
-            if re.match(rf"\s*{name}=", line) or re.search(
-                rf"\bread -r\b[^;|#]*\b{name}\b", line
-            ):
+            if re.match(rf"\s*{name}=", line) or re.search(rf"\bread -r\b[^;|#]*\b{name}\b", line):
                 return True
         return False
 
@@ -526,6 +510,7 @@ def test_every_status_the_summary_records_is_measured_on_a_dev_run():
 
 
 # --- a check whose tool is missing must fail, not skip ---
+
 
 def _required_tool_probes(path: Path) -> list[tuple[int, str, list[str]]]:
     """``if ! command -v X`` probes, as ``(line, tool, branch body)``."""

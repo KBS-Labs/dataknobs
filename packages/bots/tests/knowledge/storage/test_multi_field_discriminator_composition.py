@@ -29,18 +29,22 @@ def test_multi_field_composes_with_backend_key_discriminator(
     """A consumer wiring multi-aspect event routing classifies the
     backend key kind AND a payload label through one composable surface."""
     backend = FileKnowledgeBackend(base_path=tmp_path)
-    multi = MultiFieldDiscriminator({
-        "key": BackendKeyDiscriminator(backend),
-        "label": MappingDiscriminator(
-            mapping={"high": "critical", "low": "deferred"},
-            default="normal",
-        ),
-    })
+    multi = MultiFieldDiscriminator(
+        {
+            "key": BackendKeyDiscriminator(backend),
+            "label": MappingDiscriminator(
+                mapping={"high": "critical", "low": "deferred"},
+                default="normal",
+            ),
+        }
+    )
 
-    result = multi.classify({
-        "key": "kb1/content/doc.pdf",
-        "label": "high",
-    })
+    result = multi.classify(
+        {
+            "key": "kb1/content/doc.pdf",
+            "label": "high",
+        }
+    )
     assert result == {
         "key": KnowledgeKeyKind.CONTENT,
         "label": "critical",
@@ -54,13 +58,15 @@ def test_multi_field_missing_payload_field_returns_none(
     consumer's dispatch logic can distinguish 'absent' from 'classified
     as None'."""
     backend = FileKnowledgeBackend(base_path=tmp_path)
-    multi = MultiFieldDiscriminator({
-        "key": BackendKeyDiscriminator(backend),
-        "label": MappingDiscriminator(
-            mapping={"high": "critical"},
-            default="normal",
-        ),
-    })
+    multi = MultiFieldDiscriminator(
+        {
+            "key": BackendKeyDiscriminator(backend),
+            "label": MappingDiscriminator(
+                mapping={"high": "critical"},
+                default="normal",
+            ),
+        }
+    )
 
     result = multi.classify({"key": "kb1/_metadata.json"})
     assert result == {

@@ -141,24 +141,18 @@ class TestEmptyListFilterMatchesNothing:
     """``{key: []}`` is unsatisfiable on every backend."""
 
     @pytest.mark.parametrize("key", ["tag", "tags"])
-    async def test_count_empty_list_is_zero(
-        self, seeded_store: VectorStore, key: str
-    ) -> None:
+    async def test_count_empty_list_is_zero(self, seeded_store: VectorStore, key: str) -> None:
         # Scalar-valued (``tag``) and list-valued (``tags``) metadata both
         # yield zero under an empty-list filter.
         assert await seeded_store.count({key: []}) == 0
 
     @pytest.mark.parametrize("key", ["tag", "tags"])
-    async def test_search_empty_list_is_zero(
-        self, seeded_store: VectorStore, key: str
-    ) -> None:
+    async def test_search_empty_list_is_zero(self, seeded_store: VectorStore, key: str) -> None:
         query = np.ones(DIMS, dtype=np.float32)
         results = await seeded_store.search(query, k=10, filter={key: []})
         assert results == []
 
-    async def test_clear_empty_list_removes_nothing(
-        self, seeded_store: VectorStore
-    ) -> None:
+    async def test_clear_empty_list_removes_nothing(self, seeded_store: VectorStore) -> None:
         before = await seeded_store.count()
         assert before == 3  # sanity: corpus is present
         await seeded_store.clear(filter={"tag": []})

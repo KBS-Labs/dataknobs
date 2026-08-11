@@ -60,16 +60,18 @@ class TestPostgresPoolConfig:
 
     def test_from_dict_with_custom_values(self):
         """Test creating PostgresPoolConfig with custom values."""
-        config = PostgresPoolConfig.from_dict({
-            "host": "db.example.com",
-            "port": 5433,
-            "database": "mydb",
-            "user": "myuser",
-            "password": "secret",
-            "min_pool_size": 5,
-            "max_pool_size": 20,
-            "command_timeout": 30.0
-        })
+        config = PostgresPoolConfig.from_dict(
+            {
+                "host": "db.example.com",
+                "port": 5433,
+                "database": "mydb",
+                "user": "myuser",
+                "password": "secret",
+                "min_pool_size": 5,
+                "max_pool_size": 20,
+                "command_timeout": 30.0,
+            }
+        )
         assert config.host == "db.example.com"
         assert config.port == 5433
         assert config.database == "mydb"
@@ -82,34 +84,27 @@ class TestPostgresPoolConfig:
     def test_to_connection_string(self):
         """Test connection string generation."""
         config = PostgresPoolConfig(
-            host="localhost",
-            port=5432,
-            database="testdb",
-            user="testuser",
-            password="testpass"
+            host="localhost", port=5432, database="testdb", user="testuser", password="testpass"
         )
         expected = "postgresql://testuser:testpass@localhost:5432/testdb"
         assert config.to_connection_string() == expected
 
     def test_to_hash_key(self):
         """Test hash key generation."""
-        config = PostgresPoolConfig(
-            host="localhost",
-            port=5432,
-            database="testdb",
-            user="testuser"
-        )
+        config = PostgresPoolConfig(host="localhost", port=5432, database="testdb", user="testuser")
         assert config.to_hash_key() == ("localhost", 5432, "testdb", "testuser")
 
     def test_from_dict_accepts_individual_keys(self):
         """Individual host/port/... keys build a valid PostgresPoolConfig."""
-        config = PostgresPoolConfig.from_dict({
-            "host": "h",
-            "port": 5433,
-            "database": "db",
-            "user": "u",
-            "password": "p",
-        })
+        config = PostgresPoolConfig.from_dict(
+            {
+                "host": "h",
+                "port": 5433,
+                "database": "db",
+                "user": "u",
+                "password": "p",
+            }
+        )
         assert config.host == "h"
         assert config.port == 5433
         assert config.database == "db"
@@ -142,9 +137,11 @@ class TestPostgresPoolConfig:
 
     def test_from_dict_asyncpg_prefix_stripped(self):
         """postgresql+asyncpg:// dialect prefix is normalized."""
-        config = PostgresPoolConfig.from_dict({
-            "connection_string": "postgresql+asyncpg://u:p@h:5433/db",
-        })
+        config = PostgresPoolConfig.from_dict(
+            {
+                "connection_string": "postgresql+asyncpg://u:p@h:5433/db",
+            }
+        )
         assert config.host == "h"
         assert config.port == 5433
         assert config.database == "db"
@@ -162,13 +159,15 @@ class TestPostgresPoolConfig:
         dropping the password parsed from the URL. Authentication
         failed downstream with no hint about why.
         """
-        config = PostgresPoolConfig.from_dict({
-            "connection_string": "postgresql://u:secret@h:5432/db",
-            "host": "h",
-            "port": 5432,
-            "database": "db",
-            "user": "u",
-        })
+        config = PostgresPoolConfig.from_dict(
+            {
+                "connection_string": "postgresql://u:secret@h:5432/db",
+                "host": "h",
+                "port": 5432,
+                "database": "db",
+                "user": "u",
+            }
+        )
         assert config.password == "secret"
         assert config.host == "h"
         assert config.user == "u"
@@ -177,6 +176,7 @@ class TestPostgresPoolConfig:
 @dataclass
 class MockPoolConfig(BasePoolConfig):
     """Mock implementation of BasePoolConfig for testing."""
+
     host: str = "localhost"
     port: int = 5432
 
@@ -358,7 +358,7 @@ class TestConnectionPoolManager:
         # Mock some pools
         manager._pools = {
             (12345, 67890): _PoolEntry(MockPool()),
-            (54321, 67890): _PoolEntry(MockPool())
+            (54321, 67890): _PoolEntry(MockPool()),
         }
 
         info = manager.get_pool_info()
@@ -615,9 +615,7 @@ class TestPoolRefcount:
         assert create_count == 1
 
         # Holder B begins a warm *validated* acquire and parks in validate.
-        b_task = asyncio.create_task(
-            manager.get_pool(config, create_pool, validate_pool)
-        )
+        b_task = asyncio.create_task(manager.get_pool(config, create_pool, validate_pool))
         await validate_started.wait()
 
         # While B is parked, A releases — last holder -> close + evict.
@@ -668,9 +666,7 @@ class TestPoolRefcount:
             await close_gate.wait()
 
         # Single holder acquires; the entry registers slow_close.
-        first = await manager.get_pool(
-            config, create_pool, close_pool_func=slow_close
-        )
+        first = await manager.get_pool(config, create_pool, close_pool_func=slow_close)
         assert first is pool1
 
         # Release -> last holder -> begins closing pool1 and parks.
@@ -714,9 +710,9 @@ class TestPoolRefcount:
         with caplog.at_level("WARNING", logger="dataknobs_data.pooling.base"):
             await manager.release_pool(config)
 
-        assert any(
-            "negative" in r.message.lower() for r in caplog.records
-        ), "underflow was not logged"
+        assert any("negative" in r.message.lower() for r in caplog.records), (
+            "underflow was not logged"
+        )
         pool.close.assert_called_once()
         assert manager.get_pool_count() == 0
 
@@ -784,7 +780,7 @@ class TestAsyncpgHelpers:
             user="testuser",
             password="testpass",
             min_size=5,
-            max_size=15
+            max_size=15,
         )
 
         with patch("asyncpg.create_pool", new_callable=AsyncMock) as mock_create:
@@ -799,7 +795,7 @@ class TestAsyncpgHelpers:
                 min_size=5,
                 max_size=15,
                 command_timeout=None,
-                ssl=None
+                ssl=None,
             )
 
     @pytest.mark.asyncio

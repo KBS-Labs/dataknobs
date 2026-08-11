@@ -462,9 +462,7 @@ class SchemaExtractor:
         # the private ``_model`` this used to reach for is set by no provider
         # in the tree, so every extraction that did not pass ``model=``
         # explicitly recorded ``None``.
-        model_used = model or getattr(
-            getattr(self._provider, "config", None), "model", None
-        )
+        model_used = model or getattr(getattr(self._provider, "config", None), "model", None)
         # A *label* for the tracked record, deliberately not named
         # ``provider_name``: it prefers the canonical family key but falls back
         # to the class name, which the strict contract forbids.  That is sound
@@ -495,7 +493,8 @@ class SchemaExtractor:
         except Exception as e:
             logger.warning(
                 "LLM extraction failed: %s: %s",
-                type(e).__name__, e or repr(e),
+                type(e).__name__,
+                e or repr(e),
             )
             result = ExtractionResult(
                 data={},
@@ -682,12 +681,14 @@ class SchemaExtractor:
             if not content:
                 continue
 
-            assumptions.append(ExtractedAssumption(
-                content=content,
-                field=raw.get("field"),
-                confidence=raw.get("confidence", 0.5),
-                source="inferred",
-            ))
+            assumptions.append(
+                ExtractedAssumption(
+                    content=content,
+                    field=raw.get("field"),
+                    confidence=raw.get("confidence", 0.5),
+                    source="inferred",
+                )
+            )
 
         return assumptions
 
@@ -756,9 +757,7 @@ class SchemaExtractor:
             if name in properties:
                 prop = properties[name]
                 if "enum" in prop and value not in prop["enum"]:
-                    errors.append(
-                        f"Invalid value for {name}: must be one of {prop['enum']}"
-                    )
+                    errors.append(f"Invalid value for {name}: must be one of {prop['enum']}")
 
         return errors
 

@@ -71,9 +71,7 @@ class VectorConfig:
             raise ValueError(f"Dimensions must be positive, got {self.dimensions}")
 
         if self.dimensions > 65536:  # Common maximum for vector databases
-            raise ValueError(
-                f"Dimensions {self.dimensions} exceeds maximum supported (65536)"
-            )
+            raise ValueError(f"Dimensions {self.dimensions} exceeds maximum supported (65536)")
 
 
 @dataclass
@@ -142,7 +140,9 @@ class VectorMetadata:
             "model": {
                 "name": self.model_name,
                 "version": self.model_version,
-            } if self.model_name else None,
+            }
+            if self.model_name
+            else None,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
             "index_type": self.index_type,

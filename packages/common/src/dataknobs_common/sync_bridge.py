@@ -106,9 +106,7 @@ class SyncLoopBridge:
         self._loop = asyncio.new_event_loop()
         self._ready = threading.Event()
         try:
-            self._thread = threading.Thread(
-                target=self._run_loop, name=thread_name, daemon=True
-            )
+            self._thread = threading.Thread(target=self._run_loop, name=thread_name, daemon=True)
             self._thread.start()
         except BaseException:
             # Thread creation/start failed -> close the loop we just created so

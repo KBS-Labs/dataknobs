@@ -49,8 +49,7 @@ def format_messages_for_summary(messages: list[LLMMessage]) -> str:
     turn. Shared by every seam caller so the on-the-wire format cannot drift.
     """
     return "\n".join(
-        f"{msg.role}: {msg.content if msg.content is not None else ''}"
-        for msg in messages
+        f"{msg.role}: {msg.content if msg.content is not None else ''}" for msg in messages
     )
 
 
@@ -81,9 +80,7 @@ async def summarize_messages(
         existing_summary=existing_summary or "(none)",
         new_messages=format_messages_for_summary(messages),
     )
-    response = await llm.complete(
-        messages=[LLMMessage(role="user", content=filled)]
-    )
+    response = await llm.complete(messages=[LLMMessage(role="user", content=filled)])
     return response.content
 
 

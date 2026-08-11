@@ -72,9 +72,7 @@ class AsyncElasticsearchDatabase(
     ``ElasticsearchPoolConfig`` is derived from it in :meth:`_setup`.
     """
 
-    CONFIG_CLS: ClassVar[type[AsyncElasticsearchDatabaseConfig]] = (
-        AsyncElasticsearchDatabaseConfig
-    )
+    CONFIG_CLS: ClassVar[type[AsyncElasticsearchDatabaseConfig]] = AsyncElasticsearchDatabaseConfig
 
     def _setup(self) -> None:
         """Derive the pool config and connection state from the typed config.
@@ -127,11 +125,12 @@ class AsyncElasticsearchDatabase(
 
         # Get or create client for current event loop
         from ..pooling import BasePoolConfig
+
         self._client = await _client_manager.get_pool(
             self._pool_config,
             cast("Callable[[BasePoolConfig], Awaitable[Any]]", create_async_elasticsearch_client),
             validate_elasticsearch_client,
-            close_elasticsearch_client
+            close_elasticsearch_client,
         )
 
         # get_pool incremented this holder's claim on the shared client.
@@ -179,15 +178,17 @@ class AsyncElasticsearchDatabase(
             mappings = self.get_index_mappings(self.vector_fields)
 
             # Get settings optimized for KNN if we have vector fields
-            settings = self.get_knn_index_settings() if self.vector_fields else {
-                "number_of_shards": 1,
-                "number_of_replicas": 0,
-            }
+            settings = (
+                self.get_knn_index_settings()
+                if self.vector_fields
+                else {
+                    "number_of_shards": 1,
+                    "number_of_replicas": 0,
+                }
+            )
 
             await self._client.indices.create(
-                index=self.index_name,
-                mappings=mappings,
-                settings=settings
+                index=self.index_name, mappings=mappings, settings=settings
             )
 
             if self.vector_fields:
@@ -278,9 +279,7 @@ class AsyncElasticsearchDatabase(
         return response["_id"]
 
     @staticmethod
-    def _extract_bulk_index_ids(
-        response: Any, ids: list[str] | None = None
-    ) -> list[str]:
+    def _extract_bulk_index_ids(response: Any, ids: list[str] | None = None) -> list[str]:
         """Return the ids of successfully-indexed items from a bulk response.
 
         Reconciles ``response['items']`` per operation so a partial bulk
@@ -329,9 +328,7 @@ class AsyncElasticsearchDatabase(
             if op.get("status") == 409:
                 raise DuplicateRecordError(op.get("_id"))
 
-    async def create_batch(
-        self, records: list[Record], *, _tx: Any = None
-    ) -> list[str]:
+    async def create_batch(self, records: list[Record], *, _tx: Any = None) -> list[str]:
         """Create multiple records in batch, failing closed on a colliding id.
 
         Uses the bulk ``create`` op keyed on ``record.id`` (honoring a
@@ -362,21 +359,14 @@ class AsyncElasticsearchDatabase(
             seen.add(record_id)
             ids.append(record_id)
             doc = self._record_to_doc(record, record_id)
-            operations.append(
-                {"create": {"_index": self.index_name, "_id": record_id}}
-            )
+            operations.append({"create": {"_index": self.index_name, "_id": record_id}})
             operations.append(doc)
 
-        response = await self._client.bulk(
-            operations=operations,
-            refresh=self.refresh
-        )
+        response = await self._client.bulk(operations=operations, refresh=self.refresh)
         self._raise_on_bulk_conflict(response)
         return self._extract_bulk_index_ids(response, ids)
 
-    async def upsert_batch(
-        self, records: list[Record], *, _tx: Any = None
-    ) -> list[str]:
+    async def upsert_batch(self, records: list[Record], *, _tx: Any = None) -> list[str]:
         """Insert-or-overwrite multiple records in batch using the bulk API.
 
         Uses the bulk ``index`` op keyed on ``record.id`` (upsert-by-id),
@@ -401,14 +391,10 @@ class AsyncElasticsearchDatabase(
             record_id = record.id or self._generate_id()
             ids.append(record_id)
             doc = self._record_to_doc(record, record_id)
-            operations.append(
-                {"index": {"_index": self.index_name, "_id": record_id}}
-            )
+            operations.append({"index": {"_index": self.index_name, "_id": record_id}})
             operations.append(doc)
 
-        response = await self._client.bulk(
-            operations=operations, refresh=self.refresh
-        )
+        response = await self._client.bulk(operations=operations, refresh=self.refresh)
         return self._extract_bulk_index_ids(response, ids)
 
     async def read(self, id: str) -> Record | None:
@@ -416,10 +402,7 @@ class AsyncElasticsearchDatabase(
         self._check_connection()
 
         try:
-            response = await self._client.get(
-                index=self.index_name,
-                id=id
-            )
+            response = await self._client.get(index=self.index_name, id=id)
             return self._doc_to_record(response)
         except Exception as e:
             # Log the error for debugging
@@ -447,9 +430,7 @@ class AsyncElasticsearchDatabase(
             return None
         return es_version_token(seq_no, primary_term)
 
-    async def update(
-        self, id: str, record: Record, *, expected_version: str | None = None
-    ) -> bool:
+    async def update(self, id: str, record: Record, *, expected_version: str | None = None) -> bool:
         """Update an existing record.
 
         When ``expected_version`` is provided the update carries ES's
@@ -493,19 +474,12 @@ class AsyncElasticsearchDatabase(
                 raise version_conflict_error(id, expected_version, current) from e
 
         try:
-            await self._client.update(
-                index=self.index_name,
-                id=id,
-                doc=doc,
-                refresh=self.refresh
-            )
+            await self._client.update(index=self.index_name, id=id, doc=doc, refresh=self.refresh)
             return True
         except Exception:
             return False
 
-    async def delete(
-        self, id: str, *, expected_version: str | None = None
-    ) -> bool:
+    async def delete(self, id: str, *, expected_version: str | None = None) -> bool:
         """Delete a record by ID.
 
         When ``expected_version`` is provided the delete carries ES's
@@ -539,11 +513,7 @@ class AsyncElasticsearchDatabase(
                 raise version_conflict_error(id, expected_version, current) from e
 
         try:
-            await self._client.delete(
-                index=self.index_name,
-                id=id,
-                refresh=self.refresh
-            )
+            await self._client.delete(index=self.index_name, id=id, refresh=self.refresh)
             return True
         except Exception:
             return False
@@ -552,10 +522,7 @@ class AsyncElasticsearchDatabase(
         """Check if a record exists."""
         self._check_connection()
 
-        return await self._client.exists(
-            index=self.index_name,
-            id=id
-        )
+        return await self._client.exists(index=self.index_name, id=id)
 
     async def upsert(
         self,
@@ -593,23 +560,18 @@ class AsyncElasticsearchDatabase(
 
         doc = self._record_to_doc(record, id)
 
-        await self._client.index(
-            index=self.index_name,
-            id=id,
-            document=doc,
-            refresh=self.refresh
-        )
+        await self._client.index(index=self.index_name, id=id, document=doc, refresh=self.refresh)
 
         return id
 
     async def update_batch(self, updates: list[tuple[str, Record]]) -> list[bool]:
         """Update multiple records efficiently using the bulk API.
-        
+
         Uses AsyncElasticsearch's bulk API for efficient batch updates.
-        
+
         Args:
             updates: List of (id, record) tuples to update
-            
+
         Returns:
             List of success flags for each update
         """
@@ -622,25 +584,19 @@ class AsyncElasticsearchDatabase(
         operations: list[dict[str, Any]] = []
         for record_id, record in updates:
             # Add update operation
-            operations.append({
-                "update": {
-                    "_index": self.index_name,
-                    "_id": record_id
-                }
-            })
+            operations.append({"update": {"_index": self.index_name, "_id": record_id}})
             # Add document data
             doc = self._record_to_doc(record, record_id)
-            operations.append({
-                "doc": doc,
-                "doc_as_upsert": False  # Don't create if doesn't exist
-            })
+            operations.append(
+                {
+                    "doc": doc,
+                    "doc_as_upsert": False,  # Don't create if doesn't exist
+                }
+            )
 
         try:
             # Execute bulk update using AsyncElasticsearch
-            response = await self._client.bulk(
-                operations=operations,
-                refresh=self.refresh
-            )
+            response = await self._client.bulk(operations=operations, refresh=self.refresh)
 
             # Process the response to determine which updates succeeded
             results = []
@@ -661,6 +617,7 @@ class AsyncElasticsearchDatabase(
         except Exception as e:
             # If bulk operation fails, mark all as failed
             import logging
+
             logging.error(f"Bulk update failed: {e}")
             return [False] * len(updates)
 
@@ -672,9 +629,7 @@ class AsyncElasticsearchDatabase(
         # stays at parity with the sync backend and the vector pre-filter.
         if isinstance(query, ComplexQuery):
             es_query = (
-                build_complex_es_query(query.condition)
-                if query.condition
-                else {"match_all": {}}
+                build_complex_es_query(query.condition) if query.condition else {"match_all": {}}
             )
         else:
             es_query = build_bool_query(query.filters)
@@ -689,9 +644,7 @@ class AsyncElasticsearchDatabase(
                 # matching the sync backend. ``_id`` itself is unsortable
                 # (fielddata disabled by default), so the keyword mirror is used.
                 sort_path = (
-                    "id"
-                    if is_storage_key_field(sort_spec.field)
-                    else f"data.{sort_spec.field}"
+                    "id" if is_storage_key_field(sort_spec.field) else f"data.{sort_spec.field}"
                 )
                 sort.append({sort_path: {"order": direction}})
 
@@ -704,9 +657,7 @@ class AsyncElasticsearchDatabase(
         # caller-facing ``limit=0`` becomes ES ``size=0`` (count-only,
         # zero hits) rather than being silently coerced to the default.
         size = query.limit_value if query.limit_value is not None else 10000
-        from_param = (
-            query.offset_value if query.offset_value is not None else 0
-        )
+        from_param = query.offset_value if query.offset_value is not None else 0
 
         # Execute search
         response = await self._client.search(
@@ -714,7 +665,7 @@ class AsyncElasticsearchDatabase(
             query=es_query,
             sort=sort if sort else None,
             size=size,
-            from_=from_param
+            from_=from_param,
         )
 
         # Convert to records
@@ -766,17 +717,13 @@ class AsyncElasticsearchDatabase(
 
         # Delete by query - delete all documents
         response = await self._client.delete_by_query(
-            index=self.index_name,
-            query={"match_all": {}},
-            refresh=self.refresh
+            index=self.index_name, query={"match_all": {}}, refresh=self.refresh
         )
 
         return response.get("deleted", count)
 
     async def stream_read(
-        self,
-        query: Query | None = None,
-        config: StreamConfig | None = None
+        self, query: Query | None = None, config: StreamConfig | None = None
     ) -> AsyncIterator[Record]:
         """Stream records from Elasticsearch using scroll API."""
         self._check_connection()
@@ -784,18 +731,11 @@ class AsyncElasticsearchDatabase(
 
         # Same shared translator as search()/count(), so streamed reads honor
         # the full operator set instead of only equality.
-        es_query = (
-            build_bool_query(query.filters)
-            if query and query.filters
-            else {"match_all": {}}
-        )
+        es_query = build_bool_query(query.filters) if query and query.filters else {"match_all": {}}
 
         # Initial search with scroll
         response = await self._client.search(
-            index=self.index_name,
-            query=es_query,
-            scroll="2m",
-            size=config.batch_size
+            index=self.index_name, query=es_query, scroll="2m", size=config.batch_size
         )
 
         scroll_id = response["_scroll_id"]
@@ -810,19 +750,14 @@ class AsyncElasticsearchDatabase(
                     yield record
 
                 # Get next batch
-                response = await self._client.scroll(
-                    scroll_id=scroll_id,
-                    scroll="2m"
-                )
+                response = await self._client.scroll(scroll_id=scroll_id, scroll="2m")
                 hits = response["hits"]["hits"]
         finally:
             # Clear scroll
             await self._client.clear_scroll(scroll_id=scroll_id)
 
     async def stream_write(
-        self,
-        records: AsyncIterator[Record],
-        config: StreamConfig | None = None
+        self, records: AsyncIterator[Record], config: StreamConfig | None = None
     ) -> StreamResult:
         """Stream records into Elasticsearch using bulk API.
 
@@ -865,7 +800,7 @@ class AsyncElasticsearchDatabase(
         score_threshold: float | None = None,
     ) -> list[VectorSearchResult]:
         """Search for similar vectors using Elasticsearch KNN.
-        
+
         Args:
             query_vector: The vector to search for
             vector_field: Name of the vector field to search
@@ -874,7 +809,7 @@ class AsyncElasticsearchDatabase(
             filter: Optional query filter to apply before vector search
             include_source: Whether to include source document in results
             score_threshold: Optional minimum similarity score
-            
+
         Returns:
             List of search results ordered by similarity
         """
@@ -930,16 +865,18 @@ class AsyncElasticsearchDatabase(
             if record is None:
                 continue
 
-            results.append(VectorSearchResult(
-                record=record,
-                score=score,
-                vector_field=vector_field,
-                metadata={
-                    "index": self.index_name,
-                    "metric": metric.value,
-                    "doc_id": hit["_id"],
-                },
-            ))
+            results.append(
+                VectorSearchResult(
+                    record=record,
+                    score=score,
+                    vector_field=vector_field,
+                    metadata={
+                        "index": self.index_name,
+                        "metric": metric.value,
+                        "doc_id": hit["_id"],
+                    },
+                )
+            )
 
         return results
 
@@ -954,7 +891,7 @@ class AsyncElasticsearchDatabase(
         model_version: str | None = None,
     ) -> list[str]:
         """Embed text fields and store vectors with records.
-        
+
         Args:
             records: Records to process
             text_field: Field name(s) containing text to embed
@@ -963,7 +900,7 @@ class AsyncElasticsearchDatabase(
             batch_size: Number of records to process at once
             model_name: Name of the embedding model
             model_version: Version of the embedding model
-            
+
         Returns:
             List of record IDs that were processed
         """
@@ -981,14 +918,14 @@ class AsyncElasticsearchDatabase(
         **kwargs: Any,
     ) -> bool:
         """Create or update index mapping for vector field.
-        
+
         Args:
             vector_field: Name of the vector field to index
             dimensions: Number of dimensions
             metric: Distance metric for the index
             index_type: Type of index (ignored for ES, always uses HNSW)
             **kwargs: Additional index parameters
-            
+
         Returns:
             True if index was created/updated successfully
         """
@@ -1014,17 +951,16 @@ class AsyncElasticsearchDatabase(
         # Update index mapping
         try:
             await self._client.indices.put_mapping(
-                index=self.index_name,
-                properties={
-                    f"data.{vector_field}": mapping
-                }
+                index=self.index_name, properties={f"data.{vector_field}": mapping}
             )
 
             # Track the vector field
             self.vector_fields[vector_field] = dimensions
             self.vector_enabled = True
 
-            logger.info(f"Created vector mapping for field '{vector_field}' with {dimensions} dimensions")
+            logger.info(
+                f"Created vector mapping for field '{vector_field}' with {dimensions} dimensions"
+            )
             return True
 
         except Exception as e:
@@ -1085,6 +1021,7 @@ class AsyncElasticsearchDatabase(
         if config.fusion_strategy != FusionStrategy.NATIVE:
             # Import parent class to call its implementation
             from ..vector.mixins import VectorOperationsMixin
+
             return await VectorOperationsMixin.hybrid_search(
                 self,
                 query_text=query_text,
@@ -1122,19 +1059,17 @@ class AsyncElasticsearchDatabase(
                 "retriever": {
                     "rrf": {
                         "retrievers": [
-                            {
-                                "standard": {
-                                    "query": text_query
-                                }
-                            },
+                            {"standard": {"query": text_query}},
                             {
                                 "knn": {
                                     "field": f"data.{vector_field}",
-                                    "query_vector": query_vector.tolist() if hasattr(query_vector, 'tolist') else list(query_vector),
+                                    "query_vector": query_vector.tolist()
+                                    if hasattr(query_vector, "tolist")
+                                    else list(query_vector),
                                     "k": k,
                                     "num_candidates": k * 3,
                                 }
-                            }
+                            },
                         ],
                         "rank_constant": config.rrf_k,
                         "rank_window_size": k * 3,
@@ -1154,6 +1089,7 @@ class AsyncElasticsearchDatabase(
             # Fall back to client-side fusion if native RRF not available
             logger.warning(f"Native RRF not available ({e}), falling back to client-side fusion")
             from ..vector.mixins import VectorOperationsMixin
+
             return await VectorOperationsMixin.hybrid_search(
                 self,
                 query_text=query_text,
@@ -1185,19 +1121,21 @@ class AsyncElasticsearchDatabase(
                 # RRF doesn't provide individual scores, just the fused score
                 combined_score = hit.get("_score", 1.0 / (config.rrf_k + i + 1))
 
-                results.append(HybridSearchResult(
-                    record=record,
-                    combined_score=combined_score,
-                    text_score=None,  # Not available with native RRF
-                    vector_score=None,  # Not available with native RRF
-                    text_rank=None,
-                    vector_rank=None,
-                    metadata={
-                        "fusion_strategy": "native_rrf",
-                        "index": self.index_name,
-                        "doc_id": hit["_id"],
-                    },
-                ))
+                results.append(
+                    HybridSearchResult(
+                        record=record,
+                        combined_score=combined_score,
+                        text_score=None,  # Not available with native RRF
+                        vector_score=None,  # Not available with native RRF
+                        text_rank=None,
+                        vector_rank=None,
+                        metadata={
+                            "fusion_strategy": "native_rrf",
+                            "index": self.index_name,
+                            "doc_id": hit["_id"],
+                        },
+                    )
+                )
 
         return results
 
@@ -1239,7 +1177,9 @@ class AsyncElasticsearchDatabase(
         filter_query = self._build_filter_query(filter) if filter else None
 
         body: dict[str, Any] = {
-            "query": query if not filter_query else {
+            "query": query
+            if not filter_query
+            else {
                 "bool": {
                     "must": query,
                     "filter": filter_query,

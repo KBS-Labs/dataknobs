@@ -45,7 +45,13 @@ from dataknobs_data import (
 )
 
 from ..utils.versioned_records import iter_latest_records
-from .models import Artifact, ArtifactStatus, ArtifactTypeDefinition, _generate_artifact_id, _now_iso
+from .models import (
+    Artifact,
+    ArtifactStatus,
+    ArtifactTypeDefinition,
+    _generate_artifact_id,
+    _now_iso,
+)
 from .provenance import ProvenanceRecord, RevisionRecord, create_provenance
 from .transitions import validate_transition
 
@@ -116,9 +122,7 @@ class ArtifactRegistry:
         rubric_executor: Any | None = None,
         type_definitions: dict[str, ArtifactTypeDefinition] | None = None,
     ) -> None:
-        self._store: AsyncKeyedRecordStore[Artifact] = AsyncKeyedRecordStore[
-            Artifact
-        ](
+        self._store: AsyncKeyedRecordStore[Artifact] = AsyncKeyedRecordStore[Artifact](
             db,
             serializer=_artifact_to_columns,
             deserializer=_artifact_from_record,
@@ -230,9 +234,7 @@ class ArtifactRegistry:
         """
         return await self._store.get(artifact_id)
 
-    async def get_version(
-        self, artifact_id: str, version: str
-    ) -> Artifact | None:
+    async def get_version(self, artifact_id: str, version: str) -> Artifact | None:
         """Retrieve a specific version of an artifact."""
         return await self._store.get(f"{artifact_id}:{version}")
 
@@ -530,9 +532,7 @@ class ArtifactRegistry:
 
     # --- Review Integration ---
 
-    async def submit_for_review(
-        self, artifact_id: str
-    ) -> list[dict[str, Any]]:
+    async def submit_for_review(self, artifact_id: str) -> list[dict[str, Any]]:
         """Submit an artifact for rubric-based evaluation.
 
         Transitions the artifact to IN_REVIEW, runs applicable rubrics,
@@ -567,27 +567,19 @@ class ArtifactRegistry:
 
             # Transition to pending_review then in_review
             if artifact.status == ArtifactStatus.DRAFT:
-                await self._set_status_unlocked(
-                    artifact_id, ArtifactStatus.PENDING_REVIEW
-                )
+                await self._set_status_unlocked(artifact_id, ArtifactStatus.PENDING_REVIEW)
                 artifact = await self.get(artifact_id)
                 if artifact is None:
-                    raise ValueError(
-                        f"Artifact '{artifact_id}' not found after status update"
-                    )
+                    raise ValueError(f"Artifact '{artifact_id}' not found after status update")
             if artifact.status in (
                 ArtifactStatus.PENDING_REVIEW,
                 ArtifactStatus.NEEDS_REVISION,
             ):
                 artifact = await self.get(artifact_id)
                 if artifact is None:
-                    raise ValueError(
-                        f"Artifact '{artifact_id}' not found after status update"
-                    )
+                    raise ValueError(f"Artifact '{artifact_id}' not found after status update")
                 if artifact.status == ArtifactStatus.PENDING_REVIEW:
-                    await self._set_status_unlocked(
-                        artifact_id, ArtifactStatus.IN_REVIEW
-                    )
+                    await self._set_status_unlocked(artifact_id, ArtifactStatus.IN_REVIEW)
 
             if not self._rubric_registry or not self._rubric_executor:
                 logger.warning(
@@ -599,9 +591,7 @@ class ArtifactRegistry:
             # Re-read after status changes
             artifact = await self.get(artifact_id)
             if artifact is None:
-                raise ValueError(
-                    f"Artifact '{artifact_id}' not found after status update"
-                )
+                raise ValueError(f"Artifact '{artifact_id}' not found after status update")
 
             evaluations: list[dict[str, Any]] = []
             all_passed = True
@@ -627,13 +617,9 @@ class ArtifactRegistry:
             # Transition based on results
             if evaluations:
                 if all_passed:
-                    await self._set_status_unlocked(
-                        artifact_id, ArtifactStatus.APPROVED
-                    )
+                    await self._set_status_unlocked(artifact_id, ArtifactStatus.APPROVED)
                 else:
-                    await self._set_status_unlocked(
-                        artifact_id, ArtifactStatus.NEEDS_REVISION
-                    )
+                    await self._set_status_unlocked(artifact_id, ArtifactStatus.NEEDS_REVISION)
 
             for hook in self._on_review_complete_hooks:
                 current = await self.get(artifact_id)
@@ -642,9 +628,7 @@ class ArtifactRegistry:
 
             return evaluations
 
-    async def get_evaluations(
-        self, artifact_id: str
-    ) -> list[dict[str, Any]]:
+    async def get_evaluations(self, artifact_id: str) -> list[dict[str, Any]]:
         """Get evaluation results for an artifact.
 
         Returns evaluation dicts stored alongside the artifact.
@@ -705,9 +689,7 @@ class ArtifactRegistry:
         """
         type_defs: dict[str, ArtifactTypeDefinition] = {}
         for type_id, type_config in config.get("artifact_types", {}).items():
-            type_defs[type_id] = ArtifactTypeDefinition.from_config(
-                type_id, type_config
-            )
+            type_defs[type_id] = ArtifactTypeDefinition.from_config(type_id, type_config)
 
         return cls(
             db=db,

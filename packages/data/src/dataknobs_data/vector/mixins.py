@@ -373,19 +373,21 @@ class VectorOperationsMixin(ABC):
             if record_id not in records_by_id:
                 continue
 
-            results.append(HybridSearchResult(
-                record=records_by_id[record_id],
-                combined_score=combined_score,
-                text_score=text_score_map.get(record_id),
-                vector_score=vector_score_map.get(record_id),
-                text_rank=text_rank_map.get(record_id),
-                vector_rank=vector_rank_map.get(record_id),
-                metadata={
-                    "fusion_strategy": config.fusion_strategy.value,
-                    "text_weight": config.text_weight,
-                    "vector_weight": config.vector_weight,
-                },
-            ))
+            results.append(
+                HybridSearchResult(
+                    record=records_by_id[record_id],
+                    combined_score=combined_score,
+                    text_score=text_score_map.get(record_id),
+                    vector_score=vector_score_map.get(record_id),
+                    text_rank=text_rank_map.get(record_id),
+                    vector_rank=vector_rank_map.get(record_id),
+                    metadata={
+                        "fusion_strategy": config.fusion_strategy.value,
+                        "text_weight": config.text_weight,
+                        "vector_weight": config.vector_weight,
+                    },
+                )
+            )
 
         return results
 
@@ -423,11 +425,13 @@ class VectorOperationsMixin(ABC):
             # Use first field for simplicity in default implementation
             # Backends with full-text search should override this
             for field in text_fields[:1]:  # Only use first field to avoid complex OR
-                query.filters.append(Filter(
-                    field=field,
-                    operator=Operator.LIKE,
-                    value=f"%{query_text}%",
-                ))
+                query.filters.append(
+                    Filter(
+                        field=field,
+                        operator=Operator.LIKE,
+                        value=f"%{query_text}%",
+                    )
+                )
 
         # Perform search
         records = await self.search(query)  # type: ignore[attr-defined]
@@ -440,7 +444,7 @@ class VectorOperationsMixin(ABC):
             score = 1.0 / (i + 1)  # Rank-based score
 
             # Boost exact matches
-            for field in (text_fields or []):
+            for field in text_fields or []:
                 value = record.get_value(field)
                 if value and isinstance(value, str):
                     if query_lower in value.lower():
@@ -503,11 +507,13 @@ class VectorSyncMixin:
 
             if needs_update:
                 # Concatenate text fields
-                text_content = " ".join([
-                    str(record.get_value(field))
-                    for field in text_fields
-                    if record.get_value(field)
-                ])
+                text_content = " ".join(
+                    [
+                        str(record.get_value(field))
+                        for field in text_fields
+                        if record.get_value(field)
+                    ]
+                )
 
                 # Generate embedding
                 if text_content:
@@ -515,7 +521,7 @@ class VectorSyncMixin:
 
                     result = embedding_fn([text_content])
                     # Handle both sync and async embedding functions
-                    if hasattr(result, '__await__'):
+                    if hasattr(result, "__await__"):
                         embeddings = await result  # type: ignore[misc]
                     else:
                         embeddings = result

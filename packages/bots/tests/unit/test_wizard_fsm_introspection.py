@@ -134,9 +134,7 @@ class TestStageCountProperty:
         single_config = {
             "name": "single",
             "version": "1.0",
-            "stages": [
-                {"name": "only", "is_start": True, "is_end": True, "prompt": "Only"}
-            ],
+            "stages": [{"name": "only", "is_start": True, "is_end": True, "prompt": "Only"}],
         }
         fsm = loader.load_from_dict(single_config)
         assert fsm.stage_count == 1
@@ -145,10 +143,7 @@ class TestStageCountProperty:
         multi_config = {
             "name": "multi",
             "version": "1.0",
-            "stages": [
-                {"name": f"stage_{i}", "prompt": f"Stage {i}"}
-                for i in range(5)
-            ],
+            "stages": [{"name": f"stage_{i}", "prompt": f"Stage {i}"} for i in range(5)],
         }
         multi_config["stages"][0]["is_start"] = True
         multi_config["stages"][-1]["is_end"] = True
@@ -191,9 +186,7 @@ class TestIntrospectionConsistency:
 class TestBranchingWizardIntrospection:
     """Tests for introspection with branching wizards."""
 
-    def test_branching_stages(
-        self, wizard_config_with_branches: dict[str, Any]
-    ) -> None:
+    def test_branching_stages(self, wizard_config_with_branches: dict[str, Any]) -> None:
         """Verify introspection works with branching wizards."""
         loader = WizardConfigLoader()
         fsm = loader.load_from_dict(wizard_config_with_branches)

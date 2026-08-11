@@ -177,9 +177,7 @@ class CostTrackingMiddleware(Middleware):
         Returns:
             Calculated cost in USD.
         """
-        cost = self._calculate_cost(
-            provider, model, input_tokens, output_tokens, pricing=pricing
-        )
+        cost = self._calculate_cost(provider, model, input_tokens, output_tokens, pricing=pricing)
 
         if client_id not in self._usage_stats:
             self._usage_stats[client_id] = self._new_client_stats(client_id)
@@ -279,12 +277,14 @@ class CostTrackingMiddleware(Middleware):
             output_tokens = len(turn.response_content) // 4
             estimated = True
 
-        hook_counter = (
-            "stream_turns" if turn.is_streaming else "chat_turns"
-        )
+        hook_counter = "stream_turns" if turn.is_streaming else "chat_turns"
         cost = self._record_usage(
-            client_id, hook_counter,
-            provider, model, input_tokens, output_tokens,
+            client_id,
+            hook_counter,
+            provider,
+            model,
+            input_tokens,
+            output_tokens,
             pricing=turn.pricing,
         )
 
@@ -294,13 +294,18 @@ class CostTrackingMiddleware(Middleware):
         self._logger.info(
             "Turn complete (%s) - Client %s: %s/%s - "
             "%d in + %d out tokens%s, cost: $%.6f, total: $%.6f",
-            mode_label, client_id, provider, model,
-            input_tokens, output_tokens, est_marker, cost, total,
+            mode_label,
+            client_id,
+            provider,
+            model,
+            input_tokens,
+            output_tokens,
+            est_marker,
+            cost,
+            total,
         )
 
-    async def on_error(
-        self, error: Exception, message: str, context: BotContext
-    ) -> None:
+    async def on_error(self, error: Exception, message: str, context: BotContext) -> None:
         """Log errors but don't track costs for failed requests.
 
         Args:
@@ -314,12 +319,12 @@ class CostTrackingMiddleware(Middleware):
         self._usage_stats[client_id]["on_error_calls"] += 1
 
         self._logger.warning(
-            "Error during request for client %s: %s", client_id, error,
+            "Error during request for client %s: %s",
+            client_id,
+            error,
         )
 
-    async def on_hook_error(
-        self, hook_name: str, error: Exception, context: BotContext
-    ) -> None:
+    async def on_hook_error(self, hook_name: str, error: Exception, context: BotContext) -> None:
         """Track middleware hook failures.
 
         Args:
@@ -334,13 +339,13 @@ class CostTrackingMiddleware(Middleware):
 
         self._logger.warning(
             "Middleware hook %s failed for client %s: %s",
-            hook_name, client_id, error,
+            hook_name,
+            client_id,
+            error,
         )
 
     @staticmethod
-    def _lookup_rates(
-        table: dict[str, Any], provider: str, model: str
-    ) -> dict[str, Any] | None:
+    def _lookup_rates(table: dict[str, Any], provider: str, model: str) -> dict[str, Any] | None:
         """Resolve a per-1K rate entry from *table*, or ``None`` if absent.
 
         The model lookup is exact, then flat-family (``{"input": …}`` for a
@@ -412,9 +417,7 @@ class CostTrackingMiddleware(Middleware):
             return self._cost_from_per_1k(explicit, input_tokens, output_tokens)
 
         if pricing is not None:
-            return CostCalculator.cost_from_tokens(
-                pricing, input_tokens, output_tokens
-            )
+            return CostCalculator.cost_from_tokens(pricing, input_tokens, output_tokens)
 
         fallback = self._lookup_rates(self.cost_rates, provider, model)
         if fallback is not None:
@@ -429,9 +432,7 @@ class CostTrackingMiddleware(Middleware):
         return 0.0
 
     @staticmethod
-    def _cost_from_per_1k(
-        rates: dict[str, Any], input_tokens: int, output_tokens: int
-    ) -> float:
+    def _cost_from_per_1k(rates: dict[str, Any], input_tokens: int, output_tokens: int) -> float:
         """Compute USD cost from a per-1K-token rate entry."""
         input_cost = (input_tokens / 1000) * float(rates.get("input", 0.0))
         output_cost = (output_tokens / 1000) * float(rates.get("output", 0.0))
@@ -458,7 +459,9 @@ class CostTrackingMiddleware(Middleware):
             "Cost tracking: no rate entry for %s (provider=%r, model=%r); "
             "this traffic is being recorded at $0.00. Supply rates via "
             "CostTrackingMiddleware(cost_rates=...) to price it.",
-            reason, provider, model,
+            reason,
+            provider,
+            model,
         )
 
     def get_client_stats(self, client_id: str) -> dict[str, Any] | None:
@@ -486,9 +489,7 @@ class CostTrackingMiddleware(Middleware):
         Returns:
             Total cost in USD
         """
-        return float(
-            sum(stats["total_cost_usd"] for stats in self._usage_stats.values())
-        )
+        return float(sum(stats["total_cost_usd"] for stats in self._usage_stats.values()))
 
     def get_total_tokens(self) -> dict[str, int]:
         """Get total tokens across all clients.
@@ -496,12 +497,8 @@ class CostTrackingMiddleware(Middleware):
         Returns:
             Dictionary with 'input', 'output', and 'total' token counts
         """
-        input_tokens = sum(
-            stats["total_input_tokens"] for stats in self._usage_stats.values()
-        )
-        output_tokens = sum(
-            stats["total_output_tokens"] for stats in self._usage_stats.values()
-        )
+        input_tokens = sum(stats["total_input_tokens"] for stats in self._usage_stats.values())
+        output_tokens = sum(stats["total_output_tokens"] for stats in self._usage_stats.values())
         return {
             "input": input_tokens,
             "output": output_tokens,
@@ -537,9 +534,7 @@ class CostTrackingMiddleware(Middleware):
         Returns:
             CSV string with headers
         """
-        lines = [
-            "client_id,total_requests,total_input_tokens,total_output_tokens,total_cost_usd"
-        ]
+        lines = ["client_id,total_requests,total_input_tokens,total_output_tokens,total_cost_usd"]
         for client_id, stats in self._usage_stats.items():
             lines.append(
                 f"{client_id},{stats['total_requests']},"

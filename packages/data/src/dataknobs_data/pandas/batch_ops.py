@@ -15,7 +15,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable, Generator
     from dataknobs_data.database import AsyncDatabase, SyncDatabase
     from dataknobs_data.query import Query
-    
+
 
 logger = logging.getLogger(__name__)
 
@@ -23,6 +23,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class BatchConfig:
     """Configuration for batch operations."""
+
     chunk_size: int = 1000
     parallel: bool = False
     max_workers: int = 4
@@ -44,7 +45,7 @@ class ChunkedProcessor:
 
     def __init__(self, chunk_size: int = 1000):
         """Initialize chunked processor.
-        
+
         Args:
             chunk_size: Size of each chunk
         """
@@ -54,15 +55,15 @@ class ChunkedProcessor:
         self,
         df: pd.DataFrame,
         processor: Callable[[pd.DataFrame], Any],
-        combine: Callable[[list[Any]], Any] | None = None
+        combine: Callable[[list[Any]], Any] | None = None,
     ) -> Any:
         """Process DataFrame in chunks.
-        
+
         Args:
             df: DataFrame to process
             processor: Function to process each chunk
             combine: Function to combine results
-            
+
         Returns:
             Combined results or list of chunk results
         """
@@ -78,10 +79,10 @@ class ChunkedProcessor:
 
     def iter_chunks(self, df: pd.DataFrame) -> Generator[pd.DataFrame, None, None]:
         """Iterate over DataFrame in chunks.
-        
+
         Args:
             df: DataFrame to chunk
-            
+
         Yields:
             DataFrame chunks
         """
@@ -90,18 +91,15 @@ class ChunkedProcessor:
             yield df.iloc[start_idx:end_idx]
 
     def read_csv_chunked(
-        self,
-        filepath: str,
-        processor: Callable[[pd.DataFrame], Any],
-        **read_kwargs
+        self, filepath: str, processor: Callable[[pd.DataFrame], Any], **read_kwargs
     ) -> list[Any]:
         """Read CSV file in chunks and process.
-        
+
         Args:
             filepath: Path to CSV file
             processor: Function to process each chunk
             **read_kwargs: Additional arguments for pd.read_csv
-            
+
         Returns:
             List of processed results
         """
@@ -118,33 +116,31 @@ class BatchOperations:
     """Batch operations for DataKnobs databases using DataFrames."""
 
     def __init__(
-        self,
-        database: AsyncDatabase | SyncDatabase,
-        converter: DataFrameConverter | None = None
+        self, database: AsyncDatabase | SyncDatabase, converter: DataFrameConverter | None = None
     ):
         """Initialize batch operations.
-        
+
         Args:
             database: Target database
             converter: DataFrame converter
         """
         self.database = database
         self.converter = converter or DataFrameConverter()
-        self.is_async = hasattr(database, 'create') and asyncio.iscoroutinefunction(database.create)
+        self.is_async = hasattr(database, "create") and asyncio.iscoroutinefunction(database.create)
 
     def bulk_insert_dataframe(
         self,
         df: pd.DataFrame,
         config: BatchConfig | None = None,
-        conversion_options: ConversionOptions | None = None
+        conversion_options: ConversionOptions | None = None,
     ) -> dict[str, Any]:
         """Bulk insert DataFrame rows into database.
-        
+
         Args:
             df: DataFrame to insert
             config: Batch configuration
             conversion_options: Options for DataFrame conversion
-            
+
         Returns:
             Insert statistics
         """
@@ -154,12 +150,7 @@ class BatchOperations:
         assert config is not None
         assert conversion_options is not None
 
-        stats: dict[str, Any] = {
-            "total_rows": len(df),
-            "inserted": 0,
-            "failed": 0,
-            "errors": []
-        }
+        stats: dict[str, Any] = {"total_rows": len(df), "inserted": 0, "failed": 0, "errors": []}
 
         # Process in chunks if memory efficient mode
         if config.memory_efficient and len(df) > config.chunk_size:
@@ -186,16 +177,14 @@ class BatchOperations:
         return stats
 
     def query_as_dataframe(
-        self,
-        query: Query,
-        conversion_options: ConversionOptions | None = None
+        self, query: Query, conversion_options: ConversionOptions | None = None
     ) -> pd.DataFrame:
         """Execute query and return results as DataFrame.
-        
+
         Args:
             query: Query to execute
             conversion_options: Options for conversion
-            
+
         Returns:
             Query results as DataFrame
         """
@@ -215,16 +204,16 @@ class BatchOperations:
         df: pd.DataFrame,
         id_column: str | None,
         config: BatchConfig | None = None,
-        conversion_options: ConversionOptions | None = None
+        conversion_options: ConversionOptions | None = None,
     ) -> dict[str, Any]:
         """Update records from DataFrame using ID column.
-        
+
         Args:
             df: DataFrame with updates
             id_column: Column containing record IDs
             config: Batch configuration
             conversion_options: Conversion options
-            
+
         Returns:
             Update statistics
         """
@@ -236,7 +225,7 @@ class BatchOperations:
             "updated": 0,
             "failed": 0,
             "not_found": 0,
-            "errors": []
+            "errors": [],
         }
 
         # Convert DataFrame to records
@@ -260,7 +249,7 @@ class BatchOperations:
 
         # Process updates in chunks
         for i in range(0, len(updates), config.chunk_size):
-            chunk = updates[i:i + config.chunk_size]
+            chunk = updates[i : i + config.chunk_size]
 
             try:
                 # Use batch update for better performance
@@ -284,7 +273,9 @@ class BatchOperations:
                 for record_id, record in chunk:
                     try:
                         if self.is_async:
-                            success = asyncio.run(cast("AsyncDatabase", self.database).update(record_id, record))
+                            success = asyncio.run(
+                                cast("AsyncDatabase", self.database).update(record_id, record)
+                            )
                         else:
                             success = cast("SyncDatabase", self.database).update(record_id, record)
 
@@ -311,15 +302,15 @@ class BatchOperations:
         self,
         query: Query,
         aggregations: dict[str, str | Callable],
-        group_by: list[str] | None = None
+        group_by: list[str] | None = None,
     ) -> pd.DataFrame:
         """Perform aggregations on query results.
-        
+
         Args:
             query: Query to execute
             aggregations: Dictionary of column: aggregation function
             group_by: Columns to group by
-            
+
         Returns:
             Aggregated DataFrame
         """
@@ -348,15 +339,15 @@ class BatchOperations:
         self,
         query: Query,
         transformer: Callable[[pd.DataFrame], pd.DataFrame],
-        config: BatchConfig | None = None
+        config: BatchConfig | None = None,
     ) -> dict[str, Any]:
         """Query, transform with pandas, and save back.
-        
+
         Args:
             query: Query to get records
             transformer: Function to transform DataFrame
             config: Batch configuration
-            
+
         Returns:
             Operation statistics
         """
@@ -376,40 +367,32 @@ class BatchOperations:
             return self.update_from_dataframe(
                 transformed_df,
                 id_column=None,  # Use index
-                config=config
+                config=config,
             )
         else:
             # Insert as new records
             return self.bulk_insert_dataframe(transformed_df, config)
 
     def _insert_chunk(
-        self,
-        df: pd.DataFrame,
-        config: BatchConfig,
-        conversion_options: ConversionOptions
+        self, df: pd.DataFrame, config: BatchConfig, conversion_options: ConversionOptions
     ) -> dict[str, Any]:
         """Insert a chunk of DataFrame rows.
-        
+
         Args:
             df: DataFrame chunk
             config: Batch configuration
             conversion_options: Conversion options
-            
+
         Returns:
             Insert statistics for chunk
         """
-        stats: dict[str, Any] = {
-            "total_rows": len(df),
-            "inserted": 0,
-            "failed": 0,
-            "errors": []
-        }
+        stats: dict[str, Any] = {"total_rows": len(df), "inserted": 0, "failed": 0, "errors": []}
 
         # Convert to records
         records = self.converter.dataframe_to_records(df, conversion_options)
 
         # Use batch creation for better performance with graceful fallback
-        if hasattr(self.database, 'create_batch'):
+        if hasattr(self.database, "create_batch"):
             try:
                 if self.is_async:
                     ids = asyncio.run(cast("AsyncDatabase", self.database).create_batch(records))
@@ -475,10 +458,10 @@ class BatchOperations:
         query: Query,
         filepath: str,
         conversion_options: ConversionOptions | None = None,
-        **to_csv_kwargs
+        **to_csv_kwargs,
     ) -> None:
         """Export query results to CSV file.
-        
+
         Args:
             query: Query to execute
             filepath: Output file path
@@ -493,10 +476,10 @@ class BatchOperations:
         query: Query,
         filepath: str,
         conversion_options: ConversionOptions | None = None,
-        **to_parquet_kwargs
+        **to_parquet_kwargs,
     ) -> None:
         """Export query results to Parquet file.
-        
+
         Args:
             query: Query to execute
             filepath: Output file path

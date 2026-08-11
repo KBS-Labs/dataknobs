@@ -255,7 +255,7 @@ class TestConversationContextArtifacts:
                 "reviews": [
                     {"reviewer": "adversarial", "passed": True},
                     {"reviewer": "skeptical", "passed": False},
-                ]
+                ],
             }
         ]
 
@@ -376,9 +376,7 @@ class TestConversationContextPromptInjection:
         context.add_assumption(content="Test")
 
         # Only include wizard progress
-        prompt = context.to_prompt_injection(
-            include_sections=["wizard_progress"]
-        )
+        prompt = context.to_prompt_injection(include_sections=["wizard_progress"])
 
         assert "Wizard Progress" in prompt
         assert "Unconfirmed Assumptions" not in prompt
@@ -390,9 +388,7 @@ class TestConversationContextPromptInjection:
         context.add_assumption(content="Test")
 
         # Exclude wizard progress
-        prompt = context.to_prompt_injection(
-            exclude_sections=["wizard_progress"]
-        )
+        prompt = context.to_prompt_injection(exclude_sections=["wizard_progress"])
 
         assert "Wizard Progress" not in prompt
         assert "Unconfirmed Assumptions" in prompt

@@ -69,9 +69,7 @@ class KeyColumnsIdentity:
     :class:`CallableIdentity` for null-tolerant or sparse composite keys.
     """
 
-    def __init__(
-        self, key_columns: list[str], sep: str = DEFAULT_KEY_SEP
-    ) -> None:
+    def __init__(self, key_columns: list[str], sep: str = DEFAULT_KEY_SEP) -> None:
         self.key_columns = list(key_columns)
         self.sep = sep
 
@@ -103,9 +101,7 @@ class CallableIdentity:
         id_fn: ``Callable[[Mapping[str, Any]], str | None]``.
     """
 
-    def __init__(
-        self, id_fn: Callable[[Mapping[str, Any]], str | None]
-    ) -> None:
+    def __init__(self, id_fn: Callable[[Mapping[str, Any]], str | None]) -> None:
         self.id_fn = id_fn
 
     def derive(self, row: Mapping[str, Any]) -> str | None:
@@ -140,8 +136,7 @@ def resolve_identity(
     ]
     if len(supplied) > 1:
         raise ConfigurationError(
-            "Specify at most one of identity=, key_columns=, id_fn= "
-            f"(got {', '.join(supplied)})"
+            f"Specify at most one of identity=, key_columns=, id_fn= (got {', '.join(supplied)})"
         )
 
     if identity is not None:

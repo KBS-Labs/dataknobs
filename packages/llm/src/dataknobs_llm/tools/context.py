@@ -108,9 +108,7 @@ class ToolExecutionContext:
         return cls()
 
     @classmethod
-    def from_wizard_data(
-        cls, wizard_data: dict[str, Any], **kwargs: Any
-    ) -> "ToolExecutionContext":
+    def from_wizard_data(cls, wizard_data: dict[str, Any], **kwargs: Any) -> "ToolExecutionContext":
         """Create context from wizard collected data for standalone tool use.
 
         Convenience factory for calling wizard-aware tools outside the

@@ -69,7 +69,7 @@ class ChangeTracker:
         process_interval: float = 5.0,
     ):
         """Initialize the change tracker with simplified API.
-        
+
         Args:
             database: The database to track changes for
             tracked_fields: Fields to track for changes (if None, tracks all)
@@ -109,7 +109,7 @@ class ChangeTracker:
     def _initialize_dependencies(self) -> None:
         """Initialize field dependency mappings."""
         # Use schema if available
-        if hasattr(self.database, 'schema') and self.database.schema:
+        if hasattr(self.database, "schema") and self.database.schema:
             for field_name, field_schema in self.database.schema.fields.items():
                 if field_schema.is_vector_field():
                     self._vector_fields[field_name] = field_schema.metadata
@@ -119,10 +119,10 @@ class ChangeTracker:
 
     def add_update_callback(
         self,
-        callback: Callable[[UpdateTask], None] | Callable[[UpdateTask], Coroutine[Any, Any, None]]
+        callback: Callable[[UpdateTask], None] | Callable[[UpdateTask], Coroutine[Any, Any, None]],
     ) -> None:
         """Add a callback to be called when updates are processed.
-        
+
         Args:
             callback: Function to call with update tasks
         """
@@ -137,14 +137,14 @@ class ChangeTracker:
         event_type: str = "update",
     ) -> bool:
         """Track a field change event.
-        
+
         Args:
             record_id: ID of the changed record
             field_name: Name of the changed field
             old_value: Previous value
             new_value: New value
             event_type: Type of event (create, update, delete)
-            
+
         Returns:
             True if change affects vectors and was queued
         """
@@ -188,14 +188,14 @@ class ChangeTracker:
 
     async def on_create(self, record: Record) -> None:
         """Handle record creation.
-        
+
         Args:
             record: The created record
         """
         # Skip if record has no ID
         if record.id is None:
             return
-            
+
         for field_name in record.fields.keys():
             value = record.get_value(field_name)
             if field_name in self._dependencies:
@@ -214,7 +214,7 @@ class ChangeTracker:
         new_data: dict[str, Any],
     ) -> None:
         """Handle record update.
-        
+
         Args:
             record_id: ID of the updated record
             old_data: Previous data
@@ -235,7 +235,7 @@ class ChangeTracker:
 
     async def on_delete(self, record_id: str) -> None:
         """Handle record deletion.
-        
+
         Args:
             record_id: ID of the deleted record
         """
@@ -248,7 +248,7 @@ class ChangeTracker:
 
     def get_pending_updates(self) -> list[UpdateTask]:
         """Get list of pending update tasks.
-        
+
         Returns:
             List of pending tasks
         """
@@ -266,7 +266,9 @@ class ChangeTracker:
         self._shutdown_event.clear()
         self._processing_task = asyncio.create_task(self._process_loop())
 
-    async def start_tracking(self, tracked_fields: list[str] | None = None, vector_field: str | None = None) -> None:
+    async def start_tracking(
+        self, tracked_fields: list[str] | None = None, vector_field: str | None = None
+    ) -> None:
         """Legacy method for compatibility - redirects to start_processing."""
         if tracked_fields:
             self.tracked_fields = tracked_fields
@@ -285,7 +287,7 @@ class ChangeTracker:
 
     async def get_outdated_records(self) -> list[Record]:
         """Get records with outdated vector fields.
-        
+
         Returns:
             List of records that need vector updates
         """
@@ -306,8 +308,8 @@ class ChangeTracker:
             # Check if any tracked field is newer than vector
             # by comparing content hashes
             vector_field = record.fields.get(self.vector_field)
-            if vector_field and hasattr(vector_field, 'metadata'):
-                stored_hash = vector_field.metadata.get('content_hash')
+            if vector_field and hasattr(vector_field, "metadata"):
+                stored_hash = vector_field.metadata.get("content_hash")
 
                 # If no content hash is stored, auto-generate it and consider record up-to-date
                 if stored_hash is None:
@@ -323,14 +325,16 @@ class ChangeTracker:
                         content_hash = hashlib.md5(current_content.encode()).hexdigest()
 
                         # Update the vector field metadata
-                        vector_field.metadata['content_hash'] = content_hash
+                        vector_field.metadata["content_hash"] = content_hash
 
                         # Update the record in the database
                         try:
                             await self.database.update(record.id, record)
                             logger.debug(f"Auto-initialized content hash for record {record.id}")
                         except Exception as e:
-                            logger.warning(f"Failed to auto-initialize content hash for record {record.id}: {e}")
+                            logger.warning(
+                                f"Failed to auto-initialize content hash for record {record.id}: {e}"
+                            )
                             # If we can't update, consider it outdated for safety
                             outdated.append(record)
                     continue
@@ -355,7 +359,7 @@ class ChangeTracker:
 
     async def mark_updated(self, record_id: str) -> None:
         """Mark a record as having updated vectors.
-        
+
         Args:
             record_id: ID of the updated record
         """
@@ -373,12 +377,12 @@ class ChangeTracker:
         limit: int = 100,
     ) -> list[ChangeEvent]:
         """Get change history with optional filters.
-        
+
         Args:
             record_id: Filter by record ID
             field_name: Filter by field name
             limit: Maximum events to return
-            
+
         Returns:
             List of change events
         """
@@ -394,7 +398,7 @@ class ChangeTracker:
 
     async def process_batch(self) -> int:
         """Process a batch of pending updates.
-        
+
         Returns:
             Number of tasks processed
         """
@@ -450,8 +454,7 @@ class ChangeTracker:
                 # Wait for interval or shutdown
                 try:
                     await asyncio.wait_for(
-                        self._shutdown_event.wait(),
-                        timeout=self.process_interval
+                        self._shutdown_event.wait(), timeout=self.process_interval
                     )
                 except TimeoutError:
                     continue
@@ -464,7 +467,7 @@ class ChangeTracker:
 
     async def stop_processing(self, timeout: float = 10.0) -> None:
         """Stop background processing.
-        
+
         Args:
             timeout: Maximum time to wait for graceful shutdown
         """
@@ -487,7 +490,7 @@ class ChangeTracker:
 
     def get_stats(self) -> dict[str, Any]:
         """Get tracker statistics.
-        
+
         Returns:
             Dictionary of statistics
         """
@@ -496,18 +499,13 @@ class ChangeTracker:
             "queue_size": len(self._update_queue),
             "max_queue_size": self.max_queue_size,
             "history_size": len(self._change_history),
-            "dependencies": {
-                field: len(vectors)
-                for field, vectors in self._dependencies.items()
-            },
-            "is_processing": bool(
-                self._processing_task and not self._processing_task.done()
-            ),
+            "dependencies": {field: len(vectors) for field, vectors in self._dependencies.items()},
+            "is_processing": bool(self._processing_task and not self._processing_task.done()),
         }
 
     async def flush(self) -> int:
         """Process all pending updates immediately.
-        
+
         Returns:
             Number of tasks processed
         """
@@ -537,8 +535,8 @@ class ChangeTracker:
         for record in all_records:
             # Check if record has vector field but no content hash
             vector_field = record.fields.get(self.vector_field)
-            if vector_field and hasattr(vector_field, 'metadata'):
-                stored_hash = vector_field.metadata.get('content_hash')
+            if vector_field and hasattr(vector_field, "metadata"):
+                stored_hash = vector_field.metadata.get("content_hash")
 
                 if stored_hash is None:
                     # Calculate and store content hash
@@ -553,11 +551,13 @@ class ChangeTracker:
                         content_hash = hashlib.md5(current_content.encode()).hexdigest()
 
                         # Update the vector field metadata
-                        vector_field.metadata['content_hash'] = content_hash
+                        vector_field.metadata["content_hash"] = content_hash
 
                         # Update the record in the database
                         try:
                             await self.database.update(record.id, record)
                             logger.debug(f"Initialized content hash for record {record.id}")
                         except Exception as e:
-                            logger.warning(f"Failed to initialize content hash for record {record.id}: {e}")
+                            logger.warning(
+                                f"Failed to initialize content hash for record {record.id}: {e}"
+                            )

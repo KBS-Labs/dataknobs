@@ -49,10 +49,7 @@ def format_evaluation_summary(evaluation: RubricEvaluation) -> str:
         lines.append("| Criterion | Level | Score |")
         lines.append("|-----------|-------|-------|")
         for result in evaluation.criterion_results:
-            lines.append(
-                f"| {result.criterion_id} | {result.level_id} "
-                f"| {result.score:.1%} |"
-            )
+            lines.append(f"| {result.criterion_id} | {result.level_id} | {result.score:.1%} |")
         lines.append("")
 
     if evaluation.feedback_summary:
@@ -260,19 +257,14 @@ def format_provenance_chain(provenance: ProvenanceRecord) -> str:
         lines.append("")
         for invocation in provenance.llm_invocations:
             model = f" ({invocation.model})" if invocation.model else ""
-            lines.append(
-                f"- **{invocation.purpose}**{model} ({invocation.timestamp})"
-            )
+            lines.append(f"- **{invocation.purpose}**{model} ({invocation.timestamp})")
         lines.append("")
 
     if provenance.revision_history:
         lines.append("### Revision History")
         lines.append("")
         for revision in provenance.revision_history:
-            lines.append(
-                f"- **v{revision.previous_version}** -> revision "
-                f"({revision.timestamp})"
-            )
+            lines.append(f"- **v{revision.previous_version}** -> revision ({revision.timestamp})")
             lines.append(f"  Reason: {revision.reason}")
             lines.append(f"  Triggered by: {revision.triggered_by}")
         lines.append("")
@@ -280,9 +272,7 @@ def format_provenance_chain(provenance: ProvenanceRecord) -> str:
     return "\n".join(lines)
 
 
-def _get_criterion_score(
-    evaluation: RubricEvaluation, criterion_id: str
-) -> float | None:
+def _get_criterion_score(evaluation: RubricEvaluation, criterion_id: str) -> float | None:
     """Get the score for a specific criterion from an evaluation."""
     for result in evaluation.criterion_results:
         if result.criterion_id == criterion_id:

@@ -97,9 +97,15 @@ from dataclasses import replace
 from typing import TYPE_CHECKING, Any, Dict, List, Union, AsyncIterator
 
 from ..base import (
-    LLMAdapter, LLMConfig, LLMMessage, LLMResponse, LLMStreamResponse,
-    AsyncLLMProvider, ModelCapability, ToolCall,
-    normalize_llm_config
+    LLMAdapter,
+    LLMConfig,
+    LLMMessage,
+    LLMResponse,
+    LLMStreamResponse,
+    AsyncLLMProvider,
+    ModelCapability,
+    ToolCall,
+    normalize_llm_config,
 )
 from ..model_profile import (
     CallableModelMetadataSource,
@@ -143,10 +149,7 @@ def _find_matching_models(configured_model: str, available_models: list[str]) ->
     if configured_model in available_models:
         return [configured_model]
     base_model = configured_model.split(":", maxsplit=1)[0]
-    return [
-        m for m in available_models
-        if m == base_model or m.startswith(base_model + ":")
-    ]
+    return [m for m in available_models if m == base_model or m.startswith(base_model + ":")]
 
 
 def ollama_match_key(model_lower: str, keys: Iterable[str]) -> str | None:
@@ -192,11 +195,13 @@ _THINK_TAG_RE = re.compile(r"^<think>(.*?)</think>\s*(.*)", re.DOTALL)
 #: by :func:`_ollama_caps_from_server` and mirrored by the name-based
 #: :func:`_ollama_heuristic` fallback for servers that predate the field.
 _OLLAMA_CAPABILITY_MAP: dict[str, frozenset[ModelCapability]] = {
-    "completion": frozenset({
-        ModelCapability.TEXT_GENERATION,
-        ModelCapability.CHAT,
-        ModelCapability.STREAMING,
-    }),
+    "completion": frozenset(
+        {
+            ModelCapability.TEXT_GENERATION,
+            ModelCapability.CHAT,
+            ModelCapability.STREAMING,
+        }
+    ),
     "tools": frozenset({ModelCapability.FUNCTION_CALLING}),
     "vision": frozenset({ModelCapability.VISION}),
     "embedding": frozenset({ModelCapability.EMBEDDINGS}),
@@ -207,8 +212,18 @@ _OLLAMA_CAPABILITY_MAP: dict[str, frozenset[ModelCapability]] = {
 #: heuristic fallback. The live ``/api/show`` ``tools`` capability supersedes
 #: this whenever the server reports one.
 _TOOL_CAPABLE_FAMILIES: tuple[str, ...] = (
-    "llama3", "llama4", "mistral", "mixtral", "qwen", "command-r",
-    "phi3", "phi4", "nemotron", "firefunction", "hermes", "gpt-oss",
+    "llama3",
+    "llama4",
+    "mistral",
+    "mixtral",
+    "qwen",
+    "command-r",
+    "phi3",
+    "phi4",
+    "nemotron",
+    "firefunction",
+    "hermes",
+    "gpt-oss",
 )
 
 #: Vision family substrings for the heuristic fallback (server `vision` wins).
@@ -235,9 +250,7 @@ def _is_embedding_only_name(model_lower: str) -> bool:
     return "embed" in model_lower and not _name_has(model_lower, _CODE_FAMILIES)
 
 
-def _ollama_caps_from_server(
-    model: str, reported: Iterable[str]
-) -> frozenset[ModelCapability]:
+def _ollama_caps_from_server(model: str, reported: Iterable[str]) -> frozenset[ModelCapability]:
     """Map a server-reported `capabilities` array to the COMPLETE capability set.
 
     Because a present ``capabilities`` facet whole-set-overrides the lower
@@ -279,9 +292,7 @@ def _ollama_heuristic(model: str) -> ModelProfile:
     """
     model_lower = model.lower()
     if _is_embedding_only_name(model_lower):
-        return ModelProfile(
-            capabilities=frozenset({ModelCapability.EMBEDDINGS})
-        )
+        return ModelProfile(capabilities=frozenset({ModelCapability.EMBEDDINGS}))
     caps: set[ModelCapability] = {
         ModelCapability.TEXT_GENERATION,
         ModelCapability.CHAT,
@@ -312,9 +323,7 @@ def _extract_context_length(model_info: Any) -> int | None:
     candidates: list[Any] = []
     if arch:
         candidates.append(model_info.get(f"{arch}.context_length"))
-    candidates.extend(
-        v for k, v in model_info.items() if k.endswith(".context_length")
-    )
+    candidates.extend(v for k, v in model_info.items() if k.endswith(".context_length"))
     for value in candidates:
         if value is None:
             continue
@@ -377,9 +386,7 @@ def _ollama_entry_model_id(entry: Any) -> str | None:
 #: :meth:`OllamaProvider._profile_resolver`. There is deliberately **no**
 #: bundled-resource layer: Ollama's model space is open-ended and user-pulled,
 #: and the server reports capabilities / context live (see the block comment).
-_OLLAMA_HEURISTIC_SOURCE = CallableModelMetadataSource(
-    "ollama_heuristic", _ollama_heuristic
-)
+_OLLAMA_HEURISTIC_SOURCE = CallableModelMetadataSource("ollama_heuristic", _ollama_heuristic)
 
 
 def _coerce_bool(value: Any, *, default: bool) -> bool:
@@ -505,9 +512,7 @@ class OllamaAdapter(LLMAdapter):
             usage = {
                 "prompt_tokens": data.get("prompt_eval_count", 0),
                 "completion_tokens": data.get("eval_count", 0),
-                "total_tokens": (
-                    data.get("prompt_eval_count", 0) + data.get("eval_count", 0)
-                ),
+                "total_tokens": (data.get("prompt_eval_count", 0) + data.get("eval_count", 0)),
             }
 
         # Ollama reports a token-budget cut-off with done_reason == "length"
@@ -580,7 +585,8 @@ class OllamaAdapter(LLMAdapter):
         return [self._tool_to_dict(tool) for tool in tools]
 
     def adapt_raw_functions(
-        self, functions: list[Dict[str, Any]],
+        self,
+        functions: list[Dict[str, Any]],
     ) -> list[Dict[str, Any]]:
         """Convert raw function dicts to Ollama tools format.
 
@@ -779,7 +785,7 @@ class OllamaProvider(ProfileDetectionMixin, AsyncLLMProvider):
     def __init__(
         self,
         config: Union[LLMConfig, "Config", Dict[str, Any]],
-        prompt_builder: AsyncPromptBuilder | None = None
+        prompt_builder: AsyncPromptBuilder | None = None,
     ):
         # Normalize config first
         llm_config = normalize_llm_config(config)
@@ -788,13 +794,13 @@ class OllamaProvider(ProfileDetectionMixin, AsyncLLMProvider):
         self.adapter = OllamaAdapter()
 
         # Check for Docker environment and adjust URL accordingly
-        default_url = 'http://localhost:11434'
-        if os.path.exists('/.dockerenv'):
+        default_url = "http://localhost:11434"
+        if os.path.exists("/.dockerenv"):
             # Running in Docker, use host.docker.internal
-            default_url = 'http://host.docker.internal:11434'
+            default_url = "http://host.docker.internal:11434"
 
         # Allow environment variable override
-        self.base_url = llm_config.api_base or os.environ.get('OLLAMA_BASE_URL', default_url)
+        self.base_url = llm_config.api_base or os.environ.get("OLLAMA_BASE_URL", default_url)
 
         # Live-first model-metadata source: capabilities + context window +
         # availability from GET /api/tags (installed set) enriched per-model by
@@ -817,9 +823,7 @@ class OllamaProvider(ProfileDetectionMixin, AsyncLLMProvider):
                 llm_config.options.get("model_metadata_refresh_timeout"),
                 default=_DEFAULT_MODEL_METADATA_REFRESH_TIMEOUT,
             ),
-            enabled=_coerce_bool(
-                llm_config.options.get("model_metadata_live"), default=True
-            ),
+            enabled=_coerce_bool(llm_config.options.get("model_metadata_live"), default=True),
             model_id=_ollama_entry_model_id,
             match=ollama_match_key,
         )
@@ -866,6 +870,7 @@ class OllamaProvider(ProfileDetectionMixin, AsyncLLMProvider):
         """Initialize Ollama client."""
         try:
             import aiohttp
+
             connector = aiohttp.TCPConnector(force_close=True)
             self._session = aiohttp.ClientSession(
                 connector=connector,
@@ -877,7 +882,7 @@ class OllamaProvider(ProfileDetectionMixin, AsyncLLMProvider):
                 async with self._session.get(f"{self.base_url}/api/tags") as response:
                     if response.status == 200:
                         data = await response.json()
-                        models = [m['name'] for m in data.get('models', [])]
+                        models = [m["name"] for m in data.get("models", [])]
                         if models:
                             # Check if configured model is available
                             matching = _find_matching_models(self.config.model, models)
@@ -898,7 +903,8 @@ class OllamaProvider(ProfileDetectionMixin, AsyncLLMProvider):
                             elif not matching:
                                 logger.warning(
                                     "Ollama: Model %s not found. Available: %s",
-                                    self.config.model, models,
+                                    self.config.model,
+                                    models,
                                 )
                         else:
                             logger.warning("Ollama: No models found. Please pull a model first.")
@@ -910,13 +916,12 @@ class OllamaProvider(ProfileDetectionMixin, AsyncLLMProvider):
             self._is_initialized = True
         except ImportError as e:
             raise ImportError(
-                "aiohttp package not installed. "
-                "Install with: pip install 'dataknobs-llm[ollama]'"
+                "aiohttp package not installed. Install with: pip install 'dataknobs-llm[ollama]'"
             ) from e
 
     async def _close_client(self) -> None:
         """Close the aiohttp session."""
-        if hasattr(self, '_session') and self._session:
+        if hasattr(self, "_session") and self._session:
             await self._session.close()
             await asyncio.sleep(_AIOHTTP_DRAIN_SECS)
 
@@ -943,9 +948,7 @@ class OllamaProvider(ProfileDetectionMixin, AsyncLLMProvider):
             if response.status != 200:
                 return []
             data = await response.json()
-        names = [
-            name for model in data.get("models", []) if (name := model.get("name"))
-        ]
+        names = [name for model in data.get("models", []) if (name := model.get("name"))]
         if not names:
             return []
         sem = asyncio.Semaphore(_MODEL_SHOW_CONCURRENCY)
@@ -968,19 +971,13 @@ class OllamaProvider(ProfileDetectionMixin, AsyncLLMProvider):
                                 show.get("model_info")
                             )
                 except Exception as exc:  # per-model best-effort — keep availability
-                    logger.debug(
-                        "Ollama /api/show failed for %s: %s", name, exc
-                    )
+                    logger.debug("Ollama /api/show failed for %s: %s", name, exc)
             return entry
 
-        entries: list[dict[str, Any]] = await asyncio.gather(
-            *(_enrich(name) for name in names)
-        )
+        entries: list[dict[str, Any]] = await asyncio.gather(*(_enrich(name) for name in names))
         return entries
 
-    def _profile_resolver(
-        self, config: LLMConfig
-    ) -> LayeredModelProfileResolver:
+    def _profile_resolver(self, config: LLMConfig) -> LayeredModelProfileResolver:
         """Compose the Ollama model-profile resolver for *config*.
 
         Precedence (highest first): config override → live ``/api/show`` cache
@@ -994,9 +991,7 @@ class OllamaProvider(ProfileDetectionMixin, AsyncLLMProvider):
         """
         return LayeredModelProfileResolver(
             [
-                ConfigOverrideSource(
-                    getattr(config, "model_profile_overrides", None)
-                ),
+                ConfigOverrideSource(getattr(config, "model_profile_overrides", None)),
                 self._live_source,
                 _OLLAMA_HEURISTIC_SOURCE,
             ]
@@ -1031,7 +1026,7 @@ class OllamaProvider(ProfileDetectionMixin, AsyncLLMProvider):
         not flip availability). Preserves the pre-binding behavior (installed →
         ``True``; not-installed / unreachable-cold → ``False``) as a resolved facet.
         """
-        if not self._is_initialized or not hasattr(self, '_session'):
+        if not self._is_initialized or not hasattr(self, "_session"):
             return False
         await self._live_source.force_refresh()
         profile = self._profile_resolver(self.config).resolve(self.config.model)
@@ -1081,13 +1076,10 @@ class OllamaProvider(ProfileDetectionMixin, AsyncLLMProvider):
         ``... from exc``.
         """
         import aiohttp
+
         if isinstance(exc, aiohttp.ClientResponseError):
-            retry_after = self._retry_after_from_headers(
-                getattr(exc, "headers", None)
-            )
-            return self._dataknobs_error_for_status(
-                exc.status, str(exc), retry_after=retry_after
-            )
+            retry_after = self._retry_after_from_headers(getattr(exc, "headers", None))
+            return self._dataknobs_error_for_status(exc.status, str(exc), retry_after=retry_after)
         if isinstance(exc, (aiohttp.ClientError, TimeoutError)):
             return self._dataknobs_error_for_status(None, str(exc))
         return None
@@ -1097,7 +1089,7 @@ class OllamaProvider(ProfileDetectionMixin, AsyncLLMProvider):
         messages: Union[str, List[LLMMessage]],
         config_overrides: Dict[str, Any] | None = None,
         tools: list[Any] | None = None,
-        **kwargs: Any
+        **kwargs: Any,
     ) -> LLMResponse:
         """Generate completion using Ollama chat endpoint.
 
@@ -1116,11 +1108,13 @@ class OllamaProvider(ProfileDetectionMixin, AsyncLLMProvider):
 
         # Convert to message list
         if isinstance(messages, str):
-            messages = [LLMMessage(role='user', content=messages)]
+            messages = [LLMMessage(role="user", content=messages)]
 
         # Add system prompt if configured
-        if runtime_config.system_prompt and (not messages or messages[0].role != 'system'):
-            messages = [LLMMessage(role='system', content=runtime_config.system_prompt)] + list(messages)
+        if runtime_config.system_prompt and (not messages or messages[0].role != "system"):
+            messages = [LLMMessage(role="system", content=runtime_config.system_prompt)] + list(
+                messages
+            )
 
         # Convert to Ollama format
         ollama_messages = self._messages_to_ollama(messages)
@@ -1133,25 +1127,25 @@ class OllamaProvider(ProfileDetectionMixin, AsyncLLMProvider):
         # Build payload for chat endpoint (options shaped by the model family's
         # constraints — a no-op by default; honors a consumer constraints override)
         payload = {
-            'model': runtime_config.model,
-            'messages': ollama_messages,
-            'stream': False,
-            'options': self._build_shaped_options(runtime_config)
+            "model": runtime_config.model,
+            "messages": ollama_messages,
+            "stream": False,
+            "options": self._build_shaped_options(runtime_config),
         }
 
         # Add format if JSON mode requested
-        if runtime_config.response_format == 'json':
-            payload['format'] = 'json'
+        if runtime_config.response_format == "json":
+            payload["format"] = "json"
 
         # Handle tools if provided
         if tools:
-            payload['tools'] = self.adapter.adapt_tools(tools)
+            payload["tools"] = self.adapter.adapt_tools(tools)
 
         # Forward 'think' parameter for reasoning models (e.g. qwen3, deepseek-r1).
         # When True, the model emits <think>...</think> blocks before the answer.
-        think = runtime_config.options.get('think')
+        think = runtime_config.options.get("think")
         if think is not None:
-            payload['think'] = bool(think)
+            payload["think"] = bool(think)
 
         try:
             async with self._session.post(f"{self.base_url}/api/chat", json=payload) as response:
@@ -1161,6 +1155,7 @@ class OllamaProvider(ProfileDetectionMixin, AsyncLLMProvider):
                     # Handle tools not supported — raise explicit error
                     if response.status == 400 and "does not support tools" in error_text:
                         from ...exceptions import ToolsNotSupportedError
+
                         model_name = runtime_config.model
                         raise ToolsNotSupportedError(
                             model=model_name,
@@ -1170,7 +1165,9 @@ class OllamaProvider(ProfileDetectionMixin, AsyncLLMProvider):
                             ),
                         )
                     else:
-                        logger.error("Ollama API error (status %s): %s", response.status, error_text)
+                        logger.error(
+                            "Ollama API error (status %s): %s", response.status, error_text
+                        )
                         logger.error("Request payload: %s", json.dumps(payload, indent=2))
                         await raise_for_status_with_body(response, body=error_text)
                 else:
@@ -1189,7 +1186,7 @@ class OllamaProvider(ProfileDetectionMixin, AsyncLLMProvider):
         messages: Union[str, List[LLMMessage]],
         config_overrides: Dict[str, Any] | None = None,
         tools: list[Any] | None = None,
-        **kwargs: Any
+        **kwargs: Any,
     ) -> AsyncIterator[LLMStreamResponse]:
         """Generate streaming completion using Ollama chat endpoint.
 
@@ -1212,11 +1209,13 @@ class OllamaProvider(ProfileDetectionMixin, AsyncLLMProvider):
 
         # Convert to message list
         if isinstance(messages, str):
-            messages = [LLMMessage(role='user', content=messages)]
+            messages = [LLMMessage(role="user", content=messages)]
 
         # Add system prompt if configured
-        if runtime_config.system_prompt and (not messages or messages[0].role != 'system'):
-            messages = [LLMMessage(role='system', content=runtime_config.system_prompt)] + list(messages)
+        if runtime_config.system_prompt and (not messages or messages[0].role != "system"):
+            messages = [LLMMessage(role="system", content=runtime_config.system_prompt)] + list(
+                messages
+            )
 
         # Convert to Ollama format
         ollama_messages = self._messages_to_ollama(messages)
@@ -1227,24 +1226,24 @@ class OllamaProvider(ProfileDetectionMixin, AsyncLLMProvider):
 
         # Build payload for chat endpoint (mirrors complete())
         payload: Dict[str, Any] = {
-            'model': runtime_config.model,
-            'messages': ollama_messages,
-            'stream': True,
-            'options': self._build_shaped_options(runtime_config)
+            "model": runtime_config.model,
+            "messages": ollama_messages,
+            "stream": True,
+            "options": self._build_shaped_options(runtime_config),
         }
 
         # Add format if JSON mode requested
-        if runtime_config.response_format == 'json':
-            payload['format'] = 'json'
+        if runtime_config.response_format == "json":
+            payload["format"] = "json"
 
         # Handle tools if provided
         if tools:
-            payload['tools'] = self.adapter.adapt_tools(tools)
+            payload["tools"] = self.adapter.adapt_tools(tools)
 
         # Forward 'think' parameter for reasoning models (mirrors complete())
-        think = runtime_config.options.get('think')
+        think = runtime_config.options.get("think")
         if think is not None:
-            payload['think'] = bool(think)
+            payload["think"] = bool(think)
 
         try:
             async with self._session.post(f"{self.base_url}/api/chat", json=payload) as response:
@@ -1252,15 +1251,15 @@ class OllamaProvider(ProfileDetectionMixin, AsyncLLMProvider):
 
                 async for line in response.content:
                     if line:
-                        data = json.loads(line.decode('utf-8'))
-                        msg = data.get('message', {})
-                        done = data.get('done', False)
+                        data = json.loads(line.decode("utf-8"))
+                        msg = data.get("message", {})
+                        done = data.get("done", False)
 
                         if done:
                             # Use adapter for final chunk parsing
                             parsed = self.adapter.adapt_response(data)
                             final_chunk = LLMStreamResponse(
-                                delta=msg.get('content', ''),
+                                delta=msg.get("content", ""),
                                 is_final=True,
                                 finish_reason=parsed.finish_reason,
                                 truncated=parsed.truncated,
@@ -1272,16 +1271,14 @@ class OllamaProvider(ProfileDetectionMixin, AsyncLLMProvider):
                             yield final_chunk
                         else:
                             yield LLMStreamResponse(
-                                delta=msg.get('content', ''),
+                                delta=msg.get("content", ""),
                                 is_final=False,
                             )
         except Exception as exc:
             self._raise_translated(exc)
 
     async def embed(
-        self,
-        texts: Union[str, List[str]],
-        **kwargs
+        self, texts: Union[str, List[str]], **kwargs
     ) -> Union[List[float], List[List[float]]]:
         """Generate embeddings."""
         if not self._is_initialized:
@@ -1295,39 +1292,41 @@ class OllamaProvider(ProfileDetectionMixin, AsyncLLMProvider):
 
         embeddings = []
         for text in texts:
-            payload = {
-                'model': self.config.model,
-                'prompt': text
-            }
+            payload = {"model": self.config.model, "prompt": text}
 
             try:
-                async with self._session.post(f"{self.base_url}/api/embeddings", json=payload) as response:
+                async with self._session.post(
+                    f"{self.base_url}/api/embeddings", json=payload
+                ) as response:
                     await raise_for_status_with_body(response)
                     data = await response.json()
-                    embeddings.append(data['embedding'])
+                    embeddings.append(data["embedding"])
             except Exception as exc:
                 self._raise_translated(exc)
 
         return embeddings[0] if single else embeddings
 
     async def function_call(
-        self,
-        messages: List[LLMMessage],
-        functions: List[Dict[str, Any]],
-        **kwargs
+        self, messages: List[LLMMessage], functions: List[Dict[str, Any]], **kwargs
     ) -> LLMResponse:
         """Execute function calling with native Ollama tools support.
 
         For Ollama 0.1.17+, uses native tools API.
         Falls back to prompt-based approach for older versions.
         """
-        warnings.warn("function_call() is deprecated, use complete(tools=...) instead", DeprecationWarning, stacklevel=2)
+        warnings.warn(
+            "function_call() is deprecated, use complete(tools=...) instead",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         if not self._is_initialized:
             await self.initialize()
 
         # Add system prompt if configured
-        if self.config.system_prompt and (not messages or messages[0].role != 'system'):
-            messages = [LLMMessage(role='system', content=self.config.system_prompt)] + list(messages)
+        if self.config.system_prompt and (not messages or messages[0].role != "system"):
+            messages = [LLMMessage(role="system", content=self.config.system_prompt)] + list(
+                messages
+            )
 
         # Convert to Ollama format
         ollama_messages = self._messages_to_ollama(messages)
@@ -1343,11 +1342,11 @@ class OllamaProvider(ProfileDetectionMixin, AsyncLLMProvider):
         # Build payload with tools (options shaped by the model family's
         # constraints — a no-op by default; honors a consumer constraints override)
         payload = {
-            'model': self.config.model,
-            'messages': ollama_messages,
-            'tools': ollama_tools,
-            'stream': False,
-            'options': self._build_shaped_options(self.config)
+            "model": self.config.model,
+            "messages": ollama_messages,
+            "tools": ollama_tools,
+            "stream": False,
+            "options": self._build_shaped_options(self.config),
         }
 
         from ...exceptions import ToolsNotSupportedError
@@ -1369,26 +1368,29 @@ class OllamaProvider(ProfileDetectionMixin, AsyncLLMProvider):
                         )
                     logger.error(
                         "Ollama API error (status %s): %s",
-                        response.status, error_text,
+                        response.status,
+                        error_text,
                     )
                     await raise_for_status_with_body(response, body=error_text)
                 data = await response.json()
 
             # Extract response and tool calls
-            message = data.get('message', {})
-            content = message.get('content', '')
-            tool_calls = message.get('tool_calls', [])
+            message = data.get("message", {})
+            content = message.get("content", "")
+            tool_calls = message.get("tool_calls", [])
 
             # Build response
             llm_response = LLMResponse(
                 content=content,
                 model=self.config.model,
-                finish_reason='tool_calls' if tool_calls else 'stop',
+                finish_reason="tool_calls" if tool_calls else "stop",
                 usage={
-                    'prompt_tokens': data.get('prompt_eval_count', 0),
-                    'completion_tokens': data.get('eval_count', 0),
-                    'total_tokens': data.get('prompt_eval_count', 0) + data.get('eval_count', 0)
-                } if 'eval_count' in data else None
+                    "prompt_tokens": data.get("prompt_eval_count", 0),
+                    "completion_tokens": data.get("eval_count", 0),
+                    "total_tokens": data.get("prompt_eval_count", 0) + data.get("eval_count", 0),
+                }
+                if "eval_count" in data
+                else None,
             )
 
             # Add tool call information if present
@@ -1396,8 +1398,8 @@ class OllamaProvider(ProfileDetectionMixin, AsyncLLMProvider):
                 # Use first tool call (Ollama can return multiple)
                 tool_call = tool_calls[0]
                 llm_response.function_call = {
-                    'name': tool_call.get('function', {}).get('name', ''),
-                    'arguments': tool_call.get('function', {}).get('arguments', {})
+                    "name": tool_call.get("function", {}).get("name", ""),
+                    "arguments": tool_call.get("function", {}).get("arguments", {}),
                 }
 
             return llm_response
@@ -1408,9 +1410,7 @@ class OllamaProvider(ProfileDetectionMixin, AsyncLLMProvider):
             # connection drop) does NOT reach here: it is re-raised as a
             # dataknobs exception below rather than triggering a second,
             # wasteful full request.
-            logger.warning(
-                "Ollama native tools unsupported; falling back to prompt-based"
-            )
+            logger.warning("Ollama native tools unsupported; falling back to prompt-based")
 
             function_descriptions = json.dumps(functions, indent=2)
 
@@ -1420,19 +1420,19 @@ class OllamaProvider(ProfileDetectionMixin, AsyncLLMProvider):
 To call a function, respond with JSON:
 {{"function": "name", "arguments": {{...}}}}"""
 
-            messages_with_system = [
-                LLMMessage(role='system', content=system_prompt)
-            ] + list(messages)
+            messages_with_system = [LLMMessage(role="system", content=system_prompt)] + list(
+                messages
+            )
 
             llm_response = await self.complete(messages_with_system, **kwargs)
 
             # Try to parse function call
             try:
                 func_data = json.loads(llm_response.content)
-                if 'function' in func_data:
+                if "function" in func_data:
                     llm_response.function_call = {
-                        'name': func_data['function'],
-                        'arguments': func_data.get('arguments', {})
+                        "name": func_data["function"],
+                        "arguments": func_data.get("arguments", {}),
                     }
             except json.JSONDecodeError:
                 pass
@@ -1449,10 +1449,10 @@ To call a function, respond with JSON:
         """Build prompt from messages."""
         prompt = ""
         for msg in messages:
-            if msg.role == 'system':
+            if msg.role == "system":
                 prompt += f"System: {msg.content}\n\n"
-            elif msg.role == 'user':
+            elif msg.role == "user":
                 prompt += f"User: {msg.content}\n\n"
-            elif msg.role == 'assistant':
+            elif msg.role == "assistant":
                 prompt += f"Assistant: {msg.content}\n\n"
         return prompt

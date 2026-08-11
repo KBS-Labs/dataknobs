@@ -26,8 +26,8 @@ def _make_library() -> ConfigPromptLibrary:
 # Grounded prompt key tests
 # ============================================================================
 
-class TestGroundedPromptKeys:
 
+class TestGroundedPromptKeys:
     def test_all_synthesis_keys_present(self) -> None:
         expected = [
             "grounded.synthesis",
@@ -55,7 +55,6 @@ class TestGroundedPromptKeys:
 
 
 class TestGroundedSynthesisMetaPrompt:
-
     def test_strict_mode(self) -> None:
         """When allow_parametric is False, strict fragment is included."""
         library = _make_library()
@@ -163,8 +162,8 @@ class TestGroundedSynthesisMetaPrompt:
 # Focus prompt key tests
 # ============================================================================
 
-class TestFocusPromptKeys:
 
+class TestFocusPromptKeys:
     def test_all_guidance_keys_present(self) -> None:
         expected = [
             "focus.guidance",
@@ -192,7 +191,6 @@ class TestFocusPromptKeys:
 
 
 class TestFocusGuidanceMetaPrompt:
-
     def test_minimal_context(self) -> None:
         """With only primary_goal, optional fields are excluded."""
         library = _make_library()
@@ -246,7 +244,6 @@ class TestFocusGuidanceMetaPrompt:
 
 
 class TestFocusDriftMetaPrompt:
-
     def test_gentle_correction(self) -> None:
         """Below max_tangent_depth, gentle message is used."""
         library = _make_library()

@@ -1,5 +1,4 @@
-"""Data transformation with fluent API.
-"""
+"""Data transformation with fluent API."""
 
 from __future__ import annotations
 
@@ -20,10 +19,10 @@ class TransformRule(ABC):
     @abstractmethod
     def apply(self, record: Record) -> Record:
         """Apply this transformation rule to a record.
-        
+
         Args:
             record: Record to transform
-            
+
         Returns:
             Transformed record
         """
@@ -40,11 +39,7 @@ class MapRule(TransformRule):
 
     def apply(self, record: Record) -> Record:
         """Apply field mapping."""
-        result = Record(
-            data=dict(record.fields),
-            metadata=record.metadata.copy(),
-            id=record.id
-        )
+        result = Record(data=dict(record.fields), metadata=record.metadata.copy(), id=record.id)
 
         if self.source in record.fields:
             value = record.fields[self.source].value
@@ -76,11 +71,7 @@ class ExcludeRule(TransformRule):
 
     def apply(self, record: Record) -> Record:
         """Remove excluded fields."""
-        result = Record(
-            data={},
-            metadata=record.metadata.copy(),
-            id=record.id
-        )
+        result = Record(data={}, metadata=record.metadata.copy(), id=record.id)
 
         # Copy all fields except excluded ones
         for field_name, field in record.fields.items():
@@ -100,11 +91,7 @@ class AddRule(TransformRule):
 
     def apply(self, record: Record) -> Record:
         """Add new field."""
-        result = Record(
-            data=dict(record.fields),
-            metadata=record.metadata.copy(),
-            id=record.id
-        )
+        result = Record(data=dict(record.fields), metadata=record.metadata.copy(), id=record.id)
 
         # Compute value if it's a callable
         if callable(self.value):
@@ -123,7 +110,7 @@ class AddRule(TransformRule):
 
 class Transformer:
     """Stateless record transformer with fluent API.
-    
+
     Provides a clean, chainable interface for defining record transformations
     that can be applied during migrations or data processing.
     """
@@ -133,35 +120,28 @@ class Transformer:
         self.rules: list[TransformRule] = []
 
     def map(
-        self,
-        source: str,
-        target: str | None = None,
-        transform: Callable[[Any], Any] | None = None
+        self, source: str, target: str | None = None, transform: Callable[[Any], Any] | None = None
     ) -> Transformer:
         """Map a field, optionally transforming its value (fluent API).
-        
+
         Args:
             source: Source field name
             target: Target field name (defaults to source)
             transform: Optional transformation function
-            
+
         Returns:
             Self for chaining
         """
-        self.rules.append(MapRule(
-            source=source,
-            target=target or source,
-            transform=transform
-        ))
+        self.rules.append(MapRule(source=source, target=target or source, transform=transform))
         return self
 
     def rename(self, old_name: str, new_name: str) -> Transformer:
         """Rename a field (fluent API).
-        
+
         Args:
             old_name: Current field name
             new_name: New field name
-            
+
         Returns:
             Self for chaining
         """
@@ -169,10 +149,10 @@ class Transformer:
 
     def exclude(self, *fields: str) -> Transformer:
         """Exclude fields from the record (fluent API).
-        
+
         Args:
             *fields: Field names to exclude
-            
+
         Returns:
             Self for chaining
         """
@@ -183,31 +163,27 @@ class Transformer:
         self,
         field_name: str,
         value: Any | Callable[[Record], Any],
-        field_type: FieldType | None = None
+        field_type: FieldType | None = None,
     ) -> Transformer:
         """Add a new field (fluent API).
-        
+
         Args:
             field_name: Name of field to add
             value: Static value or function to compute value
             field_type: Optional field type
-            
+
         Returns:
             Self for chaining
         """
-        self.rules.append(AddRule(
-            field_name=field_name,
-            value=value,
-            field_type=field_type
-        ))
+        self.rules.append(AddRule(field_name=field_name, value=value, field_type=field_type))
         return self
 
     def add_rule(self, rule: TransformRule) -> Transformer:
         """Add a custom transformation rule (fluent API).
-        
+
         Args:
             rule: Custom transformation rule
-            
+
         Returns:
             Self for chaining
         """
@@ -216,10 +192,10 @@ class Transformer:
 
     def transform(self, record: Record) -> Record | None:
         """Apply all transformation rules to a record.
-        
+
         Args:
             record: Record to transform
-            
+
         Returns:
             Transformed record, or None to filter out the record
         """
@@ -231,10 +207,10 @@ class Transformer:
 
     def transform_many(self, records: list[Record]) -> list[Record]:
         """Transform multiple records.
-        
+
         Args:
             records: List of records to transform
-            
+
         Returns:
             List of transformed records (filtered records are excluded)
         """
@@ -247,7 +223,7 @@ class Transformer:
 
     def clear(self) -> Transformer:
         """Clear all transformation rules (fluent API).
-        
+
         Returns:
             Self for chaining
         """

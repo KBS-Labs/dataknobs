@@ -6,6 +6,7 @@ name like "field'name" breaks the SQL syntax; a name like "'; DROP TABLE records
 is a SQL injection vector.  quote_ident() is wrong here — the fix is allowlist
 validation with validate_field_name(), consistent with _build_json_field_expr.
 """
+
 import pytest
 
 from dataknobs_data import Filter, Operator, Query
@@ -64,6 +65,7 @@ class TestBuildTextFieldConcatValidation:
 
     def _make_db(self):
         from dataknobs_data.backends.postgres import AsyncPostgresDatabase
+
         return AsyncPostgresDatabase({})
 
     def test_single_quote_in_field_raises(self):
@@ -113,18 +115,21 @@ class TestStreamReadFilterValidation:
 
     def test_sync_injection_raises(self):
         from dataknobs_data.backends.postgres import SyncPostgresDatabase
+
         db = SyncPostgresDatabase({})
         with pytest.raises(ValueError, match="Invalid field name"):
             next(iter(db.stream_read(self._bad_query())))
 
     def test_sync_hyphen_raises(self):
         from dataknobs_data.backends.postgres import SyncPostgresDatabase
+
         db = SyncPostgresDatabase({})
         with pytest.raises(ValueError, match="Invalid field name"):
             next(iter(db.stream_read(self._bad_query("my-field"))))
 
     async def test_async_injection_raises(self):
         from dataknobs_data.backends.postgres import AsyncPostgresDatabase
+
         db = AsyncPostgresDatabase({})
         with pytest.raises(ValueError, match="Invalid field name"):
             async for _ in db.stream_read(self._bad_query()):
@@ -132,6 +137,7 @@ class TestStreamReadFilterValidation:
 
     async def test_async_hyphen_raises(self):
         from dataknobs_data.backends.postgres import AsyncPostgresDatabase
+
         db = AsyncPostgresDatabase({})
         with pytest.raises(ValueError, match="Invalid field name"):
             async for _ in db.stream_read(self._bad_query("my-field")):

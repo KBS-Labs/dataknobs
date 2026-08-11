@@ -251,6 +251,18 @@ def measure_format(contract: dict[str, Any], files: list[PurePosixPath]) -> Meas
     reports and the unit the adoption diff is measured in. Names are de-duplicated
     first: ruff reports one block per rewritten region, so a file with four of
     them would otherwise count four times against a ceiling denominated in files.
+
+    Read from JSON rather than from the diff text, which is not a tidying. The
+    text parse regexed ``--> path:line`` out of the human output, and ruff
+    reports a file it could not open with no such line — so an unreadable file
+    contributed nothing and the cell holding it measured *lower*. Every failure
+    of that parse pointed the same way, toward a cleaner tree than the one on
+    disk, and once this tool's job is to hold a set of zeroes, "found nothing"
+    and "read nothing" are the same report.
+
+    So the result is checked three ways rather than parsed one way: the output
+    must be JSON, every entry must be a formatting verdict rather than an I/O
+    error, and the exit status must agree with what was counted.
     """
     cells = contract["tools"]["format"]["cells"]
     config = contract["tools"]["format"]["config"]
@@ -263,10 +275,51 @@ def measure_format(contract: dict[str, Any], files: list[PurePosixPath]) -> Meas
             "--check",
             "--config",
             config,
+            "--output-format",
+            "json",
             *(str(f) for f in files),
         ]
     )
-    named = {_relative(match.group(1)) for match in re.finditer(r"-->\s+(\S+?):\d+", result.stdout)}
+    try:
+        reported = json.loads(result.stdout or "[]")
+    except json.JSONDecodeError as exc:
+        raise SystemExit(
+            f"ruff format did not emit JSON, so nothing was measured: {exc}\n{result.stderr[:800]}"
+        ) from exc
+
+    # An `io` entry is a file ruff could not read. It is not a formatting
+    # verdict and must never be absorbed into one: the tally would drop by one
+    # and the cell would look cleaner for having become unreadable.
+    unreadable = [entry for entry in reported if entry.get("code") != "unformatted"]
+    if unreadable:
+        detail = "\n".join(
+            f"  {entry.get('filename', '?')}: {entry.get('message', entry.get('code', '?'))}"
+            for entry in unreadable[:20]
+        )
+        raise SystemExit(
+            f"ruff format reported {len(unreadable)} result(s) that are not "
+            f"formatting verdicts, so the count below them is short by at least "
+            f"that many:\n{detail}"
+        )
+
+    named = {_relative(entry.get("filename", "")) for entry in reported}
+
+    # Exit 0 means every file is formatted and 1 means at least one is not.
+    # Anything else is ruff declining to answer, and a disagreement between the
+    # status and the count means the two halves of this measurement are reading
+    # different runs.
+    if result.returncode not in (0, 1):
+        raise SystemExit(
+            f"ruff format exited {result.returncode}, so its report is not a "
+            f"measurement:\n{result.stderr[:800]}"
+        )
+    if bool(named) != bool(result.returncode):
+        raise SystemExit(
+            f"ruff format exited {result.returncode} but named {len(named)} "
+            "unformatted file(s); status and output disagree, so one of them is "
+            "not describing this run"
+        )
+
     return _tally(cells, sorted(named))
 
 

@@ -11,24 +11,18 @@ class CalculatorTool(Tool):
     """Simple calculator tool for testing."""
 
     def __init__(self):
-        super().__init__(
-            name="calculator",
-            description="Performs basic arithmetic operations"
-        )
+        super().__init__(name="calculator", description="Performs basic arithmetic operations")
 
     @property
     def schema(self):
         return {
             "type": "object",
             "properties": {
-                "operation": {
-                    "type": "string",
-                    "enum": ["add", "subtract", "multiply", "divide"]
-                },
+                "operation": {"type": "string", "enum": ["add", "subtract", "multiply", "divide"]},
                 "a": {"type": "number"},
-                "b": {"type": "number"}
+                "b": {"type": "number"},
             },
-            "required": ["operation", "a", "b"]
+            "required": ["operation", "a", "b"],
         }
 
     async def execute(self, operation: str, a: float, b: float) -> float:
@@ -53,17 +47,15 @@ class WebSearchTool(Tool):
         super().__init__(
             name="web_search",
             description="Search the web for information",
-            metadata={"category": "search"}
+            metadata={"category": "search"},
         )
 
     @property
     def schema(self):
         return {
             "type": "object",
-            "properties": {
-                "query": {"type": "string"}
-            },
-            "required": ["query"]
+            "properties": {"query": {"type": "string"}},
+            "required": ["query"],
         }
 
     async def execute(self, query: str) -> str:
@@ -270,9 +262,7 @@ class TestToolRegistry:
         registry.register_tool(CalculatorTool())
         registry.register_tool(WebSearchTool())
 
-        definitions = registry.to_function_definitions(
-            include_only={"calculator"}
-        )
+        definitions = registry.to_function_definitions(include_only={"calculator"})
         assert len(definitions) == 1
         assert definitions[0]["name"] == "calculator"
 
@@ -282,9 +272,7 @@ class TestToolRegistry:
         registry.register_tool(CalculatorTool())
         registry.register_tool(WebSearchTool())
 
-        definitions = registry.to_function_definitions(
-            exclude={"web_search"}
-        )
+        definitions = registry.to_function_definitions(exclude={"web_search"})
         assert len(definitions) == 1
         assert definitions[0]["name"] == "calculator"
 
@@ -747,9 +735,7 @@ class TestExecuteToolForwardsInternalParams:
         tool = _KwargsAwareTool()
         registry.register_tool(tool)
 
-        await registry.execute_tool(
-            "kwargs_aware", real_param=42, _context="ctx"
-        )
+        await registry.execute_tool("kwargs_aware", real_param=42, _context="ctx")
 
         history = registry.get_execution_history()
         assert len(history) == 1
@@ -793,8 +779,6 @@ class TestExecuteToolForwardsInternalParams:
         tool = _KwargsAwareTool()
         registry.register_tool(tool)
 
-        await registry.execute_tool(
-            "kwargs_aware", name="Alice", greeting="hi"
-        )
+        await registry.execute_tool("kwargs_aware", name="Alice", greeting="hi")
 
         assert tool.last_kwargs == {"name": "Alice", "greeting": "hi"}

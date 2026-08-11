@@ -322,8 +322,7 @@ Third paragraph."""
         combined = " ".join(c.text for c in chunks)
         sentence_count = combined.count("Sentence number one.")
         assert sentence_count == 50, (
-            f"Expected 50 occurrences but got {sentence_count} "
-            "(content duplicated or lost)"
+            f"Expected 50 occurrences but got {sentence_count} (content duplicated or lost)"
         )
 
     def test_nested_heading_hierarchy(self):

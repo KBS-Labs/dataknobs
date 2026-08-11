@@ -48,14 +48,19 @@ class TestSchemaGroundingFilterExpansion:
         schema_property: dict[str, Any] | None = None,
     ) -> MergeDecision:
         return self.f.filter(
-            field, value, None, message,
-            schema_property or _EXPANDABLE, {},
+            field,
+            value,
+            None,
+            message,
+            schema_property or _EXPANDABLE,
+            {},
         )
 
     def test_partial_value_expanded(self) -> None:
         """'formal' → transform('formal and academic')."""
         decision = self._filter(
-            "tone", "formal",
+            "tone",
+            "formal",
             "Set the tone to formal and academic",
         )
         assert decision.action == "transform"
@@ -64,7 +69,8 @@ class TestSchemaGroundingFilterExpansion:
     def test_complete_value_accepted(self) -> None:
         """Full value already present → accept (no transform)."""
         decision = self._filter(
-            "tone", "formal and academic",
+            "tone",
+            "formal and academic",
             "Set the tone to formal and academic",
         )
         assert decision.action == "accept"
@@ -72,14 +78,16 @@ class TestSchemaGroundingFilterExpansion:
     def test_value_at_sentence_end_accepted(self) -> None:
         """No expansion possible → accept as-is."""
         decision = self._filter(
-            "tone", "formal",
+            "tone",
+            "formal",
             "The tone should be formal.",
         )
         assert decision.action == "accept"
 
     def test_or_conjunction_expanded(self) -> None:
         decision = self._filter(
-            "tone", "formal",
+            "tone",
+            "formal",
             "Set the tone to formal or academic",
         )
         assert decision.action == "transform"
@@ -87,7 +95,8 @@ class TestSchemaGroundingFilterExpansion:
 
     def test_expansion_reason_set(self) -> None:
         decision = self._filter(
-            "tone", "formal",
+            "tone",
+            "formal",
             "Set the tone to formal and academic",
         )
         assert decision.reason == "expanded partial extraction"
@@ -112,7 +121,12 @@ class TestExpansionSkipCases:
         schema_property: dict[str, Any],
     ) -> MergeDecision:
         return self.f.filter(
-            field, value, None, message, schema_property, {},
+            field,
+            value,
+            None,
+            message,
+            schema_property,
+            {},
         )
 
     def test_default_off_no_expansion(self) -> None:
@@ -124,7 +138,8 @@ class TestExpansionSkipCases:
         different field.
         """
         decision = self._filter(
-            "name", "Alice",
+            "name",
+            "Alice",
             "Alice and math",
             {"type": "string"},
         )
@@ -134,7 +149,8 @@ class TestExpansionSkipCases:
     def test_enum_field_not_expanded(self) -> None:
         """Enum fields have constrained values — skip expansion."""
         decision = self._filter(
-            "tone", "formal",
+            "tone",
+            "formal",
             "Set the tone to formal and academic",
             {
                 "type": "string",
@@ -148,7 +164,8 @@ class TestExpansionSkipCases:
     def test_non_string_type_not_expanded(self) -> None:
         """Integer fields should not be expanded."""
         decision = self._filter(
-            "count", "5",
+            "count",
+            "5",
             "Set count to 5 and enable logging",
             {"type": "integer", "x-extraction": {"expand_from_message": True}},
         )
@@ -157,7 +174,8 @@ class TestExpansionSkipCases:
     def test_explicit_opt_out(self) -> None:
         """x-extraction.expand_from_message: false disables expansion."""
         decision = self._filter(
-            "tone", "formal",
+            "tone",
+            "formal",
             "Set the tone to formal and academic",
             {
                 "type": "string",
@@ -170,7 +188,8 @@ class TestExpansionSkipCases:
     def test_non_string_value_not_expanded(self) -> None:
         """Non-string values (e.g. int) skip expansion."""
         decision = self._filter(
-            "count", 5,
+            "count",
+            5,
             "Set count to 5 and 10",
             {"type": "string", "x-extraction": {"expand_from_message": True}},
         )
@@ -192,21 +211,31 @@ class TestCompositeMergeFilterWithExpansion:
 
         class TrackingFilter:
             def filter(
-                self, field, new_value, existing_value,
-                user_message, schema_property, wizard_data,
+                self,
+                field,
+                new_value,
+                existing_value,
+                user_message,
+                schema_property,
+                wizard_data,
             ):
                 seen_values.append(new_value)
                 return MergeDecision.accept(reason="tracking")
 
-        composite = CompositeMergeFilter([
-            SchemaGroundingFilter(overlap_threshold=0.5),
-            TrackingFilter(),
-        ])
+        composite = CompositeMergeFilter(
+            [
+                SchemaGroundingFilter(overlap_threshold=0.5),
+                TrackingFilter(),
+            ]
+        )
 
         decision = composite.filter(
-            "tone", "formal", None,
+            "tone",
+            "formal",
+            None,
             "Set the tone to formal and academic",
-            _EXPANDABLE, {},
+            _EXPANDABLE,
+            {},
         )
 
         assert decision.action == "transform"
@@ -277,10 +306,7 @@ class TestEndToEnd:
                 [{"tone": "formal", "style": "narrative"}],
             ],
         ) as harness:
-            await harness.chat(
-                "Set the tone to formal and academic, "
-                "and the style to narrative"
-            )
+            await harness.chat("Set the tone to formal and academic, and the style to narrative")
             # Expansion should have transformed "formal" → "formal and academic"
             assert harness.wizard_data["tone"] == "formal and academic"
             # "style" has no expand_from_message → accepted as-is

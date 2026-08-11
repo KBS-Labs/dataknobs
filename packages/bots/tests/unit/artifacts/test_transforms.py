@@ -202,12 +202,8 @@ class TestApproveArtifact:
         await create_artifact(data, ctx)
 
         # Transition to in_review through the proper lifecycle
-        await ctx.artifact_registry.set_status(
-            data["_artifact_id"], ArtifactStatus.PENDING_REVIEW
-        )
-        await ctx.artifact_registry.set_status(
-            data["_artifact_id"], ArtifactStatus.IN_REVIEW
-        )
+        await ctx.artifact_registry.set_status(data["_artifact_id"], ArtifactStatus.PENDING_REVIEW)
+        await ctx.artifact_registry.set_status(data["_artifact_id"], ArtifactStatus.IN_REVIEW)
 
         await approve_artifact(data, ctx)
 

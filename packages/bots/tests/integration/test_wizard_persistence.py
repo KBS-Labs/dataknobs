@@ -68,11 +68,13 @@ async def conversation_manager(
 ) -> ConversationManager:
     """ConversationManager with Echo LLM and memory storage."""
     provider = EchoProvider({"provider": "echo", "model": "test"})
-    library = ConfigPromptLibrary({
-        "system": {
-            "test_wizard": {"template": "You are a test wizard."},
-        },
-    })
+    library = ConfigPromptLibrary(
+        {
+            "system": {
+                "test_wizard": {"template": "You are a test wizard."},
+            },
+        }
+    )
     builder = AsyncPromptBuilder(library=library)
     manager = await ConversationManager.create(
         llm=provider,

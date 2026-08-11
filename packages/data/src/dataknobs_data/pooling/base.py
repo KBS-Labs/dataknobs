@@ -44,7 +44,7 @@ class PoolProtocol(Protocol):
         ...
 
 
-PoolType = TypeVar('PoolType', bound=PoolProtocol)
+PoolType = TypeVar("PoolType", bound=PoolProtocol)
 
 
 class BasePoolConfig:
@@ -115,7 +115,7 @@ class ConnectionPoolManager(Generic[PoolType]):
         config: BasePoolConfig,
         create_pool_func: Callable[[BasePoolConfig], Awaitable[PoolType]],
         validate_pool_func: Callable[[PoolType], Awaitable[None]] | None = None,
-        close_pool_func: Callable[[PoolType], Awaitable[None]] | None = None
+        close_pool_func: Callable[[PoolType], Awaitable[None]] | None = None,
     ) -> PoolType:
         """Get or create a connection pool for the current event loop.
 
@@ -151,7 +151,8 @@ class ConnectionPoolManager(Generic[PoolType]):
             except Exception as e:
                 logger.warning(
                     "Pool for loop %s is invalid: %s. Recreating.",
-                    loop_id, e,
+                    loop_id,
+                    e,
                 )
                 stale_pool = entry.pool
                 # Fall through to the locked create/rebuild region.
@@ -197,7 +198,8 @@ class ConnectionPoolManager(Generic[PoolType]):
                     except Exception as e:
                         logger.warning(
                             "Pool for loop %s is invalid: %s. Recreating.",
-                            loop_id, e,
+                            loop_id,
+                            e,
                         )
                         carried = entry.refcount  # existing holders persist
                         await self._close_pool(pool_key, close_pool_func)
@@ -209,7 +211,9 @@ class ConnectionPoolManager(Generic[PoolType]):
             logger.info("Creating new connection pool for loop %s", loop_id)
             pool = await create_pool_func(config)
             self._pools[pool_key] = _PoolEntry(
-                pool, close_pool_func, refcount=carried + 1,
+                pool,
+                close_pool_func,
+                refcount=carried + 1,
             )
             self._loop_refs[loop_id] = loop
             return pool
@@ -247,7 +251,8 @@ class ConnectionPoolManager(Generic[PoolType]):
                 logger.warning(
                     "Pool holder count for loop %s went negative (%d): more "
                     "release_pool() calls than get_pool() hand-outs.",
-                    loop_id, entry.refcount,
+                    loop_id,
+                    entry.refcount,
                 )
             if entry.refcount <= 0:
                 await self._close_pool(pool_key)  # evicts + closes
@@ -315,7 +320,7 @@ class ConnectionPoolManager(Generic[PoolType]):
 
             if close_func:
                 await close_func(pool)
-            elif hasattr(pool, 'close'):
+            elif hasattr(pool, "close"):
                 await pool.close()
         except RuntimeError as e:
             # Silently ignore "Event loop is closed" errors
@@ -362,11 +367,7 @@ class ConnectionPoolManager(Generic[PoolType]):
         info = {}
         for (config_hash, loop_id), entry in self._pools.items():
             key = f"config_{config_hash}_loop_{loop_id}"
-            info[key] = {
-                "loop_id": loop_id,
-                "config_hash": config_hash,
-                "pool": str(entry.pool)
-            }
+            info[key] = {"loop_id": loop_id, "config_hash": config_hash, "pool": str(entry.pool)}
         return info
 
     def _cleanup_on_exit(self):

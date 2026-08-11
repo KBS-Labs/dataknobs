@@ -98,12 +98,8 @@ class TestToolEntry:
 # ── TemplateVariable / ConfigTemplate: nested variables rebuilt ───────
 class TestTemplates:
     def test_template_variable_from_dict_parity(self) -> None:
-        tv = TemplateVariable.from_dict(
-            {"name": "domain_id", "type": "string", "required": True}
-        )
-        assert tv == TemplateVariable(
-            name="domain_id", type="string", required=True
-        )
+        tv = TemplateVariable.from_dict({"name": "domain_id", "type": "string", "required": True})
+        assert tv == TemplateVariable(name="domain_id", type="string", required=True)
 
     def test_template_variable_to_dict_omits_empty(self) -> None:
         tv = TemplateVariable(name="x")
@@ -125,13 +121,9 @@ class TestTemplates:
         assert tmpl.variables[1].default == "beginner"
 
     def test_config_template_to_dict_uses_variable_to_dict(self) -> None:
-        tmpl = ConfigTemplate(
-            name="tutor", variables=[TemplateVariable(name="x")]
-        )
+        tmpl = ConfigTemplate(name="tutor", variables=[TemplateVariable(name="x")])
         # Nested variable serialized via its own omit-empty to_dict.
-        assert tmpl.to_dict()["variables"] == [
-            {"name": "x", "type": "string", "required": False}
-        ]
+        assert tmpl.to_dict()["variables"] == [{"name": "x", "type": "string", "required": False}]
 
     def test_roundtrip(self) -> None:
         assert_structured_config_roundtrip(
@@ -142,9 +134,7 @@ class TestTemplates:
                 tags=["educational"],
                 variables=[
                     TemplateVariable(name="domain_id", required=True),
-                    TemplateVariable(
-                        name="level", default="beginner", choices=["a", "b"]
-                    ),
+                    TemplateVariable(name="level", default="beginner", choices=["a", "b"]),
                 ],
                 structure={"llm": {"provider": "ollama"}},
             )
@@ -154,9 +144,7 @@ class TestTemplates:
 # ── ConfigVersion: version-only identity preserved ────────────────────
 class TestConfigVersion:
     def test_from_dict_parity(self) -> None:
-        v = ConfigVersion.from_dict(
-            {"version": 2, "config": {"a": 1}, "reason": "upgrade"}
-        )
+        v = ConfigVersion.from_dict({"version": 2, "config": {"a": 1}, "reason": "upgrade"})
         assert v.version == 2
         assert v.config == {"a": 1}
         assert v.reason == "upgrade"
@@ -183,15 +171,11 @@ class TestConfigVersion:
 # ── DraftMetadata: id<->draft_id key rename + omit-empty ──────────────
 class TestDraftMetadata:
     def test_id_key_maps_to_draft_id(self) -> None:
-        meta = DraftMetadata.from_dict(
-            {"id": "abc123", "created_at": "t0", "last_updated": "t1"}
-        )
+        meta = DraftMetadata.from_dict({"id": "abc123", "created_at": "t0", "last_updated": "t1"})
         assert meta.draft_id == "abc123"
 
     def test_to_dict_emits_id_and_omits_unset(self) -> None:
-        meta = DraftMetadata(
-            draft_id="abc123", created_at="t0", last_updated="t1"
-        )
+        meta = DraftMetadata(draft_id="abc123", created_at="t0", last_updated="t1")
         assert meta.to_dict() == {
             "id": "abc123",
             "created_at": "t0",
@@ -253,9 +237,7 @@ class TestWizardConfigs:
                 "prompt": "Tell me.",
                 "suggestions": ["A", "B"],
                 "tools": ["knowledge_search"],
-                "transitions": [
-                    {"target": "done", "condition": "data.get('name')"}
-                ],
+                "transitions": [{"target": "done", "condition": "data.get('name')"}],
                 "intent_detection": {
                     "method": "keyword",
                     "intents": [{"name": "quiz"}],
@@ -281,15 +263,11 @@ class TestWizardConfigs:
                 is_start=True,
                 suggestions=("A", "B"),
                 tools=("knowledge_search",),
-                transitions=(
-                    TransitionConfig(target="done", condition="data.get('n')"),
-                ),
+                transitions=(TransitionConfig(target="done", condition="data.get('n')"),),
                 intent_detection=IntentDetectionConfig(
                     method="keyword", intents=({"name": "quiz"},)
                 ),
-                context_generation=ContextGenerationConfig(
-                    variables={"summary": "..."}
-                ),
+                context_generation=ContextGenerationConfig(variables={"summary": "..."}),
             )
         )
 

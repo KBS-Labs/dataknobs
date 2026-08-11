@@ -446,12 +446,25 @@ BUILTIN_TRANSFORMS: dict[str, Any] = {
 }
 
 # Parameterized transforms receive config kwargs via the rule
-PARAMETERIZED_TRANSFORMS: frozenset[str] = frozenset({
-    "equals", "not_equals", "constant", "map", "boolean",
-    "one_of", "contains",
-    "first", "last", "join", "split", "length",
-    "regex_match", "regex_extract", "regex_replace",
-})
+PARAMETERIZED_TRANSFORMS: frozenset[str] = frozenset(
+    {
+        "equals",
+        "not_equals",
+        "constant",
+        "map",
+        "boolean",
+        "one_of",
+        "contains",
+        "first",
+        "last",
+        "join",
+        "split",
+        "length",
+        "regex_match",
+        "regex_extract",
+        "regex_replace",
+    }
+)
 
 _VALID_WHEN_CONDITIONS = frozenset({"target_missing", "target_empty", "always"})
 
@@ -519,8 +532,7 @@ def parse_derivation_rules(
 
         if when not in _VALID_WHEN_CONDITIONS:
             logger.warning(
-                "Unknown derivation 'when' condition %r — "
-                "defaulting to 'target_missing'.",
+                "Unknown derivation 'when' condition %r — defaulting to 'target_missing'.",
                 when,
             )
             when = "target_missing"
@@ -544,9 +556,7 @@ def parse_derivation_rules(
         if transform_name == "custom":
             custom_class_path = item.get("custom_class")
             if not custom_class_path:
-                faults.append(
-                    f"{where}: transform='custom' with no 'custom_class'"
-                )
+                faults.append(f"{where}: transform='custom' with no 'custom_class'")
                 continue
             try:
                 custom_transform = _load_custom_transform(custom_class_path)
@@ -585,9 +595,7 @@ def parse_derivation_rules(
             try:
                 compiled_regex = re.compile(str(transform_value))
             except re.error as exc:
-                faults.append(
-                    f"{where}: invalid regex {transform_value!r} ({exc})"
-                )
+                faults.append(f"{where}: invalid regex {transform_value!r} ({exc})")
                 continue
 
         rules.append(
@@ -610,8 +618,7 @@ def parse_derivation_rules(
 
     if faults:
         raise ConfigurationError(
-            "Invalid derivation configuration:\n"
-            + "\n".join(f"  - {fault}" for fault in faults),
+            "Invalid derivation configuration:\n" + "\n".join(f"  - {fault}" for fault in faults),
             context={"faults": faults},
         )
 
@@ -647,10 +654,7 @@ def _transform_param_fault(
 
     elif transform_name in ("regex_match", "regex_extract"):
         if transform_value is None:
-            return (
-                f"transform {transform_name!r} requires 'transform_value' "
-                "(a regex pattern)"
-            )
+            return f"transform {transform_name!r} requires 'transform_value' (a regex pattern)"
 
     elif transform_name == "regex_replace":
         if transform_value is None:
@@ -726,8 +730,7 @@ def apply_field_derivations(
             # safe reading: every alternative derives under a guard nobody
             # chose.
             logger.warning(
-                "Unknown 'when' condition %r at execution time for "
-                "rule %s → %s — skipping.",
+                "Unknown 'when' condition %r at execution time for rule %s → %s — skipping.",
                 rule.when,
                 rule.source,
                 rule.target,
@@ -765,8 +768,7 @@ def _execute_transform(
     if rule.transform_name == "template":
         if not rule.template:
             logger.warning(
-                "Derivation template transform missing 'template' key "
-                "for rule %s → %s",
+                "Derivation template transform missing 'template' key for rule %s → %s",
                 rule.source,
                 rule.target,
             )

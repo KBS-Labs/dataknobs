@@ -22,6 +22,7 @@ from dataknobs_data.backends.memory import SyncMemoryDatabase
 # Helpers
 # =====================================================================
 
+
 def _make_multi_bank_wizard() -> WizardReasoning:
     """Create a wizard with 3 banks: team, milestones, budget."""
     config: dict[str, Any] = {
@@ -75,8 +76,7 @@ def _make_multi_bank_wizard() -> WizardReasoning:
                     {
                         "target": "review",
                         "condition": (
-                            "bank('team').count() > 0 "
-                            "and bank('milestones').count() > 0"
+                            "bank('team').count() > 0 and bank('milestones').count() > 0"
                         ),
                     },
                 ],
@@ -102,8 +102,8 @@ def _make_multi_bank_wizard() -> WizardReasoning:
 # Multi-bank initialisation
 # =====================================================================
 
-class TestMultiBankInit:
 
+class TestMultiBankInit:
     def test_all_banks_created(self) -> None:
         reasoning = _make_multi_bank_wizard()
         assert "team" in reasoning._banks
@@ -120,20 +120,16 @@ class TestMultiBankInit:
 
     def test_bank_schemas_differ(self) -> None:
         reasoning = _make_multi_bank_wizard()
-        assert reasoning._banks["team"].schema == {
-            "required": ["name", "role"]
-        }
-        assert reasoning._banks["milestones"].schema == {
-            "required": ["title"]
-        }
+        assert reasoning._banks["team"].schema == {"required": ["name", "role"]}
+        assert reasoning._banks["milestones"].schema == {"required": ["title"]}
 
 
 # =====================================================================
 # Cross-bank conditions
 # =====================================================================
 
-class TestCrossBankConditions:
 
+class TestCrossBankConditions:
     def test_cross_bank_condition_false_when_empty(self) -> None:
         reasoning = _make_multi_bank_wizard()
         result = reasoning._evaluate_condition(
@@ -166,8 +162,8 @@ class TestCrossBankConditions:
 # Template rendering with banks
 # =====================================================================
 
-class TestBankTemplateRendering:
 
+class TestBankTemplateRendering:
     def test_multi_bank_count_in_template(self) -> None:
         reasoning = _make_multi_bank_wizard()
         reasoning._banks["team"].add({"name": "Alice", "role": "Lead"})
@@ -194,9 +190,7 @@ class TestBankTemplateRendering:
         accessor = reasoning._make_bank_accessor()
         env = create_template_env()
         template = env.from_string(
-            "{% for m in bank('team').all() %}"
-            "- {{ m.data.name }}: {{ m.data.role }}\n"
-            "{% endfor %}"
+            "{% for m in bank('team').all() %}- {{ m.data.name }}: {{ m.data.role }}\n{% endfor %}"
         )
         result = template.render(bank=accessor)
         assert "- Alice: Lead" in result
@@ -207,8 +201,8 @@ class TestBankTemplateRendering:
 # Banks in TransformContext
 # =====================================================================
 
-class TestBanksInTransformContext:
 
+class TestBanksInTransformContext:
     def test_transform_context_has_banks(self) -> None:
         reasoning = _make_multi_bank_wizard()
         reasoning._banks["team"].add({"name": "Alice", "role": "Lead"})
@@ -243,8 +237,8 @@ class TestBanksInTransformContext:
 # Per-stage bank targeting
 # =====================================================================
 
-class TestPerStageBankTargeting:
 
+class TestPerStageBankTargeting:
     def test_different_stages_target_different_banks(self) -> None:
         reasoning = _make_multi_bank_wizard()
         # Stage 1 targets "team"
@@ -261,6 +255,4 @@ class TestPerStageBankTargeting:
         team_records = reasoning._banks["team"].all()
         milestone_records = reasoning._banks["milestones"].all()
         assert all(r.source_stage == "add_team" for r in team_records)
-        assert all(
-            r.source_stage == "add_milestones" for r in milestone_records
-        )
+        assert all(r.source_stage == "add_milestones" for r in milestone_records)

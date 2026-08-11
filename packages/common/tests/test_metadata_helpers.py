@@ -31,9 +31,7 @@ class TestEnforceImmutableKeys:
         # Target reflects pre-call state (caller already merged).
         assert result["user_id"] == "ATTACKER"
 
-    def test_immutable_key_blocks_caller_override(
-        self, caplog: pytest.LogCaptureFixture
-    ) -> None:
+    def test_immutable_key_blocks_caller_override(self, caplog: pytest.LogCaptureFixture) -> None:
         """Immutable key takes value from source, regardless of caller."""
         target = {"user_id": "ATTACKER", "category": "support"}
         source = {"user_id": "tenant-A"}
@@ -53,9 +51,7 @@ class TestEnforceImmutableKeys:
             for record in caplog.records
         )
 
-    def test_silent_when_caller_agrees(
-        self, caplog: pytest.LogCaptureFixture
-    ) -> None:
+    def test_silent_when_caller_agrees(self, caplog: pytest.LogCaptureFixture) -> None:
         """No warning when caller-supplied value matches the source value."""
         target = {"user_id": "tenant-A"}
         source = {"user_id": "tenant-A"}
@@ -68,9 +64,7 @@ class TestEnforceImmutableKeys:
             )
         assert result["user_id"] == "tenant-A"
         # No warning records — caller didn't try to override.
-        assert not any(
-            "immutable" in record.message.lower() for record in caplog.records
-        )
+        assert not any("immutable" in record.message.lower() for record in caplog.records)
 
     def test_immutable_key_absent_from_source_skipped(
         self, caplog: pytest.LogCaptureFixture
@@ -88,9 +82,7 @@ class TestEnforceImmutableKeys:
         # Source has no opinion, so caller value passes through.
         assert result["user_id"] == "ATTACKER"
         # No warning — source provided no value to override against.
-        assert not any(
-            "immutable" in record.message.lower() for record in caplog.records
-        )
+        assert not any("immutable" in record.message.lower() for record in caplog.records)
 
     def test_caller_none_is_safe(self) -> None:
         """``caller=None`` is treated as no caller-supplied keys."""
@@ -104,9 +96,7 @@ class TestEnforceImmutableKeys:
         )
         assert result["user_id"] == "tenant-A"
 
-    def test_array_valued_metadata_does_not_crash(
-        self, caplog: pytest.LogCaptureFixture
-    ) -> None:
+    def test_array_valued_metadata_does_not_crash(self, caplog: pytest.LogCaptureFixture) -> None:
         """Array-valued metadata (numpy or list) does not raise on equality.
 
         Pre-fix, the helper used ``caller[key] != source_value`` which
@@ -131,9 +121,7 @@ class TestEnforceImmutableKeys:
         # Source value preserved, no spurious warning when arrays agree.
         assert result["embedding"] is embedding
 
-    def test_array_valued_caller_override_warns(
-        self, caplog: pytest.LogCaptureFixture
-    ) -> None:
+    def test_array_valued_caller_override_warns(self, caplog: pytest.LogCaptureFixture) -> None:
         """Array-valued caller override warns and discards caller value."""
         np = pytest.importorskip("numpy")
 

@@ -157,7 +157,7 @@ class Field:
             name=self.name,
             value=copy.deepcopy(self.value),
             type=self.type,
-            metadata=copy.deepcopy(self.metadata)
+            metadata=copy.deepcopy(self.metadata),
         )
 
     def validate(self) -> bool:
@@ -242,7 +242,7 @@ class Field:
 
         if self.type is None:
             raise ValueError(f"Cannot convert {self.name} from None to {target_type}")
-        
+
         converter_key = (self.type, target_type)
         if converter_key in converters:
             try:
@@ -357,9 +357,7 @@ class VectorField(Field):
             if value.dtype != np.float32:
                 value = value.astype(np.float32)
         else:
-            raise TypeError(
-                f"Vector value must be numpy array or list, got {type(value)}"
-            )
+            raise TypeError(f"Vector value must be numpy array or list, got {type(value)}")
 
         # Auto-detect dimensions if not provided
         actual_dims = len(value) if value.ndim == 1 else value.shape[-1]
@@ -373,14 +371,18 @@ class VectorField(Field):
 
         # Store vector metadata
         vector_metadata = metadata or {}
-        vector_metadata.update({
-            "dimensions": dimensions,
-            "source_field": source_field,
-            "model": {
-                "name": model_name,
-                "version": model_version,
-            } if model_name else None,
-        })
+        vector_metadata.update(
+            {
+                "dimensions": dimensions,
+                "source_field": source_field,
+                "model": {
+                    "name": model_name,
+                    "version": model_version,
+                }
+                if model_name
+                else None,
+            }
+        )
 
         super().__init__(
             name=name,
@@ -403,10 +405,10 @@ class VectorField(Field):
         dimensions: int | None = None,
         model_name: str | None = None,
         model_version: str | None = None,
-        **kwargs: Any
+        **kwargs: Any,
     ) -> VectorField:
         """Create a VectorField from text using an embedding function.
-        
+
         Args:
             text: Text to embed
             embedding_fn: Function that takes text and returns embedding vector
@@ -415,10 +417,10 @@ class VectorField(Field):
             model_name: Name of the embedding model
             model_version: Version of the embedding model
             **kwargs: Additional arguments passed to VectorField constructor
-            
+
         Returns:
             VectorField instance with the generated embedding
-            
+
         Example:
             field = VectorField.from_text(
                 "Machine learning is fascinating",
@@ -434,7 +436,7 @@ class VectorField(Field):
             source_field="text",  # Indicate it came from text
             model_name=model_name,
             model_version=model_version,
-            **kwargs
+            **kwargs,
         )
 
     def validate(self) -> bool:

@@ -227,8 +227,7 @@ def build_middleware(specs: Iterable[Mapping[str, Any]]) -> list[Middleware]:
         ```
     """
     resolved = (
-        resolve_middleware_from_spec(spec, Middleware, label="middleware")
-        for spec in specs
+        resolve_middleware_from_spec(spec, Middleware, label="middleware") for spec in specs
     )
     return [mw for mw in resolved if mw is not None]
 
@@ -243,9 +242,7 @@ def build_conversation_middleware(
     result to ``DynaBot.from_config(..., platform_conversation_middleware=...)``.
     """
     resolved = (
-        resolve_middleware_from_spec(
-            spec, ConversationMiddleware, label="conversation_middleware"
-        )
+        resolve_middleware_from_spec(spec, ConversationMiddleware, label="conversation_middleware")
         for spec in specs
     )
     return [mw for mw in resolved if mw is not None]

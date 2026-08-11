@@ -67,6 +67,7 @@ def _run(config: dict, record: dict) -> dict:
 # builtin transforms — factory form and class form
 # --------------------------------------------------------------------------- #
 
+
 def test_builtin_function_reference_factory_resolves_and_runs() -> None:
     """``{type: builtin, name: "transformers.map_fields", params: {...}}`` runs.
 
@@ -123,6 +124,7 @@ def test_builtin_function_reference_class_form_resolves_and_runs() -> None:
 # --------------------------------------------------------------------------- #
 # builtin validators (as pre_validators, which gate) — class form + kwargs factory
 # --------------------------------------------------------------------------- #
+
 
 def test_builtin_validator_reference_gates_via_pre_validators() -> None:
     """A builtin class validator authored as a ``pre_validators:`` ref gates entry.
@@ -183,6 +185,7 @@ def test_builtin_validator_kwargs_factory_reference_gates() -> None:
 # custom function reference — real importable module
 # --------------------------------------------------------------------------- #
 
+
 def test_custom_function_reference_imports_and_runs() -> None:
     """``{type: custom, module: "custom_fns_fixture", name: "AddMarker"}``.
 
@@ -240,6 +243,7 @@ def test_custom_plain_function_reference_resolves_through_standard_path() -> Non
 # loud failure modes
 # --------------------------------------------------------------------------- #
 
+
 def test_builtin_missing_name_is_loud() -> None:
     """An unknown builtin name raises a clear ``ValueError`` at build time.
 
@@ -248,11 +252,7 @@ def test_builtin_missing_name_is_loud() -> None:
     not silently no-op.
     """
     config = _single_state_config(
-        {
-            "transforms": [
-                {"type": "builtin", "name": "validators.does_not_exist"}
-            ]
-        }
+        {"transforms": [{"type": "builtin", "name": "validators.does_not_exist"}]}
     )
     with pytest.raises(ValueError, match="Built-in function not found"):
         SimpleFSM(config)
@@ -260,9 +260,7 @@ def test_builtin_missing_name_is_loud() -> None:
 
 def test_custom_missing_module_rejected_by_schema() -> None:
     """``{type: custom, name: "x"}`` (no ``module``) is rejected by the schema."""
-    config = _single_state_config(
-        {"transforms": [{"type": "custom", "name": "x"}]}
-    )
+    config = _single_state_config({"transforms": [{"type": "custom", "name": "x"}]})
     with pytest.raises(Exception, match=r"Custom functions require"):
         SimpleFSM(config)
 
@@ -270,6 +268,7 @@ def test_custom_missing_module_rejected_by_schema() -> None:
 # --------------------------------------------------------------------------- #
 # bare-string shorthand boundary (G1) — registered / inline only
 # --------------------------------------------------------------------------- #
+
 
 def test_bare_string_shorthand_resolves_registered_or_inline_only() -> None:
     """The state-sugar bare string maps only to ``registered`` or ``inline``.
@@ -301,6 +300,7 @@ def test_bare_string_shorthand_resolves_registered_or_inline_only() -> None:
 # doc-truth regression guard (G3): the corrected guide example must run
 # --------------------------------------------------------------------------- #
 
+
 def test_documented_config_guide_builtin_example_runs() -> None:
     """The corrected FSM_CONFIG_GUIDE builtin example builds and runs.
 
@@ -329,6 +329,7 @@ def test_documented_config_guide_builtin_example_runs() -> None:
 # --------------------------------------------------------------------------- #
 # arc transforms — per-arc params must stay distinct (no shared-name collision)
 # --------------------------------------------------------------------------- #
+
 
 def test_arc_transforms_referencing_same_builtin_keep_distinct_params() -> None:
     """Two arcs using the same builtin transform class run their *own* params.
@@ -396,6 +397,7 @@ def test_arc_transforms_referencing_same_builtin_keep_distinct_params() -> None:
 # async custom functions — the adapter must await, not store the coroutine
 # --------------------------------------------------------------------------- #
 
+
 def test_custom_async_transform_is_awaited() -> None:
     """A custom class with ``async def transform`` is awaited and applied.
 
@@ -456,6 +458,7 @@ def test_custom_async_validator_gates_via_pre_validators() -> None:
 # --------------------------------------------------------------------------- #
 # post-entry validators: phase + custom test-interface arc condition
 # --------------------------------------------------------------------------- #
+
 
 def test_custom_validator_under_validators_phase_merges_result() -> None:
     """A custom validator under ``validators:`` has its dict result merged.
@@ -521,9 +524,7 @@ def test_custom_test_interface_arc_condition_gates_transition() -> None:
     }
 
     ok = _run(config, {"gate": 1})
-    assert ok["success"], (
-        f"record satisfying the custom arc condition did not complete: {ok}"
-    )
+    assert ok["success"], f"record satisfying the custom arc condition did not complete: {ok}"
 
     blocked = _run(config, {"other": 1})
     assert not blocked["success"], (
@@ -570,9 +571,7 @@ def test_custom_async_test_interface_arc_condition_is_awaited() -> None:
     }
 
     ok = _run(config, {"gate": 1})
-    assert ok["success"], (
-        f"record satisfying the async arc condition did not complete: {ok}"
-    )
+    assert ok["success"], f"record satisfying the async arc condition did not complete: {ok}"
 
     blocked = _run(config, {"other": 1})
     assert not blocked["success"], (
@@ -584,6 +583,7 @@ def test_custom_async_test_interface_arc_condition_is_awaited() -> None:
 # --------------------------------------------------------------------------- #
 # custom resolution failure modes — loud, targeted ValueErrors
 # --------------------------------------------------------------------------- #
+
 
 def test_custom_missing_module_is_loud() -> None:
     """An unimportable custom module raises a clear ``ValueError`` at build time."""
@@ -622,6 +622,7 @@ def test_custom_missing_name_is_loud() -> None:
 # --------------------------------------------------------------------------- #
 # doc-truth regression guard: the index.md quickstart must build + run
 # --------------------------------------------------------------------------- #
+
 
 def test_documented_index_quickstart_runs() -> None:
     """The ``index.md`` "Using Configuration" quickstart builds and runs.
@@ -684,6 +685,5 @@ def test_documented_index_quickstart_runs() -> None:
 
     gated = _run(config, {"data": "input"})
     assert not gated["success"], (
-        "documented quickstart should gate a record missing 'user_id', but it "
-        f"succeeded: {gated}"
+        f"documented quickstart should gate a record missing 'user_id', but it succeeded: {gated}"
     )

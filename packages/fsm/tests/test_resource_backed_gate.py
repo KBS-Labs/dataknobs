@@ -99,9 +99,9 @@ async def test_resource_backed_gate_routes_on_reference_lookup(
         results = {
             row["id"]: await fsm.process(row)
             for row in [
-                {"id": "1", "country": "US"},   # in reference -> complete
-                {"id": "2", "country": "ZZ"},   # not in reference -> rejected
-                {"id": "3", "country": "CA"},   # in reference -> complete
+                {"id": "1", "country": "US"},  # in reference -> complete
+                {"id": "2", "country": "ZZ"},  # not in reference -> rejected
+                {"id": "3", "country": "CA"},  # in reference -> complete
             ]
         }
     finally:

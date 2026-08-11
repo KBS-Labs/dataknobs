@@ -53,9 +53,7 @@ ASYNC_BACKENDS = _registered_backend_classes(async_backends)
     SYNC_BACKENDS,
     ids=[name for name, _ in SYNC_BACKENDS],
 )
-def test_sync_backend_exposes_from_config(
-    name: str, backend_cls: type
-) -> None:
+def test_sync_backend_exposes_from_config(name: str, backend_cls: type) -> None:
     """Every registered sync backend exposes ``from_config(cls, config)``.
 
     ``DatabaseFactory.create`` calls ``backend_class.from_config(config)``
@@ -71,8 +69,7 @@ def test_sync_backend_exposes_from_config(
     sig = inspect.signature(backend_cls.from_config)
     params = list(sig.parameters.values())
     assert len(params) >= 1, (
-        f"{backend_cls.__name__}.from_config must accept a config "
-        "positional/keyword argument."
+        f"{backend_cls.__name__}.from_config must accept a config positional/keyword argument."
     )
 
 
@@ -81,19 +78,14 @@ def test_sync_backend_exposes_from_config(
     ASYNC_BACKENDS,
     ids=[name for name, _ in ASYNC_BACKENDS],
 )
-def test_async_backend_exposes_from_config(
-    name: str, backend_cls: type
-) -> None:
+def test_async_backend_exposes_from_config(name: str, backend_cls: type) -> None:
     """Every registered async backend exposes ``from_config(cls, config)``."""
     assert hasattr(backend_cls, "from_config"), (
-        f"Async backend {name} ({backend_cls.__name__}) has no "
-        "`from_config` classmethod."
+        f"Async backend {name} ({backend_cls.__name__}) has no `from_config` classmethod."
     )
     sig = inspect.signature(backend_cls.from_config)
     params = list(sig.parameters.values())
-    assert len(params) >= 1, (
-        f"{backend_cls.__name__}.from_config must accept a config arg."
-    )
+    assert len(params) >= 1, f"{backend_cls.__name__}.from_config must accept a config arg."
 
 
 def test_memory_backend_constructs_from_empty_config() -> None:

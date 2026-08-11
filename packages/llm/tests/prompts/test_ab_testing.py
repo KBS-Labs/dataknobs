@@ -34,7 +34,7 @@ class TestABTestManager:
             name="greeting",
             prompt_type="system",
             variants=variants,
-            metadata={"description": "Test greeting variants"}
+            metadata={"description": "Test greeting variants"},
         )
 
         assert experiment.name == "greeting"
@@ -54,10 +54,7 @@ class TestABTestManager:
         custom_split = {"1.0.0": 0.3, "1.1.0": 0.7}
 
         experiment = await manager.create_experiment(
-            name="test",
-            prompt_type="system",
-            variants=variants,
-            traffic_split=custom_split
+            name="test", prompt_type="system", variants=variants, traffic_split=custom_split
         )
 
         assert experiment.traffic_split == custom_split
@@ -72,9 +69,7 @@ class TestABTestManager:
         ]
 
         experiment = await manager.create_experiment(
-            name="test",
-            prompt_type="system",
-            variants=variants
+            name="test", prompt_type="system", variants=variants
         )
 
         # Should be normalized to sum to 1.0
@@ -82,8 +77,8 @@ class TestABTestManager:
         assert abs(total - 1.0) < 0.01
 
         # Check proportions are correct
-        assert abs(experiment.traffic_split["1.0.0"] - 1/3) < 0.01
-        assert abs(experiment.traffic_split["1.1.0"] - 2/3) < 0.01
+        assert abs(experiment.traffic_split["1.0.0"] - 1 / 3) < 0.01
+        assert abs(experiment.traffic_split["1.1.0"] - 2 / 3) < 0.01
 
     @pytest.mark.asyncio
     async def test_create_experiment_requires_two_variants(self, manager):
@@ -91,19 +86,13 @@ class TestABTestManager:
         variants = [PromptVariant("1.0.0", 1.0, "Only one")]
 
         with pytest.raises(VersioningError, match="at least 2 variants"):
-            await manager.create_experiment(
-                name="test",
-                prompt_type="system",
-                variants=variants
-            )
+            await manager.create_experiment(name="test", prompt_type="system", variants=variants)
 
     @pytest.mark.asyncio
     async def test_get_experiment(self, manager, variants):
         """Test retrieving an experiment."""
         created = await manager.create_experiment(
-            name="test",
-            prompt_type="system",
-            variants=variants
+            name="test", prompt_type="system", variants=variants
         )
 
         retrieved = await manager.get_experiment(created.experiment_id)
@@ -121,17 +110,9 @@ class TestABTestManager:
     @pytest.mark.asyncio
     async def test_list_experiments(self, manager, variants):
         """Test listing all experiments."""
-        exp1 = await manager.create_experiment(
-            name="exp1",
-            prompt_type="system",
-            variants=variants
-        )
+        exp1 = await manager.create_experiment(name="exp1", prompt_type="system", variants=variants)
 
-        exp2 = await manager.create_experiment(
-            name="exp2",
-            prompt_type="user",
-            variants=variants
-        )
+        exp2 = await manager.create_experiment(name="exp2", prompt_type="user", variants=variants)
 
         experiments = await manager.list_experiments()
 
@@ -143,17 +124,9 @@ class TestABTestManager:
     @pytest.mark.asyncio
     async def test_list_experiments_filtered_by_name(self, manager, variants):
         """Test filtering experiments by name."""
-        await manager.create_experiment(
-            name="exp1",
-            prompt_type="system",
-            variants=variants
-        )
+        await manager.create_experiment(name="exp1", prompt_type="system", variants=variants)
 
-        exp2 = await manager.create_experiment(
-            name="exp2",
-            prompt_type="system",
-            variants=variants
-        )
+        exp2 = await manager.create_experiment(name="exp2", prompt_type="system", variants=variants)
 
         experiments = await manager.list_experiments(name="exp2")
 
@@ -163,17 +136,9 @@ class TestABTestManager:
     @pytest.mark.asyncio
     async def test_list_experiments_filtered_by_status(self, manager, variants):
         """Test filtering experiments by status."""
-        exp1 = await manager.create_experiment(
-            name="exp1",
-            prompt_type="system",
-            variants=variants
-        )
+        exp1 = await manager.create_experiment(name="exp1", prompt_type="system", variants=variants)
 
-        exp2 = await manager.create_experiment(
-            name="exp2",
-            prompt_type="system",
-            variants=variants
-        )
+        exp2 = await manager.create_experiment(name="exp2", prompt_type="system", variants=variants)
 
         # Pause one experiment
         await manager.update_experiment_status(exp2.experiment_id, "paused")
@@ -192,9 +157,7 @@ class TestABTestManager:
     async def test_get_random_variant(self, manager, variants):
         """Test getting random variant."""
         experiment = await manager.create_experiment(
-            name="test",
-            prompt_type="system",
-            variants=variants
+            name="test", prompt_type="system", variants=variants
         )
 
         # Get 100 random variants
@@ -222,9 +185,7 @@ class TestABTestManager:
         ]
 
         experiment = await manager.create_experiment(
-            name="test",
-            prompt_type="system",
-            variants=variants
+            name="test", prompt_type="system", variants=variants
         )
 
         # Get 1000 selections
@@ -238,16 +199,14 @@ class TestABTestManager:
         count_v2 = selections.count("1.1.0")
 
         # Should be roughly 100/900 (allow variance)
-        assert 50 <= count_v1 <= 150    # 10% ± 5%
-        assert 850 <= count_v2 <= 950   # 90% ± 5%
+        assert 50 <= count_v1 <= 150  # 10% ± 5%
+        assert 850 <= count_v2 <= 950  # 90% ± 5%
 
     @pytest.mark.asyncio
     async def test_get_variant_from_non_running_experiment(self, manager, variants):
         """Test that getting variant from non-running experiment fails."""
         experiment = await manager.create_experiment(
-            name="test",
-            prompt_type="system",
-            variants=variants
+            name="test", prompt_type="system", variants=variants
         )
 
         # Pause the experiment
@@ -261,42 +220,31 @@ class TestABTestManager:
     async def test_get_variant_for_user(self, manager, variants):
         """Test user-sticky variant assignment."""
         experiment = await manager.create_experiment(
-            name="test",
-            prompt_type="system",
-            variants=variants
+            name="test", prompt_type="system", variants=variants
         )
 
         # Get variant for user1 multiple times
         user1_variant = await manager.get_variant_for_user(
-            experiment.experiment_id,
-            user_id="user1"
+            experiment.experiment_id, user_id="user1"
         )
 
         # Should get same variant on subsequent calls
         for _ in range(10):
-            variant = await manager.get_variant_for_user(
-                experiment.experiment_id,
-                user_id="user1"
-            )
+            variant = await manager.get_variant_for_user(experiment.experiment_id, user_id="user1")
             assert variant == user1_variant
 
     @pytest.mark.asyncio
     async def test_get_variant_for_different_users(self, manager, variants):
         """Test that different users can get different variants."""
         experiment = await manager.create_experiment(
-            name="test",
-            prompt_type="system",
-            variants=variants
+            name="test", prompt_type="system", variants=variants
         )
 
         # Get variants for 100 different users
         user_assignments = {}
         for i in range(100):
             user_id = f"user{i}"
-            variant = await manager.get_variant_for_user(
-                experiment.experiment_id,
-                user_id=user_id
-            )
+            variant = await manager.get_variant_for_user(experiment.experiment_id, user_id=user_id)
             user_assignments[user_id] = variant
 
         # Both variants should be assigned
@@ -314,17 +262,14 @@ class TestABTestManager:
     async def test_hash_based_assignment_is_deterministic(self, manager, variants):
         """Test that hash-based assignment is deterministic."""
         experiment = await manager.create_experiment(
-            name="test",
-            prompt_type="system",
-            variants=variants
+            name="test", prompt_type="system", variants=variants
         )
 
         # Get assignment for user multiple times
         assignments = []
         for _ in range(10):
             variant = await manager.get_variant_for_user(
-                experiment.experiment_id,
-                user_id="test_user"
+                experiment.experiment_id, user_id="test_user"
             )
             assignments.append(variant)
 
@@ -335,18 +280,13 @@ class TestABTestManager:
     async def test_update_experiment_status(self, manager, variants):
         """Test updating experiment status."""
         experiment = await manager.create_experiment(
-            name="test",
-            prompt_type="system",
-            variants=variants
+            name="test", prompt_type="system", variants=variants
         )
 
         assert experiment.status == "running"
 
         # Pause it
-        updated = await manager.update_experiment_status(
-            experiment.experiment_id,
-            "paused"
-        )
+        updated = await manager.update_experiment_status(experiment.experiment_id, "paused")
 
         assert updated.status == "paused"
 
@@ -354,17 +294,12 @@ class TestABTestManager:
     async def test_update_experiment_status_to_completed(self, manager, variants):
         """Test that completing experiment sets end_date."""
         experiment = await manager.create_experiment(
-            name="test",
-            prompt_type="system",
-            variants=variants
+            name="test", prompt_type="system", variants=variants
         )
 
         assert experiment.end_date is None
 
-        updated = await manager.update_experiment_status(
-            experiment.experiment_id,
-            "completed"
-        )
+        updated = await manager.update_experiment_status(experiment.experiment_id, "completed")
 
         assert updated.status == "completed"
         assert updated.end_date is not None
@@ -373,38 +308,25 @@ class TestABTestManager:
     async def test_get_user_assignment(self, manager, variants):
         """Test getting existing user assignment."""
         experiment = await manager.create_experiment(
-            name="test",
-            prompt_type="system",
-            variants=variants
+            name="test", prompt_type="system", variants=variants
         )
 
         # No assignment yet
-        assignment = await manager.get_user_assignment(
-            experiment.experiment_id,
-            "user1"
-        )
+        assignment = await manager.get_user_assignment(experiment.experiment_id, "user1")
         assert assignment is None
 
         # Create assignment
-        variant = await manager.get_variant_for_user(
-            experiment.experiment_id,
-            "user1"
-        )
+        variant = await manager.get_variant_for_user(experiment.experiment_id, "user1")
 
         # Should now exist
-        assignment = await manager.get_user_assignment(
-            experiment.experiment_id,
-            "user1"
-        )
+        assignment = await manager.get_user_assignment(experiment.experiment_id, "user1")
         assert assignment == variant
 
     @pytest.mark.asyncio
     async def test_get_experiment_assignments(self, manager, variants):
         """Test getting all assignments for an experiment."""
         experiment = await manager.create_experiment(
-            name="test",
-            prompt_type="system",
-            variants=variants
+            name="test", prompt_type="system", variants=variants
         )
 
         # Assign users
@@ -412,9 +334,7 @@ class TestABTestManager:
         await manager.get_variant_for_user(experiment.experiment_id, "user2")
         await manager.get_variant_for_user(experiment.experiment_id, "user3")
 
-        assignments = await manager.get_experiment_assignments(
-            experiment.experiment_id
-        )
+        assignments = await manager.get_experiment_assignments(experiment.experiment_id)
 
         assert len(assignments) == 3
         assert "user1" in assignments
@@ -425,9 +345,7 @@ class TestABTestManager:
     async def test_delete_experiment(self, manager, variants):
         """Test deleting an experiment."""
         experiment = await manager.create_experiment(
-            name="test",
-            prompt_type="system",
-            variants=variants
+            name="test", prompt_type="system", variants=variants
         )
 
         # Verify it exists
@@ -446,9 +364,7 @@ class TestABTestManager:
     async def test_delete_experiment_removes_assignments(self, manager, variants):
         """Test that deleting experiment removes user assignments."""
         experiment = await manager.create_experiment(
-            name="test",
-            prompt_type="system",
-            variants=variants
+            name="test", prompt_type="system", variants=variants
         )
 
         # Create assignments
@@ -470,21 +386,14 @@ class TestABTestManager:
     async def test_get_variant_distribution(self, manager, variants):
         """Test getting actual user distribution across variants."""
         experiment = await manager.create_experiment(
-            name="test",
-            prompt_type="system",
-            variants=variants
+            name="test", prompt_type="system", variants=variants
         )
 
         # Assign 10 users
         for i in range(10):
-            await manager.get_variant_for_user(
-                experiment.experiment_id,
-                user_id=f"user{i}"
-            )
+            await manager.get_variant_for_user(experiment.experiment_id, user_id=f"user{i}")
 
-        distribution = await manager.get_variant_distribution(
-            experiment.experiment_id
-        )
+        distribution = await manager.get_variant_distribution(experiment.experiment_id)
 
         assert "1.0.0" in distribution
         assert "1.1.0" in distribution
@@ -497,7 +406,7 @@ class TestABTestManager:
             name="test",
             prompt_type="system",
             variants=variants,
-            metadata={"description": "Test experiment"}
+            metadata={"description": "Test experiment"},
         )
 
         # Convert to dict

@@ -6,7 +6,7 @@ from dataknobs_llm.conversations import (
     ConversationNode,
     ConversationState,
     SCHEMA_VERSION,
-    SchemaVersionError
+    SchemaVersionError,
 )
 from dataknobs_llm.llm import LLMMessage
 from dataknobs_structures.tree import Tree
@@ -17,31 +17,19 @@ class TestSchemaVersioning:
 
     def test_new_conversation_has_current_version(self):
         """Test that new conversations use current schema version."""
-        root_node = ConversationNode(
-            message=LLMMessage(role="system", content="Test"),
-            node_id=""
-        )
+        root_node = ConversationNode(message=LLMMessage(role="system", content="Test"), node_id="")
         tree = Tree(root_node)
 
-        state = ConversationState(
-            conversation_id="test-123",
-            message_tree=tree
-        )
+        state = ConversationState(conversation_id="test-123", message_tree=tree)
 
         assert state.schema_version == SCHEMA_VERSION
 
     def test_to_dict_includes_schema_version(self):
         """Test that serialization includes schema version."""
-        root_node = ConversationNode(
-            message=LLMMessage(role="system", content="Test"),
-            node_id=""
-        )
+        root_node = ConversationNode(message=LLMMessage(role="system", content="Test"), node_id="")
         tree = Tree(root_node)
 
-        state = ConversationState(
-            conversation_id="test-123",
-            message_tree=tree
-        )
+        state = ConversationState(conversation_id="test-123", message_tree=tree)
 
         data = state.to_dict()
 
@@ -51,16 +39,10 @@ class TestSchemaVersioning:
     def test_from_dict_with_current_version(self):
         """Test loading data with current schema version."""
         # Create and serialize a conversation
-        root_node = ConversationNode(
-            message=LLMMessage(role="system", content="Test"),
-            node_id=""
-        )
+        root_node = ConversationNode(message=LLMMessage(role="system", content="Test"), node_id="")
         tree = Tree(root_node)
 
-        state1 = ConversationState(
-            conversation_id="test-123",
-            message_tree=tree
-        )
+        state1 = ConversationState(conversation_id="test-123", message_tree=tree)
 
         data = state1.to_dict()
 
@@ -73,16 +55,10 @@ class TestSchemaVersioning:
     def test_from_dict_with_missing_version(self):
         """Test loading data without schema version (legacy data)."""
         # Simulate old data without schema_version field
-        root_node = ConversationNode(
-            message=LLMMessage(role="system", content="Test"),
-            node_id=""
-        )
+        root_node = ConversationNode(message=LLMMessage(role="system", content="Test"), node_id="")
         tree = Tree(root_node)
 
-        state = ConversationState(
-            conversation_id="test-123",
-            message_tree=tree
-        )
+        state = ConversationState(conversation_id="test-123", message_tree=tree)
 
         data = state.to_dict()
         # Remove schema_version to simulate old data
@@ -100,24 +76,19 @@ class TestSchemaVersioning:
             "conversation_id": "test-123",
             "nodes": [
                 {
-                    "message": {
-                        "role": "system",
-                        "content": "Test",
-                        "name": None,
-                        "metadata": {}
-                    },
+                    "message": {"role": "system", "content": "Test", "name": None, "metadata": {}},
                     "node_id": "",
                     "timestamp": datetime.now().isoformat(),
                     "prompt_name": None,
                     "branch_name": None,
-                    "metadata": {}
+                    "metadata": {},
                 }
             ],
             "edges": [],
             "current_node_id": "",
             "metadata": {},
             "created_at": datetime.now().isoformat(),
-            "updated_at": datetime.now().isoformat()
+            "updated_at": datetime.now().isoformat(),
             # No schema_version field - represents legacy data
         }
 
@@ -137,24 +108,19 @@ class TestSchemaVersioning:
             "conversation_id": "test-123",
             "nodes": [
                 {
-                    "message": {
-                        "role": "system",
-                        "content": "Test",
-                        "name": None,
-                        "metadata": {}
-                    },
+                    "message": {"role": "system", "content": "Test", "name": None, "metadata": {}},
                     "node_id": "",
                     "timestamp": datetime.now().isoformat(),
                     "prompt_name": None,
                     "branch_name": None,
-                    "metadata": {}
+                    "metadata": {},
                 }
             ],
             "edges": [],
             "current_node_id": "",
             "metadata": {},
             "created_at": datetime.now().isoformat(),
-            "updated_at": datetime.now().isoformat()
+            "updated_at": datetime.now().isoformat(),
         }
 
         with caplog.at_level(logging.INFO):
@@ -167,16 +133,10 @@ class TestSchemaVersioning:
     def test_same_version_no_migration(self):
         """Test that same version doesn't trigger migration."""
         # Create data with current version
-        root_node = ConversationNode(
-            message=LLMMessage(role="system", content="Test"),
-            node_id=""
-        )
+        root_node = ConversationNode(message=LLMMessage(role="system", content="Test"), node_id="")
         tree = Tree(root_node)
 
-        state1 = ConversationState(
-            conversation_id="test-123",
-            message_tree=tree
-        )
+        state1 = ConversationState(conversation_id="test-123", message_tree=tree)
 
         data = state1.to_dict()
 
@@ -192,24 +152,19 @@ class TestSchemaVersioning:
             "conversation_id": "test-123",
             "nodes": [
                 {
-                    "message": {
-                        "role": "system",
-                        "content": "Test",
-                        "name": None,
-                        "metadata": {}
-                    },
+                    "message": {"role": "system", "content": "Test", "name": None, "metadata": {}},
                     "node_id": "",
                     "timestamp": datetime.now().isoformat(),
                     "prompt_name": None,
                     "branch_name": None,
-                    "metadata": {}
+                    "metadata": {},
                 }
             ],
             "edges": [],
             "current_node_id": "",
             "metadata": {},
             "created_at": datetime.now().isoformat(),
-            "updated_at": datetime.now().isoformat()
+            "updated_at": datetime.now().isoformat(),
         }
 
         # Should raise error when trying to downgrade
@@ -225,24 +180,19 @@ class TestSchemaVersioning:
             "conversation_id": "test-123",
             "nodes": [
                 {
-                    "message": {
-                        "role": "system",
-                        "content": "Test",
-                        "name": None,
-                        "metadata": {}
-                    },
+                    "message": {"role": "system", "content": "Test", "name": None, "metadata": {}},
                     "node_id": "",
                     "timestamp": datetime.now().isoformat(),
                     "prompt_name": None,
                     "branch_name": None,
-                    "metadata": {}
+                    "metadata": {},
                 }
             ],
             "edges": [],
             "current_node_id": "",
             "metadata": {},
             "created_at": datetime.now().isoformat(),
-            "updated_at": datetime.now().isoformat()
+            "updated_at": datetime.now().isoformat(),
         }
 
         with caplog.at_level(logging.WARNING):
@@ -253,24 +203,18 @@ class TestSchemaVersioning:
 
     def test_serialization_roundtrip_preserves_version(self):
         """Test that serialize + deserialize preserves schema version."""
-        root_node = ConversationNode(
-            message=LLMMessage(role="system", content="Test"),
-            node_id=""
-        )
+        root_node = ConversationNode(message=LLMMessage(role="system", content="Test"), node_id="")
         tree = Tree(root_node)
 
         # Add some child nodes
-        user_node = ConversationNode(
-            message=LLMMessage(role="user", content="Hello"),
-            node_id="0"
-        )
+        user_node = ConversationNode(message=LLMMessage(role="user", content="Hello"), node_id="0")
         tree.add_child(Tree(user_node))
 
         state1 = ConversationState(
             conversation_id="test-123",
             message_tree=tree,
             current_node_id="0",
-            metadata={"user_id": "alice"}
+            metadata={"user_id": "alice"},
         )
 
         # Serialize and deserialize

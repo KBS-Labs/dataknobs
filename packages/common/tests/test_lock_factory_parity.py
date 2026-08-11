@@ -88,9 +88,7 @@ def test_postgres_lock_config_delegates_to_normalizer() -> None:
     import inspect
     import textwrap
 
-    src = textwrap.dedent(
-        inspect.getsource(PostgresLockConfig._normalize_dict)
-    )
+    src = textwrap.dedent(inspect.getsource(PostgresLockConfig._normalize_dict))
     tree = ast.parse(src)
     found_normalize_call = any(
         isinstance(node, ast.Call)
@@ -117,9 +115,7 @@ def test_registered_lock_backends_are_audited() -> None:
     registered = set(lock_backends.list_keys())
     missing_audit = builtin - registered
     new_unaudited = registered - builtin
-    assert not missing_audit, (
-        f"Built-in lock backends no longer registered: {missing_audit}"
-    )
+    assert not missing_audit, f"Built-in lock backends no longer registered: {missing_audit}"
     if new_unaudited:
         pytest.fail(
             f"New lock backends registered without parity coverage: "

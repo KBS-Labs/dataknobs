@@ -20,7 +20,7 @@ from dataknobs_fsm.api.advanced import (
     ExecutionMode,
     ExecutionHook,
     FSMDebugger,
-    create_advanced_fsm
+    create_advanced_fsm,
 )
 from dataknobs_fsm.core.data_modes import DataHandlingMode
 
@@ -31,15 +31,15 @@ def validate_input(state) -> Dict[str, Any]:
     data = state.data.copy()
 
     # Simulate validation
-    required_fields = ['user_id', 'request_type', 'payload']
+    required_fields = ["user_id", "request_type", "payload"]
     missing = [f for f in required_fields if f not in data]
 
     if missing:
-        data['validation_errors'] = f"Missing fields: {missing}"
-        data['is_valid'] = False
+        data["validation_errors"] = f"Missing fields: {missing}"
+        data["is_valid"] = False
     else:
-        data['is_valid'] = True
-        data['validated_at'] = datetime.now().isoformat()
+        data["is_valid"] = True
+        data["validated_at"] = datetime.now().isoformat()
 
     # Simulate some processing time
     time.sleep(0.01)  # Reduced for faster demo
@@ -50,181 +50,142 @@ def validate_input(state) -> Dict[str, Any]:
 def process_request(state) -> Dict[str, Any]:
     """Process the validated request."""
     data = state.data.copy()
-    
-    request_type = data.get('request_type', 'unknown')
-    
+
+    request_type = data.get("request_type", "unknown")
+
     # Simulate different processing based on request type
-    if request_type == 'compute':
+    if request_type == "compute":
         # Simulate computation
         result = sum(range(1000))
-        data['result'] = result
+        data["result"] = result
         time.sleep(0.02)  # Simulate compute time
-    elif request_type == 'query':
+    elif request_type == "query":
         # Simulate database query
-        data['result'] = {'records': 42, 'status': 'complete'}
+        data["result"] = {"records": 42, "status": "complete"}
         time.sleep(0.015)
     else:
-        data['result'] = {'status': 'unknown_type'}
+        data["result"] = {"status": "unknown_type"}
         time.sleep(0.005)
-    
-    data['processed_at'] = datetime.now().isoformat()
-    data['processing_complete'] = True
-    
+
+    data["processed_at"] = datetime.now().isoformat()
+    data["processing_complete"] = True
+
     return data
 
 
 def enrich_data(state) -> Dict[str, Any]:
     """Enrich processed data with additional information."""
     data = state.data.copy()
-    
+
     # Add metadata
-    data['metadata'] = {
-        'version': '1.0',
-        'processor': 'advanced_fsm',
-        'enrichment_timestamp': datetime.now().isoformat()
+    data["metadata"] = {
+        "version": "1.0",
+        "processor": "advanced_fsm",
+        "enrichment_timestamp": datetime.now().isoformat(),
     }
-    
+
     # Add computed fields
-    if 'result' in data:
-        data['has_result'] = True
-        data['result_type'] = type(data['result']).__name__
-    
+    if "result" in data:
+        data["has_result"] = True
+        data["result_type"] = type(data["result"]).__name__
+
     time.sleep(0.005)
-    
+
     return data
 
 
 def format_output(state) -> Dict[str, Any]:
     """Format the final output."""
     data = state.data.copy()
-    
+
     # Create formatted response
-    data['formatted_response'] = {
-        'request_id': data.get('request_id', 'unknown'),
-        'user_id': data.get('user_id'),
-        'status': 'success' if data.get('processing_complete') else 'incomplete',
-        'result': data.get('result'),
-        'metadata': data.get('metadata'),
-        'timestamps': {
-            'validated': data.get('validated_at'),
-            'processed': data.get('processed_at'),
-            'formatted': datetime.now().isoformat()
-        }
+    data["formatted_response"] = {
+        "request_id": data.get("request_id", "unknown"),
+        "user_id": data.get("user_id"),
+        "status": "success" if data.get("processing_complete") else "incomplete",
+        "result": data.get("result"),
+        "metadata": data.get("metadata"),
+        "timestamps": {
+            "validated": data.get("validated_at"),
+            "processed": data.get("processed_at"),
+            "formatted": datetime.now().isoformat(),
+        },
     }
-    
+
     time.sleep(0.005)
-    
+
     return data
 
 
 def check_validation(data: Dict[str, Any], context: Any) -> bool:
     """Check if validation passed."""
-    return data.get('is_valid', False)
+    return data.get("is_valid", False)
 
 
 def check_processing(data: Dict[str, Any], context: Any) -> bool:
     """Check if processing completed."""
-    return data.get('processing_complete', False)
+    return data.get("processing_complete", False)
 
 
 # FSM configuration
 debug_workflow_config = {
     "name": "DebugWorkflow",
     "main_network": "main",
-    "networks": [{
-        "name": "main",
-        "states": [
-            {
-                "name": "start",
-                "is_start": True
-            },
-            {
-                "name": "validate",
-                "functions": {
-                    "transform": {
-                        "type": "registered",
-                        "name": "validate_input"
-                    }
-                }
-            },
-            {
-                "name": "process",
-                "functions": {
-                    "transform": {
-                        "type": "registered",
-                        "name": "process_request"
-                    }
-                }
-            },
-            {
-                "name": "enrich",
-                "functions": {
-                    "transform": {
-                        "type": "registered",
-                        "name": "enrich_data"
-                    }
-                }
-            },
-            {
-                "name": "format",
-                "functions": {
-                    "transform": {
-                        "type": "registered",
-                        "name": "format_output"
-                    }
-                }
-            },
-            {
-                "name": "success",
-                "is_end": True
-            },
-            {
-                "name": "validation_failed",
-                "is_end": True
-            },
-            {
-                "name": "processing_failed",
-                "is_end": True
-            }
-        ],
-        "arcs": [
-            {"from": "start", "to": "validate"},
-            {
-                "from": "validate",
-                "to": "process",
-                "condition": {
-                    "type": "registered",
-                    "name": "check_validation"
-                }
-            },
-            {
-                "from": "validate",
-                "to": "validation_failed",
-                "condition": {
-                    "type": "inline",
-                    "code": "not data.get('is_valid', False)"
-                }
-            },
-            {
-                "from": "process",
-                "to": "enrich",
-                "condition": {
-                    "type": "registered",
-                    "name": "check_processing"
-                }
-            },
-            {
-                "from": "process",
-                "to": "processing_failed",
-                "condition": {
-                    "type": "inline",
-                    "code": "not data.get('processing_complete', False)"
-                }
-            },
-            {"from": "enrich", "to": "format"},
-            {"from": "format", "to": "success"}
-        ]
-    }]
+    "networks": [
+        {
+            "name": "main",
+            "states": [
+                {"name": "start", "is_start": True},
+                {
+                    "name": "validate",
+                    "functions": {"transform": {"type": "registered", "name": "validate_input"}},
+                },
+                {
+                    "name": "process",
+                    "functions": {"transform": {"type": "registered", "name": "process_request"}},
+                },
+                {
+                    "name": "enrich",
+                    "functions": {"transform": {"type": "registered", "name": "enrich_data"}},
+                },
+                {
+                    "name": "format",
+                    "functions": {"transform": {"type": "registered", "name": "format_output"}},
+                },
+                {"name": "success", "is_end": True},
+                {"name": "validation_failed", "is_end": True},
+                {"name": "processing_failed", "is_end": True},
+            ],
+            "arcs": [
+                {"from": "start", "to": "validate"},
+                {
+                    "from": "validate",
+                    "to": "process",
+                    "condition": {"type": "registered", "name": "check_validation"},
+                },
+                {
+                    "from": "validate",
+                    "to": "validation_failed",
+                    "condition": {"type": "inline", "code": "not data.get('is_valid', False)"},
+                },
+                {
+                    "from": "process",
+                    "to": "enrich",
+                    "condition": {"type": "registered", "name": "check_processing"},
+                },
+                {
+                    "from": "process",
+                    "to": "processing_failed",
+                    "condition": {
+                        "type": "inline",
+                        "code": "not data.get('processing_complete', False)",
+                    },
+                },
+                {"from": "enrich", "to": "format"},
+                {"from": "format", "to": "success"},
+            ],
+        }
+    ],
 }
 
 
@@ -238,22 +199,21 @@ def demonstrate_step_by_step_execution():
     with create_advanced_fsm(
         debug_workflow_config,
         custom_functions={
-            'validate_input': validate_input,
-            'process_request': process_request,
-            'enrich_data': enrich_data,
-            'format_output': format_output,
-            'check_validation': check_validation,
-            'check_processing': check_processing
+            "validate_input": validate_input,
+            "process_request": process_request,
+            "enrich_data": enrich_data,
+            "format_output": format_output,
+            "check_validation": check_validation,
+            "check_processing": check_processing,
         },
-        execution_mode=ExecutionMode.STEP_BY_STEP
+        execution_mode=ExecutionMode.STEP_BY_STEP,
     ) as fsm:
-
         # Initialize with test data
         test_data = {
-            'request_id': 'REQ-001',
-            'user_id': 'USER-123',
-            'request_type': 'compute',
-            'payload': {'data': [1, 2, 3, 4, 5]}
+            "request_id": "REQ-001",
+            "user_id": "USER-123",
+            "request_type": "compute",
+            "payload": {"data": [1, 2, 3, 4, 5]},
         }
 
         print(f"\nStarting with data: {json.dumps(test_data, indent=2)}")
@@ -287,11 +247,11 @@ def demonstrate_step_by_step_execution():
 
             # Show data snapshot
             data_snapshot = context.get_data_snapshot()
-            if 'is_valid' in data_snapshot:
+            if "is_valid" in data_snapshot:
                 print(f"   Data: is_valid={data_snapshot['is_valid']}")
-            if 'processing_complete' in data_snapshot:
+            if "processing_complete" in data_snapshot:
                 print(f"   Data: processing_complete={data_snapshot['processing_complete']}")
-            if 'validation_errors' in data_snapshot:
+            if "validation_errors" in data_snapshot:
                 print(f"   Data: validation_errors={data_snapshot['validation_errors']}")
 
             # Allow inspection (in real use, could pause here)
@@ -312,27 +272,26 @@ def demonstrate_execution_with_breakpoints():
     with create_advanced_fsm(
         debug_workflow_config,
         custom_functions={
-            'validate_input': validate_input,
-            'process_request': process_request,
-            'enrich_data': enrich_data,
-            'format_output': format_output,
-            'check_validation': check_validation,
-            'check_processing': check_processing
+            "validate_input": validate_input,
+            "process_request": process_request,
+            "enrich_data": enrich_data,
+            "format_output": format_output,
+            "check_validation": check_validation,
+            "check_processing": check_processing,
         },
-        execution_mode=ExecutionMode.BREAKPOINT
+        execution_mode=ExecutionMode.BREAKPOINT,
     ) as fsm:
-
         # Set breakpoints using the API
-        fsm.add_breakpoint('process')
-        fsm.add_breakpoint('format')
+        fsm.add_breakpoint("process")
+        fsm.add_breakpoint("format")
 
         print(f"\nBreakpoints set at: {fsm.breakpoints}")
 
         test_data = {
-            'request_id': 'REQ-002',
-            'user_id': 'USER-456',
-            'request_type': 'query',
-            'payload': {'query': 'SELECT * FROM users'}
+            "request_id": "REQ-002",
+            "user_id": "USER-456",
+            "request_type": "query",
+            "payload": {"query": "SELECT * FROM users"},
         }
 
         # Execute with breakpoints synchronously
@@ -388,23 +347,22 @@ def demonstrate_execution_tracing():
     with create_advanced_fsm(
         debug_workflow_config,
         custom_functions={
-            'validate_input': validate_input,
-            'process_request': process_request,
-            'enrich_data': enrich_data,
-            'format_output': format_output,
-            'check_validation': check_validation,
-            'check_processing': check_processing
-        }
+            "validate_input": validate_input,
+            "process_request": process_request,
+            "enrich_data": enrich_data,
+            "format_output": format_output,
+            "check_validation": check_validation,
+            "check_processing": check_processing,
+        },
     ) as fsm:
-
         # Enable history tracking for detailed tracing
         fsm.enable_history(max_depth=100)
 
         test_data = {
-            'request_id': 'REQ-003',
-            'user_id': 'USER-789',
-            'request_type': 'compute',
-            'payload': {'numbers': list(range(100))}
+            "request_id": "REQ-003",
+            "user_id": "USER-789",
+            "request_type": "compute",
+            "payload": {"numbers": list(range(100))},
         }
 
         print(f"\nExecuting with tracing enabled...")
@@ -420,7 +378,7 @@ def demonstrate_execution_tracing():
         print(f"\n📊 Execution Trace:")
         for i, event in enumerate(trace[:10], 1):  # Show first 10 events
             print(f"  {i}. {event['from_state']} -> {event['to_state']}")
-            if 'duration' in event:
+            if "duration" in event:
                 print(f"     Duration: {event['duration']:.3f}s")
 
         # Execute with profiling synchronously
@@ -431,12 +389,12 @@ def demonstrate_execution_tracing():
         print(f"  Total time: {profile.get('total_time', 0):.3f}s")
         print(f"  Total transitions: {profile.get('transitions', 0)}")
 
-        if 'state_times' in profile:
+        if "state_times" in profile:
             print(f"\n  State execution times:")
-            for state, timing in profile['state_times'].items():
+            for state, timing in profile["state_times"].items():
                 if isinstance(timing, dict):
                     # Handle dict format from profile
-                    duration = timing.get('duration', 0)
+                    duration = timing.get("duration", 0)
                     print(f"    • {state}: {duration:.3f}s")
                 else:
                     # Handle direct numeric value
@@ -448,54 +406,51 @@ def demonstrate_execution_hooks():
     print("\n" + "=" * 70)
     print("🪝 EXECUTION HOOKS")
     print("=" * 70)
-    
+
     # Create monitoring hooks
     state_times = {}
     errors = []
-    
+
     def on_state_enter(state, data):
         state_times[state] = time.time()
         print(f"  → Entering state: {state}")
-    
+
     def on_state_exit(state, data):
         if state in state_times:
             duration = time.time() - state_times[state]
             print(f"  ← Exiting state: {state} (took {duration:.3f}s)")
-    
+
     def on_error(error, state, data):
-        errors.append({'error': str(error), 'state': state})
+        errors.append({"error": str(error), "state": state})
         print(f"  ⚠️ Error in state {state}: {error}")
-    
+
     # Create hooks
     hooks = ExecutionHook(
-        on_state_enter=on_state_enter,
-        on_state_exit=on_state_exit,
-        on_error=on_error
+        on_state_enter=on_state_enter, on_state_exit=on_state_exit, on_error=on_error
     )
-    
+
     # Create FSM with hooks
     with create_advanced_fsm(
         debug_workflow_config,
         custom_functions={
-            'validate_input': validate_input,
-            'process_request': process_request,
-            'enrich_data': enrich_data,
-            'format_output': format_output,
-            'check_validation': check_validation,
-            'check_processing': check_processing
-        }
+            "validate_input": validate_input,
+            "process_request": process_request,
+            "enrich_data": enrich_data,
+            "format_output": format_output,
+            "check_validation": check_validation,
+            "check_processing": check_processing,
+        },
     ) as fsm:
-    
         # Set hooks
         fsm.set_hooks(hooks)
-    
+
         test_data = {
-            'request_id': 'REQ-004',
-            'user_id': 'USER-999',
-            'request_type': 'compute',
-            'payload': {'compute': 'heavy'}
+            "request_id": "REQ-004",
+            "user_id": "USER-999",
+            "request_type": "compute",
+            "payload": {"compute": "heavy"},
         }
-    
+
         print(f"\nExecuting with hooks...")
         # Use trace_execution_sync which will trigger hooks
         result = fsm.trace_execution_sync(test_data)
@@ -516,15 +471,14 @@ def demonstrate_fsm_debugger():
     with create_advanced_fsm(
         debug_workflow_config,
         custom_functions={
-            'validate_input': validate_input,
-            'process_request': process_request,
-            'enrich_data': enrich_data,
-            'format_output': format_output,
-            'check_validation': check_validation,
-            'check_processing': check_processing
-        }
+            "validate_input": validate_input,
+            "process_request": process_request,
+            "enrich_data": enrich_data,
+            "format_output": format_output,
+            "check_validation": check_validation,
+            "check_processing": check_processing,
+        },
     ) as fsm:
-
         # Enable history for debugging
         fsm.enable_history(max_depth=50)
 
@@ -532,10 +486,10 @@ def demonstrate_fsm_debugger():
         debugger = FSMDebugger(fsm)
 
         test_data = {
-            'request_id': 'REQ-005',
-            'user_id': 'USER-111',
-            'request_type': 'query',
-            'payload': {'sql': 'SELECT COUNT(*) FROM logs'}
+            "request_id": "REQ-005",
+            "user_id": "USER-111",
+            "request_type": "query",
+            "payload": {"sql": "SELECT COUNT(*) FROM logs"},
         }
 
         print("\n🐛 Starting FSM Debugger")
@@ -547,13 +501,13 @@ def demonstrate_fsm_debugger():
         print(f"Initial state: {debugger.current_state}")
 
         # Set breakpoints
-        fsm.add_breakpoint('process')
-        fsm.add_breakpoint('format')
+        fsm.add_breakpoint("process")
+        fsm.add_breakpoint("format")
         print(f"Breakpoints: {fsm.breakpoints}")
 
         # Add watches
-        debugger.watch('validation', 'is_valid')
-        debugger.watch('processing', 'processing_complete')
+        debugger.watch("validation", "is_valid")
+        debugger.watch("processing", "processing_complete")
 
         # Step through execution
         print("\n📍 Stepping through execution:")
@@ -613,16 +567,16 @@ def main():
     print("- Execution tracing and profiling")
     print("- Custom execution hooks")
     print("- Interactive debugging")
-    
+
     # Run all demonstrations
     demonstrate_step_by_step_execution()
-    
+
     # Run automated demonstrations
     demonstrate_execution_with_breakpoints()
     demonstrate_execution_tracing()
     demonstrate_execution_hooks()
     demonstrate_fsm_debugger()
-    
+
     print("\n" + "=" * 70)
     print("Advanced FSM Example Complete!")
     print("\n📌 Key Features Demonstrated:")

@@ -74,9 +74,7 @@ def test_sync_create_batch_preserves_ids(sync_pg: SyncPostgresDatabase) -> None:
 def test_sync_streaming_insert_fails_closed(sync_pg: SyncPostgresDatabase) -> None:
     sync_pg.create(Record({"v": "old"}, id="2"))
     records = [Record({"v": "src"}, id=str(i)) for i in (1, 2, 3)]
-    result = sync_pg.stream_write(
-        iter(records), StreamConfig(on_error=lambda e, r: True)
-    )
+    result = sync_pg.stream_write(iter(records), StreamConfig(on_error=lambda e, r: True))
     assert result.failed == 1
     assert result.successful == 2
     assert sync_pg.read("2").get_value("v") == "old"
@@ -102,9 +100,7 @@ async def test_async_create_batch_fails_closed_and_is_atomic(
 
 
 async def test_async_create_batch_preserves_ids(async_pg: AsyncPostgresDatabase) -> None:
-    ids = await async_pg.create_batch(
-        [Record({"v": 1}, id="x"), Record({"v": 2}, id="y")]
-    )
+    ids = await async_pg.create_batch([Record({"v": 1}, id="x"), Record({"v": 2}, id="y")])
     assert ids == ["x", "y"]
     assert (await async_pg.read("x")).get_value("v") == 1
 
@@ -122,9 +118,7 @@ async def test_async_streaming_insert_fails_closed(
         for r in records:
             yield r
 
-    result = await async_pg.stream_write(
-        _aiter(), StreamConfig(on_error=lambda e, r: True)
-    )
+    result = await async_pg.stream_write(_aiter(), StreamConfig(on_error=lambda e, r: True))
     assert result.failed == 1
     assert result.successful == 2
     assert (await async_pg.read("2")).get_value("v") == "old"

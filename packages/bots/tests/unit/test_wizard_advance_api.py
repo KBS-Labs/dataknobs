@@ -76,7 +76,8 @@ class TestAdvanceTransitions:
 
     @pytest.mark.asyncio
     async def test_advance_transitions_to_next_stage(
-        self, simple_wizard_config: dict[str, Any],
+        self,
+        simple_wizard_config: dict[str, Any],
     ) -> None:
         """advance() transitions when condition is met."""
         reasoning = _make_reasoning(simple_wizard_config)
@@ -91,7 +92,8 @@ class TestAdvanceTransitions:
 
     @pytest.mark.asyncio
     async def test_advance_stays_when_condition_not_met(
-        self, simple_wizard_config: dict[str, Any],
+        self,
+        simple_wizard_config: dict[str, Any],
     ) -> None:
         """advance() stays at current stage when condition is not met."""
         reasoning = _make_reasoning(simple_wizard_config)
@@ -106,7 +108,8 @@ class TestAdvanceTransitions:
 
     @pytest.mark.asyncio
     async def test_advance_reaches_completion(
-        self, simple_wizard_config: dict[str, Any],
+        self,
+        simple_wizard_config: dict[str, Any],
     ) -> None:
         """advance() sets completed when reaching end stage."""
         reasoning = _make_reasoning(simple_wizard_config)
@@ -123,7 +126,8 @@ class TestAdvanceTransitions:
 
     @pytest.mark.asyncio
     async def test_advance_merges_user_input(
-        self, simple_wizard_config: dict[str, Any],
+        self,
+        simple_wizard_config: dict[str, Any],
     ) -> None:
         """advance() merges user_input into state.data."""
         reasoning = _make_reasoning(simple_wizard_config)
@@ -140,7 +144,8 @@ class TestAdvanceNavigation:
 
     @pytest.mark.asyncio
     async def test_advance_navigation_back(
-        self, simple_wizard_config: dict[str, Any],
+        self,
+        simple_wizard_config: dict[str, Any],
     ) -> None:
         """advance() with navigation='back' goes to previous stage."""
         reasoning = _make_reasoning(simple_wizard_config)
@@ -158,7 +163,8 @@ class TestAdvanceNavigation:
 
     @pytest.mark.asyncio
     async def test_advance_navigation_skip(
-        self, simple_wizard_config: dict[str, Any],
+        self,
+        simple_wizard_config: dict[str, Any],
     ) -> None:
         """advance() with navigation='skip' skips current stage."""
         reasoning = _make_reasoning(simple_wizard_config)
@@ -175,7 +181,8 @@ class TestAdvanceNavigation:
 
     @pytest.mark.asyncio
     async def test_advance_navigation_restart(
-        self, simple_wizard_config: dict[str, Any],
+        self,
+        simple_wizard_config: dict[str, Any],
     ) -> None:
         """advance() with navigation='restart' resets to initial state."""
         reasoning = _make_reasoning(simple_wizard_config)
@@ -195,7 +202,8 @@ class TestAdvanceNavigation:
 
     @pytest.mark.asyncio
     async def test_advance_restart_from_initial_stage_not_transitioned(
-        self, simple_wizard_config: dict[str, Any],
+        self,
+        simple_wizard_config: dict[str, Any],
     ) -> None:
         """Restart from initial stage sets transitioned=False."""
         reasoning = _make_reasoning(simple_wizard_config)
@@ -213,7 +221,8 @@ class TestAdvanceHooks:
 
     @pytest.mark.asyncio
     async def test_advance_fires_hooks(
-        self, simple_wizard_config: dict[str, Any],
+        self,
+        simple_wizard_config: dict[str, Any],
     ) -> None:
         """advance() fires enter/exit/complete hooks."""
         enter_calls: list[tuple[str, dict[str, Any]]] = []
@@ -249,7 +258,8 @@ class TestAdvanceHooks:
 
     @pytest.mark.asyncio
     async def test_advance_no_transition_does_not_fire_enter_hook(
-        self, simple_wizard_config: dict[str, Any],
+        self,
+        simple_wizard_config: dict[str, Any],
     ) -> None:
         """advance() must NOT fire enter hook when FSM stays at same stage."""
         enter_calls: list[tuple[str, dict[str, Any]]] = []
@@ -277,7 +287,8 @@ class TestAdvanceTransitionRecords:
 
     @pytest.mark.asyncio
     async def test_advance_records_transitions(
-        self, simple_wizard_config: dict[str, Any],
+        self,
+        simple_wizard_config: dict[str, Any],
     ) -> None:
         """advance() records transitions in state.transitions."""
         reasoning = _make_reasoning(simple_wizard_config)
@@ -300,7 +311,8 @@ class TestAdvanceResult:
 
     @pytest.mark.asyncio
     async def test_advance_result_contains_stage_info(
-        self, simple_wizard_config: dict[str, Any],
+        self,
+        simple_wizard_config: dict[str, Any],
     ) -> None:
         """WizardAdvanceResult includes prompt, schema, suggestions, nav flags."""
         reasoning = _make_reasoning(simple_wizard_config)
@@ -318,7 +330,8 @@ class TestAdvanceResult:
 
     @pytest.mark.asyncio
     async def test_advance_result_type(
-        self, simple_wizard_config: dict[str, Any],
+        self,
+        simple_wizard_config: dict[str, Any],
     ) -> None:
         """advance() returns a WizardAdvanceResult instance."""
         reasoning = _make_reasoning(simple_wizard_config)
@@ -334,7 +347,8 @@ class TestAdvanceDecoupling:
 
     @pytest.mark.asyncio
     async def test_advance_does_not_require_llm_or_manager(
-        self, simple_wizard_config: dict[str, Any],
+        self,
+        simple_wizard_config: dict[str, Any],
     ) -> None:
         """advance() works without LLM, ConversationManager, or DynaBot."""
         reasoning = _make_reasoning(simple_wizard_config)
@@ -354,7 +368,8 @@ class TestInitialStageProperty:
     """Test the initial_stage property."""
 
     def test_initial_stage_property(
-        self, simple_wizard_config: dict[str, Any],
+        self,
+        simple_wizard_config: dict[str, Any],
     ) -> None:
         """initial_stage returns the start stage name."""
         reasoning = _make_reasoning(simple_wizard_config)
@@ -406,7 +421,8 @@ class TestWizardStateHistoryInit:
 
     @pytest.mark.asyncio
     async def test_back_navigation_works_with_simple_constructor(
-        self, simple_wizard_config: dict[str, Any],
+        self,
+        simple_wizard_config: dict[str, Any],
     ) -> None:
         """Back navigation works when state is created with simple constructor."""
         reasoning = _make_reasoning(simple_wizard_config)
@@ -494,7 +510,8 @@ class TestGetWizardMetadata:
     """Test get_wizard_metadata()."""
 
     def test_get_wizard_metadata(
-        self, simple_wizard_config: dict[str, Any],
+        self,
+        simple_wizard_config: dict[str, Any],
     ) -> None:
         """get_wizard_metadata() returns metadata with expected keys."""
         reasoning = _make_reasoning(simple_wizard_config)
@@ -591,7 +608,8 @@ class TestAdvanceSubflowRestore:
 
     @pytest.mark.asyncio
     async def test_advance_restores_subflow_fsm(
-        self, subflow_wizard_config: dict[str, Any],
+        self,
+        subflow_wizard_config: dict[str, Any],
     ) -> None:
         """advance() sets up _active_subflow_fsm when state has subflow_stack.
 
@@ -633,7 +651,8 @@ class TestAdvanceSubflowRestore:
 
     @pytest.mark.asyncio
     async def test_get_wizard_metadata_restores_subflow_fsm(
-        self, subflow_wizard_config: dict[str, Any],
+        self,
+        subflow_wizard_config: dict[str, Any],
     ) -> None:
         """get_wizard_metadata() returns correct info for subflow states."""
         reasoning = _make_reasoning(subflow_wizard_config)
@@ -662,7 +681,8 @@ class TestAdvanceSubflowRestore:
 
     @pytest.mark.asyncio
     async def test_back_navigation_within_subflow(
-        self, subflow_wizard_config: dict[str, Any],
+        self,
+        subflow_wizard_config: dict[str, Any],
     ) -> None:
         """Back navigation within a subflow operates on the subflow FSM.
 
@@ -779,7 +799,8 @@ class TestAutoAdvanceMessages:
 
     @pytest.mark.asyncio
     async def test_skip_captures_auto_advance_messages(
-        self, auto_advance_wizard_config: dict[str, Any],
+        self,
+        auto_advance_wizard_config: dict[str, Any],
     ) -> None:
         """Skip through auto-advance stages populates auto_advance_messages."""
         reasoning = _make_reasoning(auto_advance_wizard_config)
@@ -794,7 +815,8 @@ class TestAutoAdvanceMessages:
 
     @pytest.mark.asyncio
     async def test_normal_advance_captures_auto_advance_messages(
-        self, auto_advance_wizard_config: dict[str, Any],
+        self,
+        auto_advance_wizard_config: dict[str, Any],
     ) -> None:
         """Normal advance through auto-advance stages populates auto_advance_messages."""
         reasoning = _make_reasoning(auto_advance_wizard_config)
@@ -810,7 +832,8 @@ class TestAutoAdvanceMessages:
 
     @pytest.mark.asyncio
     async def test_no_auto_advance_gives_empty_messages(
-        self, simple_wizard_config: dict[str, Any],
+        self,
+        simple_wizard_config: dict[str, Any],
     ) -> None:
         """auto_advance_messages is empty when no auto-advance occurs."""
         reasoning = _make_reasoning(simple_wizard_config)
@@ -830,7 +853,8 @@ class TestNavigationHookCoverage:
 
     @pytest.mark.asyncio
     async def test_forward_fires_exit_and_enter(
-        self, simple_wizard_config: dict[str, Any],
+        self,
+        simple_wizard_config: dict[str, Any],
     ) -> None:
         """Forward advance fires exit before transition, enter after."""
         exit_calls: list[str] = []
@@ -849,7 +873,8 @@ class TestNavigationHookCoverage:
 
     @pytest.mark.asyncio
     async def test_back_fires_enter_but_not_exit(
-        self, simple_wizard_config: dict[str, Any],
+        self,
+        simple_wizard_config: dict[str, Any],
     ) -> None:
         """Back fires enter on destination but NOT exit on source."""
         reasoning = _make_reasoning(simple_wizard_config)
@@ -874,7 +899,8 @@ class TestNavigationHookCoverage:
 
     @pytest.mark.asyncio
     async def test_skip_fires_enter_but_not_exit(
-        self, auto_advance_wizard_config: dict[str, Any],
+        self,
+        auto_advance_wizard_config: dict[str, Any],
     ) -> None:
         """Skip fires post-transition lifecycle (enter) but NOT exit."""
         exit_calls: list[str] = []
@@ -893,7 +919,8 @@ class TestNavigationHookCoverage:
 
     @pytest.mark.asyncio
     async def test_restart_fires_restart_hook_only(
-        self, simple_wizard_config: dict[str, Any],
+        self,
+        simple_wizard_config: dict[str, Any],
     ) -> None:
         """Restart fires restart hook but NOT enter or exit."""
         exit_calls: list[str] = []
@@ -969,7 +996,8 @@ class TestConsistentNavigationLifecycleFlag:
 
     @pytest.mark.asyncio
     async def test_back_fires_enter_hook_when_enabled(
-        self, simple_wizard_config: dict[str, Any],
+        self,
+        simple_wizard_config: dict[str, Any],
     ) -> None:
         """Back navigation fires enter hook when flag is True (default)."""
         enter_calls: list[str] = []
@@ -977,7 +1005,8 @@ class TestConsistentNavigationLifecycleFlag:
         hooks.on_enter(lambda s, d: enter_calls.append(s))
 
         reasoning = _make_reasoning(
-            simple_wizard_config, hooks=hooks,
+            simple_wizard_config,
+            hooks=hooks,
             consistent_navigation_lifecycle=True,
         )
         state = _make_state(
@@ -993,7 +1022,8 @@ class TestConsistentNavigationLifecycleFlag:
 
     @pytest.mark.asyncio
     async def test_back_skips_enter_hook_when_disabled(
-        self, simple_wizard_config: dict[str, Any],
+        self,
+        simple_wizard_config: dict[str, Any],
     ) -> None:
         """Back navigation does NOT fire enter hook when flag is False."""
         enter_calls: list[str] = []
@@ -1001,7 +1031,8 @@ class TestConsistentNavigationLifecycleFlag:
         hooks.on_enter(lambda s, d: enter_calls.append(s))
 
         reasoning = _make_reasoning(
-            simple_wizard_config, hooks=hooks,
+            simple_wizard_config,
+            hooks=hooks,
             consistent_navigation_lifecycle=False,
         )
         state = _make_state(
@@ -1017,7 +1048,8 @@ class TestConsistentNavigationLifecycleFlag:
 
     @pytest.mark.asyncio
     async def test_skip_fires_lifecycle_when_enabled(
-        self, simple_wizard_config: dict[str, Any],
+        self,
+        simple_wizard_config: dict[str, Any],
     ) -> None:
         """Skip fires post-transition lifecycle (hooks, auto-advance) when True."""
         enter_calls: list[str] = []
@@ -1027,7 +1059,8 @@ class TestConsistentNavigationLifecycleFlag:
         hooks.on_complete(lambda d: complete_calls.append(dict(d)))
 
         reasoning = _make_reasoning(
-            simple_wizard_config, hooks=hooks,
+            simple_wizard_config,
+            hooks=hooks,
             consistent_navigation_lifecycle=True,
         )
         state = _make_state(
@@ -1045,7 +1078,8 @@ class TestConsistentNavigationLifecycleFlag:
 
     @pytest.mark.asyncio
     async def test_skip_skips_lifecycle_when_disabled(
-        self, simple_wizard_config: dict[str, Any],
+        self,
+        simple_wizard_config: dict[str, Any],
     ) -> None:
         """Skip does NOT fire post-transition lifecycle when flag is False."""
         enter_calls: list[str] = []
@@ -1055,7 +1089,8 @@ class TestConsistentNavigationLifecycleFlag:
         hooks.on_complete(lambda d: complete_calls.append(dict(d)))
 
         reasoning = _make_reasoning(
-            simple_wizard_config, hooks=hooks,
+            simple_wizard_config,
+            hooks=hooks,
             consistent_navigation_lifecycle=False,
         )
         state = _make_state(
@@ -1109,9 +1144,7 @@ class TestSkipMessageInjection:
         assert result.stage_name == "end"
         assert result.transitioned is True
         # Transition was recorded
-        skip_transitions = [
-            t for t in state.transitions if t.trigger == "navigation_skip"
-        ]
+        skip_transitions = [t for t in state.transitions if t.trigger == "navigation_skip"]
         assert len(skip_transitions) == 1
 
     @pytest.mark.asyncio
@@ -1205,8 +1238,12 @@ class TestFromConfigFlag:
         config = {
             "name": "test-wizard",
             "stages": [
-                {"name": "start", "is_start": True, "prompt": "S",
-                 "transitions": [{"target": "end"}]},
+                {
+                    "name": "start",
+                    "is_start": True,
+                    "prompt": "S",
+                    "transitions": [{"target": "end"}],
+                },
                 {"name": "end", "is_end": True, "prompt": "E"},
             ],
         }
@@ -1218,13 +1255,18 @@ class TestFromConfigFlag:
         config = {
             "name": "test-wizard",
             "stages": [
-                {"name": "start", "is_start": True, "prompt": "S",
-                 "transitions": [{"target": "end"}]},
+                {
+                    "name": "start",
+                    "is_start": True,
+                    "prompt": "S",
+                    "transitions": [{"target": "end"}],
+                },
                 {"name": "end", "is_end": True, "prompt": "E"},
             ],
         }
         reasoning = _make_reasoning(
-            config, consistent_navigation_lifecycle=False,
+            config,
+            consistent_navigation_lifecycle=False,
         )
         assert reasoning._consistent_navigation_lifecycle is False
 
@@ -1234,8 +1276,12 @@ class TestFromConfigFlag:
             "wizard_config": {
                 "name": "test-wizard",
                 "stages": [
-                    {"name": "start", "is_start": True, "prompt": "S",
-                     "transitions": [{"target": "end"}]},
+                    {
+                        "name": "start",
+                        "is_start": True,
+                        "prompt": "S",
+                        "transitions": [{"target": "end"}],
+                    },
                     {"name": "end", "is_end": True, "prompt": "E"},
                 ],
             },
@@ -1251,8 +1297,12 @@ class TestFromConfigFlag:
             "wizard_config": {
                 "name": "test-wizard",
                 "stages": [
-                    {"name": "start", "is_start": True, "prompt": "S",
-                     "transitions": [{"target": "end"}]},
+                    {
+                        "name": "start",
+                        "is_start": True,
+                        "prompt": "S",
+                        "transitions": [{"target": "end"}],
+                    },
                     {"name": "end", "is_end": True, "prompt": "E"},
                 ],
             },
@@ -1272,7 +1322,8 @@ class TestAdvanceExtractionMode:
 
     @pytest.mark.asyncio
     async def test_str_input_requires_llm(
-        self, simple_wizard_config: dict[str, Any],
+        self,
+        simple_wizard_config: dict[str, Any],
     ) -> None:
         """advance() raises ValueError when str input without llm."""
         reasoning = _make_reasoning(simple_wizard_config)
@@ -1312,14 +1363,17 @@ class TestAdvanceExtractionMode:
         }
         reasoning = _make_reasoning(config)
         extractor = ConfigurableExtractor(
-            result_data={"name": "Alice", "age": 30}, confidence=0.95,
+            result_data={"name": "Alice", "age": 30},
+            confidence=0.95,
         )
         reasoning.set_extractor(extractor)
         state = _make_state(reasoning)
         provider = EchoProvider({"provider": "echo", "model": "test"})
 
         result = await reasoning.advance(
-            "My name is Alice and I am 30", state, llm=provider,
+            "My name is Alice and I am 30",
+            state,
+            llm=provider,
         )
 
         # Extraction result is populated
@@ -1356,9 +1410,7 @@ class TestAdvanceExtractionMode:
                     "transitions": [
                         {
                             "target": "done",
-                            "condition": (
-                                "data.get('name') and data.get('email')"
-                            ),
+                            "condition": ("data.get('name') and data.get('email')"),
                         },
                     ],
                 },
@@ -1368,14 +1420,17 @@ class TestAdvanceExtractionMode:
         reasoning = _make_reasoning(config)
         # Extractor only returns name, not email
         extractor = ConfigurableExtractor(
-            result_data={"name": "Alice"}, confidence=0.5,
+            result_data={"name": "Alice"},
+            confidence=0.5,
         )
         reasoning.set_extractor(extractor)
         state = _make_state(reasoning)
         provider = EchoProvider({"provider": "echo", "model": "test"})
 
         result = await reasoning.advance(
-            "My name is Alice", state, llm=provider,
+            "My name is Alice",
+            state,
+            llm=provider,
         )
 
         assert result.missing_fields is not None
@@ -1387,7 +1442,8 @@ class TestAdvanceExtractionMode:
 
     @pytest.mark.asyncio
     async def test_dict_input_no_extraction_fields(
-        self, simple_wizard_config: dict[str, Any],
+        self,
+        simple_wizard_config: dict[str, Any],
     ) -> None:
         """advance() with dict input has None extraction/missing_fields."""
         reasoning = _make_reasoning(simple_wizard_config)
@@ -1422,7 +1478,9 @@ class TestAdvanceExtractionMode:
         provider = EchoProvider({"provider": "echo", "model": "test"})
 
         result = await reasoning.advance(
-            "hello world", state, llm=provider,
+            "hello world",
+            state,
+            llm=provider,
         )
 
         # Raw input captured, no missing fields
@@ -1433,7 +1491,8 @@ class TestAdvanceExtractionMode:
 
     @pytest.mark.asyncio
     async def test_str_input_with_navigation_skips_extraction(
-        self, simple_wizard_config: dict[str, Any],
+        self,
+        simple_wizard_config: dict[str, Any],
     ) -> None:
         """advance() with str input and navigation skips extraction."""
         reasoning = _make_reasoning(simple_wizard_config)
@@ -1445,7 +1504,10 @@ class TestAdvanceExtractionMode:
         provider = EchoProvider({"provider": "echo", "model": "test"})
 
         result = await reasoning.advance(
-            "go back", state, llm=provider, navigation="back",
+            "go back",
+            state,
+            llm=provider,
+            navigation="back",
         )
 
         # Navigation happened, extraction was skipped
@@ -1523,9 +1585,7 @@ class TestRoutingTransforms:
                     "transitions": [
                         {
                             "target": "async_path",
-                            "condition": (
-                                "data.get('_route') == 'async_path'"
-                            ),
+                            "condition": ("data.get('_route') == 'async_path'"),
                         },
                         {"target": "fallback"},
                     ],
@@ -1547,7 +1607,8 @@ class TestRoutingTransforms:
 
     @pytest.mark.asyncio
     async def test_no_routing_transforms_is_noop(
-        self, simple_wizard_config: dict[str, Any],
+        self,
+        simple_wizard_config: dict[str, Any],
     ) -> None:
         """Stages without routing_transforms work normally."""
         reasoning = _make_reasoning(simple_wizard_config)
@@ -1560,7 +1621,8 @@ class TestRoutingTransforms:
 
     @pytest.mark.asyncio
     async def test_missing_routing_transform_logs_warning(
-        self, caplog: pytest.LogCaptureFixture,
+        self,
+        caplog: pytest.LogCaptureFixture,
     ) -> None:
         """Unknown routing transform name logs a warning."""
         config = {
@@ -1586,8 +1648,7 @@ class TestRoutingTransforms:
         assert result.transitioned is True
         # Warning was logged
         assert any(
-            "nonexistent_func" in r.message and "not found" in r.message
-            for r in caplog.records
+            "nonexistent_func" in r.message and "not found" in r.message for r in caplog.records
         )
 
     @pytest.mark.asyncio

@@ -73,9 +73,7 @@ class SupportsToSessionConfig(Protocol):
     def to_session_config(self) -> AwsSessionConfig: ...
 
 
-def _session_cache_key(
-    session_kwargs: dict[str, Any], warm_service: str
-) -> str:
+def _session_cache_key(session_kwargs: dict[str, Any], warm_service: str) -> str:
     """Return a stable digest identifying session kwargs + warmed service.
 
     Hashing keeps credentials out of the cache keys (the warmed session
@@ -83,9 +81,7 @@ def _session_cache_key(
     warmed service name is folded in so a session warmed for one service
     is not reused for another (whose data files it has not pre-loaded).
     """
-    payload = repr(
-        (warm_service, sorted(session_kwargs.items()))
-    ).encode("utf-8")
+    payload = repr((warm_service, sorted(session_kwargs.items()))).encode("utf-8")
     return hashlib.sha256(payload).hexdigest()
 
 
@@ -186,21 +182,13 @@ class AwsSessionConfig:
         return cls(
             region_name=cfg.get("region_name") or cfg.get("region"),
             endpoint_url=cfg.get("endpoint_url"),
-            aws_access_key_id=(
-                cfg.get("aws_access_key_id") or cfg.get("access_key_id")
-            ),
+            aws_access_key_id=(cfg.get("aws_access_key_id") or cfg.get("access_key_id")),
             aws_secret_access_key=(
                 cfg.get("aws_secret_access_key") or cfg.get("secret_access_key")
             ),
-            aws_session_token=(
-                cfg.get("aws_session_token") or cfg.get("session_token")
-            ),
-            max_pool_connections=int(
-                cfg.get("max_pool_connections", cfg.get("max_workers", 10))
-            ),
-            max_attempts=int(
-                cfg.get("max_attempts", cfg.get("max_retries", 3))
-            ),
+            aws_session_token=(cfg.get("aws_session_token") or cfg.get("session_token")),
+            max_pool_connections=int(cfg.get("max_pool_connections", cfg.get("max_workers", 10))),
+            max_attempts=int(cfg.get("max_attempts", cfg.get("max_retries", 3))),
             retry_mode=cfg.get("retry_mode", "standard"),
             extra_client_kwargs=dict(cfg.get("extra_client_kwargs", {}) or {}),
         )
@@ -401,11 +389,7 @@ async def create_aioboto3_session(
     repeated calls for the same config reuse one warmed session instead
     of re-warming.
     """
-    sess_cfg = (
-        config
-        if isinstance(config, AwsSessionConfig)
-        else config.to_session_config()
-    )
+    sess_cfg = config if isinstance(config, AwsSessionConfig) else config.to_session_config()
     # aioboto3 sessions accept credentials and region; ``endpoint_url``
     # is a per-client kwarg (applied at ``session.client(service, ...)``
     # time), not a session-level option.
@@ -416,9 +400,7 @@ async def create_aioboto3_session(
     if cached is not None:
         return cached
 
-    session = await asyncio.to_thread(
-        _build_aioboto3_session, session_kwargs, warm_service
-    )
+    session = await asyncio.to_thread(_build_aioboto3_session, session_kwargs, warm_service)
     # Dict assignment is atomic under the GIL. A rare concurrent
     # first-call for the same config double-builds harmlessly — both
     # sessions are valid, the last write wins, the loser is GC'd — so no
@@ -428,9 +410,7 @@ async def create_aioboto3_session(
     return session
 
 
-def _build_aioboto3_session(
-    session_kwargs: dict[str, Any], warm_service: str = "s3"
-) -> Any:
+def _build_aioboto3_session(session_kwargs: dict[str, Any], warm_service: str = "s3") -> Any:
     """Build an ``aioboto3.Session`` and warm its botocore caches.
 
     Runs on a ``to_thread`` worker (no event loop of its own). Creating

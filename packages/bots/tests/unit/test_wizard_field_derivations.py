@@ -91,9 +91,7 @@ class TestCustomTransformResolution:
             parse_derivation_rules([self._rule("no.such.module:Transform")])
 
     def test_a_conforming_transform_resolves(self) -> None:
-        rules = parse_derivation_rules(
-            [self._rule(f"{self.HERE}:_ConformingTransform")]
-        )
+        rules = parse_derivation_rules([self._rule(f"{self.HERE}:_ConformingTransform")])
         assert isinstance(rules[0].custom_transform, _ConformingTransform)
 
     def test_the_colon_separator_is_accepted(self) -> None:
@@ -103,9 +101,7 @@ class TestCustomTransformResolution:
         paths, so ``mypkg.transforms:SubjectToId`` — the form every other
         resolution site preferred — was reported as an invalid path.
         """
-        rules = parse_derivation_rules(
-            [self._rule(f"{self.HERE}:_ConformingTransform")]
-        )
+        rules = parse_derivation_rules([self._rule(f"{self.HERE}:_ConformingTransform")])
         assert rules[0].custom_transform is not None
 
     def test_a_wrong_shape_class_is_rejected_without_being_constructed(
@@ -210,9 +206,11 @@ class TestParsing:
     """Verify derivation rule parsing from config dicts."""
 
     def test_parse_basic_rule(self) -> None:
-        rules = parse_derivation_rules([
-            {"source": "a", "target": "b", "transform": "copy"},
-        ])
+        rules = parse_derivation_rules(
+            [
+                {"source": "a", "target": "b", "transform": "copy"},
+            ]
+        )
         assert len(rules) == 1
         assert rules[0].source == "a"
         assert rules[0].target == "b"
@@ -220,10 +218,11 @@ class TestParsing:
         assert rules[0].when == "target_missing"
 
     def test_parse_with_when_condition(self) -> None:
-        rules = parse_derivation_rules([
-            {"source": "a", "target": "b", "transform": "copy",
-             "when": "always"},
-        ])
+        rules = parse_derivation_rules(
+            [
+                {"source": "a", "target": "b", "transform": "copy", "when": "always"},
+            ]
+        )
         assert rules[0].when == "always"
 
     def test_parse_rejects_missing_source(self) -> None:
@@ -249,20 +248,23 @@ class TestParsing:
         ``when`` is running today, which makes flipping it a separate
         question from this consolidation.
         """
-        rules = parse_derivation_rules([
-            {"source": "a", "target": "b", "transform": "copy",
-             "when": "bogus"},
-        ])
+        rules = parse_derivation_rules(
+            [
+                {"source": "a", "target": "b", "transform": "copy", "when": "bogus"},
+            ]
+        )
         assert len(rules) == 1
         assert rules[0].when == "target_missing"
 
     def test_faults_are_collected_rather_than_short_circuited(self) -> None:
         """Every bad rule is reported, each labelled with its own position."""
         with pytest.raises(ConfigurationError) as exc_info:
-            parse_derivation_rules([
-                {"source": "a", "target": "b", "transform": "bogus"},
-                {"source": "c", "target": "d", "transform": "nonexistent"},
-            ])
+            parse_derivation_rules(
+                [
+                    {"source": "a", "target": "b", "transform": "bogus"},
+                    {"source": "c", "target": "d", "transform": "nonexistent"},
+                ]
+            )
         faults = exc_info.value.context["faults"]
         assert len(faults) == 2
         assert "rule 0 (a → b)" in faults[0]
@@ -270,29 +272,40 @@ class TestParsing:
 
     def test_parse_rejects_unknown_transform(self) -> None:
         with pytest.raises(ConfigurationError, match="unknown transform"):
-            parse_derivation_rules([
-                {"source": "a", "target": "b", "transform": "nonexistent"},
-            ])
+            parse_derivation_rules(
+                [
+                    {"source": "a", "target": "b", "transform": "nonexistent"},
+                ]
+            )
 
     def test_parse_template_rule(self) -> None:
-        rules = parse_derivation_rules([
-            {"source": "intent", "target": "desc",
-             "transform": "template",
-             "template": "A {{ intent }} bot"},
-        ])
+        rules = parse_derivation_rules(
+            [
+                {
+                    "source": "intent",
+                    "target": "desc",
+                    "transform": "template",
+                    "template": "A {{ intent }} bot",
+                },
+            ]
+        )
         assert len(rules) == 1
         assert rules[0].template == "A {{ intent }} bot"
 
     def test_parse_rejects_custom_with_no_class(self) -> None:
         with pytest.raises(ConfigurationError, match="no 'custom_class'"):
-            parse_derivation_rules([
-                {"source": "a", "target": "b", "transform": "custom"},
-            ])
+            parse_derivation_rules(
+                [
+                    {"source": "a", "target": "b", "transform": "custom"},
+                ]
+            )
 
     def test_parse_default_transform_is_copy(self) -> None:
-        rules = parse_derivation_rules([
-            {"source": "a", "target": "b"},
-        ])
+        rules = parse_derivation_rules(
+            [
+                {"source": "a", "target": "b"},
+            ]
+        )
         assert rules[0].transform_name == "copy"
 
 
@@ -305,16 +318,14 @@ class TestApplyDerivations:
     """Verify the derivation engine directly."""
 
     def test_basic_copy(self) -> None:
-        rules = [DerivationRule(source="a", target="b",
-                                transform_name="copy")]
+        rules = [DerivationRule(source="a", target="b", transform_name="copy")]
         data: dict = {"a": "value"}
         derived = apply_field_derivations(rules, data)
         assert derived == {"b"}
         assert data["b"] == "value"
 
     def test_title_case_derivation(self) -> None:
-        rules = [DerivationRule(source="id", target="name",
-                                transform_name="title_case")]
+        rules = [DerivationRule(source="id", target="name", transform_name="title_case")]
         data: dict = {"id": "chess-champ"}
         derived = apply_field_derivations(rules, data)
         assert derived == {"name"}
@@ -322,26 +333,27 @@ class TestApplyDerivations:
 
     def test_no_overwrite_when_target_missing(self) -> None:
         """target_missing guard: skip when target already present."""
-        rules = [DerivationRule(source="id", target="name",
-                                transform_name="title_case")]
+        rules = [DerivationRule(source="id", target="name", transform_name="title_case")]
         data: dict = {"id": "chess-champ", "name": "Custom Name"}
         derived = apply_field_derivations(rules, data)
         assert derived == set()
         assert data["name"] == "Custom Name"
 
     def test_always_guard_overwrites(self) -> None:
-        rules = [DerivationRule(source="id", target="name",
-                                transform_name="title_case",
-                                when="always")]
+        rules = [
+            DerivationRule(source="id", target="name", transform_name="title_case", when="always")
+        ]
         data: dict = {"id": "chess-champ", "name": "Old Name"}
         derived = apply_field_derivations(rules, data)
         assert derived == {"name"}
         assert data["name"] == "Chess Champ"
 
     def test_target_empty_guard(self) -> None:
-        rules = [DerivationRule(source="id", target="name",
-                                transform_name="title_case",
-                                when="target_empty")]
+        rules = [
+            DerivationRule(
+                source="id", target="name", transform_name="title_case", when="target_empty"
+            )
+        ]
         # Empty string — should derive
         data: dict = {"id": "chess-champ", "name": ""}
         derived = apply_field_derivations(rules, data)
@@ -349,9 +361,11 @@ class TestApplyDerivations:
         assert data["name"] == "Chess Champ"
 
     def test_target_empty_guard_skips_nonempty(self) -> None:
-        rules = [DerivationRule(source="id", target="name",
-                                transform_name="title_case",
-                                when="target_empty")]
+        rules = [
+            DerivationRule(
+                source="id", target="name", transform_name="title_case", when="target_empty"
+            )
+        ]
         data: dict = {"id": "chess-champ", "name": "Existing"}
         derived = apply_field_derivations(rules, data)
         assert derived == set()
@@ -365,17 +379,16 @@ class TestApplyDerivations:
         programmer error rather than operator input, and one that must not
         derive under a guard nobody chose.
         """
-        rules = [DerivationRule(source="id", target="name",
-                                transform_name="title_case",
-                                when="allways")]
+        rules = [
+            DerivationRule(source="id", target="name", transform_name="title_case", when="allways")
+        ]
         data: dict = {"id": "chess-champ"}
         derived = apply_field_derivations(rules, data)
         assert derived == set()
         assert "name" not in data
 
     def test_source_missing_skips(self) -> None:
-        rules = [DerivationRule(source="id", target="name",
-                                transform_name="title_case")]
+        rules = [DerivationRule(source="id", target="name", transform_name="title_case")]
         data: dict = {"other": "value"}
         derived = apply_field_derivations(rules, data)
         assert derived == set()
@@ -384,10 +397,8 @@ class TestApplyDerivations:
     def test_bidirectional_first_wins(self) -> None:
         """When both directions are configured, the first matching rule wins."""
         rules = [
-            DerivationRule(source="id", target="name",
-                           transform_name="title_case"),
-            DerivationRule(source="name", target="id",
-                           transform_name="lower_hyphen"),
+            DerivationRule(source="id", target="name", transform_name="title_case"),
+            DerivationRule(source="name", target="id", transform_name="lower_hyphen"),
         ]
         data: dict = {"id": "chess-champ"}
         derived = apply_field_derivations(rules, data)
@@ -397,11 +408,14 @@ class TestApplyDerivations:
         assert data["id"] == "chess-champ"
 
     def test_template_derivation(self) -> None:
-        rules = [DerivationRule(
-            source="intent", target="desc",
-            transform_name="template",
-            template="A {{ intent }} bot for {{ subject }}",
-        )]
+        rules = [
+            DerivationRule(
+                source="intent",
+                target="desc",
+                transform_name="template",
+                template="A {{ intent }} bot for {{ subject }}",
+            )
+        ]
         data: dict = {"intent": "tutoring", "subject": "chess"}
         derived = apply_field_derivations(rules, data)
         assert derived == {"desc"}
@@ -409,11 +423,14 @@ class TestApplyDerivations:
 
     def test_template_empty_render_skips(self) -> None:
         """Template rendering to empty string should not set the field."""
-        rules = [DerivationRule(
-            source="intent", target="desc",
-            transform_name="template",
-            template="{{ missing_var }}",
-        )]
+        rules = [
+            DerivationRule(
+                source="intent",
+                target="desc",
+                transform_name="template",
+                template="{{ missing_var }}",
+            )
+        ]
         data: dict = {"intent": "tutoring"}
         derived = apply_field_derivations(rules, data)
         assert derived == set()
@@ -426,11 +443,14 @@ class TestApplyDerivations:
         rendered as "A tutoring bot for" when subject was missing — a
         non-empty garbage string that passed the strip() guard.
         """
-        rules = [DerivationRule(
-            source="intent", target="desc",
-            transform_name="template",
-            template="A {{ intent }} bot for {{ subject }}",
-        )]
+        rules = [
+            DerivationRule(
+                source="intent",
+                target="desc",
+                transform_name="template",
+                template="A {{ intent }} bot for {{ subject }}",
+            )
+        ]
         data: dict = {"intent": "tutoring"}  # subject missing
         derived = apply_field_derivations(rules, data)
         assert derived == set()
@@ -438,8 +458,7 @@ class TestApplyDerivations:
 
     def test_custom_field_is_present(self) -> None:
         """Custom field_is_present function is respected."""
-        rules = [DerivationRule(source="a", target="b",
-                                transform_name="copy")]
+        rules = [DerivationRule(source="a", target="b", transform_name="copy")]
         data: dict = {"a": 0}  # 0 is falsy but not None
         # Default: is not None → present
         derived = apply_field_derivations(rules, data)
@@ -447,11 +466,12 @@ class TestApplyDerivations:
 
     def test_custom_field_is_present_strict(self) -> None:
         """Strict field_is_present that rejects falsy values."""
-        rules = [DerivationRule(source="a", target="b",
-                                transform_name="copy")]
+        rules = [DerivationRule(source="a", target="b", transform_name="copy")]
         data: dict = {"a": 0}
         derived = apply_field_derivations(
-            rules, data, field_is_present=lambda v: bool(v),
+            rules,
+            data,
+            field_is_present=lambda v: bool(v),
         )
         assert derived == set()
 
@@ -463,10 +483,8 @@ class TestApplyDerivations:
     def test_multiple_rules_chain(self) -> None:
         """Derivations can chain: A→B, then B→C in same pass."""
         rules = [
-            DerivationRule(source="a", target="b",
-                           transform_name="copy"),
-            DerivationRule(source="b", target="c",
-                           transform_name="title_case"),
+            DerivationRule(source="a", target="b", transform_name="copy"),
+            DerivationRule(source="b", target="c", transform_name="title_case"),
         ]
         data: dict = {"a": "hello-world"}
         derived = apply_field_derivations(rules, data)
@@ -493,11 +511,14 @@ class TestCustomTransform:
     def test_custom_transform_applies(self) -> None:
         custom = _UpperTransform()
         assert isinstance(custom, FieldTransform)
-        rules = [DerivationRule(
-            source="a", target="b",
-            transform_name="custom",
-            custom_transform=custom,
-        )]
+        rules = [
+            DerivationRule(
+                source="a",
+                target="b",
+                transform_name="custom",
+                custom_transform=custom,
+            )
+        ]
         data: dict = {"a": "hello"}
         derived = apply_field_derivations(rules, data)
         assert derived == {"b"}
@@ -544,7 +565,8 @@ class TestConditionalTransforms:
 
     def test_map_not_found_with_default(self) -> None:
         result = _map_transform(
-            "unknown", {},
+            "unknown",
+            {},
             transform_map={"quiz": True},
             transform_default="other",
         )
@@ -572,14 +594,16 @@ class TestConditionalTransforms:
 
     def test_one_of_match(self) -> None:
         result = _one_of(
-            "research_assistant", {},
+            "research_assistant",
+            {},
             transform_values=["research_assistant", "domain_expert"],
         )
         assert result is True
 
     def test_one_of_no_match(self) -> None:
         result = _one_of(
-            "tutor", {},
+            "tutor",
+            {},
             transform_values=["research_assistant", "domain_expert"],
         )
         assert result is False
@@ -675,7 +699,8 @@ class TestRegexTransforms:
     def test_regex_replace(self) -> None:
         pat = re.compile(r"\s+")
         result = _regex_replace(
-            "hello   world", {},
+            "hello   world",
+            {},
             compiled_regex=pat,
             transform_replacement=" ",
         )
@@ -692,7 +717,8 @@ class TestExpressionTransform:
 
     def test_expression_equality(self) -> None:
         rule = DerivationRule(
-            source="intent", target="flag",
+            source="intent",
+            target="flag",
             transform_name="expression",
             expression="value == 'ra'",
         )
@@ -700,7 +726,8 @@ class TestExpressionTransform:
 
     def test_expression_ternary(self) -> None:
         rule = DerivationRule(
-            source="intent", target="max_q",
+            source="intent",
+            target="max_q",
             transform_name="expression",
             expression="10 if value == 'quiz' else 5",
         )
@@ -708,7 +735,8 @@ class TestExpressionTransform:
 
     def test_expression_data_access(self) -> None:
         rule = DerivationRule(
-            source="x", target="y",
+            source="x",
+            target="y",
             transform_name="expression",
             expression="int(data.get('count', 0)) * 2",
         )
@@ -716,7 +744,8 @@ class TestExpressionTransform:
 
     def test_expression_has_helper(self) -> None:
         rule = DerivationRule(
-            source="x", target="y",
+            source="x",
+            target="y",
             transform_name="expression",
             expression="has('name')",
         )
@@ -724,7 +753,8 @@ class TestExpressionTransform:
 
     def test_expression_list_comprehension(self) -> None:
         rule = DerivationRule(
-            source="topics", target="lower_topics",
+            source="topics",
+            target="lower_topics",
             transform_name="expression",
             expression="[x.lower() for x in value]",
         )
@@ -732,7 +762,8 @@ class TestExpressionTransform:
 
     def test_expression_dict_lookup(self) -> None:
         rule = DerivationRule(
-            source="diff", target="time",
+            source="diff",
+            target="time",
             transform_name="expression",
             expression="{'easy': 30, 'hard': 120}.get(value, 60)",
         )
@@ -740,7 +771,8 @@ class TestExpressionTransform:
 
     def test_expression_returns_none(self) -> None:
         rule = DerivationRule(
-            source="x", target="y",
+            source="x",
+            target="y",
             transform_name="expression",
             expression="None",
         )
@@ -748,7 +780,8 @@ class TestExpressionTransform:
 
     def test_expression_error_returns_skip(self) -> None:
         rule = DerivationRule(
-            source="x", target="y",
+            source="x",
+            target="y",
             transform_name="expression",
             expression="1/0",
         )
@@ -765,7 +798,8 @@ class TestExpressionSecurity:
 
     def test_expression_no_import(self) -> None:
         rule = DerivationRule(
-            source="x", target="y",
+            source="x",
+            target="y",
             transform_name="expression",
             expression="__import__('os')",
         )
@@ -773,7 +807,8 @@ class TestExpressionSecurity:
 
     def test_expression_no_open(self) -> None:
         rule = DerivationRule(
-            source="x", target="y",
+            source="x",
+            target="y",
             transform_name="expression",
             expression="open('/etc/passwd')",
         )
@@ -781,7 +816,8 @@ class TestExpressionSecurity:
 
     def test_expression_no_exec(self) -> None:
         rule = DerivationRule(
-            source="x", target="y",
+            source="x",
+            target="y",
             transform_name="expression",
             expression="exec('import os')",
         )
@@ -789,7 +825,8 @@ class TestExpressionSecurity:
 
     def test_expression_no_eval(self) -> None:
         rule = DerivationRule(
-            source="x", target="y",
+            source="x",
+            target="y",
             transform_name="expression",
             expression="eval('1+1')",
         )
@@ -797,7 +834,8 @@ class TestExpressionSecurity:
 
     def test_expression_no_getattr(self) -> None:
         rule = DerivationRule(
-            source="x", target="y",
+            source="x",
+            target="y",
             transform_name="expression",
             expression="getattr(data, '__class__')",
         )
@@ -807,7 +845,8 @@ class TestExpressionSecurity:
         """Data dict mutations in expression don't affect original."""
         original = {"key": "value"}
         rule = DerivationRule(
-            source="x", target="y",
+            source="x",
+            target="y",
             transform_name="expression",
             expression="data.update({'injected': True}) or 'done'",
         )
@@ -824,40 +863,61 @@ class TestNewTransformParsing:
     """Verify parsing validation for parameterized transforms."""
 
     def test_parse_equals_rule(self) -> None:
-        rules = parse_derivation_rules([
-            {"source": "intent", "target": "flag",
-             "transform": "equals", "transform_value": "research"},
-        ])
+        rules = parse_derivation_rules(
+            [
+                {
+                    "source": "intent",
+                    "target": "flag",
+                    "transform": "equals",
+                    "transform_value": "research",
+                },
+            ]
+        )
         assert len(rules) == 1
         assert rules[0].transform_name == "equals"
         assert rules[0].transform_value == "research"
 
     def test_parse_map_rule(self) -> None:
-        rules = parse_derivation_rules([
-            {"source": "intent", "target": "style",
-             "transform": "map",
-             "transform_map": {"tutor": "socratic"},
-             "transform_default": "structured"},
-        ])
+        rules = parse_derivation_rules(
+            [
+                {
+                    "source": "intent",
+                    "target": "style",
+                    "transform": "map",
+                    "transform_map": {"tutor": "socratic"},
+                    "transform_default": "structured",
+                },
+            ]
+        )
         assert len(rules) == 1
         assert rules[0].transform_map == {"tutor": "socratic"}
         assert rules[0].transform_default == "structured"
 
     def test_parse_one_of_rule(self) -> None:
-        rules = parse_derivation_rules([
-            {"source": "intent", "target": "flag",
-             "transform": "one_of",
-             "transform_values": ["a", "b"]},
-        ])
+        rules = parse_derivation_rules(
+            [
+                {
+                    "source": "intent",
+                    "target": "flag",
+                    "transform": "one_of",
+                    "transform_values": ["a", "b"],
+                },
+            ]
+        )
         assert len(rules) == 1
         assert rules[0].transform_values == ["a", "b"]
 
     def test_parse_regex_precompiles(self) -> None:
-        rules = parse_derivation_rules([
-            {"source": "email", "target": "valid",
-             "transform": "regex_match",
-             "transform_value": r"\d+"},
-        ])
+        rules = parse_derivation_rules(
+            [
+                {
+                    "source": "email",
+                    "target": "valid",
+                    "transform": "regex_match",
+                    "transform_value": r"\d+",
+                },
+            ]
+        )
         assert len(rules) == 1
         assert rules[0].compiled_regex is not None
         assert rules[0].compiled_regex.pattern == r"\d+"
@@ -866,8 +926,12 @@ class TestNewTransformParsing:
         ("rule", "expected"),
         [
             (
-                {"source": "email", "target": "valid",
-                 "transform": "regex_match", "transform_value": "[invalid"},
+                {
+                    "source": "email",
+                    "target": "valid",
+                    "transform": "regex_match",
+                    "transform_value": "[invalid",
+                },
                 "invalid regex",
             ),
             (
@@ -883,8 +947,12 @@ class TestNewTransformParsing:
                 "requires 'expression'",
             ),
             (
-                {"source": "a", "target": "b", "transform": "regex_replace",
-                 "transform_value": r"\s+"},
+                {
+                    "source": "a",
+                    "target": "b",
+                    "transform": "regex_replace",
+                    "transform_value": r"\s+",
+                },
                 "requires 'transform_replacement'",
             ),
             (
@@ -892,18 +960,26 @@ class TestNewTransformParsing:
                 "requires 'transform_value'",
             ),
             (
-                {"source": "a", "target": "b", "transform": "one_of",
-                 "transform_values": "not-a-list"},
+                {
+                    "source": "a",
+                    "target": "b",
+                    "transform": "one_of",
+                    "transform_values": "not-a-list",
+                },
                 "requires 'transform_values'",
             ),
         ],
-        ids=["invalid-regex", "equals-no-value", "map-no-map",
-             "expression-no-expression", "regex-replace-no-replacement",
-             "contains-no-value", "one-of-not-a-list"],
+        ids=[
+            "invalid-regex",
+            "equals-no-value",
+            "map-no-map",
+            "expression-no-expression",
+            "regex-replace-no-replacement",
+            "contains-no-value",
+            "one-of-not-a-list",
+        ],
     )
-    def test_parse_rejects_a_malformed_parameterized_transform(
-        self, rule, expected
-    ) -> None:
+    def test_parse_rejects_a_malformed_parameterized_transform(self, rule, expected) -> None:
         """Seven faults that each used to drop their rule and log a WARNING.
 
         Collapsed into one parametrized case on the way to raising, because
@@ -915,11 +991,16 @@ class TestNewTransformParsing:
             parse_derivation_rules([rule])
 
     def test_parse_expression_rule(self) -> None:
-        rules = parse_derivation_rules([
-            {"source": "a", "target": "b",
-             "transform": "expression",
-             "expression": "value == 'x'"},
-        ])
+        rules = parse_derivation_rules(
+            [
+                {
+                    "source": "a",
+                    "target": "b",
+                    "transform": "expression",
+                    "expression": "value == 'x'",
+                },
+            ]
+        )
         assert len(rules) == 1
         assert rules[0].expression == "value == 'x'"
 
@@ -933,26 +1014,36 @@ class TestNewTransformIntegration:
     """Verify new transforms through the full derivation engine."""
 
     def test_equals_derivation_end_to_end(self) -> None:
-        rules = parse_derivation_rules([
-            {"source": "intent", "target": "kb_enabled",
-             "transform": "equals",
-             "transform_value": "research_assistant"},
-        ])
+        rules = parse_derivation_rules(
+            [
+                {
+                    "source": "intent",
+                    "target": "kb_enabled",
+                    "transform": "equals",
+                    "transform_value": "research_assistant",
+                },
+            ]
+        )
         data: dict[str, Any] = {"intent": "research_assistant"}
         derived = apply_field_derivations(rules, data)
         assert derived == {"kb_enabled"}
         assert data["kb_enabled"] is True
 
     def test_map_derivation_end_to_end(self) -> None:
-        rules = parse_derivation_rules([
-            {"source": "intent", "target": "style",
-             "transform": "map",
-             "transform_map": {
-                 "research_assistant": "conversational",
-                 "tutor": "socratic",
-             },
-             "transform_default": "structured"},
-        ])
+        rules = parse_derivation_rules(
+            [
+                {
+                    "source": "intent",
+                    "target": "style",
+                    "transform": "map",
+                    "transform_map": {
+                        "research_assistant": "conversational",
+                        "tutor": "socratic",
+                    },
+                    "transform_default": "structured",
+                },
+            ]
+        )
         data: dict[str, Any] = {"intent": "tutor"}
         derived = apply_field_derivations(rules, data)
         assert derived == {"style"}
@@ -960,12 +1051,17 @@ class TestNewTransformIntegration:
 
     def test_map_no_default_unmatched_key_skips(self) -> None:
         """map with no transform_default skips when key not found."""
-        rules = parse_derivation_rules([
-            {"source": "intent", "target": "style",
-             "transform": "map",
-             "transform_map": {"tutor": "socratic"}},
-            # No transform_default — unmatched key should skip
-        ])
+        rules = parse_derivation_rules(
+            [
+                {
+                    "source": "intent",
+                    "target": "style",
+                    "transform": "map",
+                    "transform_map": {"tutor": "socratic"},
+                },
+                # No transform_default — unmatched key should skip
+            ]
+        )
         data: dict[str, Any] = {"intent": "research_assistant"}
         derived = apply_field_derivations(rules, data)
         assert derived == set()
@@ -973,12 +1069,17 @@ class TestNewTransformIntegration:
 
     def test_map_explicit_null_default_stores_none(self) -> None:
         """map with transform_default: null stores None explicitly."""
-        rules = parse_derivation_rules([
-            {"source": "intent", "target": "style",
-             "transform": "map",
-             "transform_map": {"tutor": "socratic"},
-             "transform_default": None},
-        ])
+        rules = parse_derivation_rules(
+            [
+                {
+                    "source": "intent",
+                    "target": "style",
+                    "transform": "map",
+                    "transform_map": {"tutor": "socratic"},
+                    "transform_default": None,
+                },
+            ]
+        )
         data: dict[str, Any] = {"intent": "research_assistant"}
         derived = apply_field_derivations(rules, data)
         assert derived == {"style"}
@@ -986,10 +1087,11 @@ class TestNewTransformIntegration:
 
     def test_first_empty_list_skips(self) -> None:
         """first on empty list skips instead of storing None."""
-        rules = parse_derivation_rules([
-            {"source": "topics", "target": "primary",
-             "transform": "first"},
-        ])
+        rules = parse_derivation_rules(
+            [
+                {"source": "topics", "target": "primary", "transform": "first"},
+            ]
+        )
         data: dict[str, Any] = {"topics": []}
         derived = apply_field_derivations(rules, data)
         assert derived == set()
@@ -997,22 +1099,32 @@ class TestNewTransformIntegration:
 
     def test_regex_extract_no_match_skips(self) -> None:
         """regex_extract with no match skips instead of storing None."""
-        rules = parse_derivation_rules([
-            {"source": "email", "target": "domain",
-             "transform": "regex_extract",
-             "transform_value": r"@([\w.]+)"},
-        ])
+        rules = parse_derivation_rules(
+            [
+                {
+                    "source": "email",
+                    "target": "domain",
+                    "transform": "regex_extract",
+                    "transform_value": r"@([\w.]+)",
+                },
+            ]
+        )
         data: dict[str, Any] = {"email": "not-an-email"}
         derived = apply_field_derivations(rules, data)
         assert derived == set()
         assert "domain" not in data
 
     def test_expression_derivation_end_to_end(self) -> None:
-        rules = parse_derivation_rules([
-            {"source": "intent", "target": "max_q",
-             "transform": "expression",
-             "expression": "10 if value == 'quiz_maker' else 5"},
-        ])
+        rules = parse_derivation_rules(
+            [
+                {
+                    "source": "intent",
+                    "target": "max_q",
+                    "transform": "expression",
+                    "expression": "10 if value == 'quiz_maker' else 5",
+                },
+            ]
+        )
         data: dict[str, Any] = {"intent": "quiz_maker"}
         derived = apply_field_derivations(rules, data)
         assert derived == {"max_q"}
@@ -1020,22 +1132,28 @@ class TestNewTransformIntegration:
 
     def test_conditional_with_guard(self) -> None:
         """when: target_missing respects existing target value."""
-        rules = parse_derivation_rules([
-            {"source": "intent", "target": "kb_enabled",
-             "transform": "equals",
-             "transform_value": "research_assistant",
-             "when": "target_missing"},
-        ])
+        rules = parse_derivation_rules(
+            [
+                {
+                    "source": "intent",
+                    "target": "kb_enabled",
+                    "transform": "equals",
+                    "transform_value": "research_assistant",
+                    "when": "target_missing",
+                },
+            ]
+        )
         data: dict[str, Any] = {"intent": "research_assistant", "kb_enabled": False}
         derived = apply_field_derivations(rules, data)
         assert derived == set()
         assert data["kb_enabled"] is False
 
     def test_boolean_derivation_return_type(self) -> None:
-        rules = parse_derivation_rules([
-            {"source": "path", "target": "configured",
-             "transform": "boolean"},
-        ])
+        rules = parse_derivation_rules(
+            [
+                {"source": "path", "target": "configured", "transform": "boolean"},
+            ]
+        )
         data: dict[str, Any] = {"path": "/some/path"}
         apply_field_derivations(rules, data)
         assert data["configured"] is True
@@ -1043,11 +1161,16 @@ class TestNewTransformIntegration:
 
     def test_constant_none_sets_field(self) -> None:
         """constant with transform_value: null sets the field to None."""
-        rules = parse_derivation_rules([
-            {"source": "intent", "target": "cleared",
-             "transform": "constant",
-             "transform_value": None},
-        ])
+        rules = parse_derivation_rules(
+            [
+                {
+                    "source": "intent",
+                    "target": "cleared",
+                    "transform": "constant",
+                    "transform_value": None,
+                },
+            ]
+        )
         data: dict[str, Any] = {"intent": "anything"}
         derived = apply_field_derivations(rules, data)
         assert derived == {"cleared"}
@@ -1055,28 +1178,40 @@ class TestNewTransformIntegration:
 
     def test_expression_none_sets_field(self) -> None:
         """expression evaluating to None sets the field to None."""
-        rules = parse_derivation_rules([
-            {"source": "intent", "target": "cleared",
-             "transform": "expression",
-             "expression": "None"},
-        ])
+        rules = parse_derivation_rules(
+            [
+                {
+                    "source": "intent",
+                    "target": "cleared",
+                    "transform": "expression",
+                    "expression": "None",
+                },
+            ]
+        )
         data: dict[str, Any] = {"intent": "anything"}
         derived = apply_field_derivations(rules, data)
         assert derived == {"cleared"}
         assert data["cleared"] is None
 
     def test_mixed_transforms_in_pipeline(self) -> None:
-        rules = parse_derivation_rules([
-            {"source": "intent", "target": "kb_enabled",
-             "transform": "equals",
-             "transform_value": "research_assistant"},
-            {"source": "intent", "target": "style",
-             "transform": "map",
-             "transform_map": {"research_assistant": "conversational"},
-             "transform_default": "structured"},
-            {"source": "domain_id", "target": "domain_name",
-             "transform": "title_case"},
-        ])
+        rules = parse_derivation_rules(
+            [
+                {
+                    "source": "intent",
+                    "target": "kb_enabled",
+                    "transform": "equals",
+                    "transform_value": "research_assistant",
+                },
+                {
+                    "source": "intent",
+                    "target": "style",
+                    "transform": "map",
+                    "transform_map": {"research_assistant": "conversational"},
+                    "transform_default": "structured",
+                },
+                {"source": "domain_id", "target": "domain_name", "transform": "title_case"},
+            ]
+        )
         data: dict[str, Any] = {
             "intent": "research_assistant",
             "domain_id": "chess-champ",
@@ -1125,8 +1260,7 @@ class TestFieldDerivationIntegration:
         """domain_id extracted → domain_name derived → auto-advance fires."""
         config = _wizard_config_with_derivations(
             derivations=[
-                {"source": "domain_id", "target": "domain_name",
-                 "transform": "title_case"},
+                {"source": "domain_id", "target": "domain_name", "transform": "title_case"},
             ],
             auto_advance_filled_stages=True,
         )
@@ -1148,8 +1282,7 @@ class TestFieldDerivationIntegration:
         """domain_name extracted → domain_id derived via lower_hyphen."""
         config = _wizard_config_with_derivations(
             derivations=[
-                {"source": "domain_name", "target": "domain_id",
-                 "transform": "lower_hyphen"},
+                {"source": "domain_name", "target": "domain_id", "transform": "lower_hyphen"},
             ],
             auto_advance_filled_stages=True,
         )
@@ -1171,8 +1304,7 @@ class TestFieldDerivationIntegration:
         """When both fields are extracted, derivation does not overwrite."""
         config = _wizard_config_with_derivations(
             derivations=[
-                {"source": "domain_id", "target": "domain_name",
-                 "transform": "title_case"},
+                {"source": "domain_id", "target": "domain_name", "transform": "title_case"},
             ],
             auto_advance_filled_stages=True,
         )
@@ -1181,8 +1313,7 @@ class TestFieldDerivationIntegration:
             wizard_config=config,
             main_responses=["Got it!"],
             extraction_results=[
-                [{"domain_id": "chess-champ",
-                  "domain_name": "My Custom Name"}],
+                [{"domain_id": "chess-champ", "domain_name": "My Custom Name"}],
             ],
         ) as harness:
             await harness.chat("ID chess-champ, name My Custom Name")
@@ -1194,10 +1325,8 @@ class TestFieldDerivationIntegration:
         """Both directions configured; only the needed one fires."""
         config = _wizard_config_with_derivations(
             derivations=[
-                {"source": "domain_id", "target": "domain_name",
-                 "transform": "title_case"},
-                {"source": "domain_name", "target": "domain_id",
-                 "transform": "lower_hyphen"},
+                {"source": "domain_id", "target": "domain_name", "transform": "title_case"},
+                {"source": "domain_name", "target": "domain_id", "transform": "lower_hyphen"},
             ],
             auto_advance_filled_stages=True,
         )
@@ -1219,8 +1348,7 @@ class TestFieldDerivationIntegration:
         """Derivation does not fire when source field is absent."""
         config = _wizard_config_with_derivations(
             derivations=[
-                {"source": "domain_id", "target": "domain_name",
-                 "transform": "title_case"},
+                {"source": "domain_id", "target": "domain_name", "transform": "title_case"},
             ],
         )
 
@@ -1238,7 +1366,9 @@ class TestFieldDerivationIntegration:
             # domain_id derivation rule has source=domain_id which
             # is not yet present, so no derivation
             assert harness.wizard_data.get("domain_name") == "Chess Champ"
-            assert "domain_id" not in harness.wizard_data or not harness.wizard_data.get("domain_id")
+            assert "domain_id" not in harness.wizard_data or not harness.wizard_data.get(
+                "domain_id"
+            )
 
     @pytest.mark.asyncio
     async def test_per_stage_derivation_disabled(self) -> None:
@@ -1259,10 +1389,11 @@ class TestFieldDerivationIntegration:
                 "data.get('domain_id') and data.get('domain_name')",
             )
             .stage("done", is_end=True, prompt="All done!")
-            .settings(derivations=[
-                {"source": "domain_id", "target": "domain_name",
-                 "transform": "title_case"},
-            ])
+            .settings(
+                derivations=[
+                    {"source": "domain_id", "target": "domain_name", "transform": "title_case"},
+                ]
+            )
             .build()
         )
 
@@ -1299,9 +1430,12 @@ class TestFieldDerivationIntegration:
             .stage("done", is_end=True, prompt="All done!")
             .settings(
                 derivations=[
-                    {"source": "intent", "target": "description",
-                     "transform": "template",
-                     "template": "A {{ intent }} bot for {{ subject }}"},
+                    {
+                        "source": "intent",
+                        "target": "description",
+                        "transform": "template",
+                        "template": "A {{ intent }} bot for {{ subject }}",
+                    },
                 ],
                 auto_advance_filled_stages=True,
             )
@@ -1340,9 +1474,12 @@ class TestFieldDerivationIntegration:
             .stage("done", is_end=True, prompt="All done!")
             .settings(
                 derivations=[
-                    {"source": "intent", "target": "kb_enabled",
-                     "transform": "equals",
-                     "transform_value": "research_assistant"},
+                    {
+                        "source": "intent",
+                        "target": "kb_enabled",
+                        "transform": "equals",
+                        "transform_value": "research_assistant",
+                    },
                 ],
                 auto_advance_filled_stages=True,
             )
@@ -1380,9 +1517,12 @@ class TestFieldDerivationIntegration:
             .stage("done", is_end=True, prompt="All done!")
             .settings(
                 derivations=[
-                    {"source": "intent", "target": "max_questions",
-                     "transform": "expression",
-                     "expression": "10 if value == 'quiz_maker' else 5"},
+                    {
+                        "source": "intent",
+                        "target": "max_questions",
+                        "transform": "expression",
+                        "expression": "10 if value == 'quiz_maker' else 5",
+                    },
                 ],
                 auto_advance_filled_stages=True,
             )

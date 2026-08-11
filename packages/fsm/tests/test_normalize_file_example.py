@@ -27,35 +27,35 @@ class TestWorkflowConfiguration:
         config = yaml.safe_load(NORMALIZE_FILE_WORKFLOW_YAML)
 
         assert config is not None
-        assert config['name'] == 'text_normalization_workflow'
-        assert 'states' in config
-        assert 'arcs' in config
+        assert config["name"] == "text_normalization_workflow"
+        assert "states" in config
+        assert "arcs" in config
 
         # Check states
-        states = config['states']
+        states = config["states"]
         assert len(states) == 3
-        state_names = [s['name'] for s in states]
-        assert 'start' in state_names
-        assert 'normalize' in state_names
-        assert 'complete' in state_names
+        state_names = [s["name"] for s in states]
+        assert "start" in state_names
+        assert "normalize" in state_names
+        assert "complete" in state_names
 
         # Check start and end states
-        start_states = [s for s in states if s.get('is_start')]
-        end_states = [s for s in states if s.get('is_end')]
+        start_states = [s for s in states if s.get("is_start")]
+        end_states = [s for s in states if s.get("is_end")]
         assert len(start_states) == 1
         assert len(end_states) == 1
 
         # Check arcs
-        arcs = config['arcs']
+        arcs = config["arcs"]
         assert len(arcs) == 2
-        assert arcs[1]['transform']['type'] == 'inline'
-        assert 'lambda' in arcs[1]['transform']['code']
+        assert arcs[1]["transform"]["type"] == "inline"
+        assert "lambda" in arcs[1]["transform"]["code"]
 
     def test_workflow_config_loads_correctly(self):
         """Test that WORKFLOW_CONFIG is properly loaded."""
         assert WORKFLOW_CONFIG is not None
         assert isinstance(WORKFLOW_CONFIG, dict)
-        assert WORKFLOW_CONFIG['name'] == 'text_normalization_workflow'
+        assert WORKFLOW_CONFIG["name"] == "text_normalization_workflow"
 
     def test_fsm_can_be_created_from_config(self):
         """Test that SimpleFSM can be created from the config."""
@@ -64,9 +64,9 @@ class TestWorkflowConfiguration:
 
         # Check that the FSM has the expected states
         states = fsm.get_states()
-        assert 'start' in states
-        assert 'normalize' in states
-        assert 'complete' in states
+        assert "start" in states
+        assert "normalize" in states
+        assert "complete" in states
 
         fsm.close()
 
@@ -85,12 +85,12 @@ class TestNormalizeFileStreaming:
             "this is a TEST",
             "   Mixed   CASE   text   ",
             "email@EXAMPLE.COM",
-            "  whitespace    issues  "
+            "  whitespace    issues  ",
         ]
 
-        with open(input_file, 'w') as f:
+        with open(input_file, "w") as f:
             for line in test_lines:
-                f.write(line + '\n')
+                f.write(line + "\n")
 
         # Process the file - no mocking needed, lambda function handles it
         normalize_file_streaming(str(input_file), str(output_file))
@@ -109,14 +109,14 @@ class TestNormalizeFileStreaming:
             "this is a test",
             "mixed   case   text",
             "email@example.com",
-            "whitespace    issues"
+            "whitespace    issues",
         ]
 
         for i, line in enumerate(output_lines):
             result = json.loads(line)
-            assert 'text' in result
+            assert "text" in result
             # Check that text was normalized (lowercase and stripped)
-            assert result['text'] == expected[i]
+            assert result["text"] == expected[i]
 
     def test_normalize_file_streaming_empty_file(self, tmp_path):
         """Test streaming normalization with empty file."""
@@ -143,22 +143,18 @@ class TestNormalizeFileSimple:
         input_file = tmp_path / "input.txt"
         output_file = tmp_path / "output.jsonl"
 
-        test_lines = [
-            "  UPPER CASE  ",
-            "lower case",
-            "   MiXeD CaSe   "
-        ]
+        test_lines = ["  UPPER CASE  ", "lower case", "   MiXeD CaSe   "]
 
-        with open(input_file, 'w') as f:
+        with open(input_file, "w") as f:
             for line in test_lines:
-                f.write(line + '\n')
+                f.write(line + "\n")
 
         # Process the file - no mocking needed
         results = normalize_file_simple(str(input_file), str(output_file))
 
         assert results is not None
-        assert 'total_processed' in results
-        assert 'successful' in results
+        assert "total_processed" in results
+        assert "successful" in results
 
         # Check output file
         assert output_file.exists()
@@ -168,15 +164,11 @@ class TestNormalizeFileSimple:
 
         assert len(output_lines) == len(test_lines)
 
-        expected = [
-            "upper case",
-            "lower case",
-            "mixed case"
-        ]
+        expected = ["upper case", "lower case", "mixed case"]
 
         for i, line in enumerate(output_lines):
             result = json.loads(line)
-            assert result['text'] == expected[i]
+            assert result["text"] == expected[i]
 
 
 class TestNormalizeLines:
@@ -184,12 +176,7 @@ class TestNormalizeLines:
 
     def test_normalize_lines_basic(self):
         """Test normalizing individual lines."""
-        test_lines = [
-            "  UPPERCASE TEXT  ",
-            "MiXeD cAsE",
-            "   extra   spaces   ",
-            "normal text"
-        ]
+        test_lines = ["  UPPERCASE TEXT  ", "MiXeD cAsE", "   extra   spaces   ", "normal text"]
 
         # Use the function directly - it now uses the lambda
         normalized = normalize_lines(test_lines)
@@ -200,7 +187,7 @@ class TestNormalizeLines:
             "uppercase text",
             "mixed case",
             "extra   spaces",  # Note: lambda only strips, doesn't compress spaces
-            "normal text"
+            "normal text",
         ]
 
         for result, expected_text in zip(normalized, expected):
@@ -229,23 +216,13 @@ class TestNormalizeBatch:
 
     def test_normalize_batch_basic(self):
         """Test batch normalization."""
-        test_lines = [
-            "  BATCH LINE 1  ",
-            "batch line 2",
-            "BATCH LINE 3",
-            "  Batch Line 4  "
-        ]
+        test_lines = ["  BATCH LINE 1  ", "batch line 2", "BATCH LINE 3", "  Batch Line 4  "]
 
         normalized = normalize_batch(test_lines)
 
         assert len(normalized) == len(test_lines)
 
-        expected = [
-            "batch line 1",
-            "batch line 2",
-            "batch line 3",
-            "batch line 4"
-        ]
+        expected = ["batch line 1", "batch line 2", "batch line 3", "batch line 4"]
 
         for result, expected_text in zip(normalized, expected):
             assert result == expected_text
@@ -275,19 +252,15 @@ class TestIntegration:
 
     def test_all_methods_produce_consistent_results(self, tmp_path):
         """Test that all methods produce consistent results."""
-        test_lines = [
-            "  CONSISTENT TEST  ",
-            "Another Line",
-            "   FINAL LINE   "
-        ]
+        test_lines = ["  CONSISTENT TEST  ", "Another Line", "   FINAL LINE   "]
 
         # Method 1: Streaming
         input_file = tmp_path / "input.txt"
         output_stream = tmp_path / "output_stream.jsonl"
 
-        with open(input_file, 'w') as f:
+        with open(input_file, "w") as f:
             for line in test_lines:
-                f.write(line + '\n')
+                f.write(line + "\n")
 
         normalize_file_streaming(str(input_file), str(output_stream))
 
@@ -302,23 +275,19 @@ class TestIntegration:
         normalized_batch = normalize_batch(test_lines)
 
         # All methods should produce the same normalized text
-        expected = [
-            "consistent test",
-            "another line",
-            "final line"
-        ]
+        expected = ["consistent test", "another line", "final line"]
 
         # Check streaming output
         with open(output_stream) as f:
             for i, line in enumerate(f):
                 result = json.loads(line)
-                assert result['text'] == expected[i]
+                assert result["text"] == expected[i]
 
         # Check simple output
         with open(output_simple) as f:
             for i, line in enumerate(f):
                 result = json.loads(line)
-                assert result['text'] == expected[i]
+                assert result["text"] == expected[i]
 
         # Check individual lines
         assert normalized_lines == expected
@@ -348,7 +317,7 @@ class TestErrorHandling:
         output_file = tmp_path / "output.jsonl"
 
         # Create file with various edge cases
-        with open(input_file, 'w') as f:
+        with open(input_file, "w") as f:
             f.write("\n")  # Empty line
             f.write("   \n")  # Whitespace only
             f.write("normal line\n")
@@ -366,9 +335,9 @@ class TestErrorHandling:
 
         # Check the normalized output
         results = [json.loads(line) for line in lines]
-        assert results[0]['text'] == ""  # Whitespace only becomes empty string
-        assert results[1]['text'] == "normal line"
-        assert results[2]['text'] == ""  # Tabs only becomes empty string
+        assert results[0]["text"] == ""  # Whitespace only becomes empty string
+        assert results[1]["text"] == "normal line"
+        assert results[2]["text"] == ""  # Tabs only becomes empty string
 
     def test_streaming_with_empty_lines_included(self, tmp_path):
         """Test streaming with skip_empty_lines=False."""
@@ -376,7 +345,7 @@ class TestErrorHandling:
         output_file = tmp_path / "output.jsonl"
 
         # Create file with empty lines
-        with open(input_file, 'w') as f:
+        with open(input_file, "w") as f:
             f.write("\n")  # Empty line
             f.write("   \n")  # Whitespace only
             f.write("normal line\n")
@@ -384,20 +353,21 @@ class TestErrorHandling:
 
         # Process with skip_empty_lines=False
         from dataknobs_fsm.api.simple import SimpleFSM
+
         fsm = SimpleFSM(WORKFLOW_CONFIG)
 
         try:
             results = fsm.process_stream(
                 source=str(input_file),
                 sink=str(output_file),
-                input_format='text',
-                text_field_name='text',
+                input_format="text",
+                text_field_name="text",
                 chunk_size=1000,
                 use_streaming=True,
-                skip_empty_lines=False  # Include empty lines
+                skip_empty_lines=False,  # Include empty lines
             )
 
-            assert results['total_processed'] == 4  # All 4 lines should be processed
+            assert results["total_processed"] == 4  # All 4 lines should be processed
 
         finally:
             fsm.close()
@@ -412,7 +382,7 @@ class TestErrorHandling:
 
         # Check the normalized output
         results = [json.loads(line) for line in lines]
-        assert results[0]['text'] == ""  # Empty line becomes empty string
-        assert results[1]['text'] == ""  # Whitespace only becomes empty string
-        assert results[2]['text'] == "normal line"
-        assert results[3]['text'] == ""  # Tabs only becomes empty string
+        assert results[0]["text"] == ""  # Empty line becomes empty string
+        assert results[1]["text"] == ""  # Whitespace only becomes empty string
+        assert results[2]["text"] == "normal line"
+        assert results[3]["text"] == ""  # Tabs only becomes empty string

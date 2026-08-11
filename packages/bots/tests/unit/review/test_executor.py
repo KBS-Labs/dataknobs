@@ -126,6 +126,7 @@ class TestReviewExecutorSchemaReview:
         )
 
         import asyncio
+
         review = asyncio.run(executor.run_review(artifact, "schema_test"))
 
         assert review.passed is True
@@ -153,6 +154,7 @@ class TestReviewExecutorSchemaReview:
         )
 
         import asyncio
+
         review = asyncio.run(executor.run_review(artifact, "schema_test"))
 
         assert review.passed is False
@@ -171,6 +173,7 @@ class TestReviewExecutorSchemaReview:
         artifact = Artifact(content={"any": "content"}, name="Test")
 
         import asyncio
+
         review = asyncio.run(executor.run_review(artifact, "no_schema"))
 
         assert review.passed is True
@@ -182,6 +185,7 @@ class TestReviewExecutorCustomReview:
 
     def test_custom_review_sync_pass(self) -> None:
         """Test passing custom validation (sync function)."""
+
         def validator(artifact: Artifact) -> dict:
             return {
                 "passed": True,
@@ -199,6 +203,7 @@ class TestReviewExecutorCustomReview:
         artifact = Artifact(content={"data": "test"}, name="Test")
 
         import asyncio
+
         review = asyncio.run(executor.run_review(artifact, "custom_test"))
 
         assert review.passed is True
@@ -207,6 +212,7 @@ class TestReviewExecutorCustomReview:
 
     def test_custom_review_async(self) -> None:
         """Test custom validation with async function."""
+
         async def validator(artifact: Artifact) -> dict:
             return {"passed": True, "score": 1.0}
 
@@ -220,12 +226,14 @@ class TestReviewExecutorCustomReview:
         artifact = Artifact(content={"data": "test"}, name="Test")
 
         import asyncio
+
         review = asyncio.run(executor.run_review(artifact, "async_test"))
 
         assert review.passed is True
 
     def test_custom_review_boolean_result(self) -> None:
         """Test custom validation returning boolean."""
+
         def validator(artifact: Artifact) -> bool:
             return True
 
@@ -239,6 +247,7 @@ class TestReviewExecutorCustomReview:
         artifact = Artifact(content={"data": "test"}, name="Test")
 
         import asyncio
+
         review = asyncio.run(executor.run_review(artifact, "bool_test"))
 
         assert review.passed is True
@@ -255,6 +264,7 @@ class TestReviewExecutorCustomReview:
         artifact = Artifact(content={"data": "test"}, name="Test")
 
         import asyncio
+
         review = asyncio.run(executor.run_review(artifact, "missing_func"))
 
         assert review.passed is False
@@ -262,6 +272,7 @@ class TestReviewExecutorCustomReview:
 
     def test_custom_review_exception(self) -> None:
         """Test custom review handling exceptions."""
+
         def validator(artifact: Artifact) -> dict:
             raise ValueError("Validation error")
 
@@ -275,6 +286,7 @@ class TestReviewExecutorCustomReview:
         artifact = Artifact(content={"data": "test"}, name="Test")
 
         import asyncio
+
         review = asyncio.run(executor.run_review(artifact, "error_test"))
 
         assert review.passed is False
@@ -296,6 +308,7 @@ class TestReviewExecutorPersonaReview:
         artifact = Artifact(content={"data": "test"}, name="Test")
 
         import asyncio
+
         review = asyncio.run(executor.run_review(artifact, "persona_test"))
 
         assert review.passed is False
@@ -344,6 +357,7 @@ class TestReviewExecutorPersonaReview:
         artifact = Artifact(content={"data": "test"}, name="Test")
 
         import asyncio
+
         review = asyncio.run(executor.run_review(artifact, "missing_persona"))
 
         assert review.passed is False
@@ -366,6 +380,7 @@ class TestReviewExecutorDisabledProtocol:
         artifact = Artifact(content={"data": "test"}, name="Test")
 
         import asyncio
+
         review = asyncio.run(executor.run_review(artifact, "disabled_test"))
 
         assert review.passed is True
@@ -382,6 +397,7 @@ class TestReviewExecutorProtocolNotFound:
         artifact = Artifact(content={"data": "test"}, name="Test")
 
         import asyncio
+
         with pytest.raises(KeyError):
             asyncio.run(executor.run_review(artifact, "nonexistent"))
 
@@ -392,6 +408,7 @@ class TestReviewExecutorArtifactReviews:
     @pytest.mark.asyncio
     async def test_run_artifact_reviews_with_definition(self) -> None:
         """Test running all reviews for an artifact with definition."""
+
         # Set up protocols
         def validator1(artifact: Artifact) -> dict:
             return {"passed": True, "score": 0.9}

@@ -139,9 +139,7 @@ class LoggingMiddleware(Middleware):
         # Log content at DEBUG level (first 200 chars)
         self._logger.debug("Response content: %.200s...", turn.response_content)
 
-    async def on_error(
-        self, error: Exception, message: str, context: BotContext
-    ) -> None:
+    async def on_error(self, error: Exception, message: str, context: BotContext) -> None:
         """Called when an error occurs during message processing.
 
         Args:
@@ -162,13 +160,9 @@ class LoggingMiddleware(Middleware):
         if self.json_format:
             self._logger.error(json.dumps(log_data), exc_info=error)
         else:
-            self._logger.error(
-                "Error processing message: %s", log_data, exc_info=error
-            )
+            self._logger.error("Error processing message: %s", log_data, exc_info=error)
 
-    async def on_hook_error(
-        self, hook_name: str, error: Exception, context: BotContext
-    ) -> None:
+    async def on_hook_error(self, hook_name: str, error: Exception, context: BotContext) -> None:
         """Called when a middleware hook itself raises.
 
         Args:

@@ -12,7 +12,7 @@ from dataknobs_data.query import Filter, Operator, SortOrder, SortSpec
 # Skip all tests if Elasticsearch is not available
 pytestmark = pytest.mark.skipif(
     not os.environ.get("TEST_ELASTICSEARCH", "").lower() == "true",
-    reason="Elasticsearch tests require TEST_ELASTICSEARCH=true and a running Elasticsearch instance"
+    reason="Elasticsearch tests require TEST_ELASTICSEARCH=true and a running Elasticsearch instance",
 )
 
 
@@ -238,10 +238,7 @@ class TestSyncElasticsearchDatabase:
     def test_batch_operations(self, sync_db):
         """Test batch operations."""
         # Create batch
-        records = [
-            Record({"batch": 1, "item": i})
-            for i in range(5)
-        ]
+        records = [Record({"batch": 1, "item": i}) for i in range(5)]
         ids = sync_db.create_batch(records)
         assert len(ids) == 5
         assert all(isinstance(id, str) for id in ids)
@@ -293,10 +290,7 @@ class TestSyncElasticsearchDatabase:
 
     def test_metadata_handling(self, sync_db):
         """Test metadata storage and retrieval."""
-        record = Record(
-            data={"name": "Test"},
-            metadata={"created_by": "user1", "version": 1}
-        )
+        record = Record(data={"name": "Test"}, metadata={"created_by": "user1", "version": 1})
         id = sync_db.create(record)
 
         retrieved = sync_db.read(id)
@@ -305,15 +299,17 @@ class TestSyncElasticsearchDatabase:
 
     def test_special_characters(self, sync_db):
         """Test handling of special characters in data."""
-        record = Record({
-            "name": "Test's \"quoted\" value",
-            "json": {"nested": {"key": "value"}},
-            "unicode": "Hello 世界 🌍",
-        })
+        record = Record(
+            {
+                "name": 'Test\'s "quoted" value',
+                "json": {"nested": {"key": "value"}},
+                "unicode": "Hello 世界 🌍",
+            }
+        )
         id = sync_db.create(record)
 
         retrieved = sync_db.read(id)
-        assert retrieved.get_value("name") == "Test's \"quoted\" value"
+        assert retrieved.get_value("name") == 'Test\'s "quoted" value'
         assert retrieved.get_value("json") == {"nested": {"key": "value"}}
         assert retrieved.get_value("unicode") == "Hello 世界 🌍"
 

@@ -75,7 +75,8 @@ async def test_build_message_with_context_default_is_markdown_no_xml() -> None:
     # ever changes.
     assert bot.knowledge_base is not None
     kb_results = await bot.knowledge_base.query(
-        "How do I configure memory?", k=5,
+        "How do I configure memory?",
+        k=5,
     )
     assert kb_results, (
         "test_docs must yield at least one hit so this test exercises "
@@ -140,9 +141,7 @@ def test_envelope_style_golden_strings(
 
     assert env.section("Knowledge base", "KB body", tag="knowledge_base") == expected_kb
     assert (
-        env.section(
-            "Conversation history", "History body", tag="conversation_history"
-        )
+        env.section("Conversation history", "History body", tag="conversation_history")
         == expected_history
     )
     assert env.section("Question", "What is X?", tag="question") == expected_question
@@ -175,9 +174,7 @@ def test_conversation_history_section_matches_generic_section(
 ) -> None:
     """``conversation_history_section(body)`` matches the generic call."""
     env = PromptEnvelope(style)
-    expected = env.section(
-        "Conversation history", "History body", tag="conversation_history"
-    )
+    expected = env.section("Conversation history", "History body", tag="conversation_history")
     assert env.conversation_history_section("History body") == expected
 
 
@@ -289,7 +286,8 @@ def test_dynabotconfig_prompt_envelope_round_trips() -> None:
     ],
 )
 def test_dynabotconfig_prompt_envelope_is_case_insensitive(
-    raw: str, normalized: str,
+    raw: str,
+    normalized: str,
 ) -> None:
     """Mixed-case ``prompt_envelope`` values are accepted and normalized.
 
@@ -342,7 +340,8 @@ async def test_xml_envelope_byte_identical_to_legacy_assembly() -> None:
     # emits (test-doc content can evolve without breaking this test).
     assert bot.knowledge_base is not None
     kb_results = await bot.knowledge_base.query(
-        "How do I configure memory?", k=5,
+        "How do I configure memory?",
+        k=5,
     )
     assert kb_results, "test_docs must yield at least one hit"
     kb_body = bot.knowledge_base.format_context(kb_results, wrap_in_tags=False)
@@ -381,7 +380,8 @@ def test_xml_envelope_synthesis_prompt_byte_identical() -> None:
         prompt_envelope=PromptEnvelope(PromptEnvelopeStyle.XML),
     )
     prompt = strategy.build_synthesis_system_prompt(
-        "KB body here", "Original system prompt",
+        "KB body here",
+        "Original system prompt",
     )
 
     # Pre-fix inline assembly (from `build_synthesis_system_prompt`):

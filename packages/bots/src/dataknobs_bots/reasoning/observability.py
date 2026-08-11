@@ -358,10 +358,7 @@ class WizardTaskList:
         Returns:
             List of tasks ready to be worked on
         """
-        return [
-            t for t in self.tasks
-            if t.status == "pending" and self._dependencies_met(t)
-        ]
+        return [t for t in self.tasks if t.status == "pending" and self._dependencies_met(t)]
 
     def get_tasks_for_stage(self, stage: str) -> list[WizardTask]:
         """Get all tasks for a specific stage.
@@ -514,9 +511,7 @@ class WizardStateSnapshot:
         Returns:
             WizardStateSnapshot instance
         """
-        transitions = [
-            TransitionRecord.from_dict(t) for t in data.get("transitions", [])
-        ]
+        transitions = [TransitionRecord.from_dict(t) for t in data.get("transitions", [])]
         return cls(
             current_stage=data["current_stage"],
             data=data.get("data", {}),
@@ -646,9 +641,7 @@ class TransitionTracker:
         if len(self._history) > self._max_history:
             self._history.pop(0)
 
-    def query(
-        self, query: TransitionHistoryQuery | None = None
-    ) -> list[TransitionRecord]:
+    def query(self, query: TransitionHistoryQuery | None = None) -> list[TransitionRecord]:
         """Query transition history.
 
         Args:
@@ -678,7 +671,7 @@ class TransitionTracker:
             results = [r for r in results if r.timestamp <= query.until]
 
         if query.limit:
-            results = results[-query.limit:]
+            results = results[-query.limit :]
 
         return results
 
@@ -715,7 +708,9 @@ class TransitionTracker:
                 restart_count += 1
 
         # Find most common trigger
-        most_common_trigger = max(trigger_counts, key=trigger_counts.get) if trigger_counts else None
+        most_common_trigger = (
+            max(trigger_counts, key=trigger_counts.get) if trigger_counts else None
+        )
 
         return TransitionStats(
             total_transitions=len(self._history),

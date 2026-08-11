@@ -212,9 +212,7 @@ class ConfigDraftManager:
             extra={"draft_id": draft_id, "stage": stage},
         )
 
-    def get_draft(
-        self, draft_id: str
-    ) -> tuple[dict[str, Any], DraftMetadata] | None:
+    def get_draft(self, draft_id: str) -> tuple[dict[str, Any], DraftMetadata] | None:
         """Retrieve a draft and its metadata.
 
         Args:
@@ -261,9 +259,7 @@ class ConfigDraftManager:
         config, metadata = result
         name = final_name or metadata.config_name
         if not name:
-            raise ValueError(
-                "No final_name provided and draft has no config_name set"
-            )
+            raise ValueError("No final_name provided and draft has no config_name set")
 
         # Write final file without metadata
         self._ensure_output_dir()
@@ -364,13 +360,9 @@ class ConfigDraftManager:
                 if last_updated and _parse_timestamp(last_updated) < cutoff:
                     data.pop(self._metadata_key, None)
                     self._write_yaml(path, data)
-                    logger.info(
-                        "Stripped stale metadata from %s", path.name
-                    )
+                    logger.info("Stripped stale metadata from %s", path.name)
             except Exception:
-                logger.exception(
-                    "Failed to strip metadata from: %s", path
-                )
+                logger.exception("Failed to strip metadata from: %s", path)
 
         return cleaned
 

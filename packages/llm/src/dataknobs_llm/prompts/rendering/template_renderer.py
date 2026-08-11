@@ -25,7 +25,7 @@ from ..base.types import (
     ValidationConfig,
     PromptTemplateDict,
     RenderResult,
-    TemplateMode
+    TemplateMode,
 )
 from ..syntax import TemplateSyntax, normalize_to_jinja2
 
@@ -39,6 +39,7 @@ class PreserveUndefined(Undefined):
     undefined variables are left as {{variable}} instead of being rendered as
     empty strings.
     """
+
     def __str__(self) -> str:
         """Return the original placeholder for undefined variables."""
         return f"{{{{{self._undefined_name}}}}}"
@@ -51,6 +52,7 @@ class PreserveUndefined(Undefined):
 @dataclass
 class TemplateSyntaxError:
     """Represents a template syntax error with location information."""
+
     message: str
     line: int
     column: int
@@ -80,7 +82,7 @@ class TemplateRenderer:
     def __init__(
         self,
         default_validation: ValidationLevel = ValidationLevel.WARN,
-        default_mode: TemplateMode = TemplateMode.MIXED
+        default_mode: TemplateMode = TemplateMode.MIXED,
     ):
         """Initialize the template renderer with Jinja2.
 
@@ -95,12 +97,12 @@ class TemplateRenderer:
         # Initialize Jinja2 environment
         self._jinja_env = Environment(
             # Keep same delimiters as our custom syntax
-            variable_start_string='{{',
-            variable_end_string='}}',
-            block_start_string='{%',
-            block_end_string='%}',
-            comment_start_string='{#',
-            comment_end_string='#}',
+            variable_start_string="{{",
+            variable_end_string="}}",
+            block_start_string="{%",
+            block_end_string="%}",
+            comment_start_string="{#",
+            comment_end_string="#}",
             # Prompt generation, not HTML - no autoescaping
             autoescape=False,
             # Better whitespace handling
@@ -129,9 +131,7 @@ class TemplateRenderer:
 
         self._jinja_env.globals["prompt_ref"] = _prompt_ref_wrapper
 
-    def set_prompt_library(
-        self, library: "AbstractPromptLibrary | None"
-    ) -> None:
+    def set_prompt_library(self, library: "AbstractPromptLibrary | None") -> None:
         """Set the prompt library used for ``prompt_ref()`` resolution.
 
         The prompt library provides the template lookup for ``prompt_ref()``
@@ -183,9 +183,7 @@ class TemplateRenderer:
             ValueError: If a circular reference is detected.
         """
         if self._prompt_library is None:
-            logger.warning(
-                "prompt_ref('%s') called but no prompt library is set", key
-            )
+            logger.warning("prompt_ref('%s') called but no prompt library is set", key)
             return ""
 
         # Cycle detection using thread-local resolution stack.
@@ -199,9 +197,7 @@ class TemplateRenderer:
         stack_set: set[str] = self._resolution_local.stack_set
         if key in stack_set:
             cycle_path = " -> ".join(stack) + f" -> {key}"
-            raise ValueError(
-                f"Circular prompt reference detected: {cycle_path}"
-            )
+            raise ValueError(f"Circular prompt reference detected: {cycle_path}")
 
         # Look up the prompt template (try system first, then user)
         template_dict = self._prompt_library.get_system_prompt(key)
@@ -263,7 +259,7 @@ class TemplateRenderer:
         params: dict[str, Any],
         validation: ValidationConfig | None = None,
         template_metadata: dict[str, Any] | None = None,
-        mode: TemplateMode | None = None
+        mode: TemplateMode | None = None,
     ) -> RenderResult:
         """Render a template with parameters and validation.
 
@@ -295,7 +291,9 @@ class TemplateRenderer:
             validation = ValidationConfig(level=self._default_validation)
 
         # Determine effective validation level (inherit from renderer if not set)
-        effective_level = validation.level if validation.level is not None else self._default_validation
+        effective_level = (
+            validation.level if validation.level is not None else self._default_validation
+        )
 
         try:
             # Step 1: Pre-process (( )) if in mixed mode
@@ -336,9 +334,7 @@ class TemplateRenderer:
         if params_missing:
             missing_str = ", ".join(params_missing)
             if effective_level == ValidationLevel.ERROR:
-                raise ValueError(
-                    f"Missing required parameters: {missing_str}"
-                )
+                raise ValueError(f"Missing required parameters: {missing_str}")
             elif effective_level == ValidationLevel.WARN:
                 warning_msg = f"Missing required parameters: {missing_str}"
                 validation_warnings.append(warning_msg)
@@ -355,8 +351,8 @@ class TemplateRenderer:
                 "validation_level": effective_level.value,
                 "template_vars": list(template_vars),
                 "template_mode": effective_mode.value,
-                **(template_metadata or {})
-            }
+                **(template_metadata or {}),
+            },
         )
 
     def render_prompt_template(
@@ -364,7 +360,7 @@ class TemplateRenderer:
         prompt_template: PromptTemplateDict,
         params: dict[str, Any],
         validation_override: ValidationLevel | None = None,
-        mode_override: TemplateMode | None = None
+        mode_override: TemplateMode | None = None,
     ) -> RenderResult:
         """Render a PromptTemplateDict structure with validation.
 
@@ -382,10 +378,7 @@ class TemplateRenderer:
             RenderResult with rendered content and validation information
         """
         # Merge defaults with provided params (params take priority)
-        merged_params = {
-            **prompt_template.get("defaults", {}),
-            **params
-        }
+        merged_params = {**prompt_template.get("defaults", {}), **params}
 
         # Normalize template syntax if annotated
         template_text = prompt_template["template"]
@@ -416,7 +409,7 @@ class TemplateRenderer:
                 validation = ValidationConfig(
                     level=validation_override,
                     required_params=list(template_validation.required_params),
-                    optional_params=list(template_validation.optional_params)
+                    optional_params=list(template_validation.optional_params),
                 )
             else:
                 # Create new config with just the override level
@@ -430,14 +423,14 @@ class TemplateRenderer:
             params=merged_params,
             validation=validation,
             template_metadata=prompt_template.get("metadata"),
-            mode=effective_mode
+            mode=effective_mode,
         )
 
     def batch_render(
         self,
         templates: list[str],
         params: dict[str, Any],
-        validation: ValidationConfig | None = None
+        validation: ValidationConfig | None = None,
     ) -> list[RenderResult]:
         """Render multiple templates with the same parameters.
 
@@ -449,10 +442,7 @@ class TemplateRenderer:
         Returns:
             List of RenderResult objects, one per template
         """
-        return [
-            self.render(template, params, validation)
-            for template in templates
-        ]
+        return [self.render(template, params, validation) for template in templates]
 
     @staticmethod
     def _extract_variables(template: str) -> set[str]:
@@ -465,7 +455,7 @@ class TemplateRenderer:
             Set of variable names found in the template
         """
         # Pattern to match {{var}} or {{var|filter}} - extract just the variable name
-        var_pattern = r'\{\{\s*(\w+)(?:\s*\|[^}]*)?\s*\}\}'
+        var_pattern = r"\{\{\s*(\w+)(?:\s*\|[^}]*)?\s*\}\}"
         matches = re.finditer(var_pattern, template)
 
         # Extract variable names (group 1 from regex)
@@ -483,13 +473,13 @@ class TemplateRenderer:
             ValueError: If Jinja2 syntax found inside (( ))
         """
         # Find all (( ... )) blocks
-        pattern = r'\(\(((?:[^()]|\((?!\()|(?<!\))\))*)\)\)'
+        pattern = r"\(\(((?:[^()]|\((?!\()|(?<!\))\))*)\)\)"
 
         for match in re.finditer(pattern, template):
             block_content = match.group(1)
 
             # Check for {% %} blocks
-            if '{%' in block_content:
+            if "{%" in block_content:
                 raise ValueError(
                     f"Jinja2 block syntax ('{{% %}}') not allowed inside "
                     f"conditional blocks '(( ))'.\n"
@@ -499,7 +489,7 @@ class TemplateRenderer:
                 )
 
             # Check for filters (| after {{)
-            if re.search(r'\{\{\s*\w+\s*\|', block_content):
+            if re.search(r"\{\{\s*\w+\s*\|", block_content):
                 raise ValueError(
                     f"Jinja2 filters (|filter) not allowed inside "
                     f"conditional blocks '(( ))'.\n"
@@ -517,22 +507,18 @@ class TemplateRenderer:
             # Simple approximation: ~4 chars per token
             return len(text) // 4
 
-        self._jinja_env.filters['count_tokens'] = count_tokens
+        self._jinja_env.filters["count_tokens"] = count_tokens
 
         # Example: Prompt formatting
         def format_code(code: str, language: str = "python") -> str:
             """Format code in markdown code block."""
             return f"```{language}\n{code}\n```"
 
-        self._jinja_env.filters['format_code'] = format_code
+        self._jinja_env.filters["format_code"] = format_code
 
         # Users can add more via add_custom_filter()
 
-    def add_custom_filter(
-        self,
-        name: str,
-        filter_func: Callable[..., Any]
-    ):
+    def add_custom_filter(self, name: str, filter_func: Callable[..., Any]):
         """Register a custom filter with Jinja2.
 
         Args:
@@ -561,7 +547,7 @@ class TemplateRenderer:
         Returns:
             Tuple of (line_number, column_number) (1-indexed)
         """
-        lines = template[:position].split('\n')
+        lines = template[:position].split("\n")
         line = len(lines)
         column = len(lines[-1]) + 1
         return line, column
@@ -583,12 +569,12 @@ class TemplateRenderer:
         snippet = template[start:end]
 
         # Replace newlines for better display
-        snippet = snippet.replace('\n', '\\n')
+        snippet = snippet.replace("\n", "\\n")
 
         # Mark the error position
         error_pos = min(position - start, len(snippet))
         if error_pos < len(snippet):
-            snippet = snippet[:error_pos] + '⮜HERE⮞' + snippet[error_pos:]
+            snippet = snippet[:error_pos] + "⮜HERE⮞" + snippet[error_pos:]
 
         return snippet
 
@@ -605,46 +591,49 @@ class TemplateRenderer:
         errors = []
 
         # Check for unmatched braces
-        brace_pattern = r'(?<!\{)\{(?!\{)|(?<!\})\}(?!\})'
+        brace_pattern = r"(?<!\{)\{(?!\{)|(?<!\})\}(?!\})"
         for match in re.finditer(brace_pattern, template):
             position = match.start()
             line, col = TemplateRenderer._get_line_col(template, position)
             snippet = TemplateRenderer._get_snippet(template, position)
 
-            errors.append(TemplateSyntaxError(
-                message="Unmatched brace. Use {{ }} for variables, not { }.",
-                line=line,
-                column=col,
-                snippet=snippet,
-                error_type="unmatched_brace"
-            ))
+            errors.append(
+                TemplateSyntaxError(
+                    message="Unmatched brace. Use {{ }} for variables, not { }.",
+                    line=line,
+                    column=col,
+                    snippet=snippet,
+                    error_type="unmatched_brace",
+                )
+            )
 
         # Check for unmatched conditional sections
-        open_positions = [m.start() for m in re.finditer(r'\(\(', template)]
-        close_positions = [m.start() for m in re.finditer(r'\)\)', template)]
+        open_positions = [m.start() for m in re.finditer(r"\(\(", template)]
+        close_positions = [m.start() for m in re.finditer(r"\)\)", template)]
 
         # Simple stack-based matching
         stack = []
         all_positions = sorted(
-            [(pos, 'open') for pos in open_positions] +
-            [(pos, 'close') for pos in close_positions]
+            [(pos, "open") for pos in open_positions] + [(pos, "close") for pos in close_positions]
         )
 
         for position, bracket_type in all_positions:
-            if bracket_type == 'open':
+            if bracket_type == "open":
                 stack.append(position)
             else:  # close
                 if not stack:
                     # Closing without opening
                     line, col = TemplateRenderer._get_line_col(template, position)
                     snippet = TemplateRenderer._get_snippet(template, position)
-                    errors.append(TemplateSyntaxError(
-                        message="Closing ')) without matching opening '(('.",
-                        line=line,
-                        column=col,
-                        snippet=snippet,
-                        error_type="unmatched_conditional"
-                    ))
+                    errors.append(
+                        TemplateSyntaxError(
+                            message="Closing ')) without matching opening '(('.",
+                            line=line,
+                            column=col,
+                            snippet=snippet,
+                            error_type="unmatched_conditional",
+                        )
+                    )
                 else:
                     stack.pop()
 
@@ -652,49 +641,55 @@ class TemplateRenderer:
         for position in stack:
             line, col = TemplateRenderer._get_line_col(template, position)
             snippet = TemplateRenderer._get_snippet(template, position)
-            errors.append(TemplateSyntaxError(
-                message="Opening '((' without matching closing '))'.",
-                line=line,
-                column=col,
-                snippet=snippet,
-                error_type="unmatched_conditional"
-            ))
+            errors.append(
+                TemplateSyntaxError(
+                    message="Opening '((' without matching closing '))'.",
+                    line=line,
+                    column=col,
+                    snippet=snippet,
+                    error_type="unmatched_conditional",
+                )
+            )
 
         # Check for malformed variable patterns
         # Look for {{ }} that don't contain valid variable names
-        var_pattern = r'\{\{[^}]*\}\}'
+        var_pattern = r"\{\{[^}]*\}\}"
         for match in re.finditer(var_pattern, template):
             var_content = match.group(0)[2:-2].strip()  # Remove {{ }}
 
             # Valid variable: only word characters (letters, digits, underscores)
-            if var_content and not re.match(r'^\w+$', var_content):
+            if var_content and not re.match(r"^\w+$", var_content):
                 position = match.start()
                 line, col = TemplateRenderer._get_line_col(template, position)
                 snippet = TemplateRenderer._get_snippet(template, position, context=30)
 
-                errors.append(TemplateSyntaxError(
-                    message=(
-                        f"Malformed variable '{{{{' {var_content} '}}}}'. "
-                        "Variables should contain only letters, numbers, and underscores."
-                    ),
-                    line=line,
-                    column=col,
-                    snippet=snippet,
-                    error_type="malformed_variable"
-                ))
+                errors.append(
+                    TemplateSyntaxError(
+                        message=(
+                            f"Malformed variable '{{{{' {var_content} '}}}}'. "
+                            "Variables should contain only letters, numbers, and underscores."
+                        ),
+                        line=line,
+                        column=col,
+                        snippet=snippet,
+                        error_type="malformed_variable",
+                    )
+                )
             elif not var_content:
                 # Empty variable {{}}
                 position = match.start()
                 line, col = TemplateRenderer._get_line_col(template, position)
                 snippet = TemplateRenderer._get_snippet(template, position)
 
-                errors.append(TemplateSyntaxError(
-                    message="Empty variable {{}}. Variables must have a name.",
-                    line=line,
-                    column=col,
-                    snippet=snippet,
-                    error_type="malformed_variable"
-                ))
+                errors.append(
+                    TemplateSyntaxError(
+                        message="Empty variable {{}}. Variables must have a name.",
+                        line=line,
+                        column=col,
+                        snippet=snippet,
+                        error_type="malformed_variable",
+                    )
+                )
 
         return errors
 
@@ -717,10 +712,9 @@ class TemplateRenderer:
 
 # Convenience functions for one-off rendering
 
+
 def render_template(
-    template: str,
-    params: dict[str, Any],
-    validation_level: ValidationLevel = ValidationLevel.WARN
+    template: str, params: dict[str, Any], validation_level: ValidationLevel = ValidationLevel.WARN
 ) -> str:
     """Convenience function to render a template with parameters.
 
@@ -746,9 +740,7 @@ def render_template(
 
 
 def render_template_strict(
-    template: str,
-    params: dict[str, Any],
-    required_params: list[str]
+    template: str, params: dict[str, Any], required_params: list[str]
 ) -> str:
     """Render a template with strict validation (ERROR level).
 
@@ -764,9 +756,6 @@ def render_template_strict(
         ValueError: If any required parameters are missing
     """
     renderer = TemplateRenderer()
-    validation = ValidationConfig(
-        level=ValidationLevel.ERROR,
-        required_params=required_params
-    )
+    validation = ValidationConfig(level=ValidationLevel.ERROR, required_params=required_params)
     result = renderer.render(template, params, validation)
     return result.content

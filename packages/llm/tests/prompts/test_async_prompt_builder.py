@@ -27,10 +27,7 @@ class TestAsyncPromptBuilderInitialization:
         library = ConfigPromptLibrary()
         adapter = AsyncDictResourceAdapter({"key": "value"})
 
-        builder = AsyncPromptBuilder(
-            library=library,
-            adapters={"data": adapter}
-        )
+        builder = AsyncPromptBuilder(library=library, adapters={"data": adapter})
 
         assert "data" in builder.adapters
         assert builder.adapters["data"] is adapter
@@ -43,18 +40,12 @@ class TestAsyncPromptBuilderInitialization:
         sync_adapter = DictResourceAdapter({"key": "value"})
 
         with pytest.raises(TypeError, match="synchronous.*PromptBuilder"):
-            AsyncPromptBuilder(
-                library=library,
-                adapters={"data": sync_adapter}
-            )
+            AsyncPromptBuilder(library=library, adapters={"data": sync_adapter})
 
     def test_initialization_with_validation_level(self):
         """Test initialization with custom validation level."""
         library = ConfigPromptLibrary()
-        builder = AsyncPromptBuilder(
-            library=library,
-            default_validation=ValidationLevel.ERROR
-        )
+        builder = AsyncPromptBuilder(library=library, default_validation=ValidationLevel.ERROR)
 
         assert builder._renderer._default_validation == ValidationLevel.ERROR
 
@@ -65,20 +56,11 @@ class TestAsyncPromptBuilderSystemPrompts:
 
     async def test_render_system_prompt_basic(self):
         """Test rendering a basic system prompt."""
-        config = {
-            "system": {
-                "greet": {
-                    "template": "Hello {{name}}!"
-                }
-            }
-        }
+        config = {"system": {"greet": {"template": "Hello {{name}}!"}}}
         library = ConfigPromptLibrary(config)
         builder = AsyncPromptBuilder(library=library)
 
-        result = await builder.render_system_prompt(
-            "greet",
-            params={"name": "Alice"}
-        )
+        result = await builder.render_system_prompt("greet", params={"name": "Alice"})
 
         assert result.content == "Hello Alice!"
         assert "name" in result.params_used
@@ -87,12 +69,7 @@ class TestAsyncPromptBuilderSystemPrompts:
     async def test_render_system_prompt_with_defaults(self):
         """Test rendering system prompt with default values."""
         config = {
-            "system": {
-                "greet": {
-                    "template": "Hello {{name}}!",
-                    "defaults": {"name": "World"}
-                }
-            }
+            "system": {"greet": {"template": "Hello {{name}}!", "defaults": {"name": "World"}}}
         }
         library = ConfigPromptLibrary(config)
         builder = AsyncPromptBuilder(library=library)
@@ -108,27 +85,17 @@ class TestAsyncPromptBuilderSystemPrompts:
     async def test_render_system_prompt_with_conditionals(self):
         """Test rendering system prompt with conditional sections."""
         config = {
-            "system": {
-                "greet": {
-                    "template": "Hello {{name}}((, you are {{age}} years old))!"
-                }
-            }
+            "system": {"greet": {"template": "Hello {{name}}((, you are {{age}} years old))!"}}
         }
         library = ConfigPromptLibrary(config)
         builder = AsyncPromptBuilder(library=library)
 
         # With all params
-        result = await builder.render_system_prompt(
-            "greet",
-            params={"name": "Alice", "age": 30}
-        )
+        result = await builder.render_system_prompt("greet", params={"name": "Alice", "age": 30})
         assert "you are 30 years old" in result.content
 
         # Without age (conditional should be removed)
-        result = await builder.render_system_prompt(
-            "greet",
-            params={"name": "Alice"}
-        )
+        result = await builder.render_system_prompt("greet", params={"name": "Alice"})
         assert "you are" not in result.content
         assert result.content == "Hello Alice!"
 
@@ -146,10 +113,7 @@ class TestAsyncPromptBuilderSystemPrompts:
             "system": {
                 "analyze": {
                     "template": "Analyze {{code}}",
-                    "validation": {
-                        "level": "error",
-                        "required_params": ["code"]
-                    }
+                    "validation": {"level": "error", "required_params": ["code"]},
                 }
             }
         }
@@ -161,10 +125,7 @@ class TestAsyncPromptBuilderSystemPrompts:
             await builder.render_system_prompt("analyze")
 
         # Should succeed with required param
-        result = await builder.render_system_prompt(
-            "analyze",
-            params={"code": "print('hello')"}
-        )
+        result = await builder.render_system_prompt("analyze", params={"code": "print('hello')"})
         assert result.content == "Analyze print('hello')"
 
     async def test_render_system_prompt_with_validation_override(self):
@@ -173,10 +134,7 @@ class TestAsyncPromptBuilderSystemPrompts:
             "system": {
                 "analyze": {
                     "template": "Analyze {{code}}",
-                    "validation": {
-                        "level": "error",
-                        "required_params": ["code"]
-                    }
+                    "validation": {"level": "error", "required_params": ["code"]},
                 }
             }
         }
@@ -185,8 +143,7 @@ class TestAsyncPromptBuilderSystemPrompts:
 
         # Override ERROR to IGNORE
         result = await builder.render_system_prompt(
-            "analyze",
-            validation_override=ValidationLevel.IGNORE
+            "analyze", validation_override=ValidationLevel.IGNORE
         )
 
         # Should not raise error (missing var stays as-is in template)
@@ -199,20 +156,11 @@ class TestAsyncPromptBuilderUserPrompts:
 
     async def test_render_user_prompt_basic(self):
         """Test rendering a basic user prompt."""
-        config = {
-            "user": {
-                "ask": {
-                    "template": "Tell me about {{topic}}"
-                }
-            }
-        }
+        config = {"user": {"ask": {"template": "Tell me about {{topic}}"}}}
         library = ConfigPromptLibrary(config)
         builder = AsyncPromptBuilder(library=library)
 
-        result = await builder.render_user_prompt(
-            "ask",
-            params={"topic": "Python"}
-        )
+        result = await builder.render_user_prompt("ask", params={"topic": "Python"})
 
         assert result.content == "Tell me about Python"
 
@@ -221,7 +169,7 @@ class TestAsyncPromptBuilderUserPrompts:
         config = {
             "user": {
                 "ask": {"template": "First: {{question}}"},
-                "ask_followup": {"template": "Follow-up: {{question}}"}
+                "ask_followup": {"template": "Follow-up: {{question}}"},
             }
         }
         library = ConfigPromptLibrary(config)
@@ -252,16 +200,12 @@ class TestAsyncPromptBuilderRAG:
             "system": {
                 "analyze": {
                     "template": "Analyze {{code}}\n\n{{RAG_CONTENT}}",
-                    "rag_config_refs": ["code_docs"]  # Add reference in template
+                    "rag_config_refs": ["code_docs"],  # Add reference in template
                 }
             },
             "rag": {
-                "code_docs": {
-                    "adapter_name": "docs",
-                    "query": "{{language}} documentation",
-                    "k": 3
-                }
-            }
+                "code_docs": {"adapter_name": "docs", "query": "{{language}} documentation", "k": 3}
+            },
         }
 
         library = ConfigPromptLibrary(config)
@@ -276,14 +220,10 @@ class TestAsyncPromptBuilderRAG:
                 await asyncio.sleep(0.01)  # Simulate async operation
                 return search_results
 
-        builder = AsyncPromptBuilder(
-            library=library,
-            adapters={"docs": MockAsyncAdapter({})}
-        )
+        builder = AsyncPromptBuilder(library=library, adapters={"docs": MockAsyncAdapter({})})
 
         result = await builder.render_system_prompt(
-            "analyze",
-            params={"code": "test", "language": "python"}
+            "analyze", params={"code": "test", "language": "python"}
         )
 
         # Should contain both template content and RAG content
@@ -297,7 +237,7 @@ class TestAsyncPromptBuilderRAG:
             "system": {
                 "analyze": {
                     "template": "{{RAG_CONTENT}}",
-                    "rag_config_refs": ["docs"]  # Add reference in template
+                    "rag_config_refs": ["docs"],  # Add reference in template
                 }
             },
             "rag": {
@@ -306,9 +246,9 @@ class TestAsyncPromptBuilderRAG:
                     "query": "test",
                     "k": 2,
                     "header": "# Documentation\n",
-                    "item_template": "{{index}}. {{content}}\n"
+                    "item_template": "{{index}}. {{content}}\n",
                 }
-            }
+            },
         }
 
         library = ConfigPromptLibrary(config)
@@ -322,10 +262,7 @@ class TestAsyncPromptBuilderRAG:
             async def search(self, query, k=5, filters=None, **kwargs):
                 return search_results
 
-        builder = AsyncPromptBuilder(
-            library=library,
-            adapters={"docs": MockAsyncAdapter({})}
-        )
+        builder = AsyncPromptBuilder(library=library, adapters={"docs": MockAsyncAdapter({})})
 
         result = await builder.render_system_prompt("analyze")
 
@@ -340,21 +277,13 @@ class TestAsyncPromptBuilderRAG:
             "system": {
                 "analyze": {
                     "template": "{{RAG_1}}\n{{RAG_2}}",
-                    "rag_config_refs": ["docs1", "docs2"]  # Add reference in template
+                    "rag_config_refs": ["docs1", "docs2"],  # Add reference in template
                 }
             },
             "rag": {
-                "docs1": {
-                    "adapter_name": "docs1",
-                    "query": "test1",
-                    "placeholder": "RAG_1"
-                },
-                "docs2": {
-                    "adapter_name": "docs2",
-                    "query": "test2",
-                    "placeholder": "RAG_2"
-                }
-            }
+                "docs1": {"adapter_name": "docs1", "query": "test1", "placeholder": "RAG_1"},
+                "docs2": {"adapter_name": "docs2", "query": "test2", "placeholder": "RAG_2"},
+            },
         }
 
         library = ConfigPromptLibrary(config)
@@ -372,14 +301,15 @@ class TestAsyncPromptBuilderRAG:
                 return [{"content": self.result_text, "score": 1.0, "metadata": {}}]
 
         import time
+
         start_time = time.time()
 
         builder = AsyncPromptBuilder(
             library=library,
             adapters={
                 "docs1": MockAsyncAdapter({}, "Result 1"),
-                "docs2": MockAsyncAdapter({}, "Result 2")
-            }
+                "docs2": MockAsyncAdapter({}, "Result 2"),
+            },
         )
 
         result = await builder.render_system_prompt("analyze")
@@ -396,21 +326,13 @@ class TestAsyncPromptBuilderRAG:
 
     async def test_render_without_rag(self):
         """Test rendering with RAG disabled."""
-        config = {
-            "system": {
-                "analyze": {
-                    "template": "Analyze {{code}}\n\n{{RAG_CONTENT}}"
-                }
-            }
-        }
+        config = {"system": {"analyze": {"template": "Analyze {{code}}\n\n{{RAG_CONTENT}}"}}}
 
         library = ConfigPromptLibrary(config)
         builder = AsyncPromptBuilder(library=library)
 
         result = await builder.render_system_prompt(
-            "analyze",
-            params={"code": "test"},
-            include_rag=False
+            "analyze", params={"code": "test"}, include_rag=False
         )
 
         # RAG_CONTENT should be empty/missing
@@ -422,15 +344,10 @@ class TestAsyncPromptBuilderRAG:
             "system": {
                 "analyze": {
                     "template": "{{RAG_CONTENT}}",
-                    "rag_config_refs": ["docs"]  # Add reference in template
+                    "rag_config_refs": ["docs"],  # Add reference in template
                 }
             },
-            "rag": {
-                "docs": {
-                    "adapter_name": "nonexistent",
-                    "query": "test"
-                }
-            }
+            "rag": {"docs": {"adapter_name": "nonexistent", "query": "test"}},
         }
 
         library = ConfigPromptLibrary(config)
@@ -447,15 +364,10 @@ class TestAsyncPromptBuilderRAG:
             "system": {
                 "analyze": {
                     "template": "{{RAG_CONTENT}}",
-                    "rag_config_refs": ["docs"]  # Add reference in template
+                    "rag_config_refs": ["docs"],  # Add reference in template
                 }
             },
-            "rag": {
-                "docs": {
-                    "adapter_name": "docs",
-                    "query": "test"
-                }
-            }
+            "rag": {"docs": {"adapter_name": "docs", "query": "test"}},
         }
 
         library = ConfigPromptLibrary(config)
@@ -467,7 +379,7 @@ class TestAsyncPromptBuilderRAG:
         builder = AsyncPromptBuilder(
             library=library,
             adapters={"docs": FailingAdapter({})},
-            raise_on_rag_error=False  # Should log warning, not raise
+            raise_on_rag_error=False,  # Should log warning, not raise
         )
 
         result = await builder.render_system_prompt("analyze")
@@ -481,15 +393,10 @@ class TestAsyncPromptBuilderRAG:
             "system": {
                 "analyze": {
                     "template": "{{RAG_CONTENT}}",
-                    "rag_config_refs": ["docs"]  # Add reference in template
+                    "rag_config_refs": ["docs"],  # Add reference in template
                 }
             },
-            "rag": {
-                "docs": {
-                    "adapter_name": "docs",
-                    "query": "test"
-                }
-            }
+            "rag": {"docs": {"adapter_name": "docs", "query": "test"}},
         }
 
         library = ConfigPromptLibrary(config)
@@ -501,7 +408,7 @@ class TestAsyncPromptBuilderRAG:
         builder = AsyncPromptBuilder(
             library=library,
             adapters={"docs": FailingAdapter({})},
-            raise_on_rag_error=True  # Should raise error
+            raise_on_rag_error=True,  # Should raise error
         )
 
         with pytest.raises(RuntimeError, match="RAG search failed"):
@@ -518,10 +425,7 @@ class TestAsyncPromptBuilderHelpers:
             "system": {
                 "analyze": {
                     "template": "Analyze {{code}}",
-                    "validation": {
-                        "level": "error",
-                        "required_params": ["code", "language"]
-                    }
+                    "validation": {"level": "error", "required_params": ["code", "language"]},
                 }
             }
         }
@@ -537,12 +441,7 @@ class TestAsyncPromptBuilderHelpers:
         """Test getting required parameters for user prompt."""
         config = {
             "user": {
-                "ask": {
-                    "template": "{{question}}",
-                    "validation": {
-                        "required_params": ["question"]
-                    }
-                }
+                "ask": {"template": "{{question}}", "validation": {"required_params": ["question"]}}
             }
         }
         library = ConfigPromptLibrary(config)
@@ -564,10 +463,7 @@ class TestAsyncPromptBuilderHelpers:
         """Test string representation."""
         library = ConfigPromptLibrary()
         adapter = AsyncDictResourceAdapter({"key": "value"})
-        builder = AsyncPromptBuilder(
-            library=library,
-            adapters={"data": adapter}
-        )
+        builder = AsyncPromptBuilder(library=library, adapters={"data": adapter})
 
         repr_str = repr(builder)
 
@@ -585,8 +481,7 @@ class TestAsyncPromptBuilderInlinePrompts:
         builder = AsyncPromptBuilder(library=library)
 
         result = await builder.render_inline_system_prompt(
-            content="You are a helpful {{role}} assistant.",
-            params={"role": "coding"}
+            content="You are a helpful {{role}} assistant.", params={"role": "coding"}
         )
 
         assert "coding" in result.content
@@ -600,8 +495,7 @@ class TestAsyncPromptBuilderInlinePrompts:
         builder = AsyncPromptBuilder(library=library)
 
         result = await builder.render_inline_user_prompt(
-            content="Help me understand {{topic}}",
-            params={"topic": "decorators"}
+            content="Help me understand {{topic}}", params={"topic": "decorators"}
         )
 
         assert "decorators" in result.content
@@ -614,9 +508,7 @@ class TestAsyncPromptBuilderInlinePrompts:
         library = ConfigPromptLibrary()
         builder = AsyncPromptBuilder(library=library)
 
-        result = await builder.render_inline_system_prompt(
-            content="You are a helpful assistant."
-        )
+        result = await builder.render_inline_system_prompt(content="You are a helpful assistant.")
 
         assert result.content == "You are a helpful assistant."
 
@@ -633,23 +525,21 @@ class TestAsyncPromptBuilderInlinePrompts:
             async def search(self, query, k=5, filters=None, **kwargs):
                 return search_results
 
-        builder = AsyncPromptBuilder(
-            library=library,
-            adapters={"docs": MockAsyncAdapter({})}
-        )
+        builder = AsyncPromptBuilder(library=library, adapters={"docs": MockAsyncAdapter({})})
 
-        rag_configs = [{
-            "adapter_name": "docs",
-            "query": "assistant guidelines",
-            "placeholder": "GUIDELINES",
-            "k": 3,
-            "header": "Guidelines:\n",
-            "item_template": "- {{ content }}\n"
-        }]
+        rag_configs = [
+            {
+                "adapter_name": "docs",
+                "query": "assistant guidelines",
+                "placeholder": "GUIDELINES",
+                "k": 3,
+                "header": "Guidelines:\n",
+                "item_template": "- {{ content }}\n",
+            }
+        ]
 
         result = await builder.render_inline_system_prompt(
-            content="You are a helpful assistant.\n\n{{ GUIDELINES }}",
-            rag_configs=rag_configs
+            content="You are a helpful assistant.\n\n{{ GUIDELINES }}", rag_configs=rag_configs
         )
 
         assert "You are a helpful assistant." in result.content
@@ -669,22 +559,16 @@ class TestAsyncPromptBuilderInlinePrompts:
             async def search(self, query, k=5, filters=None, **kwargs):
                 return search_results
 
-        builder = AsyncPromptBuilder(
-            library=library,
-            adapters={"docs": MockAsyncAdapter({})}
-        )
+        builder = AsyncPromptBuilder(library=library, adapters={"docs": MockAsyncAdapter({})})
 
-        rag_configs = [{
-            "adapter_name": "docs",
-            "query": "python {{topic}}",
-            "placeholder": "DOCS",
-            "k": 1
-        }]
+        rag_configs = [
+            {"adapter_name": "docs", "query": "python {{topic}}", "placeholder": "DOCS", "k": 1}
+        ]
 
         result = await builder.render_inline_user_prompt(
             content="Help me understand {{topic}}\n\nContext: {{DOCS}}",
             params={"topic": "decorators"},
-            rag_configs=rag_configs
+            rag_configs=rag_configs,
         )
 
         assert "decorators" in result.content
@@ -698,22 +582,13 @@ class TestAsyncPromptBuilderInlinePrompts:
             async def search(self, query, k=5, filters=None, **kwargs):
                 raise RuntimeError("Should not be called")
 
-        builder = AsyncPromptBuilder(
-            library=library,
-            adapters={"docs": FailingAdapter({})}
-        )
+        builder = AsyncPromptBuilder(library=library, adapters={"docs": FailingAdapter({})})
 
-        rag_configs = [{
-            "adapter_name": "docs",
-            "query": "test",
-            "placeholder": "CONTENT"
-        }]
+        rag_configs = [{"adapter_name": "docs", "query": "test", "placeholder": "CONTENT"}]
 
         # Should not raise because include_rag=False
         result = await builder.render_inline_system_prompt(
-            content="Test {{CONTENT}}",
-            rag_configs=rag_configs,
-            include_rag=False
+            content="Test {{CONTENT}}", rag_configs=rag_configs, include_rag=False
         )
 
         # RAG placeholder should remain unrendered (may have whitespace variations)
@@ -725,9 +600,7 @@ class TestAsyncPromptBuilderInlinePrompts:
         library = ConfigPromptLibrary()
         builder = AsyncPromptBuilder(library=library)
 
-        result = await builder.render_inline_system_prompt(
-            content="Test prompt"
-        )
+        result = await builder.render_inline_system_prompt(content="Test prompt")
 
         # The template metadata should indicate inline source
         # Note: This depends on how metadata is propagated through rendering
@@ -744,11 +617,8 @@ class TestAsyncPromptBuilderIntegration:
                 "analyze": {
                     "template": "Analyze {{language}} code: {{code}}\n\n{{RAG_CONTENT}}",
                     "defaults": {"language": "python"},
-                    "validation": {
-                        "level": "warn",
-                        "required_params": ["code"]
-                    },
-                    "rag_config_refs": ["docs"]  # Add reference in template
+                    "validation": {"level": "warn", "required_params": ["code"]},
+                    "rag_config_refs": ["docs"],  # Add reference in template
                 }
             },
             "rag": {
@@ -757,9 +627,9 @@ class TestAsyncPromptBuilderIntegration:
                     "query": "{{language}} best practices",
                     "k": 2,
                     "header": "Relevant docs:\n",
-                    "item_template": "- {{content}}\n"
+                    "item_template": "- {{content}}\n",
                 }
-            }
+            },
         }
 
         library = ConfigPromptLibrary(config)
@@ -774,15 +644,9 @@ class TestAsyncPromptBuilderIntegration:
                 assert "python" in query.lower()
                 return search_results
 
-        builder = AsyncPromptBuilder(
-            library=library,
-            adapters={"docs": MockAsyncAdapter({})}
-        )
+        builder = AsyncPromptBuilder(library=library, adapters={"docs": MockAsyncAdapter({})})
 
-        result = await builder.render_system_prompt(
-            "analyze",
-            params={"code": "def foo(): pass"}
-        )
+        result = await builder.render_system_prompt("analyze", params={"code": "def foo(): pass"})
 
         # Check all components are present
         assert "Analyze python code" in result.content  # Used default

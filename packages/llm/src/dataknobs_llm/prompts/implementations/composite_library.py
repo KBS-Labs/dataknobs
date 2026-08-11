@@ -53,9 +53,7 @@ class CompositePromptLibrary(AbstractPromptLibrary):
     """
 
     def __init__(
-        self,
-        libraries: List[AbstractPromptLibrary] | None = None,
-        names: List[str] | None = None
+        self, libraries: List[AbstractPromptLibrary] | None = None, names: List[str] | None = None
     ):
         """Initialize composite prompt library.
 
@@ -73,10 +71,7 @@ class CompositePromptLibrary(AbstractPromptLibrary):
             )
 
     def add_library(
-        self,
-        library: AbstractPromptLibrary,
-        name: str | None = None,
-        priority: int = -1
+        self, library: AbstractPromptLibrary, name: str | None = None, priority: int = -1
     ) -> None:
         """Add a library to the composite.
 
@@ -140,11 +135,7 @@ class CompositePromptLibrary(AbstractPromptLibrary):
         logger.debug(f"System prompt '{name}' not found in any library")
         return None
 
-    def get_user_prompt(
-        self,
-        name: str,
-        **kwargs
-    ) -> PromptTemplateDict | None:
+    def get_user_prompt(self, name: str, **kwargs) -> PromptTemplateDict | None:
         """Get a user prompt by name, searching libraries in order.
 
         Args:
@@ -157,9 +148,7 @@ class CompositePromptLibrary(AbstractPromptLibrary):
         for lib, lib_name in zip(self._libraries, self._names, strict=True):
             template = lib.get_user_prompt(name, **kwargs)
             if template is not None:
-                logger.debug(
-                    f"Found user prompt '{name}' in library '{lib_name}'"
-                )
+                logger.debug(f"Found user prompt '{name}' in library '{lib_name}'")
                 return template
 
         logger.debug(f"User prompt '{name}' not found in any library")
@@ -204,10 +193,7 @@ class CompositePromptLibrary(AbstractPromptLibrary):
         return None
 
     def get_prompt_rag_configs(
-        self,
-        prompt_name: str,
-        prompt_type: str = "user",
-        **kwargs
+        self, prompt_name: str, prompt_type: str = "user", **kwargs
     ) -> List[RAGConfig]:
         """Get RAG configurations for a prompt, searching libraries in order.
 

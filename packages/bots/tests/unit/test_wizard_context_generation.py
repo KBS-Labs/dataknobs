@@ -26,9 +26,7 @@ def _make_echo_llm(**options: Any) -> EchoProvider:
 class TestRenderResponseTemplateExtraContext:
     """Tests for _render_response_template with extra_context parameter."""
 
-    def test_extra_context_available_in_template(
-        self, wizard_reasoning: WizardReasoning
-    ) -> None:
+    def test_extra_context_available_in_template(self, wizard_reasoning: WizardReasoning) -> None:
         """Extra context variables are accessible in the template."""
         state = WizardState(current_stage="welcome", data={})
         stage = {"name": "welcome"}
@@ -41,9 +39,7 @@ class TestRenderResponseTemplateExtraContext:
         )
         assert result == "Names: Alpha, Beta, Gamma"
 
-    def test_extra_context_merged_with_state_data(
-        self, wizard_reasoning: WizardReasoning
-    ) -> None:
+    def test_extra_context_merged_with_state_data(self, wizard_reasoning: WizardReasoning) -> None:
         """Both state data and extra context are available."""
         state = WizardState(
             current_stage="welcome",
@@ -59,9 +55,7 @@ class TestRenderResponseTemplateExtraContext:
         )
         assert result == "Chemistry: Chem Coach, Mol Master"
 
-    def test_none_extra_context_handled(
-        self, wizard_reasoning: WizardReasoning
-    ) -> None:
+    def test_none_extra_context_handled(self, wizard_reasoning: WizardReasoning) -> None:
         """None extra_context works (backwards compatible)."""
         state = WizardState(
             current_stage="welcome",
@@ -74,9 +68,7 @@ class TestRenderResponseTemplateExtraContext:
         )
         assert result == "Hello Alice!"
 
-    def test_empty_extra_context_handled(
-        self, wizard_reasoning: WizardReasoning
-    ) -> None:
+    def test_empty_extra_context_handled(self, wizard_reasoning: WizardReasoning) -> None:
         """Empty dict extra_context works."""
         state = WizardState(
             current_stage="welcome",
@@ -107,16 +99,12 @@ class TestGenerateContextVariables:
         stage = {"name": "welcome"}
         llm = _make_echo_llm()
 
-        result = await wizard_reasoning._generate_context_variables(
-            stage, state, llm
-        )
+        result = await wizard_reasoning._generate_context_variables(stage, state, llm)
         assert result == {}
         assert llm.call_count == 0
 
     @pytest.mark.asyncio
-    async def test_successful_llm_generation(
-        self, wizard_reasoning: WizardReasoning
-    ) -> None:
+    async def test_successful_llm_generation(self, wizard_reasoning: WizardReasoning) -> None:
         """LLM response is stored under the configured variable name."""
         state = WizardState(
             current_stage="configure_identity",
@@ -132,13 +120,9 @@ class TestGenerateContextVariables:
         }
 
         llm = _make_echo_llm()
-        llm.set_responses([
-            "- **Physics Pro** (`physics-pro`)\n- **Force Field** (`force-field`)"
-        ])
+        llm.set_responses(["- **Physics Pro** (`physics-pro`)\n- **Force Field** (`force-field`)"])
 
-        result = await wizard_reasoning._generate_context_variables(
-            stage, state, llm
-        )
+        result = await wizard_reasoning._generate_context_variables(stage, state, llm)
         assert "suggested_names" in result
         assert "Physics Pro" in result["suggested_names"]
         assert llm.call_count == 1
@@ -174,9 +158,7 @@ class TestGenerateContextVariables:
         assert "{{" not in sent_content  # No unrendered templates
 
     @pytest.mark.asyncio
-    async def test_fallback_on_llm_failure(
-        self, wizard_reasoning: WizardReasoning
-    ) -> None:
+    async def test_fallback_on_llm_failure(self, wizard_reasoning: WizardReasoning) -> None:
         """Fallback value used when LLM call raises an exception."""
         state = WizardState(current_stage="welcome", data={})
         stage = {
@@ -194,15 +176,11 @@ class TestGenerateContextVariables:
         llm = _make_echo_llm()
         llm.set_response_function(_raise_error)
 
-        result = await wizard_reasoning._generate_context_variables(
-            stage, state, llm
-        )
+        result = await wizard_reasoning._generate_context_variables(stage, state, llm)
         assert result == {"names": "Default Bot"}
 
     @pytest.mark.asyncio
-    async def test_fallback_on_empty_response(
-        self, wizard_reasoning: WizardReasoning
-    ) -> None:
+    async def test_fallback_on_empty_response(self, wizard_reasoning: WizardReasoning) -> None:
         """Fallback used when LLM returns empty content."""
         state = WizardState(current_stage="welcome", data={})
         stage = {
@@ -217,15 +195,11 @@ class TestGenerateContextVariables:
         llm = _make_echo_llm()
         llm.set_responses([""])
 
-        result = await wizard_reasoning._generate_context_variables(
-            stage, state, llm
-        )
+        result = await wizard_reasoning._generate_context_variables(stage, state, llm)
         assert result == {"names": "Fallback Name"}
 
     @pytest.mark.asyncio
-    async def test_missing_prompt_returns_empty(
-        self, wizard_reasoning: WizardReasoning
-    ) -> None:
+    async def test_missing_prompt_returns_empty(self, wizard_reasoning: WizardReasoning) -> None:
         """Missing prompt in context_generation returns empty dict."""
         state = WizardState(current_stage="welcome", data={})
         stage = {
@@ -236,16 +210,12 @@ class TestGenerateContextVariables:
         }
         llm = _make_echo_llm()
 
-        result = await wizard_reasoning._generate_context_variables(
-            stage, state, llm
-        )
+        result = await wizard_reasoning._generate_context_variables(stage, state, llm)
         assert result == {}
         assert llm.call_count == 0
 
     @pytest.mark.asyncio
-    async def test_missing_variable_returns_empty(
-        self, wizard_reasoning: WizardReasoning
-    ) -> None:
+    async def test_missing_variable_returns_empty(self, wizard_reasoning: WizardReasoning) -> None:
         """Missing variable name in context_generation returns empty dict."""
         state = WizardState(current_stage="welcome", data={})
         stage = {
@@ -256,9 +226,7 @@ class TestGenerateContextVariables:
         }
         llm = _make_echo_llm()
 
-        result = await wizard_reasoning._generate_context_variables(
-            stage, state, llm
-        )
+        result = await wizard_reasoning._generate_context_variables(stage, state, llm)
         assert result == {}
         assert llm.call_count == 0
 
@@ -271,9 +239,7 @@ class TestGenerateContextVariables:
 class TestRenderSuggestions:
     """Tests for _render_suggestions."""
 
-    def test_plain_suggestions_unchanged(
-        self, wizard_reasoning: WizardReasoning
-    ) -> None:
+    def test_plain_suggestions_unchanged(self, wizard_reasoning: WizardReasoning) -> None:
         """Suggestions without {{ }} pass through unchanged."""
         state = WizardState(current_stage="welcome", data={"subject": "Math"})
         suggestions = ["Create a bot", "Skip this step"]
@@ -281,9 +247,7 @@ class TestRenderSuggestions:
         result = wizard_reasoning._render_suggestions(suggestions, state)
         assert result == ["Create a bot", "Skip this step"]
 
-    def test_template_suggestions_rendered(
-        self, wizard_reasoning: WizardReasoning
-    ) -> None:
+    def test_template_suggestions_rendered(self, wizard_reasoning: WizardReasoning) -> None:
         """Suggestions with {{ }} are rendered with state data."""
         state = WizardState(
             current_stage="welcome",
@@ -300,9 +264,7 @@ class TestRenderSuggestions:
             "Name it 'Chemistry Helper'",
         ]
 
-    def test_mixed_plain_and_template(
-        self, wizard_reasoning: WizardReasoning
-    ) -> None:
+    def test_mixed_plain_and_template(self, wizard_reasoning: WizardReasoning) -> None:
         """Mix of plain and templated suggestions works."""
         state = WizardState(
             current_stage="welcome",
@@ -319,16 +281,12 @@ class TestRenderSuggestions:
             "Call it 'Physics Pro'",
         ]
 
-    def test_empty_suggestions_returned(
-        self, wizard_reasoning: WizardReasoning
-    ) -> None:
+    def test_empty_suggestions_returned(self, wizard_reasoning: WizardReasoning) -> None:
         """Empty list returns empty list."""
         state = WizardState(current_stage="welcome", data={})
         assert wizard_reasoning._render_suggestions([], state) == []
 
-    def test_undefined_variable_renders_empty(
-        self, wizard_reasoning: WizardReasoning
-    ) -> None:
+    def test_undefined_variable_renders_empty(self, wizard_reasoning: WizardReasoning) -> None:
         """Undefined variables in suggestions render as empty string."""
         state = WizardState(current_stage="welcome", data={})
         suggestions = ["Try '{{ subject }} Bot'"]
@@ -336,9 +294,7 @@ class TestRenderSuggestions:
         result = wizard_reasoning._render_suggestions(suggestions, state)
         assert result == ["Try ' Bot'"]
 
-    def test_internal_keys_available(
-        self, wizard_reasoning: WizardReasoning
-    ) -> None:
+    def test_internal_keys_available(self, wizard_reasoning: WizardReasoning) -> None:
         """All state keys including _-prefixed are available in suggestions.
 
         The consolidated WizardRenderer uses the canonical context for all
@@ -355,9 +311,7 @@ class TestRenderSuggestions:
         result = wizard_reasoning._render_suggestions(suggestions, state)
         assert result == ["Math (hidden)"]
 
-    def test_block_tag_if_else_rendered(
-        self, wizard_reasoning: WizardReasoning
-    ) -> None:
+    def test_block_tag_if_else_rendered(self, wizard_reasoning: WizardReasoning) -> None:
         """Suggestions using {% if %} block tags are rendered correctly."""
         state = WizardState(
             current_stage="welcome",
@@ -370,9 +324,7 @@ class TestRenderSuggestions:
         result = wizard_reasoning._render_suggestions(suggestions, state)
         assert result == ["Change difficulty to hard"]
 
-    def test_block_tag_if_else_falsy_branch(
-        self, wizard_reasoning: WizardReasoning
-    ) -> None:
+    def test_block_tag_if_else_falsy_branch(self, wizard_reasoning: WizardReasoning) -> None:
         """{% if %} with missing variable takes the else branch."""
         state = WizardState(current_stage="welcome", data={})
         suggestions = [
@@ -382,9 +334,7 @@ class TestRenderSuggestions:
         result = wizard_reasoning._render_suggestions(suggestions, state)
         assert result == ["Make a quiz about algebra"]
 
-    def test_block_tag_mixed_with_variable(
-        self, wizard_reasoning: WizardReasoning
-    ) -> None:
+    def test_block_tag_mixed_with_variable(self, wizard_reasoning: WizardReasoning) -> None:
         """Suggestions combining {% if %} and {{ }} render correctly."""
         state = WizardState(
             current_stage="welcome",
@@ -397,9 +347,7 @@ class TestRenderSuggestions:
         result = wizard_reasoning._render_suggestions(suggestions, state)
         assert result == ["easy chemistry quiz"]
 
-    def test_block_tag_only_no_variables(
-        self, wizard_reasoning: WizardReasoning
-    ) -> None:
+    def test_block_tag_only_no_variables(self, wizard_reasoning: WizardReasoning) -> None:
         """Suggestions with only block tags (no {{ }}) are still rendered."""
         state = WizardState(
             current_stage="welcome",
@@ -422,9 +370,7 @@ class TestRenderSuggestions:
 class TestApplyTransitionDerivations:
     """Tests for _apply_transition_derivations."""
 
-    def test_jinja2_derivation(
-        self, wizard_reasoning: WizardReasoning
-    ) -> None:
+    def test_jinja2_derivation(self, wizard_reasoning: WizardReasoning) -> None:
         """Derive a value from Jinja2 template referencing state data."""
         state = WizardState(
             current_stage="welcome",
@@ -446,9 +392,7 @@ class TestApplyTransitionDerivations:
         wizard_reasoning._apply_transition_derivations(stage, state)
         assert state.data["template_name"] == "quiz"
 
-    def test_literal_derivation(
-        self, wizard_reasoning: WizardReasoning
-    ) -> None:
+    def test_literal_derivation(self, wizard_reasoning: WizardReasoning) -> None:
         """Derive a literal (non-template) value."""
         state = WizardState(
             current_stage="welcome",
@@ -469,9 +413,7 @@ class TestApplyTransitionDerivations:
         wizard_reasoning._apply_transition_derivations(stage, state)
         assert state.data["use_template"] is True
 
-    def test_does_not_overwrite_existing_data(
-        self, wizard_reasoning: WizardReasoning
-    ) -> None:
+    def test_does_not_overwrite_existing_data(self, wizard_reasoning: WizardReasoning) -> None:
         """Derivation does not overwrite user-provided data."""
         state = WizardState(
             current_stage="welcome",
@@ -493,9 +435,7 @@ class TestApplyTransitionDerivations:
         # Should keep user's value, not overwrite with derived
         assert state.data["template_name"] == "tutor"
 
-    def test_empty_render_skipped(
-        self, wizard_reasoning: WizardReasoning
-    ) -> None:
+    def test_empty_render_skipped(self, wizard_reasoning: WizardReasoning) -> None:
         """Template that renders to empty string is not set."""
         state = WizardState(
             current_stage="welcome",
@@ -516,9 +456,7 @@ class TestApplyTransitionDerivations:
         wizard_reasoning._apply_transition_derivations(stage, state)
         assert "template_name" not in state.data
 
-    def test_no_transitions_is_noop(
-        self, wizard_reasoning: WizardReasoning
-    ) -> None:
+    def test_no_transitions_is_noop(self, wizard_reasoning: WizardReasoning) -> None:
         """Stage with no transitions does nothing."""
         state = WizardState(current_stage="welcome", data={"x": 1})
         stage = {"name": "welcome", "transitions": []}
@@ -526,9 +464,7 @@ class TestApplyTransitionDerivations:
         wizard_reasoning._apply_transition_derivations(stage, state)
         assert state.data == {"x": 1}
 
-    def test_no_derive_in_transition_is_noop(
-        self, wizard_reasoning: WizardReasoning
-    ) -> None:
+    def test_no_derive_in_transition_is_noop(self, wizard_reasoning: WizardReasoning) -> None:
         """Transition without derive block is skipped."""
         state = WizardState(current_stage="welcome", data={"x": 1})
         stage = {
@@ -590,15 +526,11 @@ class TestGetLastBotResponse:
         conversation_manager: ConversationManager,
     ) -> None:
         """Returns the most recent assistant message."""
-        await conversation_manager.add_message(
-            role="user", content="I want a quiz bot"
-        )
+        await conversation_manager.add_message(role="user", content="I want a quiz bot")
         await conversation_manager.add_message(
             role="assistant", content="Great! Here are some names..."
         )
-        await conversation_manager.add_message(
-            role="user", content="Use the first suggestion"
-        )
+        await conversation_manager.add_message(role="user", content="Use the first suggestion")
 
         result = wizard_reasoning._extraction._get_last_bot_response(conversation_manager)
         assert result == "Great! Here are some names..."
@@ -633,16 +565,10 @@ class TestGetLastBotResponse:
         conversation_manager: ConversationManager,
     ) -> None:
         """Returns the most recent assistant message when there are multiple."""
-        await conversation_manager.add_message(
-            role="assistant", content="First bot response"
-        )
+        await conversation_manager.add_message(role="assistant", content="First bot response")
         await conversation_manager.add_message(role="user", content="Something")
-        await conversation_manager.add_message(
-            role="assistant", content="Second bot response"
-        )
-        await conversation_manager.add_message(
-            role="user", content="Another thing"
-        )
+        await conversation_manager.add_message(role="assistant", content="Second bot response")
+        await conversation_manager.add_message(role="user", content="Another thing")
 
         result = wizard_reasoning._extraction._get_last_bot_response(conversation_manager)
         assert result == "Second bot response"
@@ -671,9 +597,7 @@ class TestExtractionBotResponseContext:
                 "- **Word Wizard** (`word-wizard`)"
             ),
         )
-        await conversation_manager.add_message(
-            role="user", content="Use the first suggestion"
-        )
+        await conversation_manager.add_message(role="user", content="Use the first suggestion")
 
         state = WizardState(current_stage="configure_identity", data={})
         stage = {
@@ -701,9 +625,7 @@ class TestExtractionBotResponseContext:
         assert result is not None
 
     @pytest.mark.asyncio
-    async def test_no_manager_skips_bot_response(
-        self, wizard_reasoning: WizardReasoning
-    ) -> None:
+    async def test_no_manager_skips_bot_response(self, wizard_reasoning: WizardReasoning) -> None:
         """When manager is None, bot response is not included."""
         state = WizardState(current_stage="welcome", data={})
         stage = {
@@ -727,9 +649,7 @@ class TestExtractionBotResponseContext:
         conversation_manager: ConversationManager,
     ) -> None:
         """When there are no assistant messages, no prepend happens."""
-        await conversation_manager.add_message(
-            role="user", content="I want a quiz bot"
-        )
+        await conversation_manager.add_message(role="user", content="I want a quiz bot")
 
         state = WizardState(current_stage="welcome", data={})
         stage = {
@@ -757,9 +677,7 @@ class TestExtractionBotResponseContext:
     ) -> None:
         """Bot responses longer than 1500 chars are truncated."""
         long_response = "x" * 2000
-        await conversation_manager.add_message(
-            role="assistant", content=long_response
-        )
+        await conversation_manager.add_message(role="assistant", content=long_response)
         await conversation_manager.add_message(role="user", content="Yes")
 
         state = WizardState(current_stage="welcome", data={})
@@ -812,9 +730,7 @@ class TestExtractionBotResponseContext:
                 "What type of issue do you have?"
             ),
         )
-        await conversation_manager.add_message(
-            role="user", content="The first one"
-        )
+        await conversation_manager.add_message(role="user", content="The first one")
 
         state = WizardState(current_stage="welcome", data={})
 
@@ -888,9 +804,13 @@ class TestCaptureModeStageField:
         }
 
         # _needs_llm_extraction should return True due to capture_mode
-        assert wizard_reasoning._extraction.needs_llm_extraction(
-            stage["schema"], stage,
-        ) is True
+        assert (
+            wizard_reasoning._extraction.needs_llm_extraction(
+                stage["schema"],
+                stage,
+            )
+            is True
+        )
 
     def test_capture_mode_verbatim_forces_verbatim(
         self,
@@ -911,9 +831,13 @@ class TestCaptureModeStageField:
         }
 
         # _needs_llm_extraction should return False due to capture_mode
-        assert wizard_reasoning._extraction.needs_llm_extraction(
-            stage["schema"], stage,
-        ) is False
+        assert (
+            wizard_reasoning._extraction.needs_llm_extraction(
+                stage["schema"],
+                stage,
+            )
+            is False
+        )
 
     def test_stage_capture_mode_overrides_collection_config(
         self,
@@ -934,9 +858,13 @@ class TestCaptureModeStageField:
         }
 
         # Stage-level "extract" should win over collection_config "verbatim"
-        assert wizard_reasoning._extraction.needs_llm_extraction(
-            stage["schema"], stage,
-        ) is True
+        assert (
+            wizard_reasoning._extraction.needs_llm_extraction(
+                stage["schema"],
+                stage,
+            )
+            is True
+        )
 
     def test_loader_accepts_capture_mode(self) -> None:
         """WizardConfigLoader does not warn on capture_mode field."""

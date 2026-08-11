@@ -13,6 +13,7 @@ from .base import BasePoolConfig
 @dataclass
 class PostgresPoolConfig(BasePoolConfig):
     """Configuration for PostgreSQL connection pools."""
+
     host: str = "localhost"
     port: int = 5432
     database: str = "postgres"
@@ -65,11 +66,10 @@ class PostgresPoolConfig(BasePoolConfig):
             PostgresPoolConfig instance.
         """
         normalized = normalize_postgres_connection_config(
-            config, require=False,
+            config,
+            require=False,
         )
-        source: dict[str, Any] = (
-            normalized if normalized is not None else config
-        )
+        source: dict[str, Any] = normalized if normalized is not None else config
         return cls(
             host=source.get("host", "localhost"),
             port=int(source.get("port", 5432)),
@@ -86,12 +86,13 @@ class PostgresPoolConfig(BasePoolConfig):
 async def create_asyncpg_pool(config: PostgresPoolConfig):
     """Create an asyncpg connection pool."""
     import asyncpg
+
     return await asyncpg.create_pool(
         config.to_connection_string(),
         min_size=config.min_size,
         max_size=config.max_size,
         command_timeout=config.command_timeout,
-        ssl=config.ssl
+        ssl=config.ssl,
     )
 
 

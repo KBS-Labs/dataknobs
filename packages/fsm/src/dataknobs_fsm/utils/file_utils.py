@@ -26,17 +26,17 @@ def detect_format(file_path: Union[str, Path], for_output: bool = False) -> str:
     path = Path(file_path)
     suffix = path.suffix.lower()
 
-    if suffix in ['.jsonl', '.ndjson']:
-        return 'jsonl'
-    elif suffix == '.json':
-        return 'json'
-    elif suffix in ['.csv', '.tsv']:
-        return 'csv'
-    elif suffix in ['.txt', '.text', '.log']:
-        return 'text'
+    if suffix in [".jsonl", ".ndjson"]:
+        return "jsonl"
+    elif suffix == ".json":
+        return "json"
+    elif suffix in [".csv", ".tsv"]:
+        return "csv"
+    elif suffix in [".txt", ".text", ".log"]:
+        return "text"
     else:
         # Default to jsonl for output, text for input
-        return 'jsonl' if for_output else 'text'
+        return "jsonl" if for_output else "text"
 
 
 def get_csv_delimiter(file_path: Union[str, Path]) -> str:
@@ -49,16 +49,16 @@ def get_csv_delimiter(file_path: Union[str, Path]) -> str:
         Delimiter character
     """
     path = Path(file_path)
-    return '\t' if path.suffix.lower() == '.tsv' else ','
+    return "\t" if path.suffix.lower() == ".tsv" else ","
 
 
 async def create_file_reader(
     file_path: Union[str, Path],
-    input_format: str = 'auto',
-    text_field_name: str = 'text',
-    csv_delimiter: str = ',',
+    input_format: str = "auto",
+    text_field_name: str = "text",
+    csv_delimiter: str = ",",
     csv_has_header: bool = True,
-    skip_empty_lines: bool = True
+    skip_empty_lines: bool = True,
 ) -> AsyncIterator[Dict[str, Any]]:
     """Create an async iterator for reading files in various formats.
 
@@ -79,24 +79,24 @@ async def create_file_reader(
     path = Path(file_path)
 
     # Auto-detect format if needed
-    if input_format == 'auto':
+    if input_format == "auto":
         input_format = detect_format(path)
-        if input_format == 'csv' and path.suffix.lower() == '.tsv':
-            csv_delimiter = '\t'
+        if input_format == "csv" and path.suffix.lower() == ".tsv":
+            csv_delimiter = "\t"
 
-    if input_format == 'jsonl':
+    if input_format == "jsonl":
         async for record in read_jsonl_file(path):
             yield record
 
-    elif input_format == 'json':
+    elif input_format == "json":
         async for record in read_json_file(path):
             yield record
 
-    elif input_format == 'csv':
+    elif input_format == "csv":
         async for record in read_csv_file(path, csv_delimiter, csv_has_header):
             yield record
 
-    elif input_format == 'text':
+    elif input_format == "text":
         async for record in read_text_file(path, text_field_name, skip_empty_lines):
             yield record
 
@@ -160,9 +160,7 @@ def _load_json(file_path: Path) -> Any:
 
 
 async def read_csv_file(
-    file_path: Path,
-    delimiter: str = ',',
-    has_header: bool = True
+    file_path: Path, delimiter: str = ",", has_header: bool = True
 ) -> AsyncIterator[Dict[str, Any]]:
     """Read a CSV file.
 
@@ -178,9 +176,7 @@ async def read_csv_file(
     Yields:
         Dictionaries representing each row
     """
-    async for row in aiter_sync_in_thread(
-        lambda: _read_csv_sync(file_path, delimiter, has_header)
-    ):
+    async for row in aiter_sync_in_thread(lambda: _read_csv_sync(file_path, delimiter, has_header)):
         yield row
 
 
@@ -190,20 +186,18 @@ def _read_csv_sync(
     has_header: bool,
 ) -> Iterator[Dict[str, Any]]:
     """Synchronous CSV row reader — driven on a worker thread."""
-    with open(file_path, newline='') as f:
+    with open(file_path, newline="") as f:
         if has_header:
             dict_reader = csv.DictReader(f, delimiter=delimiter)
             yield from dict_reader
         else:
             list_reader = csv.reader(f, delimiter=delimiter)
             for row_list in list_reader:
-                yield {f'col_{i}': val for i, val in enumerate(row_list)}
+                yield {f"col_{i}": val for i, val in enumerate(row_list)}
 
 
 async def read_text_file(
-    file_path: Path,
-    field_name: str = 'text',
-    skip_empty: bool = True
+    file_path: Path, field_name: str = "text", skip_empty: bool = True
 ) -> AsyncIterator[Dict[str, Any]]:
     """Read a plain text file line by line.
 
@@ -233,14 +227,13 @@ def _read_text_sync(
     """Synchronous text line reader — driven on a worker thread."""
     with open(file_path) as f:
         for line in f:
-            sline = line.rstrip('\n\r')
+            sline = line.rstrip("\n\r")
             if sline or not skip_empty:
                 yield {field_name: sline}
 
 
 def create_file_writer(
-    file_path: Union[str, Path],
-    output_format: str | None = None
+    file_path: Union[str, Path], output_format: str | None = None
 ) -> tuple[Callable[[List[Dict[str, Any]]], None], Callable[[], None] | None]:
     """Create a file writer function for the specified format.
 
@@ -258,14 +251,14 @@ def create_file_writer(
     if output_format is None:
         output_format = detect_format(path, for_output=True)
 
-    if output_format == 'jsonl':
+    if output_format == "jsonl":
         return create_jsonl_writer(path), None
 
-    elif output_format == 'csv':
+    elif output_format == "csv":
         delimiter = get_csv_delimiter(path)
         return create_csv_writer(path, delimiter)
 
-    elif output_format == 'json':
+    elif output_format == "json":
         return create_json_writer(path)
 
     else:
@@ -282,18 +275,19 @@ def create_jsonl_writer(file_path: Path) -> Callable[[List[Dict[str, Any]]], Non
     Returns:
         Writer function that appends to JSONL file
     """
+
     def write_jsonl(results: List[Dict[str, Any]]) -> None:
         from dataknobs_fsm.utils.json_encoder import dumps
-        with open(file_path, 'a') as f:
+
+        with open(file_path, "a") as f:
             for result in results:
-                f.write(dumps(result) + '\n')
+                f.write(dumps(result) + "\n")
 
     return write_jsonl
 
 
 def create_csv_writer(
-    file_path: Path,
-    delimiter: str = ','
+    file_path: Path, delimiter: str = ","
 ) -> tuple[Callable[[List[Dict[str, Any]]], None], Callable[[], None]]:
     """Create a CSV writer function with state management.
 
@@ -311,17 +305,13 @@ def create_csv_writer(
         nonlocal csv_writer, csv_file
 
         if not csv_file:
-            csv_file = open(file_path, 'w', newline='')
+            csv_file = open(file_path, "w", newline="")
 
         for result in results:
             if not csv_writer:
                 # Initialize CSV writer with fields from first result
                 fieldnames = list(result.keys())
-                csv_writer = csv.DictWriter(
-                    csv_file,
-                    fieldnames=fieldnames,
-                    delimiter=delimiter
-                )
+                csv_writer = csv.DictWriter(csv_file, fieldnames=fieldnames, delimiter=delimiter)
                 csv_writer.writeheader()
             csv_writer.writerow(result)
 
@@ -333,7 +323,7 @@ def create_csv_writer(
 
 
 def create_json_writer(
-    file_path: Path
+    file_path: Path,
 ) -> tuple[Callable[[List[Dict[str, Any]]], None], Callable[[], None]]:
     """Create a JSON writer function that accumulates results.
 
@@ -351,7 +341,7 @@ def create_json_writer(
 
     def cleanup() -> None:
         # Write all results at once
-        with open(file_path, 'w') as f:
+        with open(file_path, "w") as f:
             json.dump(all_results, f, indent=2)
 
     return write_json, cleanup

@@ -51,9 +51,14 @@ class TestEnvironmentDetection:
 
     def test_detect_default_development(self, monkeypatch):
         """Test default to development."""
-        for var in ["DATAKNOBS_ENVIRONMENT", "AWS_EXECUTION_ENV",
-                    "KUBERNETES_SERVICE_HOST", "K_SERVICE", "FUNCTIONS_WORKER_RUNTIME",
-                    "ECS_CONTAINER_METADATA_URI"]:
+        for var in [
+            "DATAKNOBS_ENVIRONMENT",
+            "AWS_EXECUTION_ENV",
+            "KUBERNETES_SERVICE_HOST",
+            "K_SERVICE",
+            "FUNCTIONS_WORKER_RUNTIME",
+            "ECS_CONTAINER_METADATA_URI",
+        ]:
             monkeypatch.delenv(var, raising=False)
         assert EnvironmentConfig.detect_environment() == "development"
 
@@ -72,19 +77,23 @@ class TestEnvironmentConfigLoading:
         """Test loading YAML environment config."""
         monkeypatch.setenv("DATABASE_URL", "postgresql://localhost/test")
         config_file = env_dir / "production.yaml"
-        config_file.write_text(yaml.dump({
-            "name": "production",
-            "description": "Production environment",
-            "settings": {"log_level": "INFO"},
-            "resources": {
-                "databases": {
-                    "default": {
-                        "backend": "postgres",
-                        "connection_string": "${DATABASE_URL}"
-                    }
+        config_file.write_text(
+            yaml.dump(
+                {
+                    "name": "production",
+                    "description": "Production environment",
+                    "settings": {"log_level": "INFO"},
+                    "resources": {
+                        "databases": {
+                            "default": {
+                                "backend": "postgres",
+                                "connection_string": "${DATABASE_URL}",
+                            }
+                        }
+                    },
                 }
-            }
-        }))
+            )
+        )
 
         env = EnvironmentConfig.load("production", config_dir=env_dir)
 
@@ -186,8 +195,7 @@ class TestResourceAccess:
     def test_get_resource_with_defaults(self, env_config):
         """Test getting resource with defaults for missing keys."""
         db = env_config.get_resource(
-            "databases", "default",
-            defaults={"port": 5432, "host": "ignored"}
+            "databases", "default", defaults={"port": 5432, "host": "ignored"}
         )
         assert db["port"] == 5432
         assert db["host"] == "localhost"  # Existing value not overwritten
@@ -195,8 +203,7 @@ class TestResourceAccess:
     def test_get_resource_not_found_with_defaults(self, env_config):
         """Test getting missing resource with defaults."""
         cache = env_config.get_resource(
-            "caches", "redis",
-            defaults={"backend": "redis", "host": "localhost"}
+            "caches", "redis", defaults={"backend": "redis", "host": "localhost"}
         )
         assert cache["backend"] == "redis"
         assert cache["host"] == "localhost"
@@ -238,20 +245,10 @@ class TestEnvironmentConfigMerge:
     def test_merge_resources(self):
         """Test merging resources from two configs."""
         base = EnvironmentConfig(
-            name="base",
-            resources={
-                "databases": {
-                    "default": {"backend": "sqlite"}
-                }
-            }
+            name="base", resources={"databases": {"default": {"backend": "sqlite"}}}
         )
         override = EnvironmentConfig(
-            name="override",
-            resources={
-                "databases": {
-                    "analytics": {"backend": "postgres"}
-                }
-            }
+            name="override", resources={"databases": {"analytics": {"backend": "postgres"}}}
         )
 
         merged = base.merge(override)
@@ -263,19 +260,10 @@ class TestEnvironmentConfigMerge:
         """Test that merge overwrites existing resource configs."""
         base = EnvironmentConfig(
             name="base",
-            resources={
-                "databases": {
-                    "default": {"backend": "sqlite", "path": "/data/db"}
-                }
-            }
+            resources={"databases": {"default": {"backend": "sqlite", "path": "/data/db"}}},
         )
         override = EnvironmentConfig(
-            name="override",
-            resources={
-                "databases": {
-                    "default": {"backend": "postgres"}
-                }
-            }
+            name="override", resources={"databases": {"default": {"backend": "postgres"}}}
         )
 
         merged = base.merge(override)
@@ -285,14 +273,8 @@ class TestEnvironmentConfigMerge:
 
     def test_merge_settings(self):
         """Test merging settings."""
-        base = EnvironmentConfig(
-            name="base",
-            settings={"a": 1, "b": 2}
-        )
-        override = EnvironmentConfig(
-            name="override",
-            settings={"b": 20, "c": 30}
-        )
+        base = EnvironmentConfig(name="base", settings={"a": 1, "b": 2})
+        override = EnvironmentConfig(name="override", settings={"b": 20, "c": 30})
 
         merged = base.merge(override)
         assert merged.settings == {"a": 1, "b": 20, "c": 30}
@@ -307,7 +289,7 @@ class TestEnvironmentConfigSerialization:
             name="test",
             description="Test environment",
             resources={"databases": {"default": {"backend": "sqlite"}}},
-            settings={"debug": True}
+            settings={"debug": True},
         )
 
         data = env.to_dict()
@@ -319,8 +301,7 @@ class TestEnvironmentConfigSerialization:
     def test_to_dict_returns_copy(self):
         """Test that to_dict returns a copy."""
         env = EnvironmentConfig(
-            name="test",
-            resources={"databases": {"default": {"backend": "sqlite"}}}
+            name="test", resources={"databases": {"default": {"backend": "sqlite"}}}
         )
 
         data = env.to_dict()
@@ -334,7 +315,7 @@ class TestEnvironmentConfigSerialization:
             "name": "production",
             "description": "Prod",
             "resources": {"databases": {"default": {"backend": "postgres"}}},
-            "settings": {"log_level": "INFO"}
+            "settings": {"log_level": "INFO"},
         }
 
         env = EnvironmentConfig.from_dict(data)
@@ -350,9 +331,7 @@ class TestResourceBinding:
     def test_resource_binding(self):
         """Test ResourceBinding creation."""
         binding = ResourceBinding(
-            name="default",
-            resource_type="databases",
-            config={"backend": "postgres"}
+            name="default", resource_type="databases", config={"backend": "postgres"}
         )
         assert binding.name == "default"
         assert binding.resource_type == "databases"
@@ -396,11 +375,7 @@ class TestEnvironmentConfigEnvVarSubstitution:
         monkeypatch.delenv("REQUIRED_VAR", raising=False)
         config_path = tmp_path / "test.yaml"
         config_path.write_text(
-            "name: test\n"
-            "resources:\n"
-            "  databases:\n"
-            "    primary:\n"
-            "      url: ${REQUIRED_VAR}\n"
+            "name: test\nresources:\n  databases:\n    primary:\n      url: ${REQUIRED_VAR}\n"
         )
         with pytest.raises(ValueError, match="REQUIRED_VAR"):
             EnvironmentConfig.load("test", tmp_path)
@@ -409,15 +384,9 @@ class TestEnvironmentConfigEnvVarSubstitution:
         """Opt-out for consumers that want to inspect raw refs."""
         config_path = tmp_path / "test.yaml"
         config_path.write_text(
-            "name: test\n"
-            "resources:\n"
-            "  databases:\n"
-            "    primary:\n"
-            "      url: ${DB_URL}\n"
+            "name: test\nresources:\n  databases:\n    primary:\n      url: ${DB_URL}\n"
         )
-        cfg = EnvironmentConfig.load(
-            "test", tmp_path, substitute_vars=False
-        )
+        cfg = EnvironmentConfig.load("test", tmp_path, substitute_vars=False)
         assert cfg.get_resource("databases", "primary") == {"url": "${DB_URL}"}
 
     def test_from_dict_substitutes_env_vars(self, monkeypatch):
@@ -426,14 +395,10 @@ class TestEnvironmentConfigEnvVarSubstitution:
         cfg = EnvironmentConfig.from_dict(
             {
                 "name": "test",
-                "resources": {
-                    "databases": {"primary": {"host": "${DB_HOST}"}}
-                },
+                "resources": {"databases": {"primary": {"host": "${DB_HOST}"}}},
             }
         )
-        assert cfg.get_resource("databases", "primary") == {
-            "host": "rds.example.com"
-        }
+        assert cfg.get_resource("databases", "primary") == {"host": "rds.example.com"}
 
     def test_from_dict_substitute_vars_false_preserves_literals(self):
         """from_dict opt-out matches load() opt-out."""
@@ -446,9 +411,7 @@ class TestEnvironmentConfigEnvVarSubstitution:
         )
         assert cfg.get_resource("databases", "primary") == {"url": "${DB_URL}"}
 
-    def test_binding_resolver_with_env_substituted_config(
-        self, tmp_path, monkeypatch
-    ):
+    def test_binding_resolver_with_env_substituted_config(self, tmp_path, monkeypatch):
         """End-to-end: ConfigBindingResolver sees substituted values from load-time substitution."""
         from dataknobs_config.binding_resolver import (
             ConfigBindingResolver,
@@ -462,11 +425,7 @@ class TestEnvironmentConfigEnvVarSubstitution:
         monkeypatch.setenv("TEST_HOST", "rds.example.com")
         config_path = tmp_path / "test.yaml"
         config_path.write_text(
-            "name: test\n"
-            "resources:\n"
-            "  databases:\n"
-            "    primary:\n"
-            "      host: ${TEST_HOST}\n"
+            "name: test\nresources:\n  databases:\n    primary:\n      host: ${TEST_HOST}\n"
         )
         env = EnvironmentConfig.load("test", tmp_path)
         resolver = ConfigBindingResolver(env)
@@ -506,12 +465,7 @@ class TestSubstitutionProvenance:
         (tmp_path / "test.yaml").write_text(yaml.dump(self.PAYLOAD))
 
         assert EnvironmentConfig.load("test", tmp_path).substituted is True
-        assert (
-            EnvironmentConfig.load(
-                "test", tmp_path, substitute_vars=False
-            ).substituted
-            is False
-        )
+        assert EnvironmentConfig.load("test", tmp_path, substitute_vars=False).substituted is False
 
     def test_load_of_absent_file_reports_what_was_asked_of_it(self, tmp_path):
         """An empty config holds no values, so either answer is vacuous.
@@ -525,9 +479,7 @@ class TestSubstitutionProvenance:
         assert EnvironmentConfig.load("absent", tmp_path).substituted is True
         assert EnvironmentConfig.from_dict({}).substituted is True
 
-    def test_absent_and_raw_disagree_the_way_mixed_provenance_should(
-        self, tmp_path, monkeypatch
-    ):
+    def test_absent_and_raw_disagree_the_way_mixed_provenance_should(self, tmp_path, monkeypatch):
         """The consequence of the above, stated rather than discovered.
 
         An absent-file config now reports ``True``, so merging it with a
@@ -562,12 +514,8 @@ class TestSubstitutionProvenance:
         ``assert loaded == EnvironmentConfig.from_dict(expected)``, which is
         about values and never about which layer expanded them.
         """
-        substituted = EnvironmentConfig.from_dict(
-            {"name": "test", "settings": {"note": "s3cret"}}
-        )
-        constructed = EnvironmentConfig(
-            name="test", settings={"note": "s3cret"}
-        )
+        substituted = EnvironmentConfig.from_dict({"name": "test", "settings": {"note": "s3cret"}})
+        constructed = EnvironmentConfig(name="test", settings={"note": "s3cret"})
 
         assert substituted.substituted is not constructed.substituted
         assert substituted == constructed
@@ -589,9 +537,7 @@ class TestSubstitutedView:
         )
 
     def test_returns_self_when_already_substituted(self):
-        env = EnvironmentConfig.from_dict(
-            {"name": "test", "settings": {"note": "${PROV_PW}"}}
-        )
+        env = EnvironmentConfig.from_dict({"name": "test", "settings": {"note": "${PROV_PW}"}})
 
         assert env.substituted_view() is env
 
@@ -696,7 +642,7 @@ class TestMergeProvenance:
 
 
 class TestGetResourceHandsOutIsolatedConfig:
-    """"Copy to avoid mutation" has to mean the whole config.
+    """ "Copy to avoid mutation" has to mean the whole config.
 
     ``get_resource`` copies the resource dict, but shallowly, so every
     nested container in the returned config is the environment's own object.
@@ -763,9 +709,7 @@ class TestSubstitutedViewCoversEveryField:
 
     def test_the_view_substitutes_description(self, monkeypatch):
         monkeypatch.setenv("ENV_BLURB", "production west")
-        env = EnvironmentConfig(
-            name="test", description="${ENV_BLURB}", substituted=False
-        )
+        env = EnvironmentConfig(name="test", description="${ENV_BLURB}", substituted=False)
 
         assert env.substituted_view().description == "production west"
 
@@ -775,9 +719,7 @@ class TestSubstitutedViewCoversEveryField:
 
         assert env.substituted_view().name == "prod-west"
 
-    def test_the_view_matches_what_load_would_have_produced(
-        self, monkeypatch, tmp_path
-    ):
+    def test_the_view_matches_what_load_would_have_produced(self, monkeypatch, tmp_path):
         monkeypatch.setenv("ENV_BLURB", "production west")
         path = tmp_path / "prod.yaml"
         path.write_text(
@@ -791,9 +733,7 @@ class TestSubstitutedViewCoversEveryField:
         )
 
         loaded = EnvironmentConfig.load("prod", config_dir=tmp_path)
-        raw = EnvironmentConfig.load(
-            "prod", config_dir=tmp_path, substitute_vars=False
-        )
+        raw = EnvironmentConfig.load("prod", config_dir=tmp_path, substitute_vars=False)
 
         assert raw.substituted_view() == loaded
         assert raw.substituted_view().description == loaded.description
@@ -864,9 +804,7 @@ class TestSubstitutedIsProvenanceNotAnAssertion:
         remarked = dataclasses.replace(env, substituted=False)
 
         assert (
-            remarked.substituted_view()
-            .get_resource("databases", "b")["dsn"]
-            == "postgres://late"
+            remarked.substituted_view().get_resource("databases", "b")["dsn"] == "postgres://late"
         )
 
 
@@ -951,9 +889,7 @@ class TestEveryHandOutIsolatesNestedStructure:
         assert env.resources["databases"]["main"]["pool"]["max"] == 5
 
     def test_merge_does_not_alias_the_argument_either(self, env):
-        other = EnvironmentConfig(
-            name="b", resources={"caches": {"r": {"opts": {"ttl": 1}}}}
-        )
+        other = EnvironmentConfig(name="b", resources={"caches": {"r": {"opts": {"ttl": 1}}}})
 
         merged = env.merge(other)
         merged.resources["caches"]["r"]["opts"]["ttl"] = 999
@@ -972,9 +908,7 @@ class TestEveryHandOutIsolatesNestedStructure:
     def test_merge_preserves_leaf_identity(self, env):
         """Same bound as ``get_resource``: structure copied, values are not."""
         sentinel = object()
-        other = EnvironmentConfig(
-            name="b", resources={"caches": {"r": {"client": sentinel}}}
-        )
+        other = EnvironmentConfig(name="b", resources={"caches": {"r": {"client": sentinel}}})
 
         merged = env.merge(other)
 
@@ -988,9 +922,7 @@ class TestEveryHandOutIsolatesNestedStructure:
         """
         cyclic: dict[str, Any] = {"host": "db.prod"}
         cyclic["self"] = cyclic
-        env = EnvironmentConfig(
-            name="a", resources={"databases": {"main": cyclic}}
-        )
+        env = EnvironmentConfig(name="a", resources={"databases": {"main": cyclic}})
 
         config = env.get_resource("databases", "main")
 
@@ -1023,9 +955,7 @@ class TestEveryHandOutIsolatesNestedStructure:
         shared = {"timeout": 30}
         defaults = {"read": shared, "write": shared}
 
-        env = EnvironmentConfig(
-            name="a", resources={"databases": {"main": {"host": "db"}}}
-        )
+        env = EnvironmentConfig(name="a", resources={"databases": {"main": {"host": "db"}}})
         found = env.get_resource("databases", "main", defaults=defaults)
         absent = env.get_resource("databases", "typo", defaults=defaults)
 
@@ -1033,9 +963,7 @@ class TestEveryHandOutIsolatesNestedStructure:
         assert absent["read"] is absent["write"]
         assert found["read"] is not shared
 
-    def test_get_resource_does_not_alias_the_defaults_it_falls_back_on(
-        self, env
-    ):
+    def test_get_resource_does_not_alias_the_defaults_it_falls_back_on(self, env):
         """The found path fills gaps from the caller's own dict.
 
         Its sibling — the path taken when the resource is absent — copies
@@ -1063,17 +991,13 @@ class TestProvenanceIsRecordedOnEveryConstructionPath:
     exact failure the flag exists to prevent.
     """
 
-    def test_a_missing_file_records_that_substitution_was_requested(
-        self, tmp_path
-    ):
+    def test_a_missing_file_records_that_substitution_was_requested(self, tmp_path):
         cfg = EnvironmentConfig.load("absent", config_dir=tmp_path)
 
         assert cfg.substituted is True
 
     def test_a_missing_file_records_when_it_was_not(self, tmp_path):
-        cfg = EnvironmentConfig.load(
-            "absent", config_dir=tmp_path, substitute_vars=False
-        )
+        cfg = EnvironmentConfig.load("absent", config_dir=tmp_path, substitute_vars=False)
 
         assert cfg.substituted is False
 

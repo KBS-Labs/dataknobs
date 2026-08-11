@@ -74,9 +74,7 @@ async def track() -> Iterator[list[PyrateRateLimiter]]:
 @pytest.fixture
 def sqlite_limiter(tmp_path, track) -> PyrateRateLimiter:
     """A real sqlite-bucket limiter over a tmp db file, closed on teardown."""
-    limiter = _make_limiter(
-        {"bucket": "sqlite", "sqlite": {"db_path": str(tmp_path / "rl.db")}}
-    )
+    limiter = _make_limiter({"bucket": "sqlite", "sqlite": {"db_path": str(tmp_path / "rl.db")}})
     track.append(limiter)
     return limiter
 
@@ -135,9 +133,7 @@ async def test_try_acquire_redis_does_not_block(track) -> None:
     — offloaded for the redis backend.
     """
     pytest.importorskip("redis")
-    limiter = _make_limiter(
-        {"bucket": "redis", "redis": {"url": "redis://localhost:6379"}}
-    )
+    limiter = _make_limiter({"bucket": "redis", "redis": {"url": "redis://localhost:6379"}})
     track.append(limiter)
     with assert_no_blocking():
         await limiter.try_acquire("api")
@@ -145,9 +141,7 @@ async def test_try_acquire_redis_does_not_block(track) -> None:
 
 @requires_blockbuster
 @requires_postgres
-async def test_try_acquire_postgres_does_not_block(
-    postgres_connection_params, track
-) -> None:
+async def test_try_acquire_postgres_does_not_block(postgres_connection_params, track) -> None:
     """try_acquire over a real postgres bucket must not block the loop.
 
     PostgresBucket requires a *sync* psycopg pool (``postgres.pool``). The
@@ -167,9 +161,7 @@ async def test_try_acquire_postgres_does_not_block(
     )
     pool = psycopg_pool.ConnectionPool(conninfo, open=True)
     try:
-        limiter = _make_limiter(
-            {"bucket": "postgres", "postgres": {"pool": pool}}
-        )
+        limiter = _make_limiter({"bucket": "postgres", "postgres": {"pool": pool}})
         track.append(limiter)
         with assert_no_blocking():
             await limiter.try_acquire("api")

@@ -60,8 +60,7 @@ logger = logging.getLogger(__name__)
 _pgvector_marks = [
     requires_postgres,
     pytest.mark.skipif(
-        os.environ.get("TEST_POSTGRES", "").lower() != "true"
-        or not ASYNCPG_AVAILABLE,
+        os.environ.get("TEST_POSTGRES", "").lower() != "true" or not ASYNCPG_AVAILABLE,
         reason="pgvector tests require TEST_POSTGRES=true and asyncpg",
     ),
 ]
@@ -145,16 +144,12 @@ CASE_IDS = [f"case{i + 1}" for i in range(len(FOUR_QUADRANT_CASES))]
         pytest.param(
             "faiss",
             id="faiss",
-            marks=pytest.mark.skipif(
-                not is_faiss_available(), reason="faiss not installed"
-            ),
+            marks=pytest.mark.skipif(not is_faiss_available(), reason="faiss not installed"),
         ),
         pytest.param(
             "chroma",
             id="chroma",
-            marks=pytest.mark.skipif(
-                not is_chromadb_available(), reason="chromadb not installed"
-            ),
+            marks=pytest.mark.skipif(not is_chromadb_available(), reason="chromadb not installed"),
         ),
         pytest.param("pgvector", id="pgvector", marks=_pgvector_marks),
     ]
@@ -183,9 +178,7 @@ async def any_vector_store(
 
     await store.initialize()
     try:
-        await store.add_vectors(
-            _seed_vectors(), ids=list(SEED_IDS), metadata=list(SEED_METADATA)
-        )
+        await store.add_vectors(_seed_vectors(), ids=list(SEED_IDS), metadata=list(SEED_METADATA))
         yield store
     finally:
         await _teardown_backend(backend, store)
@@ -193,25 +186,19 @@ async def any_vector_store(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "filter_dict,expected", FOUR_QUADRANT_CASES, ids=CASE_IDS
-)
+@pytest.mark.parametrize("filter_dict,expected", FOUR_QUADRANT_CASES, ids=CASE_IDS)
 async def test_search_filter_quadrants(
     any_vector_store: Any,
     filter_dict: dict[str, Any],
     expected: set[str],
 ) -> None:
     """search() returns the four-quadrant-correct id set for each filter."""
-    results = await any_vector_store.search(
-        _query_vector(), k=10, filter=filter_dict
-    )
+    results = await any_vector_store.search(_query_vector(), k=10, filter=filter_dict)
     assert {r[0] for r in results} == expected
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "filter_dict,expected", FOUR_QUADRANT_CASES, ids=CASE_IDS
-)
+@pytest.mark.parametrize("filter_dict,expected", FOUR_QUADRANT_CASES, ids=CASE_IDS)
 async def test_count_filter_quadrants(
     any_vector_store: Any,
     filter_dict: dict[str, Any],
@@ -244,16 +231,12 @@ TYPE_SAFETY_METADATA: list[dict[str, Any]] = [
         pytest.param(
             "faiss",
             id="faiss",
-            marks=pytest.mark.skipif(
-                not is_faiss_available(), reason="faiss not installed"
-            ),
+            marks=pytest.mark.skipif(not is_faiss_available(), reason="faiss not installed"),
         ),
         pytest.param(
             "chroma",
             id="chroma",
-            marks=pytest.mark.skipif(
-                not is_chromadb_available(), reason="chromadb not installed"
-            ),
+            marks=pytest.mark.skipif(not is_chromadb_available(), reason="chromadb not installed"),
         ),
         pytest.param("pgvector", id="pgvector", marks=_pgvector_marks),
     ]
@@ -361,16 +344,12 @@ def _domain_scoped_metadata() -> list[dict[str, Any]]:
         pytest.param(
             "faiss",
             id="faiss",
-            marks=pytest.mark.skipif(
-                not is_faiss_available(), reason="faiss not installed"
-            ),
+            marks=pytest.mark.skipif(not is_faiss_available(), reason="faiss not installed"),
         ),
         pytest.param(
             "chroma",
             id="chroma",
-            marks=pytest.mark.skipif(
-                not is_chromadb_available(), reason="chromadb not installed"
-            ),
+            marks=pytest.mark.skipif(not is_chromadb_available(), reason="chromadb not installed"),
         ),
         pytest.param("pgvector", id="pgvector", marks=_pgvector_marks),
     ]
@@ -384,9 +363,7 @@ async def domain_scoped_store(
     if backend == "memory":
         store = MemoryVectorStore({"dimensions": 4, "domain_id": "t1"})
     elif backend == "faiss":
-        store = FaissVectorStore(
-            {"dimensions": 4, "metric": "cosine", "domain_id": "t1"}
-        )
+        store = FaissVectorStore({"dimensions": 4, "metric": "cosine", "domain_id": "t1"})
     elif backend == "chroma":
         store = ChromaVectorStore(
             {
@@ -449,9 +426,7 @@ async def test_config_domain_id_scopes_search(
     results = await domain_scoped_store.search(_query_vector(), k=10)
     assert {r[0] for r in results} == {"s1", "s2"}
     # Cross-domain request → empty on every backend.
-    cross = await domain_scoped_store.search(
-        _query_vector(), k=10, filter={"domain_id": "t2"}
-    )
+    cross = await domain_scoped_store.search(_query_vector(), k=10, filter={"domain_id": "t2"})
     assert cross == []
 
 
@@ -463,15 +438,11 @@ async def test_config_domain_id_scopes_update_metadata_where(
     domain — the count of affected rows is exactly the in-domain set,
     and a cross-domain request is a no-op.
     """
-    affected = await domain_scoped_store.update_metadata_where(
-        None, {"_stale": True}
-    )
+    affected = await domain_scoped_store.update_metadata_where(None, {"_stale": True})
     assert affected == 2
     # An explicit cross-domain update never escapes the configured
     # scope (intersects to empty on every backend).
-    cross = await domain_scoped_store.update_metadata_where(
-        {"domain_id": "t2"}, {"_stale": True}
-    )
+    cross = await domain_scoped_store.update_metadata_where({"domain_id": "t2"}, {"_stale": True})
     assert cross == 0
     # The scoped store still sees exactly its two in-domain rows.
     assert await domain_scoped_store.count() == 2

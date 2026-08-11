@@ -267,9 +267,7 @@ class HotReloadManager(Generic[T]):
         await self._caching_manager.invalidate(instance_id)
 
         # Reload (force refresh)
-        instance = await self._caching_manager.get_or_create(
-            instance_id, force_refresh=True
-        )
+        instance = await self._caching_manager.get_or_create(instance_id, force_refresh=True)
 
         # Update stats and invoke callbacks
         await self._on_reload_complete(instance_id)
@@ -294,9 +292,7 @@ class HotReloadManager(Generic[T]):
         logger.info("Invalidated %d cached instances", cache_size)
         return cache_size
 
-    async def _on_change_detected(
-        self, instance_id: str, event_type: EventType
-    ) -> None:
+    async def _on_change_detected(self, instance_id: str, event_type: EventType) -> None:
         """Handle detected changes from poller or events.
 
         Args:

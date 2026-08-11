@@ -18,9 +18,18 @@ from dataknobs_fsm.functions.library._callables import normalize_record_callable
 # ``isinstance`` check in :func:`build_record_validator`. Shared by every
 # pattern that accepts a friendly dict validation schema (file-processing, ETL).
 _VALIDATION_TYPE_MAP: Dict[str, type] = {
-    "str": str, "string": str, "int": int, "integer": int,
-    "float": float, "number": float, "bool": bool, "boolean": bool,
-    "list": list, "array": list, "dict": dict, "object": dict,
+    "str": str,
+    "string": str,
+    "int": int,
+    "integer": int,
+    "float": float,
+    "number": float,
+    "bool": bool,
+    "boolean": bool,
+    "list": list,
+    "array": list,
+    "dict": dict,
+    "object": dict,
 }
 
 
@@ -71,18 +80,14 @@ def _friendly_schema_predicate(
             # invalid (the gate rejects it) — never a ``TypeError`` from
             # comparing e.g. ``"abc" >= 18``.
             if "min" in constraints and (
-                not isinstance(value, (int, float))
-                or value < constraints["min"]
+                not isinstance(value, (int, float)) or value < constraints["min"]
             ):
                 return False
             if "max" in constraints and (
-                not isinstance(value, (int, float))
-                or value > constraints["max"]
+                not isinstance(value, (int, float)) or value > constraints["max"]
             ):
                 return False
-            if "pattern" in constraints and not re.match(
-                constraints["pattern"], str(value)
-            ):
+            if "pattern" in constraints and not re.match(constraints["pattern"], str(value)):
                 return False
         return True
 
@@ -238,7 +243,7 @@ class RequiredFieldsValidator(IValidationFunction):
 
     def __init__(self, fields: List[str], allow_none: bool = False):
         """Initialize the validator.
-        
+
         Args:
             fields: List of required field names.
             allow_none: Whether to allow None values for required fields.
@@ -248,46 +253,39 @@ class RequiredFieldsValidator(IValidationFunction):
 
     def validate(self, data: Dict[str, Any]) -> bool:
         """Validate that all required fields are present.
-        
+
         Args:
             data: Data to validate.
-            
+
         Returns:
             True if valid, False otherwise.
-            
+
         Raises:
             FSMValidationError: If validation fails with details.
         """
         if not isinstance(data, dict):
             raise FSMValidationError(f"Expected dict, got {type(data).__name__}")
-        
+
         missing_fields = []
         none_fields = []
-        
+
         for field in self.fields:
             if field not in data:
                 missing_fields.append(field)
             elif not self.allow_none and data[field] is None:
                 none_fields.append(field)
-        
+
         if missing_fields:
-            raise FSMValidationError(
-                f"Missing required fields: {', '.join(missing_fields)}"
-            )
-        
+            raise FSMValidationError(f"Missing required fields: {', '.join(missing_fields)}")
+
         if none_fields:
-            raise FSMValidationError(
-                f"Fields cannot be None: {', '.join(none_fields)}"
-            )
+            raise FSMValidationError(f"Fields cannot be None: {', '.join(none_fields)}")
 
         return True
 
     def get_validation_rules(self) -> Dict[str, Any]:
         """Get the validation rules."""
-        return {
-            "required_fields": self.fields,
-            "allow_none": self.allow_none
-        }
+        return {"required_fields": self.fields, "allow_none": self.allow_none}
 
 
 class SchemaValidator(IValidationFunction):
@@ -295,26 +293,27 @@ class SchemaValidator(IValidationFunction):
 
     def __init__(self, schema: Union[type[BaseModel], Dict[str, Any]]):
         """Initialize the validator.
-        
+
         Args:
             schema: Pydantic model class or schema dictionary.
         """
         if isinstance(schema, dict):
             # Create a dynamic Pydantic model from dictionary
             from pydantic import create_model
+
             self.schema = create_model("DynamicSchema", **schema)
         else:
             self.schema = schema
 
     def validate(self, data: Dict[str, Any]) -> bool:
         """Validate data against the schema.
-        
+
         Args:
             data: Data to validate.
-            
+
         Returns:
             True if valid, False otherwise.
-            
+
         Raises:
             FSMValidationError: If validation fails with details.
         """
@@ -326,16 +325,14 @@ class SchemaValidator(IValidationFunction):
             for error in e.errors():
                 field_path = ".".join(str(loc) for loc in error["loc"])
                 errors.append(f"{field_path}: {error['msg']}")
-            
-            raise FSMValidationError(
-                f"Schema validation failed: {'; '.join(errors)}"
-            ) from e
-    
+
+            raise FSMValidationError(f"Schema validation failed: {'; '.join(errors)}") from e
+
     def get_validation_rules(self) -> Dict[str, Any]:
         """Get the validation rules."""
-        if hasattr(self.schema, 'model_json_schema'):
+        if hasattr(self.schema, "model_json_schema"):
             return self.schema.model_json_schema()
-        elif hasattr(self.schema, '__annotations__'):
+        elif hasattr(self.schema, "__annotations__"):
             return dict(self.schema.__annotations__)
         else:
             return {"schema": str(self.schema)}
@@ -349,7 +346,7 @@ class RangeValidator(IValidationFunction):
         field_ranges: Dict[str, Dict[str, Union[int, float]]],
     ):
         """Initialize the validator.
-        
+
         Args:
             field_ranges: Dictionary mapping field names to range specifications.
                          Each range can have 'min', 'max', or both.
@@ -358,33 +355,33 @@ class RangeValidator(IValidationFunction):
 
     def validate(self, data: Dict[str, Any]) -> bool:
         """Validate that values are within specified ranges.
-        
+
         Args:
             data: Data to validate.
-            
+
         Returns:
             True if valid, False otherwise.
-            
+
         Raises:
             FSMValidationError: If validation fails with details.
         """
         errors = []
-        
+
         for field, range_spec in self.field_ranges.items():
             if field not in data:
                 continue
-            
+
             value = data[field]
             if not isinstance(value, (int, float)):
                 errors.append(f"{field}: Expected numeric value, got {type(value).__name__}")
                 continue
-            
+
             if "min" in range_spec and value < range_spec["min"]:
                 errors.append(f"{field}: Value {value} is below minimum {range_spec['min']}")
-            
+
             if "max" in range_spec and value > range_spec["max"]:
                 errors.append(f"{field}: Value {value} is above maximum {range_spec['max']}")
-        
+
         if errors:
             raise FSMValidationError("; ".join(errors))
 
@@ -392,10 +389,7 @@ class RangeValidator(IValidationFunction):
 
     def get_validation_rules(self) -> Dict[str, Any]:
         """Get the validation rules."""
-        return {
-            "type": "range",
-            "field_ranges": self.field_ranges
-        }
+        return {"type": "range", "field_ranges": self.field_ranges}
 
 
 class PatternValidator(IValidationFunction):
@@ -407,7 +401,7 @@ class PatternValidator(IValidationFunction):
         flags: int = 0,
     ):
         """Initialize the validator.
-        
+
         Args:
             field_patterns: Dictionary mapping field names to regex patterns.
             flags: Regex flags to apply (e.g., re.IGNORECASE).
@@ -418,27 +412,27 @@ class PatternValidator(IValidationFunction):
 
     def validate(self, data: Dict[str, Any]) -> bool:
         """Validate that values match specified patterns.
-        
+
         Args:
             data: Data to validate.
-            
+
         Returns:
             True if valid, False otherwise.
-            
+
         Raises:
             FSMValidationError: If validation fails with details.
         """
         errors = []
-        
+
         for field, pattern in self.field_patterns.items():
             if field not in data:
                 continue
-            
+
             value = data[field]
             if not isinstance(value, str):
                 errors.append(f"{field}: Expected string value, got {type(value).__name__}")
                 continue
-            
+
             if not pattern.match(value):
                 errors.append(f"{field}: Value '{value}' does not match pattern")
 
@@ -451,7 +445,9 @@ class PatternValidator(IValidationFunction):
         """Get the validation rules."""
         return {
             "type": "pattern",
-            "field_patterns": {field: pattern.pattern for field, pattern in self.field_patterns.items()}
+            "field_patterns": {
+                field: pattern.pattern for field, pattern in self.field_patterns.items()
+            },
         }
 
 
@@ -464,7 +460,7 @@ class TypeValidator(IValidationFunction):
         strict: bool = False,
     ):
         """Initialize the validator.
-        
+
         Args:
             field_types: Dictionary mapping field names to expected types.
             strict: If True, reject extra fields not in field_types.
@@ -474,40 +470,38 @@ class TypeValidator(IValidationFunction):
 
     def validate(self, data: Dict[str, Any]) -> bool:
         """Validate that fields have expected types.
-        
+
         Args:
             data: Data to validate.
-            
+
         Returns:
             True if valid, False otherwise.
-            
+
         Raises:
             FSMValidationError: If validation fails with details.
         """
         errors = []
-        
+
         # Check field types
         for field, expected_type in self.field_types.items():
             if field not in data:
                 continue
-            
+
             value = data[field]
             if isinstance(expected_type, list):
                 # Multiple allowed types
                 if not any(isinstance(value, t) for t in expected_type):
                     type_names = ", ".join(t.__name__ for t in expected_type)
                     errors.append(
-                        f"{field}: Expected one of [{type_names}], "
-                        f"got {type(value).__name__}"
+                        f"{field}: Expected one of [{type_names}], got {type(value).__name__}"
                     )
             else:
                 # Single expected type
                 if not isinstance(value, expected_type):
                     errors.append(
-                        f"{field}: Expected {expected_type.__name__}, "
-                        f"got {type(value).__name__}"
+                        f"{field}: Expected {expected_type.__name__}, got {type(value).__name__}"
                     )
-        
+
         # Check for extra fields if strict mode
         if self.strict:
             extra_fields = set(data.keys()) - set(self.field_types.keys())
@@ -527,11 +521,7 @@ class TypeValidator(IValidationFunction):
                 field_type_names[field] = [t.__name__ for t in ftype]
             else:
                 field_type_names[field] = ftype.__name__
-        return {
-            "type": "type_check",
-            "field_types": field_type_names,
-            "strict": self.strict
-        }
+        return {"type": "type_check", "field_types": field_type_names, "strict": self.strict}
 
 
 class LengthValidator(IValidationFunction):
@@ -542,7 +532,7 @@ class LengthValidator(IValidationFunction):
         field_lengths: Dict[str, Dict[str, int]],
     ):
         """Initialize the validator.
-        
+
         Args:
             field_lengths: Dictionary mapping field names to length specifications.
                           Each spec can have 'min', 'max', or 'exact'.
@@ -551,37 +541,37 @@ class LengthValidator(IValidationFunction):
 
     def validate(self, data: Dict[str, Any]) -> bool:
         """Validate that collections have expected lengths.
-        
+
         Args:
             data: Data to validate.
-            
+
         Returns:
             True if valid, False otherwise.
-            
+
         Raises:
             FSMValidationError: If validation fails with details.
         """
         errors = []
-        
+
         for field, length_spec in self.field_lengths.items():
             if field not in data:
                 continue
-            
+
             value = data[field]
             if not hasattr(value, "__len__"):
                 errors.append(f"{field}: Value does not have a length")
                 continue
-            
+
             length = len(value)
-            
+
             if "exact" in length_spec and length != length_spec["exact"]:
                 errors.append(
                     f"{field}: Length {length} does not match expected {length_spec['exact']}"
                 )
-            
+
             if "min" in length_spec and length < length_spec["min"]:
                 errors.append(f"{field}: Length {length} is below minimum {length_spec['min']}")
-            
+
             if "max" in length_spec and length > length_spec["max"]:
                 errors.append(f"{field}: Length {length} is above maximum {length_spec['max']}")
 
@@ -592,10 +582,7 @@ class LengthValidator(IValidationFunction):
 
     def get_validation_rules(self) -> Dict[str, Any]:
         """Get the validation rules."""
-        return {
-            "type": "length",
-            "field_lengths": self.field_lengths
-        }
+        return {"type": "length", "field_lengths": self.field_lengths}
 
 
 class UniqueValidator(IValidationFunction):
@@ -607,7 +594,7 @@ class UniqueValidator(IValidationFunction):
         key: str | None = None,
     ):
         """Initialize the validator.
-        
+
         Args:
             fields: List of field names to check for uniqueness.
             key: Optional key to extract from collection items for uniqueness check.
@@ -617,38 +604,40 @@ class UniqueValidator(IValidationFunction):
 
     def validate(self, data: Dict[str, Any]) -> bool:
         """Validate that values are unique.
-        
+
         Args:
             data: Data to validate.
-            
+
         Returns:
             True if valid, False otherwise.
-            
+
         Raises:
             FSMValidationError: If validation fails with details.
         """
         errors = []
-        
+
         for field in self.fields:
             if field not in data:
                 continue
-            
+
             value = data[field]
             if not isinstance(value, (list, tuple, set)):
                 errors.append(f"{field}: Expected collection, got {type(value).__name__}")
                 continue
-            
+
             if self.key:
                 # Extract values using key
                 try:
-                    values = [item[self.key] if isinstance(item, dict) else getattr(item, self.key)
-                             for item in value]
+                    values = [
+                        item[self.key] if isinstance(item, dict) else getattr(item, self.key)
+                        for item in value
+                    ]
                 except (KeyError, AttributeError) as e:
                     errors.append(f"{field}: Cannot extract key '{self.key}': {e}")
                     continue
             else:
                 values = list(value)
-            
+
             # Check for duplicates
             seen = set()
             duplicates = set()
@@ -656,7 +645,7 @@ class UniqueValidator(IValidationFunction):
                 if v in seen:
                     duplicates.add(str(v))
                 seen.add(v)
-            
+
             if duplicates:
                 errors.append(f"{field}: Duplicate values found: {', '.join(duplicates)}")
 
@@ -667,11 +656,7 @@ class UniqueValidator(IValidationFunction):
 
     def get_validation_rules(self) -> Dict[str, Any]:
         """Get the validation rules."""
-        return {
-            "type": "unique",
-            "fields": self.fields,
-            "key": self.key
-        }
+        return {"type": "unique", "fields": self.fields, "key": self.key}
 
 
 class DependencyValidator(IValidationFunction):
@@ -682,7 +667,7 @@ class DependencyValidator(IValidationFunction):
         dependencies: Dict[str, Union[str, List[str]]],
     ):
         """Initialize the validator.
-        
+
         Args:
             dependencies: Dictionary mapping field names to their dependencies.
         """
@@ -690,30 +675,28 @@ class DependencyValidator(IValidationFunction):
 
     def validate(self, data: Dict[str, Any]) -> bool:
         """Validate field dependencies.
-        
+
         Args:
             data: Data to validate.
-            
+
         Returns:
             True if valid, False otherwise.
-            
+
         Raises:
             FSMValidationError: If validation fails with details.
         """
         errors = []
-        
+
         for field, deps in self.dependencies.items():
             if field not in data:
                 continue
-            
+
             deps_list = deps if isinstance(deps, list) else [deps]
-            
+
             missing_deps = [dep for dep in deps_list if dep not in data]
-            
+
             if missing_deps:
-                errors.append(
-                    f"Field '{field}' requires: {', '.join(missing_deps)}"
-                )
+                errors.append(f"Field '{field}' requires: {', '.join(missing_deps)}")
 
         if errors:
             raise FSMValidationError("; ".join(errors))
@@ -722,10 +705,7 @@ class DependencyValidator(IValidationFunction):
 
     def get_validation_rules(self) -> Dict[str, Any]:
         """Get the validation rules."""
-        return {
-            "type": "dependency",
-            "dependencies": self.dependencies
-        }
+        return {"type": "dependency", "dependencies": self.dependencies}
 
 
 class CompositeValidator(IValidationFunction):
@@ -737,7 +717,7 @@ class CompositeValidator(IValidationFunction):
         stop_on_first_error: bool = False,
     ):
         """Initialize the composite validator.
-        
+
         Args:
             validators: List of validators to apply.
             stop_on_first_error: If True, stop at first validation error.
@@ -747,18 +727,18 @@ class CompositeValidator(IValidationFunction):
 
     def validate(self, data: Dict[str, Any]) -> bool:
         """Apply all validators to the data.
-        
+
         Args:
             data: Data to validate.
-            
+
         Returns:
             True if all validators pass.
-            
+
         Raises:
             FSMValidationError: If any validation fails.
         """
         errors = []
-        
+
         for validator in self.validators:
             try:
                 validator.validate(data)
@@ -766,10 +746,10 @@ class CompositeValidator(IValidationFunction):
                 if self.stop_on_first_error:
                     raise
                 errors.append(str(e))
-        
+
         if errors:
             raise FSMValidationError("; ".join(errors))
-        
+
         return True
 
 

@@ -60,8 +60,7 @@ class VectorStoreTimestampConfig(StructuredConfig):
     def __post_init__(self) -> None:
         if self.format not in _VALID_TIMESTAMP_FORMATS:
             raise ValueError(
-                "timestamps.format must be 'iso', 'epoch', or 'datetime'; "
-                f"got {self.format!r}"
+                f"timestamps.format must be 'iso', 'epoch', or 'datetime'; got {self.format!r}"
             )
 
 
@@ -261,17 +260,12 @@ class PgVectorStoreConfig(VectorStoreConfig):
         object.__setattr__(
             self, "table_name", validate_pg_identifier(self.table_name, "table_name")
         )
-        object.__setattr__(
-            self, "schema", validate_pg_identifier(self.schema, "schema")
-        )
+        object.__setattr__(self, "schema", validate_pg_identifier(self.schema, "schema"))
         if self.id_type not in ("uuid", "text"):
-            raise ValueError(
-                f"id_type must be 'uuid' or 'text', got: {self.id_type}"
-            )
+            raise ValueError(f"id_type must be 'uuid' or 'text', got: {self.id_type}")
         if self.index_type not in ("none", "hnsw", "ivfflat"):
             raise ValueError(
-                "index_type must be 'none', 'hnsw', or 'ivfflat', got: "
-                f"{self.index_type}"
+                f"index_type must be 'none', 'hnsw', or 'ivfflat', got: {self.index_type}"
             )
 
 

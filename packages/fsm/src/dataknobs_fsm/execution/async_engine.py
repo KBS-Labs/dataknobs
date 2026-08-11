@@ -17,7 +17,7 @@ from dataknobs_fsm.execution.context import ExecutionContext
 from dataknobs_fsm.execution.common import (
     NetworkSelector,
     TransitionSelectionMode,
-    TraversalStrategy
+    TraversalStrategy,
 )
 from dataknobs_fsm.execution.base_engine import BaseExecutionEngine
 from dataknobs_fsm.functions.base import FunctionContext
@@ -30,14 +30,14 @@ logger = logging.getLogger(__name__)
 
 class AsyncExecutionEngine(BaseExecutionEngine):
     """Asynchronous execution engine for FSM.
-    
+
     This engine handles:
     - True async execution of state functions
     - Parallel arc evaluation
     - Async resource management
     - Non-blocking state transitions
     """
-    
+
     def __init__(
         self,
         fsm: FSM,
@@ -65,7 +65,7 @@ class AsyncExecutionEngine(BaseExecutionEngine):
         self._post_transition_hooks: list[Callable] = []
         self._error_hooks: list[Callable] = []
         self._custom_functions: dict[str, Callable] = custom_functions or {}
-    
+
     async def _fire_hooks(self, hooks: list[Callable], *args: Any) -> None:
         """Fire a list of hooks, awaiting async hooks.
 
@@ -91,8 +91,8 @@ class AsyncExecutionEngine(BaseExecutionEngine):
         Returns:
             Dictionary of all available functions.
         """
-        function_registry = getattr(self.fsm, 'function_registry', {})
-        if hasattr(function_registry, 'functions'):
+        function_registry = getattr(self.fsm, "function_registry", {})
+        if hasattr(function_registry, "functions"):
             functions = dict(function_registry.functions)
         else:
             functions = dict(function_registry)
@@ -128,26 +128,26 @@ class AsyncExecutionEngine(BaseExecutionEngine):
         context: ExecutionContext,
         data: Any = None,
         max_transitions: int = 1000,
-        arc_name: str | None = None
+        arc_name: str | None = None,
     ) -> Tuple[bool, Any]:
         """Execute the FSM asynchronously with given context.
-        
+
         Args:
             context: Execution context.
             data: Input data to process.
             max_transitions: Maximum transitions before stopping.
             arc_name: Optional specific arc name to follow.
-            
+
         Returns:
             Tuple of (success, result).
         """
         start_time = time.time()
         self._execution_count += 1
-        
+
         # Only override context.data if data was explicitly provided
         if data is not None:
             context.data = data
-        
+
         # Enter the initial state on the parent context ONLY for single-record
         # mode. Batch and stream spin up a fresh child context per item/record
         # and route each through ``_enter_and_execute_child`` ->
@@ -176,28 +176,25 @@ class AsyncExecutionEngine(BaseExecutionEngine):
                 result = await self._execute_stream(context, max_transitions)
             else:
                 result = False, f"Unknown data mode: {context.data_mode}"
-                
+
             self._total_execution_time += time.time() - start_time
             return result
-            
+
         except Exception as e:
             self._error_count += 1
             self._total_execution_time += time.time() - start_time
             return False, str(e)
-    
+
     async def _execute_single(
-        self,
-        context: ExecutionContext,
-        max_transitions: int,
-        arc_name: str | None = None
+        self, context: ExecutionContext, max_transitions: int, arc_name: str | None = None
     ) -> Tuple[bool, Any]:
         """Execute in single record mode asynchronously.
-        
+
         Args:
             context: Execution context.
             max_transitions: Maximum transitions.
             arc_name: Optional specific arc name to follow.
-            
+
         Returns:
             Tuple of (success, result).
         """
@@ -211,9 +208,7 @@ class AsyncExecutionEngine(BaseExecutionEngine):
 
                 # Get available transitions
                 transitions_available = await self._get_available_transitions(
-                    context.current_state,
-                    context,
-                    arc_name
+                    context.current_state, context, arc_name
                 )
 
                 if not transitions_available:
@@ -231,19 +226,13 @@ class AsyncExecutionEngine(BaseExecutionEngine):
                     return False, f"No valid transitions from state: {context.current_state}"
 
                 # Choose transition based on strategy
-                next_transition = await self._choose_transition(
-                    transitions_available,
-                    context
-                )
+                next_transition = await self._choose_transition(transitions_available, context)
 
                 if not next_transition:
                     return False, "No transition selected"
 
                 # Execute transition
-                success = await self._execute_transition(
-                    next_transition,
-                    context
-                )
+                success = await self._execute_transition(next_transition, context)
 
                 if not success:
                     return False, f"Transition failed: {next_transition}"
@@ -270,7 +259,7 @@ class AsyncExecutionEngine(BaseExecutionEngine):
             # touches only this state's own resources — any still-inherited
             # ancestor resources belong to an ancestor that already unwound.
             self._release_owned_state_resources(context)
-    
+
     async def _enter_and_execute_child(
         self,
         child_context: ExecutionContext,
@@ -291,14 +280,10 @@ class AsyncExecutionEngine(BaseExecutionEngine):
         success, error = await self._enter_initial_state(child_context)
         if not success:
             return False, error
-        return await self._execute_single(
-            child_context, max_transitions, arc_name
-        )
+        return await self._execute_single(child_context, max_transitions, arc_name)
 
     async def _execute_batch(
-        self,
-        context: ExecutionContext,
-        max_transitions: int
+        self, context: ExecutionContext, max_transitions: int
     ) -> Tuple[bool, Any]:
         """Execute in batch mode asynchronously.
 
@@ -322,14 +307,12 @@ class AsyncExecutionEngine(BaseExecutionEngine):
             # Enter the item's initial state through the shared parity path
             # (pre-validators + resource allocation + initial transforms),
             # then run it — matching single-record execution.
-            task = asyncio.create_task(
-                self._enter_and_execute_child(item_context, max_transitions)
-            )
+            task = asyncio.create_task(self._enter_and_execute_child(item_context, max_transitions))
             tasks.append(task)
-        
+
         # Wait for all tasks
         results = await asyncio.gather(*tasks, return_exceptions=True)
-        
+
         # Process results
         batch_results = []
         batch_errors = []
@@ -343,42 +326,37 @@ class AsyncExecutionEngine(BaseExecutionEngine):
                     batch_results.append(value)
                 else:
                     batch_errors.append((i, Exception(value)))
-        
-        return len(batch_errors) == 0, {
-            'results': batch_results,
-            'errors': batch_errors
-        }
-    
+
+        return len(batch_errors) == 0, {"results": batch_results, "errors": batch_errors}
+
     async def _execute_stream(
-        self,
-        context: ExecutionContext,
-        max_transitions: int
+        self, context: ExecutionContext, max_transitions: int
     ) -> Tuple[bool, Any]:
         """Execute in stream mode asynchronously.
-        
+
         Args:
             context: Execution context.
             max_transitions: Maximum transitions per chunk.
-            
+
         Returns:
             Tuple of (success, stream_stats).
         """
         if not context.stream_context:
             return False, "No stream context provided"
-        
+
         chunks_processed = 0
         total_records = 0
         errors = []
-        
+
         # Process each chunk
         while True:
             # Get next chunk from stream
             chunk = context.stream_context.get_next_chunk()
             if not chunk:
                 break
-            
+
             context.set_stream_chunk(chunk)
-            
+
             # Process chunk data
             for record in chunk.data:
                 record_context = context.create_child_context(
@@ -390,70 +368,64 @@ class AsyncExecutionEngine(BaseExecutionEngine):
                 # (pre-validators + resource allocation + initial transforms),
                 # then run it — matching single-record execution.
                 success, result = await self._enter_and_execute_child(
-                    record_context,
-                    max_transitions
+                    record_context, max_transitions
                 )
-                
+
                 if not success:
                     errors.append((total_records, result))
-                
+
                 # Merge context
-                context.merge_child_context(
-                    f"stream_{chunks_processed}_{total_records}"
-                )
-                
+                context.merge_child_context(f"stream_{chunks_processed}_{total_records}")
+
                 total_records += 1
-            
+
             chunks_processed += 1
-            
+
             # Check if this was the last chunk
             if chunk.is_last:
                 break
-        
+
         return len(errors) == 0, {
-            'chunks_processed': chunks_processed,
-            'records_processed': total_records,
-            'errors': errors
+            "chunks_processed": chunks_processed,
+            "records_processed": total_records,
+            "errors": errors,
         }
-    
+
     async def _get_available_transitions(
-        self,
-        state_name: str,
-        context: ExecutionContext,
-        arc_name: str | None = None
+        self, state_name: str, context: ExecutionContext, arc_name: str | None = None
     ) -> List[ArcDefinition]:
         """Get available transitions from current state asynchronously.
-        
+
         This evaluates pre-conditions in parallel.
-        
+
         Args:
             state_name: Current state name.
             context: Execution context.
             arc_name: Optional specific arc name to filter by.
-            
+
         Returns:
             List of available arc definitions.
         """
         network = await self._get_current_network(context)
         if not network or state_name not in network.states:
             return []
-        
+
         state = network.states[state_name]
         available = []
-        
+
         # Filter arcs by name if specified
         arcs_to_evaluate = state.outgoing_arcs
         if arc_name:
-            arcs_to_evaluate = [arc for arc in state.outgoing_arcs 
-                              if hasattr(arc, 'name') and arc.name == arc_name]
+            arcs_to_evaluate = [
+                arc for arc in state.outgoing_arcs if hasattr(arc, "name") and arc.name == arc_name
+            ]
             # If no arcs match the specified name, return empty list
             if not arcs_to_evaluate:
                 return []
-        
+
         # Evaluate all arc pre-conditions in parallel
         tasks = [
-            (arc, asyncio.create_task(self._evaluate_arc(arc, context)))
-            for arc in arcs_to_evaluate
+            (arc, asyncio.create_task(self._evaluate_arc(arc, context))) for arc in arcs_to_evaluate
         ]
 
         # Await ALL evaluations (return_exceptions=True) so a condition that
@@ -463,9 +435,7 @@ class AsyncExecutionEngine(BaseExecutionEngine):
         # genuine evaluation failure — re-raise it so the record errors out
         # (engine.execute() turns it into a failed record result) instead of
         # being silently de-selected.
-        outcomes = await asyncio.gather(
-            *(task for _, task in tasks), return_exceptions=True
-        )
+        outcomes = await asyncio.gather(*(task for _, task in tasks), return_exceptions=True)
         for (arc, _), outcome in zip(tasks, outcomes):
             if isinstance(outcome, BaseException):
                 raise outcome
@@ -476,18 +446,14 @@ class AsyncExecutionEngine(BaseExecutionEngine):
         available.sort(key=lambda a: a.priority, reverse=True)
 
         return available
-    
-    async def _evaluate_arc(
-        self,
-        arc: ArcDefinition,
-        context: ExecutionContext
-    ) -> bool:
+
+    async def _evaluate_arc(self, arc: ArcDefinition, context: ExecutionContext) -> bool:
         """Evaluate if an arc can be executed.
-        
+
         Args:
             arc: Arc definition.
             context: Execution context.
-            
+
         Returns:
             True if arc can be executed.
         """
@@ -510,29 +476,26 @@ class AsyncExecutionEngine(BaseExecutionEngine):
         # map) into the condition's function context, so a resource-aware
         # predicate can route on them. The factory stays transform-scoped
         # (apply_factory=False) — its documented contract is for transforms.
-        role_bindings = getattr(arc, 'required_resources', None) or {}
+        role_bindings = getattr(arc, "required_resources", None) or {}
         owner_id = self._arc_resource_owner(context, arc)
-        arc_label = (
-            f"arc '{getattr(context, 'current_state', '?')}->{arc.target_state}' "
-            f"condition"
-        )
+        arc_label = f"arc '{getattr(context, 'current_state', '?')}->{arc.target_state}' condition"
         arc_resources = self._acquire_named_resources(
             context, role_bindings.values(), owner_id, owner_label=arc_label
         )
         try:
             func_context = self._build_function_context(
                 context,
-                state_name=getattr(context, 'current_state', '') or '',
+                state_name=getattr(context, "current_state", "") or "",
                 function_name=arc.pre_test,
                 resources=arc_resources,
                 role_bindings=role_bindings,
                 base_metadata={
-                    'source_state': getattr(context, 'current_state', None),
-                    'target_state': arc.target_state,
-                    'arc_priority': arc.priority,
+                    "source_state": getattr(context, "current_state", None),
+                    "target_state": arc.target_state,
+                    "arc_priority": arc.priority,
                     # Conditions never stream; carried for shape-parity with the
                     # sync condition context (core/arc.py _create_function_context).
-                    'stream_enabled': False,
+                    "stream_enabled": False,
                 },
                 apply_factory=False,
             )
@@ -567,49 +530,38 @@ class AsyncExecutionEngine(BaseExecutionEngine):
                 # _get_available_transitions propagates this; engine.execute()
                 # converts it to a failed record result.
                 logger.warning(
-                    "Arc condition %r raised; surfacing as an evaluation error "
-                    "(arc %s->%s)",
+                    "Arc condition %r raised; surfacing as an evaluation error (arc %s->%s)",
                     arc.pre_test,
-                    getattr(context, 'current_state', '?'),
+                    getattr(context, "current_state", "?"),
                     arc.target_state,
                     exc_info=True,
                 )
                 raise
         finally:
-            self._release_named_resources(
-                context, arc_resources, owner_id, owner_label=arc_label
-            )
+            self._release_named_resources(context, arc_resources, owner_id, owner_label=arc_label)
 
         # Handle tuple return from test functions (bool, reason)
         if isinstance(result, tuple):
             return bool(result[0])
         return bool(result)
-    
+
     async def _choose_transition(
-        self,
-        available: List[ArcDefinition],
-        context: ExecutionContext
+        self, available: List[ArcDefinition], context: ExecutionContext
     ) -> ArcDefinition | None:
         """Choose transition using common transition selector.
-        
+
         Args:
             available: Available transitions.
             context: Execution context.
-            
+
         Returns:
             Selected arc or None.
         """
         return self.transition_selector.select_transition(
-            available,
-            context,
-            strategy=self.strategy
+            available, context, strategy=self.strategy
         )
-    
-    async def _execute_transition(
-        self,
-        arc: ArcDefinition,
-        context: ExecutionContext
-    ) -> bool:
+
+    async def _execute_transition(self, arc: ArcDefinition, context: ExecutionContext) -> bool:
         """Execute a state transition asynchronously.
 
         Mirrors the sync engine's retry/error categorization and hook firing.
@@ -635,11 +587,9 @@ class AsyncExecutionEngine(BaseExecutionEngine):
         # are injected (by name, plus a role map) into the transform's function
         # context and released in the finally below. Acquired even before the
         # retry loop so the same handles are reused across retries.
-        role_bindings = getattr(arc, 'required_resources', None) or {}
+        role_bindings = getattr(arc, "required_resources", None) or {}
         owner_id = self._arc_resource_owner(context, arc)
-        arc_label = (
-            f"arc '{getattr(context, 'current_state', '?')}->{arc.target_state}'"
-        )
+        arc_label = f"arc '{getattr(context, 'current_state', '?')}->{arc.target_state}'"
         # Acquire only when a transform will actually consume the resources — a
         # resource-bearing arc with no transform has no consumer for the handles.
         arc_resources = (
@@ -659,9 +609,7 @@ class AsyncExecutionEngine(BaseExecutionEngine):
 
                         # Normalize to list for uniform handling
                         transform_names = (
-                            arc.transform
-                            if isinstance(arc.transform, list)
-                            else [arc.transform]
+                            arc.transform if isinstance(arc.transform, list) else [arc.transform]
                         )
 
                         # Build the resource-bearing function context once per
@@ -670,26 +618,22 @@ class AsyncExecutionEngine(BaseExecutionEngine):
                         # transform_context_factory is honored on the arc path.
                         func_context = self._build_function_context(
                             context,
-                            state_name=getattr(context, 'current_state', '') or '',
+                            state_name=getattr(context, "current_state", "") or "",
                             function_name=(
-                                transform_names[0]
-                                if transform_names
-                                else arc.target_state
+                                transform_names[0] if transform_names else arc.target_state
                             ),
                             resources=arc_resources,
                             role_bindings=role_bindings,
                             base_metadata={
-                                'source_state': getattr(
-                                    context, 'current_state', None
-                                ),
-                                'target_state': arc.target_state,
-                                'arc_priority': arc.priority,
+                                "source_state": getattr(context, "current_state", None),
+                                "target_state": arc.target_state,
+                                "arc_priority": arc.priority,
                                 # Arc transforms run buffered (not streaming);
                                 # carried so the transform context shape matches
                                 # the condition path and the sync engine
                                 # (core/arc.py _create_function_context always
                                 # sets stream_enabled in metadata).
-                                'stream_enabled': False,
+                                "stream_enabled": False,
                             },
                         )
 
@@ -710,14 +654,10 @@ class AsyncExecutionEngine(BaseExecutionEngine):
                                 # Check if it's async
                                 is_async = asyncio.iscoroutinefunction(transform_func)
                                 if not is_async and callable(transform_func):
-                                    is_async = asyncio.iscoroutinefunction(
-                                        transform_func.__call__
-                                    )
+                                    is_async = asyncio.iscoroutinefunction(transform_func.__call__)
 
                                 if is_async:
-                                    result = await transform_func(
-                                        context.data, func_context
-                                    )
+                                    result = await transform_func(context.data, func_context)
                                 else:
                                     loop = asyncio.get_running_loop()
                                     result = await loop.run_in_executor(
@@ -727,9 +667,7 @@ class AsyncExecutionEngine(BaseExecutionEngine):
                                         func_context,
                                     )
 
-                            context.data = self._coalesce_transform_result(
-                                result, context.data
-                            )
+                            context.data = self._coalesce_transform_result(result, context.data)
 
                     # Leaving the source state: release its owned resources
                     # (held until now so a nested push can inherit them, and so a
@@ -749,9 +687,7 @@ class AsyncExecutionEngine(BaseExecutionEngine):
                     self._transition_count += 1
 
                     # Fire post-transition hooks
-                    await self._fire_hooks(
-                        self._post_transition_hooks, context, arc
-                    )
+                    await self._fire_hooks(self._post_transition_hooks, context, arc)
 
                     return True
 
@@ -779,15 +715,10 @@ class AsyncExecutionEngine(BaseExecutionEngine):
 
             return False
         finally:
-            self._release_named_resources(
-                context, arc_resources, owner_id, owner_label=arc_label
-            )
+            self._release_named_resources(context, arc_resources, owner_id, owner_label=arc_label)
 
     async def _execute_push_arc(
-        self,
-        context: ExecutionContext,
-        push_arc: PushArc,
-        max_subflow_depth: int = 10
+        self, context: ExecutionContext, push_arc: PushArc, max_subflow_depth: int = 10
     ) -> bool:
         """Execute a push arc to transition into a subflow network.
 
@@ -831,7 +762,7 @@ class AsyncExecutionEngine(BaseExecutionEngine):
         # entry path (initial, regular transition, nested push) now routes
         # through enter_state, so this reflects the pushing state's resources
         # regardless of how it was entered.
-        parent_state_resources = getattr(context, 'current_state_resources', {})
+        parent_state_resources = getattr(context, "current_state_resources", {})
 
         # Fire pre-transition hooks
         await self._fire_hooks(self._pre_transition_hooks, context, push_arc)
@@ -845,15 +776,11 @@ class AsyncExecutionEngine(BaseExecutionEngine):
             return False
 
         mapped_data = self.prepare_subflow_input(push_arc, context.data)
-        isolated_data = await self._isolate_subflow_data(
-            push_arc.isolation_mode, mapped_data
-        )
+        isolated_data = await self._isolate_subflow_data(push_arc.isolation_mode, mapped_data)
 
         # Commit the push (replace data, push network + frame, set parent
         # resources), then enter the sub-network's initial state.
-        self.begin_subflow(
-            context, push_arc, network_name, parent_state_resources, isolated_data
-        )
+        self.begin_subflow(context, push_arc, network_name, parent_state_resources, isolated_data)
         if not await self.enter_state(context, target_state, run_validators=True):
             logger.error("Failed to enter subflow initial state '%s'", target_state)
             self.rollback_push(context)
@@ -864,18 +791,12 @@ class AsyncExecutionEngine(BaseExecutionEngine):
         # Fire post-transition hooks
         await self._fire_hooks(self._post_transition_hooks, context, push_arc)
 
-        logger.debug(
-            "Pushed to subflow network '%s', state '%s'",
-            network_name,
-            target_state
-        )
+        logger.debug("Pushed to subflow network '%s', state '%s'", network_name, target_state)
 
         return True
 
     @staticmethod
-    async def _isolate_subflow_data(
-        isolation_mode: DataIsolationMode, data: Any
-    ) -> Any:
+    async def _isolate_subflow_data(isolation_mode: DataIsolationMode, data: Any) -> Any:
         """Produce the sub-network's isolated data view without stalling the loop.
 
         ``REFERENCE`` is a pass-through (no work, no thread hop). ``COPY`` /
@@ -889,10 +810,7 @@ class AsyncExecutionEngine(BaseExecutionEngine):
             return isolation_mode.apply(data)
         return await asyncio.to_thread(isolation_mode.apply, data)
 
-    async def _check_subflow_completion(
-        self,
-        context: ExecutionContext
-    ) -> bool:
+    async def _check_subflow_completion(self, context: ExecutionContext) -> bool:
         """Pop back to the parent for every subflow now at a final state.
 
         Async counterpart to ``ExecutionEngine._check_subflow_completion``.
@@ -919,10 +837,7 @@ class AsyncExecutionEngine(BaseExecutionEngine):
             popped_any = True
         return popped_any
 
-    async def _pop_subflow(
-        self,
-        context: ExecutionContext
-    ) -> bool:
+    async def _pop_subflow(self, context: ExecutionContext) -> bool:
         """Pop from a subflow back to the parent network.
 
         Async counterpart to ``ExecutionEngine._pop_subflow``. Consumes the
@@ -968,8 +883,7 @@ class AsyncExecutionEngine(BaseExecutionEngine):
                 return False
 
         logger.debug(
-            "Popped from subflow, returned to state '%s'",
-            return_state or context.current_state
+            "Popped from subflow, returned to state '%s'", return_state or context.current_state
         )
 
         return True
@@ -1020,9 +934,7 @@ class AsyncExecutionEngine(BaseExecutionEngine):
         state, so re-establishing it does not record a duplicate history entry.
         """
         state_def = self.fsm.get_state(state_name)
-        state_resources, owned = self._allocate_state_resources_with_inheritance(
-            context, state_def
-        )
+        state_resources, owned = self._allocate_state_resources_with_inheritance(context, state_def)
         context.current_state_resources = state_resources
         # Hold the just-acquired ('owned') subset so a nested push can inherit it;
         # it is released by _release_owned_state_resources when this state is left
@@ -1030,9 +942,7 @@ class AsyncExecutionEngine(BaseExecutionEngine):
         context.current_state_owned_resources = owned
 
         if run_validators and state_def is not None:
-            if not await self._run_pre_validators(
-                context, state_def, state_name, state_resources
-            ):
+            if not await self._run_pre_validators(context, state_def, state_name, state_resources):
                 # Release only what this entry acquired (not the inherited
                 # resources, which the parent owns), then fail the entry.
                 self._release_named_resources(
@@ -1045,16 +955,12 @@ class AsyncExecutionEngine(BaseExecutionEngine):
                 context.current_state_owned_resources = {}
                 # Match the sync engine: only set last_error if a more specific
                 # upstream error has not already been recorded (don't clobber it).
-                if not hasattr(context, 'last_error') or not context.last_error:
-                    context.last_error = (
-                        f"Pre-validation failed for state '{state_name}'"
-                    )
+                if not hasattr(context, "last_error") or not context.last_error:
+                    context.last_error = f"Pre-validation failed for state '{state_name}'"
                 return False
 
         # Reuse the resources allocated here (don't re-acquire / release).
-        await self._execute_state_transforms(
-            context, state_resources=state_resources
-        )
+        await self._execute_state_transforms(context, state_resources=state_resources)
         return True
 
     def _allocate_state_resources_with_inheritance(
@@ -1074,12 +980,10 @@ class AsyncExecutionEngine(BaseExecutionEngine):
             call acquired (so a failed entry can release exactly those without
             touching the parent-owned ones).
         """
-        parent = getattr(context, 'parent_state_resources', None)
+        parent = getattr(context, "parent_state_resources", None)
         resources: Dict[str, Any] = dict(parent) if parent else {}
         requirements = (
-            getattr(state_def, 'resource_requirements', None)
-            if state_def is not None
-            else None
+            getattr(state_def, "resource_requirements", None) if state_def is not None else None
         )
         if not requirements:
             return resources, {}
@@ -1087,7 +991,7 @@ class AsyncExecutionEngine(BaseExecutionEngine):
         names: list[str] = []
         timeouts: Dict[str, Any] = {}
         for resource_config in requirements:
-            name = getattr(resource_config, 'name', None)
+            name = getattr(resource_config, "name", None)
             if not name or name in resources:
                 # Skip resources already inherited from the parent state.
                 continue
@@ -1096,8 +1000,8 @@ class AsyncExecutionEngine(BaseExecutionEngine):
             # engine (ExecutionEngine._allocate_state_resources) rather than
             # leaving it None (an unbounded acquire wait).
             timeouts[name] = (
-                getattr(resource_config, 'timeout_seconds', None)
-                or getattr(resource_config, 'timeout', None)
+                getattr(resource_config, "timeout_seconds", None)
+                or getattr(resource_config, "timeout", None)
                 or 30
             )
 
@@ -1134,7 +1038,7 @@ class AsyncExecutionEngine(BaseExecutionEngine):
         Returns:
             True if all pre-validators pass, False otherwise.
         """
-        validators = getattr(state_def, 'pre_validation_functions', None)
+        validators = getattr(state_def, "pre_validation_functions", None)
         if not validators:
             return True
 
@@ -1143,9 +1047,9 @@ class AsyncExecutionEngine(BaseExecutionEngine):
                 func_context = self._build_function_context(
                     context,
                     state_name=state_name,
-                    function_name=getattr(validator_func, '__name__', 'validate'),
+                    function_name=getattr(validator_func, "__name__", "validate"),
                     resources=state_resources,
-                    base_metadata={'state': state_name, 'phase': 'pre_validation'},
+                    base_metadata={"state": state_name, "phase": "pre_validation"},
                     # Validators are not transforms — the transform context
                     # factory's documented scope (parity with the sync engine,
                     # whose pre-validators build a plain FunctionContext).
@@ -1195,7 +1099,7 @@ class AsyncExecutionEngine(BaseExecutionEngine):
         transform_functions, state_obj = self.prepare_state_transform(state, context)
 
         # Execute validation functions first (async-specific)
-        if hasattr(state, 'validation_functions') and state.validation_functions:
+        if hasattr(state, "validation_functions") and state.validation_functions:
             for validator in state.validation_functions:
                 try:
                     # Handle both async and sync validators
@@ -1213,7 +1117,9 @@ class AsyncExecutionEngine(BaseExecutionEngine):
                             result = await loop.run_in_executor(None, validator.validate, state_obj)
                         except (TypeError, AttributeError):
                             # Fall back to standard signature
-                            result = await loop.run_in_executor(None, validator.validate, ensure_dict(context.data), context)
+                            result = await loop.run_in_executor(
+                                None, validator.validate, ensure_dict(context.data), context
+                            )
 
                     if isinstance(result, dict):
                         # Merge validation results into context data
@@ -1248,8 +1154,7 @@ class AsyncExecutionEngine(BaseExecutionEngine):
                 # and runs regardless.
                 if self.should_skip_state_transforms(context, state):
                     logger.debug(
-                        "Skipping transform in state '%s': record already "
-                        "failed in %s",
+                        "Skipping transform in state '%s': record already failed in %s",
                         state_name,
                         self.failed_states_sorted(context),
                     )
@@ -1258,9 +1163,9 @@ class AsyncExecutionEngine(BaseExecutionEngine):
                     func_context = self._build_function_context(
                         context,
                         state_name=state_name,
-                        function_name=getattr(transform_func, '__name__', 'transform'),
+                        function_name=getattr(transform_func, "__name__", "transform"),
                         resources=state_resources,
-                        base_metadata={'state': state_name},
+                        base_metadata={"state": state_name},
                     )
 
                     result = await self._invoke_state_transform(
@@ -1313,7 +1218,7 @@ class AsyncExecutionEngine(BaseExecutionEngine):
 
         return (
             isinstance(transform_func, ITransformFunction)
-            or getattr(transform_func, 'interface', None) is ITransformFunction
+            or getattr(transform_func, "interface", None) is ITransformFunction
         )
 
     async def _invoke_state_transform(
@@ -1332,7 +1237,7 @@ class AsyncExecutionEngine(BaseExecutionEngine):
         dispatch with a ``(data, context)`` fallback for regression safety.
         """
         actual_func = transform_func
-        if hasattr(transform_func, 'transform'):
+        if hasattr(transform_func, "transform"):
             actual_func = transform_func.transform
 
         # Detect async via the callable, its __call__, or a wrapper hint.
@@ -1341,7 +1246,7 @@ class AsyncExecutionEngine(BaseExecutionEngine):
             # A callable *object* may carry an async ``__call__``; inspect the
             # type's bound slot (``callable()`` above guarantees it exists).
             is_async = asyncio.iscoroutinefunction(type(actual_func).__call__)
-        if not is_async and getattr(transform_func, '_is_async', False):
+        if not is_async and getattr(transform_func, "_is_async", False):
             is_async = True
 
         if self._is_interface_transform(transform_func):
@@ -1405,17 +1310,17 @@ class AsyncExecutionEngine(BaseExecutionEngine):
             A ``FunctionContext`` (default) or the factory's output.
         """
         metadata = dict(base_metadata or {})
-        metadata['resource_roles'] = dict(role_bindings or {})
-        network_stack = getattr(context, 'network_stack', None)
+        metadata["resource_roles"] = dict(role_bindings or {})
+        network_stack = getattr(context, "network_stack", None)
         func_context = FunctionContext(
             state_name=state_name,
             function_name=function_name,
             metadata=metadata,
             resources=resources or {},
-            variables=getattr(context, 'variables', {}) or {},
+            variables=getattr(context, "variables", {}) or {},
             network_name=network_stack[-1][0] if network_stack else None,
         )
-        factory = getattr(context, 'transform_context_factory', None)
+        factory = getattr(context, "transform_context_factory", None)
         if apply_factory and factory:
             return factory(func_context)
         return func_context
@@ -1449,7 +1354,7 @@ class AsyncExecutionEngine(BaseExecutionEngine):
             ``{name: resource}`` for every name acquired.
         """
         resources: Dict[str, Any] = {}
-        resource_manager = getattr(context, 'resource_manager', None)
+        resource_manager = getattr(context, "resource_manager", None)
         if not resource_manager:
             return resources
         timeouts = timeouts or {}
@@ -1480,7 +1385,7 @@ class AsyncExecutionEngine(BaseExecutionEngine):
         """Release resources acquired by :meth:`_acquire_named_resources`."""
         if not resources:
             return
-        resource_manager = getattr(context, 'resource_manager', None)
+        resource_manager = getattr(context, "resource_manager", None)
         if not resource_manager:
             return
         for name in resources:
@@ -1501,15 +1406,13 @@ class AsyncExecutionEngine(BaseExecutionEngine):
         individual names the pop site no longer has — only the stable owner key
         recorded on the frame at push time.
         """
-        resource_manager = getattr(context, 'resource_manager', None)
+        resource_manager = getattr(context, "resource_manager", None)
         if not resource_manager:
             return
         try:
             resource_manager.release_all(owner_id)
         except Exception as e:
-            logger.warning(
-                "Failed to release resources for owner '%s': %s", owner_id, e
-            )
+            logger.warning("Failed to release resources for owner '%s': %s", owner_id, e)
 
     def _acquire_state_resources(
         self,
@@ -1522,21 +1425,21 @@ class AsyncExecutionEngine(BaseExecutionEngine):
         transforms get the same resource-injection contract. Delegates the
         acquire loop to :meth:`_acquire_named_resources`.
         """
-        requirements = getattr(state, 'resource_requirements', None)
+        requirements = getattr(state, "resource_requirements", None)
         if not requirements:
             return {}
         names: list[str] = []
         timeouts: Dict[str, Any] = {}
         for resource_config in requirements:
-            name = getattr(resource_config, 'name', None)
+            name = getattr(resource_config, "name", None)
             if not name:
                 continue
             names.append(name)
             # Default to 30s when no timeout is configured, matching the sync
             # engine rather than leaving it None (an unbounded acquire wait).
             timeouts[name] = (
-                getattr(resource_config, 'timeout_seconds', None)
-                or getattr(resource_config, 'timeout', None)
+                getattr(resource_config, "timeout_seconds", None)
+                or getattr(resource_config, "timeout", None)
                 or 30
             )
         return self._acquire_named_resources(
@@ -1565,7 +1468,7 @@ class AsyncExecutionEngine(BaseExecutionEngine):
     def _state_resource_owner(context: ExecutionContext, state: Any) -> str:
         """Build the resource-ownership key for a state's acquisitions."""
         return BaseExecutionEngine._state_resource_owner_for_name(
-            context, getattr(state, 'name', 'unknown')
+            context, getattr(state, "name", "unknown")
         )
 
     def _release_owned_state_resources(self, context: ExecutionContext) -> None:
@@ -1582,14 +1485,12 @@ class AsyncExecutionEngine(BaseExecutionEngine):
         unified async engine neither leaks across transitions nor strands a
         subflow's resources on pop.
         """
-        owned = getattr(context, 'current_state_owned_resources', None)
+        owned = getattr(context, "current_state_owned_resources", None)
         if owned:
             self._release_named_resources(
                 context,
                 owned,
-                self._state_resource_owner_for_name(
-                    context, context.current_state
-                ),
+                self._state_resource_owner_for_name(context, context.current_state),
                 owner_label=f"state '{context.current_state}'",
             )
         context.current_state_owned_resources = {}
@@ -1601,16 +1502,12 @@ class AsyncExecutionEngine(BaseExecutionEngine):
         Mirrors the sync ``ArcExecution`` owner-id shape so the two engines key
         arc acquisitions the same way.
         """
-        source = getattr(arc, 'source_state', None) or getattr(
-            context, 'current_state', 'unknown'
-        )
+        source = getattr(arc, "source_state", None) or getattr(context, "current_state", "unknown")
         arc_identifier = f"{source}_to_{arc.target_state}"
-        execution_id = getattr(context, 'execution_id', 'unknown')
+        execution_id = getattr(context, "execution_id", "unknown")
         return f"arc_{arc_identifier}_{execution_id}"
 
-    async def _enter_initial_state(
-        self, context: ExecutionContext
-    ) -> tuple[bool, str | None]:
+    async def _enter_initial_state(self, context: ExecutionContext) -> tuple[bool, str | None]:
         """Ensure the initial state is entered and its transforms executed.
 
         Handles both cases:
@@ -1644,9 +1541,7 @@ class AsyncExecutionEngine(BaseExecutionEngine):
                 return False, self._initial_entry_error(context, initial_state)
         else:
             if not await self._establish_state(context, context.current_state):
-                return False, self._initial_entry_error(
-                    context, context.current_state
-                )
+                return False, self._initial_entry_error(context, context.current_state)
         return True, None
 
     @staticmethod
@@ -1659,7 +1554,7 @@ class AsyncExecutionEngine(BaseExecutionEngine):
         initial-state pre-validator surfaces *why* it rejected, not just that
         entry failed.
         """
-        specific = getattr(context, 'last_error', None)
+        specific = getattr(context, "last_error", None)
         return specific or f"Failed to enter initial state '{state_name}'"
 
     async def _find_initial_state(self) -> str | None:
@@ -1670,7 +1565,7 @@ class AsyncExecutionEngine(BaseExecutionEngine):
         """
         # Use base class implementation (it's synchronous but that's fine)
         return self.find_initial_state_common()
-    
+
     async def _is_final_state(self, state_name: str | None) -> bool:
         """Check if state is a final state.
 
@@ -1689,52 +1584,55 @@ class AsyncExecutionEngine(BaseExecutionEngine):
             return False
 
         # Get the main network - could be a string or object
-        main_network_ref = getattr(self.fsm, 'main_network', None)
+        main_network_ref = getattr(self.fsm, "main_network", None)
 
         if main_network_ref is None:
             # If no main network specified, check all networks
             for network in self.fsm.networks.values():
                 if state_name in network.states:
                     state = network.states[state_name]
-                    if state.is_end_state() if hasattr(state, 'is_end_state') else state.type == StateType.END:
+                    if (
+                        state.is_end_state()
+                        if hasattr(state, "is_end_state")
+                        else state.type == StateType.END
+                    ):
                         return True
             return False
 
         # Handle case where main_network is already a network object (FSM wrapper)
-        if hasattr(main_network_ref, 'states'):
+        if hasattr(main_network_ref, "states"):
             main_network = main_network_ref
         # Handle case where main_network is a string (core FSM)
         elif isinstance(main_network_ref, str) and main_network_ref in self.fsm.networks:
             main_network = self.fsm.networks[main_network_ref]
         else:
             return False
-        
+
         # Check if the state exists and is an end state
         if state_name in main_network.states:
             state = main_network.states[state_name]
-            return state.is_end_state() if hasattr(state, 'is_end_state') else state.type == StateType.END
-        
+            return (
+                state.is_end_state()
+                if hasattr(state, "is_end_state")
+                else state.type == StateType.END
+            )
+
         return False
-    
-    async def _get_current_network(
-        self,
-        context: ExecutionContext
-    ) -> StateNetwork | None:
+
+    async def _get_current_network(self, context: ExecutionContext) -> StateNetwork | None:
         """Get the current network from context using common network selector.
-        
+
         Args:
             context: Execution context.
-            
+
         Returns:
             Current network or None.
         """
         # Use intelligent selection for async engine by default
         return NetworkSelector.get_current_network(
-            self.fsm,
-            context,
-            enable_intelligent_selection=True
+            self.fsm, context, enable_intelligent_selection=True
         )
-    
+
     def get_statistics(self) -> Dict[str, Any]:
         """Get execution statistics.
 
@@ -1742,13 +1640,14 @@ class AsyncExecutionEngine(BaseExecutionEngine):
             Dictionary of statistics.
         """
         return {
-            'execution_count': self._execution_count,
-            'transition_count': self._transition_count,
-            'error_count': self._error_count,
-            'total_execution_time': self._total_execution_time,
-            'average_execution_time': (
+            "execution_count": self._execution_count,
+            "transition_count": self._transition_count,
+            "error_count": self._error_count,
+            "total_execution_time": self._total_execution_time,
+            "average_execution_time": (
                 self._total_execution_time / self._execution_count
-                if self._execution_count > 0 else 0.0
+                if self._execution_count > 0
+                else 0.0
             ),
-            'hooks_enabled': self.enable_hooks,
+            "hooks_enabled": self.enable_hooks,
         }

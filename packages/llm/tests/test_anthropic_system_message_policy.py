@@ -286,9 +286,10 @@ class TestInlinePolicy:
         types = [b["type"] for b in final_blocks]
         # Both tool_results first, in order; the notice text after them.
         assert types == ["tool_result", "tool_result", "text"], types
-        assert [
-            b["tool_use_id"] for b in final_blocks if b["type"] == "tool_result"
-        ] == ["t1", "t2"]
+        assert [b["tool_use_id"] for b in final_blocks if b["type"] == "tool_result"] == [
+            "t1",
+            "t2",
+        ]
         assert "Loop ended" in _flatten_text(msgs)
 
     def test_consecutive_tool_results_still_consolidated(self) -> None:
@@ -322,13 +323,11 @@ class TestWarnPolicy:
             system, msgs = adapter.adapt_messages(messages)
         assert "Mid notice." in system  # fallback disposition = hoist
         assert all(m["role"] != "system" for m in msgs)
-        assert any(
-            "system" in r.message.lower() for r in caplog.records
-        ), [r.message for r in caplog.records]
+        assert any("system" in r.message.lower() for r in caplog.records), [
+            r.message for r in caplog.records
+        ]
 
-    def test_leading_system_does_not_warn(
-        self, caplog: pytest.LogCaptureFixture
-    ) -> None:
+    def test_leading_system_does_not_warn(self, caplog: pytest.LogCaptureFixture) -> None:
         adapter = AnthropicAdapter(system_message_policy="warn")
         messages = [
             LLMMessage(role="system", content="Leading."),
@@ -395,19 +394,14 @@ class TestAcceptsInlineSystemConstraint:
         (``accepts_inline_system=False`` — Anthropic's default). When a
         consumer declares the family accepts them, no conversion happens.
         """
-        adapter = AnthropicAdapter(
-            system_message_policy="hoist", accepts_inline_system=True
-        )
+        adapter = AnthropicAdapter(system_message_policy="hoist", accepts_inline_system=True)
         messages = [
             LLMMessage(role="user", content="Hi"),
             LLMMessage(role="system", content="Mid notice."),
         ]
         system, msgs = adapter.adapt_messages(messages)
         assert "Mid notice." not in system
-        assert any(
-            m["role"] == "system" and m["content"] == "Mid notice."
-            for m in msgs
-        )
+        assert any(m["role"] == "system" and m["content"] == "Mid notice." for m in msgs)
 
 
 # ---------------------------------------------------------------------------

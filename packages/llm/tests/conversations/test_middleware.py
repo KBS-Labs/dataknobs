@@ -38,9 +38,7 @@ def create_test_prompts(prompt_dir: Path):
     # User prompts
     user_dir = prompt_dir / "user"
     user_dir.mkdir(parents=True, exist_ok=True)
-    (user_dir / "question.yaml").write_text(
-        yaml.dump({"template": "What is {{topic}}?"})
-    )
+    (user_dir / "question.yaml").write_text(yaml.dump({"template": "What is {{topic}}?"}))
 
     # Validation prompts - one that will pass, one that will fail
     # Important: Don't use the word "VALID" in the template itself, so EchoProvider
@@ -57,21 +55,13 @@ async def test_components():
         prompt_dir = Path(tmpdir) / "prompts"
         create_test_prompts(prompt_dir)
 
-        config = LLMConfig(
-            provider="echo",
-            model="echo-model",
-            options={"echo_prefix": ""}
-        )
+        config = LLMConfig(provider="echo", model="echo-model", options={"echo_prefix": ""})
         llm = EchoProvider(config)
         library = FileSystemPromptLibrary(prompt_dir)
         builder = AsyncPromptBuilder(library=library)
         storage = DataknobsConversationStorage(AsyncMemoryDatabase())
 
-        yield {
-            "llm": llm,
-            "builder": builder,
-            "storage": storage
-        }
+        yield {"llm": llm, "builder": builder, "storage": storage}
 
         await llm.close()
 
@@ -93,7 +83,7 @@ class TestLoggingMiddleware:
             prompt_builder=test_components["builder"],
             storage=test_components["storage"],
             system_prompt_name="assistant",
-            middleware=[middleware]
+            middleware=[middleware],
         )
 
         # Add message and complete
@@ -117,7 +107,7 @@ class TestLoggingMiddleware:
             llm=test_components["llm"],
             prompt_builder=test_components["builder"],
             storage=test_components["storage"],
-            middleware=[middleware]
+            middleware=[middleware],
         )
 
         with caplog.at_level(logging.INFO, logger="test_stream"):
@@ -137,15 +127,14 @@ class TestContentFilterMiddleware:
         """Test that content filter replaces filtered words."""
         # Create middleware with filter words
         middleware = ContentFilterMiddleware(
-            filter_words=["badword", "inappropriate"],
-            replacement="[FILTERED]"
+            filter_words=["badword", "inappropriate"], replacement="[FILTERED]"
         )
 
         manager = await ConversationManager.create(
             llm=test_components["llm"],
             prompt_builder=test_components["builder"],
             storage=test_components["storage"],
-            middleware=[middleware]
+            middleware=[middleware],
         )
 
         # Add message containing filtered content
@@ -161,16 +150,14 @@ class TestContentFilterMiddleware:
     async def test_case_insensitive_filtering(self, test_components):
         """Test case-insensitive content filtering."""
         middleware = ContentFilterMiddleware(
-            filter_words=["badword"],
-            replacement="***",
-            case_sensitive=False
+            filter_words=["badword"], replacement="***", case_sensitive=False
         )
 
         manager = await ConversationManager.create(
             llm=test_components["llm"],
             prompt_builder=test_components["builder"],
             storage=test_components["storage"],
-            middleware=[middleware]
+            middleware=[middleware],
         )
 
         await manager.add_message(role="user", content="BADWORD and badword and BadWord")
@@ -178,21 +165,21 @@ class TestContentFilterMiddleware:
 
         # All variations should be filtered with case-insensitive
         # (EchoProvider will return the input with all variations)
-        assert response.metadata.get("content_filtered") is True or "badword" in response.content.lower()
+        assert (
+            response.metadata.get("content_filtered") is True
+            or "badword" in response.content.lower()
+        )
 
     @pytest.mark.asyncio
     async def test_no_filtering_when_clean(self, test_components):
         """Test that clean content passes through unchanged."""
-        middleware = ContentFilterMiddleware(
-            filter_words=["badword"],
-            replacement="[FILTERED]"
-        )
+        middleware = ContentFilterMiddleware(filter_words=["badword"], replacement="[FILTERED]")
 
         manager = await ConversationManager.create(
             llm=test_components["llm"],
             prompt_builder=test_components["builder"],
             storage=test_components["storage"],
-            middleware=[middleware]
+            middleware=[middleware],
         )
 
         await manager.add_message(role="user", content="Clean content")
@@ -361,7 +348,8 @@ class TestHistoryRedactionMiddleware:
         # Find the assistant-role message the LLM received.
         seen_messages = last_call["messages"]
         assistant_msgs = [
-            m for m in seen_messages
+            m
+            for m in seen_messages
             if (m.role if isinstance(m, LLMMessage) else m.get("role")) == "assistant"
         ]
         assert assistant_msgs, "expected at least one assistant-role message in LLM call"
@@ -432,12 +420,8 @@ class TestHistoryRedactionMiddleware:
         """
         typed_mw = HistoryRedactionMiddleware(
             redactions=[
-                HistoryRedaction(
-                    pattern=r"\[bib:\d+[^\]]*\]", replacement="[prior citation]"
-                ),
-                HistoryRedaction(
-                    pattern=r"\bbib:\d+\b", replacement="[prior citation]"
-                ),
+                HistoryRedaction(pattern=r"\[bib:\d+[^\]]*\]", replacement="[prior citation]"),
+                HistoryRedaction(pattern=r"\bbib:\d+\b", replacement="[prior citation]"),
             ],
         )
         dict_mw = HistoryRedactionMiddleware(
@@ -454,9 +438,7 @@ class TestHistoryRedactionMiddleware:
         dict_out = await dict_mw.process_request(messages, state=None)
 
         assert typed_out[0].content == dict_out[0].content
-        assert typed_out[0].content == (
-            "Cited [prior citation] and [prior citation]."
-        )
+        assert typed_out[0].content == ("Cited [prior citation] and [prior citation].")
 
     @pytest.mark.asyncio
     async def test_mixed_typed_and_dict_input_raises_typeerror(self) -> None:
@@ -497,9 +479,7 @@ class TestHistoryRedactionMiddleware:
         out[0].metadata["trace_id"] = "downstream"
         out[0].metadata["new_key"] = "added"
         assert out[0].tool_calls is not None
-        out[0].tool_calls.append(
-            ToolCall(name="extra", parameters={}, id="c2")
-        )
+        out[0].tool_calls.append(ToolCall(name="extra", parameters={}, id="c2"))
         assert out[0].function_call is not None
         out[0].function_call["arguments"] = "mutated"
 
@@ -575,15 +555,13 @@ class TestMetadataMiddleware:
     @pytest.mark.asyncio
     async def test_static_request_metadata(self, test_components):
         """Test adding static metadata to requests."""
-        middleware = MetadataMiddleware(
-            request_metadata={"source": "test", "version": "1.0"}
-        )
+        middleware = MetadataMiddleware(request_metadata={"source": "test", "version": "1.0"})
 
         manager = await ConversationManager.create(
             llm=test_components["llm"],
             prompt_builder=test_components["builder"],
             storage=test_components["storage"],
-            middleware=[middleware]
+            middleware=[middleware],
         )
 
         await manager.add_message(role="user", content="Test")
@@ -596,15 +574,13 @@ class TestMetadataMiddleware:
     @pytest.mark.asyncio
     async def test_static_response_metadata(self, test_components):
         """Test adding static metadata to responses."""
-        middleware = MetadataMiddleware(
-            response_metadata={"processed": True, "version": "2.0"}
-        )
+        middleware = MetadataMiddleware(response_metadata={"processed": True, "version": "2.0"})
 
         manager = await ConversationManager.create(
             llm=test_components["llm"],
             prompt_builder=test_components["builder"],
             storage=test_components["storage"],
-            middleware=[middleware]
+            middleware=[middleware],
         )
 
         await manager.add_message(role="user", content="Test")
@@ -623,15 +599,13 @@ class TestMetadataMiddleware:
             call_count["count"] += 1
             return {"call_number": call_count["count"], "timestamp": "dynamic"}
 
-        middleware = MetadataMiddleware(
-            response_metadata_fn=get_metadata
-        )
+        middleware = MetadataMiddleware(response_metadata_fn=get_metadata)
 
         manager = await ConversationManager.create(
             llm=test_components["llm"],
             prompt_builder=test_components["builder"],
             storage=test_components["storage"],
-            middleware=[middleware]
+            middleware=[middleware],
         )
 
         await manager.add_message(role="user", content="First")
@@ -654,9 +628,7 @@ class TestValidationMiddleware:
         """Test that valid responses pass validation."""
         # Create separate LLM for validation
         validation_config = LLMConfig(
-            provider="echo",
-            model="echo-validator",
-            options={"echo_prefix": ""}
+            provider="echo", model="echo-validator", options={"echo_prefix": ""}
         )
         validation_llm = EchoProvider(validation_config)
 
@@ -667,14 +639,14 @@ class TestValidationMiddleware:
             llm=validation_llm,
             prompt_builder=test_components["builder"],
             validation_prompt="validate_response",
-            auto_retry=False
+            auto_retry=False,
         )
 
         manager = await ConversationManager.create(
             llm=test_components["llm"],
             prompt_builder=test_components["builder"],
             storage=test_components["storage"],
-            middleware=[middleware]
+            middleware=[middleware],
         )
 
         await manager.add_message(role="user", content="This is a VALID response")
@@ -694,9 +666,7 @@ class TestValidationMiddleware:
         """Test that invalid responses are marked with auto_retry."""
         # Create separate LLM for validation
         validation_config = LLMConfig(
-            provider="echo",
-            model="echo-validator",
-            options={"echo_prefix": ""}
+            provider="echo", model="echo-validator", options={"echo_prefix": ""}
         )
         validation_llm = EchoProvider(validation_config)
 
@@ -704,14 +674,14 @@ class TestValidationMiddleware:
             llm=validation_llm,
             prompt_builder=test_components["builder"],
             validation_prompt="validate_response",
-            auto_retry=True  # Mark for retry instead of raising
+            auto_retry=True,  # Mark for retry instead of raising
         )
 
         manager = await ConversationManager.create(
             llm=test_components["llm"],
             prompt_builder=test_components["builder"],
             storage=test_components["storage"],
-            middleware=[middleware]
+            middleware=[middleware],
         )
 
         await manager.add_message(role="user", content="bad response")
@@ -744,7 +714,7 @@ class TestMiddlewareChaining:
             llm=test_components["llm"],
             prompt_builder=test_components["builder"],
             storage=test_components["storage"],
-            middleware=[logging_mw, metadata_mw, filter_mw]
+            middleware=[logging_mw, metadata_mw, filter_mw],
         )
 
         await manager.add_message(role="user", content="This is bad")
@@ -780,7 +750,7 @@ class TestMiddlewareChaining:
             llm=test_components["llm"],
             prompt_builder=test_components["builder"],
             storage=test_components["storage"],
-            middleware=[mw1, mw2, mw3]
+            middleware=[mw1, mw2, mw3],
         )
 
         await manager.add_message(role="user", content="Test order")
@@ -820,7 +790,7 @@ class TestCustomMiddleware:
             llm=test_components["llm"],
             prompt_builder=test_components["builder"],
             storage=test_components["storage"],
-            middleware=[middleware]
+            middleware=[middleware],
         )
 
         await manager.add_message(role="user", content="hello world")
@@ -852,7 +822,7 @@ class TestCustomMiddleware:
             llm=test_components["llm"],
             prompt_builder=test_components["builder"],
             storage=test_components["storage"],
-            middleware=[middleware]
+            middleware=[middleware],
         )
 
         await manager.add_message(role="user", content="Test message")
@@ -977,9 +947,7 @@ class TestRateLimitMiddleware:
     @pytest.mark.asyncio
     async def test_conversation_scope_isolates_by_conversation_id(self):
         """Test that conversation scope rate limits per conversation."""
-        middleware = RateLimitMiddleware(
-            max_requests=2, window_seconds=60, scope="conversation"
-        )
+        middleware = RateLimitMiddleware(max_requests=2, window_seconds=60, scope="conversation")
         state_a = _make_conversation_state(conversation_id="conv-a")
         state_b = _make_conversation_state(conversation_id="conv-b")
         messages = [LLMMessage(role="user", content="Hello")]
@@ -999,9 +967,7 @@ class TestRateLimitMiddleware:
     @pytest.mark.asyncio
     async def test_client_id_scope(self):
         """Test that client_id scope rate limits by client_id from metadata."""
-        middleware = RateLimitMiddleware(
-            max_requests=2, window_seconds=60, scope="client_id"
-        )
+        middleware = RateLimitMiddleware(max_requests=2, window_seconds=60, scope="client_id")
         state_same_client = _make_conversation_state(
             conversation_id="conv-1",
             metadata={"client_id": "client-x"},
@@ -1031,12 +997,11 @@ class TestRateLimitMiddleware:
     @pytest.mark.asyncio
     async def test_custom_key_function(self):
         """Test rate limiting with custom key extraction function."""
+
         def user_key(state: ConversationState) -> str:
             return state.metadata.get("user_id", "anonymous")
 
-        middleware = RateLimitMiddleware(
-            max_requests=2, window_seconds=60, key_fn=user_key
-        )
+        middleware = RateLimitMiddleware(max_requests=2, window_seconds=60, key_fn=user_key)
         state = _make_conversation_state(metadata={"user_id": "alice"})
         messages = [LLMMessage(role="user", content="Hello")]
 

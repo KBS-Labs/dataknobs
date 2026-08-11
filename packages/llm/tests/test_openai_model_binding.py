@@ -107,9 +107,7 @@ class _CaptureOpenAIClient:
 
 def _provider(model: str, **config_kwargs: Any) -> OpenAIProvider:
     """Build an initialised ``OpenAIProvider`` backed by a capture client."""
-    provider = OpenAIProvider(
-        LLMConfig(provider="openai", model=model, **config_kwargs)
-    )
+    provider = OpenAIProvider(LLMConfig(provider="openai", model=model, **config_kwargs))
     provider._client = _CaptureOpenAIClient()
     provider._is_initialized = True
     return provider
@@ -301,9 +299,7 @@ class TestRequestShaping:
         """
         provider = _provider("gpt-4o")
         await provider.complete("hi", response_format={"type": "json_object"})
-        assert provider._client.captured_kwargs["response_format"] == {
-            "type": "json_object"
-        }
+        assert provider._client.captured_kwargs["response_format"] == {"type": "json_object"}
 
 
 # ---------------------------------------------------------------------------

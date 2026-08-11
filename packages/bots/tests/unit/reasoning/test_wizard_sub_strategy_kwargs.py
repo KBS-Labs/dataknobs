@@ -15,6 +15,7 @@ Pinned contracts:
 - A strict-signature sub-strategy (no ``**kwargs`` absorber) raises a
   clear error documenting the per-stage-safe convention.
 """
+
 from __future__ import annotations
 
 from typing import Any, ClassVar
@@ -36,9 +37,7 @@ class _CaptureStrategy(ReasoningStrategy):
     last_kwargs: ClassVar[dict[str, Any]] = {}
 
     @classmethod
-    def from_config(
-        cls, config: dict[str, Any], **kwargs: Any
-    ) -> "_CaptureStrategy":
+    def from_config(cls, config: dict[str, Any], **kwargs: Any) -> "_CaptureStrategy":
         cls.last_kwargs = dict(kwargs)
         return cls(greeting_template=None)
 
@@ -114,9 +113,7 @@ def test_wizard_forwards_knowledge_base_kwarg_to_sub_strategy() -> None:
     sentinel = object()
     wizard = _build_wizard_with_capture_stage(knowledge_base=sentinel)
 
-    strategy = wizard._resolve_stage_strategy(
-        {"reasoning": "capture", "name": "only"}
-    )
+    strategy = wizard._resolve_stage_strategy({"reasoning": "capture", "name": "only"})
 
     assert isinstance(strategy, _CaptureStrategy)
     assert _CaptureStrategy.last_kwargs.get("knowledge_base") is sentinel
@@ -130,9 +127,7 @@ def test_wizard_forwards_knowledge_base_kwarg_to_sub_strategy() -> None:
 def test_no_kwargs_forwards_empty_no_op() -> None:
     wizard = _build_wizard_with_capture_stage()
 
-    wizard._resolve_stage_strategy(
-        {"reasoning": "capture", "name": "only"}
-    )
+    wizard._resolve_stage_strategy({"reasoning": "capture", "name": "only"})
 
     assert _CaptureStrategy.last_kwargs == {}
 
@@ -170,9 +165,7 @@ def test_forwardable_components_excludes_wizard_internal() -> None:
     kb = object()
     wizard = _build_wizard_with_capture_stage(knowledge_base=kb)
 
-    wizard._resolve_stage_strategy(
-        {"reasoning": "capture", "name": "only"}
-    )
+    wizard._resolve_stage_strategy({"reasoning": "capture", "name": "only"})
 
     assert _CaptureStrategy.last_kwargs.get("knowledge_base") is kb
     assert "wizard_fsm" not in _CaptureStrategy.last_kwargs
@@ -193,9 +186,7 @@ def test_forwards_multiple_kwargs_simultaneously() -> None:
         custom_collaborator=extra,
     )
 
-    wizard._resolve_stage_strategy(
-        {"reasoning": "capture", "name": "only"}
-    )
+    wizard._resolve_stage_strategy({"reasoning": "capture", "name": "only"})
 
     assert _CaptureStrategy.last_kwargs.get("knowledge_base") is kb
     assert _CaptureStrategy.last_kwargs.get("prompt_resolver") is pr
@@ -220,9 +211,7 @@ def test_strict_from_config_raises_when_forwarded_unknown_kwarg() -> None:
     wizard = _build_wizard_with_capture_stage(knowledge_base=object())
 
     with pytest.raises(ConfigurationError) as exc_info:
-        wizard._resolve_stage_strategy(
-            {"reasoning": "strict", "name": "only"}
-        )
+        wizard._resolve_stage_strategy({"reasoning": "strict", "name": "only"})
 
     msg = str(exc_info.value).lower()
     assert "knowledge_base" in msg or "unexpected" in msg

@@ -100,16 +100,18 @@ class ContextFormatter:
         # Convert to result format and use standard formatting
         results = []
         for chunk in merged_chunks:
-            results.append({
-                "text": chunk.text,
-                "source": chunk.source,
-                "heading_path": chunk.heading_display,
-                "similarity": chunk.avg_similarity,
-                "metadata": {
-                    "headings": chunk.heading_path,
-                    "content_length": chunk.content_length,
-                },
-            })
+            results.append(
+                {
+                    "text": chunk.text,
+                    "source": chunk.source,
+                    "heading_path": chunk.heading_display,
+                    "similarity": chunk.avg_similarity,
+                    "metadata": {
+                        "headings": chunk.heading_path,
+                        "content_length": chunk.content_length,
+                    },
+                }
+            )
 
         return self.format(results)
 

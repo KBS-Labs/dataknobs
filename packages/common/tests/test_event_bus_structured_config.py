@@ -51,9 +51,7 @@ class TestCreateSqsBusThreadsKnobs:
     def _base_config(self, **overrides: object) -> dict[str, object]:
         config: dict[str, object] = {
             "backend": "sqs",
-            "queue_url": (
-                "https://sqs.us-east-1.amazonaws.com/000000000000/q"
-            ),
+            "queue_url": ("https://sqs.us-east-1.amazonaws.com/000000000000/q"),
             "endpoint_url": "http://127.0.0.1:65535",
         }
         config.update(overrides)
@@ -68,9 +66,7 @@ class TestCreateSqsBusThreadsKnobs:
         factory consumes the dict wholesale via
         ``SqsEventBusConfig.from_dict`` so every key is forwarded.
         """
-        bus = create_event_bus(
-            self._base_config(require_topic_attribute=False)
-        )
+        bus = create_event_bus(self._base_config(require_topic_attribute=False))
         assert isinstance(bus, SqsEventBus)
         assert bus.require_topic_attribute is False
         assert bus.config.require_topic_attribute is False
@@ -266,36 +262,28 @@ class TestPostgresEventBusConstructionShapes:
     def test_keyword_connection_string(self) -> None:
         from dataknobs_common.events.postgres import PostgresEventBus
 
-        bus = PostgresEventBus(
-            connection_string=self.DSN, channel_prefix="test_"
-        )
+        bus = PostgresEventBus(connection_string=self.DSN, channel_prefix="test_")
         assert bus.config.connection_string == self.DSN
         assert bus.config.channel_prefix == "test_"
 
     def test_dict_config(self) -> None:
         from dataknobs_common.events.postgres import PostgresEventBus
 
-        bus = PostgresEventBus(
-            config={"connection_string": self.DSN, "channel_prefix": "x"}
-        )
+        bus = PostgresEventBus(config={"connection_string": self.DSN, "channel_prefix": "x"})
         assert bus.config.connection_string == self.DSN
         assert bus.config.channel_prefix == "x"
 
     def test_typed_config(self) -> None:
         from dataknobs_common.events.postgres import PostgresEventBus
 
-        cfg = PostgresEventBusConfig(
-            connection_string=self.DSN, channel_prefix="t"
-        )
+        cfg = PostgresEventBusConfig(connection_string=self.DSN, channel_prefix="t")
         bus = PostgresEventBus(config=cfg)
         assert bus.config is cfg
 
     def test_from_config_dict(self) -> None:
         from dataknobs_common.events.postgres import PostgresEventBus
 
-        bus = PostgresEventBus.from_config(
-            {"connection_string": self.DSN, "channel_prefix": "fc"}
-        )
+        bus = PostgresEventBus.from_config({"connection_string": self.DSN, "channel_prefix": "fc"})
         assert bus.config.connection_string == self.DSN
         assert bus.config.channel_prefix == "fc"
 
@@ -328,9 +316,7 @@ class TestSqsEventBusConfigDataclass:
 
     def test_from_dict_ignores_unknown_keys(self) -> None:
         """Backend-routing keys (``"backend"``) in the same dict are tolerated."""
-        cfg = SqsEventBusConfig.from_dict(
-            {"backend": "sqs", "queue_url": "https://sqs/q"}
-        )
+        cfg = SqsEventBusConfig.from_dict({"backend": "sqs", "queue_url": "https://sqs/q"})
         assert cfg.queue_url == "https://sqs/q"
 
     def test_base_class_export(self) -> None:

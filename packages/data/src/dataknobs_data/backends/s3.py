@@ -45,7 +45,7 @@ class SyncS3Database(  # type: ignore[misc]
     SQLiteVectorSupport,
     PythonVectorSearchMixin,
     BulkEmbedMixin,
-    VectorOperationsMixin
+    VectorOperationsMixin,
 ):
     """S3-based database backend with proper connection management.
 
@@ -158,23 +158,19 @@ class SyncS3Database(  # type: ignore[misc]
             self.s3_client.head_bucket(Bucket=self.bucket)
             logger.debug(f"Bucket {self.bucket} exists")
         except self.ClientError as e:
-            error_code = e.response['Error']['Code']
-            if error_code == '404':
+            error_code = e.response["Error"]["Code"]
+            if error_code == "404":
                 logger.info(f"Creating bucket {self.bucket}")
                 # ``self.region`` may be ``None`` if config relies on
                 # boto's default chain; the constructed client always
                 # has a concrete region in ``meta.region_name``.
-                effective_region = (
-                    self.region or self.s3_client.meta.region_name
-                )
-                if effective_region == 'us-east-1':
+                effective_region = self.region or self.s3_client.meta.region_name
+                if effective_region == "us-east-1":
                     self.s3_client.create_bucket(Bucket=self.bucket)
                 else:
                     self.s3_client.create_bucket(
                         Bucket=self.bucket,
-                        CreateBucketConfiguration={
-                            'LocationConstraint': effective_region
-                        },
+                        CreateBucketConfiguration={"LocationConstraint": effective_region},
                     )
             else:
                 raise
@@ -231,8 +227,8 @@ class SyncS3Database(  # type: ignore[misc]
                 Bucket=self.bucket,
                 Key=key,
                 Body=body,
-                ContentType='application/json',
-                IfNoneMatch='*',
+                ContentType="application/json",
+                IfNoneMatch="*",
             )
         except self.ClientError as e:
             if is_s3_conditional_conflict(e):
@@ -253,13 +249,13 @@ class SyncS3Database(  # type: ignore[misc]
 
         try:
             response = self.s3_client.get_object(Bucket=self.bucket, Key=key)
-            body = response['Body'].read()
+            body = response["Body"].read()
             obj_data = json.loads(body)
             record = self._s3_object_to_record(obj_data)
             # Use centralized method to prepare record
             return self._prepare_record_from_storage(record, id)
         except self.ClientError as e:
-            if e.response['Error']['Code'] == 'NoSuchKey':
+            if e.response["Error"]["Code"] == "NoSuchKey":
                 return None
             raise
 
@@ -275,10 +271,10 @@ class SyncS3Database(  # type: ignore[misc]
         try:
             response = self.s3_client.head_object(Bucket=self.bucket, Key=key)
         except self.ClientError as e:
-            if e.response['Error']['Code'] in ('404', 'NoSuchKey'):
+            if e.response["Error"]["Code"] in ("404", "NoSuchKey"):
                 return None
             raise
-        return response.get('ETag')
+        return response.get("ETag")
 
     def update(self, id: str, record: Record, *, expected_version: str | None = None) -> bool:
         """Update an existing record in S3.
@@ -297,17 +293,19 @@ class SyncS3Database(  # type: ignore[misc]
         # Check if exists and get existing metadata
         try:
             response = self.s3_client.get_object(Bucket=self.bucket, Key=key)
-            existing_data = json.loads(response['Body'].read())
+            existing_data = json.loads(response["Body"].read())
             existing_metadata = existing_data.get("metadata", {})
         except self.ClientError as e:
-            if e.response['Error']['Code'] == 'NoSuchKey':
+            if e.response["Error"]["Code"] == "NoSuchKey":
                 return False
             raise
 
         # Preserve and update metadata
         record.metadata = record.metadata or {}
         record.metadata["id"] = id
-        record.metadata["created_at"] = existing_metadata.get("created_at", datetime.now(UTC).isoformat())
+        record.metadata["created_at"] = existing_metadata.get(
+            "created_at", datetime.now(UTC).isoformat()
+        )
         record.metadata["updated_at"] = datetime.now(UTC).isoformat()
 
         # Update the object
@@ -357,9 +355,7 @@ class SyncS3Database(  # type: ignore[misc]
 
         if expected_version is not None:
             try:
-                self.s3_client.delete_object(
-                    Bucket=self.bucket, Key=key, IfMatch=expected_version
-                )
+                self.s3_client.delete_object(Bucket=self.bucket, Key=key, IfMatch=expected_version)
             except self.ClientError as e:
                 code = e.response.get("Error", {}).get("Code")
                 if code in ("404", "NoSuchKey"):
@@ -381,7 +377,7 @@ class SyncS3Database(  # type: ignore[misc]
         try:
             self.s3_client.head_object(Bucket=self.bucket, Key=key)
         except self.ClientError as e:
-            if e.response['Error']['Code'] == '404':
+            if e.response["Error"]["Code"] == "404":
                 return False
             raise
 
@@ -396,7 +392,7 @@ class SyncS3Database(  # type: ignore[misc]
 
     def list_all(self) -> list[str]:
         """List all record IDs in the database.
-        
+
         Returns:
             List of all record IDs
         """
@@ -404,19 +400,16 @@ class SyncS3Database(  # type: ignore[misc]
         record_ids = []
 
         # Use paginator for large buckets
-        paginator = self.s3_client.get_paginator('list_objects_v2')
-        page_iterator = paginator.paginate(
-            Bucket=self.bucket,
-            Prefix=self.prefix
-        )
+        paginator = self.s3_client.get_paginator("list_objects_v2")
+        page_iterator = paginator.paginate(Bucket=self.bucket, Prefix=self.prefix)
 
         for page in page_iterator:
-            if 'Contents' in page:
-                for obj in page['Contents']:
-                    key = obj['Key']
+            if "Contents" in page:
+                for obj in page["Contents"]:
+                    key = obj["Key"]
                     # Extract record ID from key
-                    if key.startswith(self.prefix) and key.endswith('.json'):
-                        record_id = key[len(self.prefix):-5]  # Remove prefix and .json
+                    if key.startswith(self.prefix) and key.endswith(".json"):
+                        record_id = key[len(self.prefix) : -5]  # Remove prefix and .json
                         record_ids.append(record_id)
 
         logger.debug(f"Listed {len(record_ids)} records from S3")
@@ -432,13 +425,13 @@ class SyncS3Database(  # type: ignore[misc]
             self.s3_client.head_object(Bucket=self.bucket, Key=key)
             return True
         except self.ClientError as e:
-            if e.response['Error']['Code'] == '404':
+            if e.response["Error"]["Code"] == "404":
                 return False
             raise
 
     def search(self, query: Query) -> list[Record]:
         """Search for records matching the query.
-        
+
         Note: S3 doesn't support complex queries, so we need to list and filter.
         """
         self._check_connection()
@@ -449,19 +442,19 @@ class SyncS3Database(  # type: ignore[misc]
         # every backend shares (it correctly orders falsy sort values such
         # as a numeric ``0``).
         results: list[tuple[str, Record]] = []
-        paginator = self.s3_client.get_paginator('list_objects_v2')
+        paginator = self.s3_client.get_paginator("list_objects_v2")
         pages = paginator.paginate(Bucket=self.bucket, Prefix=self.prefix)
 
         for page in pages:
-            if 'Contents' not in page:
+            if "Contents" not in page:
                 continue
 
             # Fetch objects in parallel
             with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
                 futures = []
-                for obj in page['Contents']:
-                    if obj['Key'].endswith('.json'):
-                        future = executor.submit(self._fetch_and_filter, obj['Key'], query)
+                for obj in page["Contents"]:
+                    if obj["Key"].endswith(".json"):
+                        future = executor.submit(self._fetch_and_filter, obj["Key"], query)
                         futures.append(future)
 
                 for future in as_completed(futures):
@@ -477,7 +470,7 @@ class SyncS3Database(  # type: ignore[misc]
         """Fetch an object and apply query filters."""
         try:
             response = self.s3_client.get_object(Bucket=self.bucket, Key=key)
-            body = response['Body'].read()
+            body = response["Body"].read()
             obj_data = json.loads(body)
             record = self._s3_object_to_record(obj_data)
 
@@ -501,12 +494,12 @@ class SyncS3Database(  # type: ignore[misc]
         self._check_connection()
 
         count = 0
-        paginator = self.s3_client.get_paginator('list_objects_v2')
+        paginator = self.s3_client.get_paginator("list_objects_v2")
         pages = paginator.paginate(Bucket=self.bucket, Prefix=self.prefix)
 
         for page in pages:
-            if 'Contents' in page:
-                count += sum(1 for obj in page['Contents'] if obj['Key'].endswith('.json'))
+            if "Contents" in page:
+                count += sum(1 for obj in page["Contents"] if obj["Key"].endswith(".json"))
 
         return count
 
@@ -516,20 +509,19 @@ class SyncS3Database(  # type: ignore[misc]
 
         # List and delete all objects
         count = 0
-        paginator = self.s3_client.get_paginator('list_objects_v2')
+        paginator = self.s3_client.get_paginator("list_objects_v2")
         pages = paginator.paginate(Bucket=self.bucket, Prefix=self.prefix)
 
         for page in pages:
-            if 'Contents' not in page:
+            if "Contents" not in page:
                 continue
 
             # Delete in batches
-            objects = [{'Key': obj['Key']} for obj in page['Contents'] if obj['Key'].endswith('.json')]
+            objects = [
+                {"Key": obj["Key"]} for obj in page["Contents"] if obj["Key"].endswith(".json")
+            ]
             if objects:
-                self.s3_client.delete_objects(
-                    Bucket=self.bucket,
-                    Delete={'Objects': objects}
-                )
+                self.s3_client.delete_objects(Bucket=self.bucket, Delete={"Objects": objects})
                 count += len(objects)
 
         # Clear cache
@@ -540,28 +532,26 @@ class SyncS3Database(  # type: ignore[misc]
         return count
 
     def stream_read(
-        self,
-        query: Query | None = None,
-        config: StreamConfig | None = None
+        self, query: Query | None = None, config: StreamConfig | None = None
     ) -> Iterator[Record]:
         """Stream records from S3."""
         self._check_connection()
         config = config or StreamConfig()
 
         # List objects and stream them
-        paginator = self.s3_client.get_paginator('list_objects_v2')
+        paginator = self.s3_client.get_paginator("list_objects_v2")
         pages = paginator.paginate(Bucket=self.bucket, Prefix=self.prefix)
 
         batch = []
         for page in pages:
-            if 'Contents' not in page:
+            if "Contents" not in page:
                 continue
 
-            for obj in page['Contents']:
-                if not obj['Key'].endswith('.json'):
+            for obj in page["Contents"]:
+                if not obj["Key"].endswith(".json"):
                     continue
 
-                record = self._fetch_and_filter(obj['Key'], query or Query())
+                record = self._fetch_and_filter(obj["Key"], query or Query())
                 if record:
                     batch.append(record)
 
@@ -575,9 +565,7 @@ class SyncS3Database(  # type: ignore[misc]
             yield r
 
     def stream_write(
-        self,
-        records: Iterator[Record],
-        config: StreamConfig | None = None
+        self, records: Iterator[Record], config: StreamConfig | None = None
     ) -> StreamResult:
         """Stream records into S3.
 
@@ -616,10 +604,10 @@ class SyncS3Database(  # type: ignore[misc]
         k: int = 10,
         filter=None,
         metric=None,
-        **kwargs
+        **kwargs,
     ):
         """Perform vector similarity search using Python calculations.
-        
+
         WARNING: This implementation downloads all records from S3 to perform
         the search locally. This is inefficient for large datasets. Consider
         using a vector-enabled backend like PostgreSQL or Elasticsearch for
@@ -631,7 +619,7 @@ class SyncS3Database(  # type: ignore[misc]
             k=k,
             filter=filter,
             metric=metric,
-            **kwargs
+            **kwargs,
         )
 
 

@@ -239,9 +239,7 @@ async def test_reserved_consent_section_not_reachable_via_content_api() -> None:
         # Forge attempt: a direct write to the reserved section is refused, so
         # a caller cannot fabricate a grant to unlock a gated section.
         with pytest.raises(ConfigurationError):
-            await store.put_document(
-                "u1", "consent", {"pii_processing": {"granted": True}}
-            )
+            await store.put_document("u1", "consent", {"pii_processing": {"granted": True}})
         with pytest.raises(ConfigurationError):
             await store.add_record("u1", "consent", {"x": 1})
 
@@ -265,9 +263,7 @@ def test_reserved_consent_section_not_reachable_via_content_api_sync() -> None:
     store = UserStateStore.from_config(_config())
     try:
         with pytest.raises(ConfigurationError):
-            store.put_document(
-                "u1", "consent", {"pii_processing": {"granted": True}}
-            )
+            store.put_document("u1", "consent", {"pii_processing": {"granted": True}})
         with pytest.raises(ConfigurationError):
             store.add_record("u1", "consent", {"x": 1})
         with pytest.raises(ConfigurationError):
@@ -294,9 +290,7 @@ async def test_consent_write_fires_metadata_only_event() -> None:
 
     store = await _make_async()
     captured: list[dict[str, Any]] = []
-    store._callbacks.register(
-        SECTION_WRITTEN_TOPIC, lambda payload: captured.append(payload)
-    )
+    store._callbacks.register(SECTION_WRITTEN_TOPIC, lambda payload: captured.append(payload))
     try:
         await store.grant_consent("u1", _SCOPE)
         await store.revoke_consent("u1", _SCOPE)
@@ -325,9 +319,7 @@ def test_consent_write_fires_event_sync() -> None:
 
     store = UserStateStore.from_config(_config())
     captured: list[dict[str, Any]] = []
-    store._callbacks.register(
-        SECTION_WRITTEN_TOPIC, lambda payload: captured.append(payload)
-    )
+    store._callbacks.register(SECTION_WRITTEN_TOPIC, lambda payload: captured.append(payload))
     try:
         store.grant_consent("u1", _SCOPE)
         store.revoke_consent("u1", _SCOPE)
@@ -369,9 +361,7 @@ async def test_consent_scope_named_after_reserved_field_is_grantable() -> None:
         await store.grant_consent("u1", "user_id")
         assert await store.has_consent("u1", "user_id") is True
         await store.put_document("u1", "profile", {"name": "Ada"})
-        assert (
-            await store.get_document("u1", "profile")
-        ).get_value("name") == "Ada"
+        assert (await store.get_document("u1", "profile")).get_value("name") == "Ada"
     finally:
         await store.close()
 
@@ -425,7 +415,6 @@ def test_consent_method_parity() -> None:
     for name in ("grant_consent", "revoke_consent", "has_consent"):
         assert hasattr(AsyncUserStateStore, name)
         assert hasattr(UserStateStore, name)
-        assert (
-            inspect.signature(getattr(AsyncUserStateStore, name))
-            == inspect.signature(getattr(UserStateStore, name))
+        assert inspect.signature(getattr(AsyncUserStateStore, name)) == inspect.signature(
+            getattr(UserStateStore, name)
         )

@@ -75,7 +75,7 @@ class PromptBenchmark:
         template = "{{name|upper}} - {{text|truncate(50)}}"
         params = {
             "name": "alice",
-            "text": "This is a longer text that needs to be truncated to fit"
+            "text": "This is a longer text that needs to be truncated to fit",
         }
 
         times = []
@@ -114,12 +114,7 @@ class PromptBenchmark:
         {{ loop.index }}. {{ item.name }} - {{ item.value }}
         {% endfor %}
         """
-        params = {
-            "items": [
-                {"name": f"Item {i}", "value": i * 10}
-                for i in range(10)
-            ]
-        }
+        params = {"items": [{"name": f"Item {i}", "value": i * 10} for i in range(10)]}
 
         times = []
         for _ in range(self.iterations):
@@ -149,10 +144,10 @@ class PromptBenchmark:
                 "email": "alice@example.com",
                 "city": "New York",
                 "country": "USA",
-                "premium": True
+                "premium": True,
             },
             "prefs": {"theme": "dark", "language": "en"},
-            "settings": {"notifications": "on", "privacy": "strict"}
+            "settings": {"notifications": "on", "privacy": "strict"},
         }
 
         times = []
@@ -192,7 +187,7 @@ class PromptBenchmark:
 
         return [
             BenchmarkResult.from_times("Mode Comparison: MIXED", times_mixed),
-            BenchmarkResult.from_times("Mode Comparison: JINJA2", times_jinja2)
+            BenchmarkResult.from_times("Mode Comparison: JINJA2", times_jinja2),
         ]
 
     def benchmark_nested_conditionals(self) -> BenchmarkResult:
@@ -236,16 +231,20 @@ class PromptBenchmark:
             print(f"Running {name}...")
             result = benchmark_func()
             results.append(result)
-            print(f"  {result.operations_per_second:.0f} ops/sec "
-                  f"({result.mean_time * 1000:.3f}ms mean)")
+            print(
+                f"  {result.operations_per_second:.0f} ops/sec "
+                f"({result.mean_time * 1000:.3f}ms mean)"
+            )
 
         # Mode comparison
         print("Running Mode Comparison...")
         comparison_results = self.benchmark_mixed_vs_jinja2_mode()
         results.extend(comparison_results)
         for result in comparison_results:
-            print(f"  {result.name}: {result.operations_per_second:.0f} ops/sec "
-                  f"({result.mean_time * 1000:.3f}ms mean)")
+            print(
+                f"  {result.name}: {result.operations_per_second:.0f} ops/sec "
+                f"({result.mean_time * 1000:.3f}ms mean)"
+            )
 
         print()
         print("Prompt rendering benchmarks complete!")

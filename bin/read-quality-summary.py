@@ -112,8 +112,10 @@ def project(doc: Any) -> list[str]:
 
 def main(argv: list[str]) -> int:
     if len(argv) != 2:
-        print(f"usage: {argv[0] if argv else 'read-quality-summary.py'} <summary.json>",
-              file=sys.stderr)
+        print(
+            f"usage: {argv[0] if argv else 'read-quality-summary.py'} <summary.json>",
+            file=sys.stderr,
+        )
         return 2
 
     try:

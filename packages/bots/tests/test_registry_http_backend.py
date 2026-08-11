@@ -107,9 +107,7 @@ class _MockHttpServer:
         payload: Any = None,
         body: bytes | None = None,
     ) -> None:
-        self._responses[("GET", path)] = _ResponseSpec(
-            status=status, payload=payload, body=body
-        )
+        self._responses[("GET", path)] = _ResponseSpec(status=status, payload=payload, body=body)
 
     def put(
         self,
@@ -119,9 +117,7 @@ class _MockHttpServer:
         payload: Any = None,
         body: bytes | None = None,
     ) -> None:
-        self._responses[("PUT", path)] = _ResponseSpec(
-            status=status, payload=payload, body=body
-        )
+        self._responses[("PUT", path)] = _ResponseSpec(status=status, payload=payload, body=body)
 
     def post(
         self,
@@ -131,9 +127,7 @@ class _MockHttpServer:
         payload: Any = None,
         body: bytes | None = None,
     ) -> None:
-        self._responses[("POST", path)] = _ResponseSpec(
-            status=status, payload=payload, body=body
-        )
+        self._responses[("POST", path)] = _ResponseSpec(status=status, payload=payload, body=body)
 
     def delete(
         self,
@@ -143,9 +137,7 @@ class _MockHttpServer:
         payload: Any = None,
         body: bytes | None = None,
     ) -> None:
-        self._responses[("DELETE", path)] = _ResponseSpec(
-            status=status, payload=payload, body=body
-        )
+        self._responses[("DELETE", path)] = _ResponseSpec(status=status, payload=payload, body=body)
 
     @property
     def calls(self) -> list[_CapturedCall]:
@@ -154,9 +146,7 @@ class _MockHttpServer:
     def calls_for(self, method: str) -> list[_CapturedCall]:
         return [c for c in self._calls if c.method.upper() == method.upper()]
 
-    async def _dispatch(
-        self, request: aiohttp.web.Request
-    ) -> aiohttp.web.Response:
+    async def _dispatch(self, request: aiohttp.web.Request) -> aiohttp.web.Response:
         body = await request.read()
         # ``request.query.keys()`` on a MultiDict returns unique keys in
         # insertion order — deterministic, no set-hash dedup surprises.
@@ -243,9 +233,12 @@ class TestHTTPRegistryBackendConfiguration:
 
     def test_create_registry_backend_http(self):
         """Test factory function creates HTTP backend."""
-        backend = create_registry_backend("http", {
-            "base_url": "https://example.com/api",
-        })
+        backend = create_registry_backend(
+            "http",
+            {
+                "base_url": "https://example.com/api",
+            },
+        )
         assert isinstance(backend, HTTPRegistryBackend)
 
     def test_create_registry_backend_memory(self):
@@ -616,9 +609,7 @@ class TestHTTPRegistryBackendWithMockServer:
         assert config is None
 
     @pytest.mark.asyncio
-    async def test_peek_config_does_not_impose_wire_protocol(
-        self, backend, mock_server
-    ):
+    async def test_peek_config_does_not_impose_wire_protocol(self, backend, mock_server):
         """peek_config issues a plain GET — no client-imposed wire protocol.
 
         The HTTP backend does not maintain client-side ``last_accessed_at``
@@ -676,9 +667,7 @@ class TestHTTPRegistryBackendWithMockServer:
             await backend.close()
 
     @pytest.mark.asyncio
-    async def test_list_all_no_filter_sends_no_query_param(
-        self, backend, mock_server
-    ):
+    async def test_list_all_no_filter_sends_no_query_param(self, backend, mock_server):
         """``list_all()`` with no filter must not pass ``params`` to aiohttp."""
         mock_server.get(
             "/api/v1/configs",
@@ -692,14 +681,10 @@ class TestHTTPRegistryBackendWithMockServer:
         captured = _captured_params(mock_server)
         assert captured, "expected a GET /configs request"
         for params in captured:
-            assert not params, (
-                f"list_all() without filter must not send params, got {params!r}"
-            )
+            assert not params, f"list_all() without filter must not send params, got {params!r}"
 
     @pytest.mark.asyncio
-    async def test_list_all_pushes_filter_metadata_to_server(
-        self, backend, mock_server
-    ):
+    async def test_list_all_pushes_filter_metadata_to_server(self, backend, mock_server):
         """list_all sends filter_metadata as a URL-encoded JSON query param."""
         mock_server.get(
             "/api/v1/configs",
@@ -719,9 +704,7 @@ class TestHTTPRegistryBackendWithMockServer:
         assert _filter_metadata_param(mock_server) == {"tenant_id": "acme"}
 
     @pytest.mark.asyncio
-    async def test_list_active_pushes_filter_metadata_to_server(
-        self, backend, mock_server
-    ):
+    async def test_list_active_pushes_filter_metadata_to_server(self, backend, mock_server):
         """list_active routes filter_metadata down to the same GET /configs call."""
         mock_server.get(
             "/api/v1/configs",
@@ -741,9 +724,7 @@ class TestHTTPRegistryBackendWithMockServer:
         assert _filter_metadata_param(mock_server) == {"tenant_id": "acme"}
 
     @pytest.mark.asyncio
-    async def test_count_pushes_filter_metadata_to_server(
-        self, backend, mock_server
-    ):
+    async def test_count_pushes_filter_metadata_to_server(self, backend, mock_server):
         """count() routes filter_metadata down to the underlying list call."""
         mock_server.get(
             "/api/v1/configs",
@@ -769,9 +750,7 @@ class TestHTTPRegistryBackendWithMockServer:
         assert _filter_metadata_param(mock_server) == {"tenant_id": "acme"}
 
     @pytest.mark.asyncio
-    async def test_filter_metadata_query_param_is_deterministic(
-        self, backend, mock_server
-    ):
+    async def test_filter_metadata_query_param_is_deterministic(self, backend, mock_server):
         """``filter_metadata`` JSON is serialized with ``sort_keys=True``.
 
         Determinism matters for server-side cache keys and request logs:
@@ -845,9 +824,7 @@ class TestHTTPRegistryBackendWithMockServer:
         assert "active" in statuses
 
     @pytest.mark.asyncio
-    async def test_list_inactive_pushes_status_to_server(
-        self, backend, mock_server
-    ):
+    async def test_list_inactive_pushes_status_to_server(self, backend, mock_server):
         """``list_inactive()`` routes through the same ``?status=`` push-down."""
         mock_server.get(
             "/api/v1/configs",
@@ -863,9 +840,7 @@ class TestHTTPRegistryBackendWithMockServer:
         assert "inactive" in statuses
 
     @pytest.mark.asyncio
-    async def test_sort_encoded_as_field_colon_order(
-        self, backend, mock_server
-    ):
+    async def test_sort_encoded_as_field_colon_order(self, backend, mock_server):
         """``sort=[SortSpec("bot_id", DESC)]`` serializes to ``?sort=bot_id:desc``.
 
         Single-occurrence wire params surface as scalars via
@@ -878,18 +853,14 @@ class TestHTTPRegistryBackendWithMockServer:
 
         mock_server.get("/api/v1/configs", payload=[])
 
-        await backend.list_all(
-            sort=[SortSpec(field="bot_id", order=SortOrder.DESC)]
-        )
+        await backend.list_all(sort=[SortSpec(field="bot_id", order=SortOrder.DESC)])
 
         captured = _captured_params(mock_server)
         sort_params = [p.get("sort") for p in captured if p]
         assert sort_params == ["bot_id:desc"]
 
     @pytest.mark.asyncio
-    async def test_sort_multi_key_preserves_list_order(
-        self, backend, mock_server
-    ):
+    async def test_sort_multi_key_preserves_list_order(self, backend, mock_server):
         """Multi-key sort serializes as a list (repeated query param)."""
         from dataknobs_data import SortOrder, SortSpec
 
@@ -929,9 +900,7 @@ class TestHTTPRegistryBackendWithMockServer:
         assert "5" in offsets
 
     @pytest.mark.asyncio
-    async def test_limit_offset_not_reapplied_client_side(
-        self, backend, mock_server
-    ):
+    async def test_limit_offset_not_reapplied_client_side(self, backend, mock_server):
         """Server is trusted on pagination — client must not re-truncate.
 
         Re-applying ``offset`` on an already-offset window would drop
@@ -953,9 +922,7 @@ class TestHTTPRegistryBackendWithMockServer:
         assert [r.bot_id for r in regs] == ["bot-5", "bot-6", "bot-7"]
 
     @pytest.mark.asyncio
-    async def test_limit_not_reapplied_client_side(
-        self, backend, mock_server
-    ):
+    async def test_limit_not_reapplied_client_side(self, backend, mock_server):
         """The server is trusted on limit; client does not re-truncate."""
         mock_server.get(
             "/api/v1/configs",
@@ -971,9 +938,7 @@ class TestHTTPRegistryBackendWithMockServer:
         assert len(regs) == 2
 
     @pytest.mark.asyncio
-    async def test_status_reapplied_client_side_for_legacy_servers(
-        self, backend, mock_server
-    ):
+    async def test_status_reapplied_client_side_for_legacy_servers(self, backend, mock_server):
         """Legacy server returning mixed-status rows is still filtered client-side.
 
         ``status`` is an additive-optional parameter; the defensive
@@ -994,9 +959,7 @@ class TestHTTPRegistryBackendWithMockServer:
         assert [r.bot_id for r in regs] == ["bot-1"]
 
     @pytest.mark.asyncio
-    async def test_sort_reapplied_client_side_for_legacy_servers(
-        self, backend, mock_server
-    ):
+    async def test_sort_reapplied_client_side_for_legacy_servers(self, backend, mock_server):
         """Legacy server returns unsorted rows; the client must sort them.
 
         Re-sorting is idempotent, so the defensive reapply is always
@@ -1013,9 +976,7 @@ class TestHTTPRegistryBackendWithMockServer:
             ],
         )
 
-        regs = await backend.list_all(
-            sort=[SortSpec(field="bot_id", order=SortOrder.ASC)]
-        )
+        regs = await backend.list_all(sort=[SortSpec(field="bot_id", order=SortOrder.ASC)])
         assert [r.bot_id for r in regs] == ["alice", "bob", "charlie"]
 
     @pytest.mark.asyncio
@@ -1047,9 +1008,7 @@ class TestHTTPRegistryBackendWithMockServer:
         captured = _captured_params(mock_server)
         assert captured, "expected a request"
         for params in captured:
-            assert not params, (
-                f"bare list_all() must not send params, got {params!r}"
-            )
+            assert not params, f"bare list_all() must not send params, got {params!r}"
 
     @pytest.mark.asyncio
     async def test_auth_header_sent(self, mock_server):

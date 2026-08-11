@@ -160,9 +160,7 @@ try:
     _section = _load_models_section()
     RESOURCE_MODEL_LIMITS: dict[str, int]
     RESOURCE_MODEL_INPUT_LIMITS: dict[str, int]
-    RESOURCE_MODEL_LIMITS, RESOURCE_MODEL_INPUT_LIMITS = project_model_limits(
-        _section
-    )
+    RESOURCE_MODEL_LIMITS, RESOURCE_MODEL_INPUT_LIMITS = project_model_limits(_section)
     del _section
 except Exception:  # pragma: no cover - resource ships + is guarded by a test
     logger.exception(
@@ -174,9 +172,7 @@ except Exception:  # pragma: no cover - resource ships + is guarded by a test
     RESOURCE_MODEL_INPUT_LIMITS = {}
 
 
-def match_ceiling(
-    model_lower: str, items: Iterable[tuple[str, int]]
-) -> int | None:
+def match_ceiling(model_lower: str, items: Iterable[tuple[str, int]]) -> int | None:
     """Resolve a ``max_tokens`` ceiling for *model_lower* against ``items``.
 
     A single family-matching rule shared by both ceiling sources — the live
@@ -270,9 +266,15 @@ def claude_rejects_temperature(model_lower: str) -> bool:
 #: would be mis-detected as lacking these. Consumed by
 #: :func:`claude_heuristic_profile`.
 MODERN_CAPABILITY_FAMILIES: tuple[str, ...] = (
-    "claude-3", "claude-3.5", "claude-4", "claude-5",
-    "claude-sonnet", "claude-opus", "claude-haiku",
-    "claude-fable", "claude-mythos",
+    "claude-3",
+    "claude-3.5",
+    "claude-4",
+    "claude-5",
+    "claude-sonnet",
+    "claude-opus",
+    "claude-haiku",
+    "claude-fable",
+    "claude-mythos",
 )
 
 
@@ -329,9 +331,7 @@ def claude_heuristic_profile(model: str) -> ModelProfile:
             ModelCapability.JSON_MODE,
         }
     rejected = (
-        frozenset({"temperature"})
-        if claude_rejects_temperature(model_lower)
-        else frozenset()
+        frozenset({"temperature"}) if claude_rejects_temperature(model_lower) else frozenset()
     )
     return ModelProfile(
         capabilities=frozenset(capabilities),
@@ -367,9 +367,7 @@ def claude_only_heuristic_profile(model: str) -> ModelProfile:
 CLAUDE_RESOURCE_PROFILE_SOURCE = CallableModelMetadataSource(
     "bundled_resource", claude_resource_profile
 )
-CLAUDE_HEURISTIC_PROFILE_SOURCE = CallableModelMetadataSource(
-    "heuristic", claude_heuristic_profile
-)
+CLAUDE_HEURISTIC_PROFILE_SOURCE = CallableModelMetadataSource("heuristic", claude_heuristic_profile)
 CLAUDE_ONLY_HEURISTIC_PROFILE_SOURCE = CallableModelMetadataSource(
     "claude_heuristic", claude_only_heuristic_profile
 )

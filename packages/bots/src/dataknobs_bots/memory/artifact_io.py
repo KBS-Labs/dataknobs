@@ -159,13 +159,10 @@ def _read_jsonl(path: Path) -> list[dict[str, Any]]:
             try:
                 obj = json.loads(stripped)
             except json.JSONDecodeError as exc:
-                raise ValueError(
-                    f"Invalid JSON on line {line_no} of {path}: {exc}"
-                ) from exc
+                raise ValueError(f"Invalid JSON on line {line_no} of {path}: {exc}") from exc
             if not isinstance(obj, dict):
                 raise ValueError(
-                    f"Expected JSON object on line {line_no} of {path}, "
-                    f"got {type(obj).__name__}"
+                    f"Expected JSON object on line {line_no} of {path}, got {type(obj).__name__}"
                 )
             entries.append(obj)
     return entries
@@ -284,9 +281,7 @@ def load_artifact(
     except json.JSONDecodeError as exc:
         raise ValueError(f"Invalid JSON in {path}: {exc}") from exc
     if not isinstance(data, dict):
-        raise ValueError(
-            f"Expected JSON object in {path}, got {type(data).__name__}"
-        )
+        raise ValueError(f"Expected JSON object in {path}, got {type(data).__name__}")
 
     fmt = _detect_format(data)
     if fmt == "full_state":
@@ -332,9 +327,7 @@ def load_from_book(
 
     if index is not None:
         if index < 0 or index >= len(entries):
-            raise ValueError(
-                f"Index {index} out of range for book with {len(entries)} entries."
-            )
+            raise ValueError(f"Index {index} out of range for book with {len(entries)} entries.")
         data = entries[index]
     else:
         # name is not None
@@ -346,10 +339,7 @@ def load_from_book(
                 break
         if matched is None:
             available = [_artifact_name_from_data(e) for e in entries]
-            raise ValueError(
-                f"No artifact named '{name}' in {path}. "
-                f"Available: {available}"
-            )
+            raise ValueError(f"No artifact named '{name}' in {path}. Available: {available}")
         data = matched
 
     fmt = _detect_format(data)
@@ -379,9 +369,11 @@ def list_book(path: str | Path) -> list[dict[str, Any]]:
     result: list[dict[str, Any]] = []
     for idx, entry in enumerate(entries):
         fmt = _detect_format(entry)
-        result.append({
-            "index": idx,
-            "name": _artifact_name_from_data(entry),
-            "format": fmt,
-        })
+        result.append(
+            {
+                "index": idx,
+                "name": _artifact_name_from_data(entry),
+                "format": fmt,
+            }
+        )
     return result

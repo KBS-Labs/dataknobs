@@ -155,30 +155,19 @@ class DirectoryProcessor:
 
         # Build the default chunker once for markdown files.  Per-file
         # chunkers are only created when a pattern overrides the default.
-        self._default_chunking_config = self._build_effective_config(
-            config.default_chunking
-        )
-        self._default_config_key = self._config_cache_key(
-            self._default_chunking_config
-        )
-        self._default_chunker = chunker or create_chunker(
-            self._default_chunking_config
-        )
+        self._default_chunking_config = self._build_effective_config(config.default_chunking)
+        self._default_config_key = self._config_cache_key(self._default_chunking_config)
+        self._default_chunker = chunker or create_chunker(self._default_chunking_config)
 
     @property
     def source(self) -> DocumentSource:
         """The underlying :class:`DocumentSource`."""
         return self._source
 
-    def _build_effective_config(
-        self, chunking_config: dict[str, Any]
-    ) -> dict[str, Any]:
+    def _build_effective_config(self, chunking_config: dict[str, Any]) -> dict[str, Any]:
         """Merge default quality filter into a chunking config dict."""
         effective = dict(chunking_config)
-        if (
-            self.config.default_quality_filter
-            and "quality_filter" not in effective
-        ):
+        if self.config.default_quality_filter and "quality_filter" not in effective:
             effective["quality_filter"] = self.config.default_quality_filter
         return effective
 
@@ -203,6 +192,7 @@ class DirectoryProcessor:
         Yields:
             ProcessedDocument for each processed file.
         """
+
         async def _collect() -> list[ProcessedDocument]:
             return [doc async for doc in self.process_async()]
 
@@ -238,18 +228,20 @@ class DirectoryProcessor:
             suffix = Path(ref.path).suffix.lower()
             stem_suffix = Path(Path(ref.path).stem).suffix.lower()
             if suffix in _MARKDOWN_LIKE_EXTS:
-                yield await self._process_markdown_file_async(
-                    ref, pattern_config
-                )
+                yield await self._process_markdown_file_async(ref, pattern_config)
             elif suffix in _YAML_EXTS:
                 yield await self._process_yaml_async(ref, pattern_config)
             elif suffix in _CSV_EXTS:
                 yield await self._process_csv_async(ref, pattern_config)
-            elif suffix in (".json", ".jsonl", ".ndjson") or (suffix == ".gz" and stem_suffix in (
-                ".json",
-                ".jsonl",
-                ".ndjson",
-            )):
+            elif suffix in (".json", ".jsonl", ".ndjson") or (
+                suffix == ".gz"
+                and stem_suffix
+                in (
+                    ".json",
+                    ".jsonl",
+                    ".ndjson",
+                )
+            ):
                 async for doc in self._process_json_async(ref, pattern_config):
                     yield doc
             else:
@@ -317,8 +309,7 @@ class DirectoryProcessor:
             chunk_dicts.append(
                 {
                     "text": chunk.text,
-                    "embedding_text": chunk.metadata.embedding_text
-                    or chunk.text,
+                    "embedding_text": chunk.metadata.embedding_text or chunk.text,
                     "chunk_index": i,
                     "source_path": source_display,
                     "metadata": {
@@ -498,12 +489,11 @@ class DirectoryProcessor:
             should_stream = is_jsonl or file_size > STREAMING_THRESHOLD_BYTES
 
             if should_stream:
-                async for json_chunk in self._stream_json_chunks(
-                    ref, chunker, source_file
-                ):
+                async for json_chunk in self._stream_json_chunks(ref, chunker, source_file):
                     chunks.append(self._json_chunk_to_dict(json_chunk))
             else:
                 import json as json_lib
+
                 raw = await self._source.read_bytes(ref)
                 data = json_lib.loads(raw.decode("utf-8"))
 
@@ -561,18 +551,14 @@ class DirectoryProcessor:
         """
         if isinstance(self._source, LocalDocumentSource):
             path = self._source.root / ref.path
-            async for chunk in aiter_sync_in_thread(
-                lambda: chunker.stream_chunks(path)
-            ):
+            async for chunk in aiter_sync_in_thread(lambda: chunker.stream_chunks(path)):
                 if not chunk.source_file:
                     chunk.source_file = source_display
                 yield chunk
             return
 
         if self._is_jsonl_file(ref.path):
-            async for chunk in self._stream_jsonl_from_remote(
-                ref, chunker, source_display
-            ):
+            async for chunk in self._stream_jsonl_from_remote(ref, chunker, source_display):
                 yield chunk
             return
 
@@ -590,9 +576,7 @@ class DirectoryProcessor:
             # instead would race the in-flight worker read if a second
             # cancellation let teardown return before the join completed.
             try:
-                yield from chunker.stream_chunks(
-                    text_stream, source_file=source_display
-                )
+                yield from chunker.stream_chunks(text_stream, source_file=source_display)
             finally:
                 text_stream.detach()
 
@@ -619,9 +603,7 @@ class DirectoryProcessor:
                 if nl < 0:
                     break
                 raw_line, pending = pending[:nl], pending[nl + 1 :]
-                for chunk in self._emit_jsonl_line(
-                    raw_line, chunker, source_display
-                ):
+                for chunk in self._emit_jsonl_line(raw_line, chunker, source_display):
                     yield chunk
 
         if pending.strip():
@@ -645,9 +627,7 @@ class DirectoryProcessor:
         try:
             obj = json.loads(stripped.decode("utf-8"))
         except (UnicodeDecodeError, json.JSONDecodeError) as e:
-            logger.warning(
-                "Skipping malformed JSONL line in %s: %s", source_display, e
-            )
+            logger.warning("Skipping malformed JSONL line in %s: %s", source_display, e)
             return
         for chunk in chunker.chunk(obj, source=source_display):
             yield chunk
@@ -692,8 +672,7 @@ class DirectoryProcessor:
         """
         filepath_lower = filepath.lower()
         return any(
-            filepath_lower.endswith(ext)
-            for ext in [".jsonl", ".ndjson", ".jsonl.gz", ".ndjson.gz"]
+            filepath_lower.endswith(ext) for ext in [".jsonl", ".ndjson", ".jsonl.gz", ".ndjson.gz"]
         )
 
 

@@ -79,8 +79,7 @@ class MarkdownTreeChunker(Chunker):
             except ValueError:
                 valid = [e.value for e in HeadingInclusion]
                 raise ValueError(
-                    f"Invalid 'heading_inclusion' value {hi_raw!r}. "
-                    f"Valid values: {valid}"
+                    f"Invalid 'heading_inclusion' value {hi_raw!r}. Valid values: {valid}"
                 ) from None
         else:
             hi = HeadingInclusion.IN_METADATA

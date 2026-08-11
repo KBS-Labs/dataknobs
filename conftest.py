@@ -1,6 +1,7 @@
 """Root conftest.py for pytest configuration.
 Automatically adds all package src directories to Python path using package-discovery.sh.
 """
+
 import sys
 import subprocess
 from pathlib import Path
@@ -15,15 +16,12 @@ if package_discovery_script.exists():
     try:
         # Run package-discovery.sh to get list of packages
         result = subprocess.run(
-            [str(package_discovery_script), "list"],
-            capture_output=True,
-            text=True,
-            check=True
+            [str(package_discovery_script), "list"], capture_output=True, text=True, check=True
         )
-        
+
         # Parse the package names
         packages = result.stdout.strip().split()
-        
+
         # Add each package's src directory to Python path
         for package_name in packages:
             src_dir = PROJECT_ROOT / "packages" / package_name / "src"

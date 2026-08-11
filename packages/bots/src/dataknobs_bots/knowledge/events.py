@@ -147,7 +147,4 @@ class TenantFilteredCallback:
         return self._inner(event)
 
     def __repr__(self) -> str:
-        return (
-            f"TenantFilteredCallback("
-            f"inner={self._inner!r}, tenant_id={self._tenant_id!r})"
-        )
+        return f"TenantFilteredCallback(inner={self._inner!r}, tenant_id={self._tenant_id!r})"

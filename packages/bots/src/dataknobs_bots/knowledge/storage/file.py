@@ -86,14 +86,16 @@ class FileKnowledgeBackend(KnowledgeResourceBackendMixin):
     # set (does not replace it).
     SUPPORTED_CAPABILITIES: ClassVar[frozenset[CapabilityLike]] = (
         KnowledgeResourceBackendMixin.SUPPORTED_CAPABILITIES
-        | frozenset({
-            Capability.TENANT_SCOPED_STATE,
-            Capability.SNAPSHOT_ISOLATION,
-            # Conditional metadata writes are guarded by an ephemeral
-            # advisory file lock (POSIX fcntl.flock) held for the
-            # read-check-write critical section; see _cas_write_metadata_sync.
-            Capability.CONDITIONAL_WRITE,
-        })
+        | frozenset(
+            {
+                Capability.TENANT_SCOPED_STATE,
+                Capability.SNAPSHOT_ISOLATION,
+                # Conditional metadata writes are guarded by an ephemeral
+                # advisory file lock (POSIX fcntl.flock) held for the
+                # read-check-write critical section; see _cas_write_metadata_sync.
+                Capability.CONDITIONAL_WRITE,
+            }
+        )
     )
 
     # Sidecar lock file for the conditional-write critical section. Held
@@ -124,18 +126,14 @@ class FileKnowledgeBackend(KnowledgeResourceBackendMixin):
 
     async def initialize(self) -> None:
         """Initialize the backend. Creates base directory if needed."""
-        await asyncio.to_thread(
-            self._base_path.mkdir, parents=True, exist_ok=True
-        )
+        await asyncio.to_thread(self._base_path.mkdir, parents=True, exist_ok=True)
         self._initialized = True
 
     async def close(self) -> None:
         """Close the backend. No-op for file backend."""
         self._initialized = False
 
-    def _kb_path(
-        self, domain_id: str, ctx: TenantContext | None = None
-    ) -> Path:
+    def _kb_path(self, domain_id: str, ctx: TenantContext | None = None) -> Path:
         """Get the path to a knowledge base's state directory.
 
         With ``ctx=None`` (the default — every content path and every
@@ -148,9 +146,7 @@ class FileKnowledgeBackend(KnowledgeResourceBackendMixin):
         """
         return self._base_path / self._state_prefix(ctx) / domain_id
 
-    def _metadata_path(
-        self, domain_id: str, ctx: TenantContext | None = None
-    ) -> Path:
+    def _metadata_path(self, domain_id: str, ctx: TenantContext | None = None) -> Path:
         """Get the path to a KB's metadata file (tenant-scoped via ``ctx``)."""
         return self._kb_path(domain_id, ctx) / self.METADATA_FILE
 
@@ -158,9 +154,7 @@ class FileKnowledgeBackend(KnowledgeResourceBackendMixin):
         """Get the path to a KB's content directory (domain-keyed)."""
         return self._kb_path(domain_id) / self.CONTENT_DIR
 
-    def _snapshots_path(
-        self, domain_id: str, ctx: TenantContext | None = None
-    ) -> Path:
+    def _snapshots_path(self, domain_id: str, ctx: TenantContext | None = None) -> Path:
         """Path to a KB's per-version snapshot directory (tenant-scoped)."""
         return self._kb_path(domain_id, ctx) / self.SNAPSHOTS_DIR
 
@@ -200,13 +194,10 @@ class FileKnowledgeBackend(KnowledgeResourceBackendMixin):
         if kind is KnowledgeKeyKind.SNAPSHOT:
             return f"{base}/{domain_segment}/{self.SNAPSHOTS_DIR}/*"
         raise ValueError(
-            f"key_pattern is not defined for kind {kind!r} "
-            f"(only CONTENT / METADATA / SNAPSHOT)"
+            f"key_pattern is not defined for kind {kind!r} (only CONTENT / METADATA / SNAPSHOT)"
         )
 
-    def _load_metadata_sync(
-        self, domain_id: str, ctx: TenantContext | None = None
-    ) -> dict:
+    def _load_metadata_sync(self, domain_id: str, ctx: TenantContext | None = None) -> dict:
         """Load metadata from disk (blocking; call via :meth:`_load_metadata`)."""
         meta_path = self._metadata_path(domain_id, ctx)
         if not meta_path.exists():
@@ -214,13 +205,9 @@ class FileKnowledgeBackend(KnowledgeResourceBackendMixin):
         with open(meta_path, encoding="utf-8") as f:
             return json.load(f)
 
-    async def _load_metadata(
-        self, domain_id: str, ctx: TenantContext | None = None
-    ) -> dict:
+    async def _load_metadata(self, domain_id: str, ctx: TenantContext | None = None) -> dict:
         """Load metadata from disk, off the event loop (tenant-scoped via ``ctx``)."""
-        return await asyncio.to_thread(
-            self._load_metadata_sync, domain_id, ctx
-        )
+        return await asyncio.to_thread(self._load_metadata_sync, domain_id, ctx)
 
     @staticmethod
     def _atomic_write_text(target: Path, body: str) -> None:
@@ -285,9 +272,7 @@ class FileKnowledgeBackend(KnowledgeResourceBackendMixin):
         body = json.dumps(metadata, indent=2, default=str)
 
         if self._state_prefix(ctx):
-            await asyncio.to_thread(
-                meta_path.parent.mkdir, parents=True, exist_ok=True
-            )
+            await asyncio.to_thread(meta_path.parent.mkdir, parents=True, exist_ok=True)
 
         if expected_version is None:
             await asyncio.to_thread(self._atomic_write_text, meta_path, body)
@@ -354,15 +339,10 @@ class FileKnowledgeBackend(KnowledgeResourceBackendMixin):
         try:
             fcntl.flock(fd, fcntl.LOCK_EX)
             current = self._read_document_bytes(meta_path)
-            current_version = (
-                hashlib.sha256(current).hexdigest()
-                if current is not None
-                else None
-            )
+            current_version = hashlib.sha256(current).hexdigest() if current is not None else None
             if current_version != expected_version:
                 raise ConcurrencyError(
-                    "Knowledge-base state document was modified by a "
-                    "concurrent writer",
+                    "Knowledge-base state document was modified by a concurrent writer",
                     context={
                         "domain_id": domain_id,
                         "expected_version": expected_version,
@@ -394,9 +374,7 @@ class FileKnowledgeBackend(KnowledgeResourceBackendMixin):
         # Auto-detect content type. The first mimetypes lookup lazily
         # reads the system mime database from disk, so offload it.
         if content_type is None:
-            content_type = await asyncio.to_thread(
-                self._guess_content_type, path
-            )
+            content_type = await asyncio.to_thread(self._guess_content_type, path)
 
         # Calculate checksum
         checksum = hashlib.md5(data).hexdigest()
@@ -535,9 +513,7 @@ class FileKnowledgeBackend(KnowledgeResourceBackendMixin):
             else:
                 break
 
-    async def list_files(
-        self, domain_id: str, prefix: str | None = None
-    ) -> list[KnowledgeFile]:
+    async def list_files(self, domain_id: str, prefix: str | None = None) -> list[KnowledgeFile]:
         """List all files in a knowledge base."""
         kb_metadata = await self._load_metadata(domain_id)
         files_dict = kb_metadata.get("files", {})
@@ -557,9 +533,7 @@ class FileKnowledgeBackend(KnowledgeResourceBackendMixin):
 
     # --- Knowledge Base Operations ---
 
-    async def create_kb(
-        self, domain_id: str, metadata: dict | None = None
-    ) -> KnowledgeBaseInfo:
+    async def create_kb(self, domain_id: str, metadata: dict | None = None) -> KnowledgeBaseInfo:
         """Create a new knowledge base."""
         if not await asyncio.to_thread(self._create_kb_dirs, domain_id):
             raise ValueError(f"Knowledge base '{domain_id}' already exists")
@@ -705,18 +679,14 @@ class FileKnowledgeBackend(KnowledgeResourceBackendMixin):
         info_dict = kb_metadata.get("info", {"domain_id": domain_id})
         # Persist the string value so the JSON round-trips and
         # KnowledgeBaseInfo.from_dict rehydrates the enum.
-        info_dict["ingestion_status"] = normalize_ingestion_status(
-            status
-        ).value
+        info_dict["ingestion_status"] = normalize_ingestion_status(status).value
         info_dict["ingestion_error"] = error
         # Always written through: a non-SWAPPING transition passes the
         # default None and so clears any stale in-flight swap token.
         info_dict["generation"] = generation
         kb_metadata["info"] = info_dict
 
-        await self._save_metadata(
-            domain_id, kb_metadata, ctx, expected_version=expected_version
-        )
+        await self._save_metadata(domain_id, kb_metadata, ctx, expected_version=expected_version)
 
     # --- Change Detection ---
     #
@@ -753,17 +723,13 @@ class FileKnowledgeBackend(KnowledgeResourceBackendMixin):
         tenant context writes the snapshot under the per-tenant state
         prefix.
         """
-        snapshot = {
-            path: info.get("checksum", "") for path, info in files.items()
-        }
+        snapshot = {path: info.get("checksum", "") for path, info in files.items()}
         version = self._identity_of_snapshot(snapshot)
         if not version:
             return
         snap_path = self._snapshot_file(domain_id, version, ctx)
         body = json.dumps(snapshot)
-        wrote = await asyncio.to_thread(
-            self._write_snapshot_file, snap_path, body
-        )
+        wrote = await asyncio.to_thread(self._write_snapshot_file, snap_path, body)
         if not wrote:
             return  # identical content state already captured
 
@@ -808,8 +774,7 @@ class FileKnowledgeBackend(KnowledgeResourceBackendMixin):
         data = await asyncio.to_thread(self._read_snapshot_file, snap_path)
         if data is None:
             raise InvalidVersionError(
-                f"Version {version!r} is not retained for domain "
-                f"{domain_id!r}"
+                f"Version {version!r} is not retained for domain {domain_id!r}"
             )
         return data
 

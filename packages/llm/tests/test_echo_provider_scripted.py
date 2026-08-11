@@ -36,9 +36,7 @@ class TestResponseQueue:
         assert response.content == "Hello from queue"
 
     @pytest.mark.asyncio
-    async def test_multiple_responses_consumed_in_order(
-        self, provider: EchoProvider
-    ) -> None:
+    async def test_multiple_responses_consumed_in_order(self, provider: EchoProvider) -> None:
         """Test multiple responses are consumed in order."""
         provider.set_responses(["First", "Second", "Third"])
 
@@ -51,9 +49,7 @@ class TestResponseQueue:
         assert r3.content == "Third"
 
     @pytest.mark.asyncio
-    async def test_falls_back_to_echo_when_queue_empty(
-        self, provider: EchoProvider
-    ) -> None:
+    async def test_falls_back_to_echo_when_queue_empty(self, provider: EchoProvider) -> None:
         """Test falls back to echo when queue is exhausted."""
         provider.set_responses(["Only one"])
 
@@ -64,9 +60,7 @@ class TestResponseQueue:
         assert "Second call" in r2.content  # Echo behavior
 
     @pytest.mark.asyncio
-    async def test_cycle_mode_repeats_responses(
-        self, provider: EchoProvider
-    ) -> None:
+    async def test_cycle_mode_repeats_responses(self, provider: EchoProvider) -> None:
         """Test cycle mode repeats responses."""
         provider.set_responses(["A", "B"], cycle=True)
 
@@ -81,9 +75,7 @@ class TestResponseQueue:
         assert r4.content == "B"
 
     @pytest.mark.asyncio
-    async def test_add_response_appends_to_queue(
-        self, provider: EchoProvider
-    ) -> None:
+    async def test_add_response_appends_to_queue(self, provider: EchoProvider) -> None:
         """Test add_response appends to existing queue."""
         provider.set_responses(["First"])
         provider.add_response("Second")
@@ -99,22 +91,16 @@ class TestResponseFunction:
     """Tests for response function functionality."""
 
     @pytest.mark.asyncio
-    async def test_simple_response_function(
-        self, provider: EchoProvider
-    ) -> None:
+    async def test_simple_response_function(self, provider: EchoProvider) -> None:
         """Test simple response function."""
-        provider.set_response_function(
-            lambda msgs: f"Got {len(msgs)} messages"
-        )
+        provider.set_response_function(lambda msgs: f"Got {len(msgs)} messages")
 
         response = await provider.complete("Hello")
 
         assert response.content == "Got 1 messages"
 
     @pytest.mark.asyncio
-    async def test_response_function_receives_messages(
-        self, provider: EchoProvider
-    ) -> None:
+    async def test_response_function_receives_messages(self, provider: EchoProvider) -> None:
         """Test response function receives message list."""
         captured = []
 
@@ -130,9 +116,7 @@ class TestResponseFunction:
         assert captured[0][0].content == "Test message"
 
     @pytest.mark.asyncio
-    async def test_response_function_can_return_llm_response(
-        self, provider: EchoProvider
-    ) -> None:
+    async def test_response_function_can_return_llm_response(self, provider: EchoProvider) -> None:
         """Test response function can return LLMResponse directly."""
         custom_response = LLMResponse(
             content="Custom content",
@@ -149,9 +133,7 @@ class TestResponseFunction:
         assert response.finish_reason == "custom"
 
     @pytest.mark.asyncio
-    async def test_response_function_has_priority_over_queue(
-        self, provider: EchoProvider
-    ) -> None:
+    async def test_response_function_has_priority_over_queue(self, provider: EchoProvider) -> None:
         """Test response function takes priority over queue."""
         provider.set_responses(["From queue"])
         provider.set_response_function(lambda msgs: "From function")
@@ -165,9 +147,7 @@ class TestPatternMatching:
     """Tests for pattern matching functionality."""
 
     @pytest.mark.asyncio
-    async def test_simple_pattern_match(
-        self, provider: EchoProvider
-    ) -> None:
+    async def test_simple_pattern_match(self, provider: EchoProvider) -> None:
         """Test simple pattern matching."""
         provider.add_pattern_response(r"hello", "Hi there!")
 
@@ -176,9 +156,7 @@ class TestPatternMatching:
         assert response.content == "Hi there!"
 
     @pytest.mark.asyncio
-    async def test_case_insensitive_by_default(
-        self, provider: EchoProvider
-    ) -> None:
+    async def test_case_insensitive_by_default(self, provider: EchoProvider) -> None:
         """Test patterns are case-insensitive by default."""
         provider.add_pattern_response(r"hello", "Matched!")
 
@@ -187,9 +165,7 @@ class TestPatternMatching:
         assert response.content == "Matched!"
 
     @pytest.mark.asyncio
-    async def test_multiple_patterns_first_wins(
-        self, provider: EchoProvider
-    ) -> None:
+    async def test_multiple_patterns_first_wins(self, provider: EchoProvider) -> None:
         """Test first matching pattern wins."""
         provider.add_pattern_response(r"hello", "Hello response")
         provider.add_pattern_response(r"world", "World response")
@@ -199,9 +175,7 @@ class TestPatternMatching:
         assert response.content == "Hello response"
 
     @pytest.mark.asyncio
-    async def test_no_match_falls_through(
-        self, provider: EchoProvider
-    ) -> None:
+    async def test_no_match_falls_through(self, provider: EchoProvider) -> None:
         """Test no match falls through to next priority."""
         provider.add_pattern_response(r"specific", "Matched!")
         provider.set_responses(["From queue"])
@@ -271,9 +245,7 @@ class TestCallHistory:
         assert provider.get_last_user_message() == "User message here"
 
     @pytest.mark.asyncio
-    async def test_call_history_includes_response(
-        self, provider: EchoProvider
-    ) -> None:
+    async def test_call_history_includes_response(self, provider: EchoProvider) -> None:
         """Test call history includes the response."""
         provider.set_responses(["Expected response"])
 
@@ -312,9 +284,7 @@ class TestReset:
         assert "test message" in response.content
 
     @pytest.mark.asyncio
-    async def test_reset_clears_everything(
-        self, provider: EchoProvider
-    ) -> None:
+    async def test_reset_clears_everything(self, provider: EchoProvider) -> None:
         """Test reset clears responses and history."""
         provider.set_responses(["Queued"])
         await provider.complete("Test")
@@ -388,9 +358,7 @@ class TestStrictMode:
 
         await provider.complete("first")  # Consumes the response
 
-        with pytest.raises(
-            ResponseQueueExhaustedError, match="exhausted after 2 call"
-        ):
+        with pytest.raises(ResponseQueueExhaustedError, match="exhausted after 2 call"):
             await provider.complete("second")
 
     @pytest.mark.asyncio
@@ -484,12 +452,8 @@ class TestStrictMode:
     @pytest.mark.asyncio
     async def test_strict_property(self) -> None:
         """Strict property reflects constructor argument."""
-        strict_provider = EchoProvider(
-            {"provider": "echo", "model": "test"}, strict=True
-        )
-        default_provider = EchoProvider(
-            {"provider": "echo", "model": "test"}
-        )
+        strict_provider = EchoProvider({"provider": "echo", "model": "test"}, strict=True)
+        default_provider = EchoProvider({"provider": "echo", "model": "test"})
 
         assert strict_provider.strict is True
         assert default_provider.strict is False

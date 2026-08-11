@@ -129,9 +129,7 @@ class RubricExecutor:
             result = await self._evaluate_criterion(criterion, target)
             criterion_results.append(result)
 
-        weighted_score = self._compute_weighted_score(
-            rubric.criteria, criterion_results
-        )
+        weighted_score = self._compute_weighted_score(rubric.criteria, criterion_results)
         passed = weighted_score >= rubric.pass_threshold
 
         evaluation = RubricEvaluation(
@@ -147,7 +145,9 @@ class RubricExecutor:
         )
 
         evaluation.feedback_summary = await generate_feedback_summary(
-            rubric, evaluation, self._llm,
+            rubric,
+            evaluation,
+            self._llm,
             prompt_resolver=self._prompt_resolver,
         )
 
@@ -200,8 +200,7 @@ class RubricExecutor:
         ref = criterion.scoring_method.function_ref
         if ref is None:
             raise ValueError(
-                f"Criterion '{criterion.id}' has DETERMINISTIC scoring "
-                "but no function_ref"
+                f"Criterion '{criterion.id}' has DETERMINISTIC scoring but no function_ref"
             )
 
         func = self._function_registry.get(ref)
@@ -231,10 +230,7 @@ class RubricExecutor:
 
         schema = criterion.scoring_method.schema
         if schema is None:
-            raise ValueError(
-                f"Criterion '{criterion.id}' has SCHEMA scoring "
-                "but no schema defined"
-            )
+            raise ValueError(f"Criterion '{criterion.id}' has SCHEMA scoring but no schema defined")
 
         errors: list[str] = []
         try:
@@ -242,9 +238,7 @@ class RubricExecutor:
         except jsonschema.ValidationError as e:
             errors.append(str(e.message))
         except jsonschema.SchemaError as e:
-            raise ValueError(
-                f"Invalid JSON Schema for criterion '{criterion.id}': {e}"
-            ) from e
+            raise ValueError(f"Invalid JSON Schema for criterion '{criterion.id}': {e}") from e
 
         sorted_levels = sorted(criterion.levels, key=lambda level: level.score)
 
@@ -287,8 +281,7 @@ class RubricExecutor:
         method = criterion.scoring_method
         if method.decode_prompt is None:
             raise ValueError(
-                f"Criterion '{criterion.id}' has LLM_DECODE scoring "
-                "but no decode_prompt defined"
+                f"Criterion '{criterion.id}' has LLM_DECODE scoring but no decode_prompt defined"
             )
 
         rendered_prompt = self._render_template(method.decode_prompt, target)
@@ -316,9 +309,7 @@ class RubricExecutor:
             if response.usage:
                 llm_invocation["usage"] = response.usage
 
-            level_id = self._parse_llm_level_response(
-                response_text, valid_level_ids, method
-            )
+            level_id = self._parse_llm_level_response(response_text, valid_level_ids, method)
 
         except Exception as e:
             logger.warning(
@@ -361,8 +352,7 @@ class RubricExecutor:
     def _build_decode_system_message(self, criterion: RubricCriterion) -> str:
         """Build the system message for LLM decode classification."""
         level_descriptions = "\n".join(
-            f"- {level.id}: {level.description}"
-            for level in criterion.levels
+            f"- {level.id}: {level.description}" for level in criterion.levels
         )
         valid_ids = ", ".join(f'"{level.id}"' for level in criterion.levels)
         example_level_id = criterion.levels[0].id if criterion.levels else ""
@@ -386,9 +376,9 @@ class RubricExecutor:
             f"Description: {criterion.description}\n\n"
             f"Classify the content into exactly one of these levels:\n"
             f"{level_descriptions}\n\n"
-            f"Respond with a JSON object containing a single field \"level_id\" "
+            f'Respond with a JSON object containing a single field "level_id" '
             f"set to one of: {valid_ids}\n"
-            f"Example: {{\"level_id\": \"{example_level_id}\"}}\n"
+            f'Example: {{"level_id": "{example_level_id}"}}\n'
             f"Do not include any other text."
         )
 
@@ -431,9 +421,7 @@ class RubricExecutor:
             pass
         return None
 
-    def _validate_output_schema(
-        self, response_text: str, schema: dict[str, Any]
-    ) -> None:
+    def _validate_output_schema(self, response_text: str, schema: dict[str, Any]) -> None:
         """Validate the LLM response against the decode_output_schema."""
         import jsonschema
 
@@ -443,9 +431,7 @@ class RubricExecutor:
         except (json.JSONDecodeError, jsonschema.ValidationError) as e:
             logger.warning("LLM decode output schema validation failed: %s", e)
 
-    def _level_id_to_score(
-        self, criterion: RubricCriterion, level_id: str
-    ) -> float:
+    def _level_id_to_score(self, criterion: RubricCriterion, level_id: str) -> float:
         """Look up the numeric score for a level_id within a criterion.
 
         Returns 0.0 if the level_id is not found.
@@ -484,4 +470,3 @@ class RubricExecutor:
                 weighted_sum += criterion.weight * result.score
 
         return weighted_sum / total_weight
-

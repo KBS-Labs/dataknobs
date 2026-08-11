@@ -121,9 +121,7 @@ def test_stream_json_data_accepts_bytes_io():
 
 def test_stream_json_data_path_branch_unchanged():
     """Regression guard: path input still works as before."""
-    with tempfile.NamedTemporaryFile(
-        mode="w", suffix=".json", delete=False
-    ) as f:
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
         f.write('{"k": "v", "n": 42}')
         temp_path = f.name
     try:

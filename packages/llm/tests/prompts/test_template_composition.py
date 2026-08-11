@@ -23,11 +23,7 @@ class TestBasicComposition:
         composer = TemplateComposer()
 
         template = "{{HEADER}}\n\n{{BODY}}\n\n{{FOOTER}}"
-        sections = {
-            "HEADER": "# Title",
-            "BODY": "Content here",
-            "FOOTER": "---\nEnd"
-        }
+        sections = {"HEADER": "# Title", "BODY": "Content here", "FOOTER": "---\nEnd"}
 
         result = composer.compose_template(template, sections)
         expected = "# Title\n\nContent here\n\n---\nEnd"
@@ -80,10 +76,7 @@ class TestBasicComposition:
         composer = TemplateComposer()
 
         template = "{{OUTER}}"
-        sections = {
-            "OUTER": "Start {{INNER}} End",
-            "INNER": "middle"
-        }
+        sections = {"OUTER": "Start {{INNER}} End", "INNER": "middle"}
 
         # Our implementation replaces all sections in one pass
         # This is efficient and matches template variable resolution behavior
@@ -106,7 +99,7 @@ class TestConfigMerging:
         assert merged["sections"] == {
             "A": "base A",
             "B": "derived B",  # Overridden
-            "C": "derived C"
+            "C": "derived C",
         }
 
     def test_merge_defaults(self):
@@ -121,33 +114,20 @@ class TestConfigMerging:
         assert merged["defaults"] == {
             "lang": "python",
             "style": "black",  # Overridden
-            "format": "strict"
+            "format": "strict",
         }
 
     def test_merge_validation(self):
         """Test that derived validation completely overrides base."""
         composer = TemplateComposer()
 
-        base = {
-            "validation": {
-                "level": "error",
-                "required_params": ["x", "y"]
-            }
-        }
-        derived = {
-            "validation": {
-                "level": "warn",
-                "required_params": ["z"]
-            }
-        }
+        base = {"validation": {"level": "error", "required_params": ["x", "y"]}}
+        derived = {"validation": {"level": "warn", "required_params": ["z"]}}
 
         merged = composer.merge_prompt_configs(base, derived)
 
         # Derived validation completely replaces base
-        assert merged["validation"] == {
-            "level": "warn",
-            "required_params": ["z"]
-        }
+        assert merged["validation"] == {"level": "warn", "required_params": ["z"]}
 
     def test_merge_rag_config_refs(self):
         """Test merging RAG config references."""
@@ -165,16 +145,8 @@ class TestConfigMerging:
         """Test merging inline RAG configurations."""
         composer = TemplateComposer()
 
-        base = {
-            "rag_configs": [
-                {"adapter_name": "base", "query": "base query"}
-            ]
-        }
-        derived = {
-            "rag_configs": [
-                {"adapter_name": "derived", "query": "derived query"}
-            ]
-        }
+        base = {"rag_configs": [{"adapter_name": "base", "query": "base query"}]}
+        derived = {"rag_configs": [{"adapter_name": "derived", "query": "derived query"}]}
 
         merged = composer.merge_prompt_configs(base, derived)
 
@@ -206,7 +178,7 @@ class TestConfigMerging:
         assert merged["metadata"] == {
             "author": "Alice",
             "version": "2.0",  # Overridden
-            "tags": ["new"]
+            "tags": ["new"],
         }
 
     def test_merge_empty_configs(self):
@@ -237,13 +209,13 @@ class TestInheritance:
                 "base": {
                     "template": "{{CODE}}",
                     "sections": {"CODE": "```{{lang}}\n{{code}}\n```"},
-                    "defaults": {"lang": "python"}
+                    "defaults": {"lang": "python"},
                 },
                 "derived": {
                     "extends": "base",
                     "sections": {"CODE": "```{{language}}\n{{code}}\n```"},
-                    "defaults": {"language": "python"}
-                }
+                    "defaults": {"language": "python"},
+                },
             }
         }
 
@@ -266,24 +238,20 @@ class TestInheritance:
             "system": {
                 "grandparent": {
                     "template": "{{A}} {{B}} {{C}}",
-                    "sections": {
-                        "A": "grandparent A",
-                        "B": "grandparent B",
-                        "C": "grandparent C"
-                    }
+                    "sections": {"A": "grandparent A", "B": "grandparent B", "C": "grandparent C"},
                 },
                 "parent": {
                     "extends": "grandparent",
                     "sections": {
                         "B": "parent B"  # Override B
-                    }
+                    },
                 },
                 "child": {
                     "extends": "parent",
                     "sections": {
                         "C": "child C"  # Override C
-                    }
-                }
+                    },
+                },
             }
         }
 
@@ -295,8 +263,8 @@ class TestInheritance:
 
         # Child should have all sections with proper overrides
         assert sections["A"] == "grandparent A"  # Inherited from grandparent
-        assert sections["B"] == "parent B"        # Inherited from parent
-        assert sections["C"] == "child C"         # Child's own
+        assert sections["B"] == "parent B"  # Inherited from parent
+        assert sections["C"] == "child C"  # Child's own
 
     def test_resolve_full_inheritance(self):
         """Test resolve_inheritance method for full config resolution."""
@@ -305,14 +273,14 @@ class TestInheritance:
                 "base": {
                     "template": "Base",
                     "defaults": {"x": "base_x", "y": "base_y"},
-                    "sections": {"A": "base A"}
+                    "sections": {"A": "base A"},
                 },
                 "derived": {
                     "extends": "base",
                     "template": "Derived",
                     "defaults": {"y": "derived_y", "z": "derived_z"},
-                    "sections": {"B": "derived B"}
-                }
+                    "sections": {"B": "derived B"},
+                },
             }
         }
 
@@ -325,13 +293,13 @@ class TestInheritance:
         # Should have merged configs
         assert resolved["template"] == "Derived"  # Overridden
         assert resolved["defaults"] == {
-            "x": "base_x",      # From base
-            "y": "derived_y",   # Overridden
-            "z": "derived_z"    # From derived
+            "x": "base_x",  # From base
+            "y": "derived_y",  # Overridden
+            "z": "derived_z",  # From derived
         }
         assert resolved["sections"] == {
-            "A": "base A",      # From base
-            "B": "derived B"    # From derived
+            "A": "base A",  # From base
+            "B": "derived B",  # From derived
         }
 
     def test_circular_inheritance_detection(self):
@@ -340,7 +308,7 @@ class TestInheritance:
             "system": {
                 "a": {"extends": "b"},
                 "b": {"extends": "c"},
-                "c": {"extends": "a"}  # Circular!
+                "c": {"extends": "a"},  # Circular!
             }
         }
 
@@ -354,11 +322,7 @@ class TestInheritance:
 
     def test_self_inheritance_detection(self):
         """Test that self-inheritance is detected."""
-        config = {
-            "system": {
-                "self_ref": {"extends": "self_ref"}
-            }
-        }
+        config = {"system": {"self_ref": {"extends": "self_ref"}}}
 
         library = ConfigPromptLibrary(config)
         composer = TemplateComposer(library)
@@ -370,11 +334,7 @@ class TestInheritance:
 
     def test_missing_base_template(self):
         """Test handling of missing base template."""
-        config = {
-            "system": {
-                "derived": {"extends": "nonexistent"}
-            }
-        }
+        config = {"system": {"derived": {"extends": "nonexistent"}}}
 
         library = ConfigPromptLibrary(config)
         composer = TemplateComposer(library)
@@ -441,7 +401,7 @@ class TestCaching:
         config = {
             "system": {
                 "base": {"template": "Base {{x}}", "defaults": {"x": "base"}},
-                "derived": {"extends": "base", "defaults": {"y": "derived"}}
+                "derived": {"extends": "base", "defaults": {"y": "derived"}},
             }
         }
 
@@ -467,12 +427,7 @@ class TestCaching:
 
     def test_clear_cache(self):
         """Test that clear_cache clears all caches."""
-        config = {
-            "system": {
-                "base": {"defaults": {"x": "base"}},
-                "derived": {"extends": "base"}
-            }
-        }
+        config = {"system": {"base": {"defaults": {"x": "base"}}, "derived": {"extends": "base"}}}
 
         library = ConfigPromptLibrary(config)
         composer = TemplateComposer(library)
@@ -509,9 +464,9 @@ class TestEndToEnd:
                     "sections": {
                         "HEADER": "# Code Analysis",
                         "CODE": "```{{language}}\n{{code}}\n```",
-                        "INSTRUCTIONS": "Analyze the code above."
+                        "INSTRUCTIONS": "Analyze the code above.",
                     },
-                    "defaults": {"language": "python"}
+                    "defaults": {"language": "python"},
                 }
             }
         }
@@ -540,18 +495,15 @@ class TestEndToEnd:
             "system": {
                 "base_analysis": {
                     "template": "{{HEADER}}\n{{BODY}}",
-                    "sections": {
-                        "HEADER": "# Analysis",
-                        "BODY": "Generic analysis"
-                    }
+                    "sections": {"HEADER": "# Analysis", "BODY": "Generic analysis"},
                 },
                 "security_analysis": {
                     "extends": "base_analysis",
                     "sections": {
                         "HEADER": "# Security Analysis",
-                        "BODY": "Security-focused analysis"
-                    }
-                }
+                        "BODY": "Security-focused analysis",
+                    },
+                },
             }
         }
 
@@ -580,23 +532,19 @@ class TestEndToEnd:
             "system": {
                 "base": {
                     "template": "{{A}}\n{{B}}\n{{C}}",
-                    "sections": {
-                        "A": "Base A",
-                        "B": "Base B",
-                        "C": "Base C"
-                    },
-                    "defaults": {"x": "1", "y": "2", "z": "3"}
+                    "sections": {"A": "Base A", "B": "Base B", "C": "Base C"},
+                    "defaults": {"x": "1", "y": "2", "z": "3"},
                 },
                 "middle": {
                     "extends": "base",
                     "sections": {"B": "Middle B"},
-                    "defaults": {"y": "20"}
+                    "defaults": {"y": "20"},
                 },
                 "final": {
                     "extends": "middle",
                     "sections": {"C": "Final C"},
-                    "defaults": {"z": "300"}
-                }
+                    "defaults": {"z": "300"},
+                },
             }
         }
 
@@ -611,21 +559,18 @@ class TestEndToEnd:
 
         # Check merged defaults
         assert resolved["defaults"] == {
-            "x": "1",    # From base
-            "y": "20",   # From middle
-            "z": "300"   # From final
+            "x": "1",  # From base
+            "y": "20",  # From middle
+            "z": "300",  # From final
         }
 
         # Check merged sections
-        assert resolved["sections"]["A"] == "Base A"    # From base
+        assert resolved["sections"]["A"] == "Base A"  # From base
         assert resolved["sections"]["B"] == "Middle B"  # From middle
-        assert resolved["sections"]["C"] == "Final C"   # From final
+        assert resolved["sections"]["C"] == "Final C"  # From final
 
         # Compose
-        composed = composer.compose_template(
-            resolved["template"],
-            resolved["sections"]
-        )
+        composed = composer.compose_template(resolved["template"], resolved["sections"])
 
         assert "Base A" in composed
         assert "Middle B" in composed

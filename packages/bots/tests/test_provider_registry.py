@@ -184,8 +184,7 @@ class TestProviderRegistryClose:
         await bot.close()
 
         assert extra.close_count == 0, (
-            "Catalog-only provider should not be closed by bot — "
-            "originator owns lifecycle"
+            "Catalog-only provider should not be closed by bot — originator owns lifecycle"
         )
 
     @pytest.mark.asyncio

@@ -218,7 +218,9 @@ class TestIsAncestorOf:
 class TestResolveNavigationConfig:
     """Tests for _resolve_navigation_config."""
 
-    def test_returns_wizard_config_when_stage_has_no_override(self, wizard_loader: WizardConfigLoader) -> None:
+    def test_returns_wizard_config_when_stage_has_no_override(
+        self, wizard_loader: WizardConfigLoader
+    ) -> None:
         nav = _build_navigator(_two_stage_config(), wizard_loader=wizard_loader)
         result = nav._resolve_navigation_config("start")
         assert result is nav._navigation_config
@@ -273,7 +275,9 @@ class TestMapSectionToStage:
         )
         assert nav.map_section_to_stage("mykey") == "start"
 
-    def test_default_mapping_returns_none_if_stage_missing(self, wizard_loader: WizardConfigLoader) -> None:
+    def test_default_mapping_returns_none_if_stage_missing(
+        self, wizard_loader: WizardConfigLoader
+    ) -> None:
         # Default maps "llm" to "configure_llm" which doesn't exist here
         nav = _build_navigator(_two_stage_config(), wizard_loader=wizard_loader)
         assert nav.map_section_to_stage("llm") is None
@@ -320,7 +324,9 @@ class TestHandleNavigation:
         assert state.current_stage == "middle"
 
     @pytest.mark.asyncio
-    async def test_restart_keyword_triggers_restart(self, wizard_loader: WizardConfigLoader) -> None:
+    async def test_restart_keyword_triggers_restart(
+        self, wizard_loader: WizardConfigLoader
+    ) -> None:
         nav = _build_navigator(_three_stage_config(), wizard_loader=wizard_loader)
         state = _make_state(nav)
 
@@ -363,7 +369,9 @@ class TestNavigateBack:
     """Behavioral tests for navigate_back."""
 
     @pytest.mark.asyncio
-    async def test_back_pops_history_and_restores_stage(self, wizard_loader: WizardConfigLoader) -> None:
+    async def test_back_pops_history_and_restores_stage(
+        self, wizard_loader: WizardConfigLoader
+    ) -> None:
         nav = _build_navigator(_three_stage_config(), wizard_loader=wizard_loader)
         state = _make_state(nav)
         state.current_stage = "middle"
@@ -399,7 +407,9 @@ class TestNavigateBack:
         assert state.transitions[0].to_stage == "start"
 
     @pytest.mark.asyncio
-    async def test_back_fires_enter_hook_when_consistent(self, wizard_loader: WizardConfigLoader) -> None:
+    async def test_back_fires_enter_hook_when_consistent(
+        self, wizard_loader: WizardConfigLoader
+    ) -> None:
         enter_calls: list[str] = []
         hooks = WizardHooks()
         hooks.on_enter(lambda s, d: enter_calls.append(s))
@@ -419,7 +429,9 @@ class TestNavigateBack:
         assert enter_calls == ["start"]
 
     @pytest.mark.asyncio
-    async def test_back_no_hooks_when_not_consistent(self, wizard_loader: WizardConfigLoader) -> None:
+    async def test_back_no_hooks_when_not_consistent(
+        self, wizard_loader: WizardConfigLoader
+    ) -> None:
         enter_calls: list[str] = []
         hooks = WizardHooks()
         hooks.on_enter(lambda s, d: enter_calls.append(s))
@@ -500,7 +512,9 @@ class TestRestartCleanup:
         assert state.completed is False
 
     @pytest.mark.asyncio
-    async def test_restart_preserves_transition_history(self, wizard_loader: WizardConfigLoader) -> None:
+    async def test_restart_preserves_transition_history(
+        self, wizard_loader: WizardConfigLoader
+    ) -> None:
         nav = _build_navigator(_two_stage_config(), wizard_loader=wizard_loader)
         state = _make_state(nav)
         from dataknobs_bots.reasoning.observability import create_transition_record
@@ -554,7 +568,9 @@ class TestBranchForRevisitedStage:
     """Behavioral tests for branch_for_revisited_stage."""
 
     @pytest.mark.asyncio
-    async def test_no_crash_when_manager_has_no_state(self, wizard_loader: WizardConfigLoader) -> None:
+    async def test_no_crash_when_manager_has_no_state(
+        self, wizard_loader: WizardConfigLoader
+    ) -> None:
         nav = _build_navigator(_two_stage_config(), wizard_loader=wizard_loader)
         # Plain object with no .state — should degrade gracefully
         await nav.branch_for_revisited_stage(object(), "start")

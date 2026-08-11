@@ -27,18 +27,18 @@ class TestCreateBotResolver:
                 "default": {"provider": "echo", "model": "test-embed"},
             },
         }
-        mock.get_resource = MagicMock(
-            side_effect=lambda type_, name: mock.resources[type_][name]
-        )
+        mock.get_resource = MagicMock(side_effect=lambda type_, name: mock.resources[type_][name])
         return mock
 
     def test_create_bot_resolver_registers_all_factories(self, mock_env_config):
         """Test that create_bot_resolver registers all default factories."""
         # Patch at the source modules where imports come from
-        with patch("dataknobs_config.ConfigBindingResolver") as mock_resolver_class, \
-             patch("dataknobs_llm.llm.LLMProviderFactory"), \
-             patch("dataknobs_data.factory.AsyncDatabaseFactory"), \
-             patch("dataknobs_data.vector.stores.VectorStoreFactory"):
+        with (
+            patch("dataknobs_config.ConfigBindingResolver") as mock_resolver_class,
+            patch("dataknobs_llm.llm.LLMProviderFactory"),
+            patch("dataknobs_data.factory.AsyncDatabaseFactory"),
+            patch("dataknobs_data.vector.stores.VectorStoreFactory"),
+        ):
             mock_resolver = MagicMock()
             mock_resolver_class.return_value = mock_resolver
 
@@ -91,9 +91,7 @@ class TestIndividualFactoryRegistration:
             register_llm_factory(mock_resolver)
 
             mock_factory_class.assert_called_once_with(is_async=True)
-            mock_resolver.register_factory.assert_called_once_with(
-                "llm_providers", mock_factory
-            )
+            mock_resolver.register_factory.assert_called_once_with("llm_providers", mock_factory)
 
     def test_register_database_factory(self, mock_resolver):
         """Test registering database factory."""
@@ -106,9 +104,7 @@ class TestIndividualFactoryRegistration:
             register_database_factory(mock_resolver)
 
             mock_factory_class.assert_called_once()
-            mock_resolver.register_factory.assert_called_once_with(
-                "databases", mock_factory
-            )
+            mock_resolver.register_factory.assert_called_once_with("databases", mock_factory)
 
     def test_register_vector_store_factory(self, mock_resolver):
         """Test registering vector store factory."""
@@ -121,9 +117,7 @@ class TestIndividualFactoryRegistration:
             register_vector_store_factory(mock_resolver)
 
             mock_factory_class.assert_called_once()
-            mock_resolver.register_factory.assert_called_once_with(
-                "vector_stores", mock_factory
-            )
+            mock_resolver.register_factory.assert_called_once_with("vector_stores", mock_factory)
 
     def test_register_embedding_factory(self, mock_resolver):
         """Test registering embedding factory."""
@@ -165,9 +159,7 @@ class TestBotResourceResolver:
 
     def test_init_creates_resolver(self, mock_env_config):
         """Test that init creates underlying resolver."""
-        with patch(
-            "dataknobs_bots.config.resolution.create_bot_resolver"
-        ) as mock_create:
+        with patch("dataknobs_bots.config.resolution.create_bot_resolver") as mock_create:
             mock_resolver = MagicMock()
             mock_create.return_value = mock_resolver
 
@@ -175,18 +167,14 @@ class TestBotResourceResolver:
 
             bot_resolver = BotResourceResolver(mock_env_config)
 
-            mock_create.assert_called_once_with(
-                mock_env_config, resolve_env_vars=True
-            )
+            mock_create.assert_called_once_with(mock_env_config, resolve_env_vars=True)
             assert bot_resolver.environment is mock_env_config
             assert bot_resolver.resolver is mock_resolver
 
     @pytest.mark.asyncio
     async def test_get_llm(self, mock_env_config):
         """Test getting initialized LLM provider."""
-        with patch(
-            "dataknobs_bots.config.resolution.create_bot_resolver"
-        ) as mock_create:
+        with patch("dataknobs_bots.config.resolution.create_bot_resolver") as mock_create:
             mock_resolver = MagicMock()
             mock_llm = AsyncMock()
             mock_resolver.resolve.return_value = mock_llm
@@ -206,9 +194,7 @@ class TestBotResourceResolver:
     @pytest.mark.asyncio
     async def test_get_llm_with_overrides(self, mock_env_config):
         """Test getting LLM with overrides."""
-        with patch(
-            "dataknobs_bots.config.resolution.create_bot_resolver"
-        ) as mock_create:
+        with patch("dataknobs_bots.config.resolution.create_bot_resolver") as mock_create:
             mock_resolver = MagicMock()
             mock_llm = AsyncMock()
             mock_resolver.resolve.return_value = mock_llm
@@ -217,9 +203,7 @@ class TestBotResourceResolver:
             from dataknobs_bots.config import BotResourceResolver
 
             bot_resolver = BotResourceResolver(mock_env_config)
-            llm = await bot_resolver.get_llm(
-                "default", use_cache=False, temperature=0.5
-            )
+            llm = await bot_resolver.get_llm("default", use_cache=False, temperature=0.5)
 
             mock_resolver.resolve.assert_called_once_with(
                 "llm_providers", "default", use_cache=False, temperature=0.5
@@ -228,9 +212,7 @@ class TestBotResourceResolver:
     @pytest.mark.asyncio
     async def test_get_database(self, mock_env_config):
         """Test getting initialized database."""
-        with patch(
-            "dataknobs_bots.config.resolution.create_bot_resolver"
-        ) as mock_create:
+        with patch("dataknobs_bots.config.resolution.create_bot_resolver") as mock_create:
             mock_resolver = MagicMock()
             mock_db = AsyncMock()
             mock_resolver.resolve.return_value = mock_db
@@ -250,9 +232,7 @@ class TestBotResourceResolver:
     @pytest.mark.asyncio
     async def test_get_database_no_connect(self, mock_env_config):
         """Test getting database without connect method."""
-        with patch(
-            "dataknobs_bots.config.resolution.create_bot_resolver"
-        ) as mock_create:
+        with patch("dataknobs_bots.config.resolution.create_bot_resolver") as mock_create:
             mock_resolver = MagicMock()
             mock_db = MagicMock(spec=[])  # No connect method
             mock_resolver.resolve.return_value = mock_db
@@ -268,9 +248,7 @@ class TestBotResourceResolver:
     @pytest.mark.asyncio
     async def test_get_vector_store(self, mock_env_config):
         """Test getting initialized vector store."""
-        with patch(
-            "dataknobs_bots.config.resolution.create_bot_resolver"
-        ) as mock_create:
+        with patch("dataknobs_bots.config.resolution.create_bot_resolver") as mock_create:
             mock_resolver = MagicMock()
             mock_vs = AsyncMock()
             mock_resolver.resolve.return_value = mock_vs
@@ -290,9 +268,7 @@ class TestBotResourceResolver:
     @pytest.mark.asyncio
     async def test_get_embedding_provider(self, mock_env_config):
         """Test getting initialized embedding provider."""
-        with patch(
-            "dataknobs_bots.config.resolution.create_bot_resolver"
-        ) as mock_create:
+        with patch("dataknobs_bots.config.resolution.create_bot_resolver") as mock_create:
             mock_resolver = MagicMock()
             mock_embedder = AsyncMock()
             mock_resolver.resolve.return_value = mock_embedder
@@ -311,9 +287,7 @@ class TestBotResourceResolver:
 
     def test_clear_cache(self, mock_env_config):
         """Test clearing cache."""
-        with patch(
-            "dataknobs_bots.config.resolution.create_bot_resolver"
-        ) as mock_create:
+        with patch("dataknobs_bots.config.resolution.create_bot_resolver") as mock_create:
             mock_resolver = MagicMock()
             mock_create.return_value = mock_resolver
 
@@ -331,9 +305,7 @@ class TestBotResourceResolver:
 
     def test_repr(self, mock_env_config):
         """Test string representation."""
-        with patch(
-            "dataknobs_bots.config.resolution.create_bot_resolver"
-        ) as mock_create:
+        with patch("dataknobs_bots.config.resolution.create_bot_resolver") as mock_create:
             mock_resolver = MagicMock()
             mock_resolver.get_registered_types.return_value = ["llm_providers", "databases"]
             mock_create.return_value = mock_resolver

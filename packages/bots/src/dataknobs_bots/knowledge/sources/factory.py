@@ -156,7 +156,8 @@ def _create_vector_kb_source(
     )
 
     topic_index = build_topic_index(
-        config.topic_index, knowledge_base,
+        config.topic_index,
+        knowledge_base,
         source_name=config.name,
         source_id_fn=source_id_fn,
         metadata_fn=metadata_fn,
@@ -214,7 +215,8 @@ def build_topic_index(
     # callables so the topic-index path uses the same identity rule as
     # the main VectorKnowledgeSource.query path.
     vector_query_fn = _build_vector_query_fn(
-        kb, source_name,
+        kb,
+        source_name,
         source_id_fn=source_id_fn,
         metadata_fn=metadata_fn,
     )
@@ -240,7 +242,9 @@ def build_topic_index(
             "Built heading_tree topic index for source '%s' "
             "(entry_strategy=%s, expansion_mode=%s, "
             "heading_selection_llm=%s)",
-            source_name, config.entry_strategy, config.expansion_mode,
+            source_name,
+            config.entry_strategy,
+            config.expansion_mode,
             "dedicated" if heading_selection_llm else "main",
         )
         return idx
@@ -260,15 +264,17 @@ def build_topic_index(
             config=config,
         )
         logger.info(
-            "Built cluster topic index for source '%s' "
-            "(cluster_threshold=%.2f, top_clusters=%d)",
-            source_name, config.cluster_threshold, config.top_clusters,
+            "Built cluster topic index for source '%s' (cluster_threshold=%.2f, top_clusters=%d)",
+            source_name,
+            config.cluster_threshold,
+            config.top_clusters,
         )
         return idx
 
     logger.warning(
         "Unknown topic_index type %r for source '%s', skipping",
-        index_type, source_name,
+        index_type,
+        source_name,
     )
     return None
 
@@ -301,7 +307,9 @@ def _build_vector_query_fn(
         filter_metadata: dict[str, Any] | None = None,
     ) -> list[SourceResult]:
         raw_results = await kb.query(
-            query, k=top_k, filter_metadata=filter_metadata,
+            query,
+            k=top_k,
+            filter_metadata=filter_metadata,
         )
         results: list[SourceResult] = []
         for r in raw_results:
@@ -327,8 +335,10 @@ def _build_embed_fn(kb: Any) -> Any | None:
     Returns ``None`` if the KB doesn't support embedding.
     """
     if hasattr(kb, "embed"):
+
         async def embed_fn(text: str) -> list[float]:
             return await kb.embed(text)
+
         return embed_fn
     return None
 
@@ -353,14 +363,15 @@ def _build_heading_selection_llm(config: Any) -> Any | None:
         provider = create_llm_provider(hs_config)
         logger.info(
             "Built dedicated heading selection LLM: provider=%s, model=%s",
-            hs_config.get("provider"), hs_config.get("model"),
+            hs_config.get("provider"),
+            hs_config.get("model"),
         )
         return provider
     except Exception:
         logger.warning(
-            "Failed to build heading selection LLM from config %r, "
-            "will fall back to main LLM",
-            hs_config, exc_info=True,
+            "Failed to build heading selection LLM from config %r, will fall back to main LLM",
+            hs_config,
+            exc_info=True,
         )
         return None
 
@@ -455,7 +466,8 @@ def _build_database_schema(
             if ft is None:
                 logger.warning(
                     "Unknown field type %r for field %r, defaulting to STRING",
-                    definition, name,
+                    definition,
+                    name,
                 )
                 ft = FieldType.STRING
             kwargs[name] = ft
@@ -470,7 +482,8 @@ def _build_database_schema(
         else:
             logger.warning(
                 "Unexpected field definition for %r: %r, skipping",
-                name, definition,
+                name,
+                definition,
             )
 
     schema = DatabaseSchema.create(**kwargs)

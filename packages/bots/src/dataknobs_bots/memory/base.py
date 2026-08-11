@@ -123,6 +123,4 @@ class Memory(ABC):
         Raises:
             NotImplementedError: If the implementation does not support undo.
         """
-        raise NotImplementedError(
-            f"{type(self).__name__} does not support pop_messages"
-        )
+        raise NotImplementedError(f"{type(self).__name__} does not support pop_messages")

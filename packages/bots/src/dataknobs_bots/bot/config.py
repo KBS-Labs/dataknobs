@@ -30,9 +30,7 @@ from dataknobs_common.structured_config import StructuredConfig
 #: and free of any consumer/product naming so it is a safe out-of-the-box
 #: default; consumers localize / brand / soften it via
 #: ``DynaBotConfig.tool_loop_timeout_message``.
-_DEFAULT_TOOL_LOOP_TIMEOUT_MESSAGE = (
-    "The response was cut short due to a time limit."
-)
+_DEFAULT_TOOL_LOOP_TIMEOUT_MESSAGE = "The response was cut short due to a time limit."
 
 
 @dataclass(frozen=True)
@@ -187,21 +185,15 @@ class DynaBotConfig(StructuredConfig):
         uniformly.
         """
         if self.tool_timeout < 0:
-            raise ValueError(
-                f"tool_timeout must be non-negative, got {self.tool_timeout}"
-            )
+            raise ValueError(f"tool_timeout must be non-negative, got {self.tool_timeout}")
         if self.tool_loop_timeout < 0:
             raise ValueError(
-                f"tool_loop_timeout must be non-negative, got "
-                f"{self.tool_loop_timeout}"
+                f"tool_loop_timeout must be non-negative, got {self.tool_loop_timeout}"
             )
         # A zero/negative bound is nonsensical (it would evict everything,
         # including the just-created in-flight conversation). ``None`` stays
         # the unbounded opt-out; any set value must retain at least one entry.
-        if (
-            self.max_cached_conversations is not None
-            and self.max_cached_conversations < 1
-        ):
+        if self.max_cached_conversations is not None and self.max_cached_conversations < 1:
             raise ValueError(
                 f"max_cached_conversations must be >= 1 or None, got "
                 f"{self.max_cached_conversations}"
@@ -209,13 +201,9 @@ class DynaBotConfig(StructuredConfig):
         # Same rationale for the checkpoint cap: ``None`` is the unbounded
         # opt-out; a set value must retain at least one checkpoint (a ``0``
         # cap would drop every turn's undo target as soon as it is recorded).
-        if (
-            self.max_undo_checkpoints is not None
-            and self.max_undo_checkpoints < 1
-        ):
+        if self.max_undo_checkpoints is not None and self.max_undo_checkpoints < 1:
             raise ValueError(
-                f"max_undo_checkpoints must be >= 1 or None, got "
-                f"{self.max_undo_checkpoints}"
+                f"max_undo_checkpoints must be >= 1 or None, got {self.max_undo_checkpoints}"
             )
         # Validate prompt_envelope is a known style. Case-insensitive:
         # YAML configs are human-written, so ``"XML"`` / ``"Markdown"``
@@ -244,8 +232,7 @@ class DynaBotConfig(StructuredConfig):
         except ValueError as exc:
             valid = ", ".join(repr(s.value) for s in PromptEnvelopeStyle)
             raise ValueError(
-                f"prompt_envelope must be one of {valid} (case-insensitive), "
-                f"got {raw!r}"
+                f"prompt_envelope must be one of {valid} (case-insensitive), got {raw!r}"
             ) from exc
         if normalized != raw:
             # Frozen dataclass — bypass the immutability for the

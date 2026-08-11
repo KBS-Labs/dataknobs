@@ -69,33 +69,25 @@ class TestCheckCriteriaIndependence:
             {"name": "A", "description": "Desc A"},
             {"name": "B", "description": "Desc B"},
         ]
-        assert check_criteria_independence(
-            _rubric_content(criteria=criteria)
-        ) == "pass"
+        assert check_criteria_independence(_rubric_content(criteria=criteria)) == "pass"
 
     def test_fail_duplicate_names(self) -> None:
         criteria = [
             {"name": "Same", "description": "Desc A"},
             {"name": "Same", "description": "Desc B"},
         ]
-        assert check_criteria_independence(
-            _rubric_content(criteria=criteria)
-        ) == "fail"
+        assert check_criteria_independence(_rubric_content(criteria=criteria)) == "fail"
 
     def test_partial_duplicate_descriptions(self) -> None:
         criteria = [
             {"name": "A", "description": "Same desc"},
             {"name": "B", "description": "Same desc"},
         ]
-        assert check_criteria_independence(
-            _rubric_content(criteria=criteria)
-        ) == "partial"
+        assert check_criteria_independence(_rubric_content(criteria=criteria)) == "partial"
 
     def test_pass_single_criterion(self) -> None:
         criteria = [{"name": "Only", "description": "Only desc"}]
-        assert check_criteria_independence(
-            _rubric_content(criteria=criteria)
-        ) == "pass"
+        assert check_criteria_independence(_rubric_content(criteria=criteria)) == "pass"
 
 
 class TestCheckWeightDistribution:
@@ -104,9 +96,7 @@ class TestCheckWeightDistribution:
             {"weight": 0.6},
             {"weight": 0.4},
         ]
-        assert check_weight_distribution(
-            _rubric_content(criteria=criteria)
-        ) == "pass"
+        assert check_weight_distribution(_rubric_content(criteria=criteria)) == "pass"
 
     def test_pass_within_tolerance(self) -> None:
         criteria = [
@@ -114,23 +104,17 @@ class TestCheckWeightDistribution:
             {"weight": 0.33},
             {"weight": 0.34},
         ]
-        assert check_weight_distribution(
-            _rubric_content(criteria=criteria)
-        ) == "pass"
+        assert check_weight_distribution(_rubric_content(criteria=criteria)) == "pass"
 
     def test_fail_weights_dont_sum(self) -> None:
         criteria = [
             {"weight": 0.5},
             {"weight": 0.3},
         ]
-        assert check_weight_distribution(
-            _rubric_content(criteria=criteria)
-        ) == "fail"
+        assert check_weight_distribution(_rubric_content(criteria=criteria)) == "fail"
 
     def test_fail_empty_criteria(self) -> None:
-        assert check_weight_distribution(
-            _rubric_content(criteria=[])
-        ) == "fail"
+        assert check_weight_distribution(_rubric_content(criteria=[])) == "fail"
 
 
 class TestCheckThreshold:
@@ -145,9 +129,7 @@ class TestCheckThreshold:
                 ],
             },
         ]
-        assert check_threshold(
-            _rubric_content(criteria=criteria, pass_threshold=0.5)
-        ) == "pass"
+        assert check_threshold(_rubric_content(criteria=criteria, pass_threshold=0.5)) == "pass"
 
     def test_too_high_unachievable(self) -> None:
         criteria = [
@@ -159,9 +141,7 @@ class TestCheckThreshold:
                 ],
             },
         ]
-        assert check_threshold(
-            _rubric_content(criteria=criteria, pass_threshold=0.8)
-        ) == "too_high"
+        assert check_threshold(_rubric_content(criteria=criteria, pass_threshold=0.8)) == "too_high"
 
     def test_too_low_trivial(self) -> None:
         criteria = [
@@ -174,20 +154,14 @@ class TestCheckThreshold:
             },
         ]
         # Threshold of 0.5 == min possible (0.5), so too_low
-        assert check_threshold(
-            _rubric_content(criteria=criteria, pass_threshold=0.5)
-        ) == "too_low"
+        assert check_threshold(_rubric_content(criteria=criteria, pass_threshold=0.5)) == "too_low"
 
     def test_fail_empty_criteria(self) -> None:
-        assert check_threshold(
-            _rubric_content(criteria=[], pass_threshold=0.5)
-        ) == "fail"
+        assert check_threshold(_rubric_content(criteria=[], pass_threshold=0.5)) == "fail"
 
     def test_fail_zero_weight(self) -> None:
         criteria = [{"weight": 0.0, "levels": [{"score": 0.5}]}]
-        assert check_threshold(
-            _rubric_content(criteria=criteria, pass_threshold=0.5)
-        ) == "fail"
+        assert check_threshold(_rubric_content(criteria=criteria, pass_threshold=0.5)) == "fail"
 
 
 class TestCheckLevelOrdering:
@@ -201,9 +175,7 @@ class TestCheckLevelOrdering:
                 ],
             },
         ]
-        assert check_level_ordering(
-            _rubric_content(criteria=criteria)
-        ) == "pass"
+        assert check_level_ordering(_rubric_content(criteria=criteria)) == "pass"
 
     def test_pass_descending(self) -> None:
         criteria = [
@@ -215,9 +187,7 @@ class TestCheckLevelOrdering:
                 ],
             },
         ]
-        assert check_level_ordering(
-            _rubric_content(criteria=criteria)
-        ) == "pass"
+        assert check_level_ordering(_rubric_content(criteria=criteria)) == "pass"
 
     def test_fail_unordered(self) -> None:
         criteria = [
@@ -229,15 +199,11 @@ class TestCheckLevelOrdering:
                 ],
             },
         ]
-        assert check_level_ordering(
-            _rubric_content(criteria=criteria)
-        ) == "fail"
+        assert check_level_ordering(_rubric_content(criteria=criteria)) == "fail"
 
     def test_pass_single_level(self) -> None:
         criteria = [{"levels": [{"score": 0.5}]}]
-        assert check_level_ordering(
-            _rubric_content(criteria=criteria)
-        ) == "pass"
+        assert check_level_ordering(_rubric_content(criteria=criteria)) == "pass"
 
     def test_pass_empty_criteria(self) -> None:
         assert check_level_ordering(_rubric_content(criteria=[])) == "pass"
@@ -328,9 +294,7 @@ class TestMetaRubricEvaluation:
             "pass_threshold": 0.5,
         }
 
-        evaluation = await executor.evaluate(
-            meta, good_rubric_content, target_id="test_r"
-        )
+        evaluation = await executor.evaluate(meta, good_rubric_content, target_id="test_r")
 
         assert evaluation.passed is True
         assert evaluation.weighted_score == pytest.approx(1.0)
@@ -382,8 +346,7 @@ class TestMetaRubricEvaluation:
 
         # weight_distribution should fail (0.3 + 0.3 = 0.6 != 1.0)
         weight_result = next(
-            r for r in evaluation.criterion_results
-            if r.criterion_id == "weight_distribution"
+            r for r in evaluation.criterion_results if r.criterion_id == "weight_distribution"
         )
         assert weight_result.level_id == "fail"
         # But other criteria may still pass, so overall may still pass

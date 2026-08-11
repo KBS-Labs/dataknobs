@@ -18,7 +18,7 @@ from dataknobs_fsm.api.advanced import (
     ExecutionHook,
     FSMDebugger,
     create_advanced_fsm,
-    StepResult
+    StepResult,
 )
 from dataknobs_fsm.core.data_modes import DataHandlingMode
 
@@ -31,7 +31,7 @@ from advanced_debugging import (
     enrich_data,
     format_output,
     check_validation,
-    check_processing
+    check_processing,
 )
 
 
@@ -41,14 +41,14 @@ def fsm():
     with create_advanced_fsm(
         debug_workflow_config,
         custom_functions={
-            'validate_input': validate_input,
-            'process_request': process_request,
-            'enrich_data': enrich_data,
-            'format_output': format_output,
-            'check_validation': check_validation,
-            'check_processing': check_processing
+            "validate_input": validate_input,
+            "process_request": process_request,
+            "enrich_data": enrich_data,
+            "format_output": format_output,
+            "check_validation": check_validation,
+            "check_processing": check_processing,
         },
-        execution_mode=ExecutionMode.STEP_BY_STEP
+        execution_mode=ExecutionMode.STEP_BY_STEP,
     ) as fsm:
         yield fsm
 
@@ -57,10 +57,10 @@ def fsm():
 def valid_test_data():
     """Valid test data that will pass validation."""
     return {
-        'request_id': 'REQ-TEST-001',
-        'user_id': 'USER-TEST-123',
-        'request_type': 'compute',
-        'payload': {'data': [1, 2, 3, 4, 5]}
+        "request_id": "REQ-TEST-001",
+        "user_id": "USER-TEST-123",
+        "request_type": "compute",
+        "payload": {"data": [1, 2, 3, 4, 5]},
     }
 
 
@@ -68,9 +68,9 @@ def valid_test_data():
 def invalid_test_data():
     """Invalid test data that will fail validation."""
     return {
-        'request_id': 'REQ-TEST-002',
+        "request_id": "REQ-TEST-002",
         # Missing user_id and request_type
-        'payload': {'data': [1, 2, 3]}
+        "payload": {"data": [1, 2, 3]},
     }
 
 
@@ -100,19 +100,19 @@ class TestStepByStepExecution:
             assert result.duration >= 0
 
         # Verify the complete path
-        expected_path = ['start', 'validate', 'process', 'enrich', 'format', 'success']
+        expected_path = ["start", "validate", "process", "enrich", "format", "success"]
         assert states_visited == expected_path
 
         # Verify final state
-        assert context.get_current_state() == 'success'
+        assert context.get_current_state() == "success"
         assert context.is_complete() is True
 
         # Verify data transformations occurred
         final_data = context.get_data_snapshot()
-        assert final_data.get('is_valid') is True
-        assert final_data.get('processing_complete') is True
-        assert 'formatted_response' in final_data
-        assert 'metadata' in final_data
+        assert final_data.get("is_valid") is True
+        assert final_data.get("processing_complete") is True
+        assert "formatted_response" in final_data
+        assert "metadata" in final_data
 
     def test_validation_failure_workflow(self, fsm, invalid_test_data):
         """Test that invalid data leads to validation_failed state."""
@@ -127,17 +127,17 @@ class TestStepByStepExecution:
             assert result.success is True  # Even validation failure is a successful transition
 
         # Should go: start -> validate -> validation_failed
-        expected_path = ['start', 'validate', 'validation_failed']
+        expected_path = ["start", "validate", "validation_failed"]
         assert states_visited == expected_path
 
         # Verify final state
-        assert context.get_current_state() == 'validation_failed'
+        assert context.get_current_state() == "validation_failed"
         assert context.is_complete() is True
 
         # Verify validation error was recorded
         final_data = context.get_data_snapshot()
-        assert final_data.get('is_valid') is False
-        assert 'validation_errors' in final_data
+        assert final_data.get("is_valid") is False
+        assert "validation_errors" in final_data
 
     def test_state_transforms_are_executed(self, fsm, valid_test_data):
         """Test that state transform functions are executed when entering states."""
@@ -145,22 +145,22 @@ class TestStepByStepExecution:
 
         # Step from start to validate
         result = fsm.execute_step_sync(context)
-        assert result.to_state == 'validate'
+        assert result.to_state == "validate"
 
         # After entering validate, the transform should have been executed
         data = context.get_data_snapshot()
-        assert 'is_valid' in data
-        assert 'validated_at' in data
+        assert "is_valid" in data
+        assert "validated_at" in data
 
         # Step to process
         result = fsm.execute_step_sync(context)
-        assert result.to_state == 'process'
+        assert result.to_state == "process"
 
         # After entering process, its transform should have been executed
         data = context.get_data_snapshot()
-        assert 'processing_complete' in data
-        assert 'processed_at' in data
-        assert 'result' in data
+        assert "processing_complete" in data
+        assert "processed_at" in data
+        assert "result" in data
 
 
 class TestBreakpointExecution:
@@ -169,10 +169,10 @@ class TestBreakpointExecution:
     def test_breakpoints_stop_execution(self, fsm, valid_test_data):
         """Test that execution stops at breakpoints."""
         # Set breakpoints
-        fsm.add_breakpoint('process')
-        fsm.add_breakpoint('format')
+        fsm.add_breakpoint("process")
+        fsm.add_breakpoint("format")
 
-        assert fsm.breakpoints == {'process', 'format'}
+        assert fsm.breakpoints == {"process", "format"}
 
         context = fsm.create_context(valid_test_data)
 
@@ -180,20 +180,20 @@ class TestBreakpointExecution:
         result = fsm.run_until_breakpoint_sync(context)
         assert result is not None
         assert result.at_breakpoint is True
-        assert result.to_state == 'process'
+        assert result.to_state == "process"
 
         # Verify we're at the breakpoint
-        assert context.get_current_state() == 'process'
+        assert context.get_current_state() == "process"
 
         # Step once to move past the breakpoint
         result = fsm.execute_step_sync(context)
-        assert result.to_state == 'enrich'
+        assert result.to_state == "enrich"
 
         # Run until next breakpoint
         result = fsm.run_until_breakpoint_sync(context)
         assert result is not None
         assert result.at_breakpoint is True
-        assert result.to_state == 'format'
+        assert result.to_state == "format"
 
         # Continue to completion - step once more to finish
         result = fsm.execute_step_sync(context)  # format -> success
@@ -202,13 +202,13 @@ class TestBreakpointExecution:
     def test_remove_breakpoint(self, fsm):
         """Test adding and removing breakpoints."""
         # Add breakpoints
-        fsm.add_breakpoint('validate')
-        fsm.add_breakpoint('process')
+        fsm.add_breakpoint("validate")
+        fsm.add_breakpoint("process")
         assert len(fsm.breakpoints) == 2
 
         # Remove one
-        fsm.remove_breakpoint('validate')
-        assert fsm.breakpoints == {'process'}
+        fsm.remove_breakpoint("validate")
+        assert fsm.breakpoints == {"process"}
 
         # Clear all
         fsm.clear_breakpoints()
@@ -232,13 +232,13 @@ class TestExecutionTracing:
 
         # Check each trace entry
         for entry in trace:
-            assert 'from_state' in entry
-            assert 'to_state' in entry
-            assert 'timestamp' in entry
+            assert "from_state" in entry
+            assert "to_state" in entry
+            assert "timestamp" in entry
 
         # Verify the execution path
-        path = [trace[0]['from_state']] + [t['to_state'] for t in trace]
-        assert path == ['start', 'validate', 'process', 'enrich', 'format', 'success']
+        path = [trace[0]["from_state"]] + [t["to_state"] for t in trace]
+        assert path == ["start", "validate", "process", "enrich", "format", "success"]
 
         # Verify history was recorded
         assert fsm.history_enabled is True
@@ -252,24 +252,24 @@ class TestExecutionTracing:
 
         # Verify profile structure
         assert isinstance(profile, dict)
-        assert 'total_time' in profile
-        assert 'transitions' in profile
-        assert 'state_times' in profile
+        assert "total_time" in profile
+        assert "transitions" in profile
+        assert "state_times" in profile
 
         # Verify timing data
-        assert profile['total_time'] >= 0
-        assert profile['transitions'] == 5  # start->validate->process->enrich->format->success
+        assert profile["total_time"] >= 0
+        assert profile["transitions"] == 5  # start->validate->process->enrich->format->success
 
         # Verify state timing data
-        state_times = profile['state_times']
-        expected_states = ['start', 'validate', 'process', 'enrich', 'format']
+        state_times = profile["state_times"]
+        expected_states = ["start", "validate", "process", "enrich", "format"]
         for state in expected_states:
             assert state in state_times
             timing = state_times[state]
             # The timing can be a dict with stats or a direct value
             if isinstance(timing, dict):
                 # Could have 'duration', 'total', 'avg', etc.
-                assert any(k in timing for k in ['duration', 'total', 'avg'])
+                assert any(k in timing for k in ["duration", "total", "avg"])
             else:
                 assert timing >= 0
 
@@ -294,11 +294,7 @@ class TestExecutionHooks:
             errors_caught.append((str(error), state))
 
         # Set hooks
-        hooks = ExecutionHook(
-            on_state_enter=on_enter,
-            on_state_exit=on_exit,
-            on_error=on_error
-        )
+        hooks = ExecutionHook(on_state_enter=on_enter, on_state_exit=on_exit, on_error=on_error)
         fsm.set_hooks(hooks)
 
         # Execute with hooks - hooks need to be called during regular execution
@@ -332,7 +328,7 @@ class TestFSMDebugger:
         debugger.start(valid_test_data)
 
         # Verify initial state
-        assert debugger.current_state == 'start'
+        assert debugger.current_state == "start"
         assert debugger.step_count == 0
         assert len(debugger.execution_history) == 0
 
@@ -344,19 +340,19 @@ class TestFSMDebugger:
         # Execute first step
         result = debugger.step()
         assert isinstance(result, StepResult)
-        assert result.from_state == 'start'
-        assert result.to_state == 'validate'
+        assert result.from_state == "start"
+        assert result.to_state == "validate"
         assert result.success is True
         assert debugger.step_count == 1
 
         # Execute second step
         result = debugger.step()
-        assert result.from_state == 'validate'
-        assert result.to_state == 'process'
+        assert result.from_state == "validate"
+        assert result.to_state == "process"
         assert debugger.step_count == 2
 
         # Verify current state
-        assert debugger.current_state == 'process'
+        assert debugger.current_state == "process"
 
     def test_debugger_watches(self, fsm, valid_test_data):
         """Test watch variable functionality."""
@@ -364,33 +360,38 @@ class TestFSMDebugger:
         debugger.start(valid_test_data)
 
         # Add watches
-        debugger.watch('validation', 'is_valid')
-        debugger.watch('processing', 'processing_complete')
+        debugger.watch("validation", "is_valid")
+        debugger.watch("processing", "processing_complete")
 
         # Initially, watched values should be None or the path itself
         # The watch returns the path if not found
-        assert debugger.watches['validation'] == 'is_valid'
-        assert debugger.watches['processing'] == 'processing_complete'
+        assert debugger.watches["validation"] == "is_valid"
+        assert debugger.watches["processing"] == "processing_complete"
 
         # Step to validate state
         debugger.step()
 
         # After validation, is_valid should be set
         # The watch should now return the actual value
-        assert debugger.watches['validation'] == 'is_valid' or debugger.watches['validation'] is True
+        assert (
+            debugger.watches["validation"] == "is_valid" or debugger.watches["validation"] is True
+        )
 
         # Step to process state
         debugger.step()
 
         # After processing, processing_complete should be set
         # The watch returns the path if the value is not found, or the actual value
-        assert debugger.watches['processing'] == 'processing_complete' or debugger.watches['processing'] is True
+        assert (
+            debugger.watches["processing"] == "processing_complete"
+            or debugger.watches["processing"] is True
+        )
 
     def test_debugger_breakpoints(self, fsm, valid_test_data):
         """Test debugger with breakpoints."""
         # Set breakpoints on FSM
-        fsm.add_breakpoint('process')
-        fsm.add_breakpoint('format')
+        fsm.add_breakpoint("process")
+        fsm.add_breakpoint("format")
 
         debugger = FSMDebugger(fsm)
         debugger.start(valid_test_data)
@@ -399,7 +400,7 @@ class TestFSMDebugger:
         result = debugger.continue_to_breakpoint()
         assert result is not None
         assert result.at_breakpoint is True
-        assert debugger.current_state == 'process'
+        assert debugger.current_state == "process"
 
         # Step once to move past process breakpoint
         debugger.step()  # process -> enrich
@@ -408,7 +409,7 @@ class TestFSMDebugger:
         result = debugger.continue_to_breakpoint()
         assert result is not None
         assert result.at_breakpoint is True
-        assert debugger.current_state == 'format'
+        assert debugger.current_state == "format"
 
     def test_debugger_history(self, fsm, valid_test_data):
         """Test debugger execution history."""
@@ -443,17 +444,17 @@ class TestFSMDebugger:
         # Inspect current state
         state_info = debugger.inspect_current_state()
         assert isinstance(state_info, dict)
-        assert state_info['state'] == 'validate'
-        assert 'data' in state_info
-        assert 'is_complete' in state_info
-        assert 'available_transitions' in state_info
+        assert state_info["state"] == "validate"
+        assert "data" in state_info
+        assert "is_complete" in state_info
+        assert "available_transitions" in state_info
 
         # Verify data inspection
-        value = debugger.inspect('is_valid')
+        value = debugger.inspect("is_valid")
         assert value is True
 
         # Test nested path inspection
-        value = debugger.inspect('payload.data')
+        value = debugger.inspect("payload.data")
         assert value == [1, 2, 3, 4, 5]
 
 
@@ -463,26 +464,26 @@ class TestStateInspection:
     def test_inspect_state(self, fsm):
         """Test inspecting state details."""
         # Inspect validate state
-        state_info = fsm.inspect_state('validate')
-        assert state_info['name'] == 'validate'
-        assert state_info['has_transform'] is True
-        assert state_info['is_start'] is False
-        assert state_info['is_end'] is False
+        state_info = fsm.inspect_state("validate")
+        assert state_info["name"] == "validate"
+        assert state_info["has_transform"] is True
+        assert state_info["is_start"] is False
+        assert state_info["is_end"] is False
 
         # Inspect success state
-        state_info = fsm.inspect_state('success')
-        assert state_info['is_end'] is True
+        state_info = fsm.inspect_state("success")
+        assert state_info["is_end"] is True
 
     def test_get_available_transitions(self, fsm):
         """Test getting available transitions from a state."""
         # Get transitions from validate
-        transitions = fsm.get_available_transitions('validate')
+        transitions = fsm.get_available_transitions("validate")
         assert len(transitions) == 2
 
         # Should have transitions to process and validation_failed
-        targets = [t['target'] for t in transitions]
-        assert 'process' in targets
-        assert 'validation_failed' in targets
+        targets = [t["target"] for t in transitions]
+        assert "process" in targets
+        assert "validation_failed" in targets
 
 
 class TestContextHelpers:
@@ -494,12 +495,12 @@ class TestContextHelpers:
 
         # Test initial state
         assert context.is_complete() is False
-        assert context.get_current_state() == 'start'
+        assert context.get_current_state() == "start"
 
         # Test data snapshot
         snapshot = context.get_data_snapshot()
         assert isinstance(snapshot, dict)
-        assert snapshot['request_id'] == 'REQ-TEST-001'
+        assert snapshot["request_id"] == "REQ-TEST-001"
 
         # Execute to end
         while not context.is_complete():
@@ -507,7 +508,7 @@ class TestContextHelpers:
 
         # Test completion
         assert context.is_complete() is True
-        assert context.get_current_state() == 'success'
+        assert context.get_current_state() == "success"
 
 
 @pytest.mark.integration
@@ -517,53 +518,53 @@ class TestFullWorkflow:
     def test_complete_compute_workflow(self, fsm):
         """Test complete workflow for compute request type."""
         test_data = {
-            'request_id': 'REQ-COMPUTE',
-            'user_id': 'USER-001',
-            'request_type': 'compute',
-            'payload': {'numbers': list(range(100))}
+            "request_id": "REQ-COMPUTE",
+            "user_id": "USER-001",
+            "request_type": "compute",
+            "payload": {"numbers": list(range(100))},
         }
 
         # Execute with tracing
         trace = fsm.trace_execution_sync(test_data)
 
         # Verify complete path
-        path = [t['to_state'] for t in trace]
-        assert path == ['validate', 'process', 'enrich', 'format', 'success']
+        path = [t["to_state"] for t in trace]
+        assert path == ["validate", "process", "enrich", "format", "success"]
 
         # Get final data from last trace entry
-        final_data = trace[-1].get('data', {})
-        assert final_data.get('processing_complete') is True
-        assert 'result' in final_data
-        assert 'formatted_response' in final_data
+        final_data = trace[-1].get("data", {})
+        assert final_data.get("processing_complete") is True
+        assert "result" in final_data
+        assert "formatted_response" in final_data
 
     def test_complete_query_workflow(self, fsm):
         """Test complete workflow for query request type."""
         test_data = {
-            'request_id': 'REQ-QUERY',
-            'user_id': 'USER-002',
-            'request_type': 'query',
-            'payload': {'sql': 'SELECT * FROM users'}
+            "request_id": "REQ-QUERY",
+            "user_id": "USER-002",
+            "request_type": "query",
+            "payload": {"sql": "SELECT * FROM users"},
         }
 
         # Execute with profiling
         profile = fsm.profile_execution_sync(test_data)
 
         # Verify successful completion
-        assert profile['transitions'] == 5
-        assert profile['total_time'] > 0
+        assert profile["transitions"] == 5
+        assert profile["total_time"] > 0
 
         # All states should have been visited
-        expected_states = ['start', 'validate', 'process', 'enrich', 'format']
+        expected_states = ["start", "validate", "process", "enrich", "format"]
         for state in expected_states:
-            assert state in profile['state_times']
+            assert state in profile["state_times"]
 
     def test_invalid_request_type_workflow(self, fsm):
         """Test workflow with unknown request type."""
         test_data = {
-            'request_id': 'REQ-UNKNOWN',
-            'user_id': 'USER-003',
-            'request_type': 'unknown_type',
-            'payload': {'data': 'test'}
+            "request_id": "REQ-UNKNOWN",
+            "user_id": "USER-003",
+            "request_type": "unknown_type",
+            "payload": {"data": "test"},
         }
 
         context = fsm.create_context(test_data)
@@ -576,11 +577,11 @@ class TestFullWorkflow:
 
         # Should still complete successfully
         assert context.is_complete() is True
-        assert context.get_current_state() == 'success'
+        assert context.get_current_state() == "success"
 
         # Result should indicate unknown type
         data = context.get_data_snapshot()
-        assert data.get('result', {}).get('status') == 'unknown_type'
+        assert data.get("result", {}).get("status") == "unknown_type"
 
 
 if __name__ == "__main__":

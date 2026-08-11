@@ -115,9 +115,7 @@ def test_process_timeout_returns_bounded_error_result() -> None:
     under 2s) and surface a timeout error result, rather than blocking until the
     transform finishes anyway.
     """
-    fsm = SimpleFSM(
-        _linear_config("slow_fsm", "slow"), custom_functions={"slow": _slow_transform}
-    )
+    fsm = SimpleFSM(_linear_config("slow_fsm", "slow"), custom_functions={"slow": _slow_transform})
     try:
         start = time.monotonic()
         result = fsm.process({"input": "test"}, timeout=0.2)
@@ -202,9 +200,7 @@ def test_process_timeout_releases_resources_on_close() -> None:
     assert all(not owners for owners in manager._resource_owners.values()), (
         f"resource owners leaked after timeout + close: {manager._resource_owners!r}"
     )
-    assert not bridge_thread.is_alive(), (
-        "this FSM's bridge thread was not joined by close()"
-    )
+    assert not bridge_thread.is_alive(), "this FSM's bridge thread was not joined by close()"
 
 
 # --------------------------------------------------------------------------- #
@@ -220,9 +216,7 @@ def test_process_file_within_timeout_succeeds() -> None:
         ran.append("ran")
         return data
 
-    with tempfile.NamedTemporaryFile(
-        mode="w", suffix=".jsonl", delete=False
-    ) as handle:
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".jsonl", delete=False) as handle:
         handle.write(json.dumps({"data": "a"}) + "\n")
         handle.write(json.dumps({"data": "b"}) + "\n")
         input_path = Path(handle.name)
@@ -243,9 +237,7 @@ def test_process_file_within_timeout_succeeds() -> None:
 
 def test_process_file_timeout_raises_bounded() -> None:
     """``process_file(timeout=)`` raises ``TimeoutError`` promptly, bounded."""
-    with tempfile.NamedTemporaryFile(
-        mode="w", suffix=".jsonl", delete=False
-    ) as handle:
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".jsonl", delete=False) as handle:
         handle.write(json.dumps({"data": "a"}) + "\n")
         handle.write(json.dumps({"data": "b"}) + "\n")
         input_path = Path(handle.name)
@@ -260,9 +252,7 @@ def test_process_file_timeout_raises_bounded() -> None:
                 custom_functions={"slow": _slow_transform},
             )
         elapsed = time.monotonic() - start
-        assert elapsed < 3.0, (
-            f"process_file(timeout=0.3) was not bounded — took {elapsed:.2f}s"
-        )
+        assert elapsed < 3.0, f"process_file(timeout=0.3) was not bounded — took {elapsed:.2f}s"
     finally:
         input_path.unlink(missing_ok=True)
 
@@ -307,6 +297,4 @@ def test_batch_process_timeout_raises_bounded() -> None:
             custom_functions={"slow": _slow_transform},
         )
     elapsed = time.monotonic() - start
-    assert elapsed < 3.0, (
-        f"batch_process(timeout=0.3) was not bounded — took {elapsed:.2f}s"
-    )
+    assert elapsed < 3.0, f"batch_process(timeout=0.3) was not bounded — took {elapsed:.2f}s"

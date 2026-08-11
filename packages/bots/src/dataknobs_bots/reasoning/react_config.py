@@ -64,27 +64,19 @@ class HistoryCompactionConfig(StructuredConfig):
     def __post_init__(self) -> None:
         """Validate the compaction knobs at construction (fail-loud)."""
         if not 0.0 < self.budget_fraction <= 1.0:
-            raise ValueError(
-                "budget_fraction must be in (0, 1], got "
-                f"{self.budget_fraction}"
-            )
+            raise ValueError(f"budget_fraction must be in (0, 1], got {self.budget_fraction}")
         if self.keep_recent_iterations < 0:
             raise ValueError(
-                "keep_recent_iterations must be >= 0, got "
-                f"{self.keep_recent_iterations}"
+                f"keep_recent_iterations must be >= 0, got {self.keep_recent_iterations}"
             )
-        if (
-            self.history_token_budget is not None
-            and self.history_token_budget <= 0
-        ):
+        if self.history_token_budget is not None and self.history_token_budget <= 0:
             raise ValueError(
                 "history_token_budget must be a positive integer when set, "
                 f"got {self.history_token_budget}"
             )
         if self.strategy not in _COMPACTION_STRATEGIES:
             raise ValueError(
-                f"strategy must be one of {sorted(_COMPACTION_STRATEGIES)}, "
-                f"got {self.strategy!r}"
+                f"strategy must be one of {sorted(_COMPACTION_STRATEGIES)}, got {self.strategy!r}"
             )
 
 
@@ -145,10 +137,7 @@ class ReActReasoningConfig(StructuredConfig):
         ``from_dict`` loading), so the guard lives once on the config rather
         than at each call site — mirroring ``RetryConfig.__post_init__``.
         """
-        if (
-            self.truncation_retry_max_tokens is not None
-            and self.truncation_retry_max_tokens <= 0
-        ):
+        if self.truncation_retry_max_tokens is not None and self.truncation_retry_max_tokens <= 0:
             raise ValueError(
                 "truncation_retry_max_tokens must be a positive integer when "
                 f"set, got {self.truncation_retry_max_tokens}"

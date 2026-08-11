@@ -34,17 +34,13 @@ _HASH_PATTERNS = [
 
 # Lines matching these patterns are stripped before hashing because they
 # change during releases but do not affect code quality.
-_VERSION_LINE_RE = re.compile(
-    r'^(?:version\s*=\s*"[^"]*"|__version__\s*=\s*"[^"]*")\s*$'
-)
+_VERSION_LINE_RE = re.compile(r'^(?:version\s*=\s*"[^"]*"|__version__\s*=\s*"[^"]*")\s*$')
 
 # Cross-package dependency constraint lines — bumped by release-helper.sh
 # whenever a sibling dataknobs package's version changes. The dep itself
 # is hashed independently and propagates via the transitive-dirty graph,
 # so the constraint string adds no signal about *this* package's behavior.
-_DEP_CONSTRAINT_LINE_RE = re.compile(
-    r'^"dataknobs-[a-z]+(?:>=|==)[^"]+",?$'
-)
+_DEP_CONSTRAINT_LINE_RE = re.compile(r'^"dataknobs-[a-z]+(?:>=|==)[^"]+",?$')
 
 # Increment when the hashing algorithm changes (e.g., adding version stripping).
 # A mismatch between stored and current version means hashes are incomparable
@@ -424,11 +420,7 @@ def changed_since(
     # Dropped rather than compared: the algorithm version is a property of this
     # script, not of the tree, so it cannot move during a run and naming it in a
     # diff would only mislead.
-    recorded = (
-        {k: v for k, v in packages.items() if k != "_algorithm_version"}
-        if packages
-        else {}
-    )
+    recorded = {k: v for k, v in packages.items() if k != "_algorithm_version"} if packages else {}
     if recorded:
         current = compute_all_hashes()
         moved += sorted(
@@ -475,9 +467,7 @@ def cmd_changed_since(packages_json: str | None, workspace_json: str | None) -> 
 
     moved, unchecked = changed_since(packages, workspace)
     for half in unchecked:
-        logger.warning(
-            "No %s hashes were recorded, so nothing about them was re-checked", half
-        )
+        logger.warning("No %s hashes were recorded, so nothing about them was re-checked", half)
     for name in moved:
         print(name)
     sys.exit(1 if moved else 0)
@@ -507,9 +497,7 @@ def cmd_validate(*, use_json: bool = False) -> None:
         else:
             logger.error("Quality artifacts are stale")
             if result["changed_scopes"]:
-                logger.error(
-                    "Changed workspace scopes: %s", ", ".join(result["changed_scopes"])
-                )
+                logger.error("Changed workspace scopes: %s", ", ".join(result["changed_scopes"]))
             if result["changed_packages"]:
                 logger.error("Changed packages: %s", ", ".join(result["changed_packages"]))
             if result["dirty_packages"]:
@@ -522,9 +510,7 @@ def cmd_validate(*, use_json: bool = False) -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(
-        description="Compute and validate per-package content hashes"
-    )
+    parser = argparse.ArgumentParser(description="Compute and validate per-package content hashes")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     subparsers.add_parser("compute", help="Print per-package content hashes as JSON")
@@ -548,7 +534,9 @@ def main() -> None:
         "validate", help="Validate artifacts against current source content"
     )
     validate_parser.add_argument(
-        "--json", action="store_true", dest="use_json",
+        "--json",
+        action="store_true",
+        dest="use_json",
         help="Output structured JSON result",
     )
 

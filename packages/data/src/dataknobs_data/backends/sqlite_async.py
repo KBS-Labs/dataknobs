@@ -45,7 +45,7 @@ class AsyncSQLiteDatabase(  # type: ignore[misc]
     SQLiteVectorSupport,
     PythonVectorSearchMixin,  # Provides python_vector_search_async
     BulkEmbedMixin,  # Must come before VectorOperationsMixin to override bulk_embed_and_store
-    VectorOperationsMixin
+    VectorOperationsMixin,
 ):
     """Asynchronous SQLite database backend using aiosqlite.
 
@@ -105,15 +105,10 @@ class AsyncSQLiteDatabase(  # type: ignore[misc]
         # Create directory if needed for file-based database (off the loop).
         if self.db_path != ":memory:":
             db_file = Path(self.db_path)
-            await asyncio.to_thread(
-                db_file.parent.mkdir, parents=True, exist_ok=True
-            )
+            await asyncio.to_thread(db_file.parent.mkdir, parents=True, exist_ok=True)
 
         # Connect to database
-        self.db = await aiosqlite.connect(
-            self.db_path,
-            timeout=self.timeout
-        )
+        self.db = await aiosqlite.connect(self.db_path, timeout=self.timeout)
 
         # Enable row factory for dict-like access
         self.db.row_factory = aiosqlite.Row
@@ -224,9 +219,7 @@ class AsyncSQLiteDatabase(  # type: ignore[misc]
                 return SQLQueryBuilder.row_to_record(dict(row))
             return None
 
-    async def update(
-        self, id: str, record: Record, *, expected_version: str | None = None
-    ) -> bool:
+    async def update(self, id: str, record: Record, *, expected_version: str | None = None) -> bool:
         """Update an existing record.
 
         Args:
@@ -274,9 +267,7 @@ class AsyncSQLiteDatabase(  # type: ignore[misc]
 
         return rows_affected > 0
 
-    async def delete(
-        self, id: str, *, expected_version: str | None = None
-    ) -> bool:
+    async def delete(self, id: str, *, expected_version: str | None = None) -> bool:
         """Delete a record by ID.
 
         When ``expected_version`` is provided the read-compare-delete runs
@@ -377,9 +368,7 @@ class AsyncSQLiteDatabase(  # type: ignore[misc]
             await self.db.rollback()
             raise
 
-    async def create_batch(
-        self, records: list[Record], *, _tx: Any = None
-    ) -> list[str]:
+    async def create_batch(self, records: list[Record], *, _tx: Any = None) -> list[str]:
         """Create multiple records efficiently using a single query.
 
         Uses a multi-value INSERT. Like ``create()``, this fails closed: a
@@ -433,9 +422,7 @@ class AsyncSQLiteDatabase(  # type: ignore[misc]
                 await self.db.rollback()
             raise
 
-    async def upsert_batch(
-        self, records: list[Record], *, _tx: Any = None
-    ) -> list[str]:
+    async def upsert_batch(self, records: list[Record], *, _tx: Any = None) -> list[str]:
         """Insert-or-overwrite multiple records efficiently in one statement.
 
         Uses ``INSERT ... ON CONFLICT (id) DO UPDATE``. Honors a caller-supplied
@@ -469,7 +456,7 @@ class AsyncSQLiteDatabase(  # type: ignore[misc]
 
     async def update_batch(self, updates: list[tuple[str, Record]]) -> list[bool]:
         """Update multiple records efficiently using a single query.
-        
+
         Uses CASE expressions for batch updates, similar to PostgreSQL.
         """
         if not updates:
@@ -491,7 +478,9 @@ class AsyncSQLiteDatabase(  # type: ignore[misc]
             # SQLite doesn't have RETURNING, so we need to verify each ID
             update_ids = [record_id for record_id, _ in updates]
             placeholders = ", ".join(["?" for _ in update_ids])
-            check_query = f"SELECT id FROM {self.table_manager.qualified_table} WHERE id IN ({placeholders})"
+            check_query = (
+                f"SELECT id FROM {self.table_manager.qualified_table} WHERE id IN ({placeholders})"
+            )
 
             async with self.db.execute(check_query, update_ids) as check_cursor:
                 rows = await check_cursor.fetchall()
@@ -507,9 +496,7 @@ class AsyncSQLiteDatabase(  # type: ignore[misc]
             await self.db.rollback()
             raise
 
-    async def delete_batch(
-        self, ids: list[str], *, _tx: Any = None
-    ) -> list[bool]:
+    async def delete_batch(self, ids: list[str], *, _tx: Any = None) -> list[bool]:
         """Delete multiple records efficiently using a single query.
 
         Uses single DELETE with IN clause for better performance.
@@ -524,7 +511,9 @@ class AsyncSQLiteDatabase(  # type: ignore[misc]
 
         # Check which IDs exist before deletion
         placeholders = ", ".join(["?" for _ in ids])
-        check_query = f"SELECT id FROM {self.table_manager.qualified_table} WHERE id IN ({placeholders})"
+        check_query = (
+            f"SELECT id FROM {self.table_manager.qualified_table} WHERE id IN ({placeholders})"
+        )
 
         async with self.db.execute(check_query, ids) as cursor:
             rows = await cursor.fetchall()
@@ -561,14 +550,14 @@ class AsyncSQLiteDatabase(  # type: ignore[misc]
         """Count all records in the database."""
         self._check_connection()
 
-        async with self.db.execute(f"SELECT COUNT(*) FROM {self.table_manager.qualified_table}") as cursor:
+        async with self.db.execute(
+            f"SELECT COUNT(*) FROM {self.table_manager.qualified_table}"
+        ) as cursor:
             result = await cursor.fetchone()
             return result[0] if result else 0
 
     async def stream_read(
-        self,
-        query: Query | None = None,
-        config: StreamConfig | None = None
+        self, query: Query | None = None, config: StreamConfig | None = None
     ) -> AsyncIterator[Record]:
         """Stream records from database."""
         from ..streaming import StreamConfig
@@ -597,9 +586,7 @@ class AsyncSQLiteDatabase(  # type: ignore[misc]
                 break
 
     async def stream_write(
-        self,
-        records: AsyncIterator[Record],
-        config: StreamConfig | None = None
+        self, records: AsyncIterator[Record], config: StreamConfig | None = None
     ) -> StreamResult:
         """Stream records into database.
 
@@ -639,20 +626,20 @@ class AsyncSQLiteDatabase(  # type: ignore[misc]
         k: int = 10,
         filter=None,
         metric=None,
-        **kwargs
+        **kwargs,
     ):
         """Perform async vector similarity search using Python-based calculations.
-        
+
         Delegates to PythonVectorSearchMixin for the implementation.
-        
+
         Args:
             query_vector: Query vector
             vector_field: Name of the vector field to search
-            k: Number of results to return  
+            k: Number of results to return
             filter: Optional filter conditions
             metric: Distance metric (uses instance default if not specified)
             **kwargs: Additional arguments for compatibility
-            
+
         Returns:
             List of VectorSearchResult objects with scores
         """
@@ -665,5 +652,5 @@ class AsyncSQLiteDatabase(  # type: ignore[misc]
             k=k,
             filter=filter,
             metric=metric,
-            **kwargs
+            **kwargs,
         )

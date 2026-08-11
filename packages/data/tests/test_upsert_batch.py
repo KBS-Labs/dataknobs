@@ -50,9 +50,7 @@ def sync_db(request: pytest.FixtureRequest) -> Iterator[object]:
             db = SyncSQLiteDatabase({"path": str(Path(d) / "records.db")})
             db.connect()
         else:
-            db = SyncDuckDBDatabase(
-                {"path": str(Path(d) / "records.duckdb"), "table": "records"}
-            )
+            db = SyncDuckDBDatabase({"path": str(Path(d) / "records.duckdb"), "table": "records"})
             db.connect()
         try:
             yield db
@@ -64,9 +62,7 @@ def sync_db(request: pytest.FixtureRequest) -> Iterator[object]:
 
 def test_sync_upsert_batch_inserts_new(sync_db: object) -> None:
     """upsert_batch inserts new records and honors caller-supplied ids."""
-    ids = sync_db.upsert_batch(
-        [Record({"v": 1}, id="x"), Record({"v": 2}, id="y")]
-    )
+    ids = sync_db.upsert_batch([Record({"v": 1}, id="x"), Record({"v": 2}, id="y")])
     assert ids == ["x", "y"]
     assert sync_db.read("x").get_value("v") == 1
     assert sync_db.read("y").get_value("v") == 2
@@ -104,9 +100,7 @@ def test_sync_upsert_batch_within_batch_duplicate_is_last_wins(
     of physical VALUES rows differs from ``len(ids)``); for memory/file it
     exercises the overwrite loop.
     """
-    ids = sync_db.upsert_batch(
-        [Record({"v": 1}, id="dup"), Record({"v": 2}, id="dup")]
-    )
+    ids = sync_db.upsert_batch([Record({"v": 1}, id="dup"), Record({"v": 2}, id="dup")])
     assert ids == ["dup", "dup"]  # one id per input record, in order
     assert sync_db.read("dup").get_value("v") == 2  # last occurrence won
 
@@ -150,9 +144,7 @@ async def async_db(request: pytest.FixtureRequest) -> AsyncIterator[object]:
             db = AsyncSQLiteDatabase({"path": str(Path(d) / "records.db")})
             await db.connect()
         else:
-            db = AsyncDuckDBDatabase(
-                {"path": str(Path(d) / "records.duckdb"), "table": "records"}
-            )
+            db = AsyncDuckDBDatabase({"path": str(Path(d) / "records.duckdb"), "table": "records"})
             await db.connect()
         try:
             yield db
@@ -165,9 +157,7 @@ async def async_db(request: pytest.FixtureRequest) -> AsyncIterator[object]:
 @pytest.mark.asyncio
 async def test_async_upsert_batch_inserts_new(async_db: object) -> None:
     """upsert_batch inserts new records and honors caller-supplied ids."""
-    ids = await async_db.upsert_batch(
-        [Record({"v": 1}, id="x"), Record({"v": 2}, id="y")]
-    )
+    ids = await async_db.upsert_batch([Record({"v": 1}, id="x"), Record({"v": 2}, id="y")])
     assert ids == ["x", "y"]
     assert (await async_db.read("x")).get_value("v") == 1
     assert (await async_db.read("y")).get_value("v") == 2
@@ -199,9 +189,7 @@ async def test_async_upsert_batch_within_batch_duplicate_is_last_wins(
     async_db: object,
 ) -> None:
     """Two records with the same id in one batch coalesce last-wins (async)."""
-    ids = await async_db.upsert_batch(
-        [Record({"v": 1}, id="dup"), Record({"v": 2}, id="dup")]
-    )
+    ids = await async_db.upsert_batch([Record({"v": 1}, id="dup"), Record({"v": 2}, id="dup")])
     assert ids == ["dup", "dup"]
     assert (await async_db.read("dup")).get_value("v") == 2
 

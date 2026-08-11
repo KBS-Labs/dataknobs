@@ -203,7 +203,4 @@ def _normalize_scores(scores: dict[str, float]) -> dict[str, float]:
         # All scores are the same
         return dict.fromkeys(scores, 1.0)
 
-    return {
-        k: (v - min_score) / (max_score - min_score)
-        for k, v in scores.items()
-    }
+    return {k: (v - min_score) / (max_score - min_score) for k, v in scores.items()}

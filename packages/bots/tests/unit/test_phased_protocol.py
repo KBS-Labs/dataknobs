@@ -109,8 +109,8 @@ class TestPhasedGenerate:
         config = (
             WizardConfigBuilder("test")
             .stage("gather", is_start=True, prompt="What is your name?")
-                .field("name", field_type="string", required=True)
-                .transition("done", "has('name')")
+            .field("name", field_type="string", required=True)
+            .transition("done", "has('name')")
             .stage("done", is_end=True, prompt="All done!")
             .build()
         )
@@ -130,11 +130,11 @@ class TestPhasedGenerate:
         config = (
             WizardConfigBuilder("test")
             .stage("first", is_start=True, prompt="Step 1")
-                .field("a", field_type="string", required=True)
-                .transition("second", "has('a')")
+            .field("a", field_type="string", required=True)
+            .transition("second", "has('a')")
             .stage("second", prompt="Step 2")
-                .field("b", field_type="string", required=True)
-                .transition("done", "has('b')")
+            .field("b", field_type="string", required=True)
+            .transition("done", "has('b')")
             .stage("done", is_end=True, prompt="Done!")
             .build()
         )
@@ -158,8 +158,8 @@ class TestPhasedGenerate:
         config = (
             WizardConfigBuilder("test")
             .stage("gather", is_start=True, prompt="What is your name?")
-                .field("name", field_type="string", required=True)
-                .transition("done", "has('name')")
+            .field("name", field_type="string", required=True)
+            .transition("done", "has('name')")
             .stage("done", is_end=True, prompt="Done!")
             .build()
         )
@@ -188,8 +188,8 @@ class TestDynaBotPhasedRouting:
         config = (
             WizardConfigBuilder("test")
             .stage("start", is_start=True, prompt="Hello!")
-                .field("x", field_type="string", required=True)
-                .transition("done", "has('x')")
+            .field("x", field_type="string", required=True)
+            .transition("done", "has('x')")
             .stage("done", is_end=True, prompt="Done!")
             .build()
         )
@@ -200,9 +200,7 @@ class TestDynaBotPhasedRouting:
             extraction_results=[[{"x": "val"}]],
         ) as harness:
             # Verify the strategy is detected as phased
-            assert isinstance(
-                harness.bot.reasoning_strategy, PhasedReasoningProtocol
-            )
+            assert isinstance(harness.bot.reasoning_strategy, PhasedReasoningProtocol)
             # Chat should work through the phased flow
             result = await harness.chat("val")
             assert result.response  # Got a response
@@ -219,9 +217,7 @@ class TestDynaBotPhasedRouting:
             },
             main_responses=[text_response("Hello!")],
         ) as harness:
-            assert not isinstance(
-                harness.bot.reasoning_strategy, PhasedReasoningProtocol
-            )
+            assert not isinstance(harness.bot.reasoning_strategy, PhasedReasoningProtocol)
             result = await harness.chat("Hi")
             assert result.response
 
@@ -237,14 +233,16 @@ class TestToolTaskWiring:
     def test_successful_tool_completes_task(self) -> None:
         """Successful tool execution marks matching tasks as complete."""
         state = WizardState(current_stage="test")
-        state.tasks = WizardTaskList(tasks=[
-            WizardTask(
-                id="t1",
-                description="Run search",
-                completed_by="tool_result",
-                tool_name="search",
-            ),
-        ])
+        state.tasks = WizardTaskList(
+            tasks=[
+                WizardTask(
+                    id="t1",
+                    description="Run search",
+                    completed_by="tool_result",
+                    tool_name="search",
+                ),
+            ]
+        )
 
         update_tool_tasks(state, "search", success=True)
 
@@ -253,14 +251,16 @@ class TestToolTaskWiring:
     def test_failed_tool_leaves_task_pending(self) -> None:
         """Failed tool execution does not mark tasks as complete."""
         state = WizardState(current_stage="test")
-        state.tasks = WizardTaskList(tasks=[
-            WizardTask(
-                id="t1",
-                description="Run search",
-                completed_by="tool_result",
-                tool_name="search",
-            ),
-        ])
+        state.tasks = WizardTaskList(
+            tasks=[
+                WizardTask(
+                    id="t1",
+                    description="Run search",
+                    completed_by="tool_result",
+                    tool_name="search",
+                ),
+            ]
+        )
 
         update_tool_tasks(state, "search", success=False)
 
@@ -269,14 +269,16 @@ class TestToolTaskWiring:
     def test_unmatched_tool_name_ignored(self) -> None:
         """Tool results for non-matching tools don't affect tasks."""
         state = WizardState(current_stage="test")
-        state.tasks = WizardTaskList(tasks=[
-            WizardTask(
-                id="t1",
-                description="Run search",
-                completed_by="tool_result",
-                tool_name="search",
-            ),
-        ])
+        state.tasks = WizardTaskList(
+            tasks=[
+                WizardTask(
+                    id="t1",
+                    description="Run search",
+                    completed_by="tool_result",
+                    tool_name="search",
+                ),
+            ]
+        )
 
         update_tool_tasks(state, "calculator", success=True)
 
@@ -285,14 +287,16 @@ class TestToolTaskWiring:
     def test_non_tool_result_task_ignored(self) -> None:
         """Tasks with completed_by != 'tool_result' are not affected."""
         state = WizardState(current_stage="test")
-        state.tasks = WizardTaskList(tasks=[
-            WizardTask(
-                id="t1",
-                description="Fill name field",
-                completed_by="field_extraction",
-                tool_name="search",  # Even if tool_name matches
-            ),
-        ])
+        state.tasks = WizardTaskList(
+            tasks=[
+                WizardTask(
+                    id="t1",
+                    description="Fill name field",
+                    completed_by="field_extraction",
+                    tool_name="search",  # Even if tool_name matches
+                ),
+            ]
+        )
 
         update_tool_tasks(state, "search", success=True)
 

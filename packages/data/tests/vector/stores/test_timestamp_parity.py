@@ -47,8 +47,7 @@ except ImportError:
 _pgvector_marks = [
     requires_postgres,
     pytest.mark.skipif(
-        os.environ.get("TEST_POSTGRES", "").lower() != "true"
-        or not ASYNCPG_AVAILABLE,
+        os.environ.get("TEST_POSTGRES", "").lower() != "true" or not ASYNCPG_AVAILABLE,
         reason="pgvector parity tests require TEST_POSTGRES=true and asyncpg",
     ),
 ]
@@ -111,13 +110,9 @@ async def any_vector_store(
 async def test_timestamps_present_and_ordered(any_vector_store: Any) -> None:
     """include_timestamps=True exposes _created_at / _updated_at on every backend."""
     vec = np.random.rand(4).astype(np.float32)
-    await any_vector_store.add_vectors(
-        [vec], ids=["t1"], metadata=[{"k": "v"}]
-    )
+    await any_vector_store.add_vectors([vec], ids=["t1"], metadata=[{"k": "v"}])
 
-    results = await any_vector_store.get_vectors(
-        ["t1"], include_timestamps=True
-    )
+    results = await any_vector_store.get_vectors(["t1"], include_timestamps=True)
     _, meta = results[0]
 
     assert meta is not None
@@ -132,9 +127,7 @@ async def test_timestamps_present_and_ordered(any_vector_store: Any) -> None:
 async def test_timestamps_absent_by_default(any_vector_store: Any) -> None:
     """Default get_vectors() omits timestamp keys on every backend."""
     vec = np.random.rand(4).astype(np.float32)
-    await any_vector_store.add_vectors(
-        [vec], ids=["t1"], metadata=[{"k": "v"}]
-    )
+    await any_vector_store.add_vectors([vec], ids=["t1"], metadata=[{"k": "v"}])
 
     results = await any_vector_store.get_vectors(["t1"])
     _, meta = results[0]
@@ -154,9 +147,7 @@ async def test_upsert_refreshes_updated_consistently(
     vec2 = np.random.rand(4).astype(np.float32)
 
     await any_vector_store.add_vectors([vec1], ids=["t1"])
-    first_results = await any_vector_store.get_vectors(
-        ["t1"], include_timestamps=True
-    )
+    first_results = await any_vector_store.get_vectors(["t1"], include_timestamps=True)
     first = first_results[0][1]
     assert first is not None
 
@@ -165,16 +156,11 @@ async def test_upsert_refreshes_updated_consistently(
     await asyncio.sleep(0.05)
 
     await any_vector_store.add_vectors([vec2], ids=["t1"])
-    second_results = await any_vector_store.get_vectors(
-        ["t1"], include_timestamps=True
-    )
+    second_results = await any_vector_store.get_vectors(["t1"], include_timestamps=True)
     second = second_results[0][1]
     assert second is not None
 
     assert second["_created_at"] == first["_created_at"], (
-        "created_at must not change on upsert "
-        "(backend-dependent parity violation)"
+        "created_at must not change on upsert (backend-dependent parity violation)"
     )
-    assert second["_updated_at"] > first["_updated_at"], (
-        "updated_at must advance on upsert"
-    )
+    assert second["_updated_at"] > first["_updated_at"], "updated_at must advance on upsert"

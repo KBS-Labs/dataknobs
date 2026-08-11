@@ -56,7 +56,7 @@ class ConversationFlowAdapter:
         self,
         flow: ConversationFlow,
         prompt_builder: Any,  # AsyncPromptBuilder
-        llm: Any | None = None  # AsyncLLMProvider
+        llm: Any | None = None,  # AsyncLLMProvider
     ):
         """Initialize the adapter.
 
@@ -83,14 +83,14 @@ class ConversationFlowAdapter:
         # Create FSM states from flow states
         for state_name, flow_state in self.flow.states.items():
             # Determine state type
-            is_start = (state_name == self.flow.initial_state)
-            is_end = (len(flow_state.transitions) == 0)
+            is_start = state_name == self.flow.initial_state
+            is_end = len(flow_state.transitions) == 0
 
             fsm_state = {
                 "name": state_name,
                 "is_start": is_start,
                 "is_end": is_end,
-                "transform": self._create_state_transform_function(state_name, flow_state)
+                "transform": self._create_state_transform_function(state_name, flow_state),
             }
 
             states.append(fsm_state)
@@ -105,10 +105,8 @@ class ConversationFlowAdapter:
                     "to": target_state,
                     "name": f"{state_name}_to_{target_state}_{condition_name}",
                     "pre_test": self._register_condition_function(
-                        condition_name,
-                        condition,
-                        state_name
-                    )
+                        condition_name, condition, state_name
+                    ),
                 }
 
                 arcs.append(arc)
@@ -120,16 +118,12 @@ class ConversationFlowAdapter:
             "description": self.flow.description or f"Conversation flow: {self.flow.name}",
             "states": states,
             "arcs": arcs,
-            "functions": self._function_registry
+            "functions": self._function_registry,
         }
 
         return config
 
-    def _create_state_transform_function(
-        self,
-        state_name: str,
-        flow_state: FlowState
-    ) -> str:
+    def _create_state_transform_function(self, state_name: str, flow_state: FlowState) -> str:
         """Create and register transform function for a state.
 
         Args:
@@ -147,26 +141,18 @@ class ConversationFlowAdapter:
             loop_count = self.execution_state.increment_loop_count(state_name)
 
             if flow_state.max_loops and loop_count > flow_state.max_loops:
-                logger.warning(
-                    f"State '{state_name}' exceeded max loops ({flow_state.max_loops})"
-                )
+                logger.warning(f"State '{state_name}' exceeded max loops ({flow_state.max_loops})")
                 return {
                     **data,
                     "_error": f"Max loops exceeded for state {state_name}",
-                    "_force_end": True
+                    "_force_end": True,
                 }
 
             # Check total transition limit
             self.execution_state.total_transitions += 1
             if self.execution_state.total_transitions > self.flow.max_total_loops:
-                logger.warning(
-                    f"Flow exceeded max total transitions ({self.flow.max_total_loops})"
-                )
-                return {
-                    **data,
-                    "_error": "Max total transitions exceeded",
-                    "_force_end": True
-                }
+                logger.warning(f"Flow exceeded max total transitions ({self.flow.max_total_loops})")
+                return {**data, "_error": "Max total transitions exceeded", "_force_end": True}
 
             # Call on_enter hook if defined
             if flow_state.on_enter:
@@ -181,25 +167,24 @@ class ConversationFlowAdapter:
                 **flow_state.prompt_params,
                 **context,
                 "state": state_name,
-                "loop_count": loop_count
+                "loop_count": loop_count,
             }
 
             # Render and build prompt
             try:
                 result = await self.prompt_builder.build_prompt(
-                    prompt_name=flow_state.prompt_name,
-                    params=prompt_params
+                    prompt_name=flow_state.prompt_name, params=prompt_params
                 )
             except Exception as e:
                 logger.error(f"Failed to build prompt for state '{state_name}': {e}")
                 return {
                     **data,
                     "_error": f"Prompt building failed: {e!s}",
-                    "response": f"[Error in state {state_name}]"
+                    "response": f"[Error in state {state_name}]",
                 }
 
             # Store response in data
-            response = result.content if hasattr(result, 'content') else str(result)
+            response = result.content if hasattr(result, "content") else str(result)
 
             # Add to history
             self.execution_state.add_to_history(state_name, response)
@@ -217,7 +202,7 @@ class ConversationFlowAdapter:
                 "response": response,
                 "state": state_name,
                 "loop_count": loop_count,
-                "history": list(self.execution_state.history)
+                "history": list(self.execution_state.history),
             }
 
         # Register function
@@ -226,10 +211,7 @@ class ConversationFlowAdapter:
         return function_name
 
     def _register_condition_function(
-        self,
-        condition_name: str,
-        condition: TransitionCondition,
-        state_name: str
+        self, condition_name: str, condition: TransitionCondition, state_name: str
     ) -> str:
         """Register a condition function for arc pre_test.
 
@@ -254,14 +236,10 @@ class ConversationFlowAdapter:
             # Evaluate condition
             try:
                 result = await condition.evaluate(response, {**context, **data})
-                logger.debug(
-                    f"Condition '{condition_name}' for state '{state_name}': {result}"
-                )
+                logger.debug(f"Condition '{condition_name}' for state '{state_name}': {result}")
                 return result
             except Exception as e:
-                logger.error(
-                    f"Condition '{condition_name}' evaluation failed: {e}"
-                )
+                logger.error(f"Condition '{condition_name}' evaluation failed: {e}")
                 return False
 
         # Register function
@@ -269,10 +247,7 @@ class ConversationFlowAdapter:
 
         return function_name
 
-    async def execute(
-        self,
-        initial_data: Dict[str, Any] | None = None
-    ) -> Dict[str, Any]:
+    async def execute(self, initial_data: Dict[str, Any] | None = None) -> Dict[str, Any]:
         """Execute the conversation flow.
 
         Args:
@@ -283,8 +258,7 @@ class ConversationFlowAdapter:
         """
         # Initialize execution state
         self.execution_state = FlowExecutionState(
-            current_state=self.flow.initial_state,
-            context={**self.flow.initial_context}
+            current_state=self.flow.initial_state, context={**self.flow.initial_context}
         )
 
         # Prepare initial data
@@ -302,11 +276,7 @@ class ConversationFlowAdapter:
             return result.get("data", result)
         except Exception as e:
             logger.error(f"Flow execution failed: {e}")
-            return {
-                **data,
-                "_error": str(e),
-                "_execution_failed": True
-            }
+            return {**data, "_error": str(e), "_execution_failed": True}
 
     def get_execution_summary(self) -> Dict[str, Any]:
         """Get summary of flow execution.
@@ -319,5 +289,5 @@ class ConversationFlowAdapter:
             "loop_counts": dict(self.execution_state.loop_counts),
             "current_state": self.execution_state.current_state,
             "history_length": len(self.execution_state.history),
-            "states_visited": list(self.execution_state.loop_counts.keys())
+            "states_visited": list(self.execution_state.loop_counts.keys()),
         }

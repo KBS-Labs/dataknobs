@@ -260,17 +260,9 @@ class DynaBotConfigBuilder:
             self for method chaining.
         """
         if isinstance(wizard_config, dict):
-            return self.set_reasoning(
-                "wizard", wizard_config=wizard_config, **kwargs
-            )
-        config_path = (
-            wizard_config
-            if isinstance(wizard_config, str)
-            else wizard_config.name
-        )
-        return self.set_reasoning(
-            "wizard", wizard_config=config_path, **kwargs
-        )
+            return self.set_reasoning("wizard", wizard_config=wizard_config, **kwargs)
+        config_path = wizard_config if isinstance(wizard_config, str) else wizard_config.name
+        return self.set_reasoning("wizard", wizard_config=config_path, **kwargs)
 
     def set_system_prompt(
         self,
@@ -499,8 +491,7 @@ class DynaBotConfigBuilder:
         result = self._validator.validate(config)
         if not result.valid:
             raise ValueError(
-                "Configuration validation failed:\n"
-                + "\n".join(f"  - {e}" for e in result.errors)
+                "Configuration validation failed:\n" + "\n".join(f"  - {e}" for e in result.errors)
             )
         for warning in result.warnings:
             logger.warning("Config warning: %s", warning)
@@ -522,8 +513,7 @@ class DynaBotConfigBuilder:
         result = self._validator.validate(config)
         if not result.valid:
             raise ValueError(
-                "Configuration validation failed:\n"
-                + "\n".join(f"  - {e}" for e in result.errors)
+                "Configuration validation failed:\n" + "\n".join(f"  - {e}" for e in result.errors)
             )
         for warning in result.warnings:
             logger.warning("Config warning: %s", warning)

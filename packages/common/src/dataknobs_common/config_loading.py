@@ -81,9 +81,7 @@ def find_config_file(
         exists.
     """
     directory = Path(config_dir)
-    normalized = tuple(
-        ext if ext.startswith(".") else f".{ext}" for ext in extensions
-    )
+    normalized = tuple(ext if ext.startswith(".") else f".{ext}" for ext in extensions)
     for ext in normalized:
         candidate = directory / f"{name}{ext}"
         if candidate.exists():
@@ -185,9 +183,7 @@ def parse_yaml_or_json(
         try:
             text = data.decode("utf-8")
         except UnicodeDecodeError as e:
-            raise ConfigParseError(
-                f"Failed to decode bytes as UTF-8 ({name}): {e}"
-            ) from e
+            raise ConfigParseError(f"Failed to decode bytes as UTF-8 ({name}): {e}") from e
     else:
         text = data
 
@@ -195,23 +191,18 @@ def parse_yaml_or_json(
         try:
             parsed = json.loads(text)
         except json.JSONDecodeError as e:
-            raise ConfigParseError(
-                f"Failed to parse JSON ({name}): {e}"
-            ) from e
+            raise ConfigParseError(f"Failed to parse JSON ({name}): {e}") from e
     elif format == "yaml":
         try:
             import yaml
         except ImportError as e:
             raise ConfigYAMLNotInstalledError(
-                f"PyYAML is required to parse YAML ({name}). "
-                "Install with: pip install pyyaml"
+                f"PyYAML is required to parse YAML ({name}). Install with: pip install pyyaml"
             ) from e
         try:
             parsed = yaml.safe_load(text)
         except yaml.YAMLError as e:
-            raise ConfigParseError(
-                f"Failed to parse YAML ({name}): {e}"
-            ) from e
+            raise ConfigParseError(f"Failed to parse YAML ({name}): {e}") from e
     else:
         raise ConfigUnsupportedFormatError(
             f"Unsupported format: {format!r} (must be 'yaml' or 'json')"
@@ -219,8 +210,7 @@ def parse_yaml_or_json(
 
     if require_dict and not isinstance(parsed, dict):
         raise ConfigShapeError(
-            f"Expected a dict at the root of {name}, "
-            f"got {type(parsed).__name__}"
+            f"Expected a dict at the root of {name}, got {type(parsed).__name__}"
         )
 
     return parsed

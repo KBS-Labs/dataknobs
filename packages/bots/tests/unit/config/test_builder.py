@@ -151,11 +151,7 @@ class TestDynaBotConfigBuilder:
             builder.build()
 
     def test_validate_returns_result(self) -> None:
-        builder = (
-            DynaBotConfigBuilder()
-            .set_llm("ollama")
-            .set_conversation_storage("memory")
-        )
+        builder = DynaBotConfigBuilder().set_llm("ollama").set_conversation_storage("memory")
         result = builder.validate()
         assert result.valid is True
 
@@ -176,11 +172,7 @@ class TestDynaBotConfigBuilder:
         assert parsed["bot"]["llm"]["provider"] == "ollama"
 
     def test_reset(self) -> None:
-        builder = (
-            DynaBotConfigBuilder()
-            .set_llm("ollama")
-            .set_conversation_storage("memory")
-        )
+        builder = DynaBotConfigBuilder().set_llm("ollama").set_conversation_storage("memory")
         builder.reset()
         result = builder.validate()
         assert result.valid is False
@@ -231,9 +223,7 @@ class TestDynaBotConfigBuilder:
                 },
             },
         )
-        builder = DynaBotConfigBuilder().from_template(
-            template, {"bot_name": "Helper"}
-        )
+        builder = DynaBotConfigBuilder().from_template(template, {"bot_name": "Helper"})
         config = builder.build()
         assert config["system_prompt"] == "I am Helper"
         assert config["llm"]["$resource"] == "default"

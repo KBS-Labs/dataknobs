@@ -155,7 +155,6 @@ Content:
         scoring_criteria="Robustness against edge cases and failure modes",
         default_score_threshold=0.7,
     ),
-
     "skeptical": ReviewPersona(
         id="skeptical",
         name="Skeptical Reviewer",
@@ -191,7 +190,6 @@ Content:
         scoring_criteria="Accuracy and correctness of claims",
         default_score_threshold=0.8,
     ),
-
     "insightful": ReviewPersona(
         id="insightful",
         name="Insightful Advisor",
@@ -227,7 +225,6 @@ Content:
         scoring_criteria="Completeness and contextual awareness",
         default_score_threshold=0.7,
     ),
-
     "minimalist": ReviewPersona(
         id="minimalist",
         name="Minimalist Reviewer",
@@ -263,7 +260,6 @@ Content:
         scoring_criteria="Simplicity and absence of unnecessary complexity",
         default_score_threshold=0.7,
     ),
-
     "downstream": ReviewPersona(
         id="downstream",
         name="Downstream Consumer",

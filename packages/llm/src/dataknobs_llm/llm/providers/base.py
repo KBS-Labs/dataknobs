@@ -2,10 +2,7 @@
 
 from typing import List, Union, Dict, Any
 
-from ..base import (
-    LLMMessage, LLMResponse,
-    AsyncLLMProvider, ModelCapability
-)
+from ..base import LLMMessage, LLMResponse, AsyncLLMProvider, ModelCapability
 
 
 class SyncProviderAdapter:
@@ -54,6 +51,7 @@ class SyncProviderAdapter:
     def initialize(self) -> None:
         """Initialize the provider synchronously."""
         import asyncio
+
         try:
             loop = asyncio.get_event_loop()
         except RuntimeError:
@@ -65,6 +63,7 @@ class SyncProviderAdapter:
     def close(self) -> None:
         """Close the provider synchronously."""
         import asyncio
+
         try:
             loop = asyncio.get_event_loop()
         except RuntimeError:
@@ -73,13 +72,10 @@ class SyncProviderAdapter:
 
         return loop.run_until_complete(self.async_provider.close())
 
-    def complete(
-        self,
-        messages: Union[str, List[LLMMessage]],
-        **kwargs
-    ) -> LLMResponse:
+    def complete(self, messages: Union[str, List[LLMMessage]], **kwargs) -> LLMResponse:
         """Generate completion synchronously."""
         import asyncio
+
         try:
             loop = asyncio.get_event_loop()
         except RuntimeError:
@@ -88,13 +84,10 @@ class SyncProviderAdapter:
 
         return loop.run_until_complete(self.async_provider.complete(messages, **kwargs))
 
-    def stream(
-        self,
-        messages: Union[str, List[LLMMessage]],
-        **kwargs
-    ):
+    def stream(self, messages: Union[str, List[LLMMessage]], **kwargs):
         """Stream completion synchronously."""
         import asyncio
+
         try:
             loop = asyncio.get_event_loop()
         except RuntimeError:
@@ -117,12 +110,11 @@ class SyncProviderAdapter:
             loop.run_until_complete(async_gen.aclose())
 
     def embed(
-        self,
-        texts: Union[str, List[str]],
-        **kwargs
+        self, texts: Union[str, List[str]], **kwargs
     ) -> Union[List[float], List[List[float]]]:
         """Generate embeddings synchronously."""
         import asyncio
+
         try:
             loop = asyncio.get_event_loop()
         except RuntimeError:
@@ -132,24 +124,25 @@ class SyncProviderAdapter:
         return loop.run_until_complete(self.async_provider.embed(texts, **kwargs))
 
     def function_call(
-        self,
-        messages: List[LLMMessage],
-        functions: List[Dict[str, Any]],
-        **kwargs
+        self, messages: List[LLMMessage], functions: List[Dict[str, Any]], **kwargs
     ) -> LLMResponse:
         """Make function call synchronously."""
         import asyncio
+
         try:
             loop = asyncio.get_event_loop()
         except RuntimeError:
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
 
-        return loop.run_until_complete(self.async_provider.function_call(messages, functions, **kwargs))
+        return loop.run_until_complete(
+            self.async_provider.function_call(messages, functions, **kwargs)
+        )
 
     def validate_model(self) -> bool:
         """Validate model synchronously."""
         import asyncio
+
         try:
             loop = asyncio.get_event_loop()
         except RuntimeError:

@@ -166,18 +166,14 @@ def test_like_underscore_is_a_false_positive(sync_db: object) -> None:
     like_hits = _ids(sync_db.search(Query(filters=[Filter("id", Operator.LIKE, "a_b/%")])))
     assert like_hits == {"a_b/1", "axb/1", "a_b/2"}  # axb/1 is the wildcard false positive
 
-    prefix_hits = _ids(
-        sync_db.search(Query(filters=[Filter("id", Operator.STARTS_WITH, "a_b/")]))
-    )
+    prefix_hits = _ids(sync_db.search(Query(filters=[Filter("id", Operator.STARTS_WITH, "a_b/")])))
     assert prefix_hits == {"a_b/1", "a_b/2"}  # literal: axb/1 excluded
 
 
 def test_starts_with_literal_percent(sync_db: object) -> None:
     """A ``%`` in the prefix is matched literally, not as a wildcard."""
     _seed_keys(sync_db, ["100%/done", "100x/done", "100%/pending"])
-    hits = _ids(
-        sync_db.search(Query(filters=[Filter("id", Operator.STARTS_WITH, "100%/")]))
-    )
+    hits = _ids(sync_db.search(Query(filters=[Filter("id", Operator.STARTS_WITH, "100%/")])))
     assert hits == {"100%/done", "100%/pending"}
 
 
@@ -213,9 +209,11 @@ def test_id_operators_resolve_to_storage_key(sync_db: object) -> None:
     assert _ids(
         sync_db.search(Query(filters=[Filter("id", Operator.IN, ["orders/1", "carts/1"])]))
     ) == {"orders/1", "carts/1"}
-    assert _ids(
-        sync_db.search(Query(filters=[Filter("id", Operator.STARTS_WITH, "orders/")]))
-    ) == {"orders/1", "orders/2", "orders/3"}
+    assert _ids(sync_db.search(Query(filters=[Filter("id", Operator.STARTS_WITH, "orders/")]))) == {
+        "orders/1",
+        "orders/2",
+        "orders/3",
+    }
 
 
 @pytest.mark.asyncio
@@ -271,9 +269,7 @@ def test_starts_with_on_data_field(sync_db: object) -> None:
     sync_db.create(Record({"path": "docs/intro"}, id="1"))
     sync_db.create(Record({"path": "docs/advanced"}, id="2"))
     sync_db.create(Record({"path": "images/logo"}, id="3"))
-    hits = _ids(
-        sync_db.search(Query(filters=[Filter("path", Operator.STARTS_WITH, "docs/")]))
-    )
+    hits = _ids(sync_db.search(Query(filters=[Filter("path", Operator.STARTS_WITH, "docs/")])))
     assert hits == {"1", "2"}
 
 
@@ -308,9 +304,7 @@ def test_data_id_field_is_shadowed_by_filter_id(sync_db: object) -> None:
     assert sync_db.search(Query(filters=[Filter("id", Operator.EQ, "node-abc")])) == []
 
     # Proof the filter resolved to the storage key: filtering on the key hits.
-    assert _ids(sync_db.search(Query(filters=[Filter("id", Operator.EQ, "row-1")]))) == {
-        "row-1"
-    }
+    assert _ids(sync_db.search(Query(filters=[Filter("id", Operator.EQ, "row-1")]))) == {"row-1"}
 
 
 @pytest.mark.asyncio
@@ -320,12 +314,10 @@ async def test_async_data_id_field_is_shadowed_by_filter_id(async_db: object) ->
     await async_db.create(Record({"id": "node-abc", "name": "widget"}, id="row-1"))
     await async_db.create(Record({"id": "node-xyz", "name": "gadget"}, id="row-2"))
 
-    assert (
-        await async_db.search(Query(filters=[Filter("id", Operator.EQ, "node-abc")]))
-    ) == []
-    assert _ids(
-        await async_db.search(Query(filters=[Filter("id", Operator.EQ, "row-1")]))
-    ) == {"row-1"}
+    assert (await async_db.search(Query(filters=[Filter("id", Operator.EQ, "node-abc")]))) == []
+    assert _ids(await async_db.search(Query(filters=[Filter("id", Operator.EQ, "row-1")]))) == {
+        "row-1"
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -365,10 +357,7 @@ async def test_async_sort_by_id_orders_by_storage_key(async_db: object) -> None:
     """Async twin of the sort parity pin — the async in-process backends order by
     the storage key when sorting on the reserved ``id`` field."""
     await _aseed_keys(async_db, ["c", "a", "b"])
-    asc = [
-        r.id
-        for r in await async_db.search(Query(sort_specs=[SortSpec("id", SortOrder.ASC)]))
-    ]
+    asc = [r.id for r in await async_db.search(Query(sort_specs=[SortSpec("id", SortOrder.ASC)]))]
     assert asc == ["a", "b", "c"]
 
 
@@ -402,9 +391,7 @@ def test_sql_pushdown_sqlite_range() -> None:
 def test_sql_pushdown_sqlite_empty_prefix_is_always_true() -> None:
     """An empty prefix on sqlite emits an always-true clause with no bound params."""
     qb = SQLQueryBuilder("records", dialect="sqlite", param_style="qmark")
-    sql, params = qb.build_search_query(
-        Query(filters=[Filter("id", Operator.STARTS_WITH, "")])
-    )
+    sql, params = qb.build_search_query(Query(filters=[Filter("id", Operator.STARTS_WITH, "")]))
     assert "IS NOT NULL" in sql
     assert params == []
 
@@ -464,9 +451,7 @@ def test_id_string_only_operators_are_unguarded() -> None:
     """The 'id' real column is always a string — no JSON type guard is added."""
     for dialect, style in (("postgres", "numeric"), ("sqlite", "qmark"), ("duckdb", "qmark")):
         qb = SQLQueryBuilder("records", dialect=dialect, param_style=style)
-        sql, _ = qb.build_search_query(
-            Query(filters=[Filter("id", Operator.STARTS_WITH, "x")])
-        )
+        sql, _ = qb.build_search_query(Query(filters=[Filter("id", Operator.STARTS_WITH, "x")]))
         assert "jsonb_typeof" not in sql
         assert "json_type" not in sql
 
@@ -482,19 +467,19 @@ def test_string_only_operators_skip_non_string_values(sync_db: object) -> None:
     """
     sync_db.create(Record({"code": 500}, id="numeric"))
     sync_db.create(Record({"code": "500-alpha"}, id="string"))
-    assert _ids(
-        sync_db.search(Query(filters=[Filter("code", Operator.STARTS_WITH, "500")]))
-    ) == {"string"}
-    assert _ids(
-        sync_db.search(Query(filters=[Filter("code", Operator.LIKE, "500%")]))
-    ) == {"string"}
+    assert _ids(sync_db.search(Query(filters=[Filter("code", Operator.STARTS_WITH, "500")]))) == {
+        "string"
+    }
+    assert _ids(sync_db.search(Query(filters=[Filter("code", Operator.LIKE, "500%")]))) == {
+        "string"
+    }
     # NOT_LIKE polarity: the numeric value must NOT resurface just because its
     # text form ('500') is unlike 'zzz%'. A non-string value never matches a
     # string-only operator in *either* direction (in-memory returns False for
     # NOT_LIKE too), so only the genuinely-unlike string is returned.
-    assert _ids(
-        sync_db.search(Query(filters=[Filter("code", Operator.NOT_LIKE, "zzz%")]))
-    ) == {"string"}
+    assert _ids(sync_db.search(Query(filters=[Filter("code", Operator.NOT_LIKE, "zzz%")]))) == {
+        "string"
+    }
 
 
 # ---------------------------------------------------------------------------

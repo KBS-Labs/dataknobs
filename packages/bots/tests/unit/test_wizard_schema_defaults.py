@@ -40,9 +40,7 @@ def wizard_reasoning(minimal_wizard_config: dict[str, Any]) -> WizardReasoning:
 class TestStripSchemaDefaults:
     """Tests for _strip_schema_defaults method."""
 
-    def test_strip_simple_defaults(
-        self, wizard_reasoning: WizardReasoning
-    ) -> None:
+    def test_strip_simple_defaults(self, wizard_reasoning: WizardReasoning) -> None:
         """Test stripping defaults from simple properties."""
         schema: dict[str, Any] = {
             "type": "object",
@@ -57,18 +55,14 @@ class TestStripSchemaDefaults:
         assert "default" not in result["properties"]["provider"]
         assert result["properties"]["model"]["type"] == "string"
 
-    def test_strip_nested_defaults(
-        self, wizard_reasoning: WizardReasoning
-    ) -> None:
+    def test_strip_nested_defaults(self, wizard_reasoning: WizardReasoning) -> None:
         """Test stripping defaults from nested object properties."""
         schema: dict[str, Any] = {
             "type": "object",
             "properties": {
                 "config": {
                     "type": "object",
-                    "properties": {
-                        "temperature": {"type": "number", "default": 0.7}
-                    },
+                    "properties": {"temperature": {"type": "number", "default": 0.7}},
                 }
             },
         }
@@ -78,9 +72,7 @@ class TestStripSchemaDefaults:
         nested_temp = result["properties"]["config"]["properties"]["temperature"]
         assert "default" not in nested_temp
 
-    def test_strip_array_item_defaults(
-        self, wizard_reasoning: WizardReasoning
-    ) -> None:
+    def test_strip_array_item_defaults(self, wizard_reasoning: WizardReasoning) -> None:
         """Test stripping defaults from array item schemas."""
         schema: dict[str, Any] = {
             "type": "object",
@@ -89,9 +81,7 @@ class TestStripSchemaDefaults:
                     "type": "array",
                     "items": {
                         "type": "object",
-                        "properties": {
-                            "enabled": {"type": "boolean", "default": True}
-                        },
+                        "properties": {"enabled": {"type": "boolean", "default": True}},
                     },
                 }
             },
@@ -102,9 +92,7 @@ class TestStripSchemaDefaults:
         item_enabled = result["properties"]["items"]["items"]["properties"]["enabled"]
         assert "default" not in item_enabled
 
-    def test_original_schema_unchanged(
-        self, wizard_reasoning: WizardReasoning
-    ) -> None:
+    def test_original_schema_unchanged(self, wizard_reasoning: WizardReasoning) -> None:
         """Test that original schema is not modified."""
         schema: dict[str, Any] = {
             "type": "object",
@@ -116,23 +104,17 @@ class TestStripSchemaDefaults:
         # Original should be unchanged
         assert schema["properties"]["value"]["default"] == "test"
 
-    def test_strip_allof_defaults(
-        self, wizard_reasoning: WizardReasoning
-    ) -> None:
+    def test_strip_allof_defaults(self, wizard_reasoning: WizardReasoning) -> None:
         """Test stripping defaults from allOf schemas."""
         schema: dict[str, Any] = {
-            "allOf": [
-                {"properties": {"field": {"type": "string", "default": "x"}}}
-            ]
+            "allOf": [{"properties": {"field": {"type": "string", "default": "x"}}}]
         }
 
         result = wizard_reasoning._extraction._strip_schema_defaults(schema)
 
         assert "default" not in result["allOf"][0]["properties"]["field"]
 
-    def test_strip_anyof_defaults(
-        self, wizard_reasoning: WizardReasoning
-    ) -> None:
+    def test_strip_anyof_defaults(self, wizard_reasoning: WizardReasoning) -> None:
         """Test stripping defaults from anyOf schemas."""
         schema: dict[str, Any] = {
             "anyOf": [
@@ -146,9 +128,7 @@ class TestStripSchemaDefaults:
         assert "default" not in result["anyOf"][0]["properties"]["a"]
         assert "default" not in result["anyOf"][1]["properties"]["b"]
 
-    def test_strip_oneof_defaults(
-        self, wizard_reasoning: WizardReasoning
-    ) -> None:
+    def test_strip_oneof_defaults(self, wizard_reasoning: WizardReasoning) -> None:
         """Test stripping defaults from oneOf schemas."""
         schema: dict[str, Any] = {
             "oneOf": [
@@ -160,9 +140,7 @@ class TestStripSchemaDefaults:
 
         assert "default" not in result["oneOf"][0]["properties"]["x"]
 
-    def test_preserves_other_schema_properties(
-        self, wizard_reasoning: WizardReasoning
-    ) -> None:
+    def test_preserves_other_schema_properties(self, wizard_reasoning: WizardReasoning) -> None:
         """Test that non-default properties are preserved."""
         schema: dict[str, Any] = {
             "type": "object",
@@ -187,9 +165,7 @@ class TestStripSchemaDefaults:
         assert prop["maxLength"] == 100
         assert result["required"] == ["name"]
 
-    def test_schema_without_defaults(
-        self, wizard_reasoning: WizardReasoning
-    ) -> None:
+    def test_schema_without_defaults(self, wizard_reasoning: WizardReasoning) -> None:
         """Test schema with no defaults returns equivalent copy."""
         schema: dict[str, Any] = {
             "type": "object",
@@ -206,9 +182,7 @@ class TestStripSchemaDefaults:
         # Should be a copy, not the same object
         assert result is not schema
 
-    def test_empty_properties(
-        self, wizard_reasoning: WizardReasoning
-    ) -> None:
+    def test_empty_properties(self, wizard_reasoning: WizardReasoning) -> None:
         """Test schema with empty properties dict."""
         schema: dict[str, Any] = {"type": "object", "properties": {}}
 
@@ -216,9 +190,7 @@ class TestStripSchemaDefaults:
 
         assert result["properties"] == {}
 
-    def test_deeply_nested_defaults(
-        self, wizard_reasoning: WizardReasoning
-    ) -> None:
+    def test_deeply_nested_defaults(self, wizard_reasoning: WizardReasoning) -> None:
         """Test stripping defaults from deeply nested structures."""
         schema: dict[str, Any] = {
             "type": "object",
@@ -242,15 +214,11 @@ class TestStripSchemaDefaults:
 
         result = wizard_reasoning._extraction._strip_schema_defaults(schema)
 
-        level3 = result["properties"]["level1"]["properties"]["level2"][
-            "properties"
-        ]["level3"]
+        level3 = result["properties"]["level1"]["properties"]["level2"]["properties"]["level3"]
         assert "default" not in level3
         assert level3["type"] == "string"
 
-    def test_multiple_defaults_same_level(
-        self, wizard_reasoning: WizardReasoning
-    ) -> None:
+    def test_multiple_defaults_same_level(self, wizard_reasoning: WizardReasoning) -> None:
         """Test stripping multiple defaults at the same nesting level."""
         schema: dict[str, Any] = {
             "type": "object",
@@ -419,9 +387,7 @@ class TestSchemaDefaultsIntegration:
 class TestApplySchemaDefaults:
     """Tests for _apply_schema_defaults method."""
 
-    def test_applies_missing_defaults(
-        self, wizard_reasoning: WizardReasoning
-    ) -> None:
+    def test_applies_missing_defaults(self, wizard_reasoning: WizardReasoning) -> None:
         """Defaults are applied for properties not in wizard data."""
         state = WizardState(
             current_stage="start",
@@ -449,9 +415,7 @@ class TestApplySchemaDefaults:
         # Existing value untouched
         assert state.data["topic"] == "biology"
 
-    def test_does_not_overwrite_existing_values(
-        self, wizard_reasoning: WizardReasoning
-    ) -> None:
+    def test_does_not_overwrite_existing_values(self, wizard_reasoning: WizardReasoning) -> None:
         """Existing non-None values are preserved."""
         state = WizardState(
             current_stage="start",
@@ -471,9 +435,7 @@ class TestApplySchemaDefaults:
         assert applied == set()
         assert state.data["difficulty"] == "hard"
 
-    def test_applies_default_when_value_is_none(
-        self, wizard_reasoning: WizardReasoning
-    ) -> None:
+    def test_applies_default_when_value_is_none(self, wizard_reasoning: WizardReasoning) -> None:
         """Default is applied when value is explicitly None."""
         state = WizardState(
             current_stage="start",
@@ -493,9 +455,7 @@ class TestApplySchemaDefaults:
         assert applied == {"difficulty"}
         assert state.data["difficulty"] == "medium"
 
-    def test_no_schema_returns_empty(
-        self, wizard_reasoning: WizardReasoning
-    ) -> None:
+    def test_no_schema_returns_empty(self, wizard_reasoning: WizardReasoning) -> None:
         """Stage without schema returns empty set."""
         state = WizardState(current_stage="start", data={})
         stage: dict[str, Any] = {}
@@ -504,9 +464,7 @@ class TestApplySchemaDefaults:
 
         assert applied == set()
 
-    def test_no_defaults_in_schema(
-        self, wizard_reasoning: WizardReasoning
-    ) -> None:
+    def test_no_defaults_in_schema(self, wizard_reasoning: WizardReasoning) -> None:
         """Schema without any defaults returns empty set."""
         state = WizardState(current_stage="start", data={})
         stage: dict[str, Any] = {
@@ -522,9 +480,7 @@ class TestApplySchemaDefaults:
 
         assert applied == set()
 
-    def test_boolean_default_false(
-        self, wizard_reasoning: WizardReasoning
-    ) -> None:
+    def test_boolean_default_false(self, wizard_reasoning: WizardReasoning) -> None:
         """Boolean false default is applied (not treated as missing)."""
         state = WizardState(current_stage="start", data={})
         stage: dict[str, Any] = {
@@ -541,9 +497,7 @@ class TestApplySchemaDefaults:
         assert applied == {"enabled"}
         assert state.data["enabled"] is False
 
-    def test_integer_default_zero(
-        self, wizard_reasoning: WizardReasoning
-    ) -> None:
+    def test_integer_default_zero(self, wizard_reasoning: WizardReasoning) -> None:
         """Integer zero default is applied (not treated as missing)."""
         state = WizardState(current_stage="start", data={})
         stage: dict[str, Any] = {

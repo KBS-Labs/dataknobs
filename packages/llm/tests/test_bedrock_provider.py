@@ -72,10 +72,12 @@ class _Tool:
 class TestAdaptMessages:
     def test_plain_user_and_assistant(self) -> None:
         adapter = BedrockConverseAdapter()
-        system, messages = adapter.adapt_messages([
-            LLMMessage(role="user", content="hello"),
-            LLMMessage(role="assistant", content="hi there"),
-        ])
+        system, messages = adapter.adapt_messages(
+            [
+                LLMMessage(role="user", content="hello"),
+                LLMMessage(role="assistant", content="hi there"),
+            ]
+        )
         assert system == []
         assert messages == [
             {"role": "user", "content": [{"text": "hello"}]},
@@ -99,15 +101,17 @@ class TestAdaptMessages:
 
     def test_assistant_tool_calls(self) -> None:
         adapter = BedrockConverseAdapter()
-        _, messages = adapter.adapt_messages([
-            LLMMessage(
-                role="assistant",
-                content="let me look that up",
-                tool_calls=[
-                    ToolCall(name="search", parameters={"query": "x"}, id="t1"),
-                ],
-            ),
-        ])
+        _, messages = adapter.adapt_messages(
+            [
+                LLMMessage(
+                    role="assistant",
+                    content="let me look that up",
+                    tool_calls=[
+                        ToolCall(name="search", parameters={"query": "x"}, id="t1"),
+                    ],
+                ),
+            ]
+        )
         assert messages == [
             {
                 "role": "assistant",
@@ -126,22 +130,26 @@ class TestAdaptMessages:
 
     def test_tool_call_without_id_falls_back_to_name(self) -> None:
         adapter = BedrockConverseAdapter()
-        _, messages = adapter.adapt_messages([
-            LLMMessage(
-                role="assistant",
-                content="",
-                tool_calls=[ToolCall(name="search", parameters={})],
-            ),
-        ])
+        _, messages = adapter.adapt_messages(
+            [
+                LLMMessage(
+                    role="assistant",
+                    content="",
+                    tool_calls=[ToolCall(name="search", parameters={})],
+                ),
+            ]
+        )
         tool_use = messages[0]["content"][0]["toolUse"]
         assert tool_use["toolUseId"] == "search"
 
     def test_consecutive_tool_results_consolidated(self) -> None:
         adapter = BedrockConverseAdapter()
-        _, messages = adapter.adapt_messages([
-            LLMMessage(role="tool", content="result A", tool_call_id="t1"),
-            LLMMessage(role="tool", content="result B", tool_call_id="t2"),
-        ])
+        _, messages = adapter.adapt_messages(
+            [
+                LLMMessage(role="tool", content="result A", tool_call_id="t1"),
+                LLMMessage(role="tool", content="result B", tool_call_id="t2"),
+            ]
+        )
         # Converse rejects consecutive same-role messages: both tool results
         # must land in a single user message.
         assert len(messages) == 1
@@ -153,10 +161,12 @@ class TestAdaptMessages:
 
     def test_tool_result_after_user_starts_new_message(self) -> None:
         adapter = BedrockConverseAdapter()
-        _, messages = adapter.adapt_messages([
-            LLMMessage(role="user", content="hi"),
-            LLMMessage(role="tool", content="result", tool_call_id="t1"),
-        ])
+        _, messages = adapter.adapt_messages(
+            [
+                LLMMessage(role="user", content="hi"),
+                LLMMessage(role="tool", content="result", tool_call_id="t1"),
+            ]
+        )
         assert len(messages) == 2
         assert messages[0]["content"] == [{"text": "hi"}]
         assert messages[1]["content"][0]["toolResult"]["toolUseId"] == "t1"
@@ -213,13 +223,15 @@ class TestAdaptTools:
 
     def test_raw_functions_to_toolspec(self) -> None:
         adapter = BedrockConverseAdapter()
-        specs = adapter.adapt_raw_functions([
-            {
-                "name": "lookup",
-                "description": "look it up",
-                "parameters": {"type": "object", "properties": {}},
-            }
-        ])
+        specs = adapter.adapt_raw_functions(
+            [
+                {
+                    "name": "lookup",
+                    "description": "look it up",
+                    "parameters": {"type": "object", "properties": {}},
+                }
+            ]
+        )
         assert specs[0]["toolSpec"]["name"] == "lookup"
         assert specs[0]["toolSpec"]["inputSchema"]["json"] == {
             "type": "object",
@@ -239,9 +251,7 @@ class TestAdaptResponse:
                 "totalTokens": 15,
             },
         }
-        parsed = adapter.adapt_response(
-            response, model="anthropic.claude-3-haiku-20240307-v1:0"
-        )
+        parsed = adapter.adapt_response(response, model="anthropic.claude-3-haiku-20240307-v1:0")
         assert parsed.content == "the answer"
         # Bedrock runs Claude → finish_reason normalized onto the canonical
         # vocabulary, raw stopReason preserved on metadata.
@@ -297,10 +307,7 @@ class TestHelpers:
             _canonical_model_id("us.anthropic.claude-3-haiku-20240307-v1:0")
             == "anthropic.claude-3-haiku-20240307-v1:0"
         )
-        assert (
-            _canonical_model_id("amazon.titan-embed-text-v2:0")
-            == "amazon.titan-embed-text-v2:0"
-        )
+        assert _canonical_model_id("amazon.titan-embed-text-v2:0") == "amazon.titan-embed-text-v2:0"
 
 
 class TestCapabilities:
@@ -320,17 +327,13 @@ class TestCapabilities:
         """Fable 5 on Bedrock carries no opus/sonnet/haiku marker → its vision
         support was mis-detected until the family name was listed.
         """
-        provider = BedrockProvider(
-            LLMConfig(provider="bedrock", model="anthropic.claude-fable-5")
-        )
+        provider = BedrockProvider(LLMConfig(provider="bedrock", model="anthropic.claude-fable-5"))
         caps = provider.get_capabilities()
         assert ModelCapability.VISION in caps
         assert ModelCapability.FUNCTION_CALLING in caps
 
     def test_mythos_5_has_vision(self) -> None:
-        provider = BedrockProvider(
-            LLMConfig(provider="bedrock", model="anthropic.claude-mythos-5")
-        )
+        provider = BedrockProvider(LLMConfig(provider="bedrock", model="anthropic.claude-mythos-5"))
         caps = provider.get_capabilities()
         assert ModelCapability.VISION in caps
 
@@ -363,20 +366,14 @@ class TestCapabilities:
 
     def test_cohere_embed_model_excludes_chat_capabilities(self) -> None:
         """Cohere embed models are embed-only too (``-embed-`` / prefix)."""
-        provider = BedrockProvider(
-            LLMConfig(provider="bedrock", model="cohere.embed-english-v3")
-        )
+        provider = BedrockProvider(LLMConfig(provider="bedrock", model="cohere.embed-english-v3"))
         caps = provider.get_capabilities()
         assert caps == [ModelCapability.EMBEDDINGS]
 
     @pytest.mark.asyncio
     async def test_validate_model_heuristic(self) -> None:
-        good = BedrockProvider(
-            LLMConfig(provider="bedrock", model="meta.llama3-8b-instruct-v1:0")
-        )
-        bad = BedrockProvider(
-            LLMConfig(provider="bedrock", model="gpt-4")
-        )
+        good = BedrockProvider(LLMConfig(provider="bedrock", model="meta.llama3-8b-instruct-v1:0"))
+        bad = BedrockProvider(LLMConfig(provider="bedrock", model="gpt-4"))
         assert await good.validate_model() is True
         assert await bad.validate_model() is False
 
@@ -394,9 +391,7 @@ class TestGuardrailConfig:
                 },
             )
         )
-        request = provider._build_converse_request(
-            "hi", provider.config, None
-        )
+        request = provider._build_converse_request("hi", provider.config, None)
         assert request["guardrailConfig"] == {
             "guardrailIdentifier": "gr-1",
             "guardrailVersion": "DRAFT",
@@ -413,8 +408,6 @@ class TestGuardrailConfig:
         )
         request = provider._build_converse_request("hi", provider.config, None)
         assert "guardrailConfig" not in request
-
-
 
 
 class TestCompleteBoundary:
@@ -448,9 +441,7 @@ class TestCompleteBoundary:
         # request was built through the real path
         sent = client.converse_calls[0]
         assert sent["modelId"] == "anthropic.claude-3-haiku-20240307-v1:0"
-        assert sent["messages"] == [
-            {"role": "user", "content": [{"text": "hello"}]}
-        ]
+        assert sent["messages"] == [{"role": "user", "content": [{"text": "hello"}]}]
         assert sent["inferenceConfig"]["temperature"] == 0.2
 
     @pytest.mark.asyncio
@@ -513,9 +504,7 @@ class TestCompleteBoundary:
         )
         response = await provider.complete("find cats", tools=[_Tool("search")])
         assert response.tool_calls[0].name == "search"
-        assert client.converse_calls[0]["toolConfig"]["tools"][0][
-            "toolSpec"
-        ]["name"] == "search"
+        assert client.converse_calls[0]["toolConfig"]["tools"][0]["toolSpec"]["name"] == "search"
 
 
 class TestStreamBoundary:
@@ -523,20 +512,28 @@ class TestStreamBoundary:
     async def test_stream_text_and_final(self) -> None:
         client = _StubBedrockClient(
             stream_events=[
-                {"contentBlockDelta": {
-                    "contentBlockIndex": 0,
-                    "delta": {"text": "Hel"},
-                }},
-                {"contentBlockDelta": {
-                    "contentBlockIndex": 0,
-                    "delta": {"text": "lo"},
-                }},
+                {
+                    "contentBlockDelta": {
+                        "contentBlockIndex": 0,
+                        "delta": {"text": "Hel"},
+                    }
+                },
+                {
+                    "contentBlockDelta": {
+                        "contentBlockIndex": 0,
+                        "delta": {"text": "lo"},
+                    }
+                },
                 {"messageStop": {"stopReason": "end_turn"}},
-                {"metadata": {"usage": {
-                    "inputTokens": 4,
-                    "outputTokens": 1,
-                    "totalTokens": 5,
-                }}},
+                {
+                    "metadata": {
+                        "usage": {
+                            "inputTokens": 4,
+                            "outputTokens": 1,
+                            "totalTokens": 5,
+                        }
+                    }
+                },
             ]
         )
         provider = _stub_provider(
@@ -560,18 +557,24 @@ class TestStreamBoundary:
     async def test_stream_tool_use_accumulation(self) -> None:
         client = _StubBedrockClient(
             stream_events=[
-                {"contentBlockStart": {
-                    "contentBlockIndex": 0,
-                    "start": {"toolUse": {"toolUseId": "u1", "name": "search"}},
-                }},
-                {"contentBlockDelta": {
-                    "contentBlockIndex": 0,
-                    "delta": {"toolUse": {"input": '{"query":'}},
-                }},
-                {"contentBlockDelta": {
-                    "contentBlockIndex": 0,
-                    "delta": {"toolUse": {"input": '"cats"}'}},
-                }},
+                {
+                    "contentBlockStart": {
+                        "contentBlockIndex": 0,
+                        "start": {"toolUse": {"toolUseId": "u1", "name": "search"}},
+                    }
+                },
+                {
+                    "contentBlockDelta": {
+                        "contentBlockIndex": 0,
+                        "delta": {"toolUse": {"input": '{"query":'}},
+                    }
+                },
+                {
+                    "contentBlockDelta": {
+                        "contentBlockIndex": 0,
+                        "delta": {"toolUse": {"input": '"cats"}'}},
+                    }
+                },
                 {"messageStop": {"stopReason": "tool_use"}},
             ]
         )
@@ -600,9 +603,7 @@ class TestStreamBoundary:
         a tight 5s) would kill the stream on any inter-token pause > 5s. The
         streaming client must default to boto's read timeout (``None``) instead.
         """
-        client = _StubBedrockClient(
-            stream_events=[{"messageStop": {"stopReason": "end_turn"}}]
-        )
+        client = _StubBedrockClient(stream_events=[{"messageStop": {"stopReason": "end_turn"}}])
         provider = _stub_provider(
             LLMConfig(
                 provider="bedrock",
@@ -620,9 +621,7 @@ class TestStreamBoundary:
     @pytest.mark.asyncio
     async def test_stream_read_timeout_from_options(self) -> None:
         """``options["stream_read_timeout"]`` sets the inter-chunk timeout."""
-        client = _StubBedrockClient(
-            stream_events=[{"messageStop": {"stopReason": "end_turn"}}]
-        )
+        client = _StubBedrockClient(stream_events=[{"messageStop": {"stopReason": "end_turn"}}])
         provider = _stub_provider(
             LLMConfig(
                 provider="bedrock",
@@ -640,9 +639,7 @@ class TestStreamBoundary:
 class TestEmbedBoundary:
     @pytest.mark.asyncio
     async def test_titan_single(self) -> None:
-        client = _StubBedrockClient(
-            invoke_payloads=[{"embedding": [0.1, 0.2, 0.3]}]
-        )
+        client = _StubBedrockClient(invoke_payloads=[{"embedding": [0.1, 0.2, 0.3]}])
         provider = _stub_provider(
             LLMConfig(
                 provider="bedrock",
@@ -667,9 +664,7 @@ class TestEmbedBoundary:
             ]
         )
         provider = _stub_provider(
-            LLMConfig(
-                provider="bedrock", model="amazon.titan-embed-text-v2:0"
-            ),
+            LLMConfig(provider="bedrock", model="amazon.titan-embed-text-v2:0"),
             client,
         )
         vectors = await provider.embed(["a", "b"])
@@ -678,13 +673,9 @@ class TestEmbedBoundary:
 
     @pytest.mark.asyncio
     async def test_cohere_batch(self) -> None:
-        client = _StubBedrockClient(
-            invoke_payloads=[{"embeddings": [[0.1], [0.2]]}]
-        )
+        client = _StubBedrockClient(invoke_payloads=[{"embeddings": [[0.1], [0.2]]}])
         provider = _stub_provider(
-            LLMConfig(
-                provider="bedrock", model="cohere.embed-english-v3"
-            ),
+            LLMConfig(provider="bedrock", model="cohere.embed-english-v3"),
             client,
         )
         vectors = await provider.embed(["a", "b"])
@@ -831,9 +822,7 @@ class TestEmbedBoundary:
     @pytest.mark.asyncio
     async def test_unknown_embedding_family_raises(self) -> None:
         provider = _stub_provider(
-            LLMConfig(
-                provider="bedrock", model="anthropic.claude-3-haiku-20240307-v1:0"
-            ),
+            LLMConfig(provider="bedrock", model="anthropic.claude-3-haiku-20240307-v1:0"),
             _StubBedrockClient(),
         )
         with pytest.raises(ValueError, match="Unsupported Bedrock embedding"):
@@ -876,9 +865,7 @@ class TestFunctionCallDeprecated:
         assert response.function_call == {"name": "lookup", "arguments": {"q": "x"}}
 
     @pytest.mark.asyncio
-    async def test_truncated_tool_call_warns(
-        self, caplog: pytest.LogCaptureFixture
-    ) -> None:
+    async def test_truncated_tool_call_warns(self, caplog: pytest.LogCaptureFixture) -> None:
         """A truncated tool-call turn on this path must fire the warning.
 
         Reproduce-first: FAILS when function_call() returns ``parsed`` directly
@@ -929,9 +916,7 @@ class TestObservability:
     """The provider logs sanitized per-call diagnostics (no credentials)."""
 
     @pytest.mark.asyncio
-    async def test_complete_emits_debug_log(
-        self, caplog: pytest.LogCaptureFixture
-    ) -> None:
+    async def test_complete_emits_debug_log(self, caplog: pytest.LogCaptureFixture) -> None:
         client = _StubBedrockClient(
             converse_response={
                 "output": {"message": {"content": [{"text": "ok"}]}},
@@ -950,28 +935,18 @@ class TestObservability:
             ),
             client,
         )
-        with caplog.at_level(
-            logging.DEBUG, logger="dataknobs_llm.llm.providers.bedrock"
-        ):
+        with caplog.at_level(logging.DEBUG, logger="dataknobs_llm.llm.providers.bedrock"):
             await provider.complete("hi")
-        assert any(
-            "converse complete" in r.getMessage() for r in caplog.records
-        )
+        assert any("converse complete" in r.getMessage() for r in caplog.records)
 
     @pytest.mark.asyncio
-    async def test_embed_emits_debug_log(
-        self, caplog: pytest.LogCaptureFixture
-    ) -> None:
+    async def test_embed_emits_debug_log(self, caplog: pytest.LogCaptureFixture) -> None:
         client = _StubBedrockClient(invoke_payloads=[{"embedding": [0.1]}])
         provider = _stub_provider(
-            LLMConfig(
-                provider="bedrock", model="amazon.titan-embed-text-v2:0"
-            ),
+            LLMConfig(provider="bedrock", model="amazon.titan-embed-text-v2:0"),
             client,
         )
-        with caplog.at_level(
-            logging.DEBUG, logger="dataknobs_llm.llm.providers.bedrock"
-        ):
+        with caplog.at_level(logging.DEBUG, logger="dataknobs_llm.llm.providers.bedrock"):
             await provider.embed("hello")
         assert any("embed complete" in r.getMessage() for r in caplog.records)
 
@@ -981,10 +956,12 @@ class TestObservability:
     ) -> None:
         client = _StubBedrockClient(
             stream_events=[
-                {"contentBlockDelta": {
-                    "contentBlockIndex": 0,
-                    "delta": {"text": "hi"},
-                }},
+                {
+                    "contentBlockDelta": {
+                        "contentBlockIndex": 0,
+                        "delta": {"text": "hi"},
+                    }
+                },
                 {"messageStop": {"stopReason": "end_turn"}},
             ]
         )
@@ -995,13 +972,9 @@ class TestObservability:
             ),
             client,
         )
-        with caplog.at_level(
-            logging.DEBUG, logger="dataknobs_llm.llm.providers.bedrock"
-        ):
+        with caplog.at_level(logging.DEBUG, logger="dataknobs_llm.llm.providers.bedrock"):
             _ = [c async for c in provider.stream_complete("hi")]
-        done = [
-            r for r in caplog.records if "converse_stream done" in r.getMessage()
-        ]
+        done = [r for r in caplog.records if "converse_stream done" in r.getMessage()]
         assert done and "latency_ms" in done[0].getMessage()
 
 

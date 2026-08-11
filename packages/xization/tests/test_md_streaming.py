@@ -71,7 +71,7 @@ Body text."""
 Body text for testing file processing."""
 
         # Create a temporary file
-        with NamedTemporaryFile(mode='w', suffix='.md', delete=False, encoding='utf-8') as f:
+        with NamedTemporaryFile(mode="w", suffix=".md", delete=False, encoding="utf-8") as f:
             f.write(markdown)
             temp_path = f.name
 
@@ -232,7 +232,7 @@ class TestStreamMarkdownFileFunction:
         markdown = """# Title
 Body text."""
 
-        with NamedTemporaryFile(mode='w', suffix='.md', delete=False, encoding='utf-8') as f:
+        with NamedTemporaryFile(mode="w", suffix=".md", delete=False, encoding="utf-8") as f:
             f.write(markdown)
             temp_path = f.name
 
@@ -247,16 +247,18 @@ Body text."""
         markdown = """# Title
 Body text."""
 
-        with NamedTemporaryFile(mode='w', suffix='.md', delete=False, encoding='utf-8') as f:
+        with NamedTemporaryFile(mode="w", suffix=".md", delete=False, encoding="utf-8") as f:
             f.write(markdown)
             temp_path = f.name
 
         try:
-            chunks = list(stream_markdown_file(
-                temp_path,
-                max_chunk_size=50,
-                heading_inclusion=HeadingInclusion.IN_TEXT,
-            ))
+            chunks = list(
+                stream_markdown_file(
+                    temp_path,
+                    max_chunk_size=50,
+                    heading_inclusion=HeadingInclusion.IN_TEXT,
+                )
+            )
             assert len(chunks) > 0
             assert "Title" in chunks[0].text
         finally:
@@ -279,11 +281,13 @@ Body text."""
         markdown = """# Title
 Body text."""
 
-        chunks = list(stream_markdown_string(
-            markdown,
-            max_chunk_size=50,
-            heading_inclusion=HeadingInclusion.BOTH,
-        ))
+        chunks = list(
+            stream_markdown_string(
+                markdown,
+                max_chunk_size=50,
+                heading_inclusion=HeadingInclusion.BOTH,
+            )
+        )
 
         assert len(chunks) > 0
         # Should have headings in both text and metadata

@@ -9,9 +9,7 @@ from .base import ReasoningStrategy
 from .simple_config import SimpleReasoningConfig
 
 
-class SimpleReasoning(
-    StructuredConfigConsumer[SimpleReasoningConfig], ReasoningStrategy
-):
+class SimpleReasoning(StructuredConfigConsumer[SimpleReasoningConfig], ReasoningStrategy):
     """Simple reasoning strategy that makes direct LLM calls.
 
     This is the most straightforward strategy - it simply passes

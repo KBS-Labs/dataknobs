@@ -152,17 +152,13 @@ class _CustomAttrBad:
 
 def test_config_attr_override_passes() -> None:
     """``config_attr`` retargets which instance attribute is audited."""
-    assert_config_attribute_access_matches_dataclass(
-        _CustomAttrConsumer, _Cfg, config_attr="cfg"
-    )
+    assert_config_attribute_access_matches_dataclass(_CustomAttrConsumer, _Cfg, config_attr="cfg")
 
 
 def test_config_attr_override_fires() -> None:
     """With a retargeted attr, a drifted read off it is still caught."""
     with pytest.raises(AssertionError, match="nope"):
-        assert_config_attribute_access_matches_dataclass(
-            _CustomAttrBad, _Cfg, config_attr="cfg"
-        )
+        assert_config_attribute_access_matches_dataclass(_CustomAttrBad, _Cfg, config_attr="cfg")
 
 
 def test_default_config_attr_ignores_other_attrs() -> None:
@@ -202,9 +198,7 @@ def test_config_attr_scope_is_isolated_to_default() -> None:
     ``ghost_b`` (which lives off the unaudited ``cfg`` attr).
     """
     with pytest.raises(AssertionError) as excinfo:
-        assert_config_attribute_access_matches_dataclass(
-            _DualScopeConsumer, _Cfg
-        )
+        assert_config_attribute_access_matches_dataclass(_DualScopeConsumer, _Cfg)
     message = str(excinfo.value)
     assert "ghost_a" in message
     assert "ghost_b" not in message
@@ -234,6 +228,4 @@ class _NotADataclass:
 def test_non_dataclass_config_rejected() -> None:
     """Passing a non-dataclass config type raises a clear error."""
     with pytest.raises(AssertionError, match="not a dataclass"):
-        assert_config_attribute_access_matches_dataclass(
-            _GoodConsumer, _NotADataclass
-        )
+        assert_config_attribute_access_matches_dataclass(_GoodConsumer, _NotADataclass)

@@ -16,6 +16,7 @@ Pure load-time YAML transformation. ``intent_confirm:`` expands to:
 Zero new runtime dispatch — every step runs through the existing
 wizard machinery.
 """
+
 from __future__ import annotations
 
 import logging
@@ -96,9 +97,7 @@ class IntentConfirmSynthesizer:
         # 2) Optional clarification template (consulted by template-mode
         #    response branch on re-render when set)
         if on_no_match.get("clarification_template"):
-            stage["clarification_template"] = on_no_match[
-                "clarification_template"
-            ]
+            stage["clarification_template"] = on_no_match["clarification_template"]
 
         # 3) intent_detection block (consumed by classifier-backend dispatch)
         intent_detection_intents: list[dict[str, Any]] = []
@@ -117,8 +116,7 @@ class IntentConfirmSynthesizer:
         # is per-stage rather than per-intent.
         block_llm_fallback = block.get("llm_fallback", False)
         per_intent_llm_fallback = any(
-            isinstance(intent, dict) and intent.get("llm_fallback")
-            for intent in intents.values()
+            isinstance(intent, dict) and intent.get("llm_fallback") for intent in intents.values()
         )
         if block_llm_fallback or per_intent_llm_fallback:
             classifier_name = "composite"
@@ -162,13 +160,12 @@ class IntentConfirmSynthesizer:
             for name, intent in intents.items()
         ]
         if on_no_match.get("target"):
-            transitions.append({
-                "target": on_no_match["target"],
-                "condition": (
-                    "not any(data.get(k) for k in "
-                    f"{sorted(intents.keys())!r})"
-                ),
-            })
+            transitions.append(
+                {
+                    "target": on_no_match["target"],
+                    "condition": (f"not any(data.get(k) for k in {sorted(intents.keys())!r})"),
+                }
+            )
         stage["transitions"] = transitions
 
         # 6) Consume the original primitive block. Downstream code

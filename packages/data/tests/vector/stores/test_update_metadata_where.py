@@ -54,8 +54,7 @@ logger = logging.getLogger(__name__)
 _pgvector_marks = [
     requires_postgres,
     pytest.mark.skipif(
-        os.environ.get("TEST_POSTGRES", "").lower() != "true"
-        or not ASYNCPG_AVAILABLE,
+        os.environ.get("TEST_POSTGRES", "").lower() != "true" or not ASYNCPG_AVAILABLE,
         reason="pgvector tests require TEST_POSTGRES=true and asyncpg",
     ),
 ]
@@ -137,16 +136,12 @@ def _make_store(
     if backend == "memory":
         return MemoryVectorStore({"dimensions": 4, **extra})
     if backend == "faiss":
-        return FaissVectorStore(
-            {"dimensions": 4, "metric": "cosine", **extra}
-        )
+        return FaissVectorStore({"dimensions": 4, "metric": "cosine", **extra})
     if backend == "chroma":
         return ChromaVectorStore(
             {
                 "dimensions": 4,
-                "collection_name": (
-                    f"test_update_meta_where_{uuid.uuid4().hex[:8]}"
-                ),
+                "collection_name": (f"test_update_meta_where_{uuid.uuid4().hex[:8]}"),
                 **extra,
             }
         )
@@ -161,16 +156,12 @@ def _make_store(
         pytest.param(
             "faiss",
             id="faiss",
-            marks=pytest.mark.skipif(
-                not is_faiss_available(), reason="faiss not installed"
-            ),
+            marks=pytest.mark.skipif(not is_faiss_available(), reason="faiss not installed"),
         ),
         pytest.param(
             "chroma",
             id="chroma",
-            marks=pytest.mark.skipif(
-                not is_chromadb_available(), reason="chromadb not installed"
-            ),
+            marks=pytest.mark.skipif(not is_chromadb_available(), reason="chromadb not installed"),
         ),
         pytest.param("pgvector", id="pgvector", marks=_pgvector_marks),
     ]
@@ -183,9 +174,7 @@ async def any_vector_store(
     store = _make_store(backend, pgvector_config)
     await store.initialize()
     try:
-        await store.add_vectors(
-            _seed_vectors(), ids=list(SEED_IDS), metadata=_seed_metadata()
-        )
+        await store.add_vectors(_seed_vectors(), ids=list(SEED_IDS), metadata=_seed_metadata())
         yield store
     finally:
         await _teardown_backend(backend, store)
@@ -198,9 +187,7 @@ async def any_vector_store(
         pytest.param(
             "faiss",
             id="faiss",
-            marks=pytest.mark.skipif(
-                not is_faiss_available(), reason="faiss not installed"
-            ),
+            marks=pytest.mark.skipif(not is_faiss_available(), reason="faiss not installed"),
         ),
         pytest.param("pgvector", id="pgvector", marks=_pgvector_marks),
     ]
@@ -224,9 +211,7 @@ async def ts_vector_store(
     )
     await store.initialize()
     try:
-        await store.add_vectors(
-            _seed_vectors(), ids=list(SEED_IDS), metadata=_seed_metadata()
-        )
+        await store.add_vectors(_seed_vectors(), ids=list(SEED_IDS), metadata=_seed_metadata())
         yield store
     finally:
         await _teardown_backend(backend, store)
@@ -238,9 +223,7 @@ async def test_update_metadata_where_filter_scoped(
     any_vector_store: Any,
 ) -> None:
     """Only filter-matched rows are touched; the count is returned."""
-    affected = await any_vector_store.update_metadata_where(
-        {"tenant": "A"}, {"_stale": True}
-    )
+    affected = await any_vector_store.update_metadata_where({"tenant": "A"}, {"_stale": True})
     assert affected == 2
 
     # Equality filter on the merged key — the exact mechanism the
@@ -255,17 +238,10 @@ async def test_update_metadata_where_merges_not_replaces(
     any_vector_store: Any,
 ) -> None:
     """``set_`` is merged into existing metadata, not a wholesale swap."""
-    await any_vector_store.update_metadata_where(
-        {"tenant": "A"}, {"_stale": True}
-    )
+    await any_vector_store.update_metadata_where({"tenant": "A"}, {"_stale": True})
     # Original ``tenant`` key still selects the same two rows.
     assert await any_vector_store.count(filter={"tenant": "A"}) == 2
-    assert (
-        await any_vector_store.count(
-            filter={"tenant": "A", "_stale": True}
-        )
-        == 2
-    )
+    assert await any_vector_store.count(filter={"tenant": "A", "_stale": True}) == 2
 
 
 @pytest.mark.asyncio
@@ -273,9 +249,7 @@ async def test_update_metadata_where_none_filter_updates_all(
     any_vector_store: Any,
 ) -> None:
     """``filter=None`` matches every vector (parity with clear/count)."""
-    affected = await any_vector_store.update_metadata_where(
-        None, {"_stale": False}
-    )
+    affected = await any_vector_store.update_metadata_where(None, {"_stale": False})
     assert affected == 3
     assert await any_vector_store.count(filter={"_stale": False}) == 3
 
@@ -315,9 +289,7 @@ async def test_update_metadata_where_refreshes_updated_at(
     assert updated_before is not None
 
     await asyncio.sleep(0.01)
-    affected = await ts_vector_store.update_metadata_where(
-        {"tenant": "A"}, {"_stale": True}
-    )
+    affected = await ts_vector_store.update_metadata_where({"tenant": "A"}, {"_stale": True})
     assert affected == 2
 
     after = await ts_vector_store.get_vectors(
@@ -340,9 +312,7 @@ async def test_update_metadata_where_refreshes_updated_at(
 
 # --- FAISS-only timestamp behavior (mirrors MemoryVectorStore) ---
 
-pytestmark_faiss = pytest.mark.skipif(
-    not is_faiss_available(), reason="faiss not installed"
-)
+pytestmark_faiss = pytest.mark.skipif(not is_faiss_available(), reason="faiss not installed")
 
 
 @pytestmark_faiss
@@ -358,10 +328,8 @@ async def test_faiss_add_vectors_sets_created_equals_updated() -> None:
     )
     await store.initialize()
     try:
-        await store.add_vectors(
-            _seed_vectors(), ids=list(SEED_IDS), metadata=_seed_metadata()
-        )
-        (_, meta), = await store.get_vectors(
+        await store.add_vectors(_seed_vectors(), ids=list(SEED_IDS), metadata=_seed_metadata())
+        ((_, meta),) = await store.get_vectors(
             ["a-1"], include_metadata=True, include_timestamps=True
         )
         assert meta is not None
@@ -385,18 +353,14 @@ async def test_faiss_readd_preserves_created_advances_updated() -> None:
     )
     await store.initialize()
     try:
-        await store.add_vectors(
-            _seed_vectors()[:1], ids=["a-1"], metadata=[{"tenant": "A"}]
-        )
-        (_, first), = await store.get_vectors(
+        await store.add_vectors(_seed_vectors()[:1], ids=["a-1"], metadata=[{"tenant": "A"}])
+        ((_, first),) = await store.get_vectors(
             ["a-1"], include_metadata=True, include_timestamps=True
         )
         assert first is not None
         await asyncio.sleep(0.01)
-        await store.add_vectors(
-            _seed_vectors()[:1], ids=["a-1"], metadata=[{"tenant": "A2"}]
-        )
-        (_, second), = await store.get_vectors(
+        await store.add_vectors(_seed_vectors()[:1], ids=["a-1"], metadata=[{"tenant": "A2"}])
+        ((_, second),) = await store.get_vectors(
             ["a-1"], include_metadata=True, include_timestamps=True
         )
         assert second is not None
@@ -422,16 +386,14 @@ async def test_faiss_update_metadata_refreshes_updated_at() -> None:
     )
     await store.initialize()
     try:
-        await store.add_vectors(
-            _seed_vectors()[:1], ids=["a-1"], metadata=[{"tenant": "A"}]
-        )
-        (_, before), = await store.get_vectors(
+        await store.add_vectors(_seed_vectors()[:1], ids=["a-1"], metadata=[{"tenant": "A"}])
+        ((_, before),) = await store.get_vectors(
             ["a-1"], include_metadata=True, include_timestamps=True
         )
         assert before is not None
         await asyncio.sleep(0.01)
         await store.update_metadata(["a-1"], [{"tenant": "A", "x": 1}])
-        (_, after), = await store.get_vectors(
+        ((_, after),) = await store.get_vectors(
             ["a-1"], include_metadata=True, include_timestamps=True
         )
         assert after is not None
@@ -457,20 +419,14 @@ async def test_faiss_timestamps_survive_save_load(tmp_path: Any) -> None:
     }
     store = FaissVectorStore(cfg)
     await store.initialize()
-    await store.add_vectors(
-        _seed_vectors()[:1], ids=["a-1"], metadata=[{"tenant": "A"}]
-    )
-    (_, saved), = await store.get_vectors(
-        ["a-1"], include_metadata=True, include_timestamps=True
-    )
+    await store.add_vectors(_seed_vectors()[:1], ids=["a-1"], metadata=[{"tenant": "A"}])
+    ((_, saved),) = await store.get_vectors(["a-1"], include_metadata=True, include_timestamps=True)
     assert saved is not None
     await store.close()  # triggers save()
 
     reloaded = FaissVectorStore(cfg)
     await reloaded.initialize()  # triggers load()
-    (_, rt), = await reloaded.get_vectors(
-        ["a-1"], include_metadata=True, include_timestamps=True
-    )
+    ((_, rt),) = await reloaded.get_vectors(["a-1"], include_metadata=True, include_timestamps=True)
     assert rt is not None
     assert rt["_created_at"] == saved["_created_at"]
     assert rt["_updated_at"] == saved["_updated_at"]
@@ -489,7 +445,7 @@ async def test_faiss_timestamps_survive_save_load(tmp_path: Any) -> None:
 
     legacy_store = FaissVectorStore(cfg)
     await legacy_store.initialize()
-    (_, legacy_meta), = await legacy_store.get_vectors(
+    ((_, legacy_meta),) = await legacy_store.get_vectors(
         ["a-1"], include_metadata=True, include_timestamps=True
     )
     assert legacy_meta is not None
@@ -517,16 +473,12 @@ async def test_faiss_timestamps_survive_save_load(tmp_path: Any) -> None:
         pytest.param(
             "faiss",
             id="faiss",
-            marks=pytest.mark.skipif(
-                not is_faiss_available(), reason="faiss not installed"
-            ),
+            marks=pytest.mark.skipif(not is_faiss_available(), reason="faiss not installed"),
         ),
         pytest.param(
             "chroma",
             id="chroma",
-            marks=pytest.mark.skipif(
-                not is_chromadb_available(), reason="chromadb not installed"
-            ),
+            marks=pytest.mark.skipif(not is_chromadb_available(), reason="chromadb not installed"),
         ),
         pytest.param("pgvector", id="pgvector", marks=_pgvector_marks),
     ]
@@ -555,15 +507,11 @@ async def test_caller_mutation_after_add_does_not_leak_into_store(
     must not change what the store returns.
     """
     caller_meta = {"k": 1}
-    await empty_vector_store.add_vectors(
-        _seed_vectors()[:1], ids=["a"], metadata=[caller_meta]
-    )
+    await empty_vector_store.add_vectors(_seed_vectors()[:1], ids=["a"], metadata=[caller_meta])
 
     caller_meta["k"] = 2  # caller reuses/mutates its own dict
 
-    (_, stored), = await empty_vector_store.get_vectors(
-        ["a"], include_metadata=True
-    )
+    ((_, stored),) = await empty_vector_store.get_vectors(["a"], include_metadata=True)
     assert stored is not None
     assert stored["k"] == 1
 
@@ -576,9 +524,7 @@ async def test_store_writes_do_not_leak_onto_caller_dict(
     (``update_metadata_where``) must not appear on the caller's dict.
     """
     caller_meta = {"k": 1}
-    await empty_vector_store.add_vectors(
-        _seed_vectors()[:1], ids=["a"], metadata=[caller_meta]
-    )
+    await empty_vector_store.add_vectors(_seed_vectors()[:1], ids=["a"], metadata=[caller_meta])
 
     await empty_vector_store.update_metadata_where(None, {"_stale": True})
 
@@ -638,14 +584,10 @@ async def test_faiss_ivfflat_get_vectors_reconstructs() -> None:
             ids=ids,
             metadata=[{"i": i} for i in range(n)],
         )
-        got = await store.get_vectors(
-            ids, include_metadata=True, include_timestamps=True
-        )
+        got = await store.get_vectors(ids, include_metadata=True, include_timestamps=True)
         assert len(got) == n
         for i, (vec, meta) in enumerate(got):
-            assert vec is not None, (
-                f"id v-{i} returned None — IVF get_vectors broken"
-            )
+            assert vec is not None, f"id v-{i} returned None — IVF get_vectors broken"
             assert vec.shape == (dim,)
             assert meta is not None
             assert meta["i"] == i
@@ -676,9 +618,7 @@ async def test_faiss_ivfflat_get_vectors_survives_save_load(
     store = FaissVectorStore(cfg)
     await store.initialize()
     ids = [f"v-{i}" for i in range(n)]
-    await store.add_vectors(
-        _ivf_vectors(n, dim), ids=ids, metadata=[{"i": i} for i in range(n)]
-    )
+    await store.add_vectors(_ivf_vectors(n, dim), ids=ids, metadata=[{"i": i} for i in range(n)])
     await store.close()  # triggers save()
 
     reloaded = FaissVectorStore(cfg)
@@ -686,9 +626,7 @@ async def test_faiss_ivfflat_get_vectors_survives_save_load(
     try:
         got = await reloaded.get_vectors(ids, include_metadata=True)
         for i, (vec, meta) in enumerate(got):
-            assert vec is not None, (
-                "IVF get_vectors lost the vector after save/reload"
-            )
+            assert vec is not None, "IVF get_vectors lost the vector after save/reload"
             assert meta is not None and meta["i"] == i
     finally:
         await reloaded.close()
@@ -785,10 +723,7 @@ async def test_faiss_ivfflat_delete_vectors_then_get() -> None:
         survivors = [f"v-{i}" for i in range(n) if i not in (1, 3)]
         got = await store.get_vectors(survivors, include_metadata=True)
         for ext_id, (vec, meta) in zip(survivors, got):
-            assert vec is not None, (
-                f"survivor {ext_id} lost its vector after IVF "
-                "delete_vectors"
-            )
+            assert vec is not None, f"survivor {ext_id} lost its vector after IVF delete_vectors"
             assert meta is not None and meta["i"] == int(ext_id[2:])
     finally:
         await store.close()
@@ -824,9 +759,7 @@ async def test_faiss_ivfflat_upsert_evicts_and_gets() -> None:
             ids=ids,
             metadata=[{"gen": 1} for _ in range(n)],
         )
-        first = await store.get_vectors(
-            ["v-0"], include_metadata=True, include_timestamps=True
-        )
+        first = await store.get_vectors(["v-0"], include_metadata=True, include_timestamps=True)
         created_v0 = first[0][1]["_created_at"]
 
         # Re-add v-0 with a fresh vector + metadata: triggers the
@@ -835,13 +768,9 @@ async def test_faiss_ivfflat_upsert_evicts_and_gets() -> None:
         await store.add_vectors(new_vec, ids=["v-0"], metadata=[{"gen": 2}])
 
         assert await store.count() == n  # upsert, not insert
-        got = await store.get_vectors(
-            ["v-0"], include_metadata=True, include_timestamps=True
-        )
+        got = await store.get_vectors(["v-0"], include_metadata=True, include_timestamps=True)
         vec, meta = got[0]
-        assert vec is not None, (
-            "re-added id lost its vector after IVF upsert eviction"
-        )
+        assert vec is not None, "re-added id lost its vector after IVF upsert eviction"
         assert meta["gen"] == 2
         assert meta["_created_at"] == created_v0  # created carried over
         assert meta["_updated_at"] >= created_v0
@@ -879,9 +808,7 @@ async def test_faiss_ivf_small_first_batch_defers_then_migrates() -> None:
     try:
         # First batch of 2 < nlist=4: pre-fix this raised RuntimeError.
         small = _ivf_vectors(2, dim)
-        await store.add_vectors(
-            small, ids=["a", "b"], metadata=[{"i": 0}, {"i": 1}]
-        )
+        await store.add_vectors(small, ids=["a", "b"], metadata=[{"i": 0}, {"i": 1}])
         assert store._deferred_ivf is True  # temp-flat, IVF deferred
 
         # Search + get_vectors must already be correct on the temp-flat.
@@ -936,9 +863,7 @@ async def test_faiss_ivf_deferred_state_survives_save_load(
     }
     store = FaissVectorStore(cfg)
     await store.initialize()
-    await store.add_vectors(
-        _ivf_vectors(2, dim), ids=["a", "b"], metadata=[{"i": 0}, {"i": 1}]
-    )
+    await store.add_vectors(_ivf_vectors(2, dim), ids=["a", "b"], metadata=[{"i": 0}, {"i": 1}])
     assert store._deferred_ivf is True
     await store.close()  # save() while deferred
 
@@ -957,9 +882,7 @@ async def test_faiss_ivf_deferred_state_survives_save_load(
         )
         assert reloaded._deferred_ivf is False
         assert await reloaded.count() == 5
-        got = await reloaded.get_vectors(
-            ["a", "b", "c", "d", "e"], include_metadata=True
-        )
+        got = await reloaded.get_vectors(["a", "b", "c", "d", "e"], include_metadata=True)
         assert all(v is not None for v, _ in got)
         assert [m["i"] for _, m in got] == [0, 1, 2, 3, 4]
     finally:
@@ -1024,23 +947,18 @@ async def test_faiss_get_vectors_internal_id_desync_is_logged(
     store = FaissVectorStore({"dimensions": 4, "metric": "cosine"})
     await store.initialize()
     try:
-        await store.add_vectors(
-            _seed_vectors()[:1], ids=["a"], metadata=[{"k": 1}]
-        )
+        await store.add_vectors(_seed_vectors()[:1], ids=["a"], metadata=[{"k": 1}])
 
         # ``"a"`` stays in ``id_map`` (passes the absent-id guard) but
         # now maps to an internal id the side-car never stored.
         store.id_map["a"] = 10_000_000
 
-        with caplog.at_level(
-            logging.WARNING, logger="dataknobs_data.vector.stores.faiss"
-        ):
+        with caplog.at_level(logging.WARNING, logger="dataknobs_data.vector.stores.faiss"):
             got = await store.get_vectors(["a"])
 
         assert got == [(None, None)]
-        assert any(
-            "no stored vector" in rec.getMessage().lower()
-            for rec in caplog.records
-        ), "expected a WARNING for the internal-id desync"
+        assert any("no stored vector" in rec.getMessage().lower() for rec in caplog.records), (
+            "expected a WARNING for the internal-id desync"
+        )
     finally:
         await store.close()

@@ -16,9 +16,11 @@ from dataknobs_common.exceptions import DataknobsError, OperationError
 
 
 class _Backend(CapabilityMixin):
-    SUPPORTED_CAPABILITIES: ClassVar[frozenset[Capability]] = frozenset({
-        Capability.STREAMING_READS,
-    })
+    SUPPORTED_CAPABILITIES: ClassVar[frozenset[Capability]] = frozenset(
+        {
+            Capability.STREAMING_READS,
+        }
+    )
 
 
 def test_require_capability_supported_returns_none() -> None:

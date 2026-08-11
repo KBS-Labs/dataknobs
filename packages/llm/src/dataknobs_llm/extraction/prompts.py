@@ -31,13 +31,7 @@ logger = logging.getLogger(__name__)
 # ============================================================================
 
 EXTRACTION_DEFAULT_SCHEMA_SECTION: PromptTemplateDict = {
-    "template": (
-        "## Schema\n"
-        "Extract data matching this JSON Schema:\n"
-        "```json\n"
-        "{schema}\n"
-        "```"
-    ),
+    "template": ("## Schema\nExtract data matching this JSON Schema:\n```json\n{schema}\n```"),
     "template_syntax": "format",
 }
 
@@ -54,15 +48,15 @@ EXTRACTION_DEFAULT_INSTRUCTIONS: PromptTemplateDict = {
         "3. If the user did NOT mention a field at all, omit it\n"
         "4. If you cannot extract the required information, return an empty object {{}}\n"
         "5. Do not include explanations - only return the JSON object\n"
-        "6. For boolean fields: \"yes\"/\"enable\"/\"add\" → true; "
-        "\"no\"/\"disable\"/\"skip\"/\"none\" → false\n"
-        "7. Negations count as explicit values: \"no knowledge base\" → kb_enabled: false\n"
-        "8. For array fields with enum constraints, \"all\" means include every enum "
-        "value; \"none\" means an empty array\n"
-        "9. For array fields, always return a JSON array (e.g. [\"value\"]), never a bare string\n"
+        '6. For boolean fields: "yes"/"enable"/"add" → true; '
+        '"no"/"disable"/"skip"/"none" → false\n'
+        '7. Negations count as explicit values: "no knowledge base" → kb_enabled: false\n'
+        '8. For array fields with enum constraints, "all" means include every enum '
+        'value; "none" means an empty array\n'
+        '9. For array fields, always return a JSON array (e.g. ["value"]), never a bare string\n'
         "10. For string values, use the user's exact words and phrasing. "
         "Do not reformat conjunctions, lists, or separators "
-        "(e.g., keep \"formal and academic\" as-is, do not change to \"formal, academic\")"
+        '(e.g., keep "formal and academic" as-is, do not change to "formal, academic")'
     ),
     "template_syntax": "format",
 }
@@ -98,22 +92,22 @@ EXTRACTION_ASSUMPTIONS_INSTRUCTIONS: PromptTemplateDict = {
         "   - Implied but not explicitly stated information\n"
         "   - Default values used when information is missing\n"
         "   - Interpretations that could have multiple meanings\n"
-        "3. If the user did NOT mention a field at all, omit it from \"data\"\n"
-        "4. For boolean fields: \"yes\"/\"enable\"/\"add\" → true; "
-        "\"no\"/\"disable\"/\"skip\"/\"none\" → false\n"
-        "5. Negations count as explicit values: \"no knowledge base\" → kb_enabled: false\n"
-        "6. For array fields with enum constraints, \"all\" means include every enum "
-        "value; \"none\" means an empty array\n"
-        "7. For array fields, always return a JSON array (e.g. [\"value\"]), never a bare string\n"
+        '3. If the user did NOT mention a field at all, omit it from "data"\n'
+        '4. For boolean fields: "yes"/"enable"/"add" → true; '
+        '"no"/"disable"/"skip"/"none" → false\n'
+        '5. Negations count as explicit values: "no knowledge base" → kb_enabled: false\n'
+        '6. For array fields with enum constraints, "all" means include every enum '
+        'value; "none" means an empty array\n'
+        '7. For array fields, always return a JSON array (e.g. ["value"]), never a bare string\n'
         "8. For string values, use the user's exact words and phrasing. "
         "Do not reformat conjunctions, lists, or separators "
-        "(e.g., keep \"formal and academic\" as-is, do not change to \"formal, academic\")\n"
+        '(e.g., keep "formal and academic" as-is, do not change to "formal, academic")\n'
         "9. Return a JSON object with two keys:\n"
-        "   - \"data\": The extracted data matching the schema\n"
-        "   - \"assumptions\": Array of assumption objects with:\n"
-        "     - \"content\": Description of the assumption\n"
-        "     - \"field\": Which field this relates to (or null if general)\n"
-        "     - \"confidence\": How confident you are (0.0-1.0)"
+        '   - "data": The extracted data matching the schema\n'
+        '   - "assumptions": Array of assumption objects with:\n'
+        '     - "content": Description of the assumption\n'
+        '     - "field": Which field this relates to (or null if general)\n'
+        '     - "confidence": How confident you are (0.0-1.0)'
     ),
     "template_syntax": "format",
 }
@@ -137,10 +131,7 @@ EXTRACTION_ASSUMPTIONS_EXAMPLE: PromptTemplateDict = {
 }
 
 EXTRACTION_ASSUMPTIONS_MESSAGE_SECTION: PromptTemplateDict = {
-    "template": (
-        "## User Message\n{text}\n\n"
-        "## Extracted Data and Assumptions (JSON only):"
-    ),
+    "template": ("## User Message\n{text}\n\n## Extracted Data and Assumptions (JSON only):"),
     "template_syntax": "format",
 }
 
@@ -249,6 +240,7 @@ Extract data matching this JSON Schema:
 # ExtractionPromptLibrary
 # ============================================================================
 
+
 def get_extraction_prompt_library() -> ConfigPromptLibrary:
     """Create a ConfigPromptLibrary with all default extraction prompts.
 
@@ -257,18 +249,20 @@ def get_extraction_prompt_library() -> ConfigPromptLibrary:
         meta-prompts registered as system prompts under the ``extraction.*``
         namespace.
     """
-    return ConfigPromptLibrary(config={
-        "system": {
-            # Default extraction fragments
-            "extraction.default.schema_section": EXTRACTION_DEFAULT_SCHEMA_SECTION,
-            "extraction.default.context_section": EXTRACTION_DEFAULT_CONTEXT_SECTION,
-            "extraction.default.instructions": EXTRACTION_DEFAULT_INSTRUCTIONS,
-            "extraction.default.message_section": EXTRACTION_DEFAULT_MESSAGE_SECTION,
-            "extraction.default": EXTRACTION_DEFAULT_META,
-            # Assumptions extraction fragments
-            "extraction.with_assumptions.instructions": EXTRACTION_ASSUMPTIONS_INSTRUCTIONS,
-            "extraction.with_assumptions.example": EXTRACTION_ASSUMPTIONS_EXAMPLE,
-            "extraction.with_assumptions.message_section": EXTRACTION_ASSUMPTIONS_MESSAGE_SECTION,
-            "extraction.with_assumptions": EXTRACTION_ASSUMPTIONS_META,
-        },
-    })
+    return ConfigPromptLibrary(
+        config={
+            "system": {
+                # Default extraction fragments
+                "extraction.default.schema_section": EXTRACTION_DEFAULT_SCHEMA_SECTION,
+                "extraction.default.context_section": EXTRACTION_DEFAULT_CONTEXT_SECTION,
+                "extraction.default.instructions": EXTRACTION_DEFAULT_INSTRUCTIONS,
+                "extraction.default.message_section": EXTRACTION_DEFAULT_MESSAGE_SECTION,
+                "extraction.default": EXTRACTION_DEFAULT_META,
+                # Assumptions extraction fragments
+                "extraction.with_assumptions.instructions": EXTRACTION_ASSUMPTIONS_INSTRUCTIONS,
+                "extraction.with_assumptions.example": EXTRACTION_ASSUMPTIONS_EXAMPLE,
+                "extraction.with_assumptions.message_section": EXTRACTION_ASSUMPTIONS_MESSAGE_SECTION,
+                "extraction.with_assumptions": EXTRACTION_ASSUMPTIONS_META,
+            },
+        }
+    )

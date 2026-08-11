@@ -74,9 +74,7 @@ async def test_regex_condition_with_flags():
 @pytest.mark.asyncio
 async def test_context_condition():
     """Test ContextCondition."""
-    cond = ContextCondition(
-        condition_func=lambda ctx: ctx.get("ready", False)
-    )
+    cond = ContextCondition(condition_func=lambda ctx: ctx.get("ready", False))
 
     assert await cond.evaluate("any text", {"ready": True})
     assert not await cond.evaluate("any text", {"ready": False})
@@ -89,10 +87,7 @@ async def test_composite_condition_and():
     cond1 = KeywordCondition(keywords=["hello"])
     cond2 = KeywordCondition(keywords=["world"])
 
-    composite = CompositeCondition(
-        conditions=[cond1, cond2],
-        operator="and"
-    )
+    composite = CompositeCondition(conditions=[cond1, cond2], operator="and")
 
     assert await composite.evaluate("hello world", {})
     assert not await composite.evaluate("hello", {})
@@ -105,10 +100,7 @@ async def test_composite_condition_or():
     cond1 = KeywordCondition(keywords=["hello"])
     cond2 = KeywordCondition(keywords=["world"])
 
-    composite = CompositeCondition(
-        conditions=[cond1, cond2],
-        operator="or"
-    )
+    composite = CompositeCondition(conditions=[cond1, cond2], operator="or")
 
     assert await composite.evaluate("hello world", {})
     assert await composite.evaluate("hello", {})

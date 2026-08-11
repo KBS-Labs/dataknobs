@@ -277,9 +277,7 @@ class TestGroundedPassThrough:
         async with await BotTestHarness.create(
             # ``intent: static`` → no LLM query-generation call; the single
             # provider call is the conversational synthesis.
-            bot_config=_bot_config(
-                "grounded", reasoning_extra={"intent": {"mode": "static"}}
-            ),
+            bot_config=_bot_config("grounded", reasoning_extra={"intent": {"mode": "static"}}),
             main_responses=[text_response("Grounded answer")],
             tools=[EchoTool()],
         ) as harness:
@@ -506,8 +504,6 @@ class TestPureCoreIdempotency:
         messages = [
             LLMMessage(role="user", content="hi"),
             LLMMessage(role="assistant", content="", tool_calls=[tc]),
-            LLMMessage(
-                role="tool", content="ok", name="echo_tool", tool_call_id="X1"
-            ),
+            LLMMessage(role="tool", content="ok", name="echo_tool", tool_call_id="X1"),
         ]
         assert pair_orphan_tool_calls(messages) == []

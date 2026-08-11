@@ -600,7 +600,7 @@ class SimplifiedElasticsearchIndex:
         mappings: Dict[str, Any] | None = None,
     ):
         """Initialize the index wrapper.
-        
+
         Args:
             index_name: Name of the Elasticsearch index
             host: Elasticsearch host
@@ -641,10 +641,10 @@ class SimplifiedElasticsearchIndex:
 
     def exists(self, doc_id: str | None = None) -> bool:
         """Check if index or document exists.
-        
+
         Args:
             doc_id: If provided, check if document exists. Otherwise check if index exists.
-            
+
         Returns:
             True if exists, False otherwise
         """
@@ -659,7 +659,7 @@ class SimplifiedElasticsearchIndex:
 
     def create(self) -> bool:
         """Create the index with settings and mappings.
-        
+
         Returns:
             True if created successfully
         """
@@ -790,7 +790,10 @@ class SimplifiedElasticsearchIndex:
                 logger.warning(
                     "Transient server error %s indexing document (attempt %d/%d), "
                     "retrying in %.1fs",
-                    status, attempt + 1, max_retries + 1, delay,
+                    status,
+                    attempt + 1,
+                    max_retries + 1,
+                    delay,
                 )
                 time.sleep(delay)
                 delay *= 2
@@ -802,10 +805,10 @@ class SimplifiedElasticsearchIndex:
 
     def get(self, doc_id: str) -> Dict[str, Any] | None:
         """Get a document by ID.
-        
+
         Args:
             doc_id: Document ID
-            
+
         Returns:
             Document data or None if not found
         """
@@ -853,9 +856,7 @@ class SimplifiedElasticsearchIndex:
             params["if_seq_no"] = if_seq_no
         if if_primary_term is not None:
             params["if_primary_term"] = if_primary_term
-        response = self._request(
-            "post", f"_update/{_encode_doc_id(doc_id)}", body, params or None
-        )
+        response = self._request("post", f"_update/{_encode_doc_id(doc_id)}", body, params or None)
         # A conditional update (guards supplied) surfaces a stale-token 409 as
         # a distinct conflict; the unconditional path keeps its bool contract.
         if if_seq_no is not None and response.status == 409:
@@ -864,10 +865,10 @@ class SimplifiedElasticsearchIndex:
 
     def search(self, body: Dict[str, Any] | None = None) -> Any:
         """Search documents.
-        
+
         Args:
             body: Search query body
-            
+
         Returns:
             ServerResponse object with search results
         """
@@ -882,10 +883,10 @@ class SimplifiedElasticsearchIndex:
 
     def count(self, body: Dict[str, Any] | None = None) -> int:
         """Count documents.
-        
+
         Args:
             body: Optional query to count matching documents
-            
+
         Returns:
             Number of documents
         """
@@ -897,10 +898,10 @@ class SimplifiedElasticsearchIndex:
 
     def delete_by_query(self, body: Dict[str, Any]) -> Dict[str, Any]:
         """Delete documents matching a query.
-        
+
         Args:
             body: Query to match documents for deletion
-            
+
         Returns:
             Response with deletion info
         """
@@ -912,7 +913,7 @@ class SimplifiedElasticsearchIndex:
 
     def refresh(self) -> bool:
         """Refresh the index to make recent changes searchable.
-        
+
         Returns:
             True if refreshed successfully
         """

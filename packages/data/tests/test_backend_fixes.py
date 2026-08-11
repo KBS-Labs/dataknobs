@@ -10,8 +10,7 @@ import pytest
 # Check if PostgreSQL tests should run
 TEST_POSTGRES = os.getenv("TEST_POSTGRES", "false").lower() == "true"
 skip_postgres = pytest.mark.skipif(
-    not TEST_POSTGRES,
-    reason="PostgreSQL tests skipped. Set TEST_POSTGRES=true to run."
+    not TEST_POSTGRES, reason="PostgreSQL tests skipped. Set TEST_POSTGRES=true to run."
 )
 
 
@@ -29,9 +28,9 @@ async def test_postgres_search_populates_storage_id():
 
     # Create backend with connection string (also tests Issue #3)
     db_name = os.environ.get("POSTGRES_DB", "dataknobs_test")
-    backend = AsyncPostgresDatabase({
-        "connection_string": f"postgresql://postgres:postgres@localhost:5432/{db_name}"
-    })
+    backend = AsyncPostgresDatabase(
+        {"connection_string": f"postgresql://postgres:postgres@localhost:5432/{db_name}"}
+    )
 
     try:
         await backend.connect()
@@ -72,13 +71,15 @@ async def test_postgres_update_persists_changes():
     from dataknobs_data.records import Record
 
     db_name = os.environ.get("POSTGRES_DB", "dataknobs_test")
-    backend = AsyncPostgresDatabase({
-        "host": "localhost",
-        "port": 5432,
-        "database": db_name,
-        "user": "postgres",
-        "password": "postgres"
-    })
+    backend = AsyncPostgresDatabase(
+        {
+            "host": "localhost",
+            "port": 5432,
+            "database": db_name,
+            "user": "postgres",
+            "password": "postgres",
+        }
+    )
 
     try:
         await backend.connect()
@@ -131,9 +132,7 @@ async def test_postgres_connection_string():
     # Test with connection string
     db_name = os.environ.get("POSTGRES_DB", "dataknobs_test")
     connection_string = f"postgresql://postgres:postgres@localhost:5432/{db_name}"
-    backend = AsyncPostgresDatabase({
-        "connection_string": connection_string
-    })
+    backend = AsyncPostgresDatabase({"connection_string": connection_string})
 
     try:
         await backend.connect()

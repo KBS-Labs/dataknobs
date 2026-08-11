@@ -24,13 +24,13 @@ logger = logging.getLogger(__name__)
 
 class SchemaFactory(FactoryBase):
     """Factory for creating validation schemas from configuration.
-    
+
     Configuration Options:
         name (str): Schema name
         strict (bool): Whether to reject unknown fields (default: False)
         description (str): Optional schema description
         fields (list): List of field definitions
-        
+
     Field Definition Options:
         name (str): Field name
         type (str): Field type (STRING, INTEGER, FLOAT, BOOLEAN, DATETIME, JSON, BINARY)
@@ -38,7 +38,7 @@ class SchemaFactory(FactoryBase):
         default (any): Default value if field is missing
         description (str): Field description
         constraints (list): List of constraint definitions
-        
+
     Example Configuration:
         schemas:
           - name: user_schema
@@ -65,10 +65,10 @@ class SchemaFactory(FactoryBase):
 
     def create(self, **config) -> Schema:
         """Create a Schema instance from configuration.
-        
+
         Args:
             **config: Schema configuration
-            
+
         Returns:
             Schema instance
         """
@@ -91,7 +91,7 @@ class SchemaFactory(FactoryBase):
 
     def _add_field_to_schema(self, schema: Schema, field_config: dict[str, Any]) -> None:
         """Add a field to the schema based on configuration.
-        
+
         Args:
             schema: Schema to add field to
             field_config: Field configuration
@@ -115,15 +115,15 @@ class SchemaFactory(FactoryBase):
             required=required,
             default=default,
             constraints=constraints,
-            description=description
+            description=description,
         )
 
     def _build_constraints(self, constraint_configs: list[dict[str, Any]]) -> list[Constraint]:
         """Build constraint objects from configuration.
-        
+
         Args:
             constraint_configs: List of constraint configurations
-            
+
         Returns:
             List of Constraint objects
         """
@@ -133,21 +133,13 @@ class SchemaFactory(FactoryBase):
             constraint_type = config.get("type", "").lower()
 
             if constraint_type == "required":
-                constraints.append(Required(
-                    allow_empty=config.get("allow_empty", False)
-                ))
+                constraints.append(Required(allow_empty=config.get("allow_empty", False)))
 
             elif constraint_type == "range":
-                constraints.append(Range(
-                    min=config.get("min"),
-                    max=config.get("max")
-                ))
+                constraints.append(Range(min=config.get("min"), max=config.get("max")))
 
             elif constraint_type == "length":
-                constraints.append(Length(
-                    min=config.get("min"),
-                    max=config.get("max")
-                ))
+                constraints.append(Length(min=config.get("min"), max=config.get("max")))
 
             elif constraint_type == "pattern":
                 pattern = config.get("pattern")
@@ -160,9 +152,7 @@ class SchemaFactory(FactoryBase):
                     constraints.append(Enum(values))
 
             elif constraint_type == "unique":
-                constraints.append(Unique(
-                    field_name=config.get("field_name")
-                ))
+                constraints.append(Unique(field_name=config.get("field_name")))
 
             elif constraint_type == "all":
                 # Recursive build for composite constraints
@@ -184,17 +174,17 @@ class SchemaFactory(FactoryBase):
 
 class CoercerFactory(FactoryBase):
     """Factory for creating Coercer instances.
-    
+
     The Coercer doesn't require configuration, but this factory
     provides a consistent interface for the config system.
     """
 
     def create(self, **config) -> Coercer:
         """Create a Coercer instance.
-        
+
         Args:
             **config: Currently unused
-            
+
         Returns:
             Coercer instance
         """

@@ -129,9 +129,7 @@ class TestRubricLevel:
         assert level.indicators == ["indicator_a"]
 
     def test_default_indicators(self) -> None:
-        level = RubricLevel(
-            id="pass", label="Pass", description="OK", score=0.7
-        )
+        level = RubricLevel(id="pass", label="Pass", description="OK", score=0.7)
         assert level.indicators == []
 
     def test_serialization_round_trip(self) -> None:
@@ -163,10 +161,7 @@ class TestRubricCriterion:
         assert restored.weight == criterion.weight
         assert len(restored.levels) == len(criterion.levels)
         assert restored.scoring_method.type == criterion.scoring_method.type
-        assert (
-            restored.scoring_method.function_ref
-            == criterion.scoring_method.function_ref
-        )
+        assert restored.scoring_method.function_ref == criterion.scoring_method.function_ref
 
 
 class TestRubric:
@@ -191,9 +186,7 @@ class TestRubric:
         assert rubric.metadata == {}
 
     def test_serialization_round_trip(self) -> None:
-        rubric = _make_rubric(
-            criteria=[_make_criterion("c1", 0.6), _make_criterion("c2", 0.4)]
-        )
+        rubric = _make_rubric(criteria=[_make_criterion("c1", 0.6), _make_criterion("c2", 0.4)])
         d = rubric.to_dict()
         restored = Rubric.from_dict(d)
         assert restored.id == rubric.id
@@ -209,9 +202,7 @@ class TestRubric:
             criteria=[
                 _make_criterion("c1", 0.5),
                 _make_criterion("c2", 0.3),
-                _make_criterion(
-                    "c3", 0.2, scoring_type=ScoringType.SCHEMA
-                ),
+                _make_criterion("c3", 0.2, scoring_type=ScoringType.SCHEMA),
             ]
         )
         assert len(rubric.criteria) == 3
@@ -232,9 +223,7 @@ class TestCriterionResult:
         assert result.scoring_method_used == ScoringType.DETERMINISTIC
 
     def test_defaults(self) -> None:
-        result = CriterionResult(
-            criterion_id="c1", level_id="pass", score=0.7
-        )
+        result = CriterionResult(criterion_id="c1", level_id="pass", score=0.7)
         assert result.evidence == []
         assert result.notes == ""
         assert result.scoring_method_used == ScoringType.DETERMINISTIC
@@ -269,9 +258,7 @@ class TestRubricEvaluation:
     def test_creation_with_values(self) -> None:
         results = [
             CriterionResult(criterion_id="c1", level_id="pass", score=0.7),
-            CriterionResult(
-                criterion_id="c2", level_id="excellent", score=1.0
-            ),
+            CriterionResult(criterion_id="c2", level_id="excellent", score=1.0),
         ]
         evaluation = RubricEvaluation(
             id="eval_test123",

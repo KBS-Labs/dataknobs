@@ -245,7 +245,11 @@ class Registry(Generic[T]):
             if key not in self._items:
                 raise NotFoundError(
                     f"Item not found: {key}",
-                    context={"key": key, "registry": self._name, "available_keys": list(self._items.keys())},
+                    context={
+                        "key": key,
+                        "registry": self._name,
+                        "available_keys": list(self._items.keys()),
+                    },
                 )
             return self._items[key]
 
@@ -653,7 +657,11 @@ class AsyncRegistry(Generic[T]):
             if key not in self._items:
                 raise NotFoundError(
                     f"Item not found: {key}",
-                    context={"key": key, "registry": self._name, "available_keys": list(self._items.keys())},
+                    context={
+                        "key": key,
+                        "registry": self._name,
+                        "available_keys": list(self._items.keys()),
+                    },
                 )
             return self._items[key]
 
@@ -1389,22 +1397,14 @@ class PluginRegistry(Generic[T]):
         factory, key, config = self._resolve_factory(key, config)
 
         try:
-            if isinstance(factory, type) and hasattr(
-                factory, "from_config_async"
-            ):
-                instance = await factory.from_config_async(
-                    config or {}, **kwargs
-                )
+            if isinstance(factory, type) and hasattr(factory, "from_config_async"):
+                instance = await factory.from_config_async(config or {}, **kwargs)
             else:
-                if isinstance(factory, type) and hasattr(
-                    factory, "from_config"
-                ):
+                if isinstance(factory, type) and hasattr(factory, "from_config"):
                     result = factory.from_config(config or {}, **kwargs)
                 else:
                     result = factory(config or {}, **kwargs)
-                instance = (
-                    await result if inspect.isawaitable(result) else result
-                )
+                instance = await result if inspect.isawaitable(result) else result
 
             self._check_validate_type(key, instance)
 
@@ -1448,23 +1448,17 @@ class PluginRegistry(Generic[T]):
         # Resolve key
         if key is None:
             if self._config_key is None:
-                raise ValueError(
-                    "key is required when config_key is not configured"
-                )
-            resolved = (config or {}).get(
-                self._config_key, self._config_key_default
-            )
+                raise ValueError("key is required when config_key is not configured")
+            resolved = (config or {}).get(self._config_key, self._config_key_default)
             if resolved is None:
                 raise ValueError(
-                    f"config must contain '{self._config_key}' "
-                    f"(no default configured)"
+                    f"config must contain '{self._config_key}' (no default configured)"
                 )
             key = resolved
 
             # Strip the routing key from config before passing to factory
             if self._strip_config_key and config is not None:
-                config = {k: v for k, v in config.items()
-                          if k != self._config_key}
+                config = {k: v for k, v in config.items() if k != self._config_key}
 
         key = self._canon(key)
 

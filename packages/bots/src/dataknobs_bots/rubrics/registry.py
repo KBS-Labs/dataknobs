@@ -98,9 +98,7 @@ class RubricRegistry:
     """
 
     def __init__(self, db: AsyncDatabase) -> None:
-        self._store: AsyncKeyedRecordStore[Rubric] = AsyncKeyedRecordStore[
-            Rubric
-        ](
+        self._store: AsyncKeyedRecordStore[Rubric] = AsyncKeyedRecordStore[Rubric](
             db,
             serializer=_rubric_to_columns,
             deserializer=_rubric_from_record,
@@ -140,9 +138,7 @@ class RubricRegistry:
         )
         return rubric.id
 
-    async def get(
-        self, rubric_id: str, version: str | None = None
-    ) -> Rubric | None:
+    async def get(self, rubric_id: str, version: str | None = None) -> Rubric | None:
         """Retrieve a rubric by ID, optionally at a specific version.
 
         Args:
@@ -207,9 +203,7 @@ class RubricRegistry:
             q.sort_specs = list(sort)
 
         records = await self._store.search(q)
-        rubrics = [
-            _rubric_from_record(r) for r in iter_latest_records(records)
-        ]
+        rubrics = [_rubric_from_record(r) for r in iter_latest_records(records)]
 
         # Apply pagination after dedup.  See docstring for why these
         # cannot be pushed to the database alongside the filters.
@@ -287,9 +281,7 @@ class RubricRegistry:
             q.sort_specs = list(sort)
 
         records = await self._store.search(q)
-        rubrics = [
-            _rubric_from_record(r) for r in iter_latest_records(records)
-        ]
+        rubrics = [_rubric_from_record(r) for r in iter_latest_records(records)]
 
         if offset is not None:
             rubrics = rubrics[offset:]
@@ -386,9 +378,7 @@ class RubricRegistry:
         return filters
 
     @classmethod
-    async def from_config(
-        cls, config: dict[str, Any], db: AsyncDatabase
-    ) -> RubricRegistry:
+    async def from_config(cls, config: dict[str, Any], db: AsyncDatabase) -> RubricRegistry:
         """Create a registry and load rubrics from a config dict.
 
         The config should have a ``"rubrics"`` key containing a list

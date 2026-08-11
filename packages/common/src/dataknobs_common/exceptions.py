@@ -476,9 +476,7 @@ class DottedPathTypeError(ConfigurationError):
             expected: The base class or protocol the target had to satisfy.
             **context: Extra context keys, merged into ``context``.
         """
-        super().__init__(
-            message, context={"ref": ref, "expected": expected, **context}
-        )
+        super().__init__(message, context={"ref": ref, "expected": expected, **context})
         self.ref = ref
         self.expected = expected
 

@@ -46,13 +46,9 @@ def test_no_region_defers_to_boto_chain() -> None:
 
 def test_region_kwarg_threads_through() -> None:
     """Explicit region= kwarg pins the region on the session + client kwargs."""
-    backend = S3KnowledgeBackend(
-        bucket="explicit-bucket", region="eu-west-1"
-    )
+    backend = S3KnowledgeBackend(bucket="explicit-bucket", region="eu-west-1")
     assert backend._session_config.region_name == "eu-west-1"
-    assert backend._session_config.to_client_kwargs()["region_name"] == (
-        "eu-west-1"
-    )
+    assert backend._session_config.to_client_kwargs()["region_name"] == ("eu-west-1")
 
 
 def test_region_name_via_from_config() -> None:
@@ -65,9 +61,7 @@ def test_region_name_via_from_config() -> None:
 
 def test_region_via_from_config() -> None:
     """``region`` (legacy key) accepted in from_config dict."""
-    backend = S3KnowledgeBackend.from_config(
-        {"bucket": "legacy-key-bucket", "region": "eu-west-1"}
-    )
+    backend = S3KnowledgeBackend.from_config({"bucket": "legacy-key-bucket", "region": "eu-west-1"})
     assert backend._session_config.region_name == "eu-west-1"
 
 

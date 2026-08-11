@@ -128,10 +128,12 @@ class TestMultiToolResponse:
 
     def test_multi_tool_response(self) -> None:
         """Create response with multiple tools."""
-        response = multi_tool_response([
-            ("preview", {}),
-            ("validate", {"strict": True}),
-        ])
+        response = multi_tool_response(
+            [
+                ("preview", {}),
+                ("validate", {"strict": True}),
+            ]
+        )
 
         assert response.tool_calls is not None
         assert len(response.tool_calls) == 2
@@ -171,13 +173,15 @@ class TestExtractionResponse:
 
     def test_extraction_response_nested_data(self) -> None:
         """Create extraction response with nested data."""
-        response = extraction_response({
-            "bot": {
-                "name": "Math Tutor",
-                "settings": {"difficulty": 5},
-            },
-            "tags": ["math", "education"],
-        })
+        response = extraction_response(
+            {
+                "bot": {
+                    "name": "Math Tutor",
+                    "settings": {"difficulty": 5},
+                },
+                "tags": ["math", "education"],
+            }
+        )
 
         data = json.loads(response.content)
         assert data["bot"]["name"] == "Math Tutor"
@@ -232,10 +236,12 @@ class TestResponseSequenceBuilder:
         """Add multi-tool response via builder."""
         responses = (
             ResponseSequenceBuilder()
-            .add_multi_tool([
-                ("tool1", {"x": 1}),
-                ("tool2", {"y": 2}),
-            ])
+            .add_multi_tool(
+                [
+                    ("tool1", {"x": 1}),
+                    ("tool2", {"y": 2}),
+                ]
+            )
             .build()
         )
 
@@ -245,11 +251,7 @@ class TestResponseSequenceBuilder:
 
     def test_add_extraction(self) -> None:
         """Add extraction response via builder."""
-        responses = (
-            ResponseSequenceBuilder()
-            .add_extraction({"name": "Test Bot"})
-            .build()
-        )
+        responses = ResponseSequenceBuilder().add_extraction({"name": "Test Bot"}).build()
 
         assert len(responses) == 1
         data = json.loads(responses[0].content)
@@ -259,12 +261,7 @@ class TestResponseSequenceBuilder:
         """Add custom LLMResponse via builder."""
         custom = text_response("Custom!", model="special-model")
 
-        responses = (
-            ResponseSequenceBuilder()
-            .add(custom)
-            .add_text("Regular")
-            .build()
-        )
+        responses = ResponseSequenceBuilder().add(custom).add_text("Regular").build()
 
         assert len(responses) == 2
         assert responses[0].model == "special-model"
@@ -292,10 +289,12 @@ class TestEchoProviderIntegration:
     async def test_tool_call_then_text(self) -> None:
         """EchoProvider returns tool call then text."""
         provider = EchoProvider({"provider": "echo", "model": "test"})
-        provider.set_responses([
-            tool_call_response("my_tool", {"x": 1}),
-            text_response("Tool executed!"),
-        ])
+        provider.set_responses(
+            [
+                tool_call_response("my_tool", {"x": 1}),
+                text_response("Tool executed!"),
+            ]
+        )
 
         # First call returns tool call
         response1 = await provider.complete("Do something", tools=["my_tool"])
@@ -311,9 +310,11 @@ class TestEchoProviderIntegration:
     async def test_extraction_sequence(self) -> None:
         """Test extraction response in sequence."""
         provider = EchoProvider({"provider": "echo", "model": "test"})
-        provider.set_responses([
-            extraction_response({"name": "Test Bot"}),
-        ])
+        provider.set_responses(
+            [
+                extraction_response({"name": "Test Bot"}),
+            ]
+        )
 
         response = await provider.complete("Extract data")
         data = json.loads(response.content)
@@ -352,13 +353,17 @@ class TestEchoProviderIntegration:
     async def test_multi_tool_response_integration(self) -> None:
         """Test multi-tool response with EchoProvider."""
         provider = EchoProvider({"provider": "echo", "model": "test"})
-        provider.set_responses([
-            multi_tool_response([
-                ("preview_config", {}),
-                ("validate_config", {"strict": True}),
-            ]),
-            text_response("All done!"),
-        ])
+        provider.set_responses(
+            [
+                multi_tool_response(
+                    [
+                        ("preview_config", {}),
+                        ("validate_config", {"strict": True}),
+                    ]
+                ),
+                text_response("All done!"),
+            ]
+        )
 
         # First call returns multiple tools
         response1 = await provider.complete(

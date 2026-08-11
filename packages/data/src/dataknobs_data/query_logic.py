@@ -18,6 +18,7 @@ if TYPE_CHECKING:
 
 class LogicOperator(Enum):
     """Logical operators for combining conditions."""
+
     AND = "and"
     OR = "or"
     NOT = "not"
@@ -46,6 +47,7 @@ class Condition(ABC):
 @dataclass
 class FilterCondition(Condition):
     """A single filter condition."""
+
     filter: Filter
 
     def matches(self, record: Any) -> bool:
@@ -65,7 +67,7 @@ class FilterCondition(Condition):
         elif isinstance(record, dict):
             # Support nested field access for dicts
             value = record
-            for part in self.filter.field.split('.'):
+            for part in self.filter.field.split("."):
                 if isinstance(value, dict):
                     value = value.get(part)
                 else:
@@ -78,10 +80,7 @@ class FilterCondition(Condition):
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary representation."""
-        return {
-            "type": "filter",
-            "filter": self.filter.to_dict()
-        }
+        return {"type": "filter", "filter": self.filter.to_dict()}
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> FilterCondition:
@@ -92,6 +91,7 @@ class FilterCondition(Condition):
 @dataclass
 class LogicCondition(Condition):
     """A logical combination of conditions."""
+
     operator: LogicOperator
     conditions: list[Condition] = field(default_factory=list)
 
@@ -119,7 +119,7 @@ class LogicCondition(Condition):
         return {
             "type": "logic",
             "operator": self.operator.value,
-            "conditions": [cond.to_dict() for cond in self.conditions]
+            "conditions": [cond.to_dict() for cond in self.conditions],
         }
 
     @classmethod
@@ -132,10 +132,7 @@ class LogicCondition(Condition):
             elif cond_data["type"] == "logic":
                 conditions.append(LogicCondition.from_dict(cond_data))
 
-        return cls(
-            operator=LogicOperator(data["operator"]),
-            conditions=conditions
-        )
+        return cls(operator=LogicOperator(data["operator"]), conditions=conditions)
 
 
 def condition_from_dict(data: dict[str, Any]) -> Condition:
@@ -167,13 +164,15 @@ class QueryBuilder:
 
         if self.root_condition is None:
             self.root_condition = filter_cond
-        elif isinstance(self.root_condition, LogicCondition) and self.root_condition.operator == LogicOperator.AND:
+        elif (
+            isinstance(self.root_condition, LogicCondition)
+            and self.root_condition.operator == LogicOperator.AND
+        ):
             self.root_condition.conditions.append(filter_cond)
         else:
             # Wrap existing condition in AND
             self.root_condition = LogicCondition(
-                operator=LogicOperator.AND,
-                conditions=[self.root_condition, filter_cond]
+                operator=LogicOperator.AND, conditions=[self.root_condition, filter_cond]
             )
 
         return self
@@ -193,12 +192,14 @@ class QueryBuilder:
 
         if self.root_condition is None:
             self.root_condition = logic_cond
-        elif isinstance(self.root_condition, LogicCondition) and self.root_condition.operator == LogicOperator.AND:
+        elif (
+            isinstance(self.root_condition, LogicCondition)
+            and self.root_condition.operator == LogicOperator.AND
+        ):
             self.root_condition.conditions.extend(logic_cond.conditions)
         else:
             self.root_condition = LogicCondition(
-                operator=LogicOperator.AND,
-                conditions=[self.root_condition, logic_cond]
+                operator=LogicOperator.AND, conditions=[self.root_condition, logic_cond]
             )
 
         return self
@@ -220,12 +221,15 @@ class QueryBuilder:
             self.root_condition = logic_cond
         else:
             # Always wrap in OR at top level
-            if isinstance(self.root_condition, LogicCondition) and self.root_condition.operator == LogicOperator.OR:
+            if (
+                isinstance(self.root_condition, LogicCondition)
+                and self.root_condition.operator == LogicOperator.OR
+            ):
                 self.root_condition.conditions.extend(logic_cond.conditions)
             else:
                 self.root_condition = LogicCondition(
                     operator=LogicOperator.OR,
-                    conditions=[self.root_condition] + logic_cond.conditions
+                    conditions=[self.root_condition] + logic_cond.conditions,
                 )
 
         return self
@@ -235,27 +239,25 @@ class QueryBuilder:
         if isinstance(condition, QueryBuilder):
             not_cond = LogicCondition(
                 operator=LogicOperator.NOT,
-                conditions=[condition.root_condition] if condition.root_condition else []
+                conditions=[condition.root_condition] if condition.root_condition else [],
             )
         elif isinstance(condition, Filter):
             not_cond = LogicCondition(
-                operator=LogicOperator.NOT,
-                conditions=[FilterCondition(condition)]
+                operator=LogicOperator.NOT, conditions=[FilterCondition(condition)]
             )
         else:
-            not_cond = LogicCondition(
-                operator=LogicOperator.NOT,
-                conditions=[condition]
-            )
+            not_cond = LogicCondition(operator=LogicOperator.NOT, conditions=[condition])
 
         if self.root_condition is None:
             self.root_condition = not_cond
-        elif isinstance(self.root_condition, LogicCondition) and self.root_condition.operator == LogicOperator.AND:
+        elif (
+            isinstance(self.root_condition, LogicCondition)
+            and self.root_condition.operator == LogicOperator.AND
+        ):
             self.root_condition.conditions.append(not_cond)
         else:
             self.root_condition = LogicCondition(
-                operator=LogicOperator.AND,
-                conditions=[self.root_condition, not_cond]
+                operator=LogicOperator.AND, conditions=[self.root_condition, not_cond]
             )
 
         return self
@@ -314,7 +316,7 @@ class QueryBuilder:
             limit_value=self.limit_value,
             offset_value=self.offset_value,
             fields=self.fields,
-            vector_query=self.vector_query
+            vector_query=self.vector_query,
         )
 
 
@@ -342,9 +344,7 @@ class ComplexQuery:
                 for f in q.filters:
                     conditions.append(FilterCondition(filter=f))
 
-        return cls(
-            condition=LogicCondition(operator=LogicOperator.AND, conditions=conditions)
-        )
+        return cls(condition=LogicCondition(operator=LogicOperator.AND, conditions=conditions))
 
     @classmethod
     def OR(cls, queries: list[Query]) -> ComplexQuery:
@@ -358,9 +358,7 @@ class ComplexQuery:
                 for f in q.filters:
                     conditions.append(FilterCondition(filter=f))
 
-        return cls(
-            condition=LogicCondition(operator=LogicOperator.OR, conditions=conditions)
-        )
+        return cls(condition=LogicCondition(operator=LogicOperator.OR, conditions=conditions))
 
     def matches(self, record: Any) -> bool:
         """Check if a record matches this query."""
@@ -379,7 +377,10 @@ class ComplexQuery:
             pass
         elif isinstance(self.condition, FilterCondition):
             filters.append(self.condition.filter)
-        elif isinstance(self.condition, LogicCondition) and self.condition.operator == LogicOperator.AND:
+        elif (
+            isinstance(self.condition, LogicCondition)
+            and self.condition.operator == LogicOperator.AND
+        ):
             # Check if all sub-conditions are simple filters
             all_filters = True
             for cond in self.condition.conditions:
@@ -401,7 +402,7 @@ class ComplexQuery:
             limit_value=self.limit_value,
             offset_value=self.offset_value,
             fields=self.fields,
-            vector_query=self.vector_query
+            vector_query=self.vector_query,
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -451,5 +452,5 @@ class ComplexQuery:
             limit_value=data.get("limit"),
             offset_value=data.get("offset"),
             fields=data.get("fields"),
-            vector_query=vector_query
+            vector_query=vector_query,
         )

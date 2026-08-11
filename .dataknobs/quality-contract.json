@@ -64,19 +64,19 @@
         {
           "path": "packages/*/tests",
           "tier": "deferred",
-          "ceiling": 1766,
+          "ceiling": 1685,
           "reason": "wants each package's src cleared first; 101 of these are ASYNC230/ASYNC240, which is blocking I/O on the event loop and a defect rather than a tidy-up"
         },
         {
           "path": "packages/*/examples",
           "tier": "deferred",
-          "ceiling": 241,
+          "ceiling": 219,
           "reason": "~90% under data/ and fsm/; needs a policy call on T201 and the annotation family before sweeping, since this is the code consumers copy"
         },
         {
           "path": "packages/*/scripts",
           "tier": "deferred",
-          "ceiling": 9,
+          "ceiling": 8,
           "reason": "one sitting, alongside benchmarks and docs"
         },
         {
@@ -88,7 +88,7 @@
         {
           "path": "packages/*/docs",
           "tier": "deferred",
-          "ceiling": 7,
+          "ceiling": 6,
           "reason": "all in a single fsm/ module"
         }
       ]
@@ -222,8 +222,7 @@
       "unit": "files",
       "config": "pyproject.toml",
       "tiers": {
-        "enforced": "formatted, and a regression fails",
-        "pending": "declared but not yet formatted; the count is files the formatter would rewrite"
+        "enforced": "formatted, and a file the formatter would rewrite fails"
       },
       "cells": [
         {
@@ -234,57 +233,57 @@
         },
         {
           "path": "conftest.py",
-          "tier": "pending",
-          "ceiling": 1,
-          "reason": "one file, and it moves with the repository-wide reformat rather than ahead of it"
+          "tier": "enforced",
+          "ceiling": 0,
+          "reason": "formatted by the workspace-wide adoption; a regression fails"
         },
         {
           "path": "packages/*/src",
-          "tier": "pending",
-          "ceiling": 398,
-          "reason": "the formatter is declared in pyproject.toml and named in five published doc lines while being enforced nowhere; adopting it is one repository-wide diff, and doing it piecemeal would spread the blame-noise across many commits instead of one"
+          "tier": "enforced",
+          "ceiling": 0,
+          "reason": "formatted by the workspace-wide adoption; a regression fails"
         },
         {
           "path": "packages/*/tests",
-          "tier": "pending",
-          "ceiling": 660,
-          "reason": "same reformat"
+          "tier": "enforced",
+          "ceiling": 0,
+          "reason": "formatted by the workspace-wide adoption; a regression fails"
         },
         {
           "path": "packages/*/examples",
-          "tier": "pending",
-          "ceiling": 28,
-          "reason": "same reformat"
+          "tier": "enforced",
+          "ceiling": 0,
+          "reason": "formatted by the workspace-wide adoption; a regression fails"
         },
         {
           "path": "packages/*/scripts",
-          "tier": "pending",
-          "ceiling": 2,
-          "reason": "same reformat"
+          "tier": "enforced",
+          "ceiling": 0,
+          "reason": "formatted by the workspace-wide adoption; a regression fails"
         },
         {
           "path": "packages/*/benchmarks",
-          "tier": "pending",
-          "ceiling": 6,
-          "reason": "same reformat"
+          "tier": "enforced",
+          "ceiling": 0,
+          "reason": "formatted by the workspace-wide adoption; a regression fails"
         },
         {
           "path": "packages/*/docs",
-          "tier": "pending",
-          "ceiling": 1,
-          "reason": "same reformat"
+          "tier": "enforced",
+          "ceiling": 0,
+          "reason": "formatted by the workspace-wide adoption; a regression fails"
         },
         {
           "path": "tests",
-          "tier": "pending",
-          "ceiling": 20,
-          "reason": "same reformat; note the line-numbered allow sets in test_dotted_import_consolidation.py move with it"
+          "tier": "enforced",
+          "ceiling": 0,
+          "reason": "formatted by the workspace-wide adoption; a regression fails"
         },
         {
           "path": "bin",
-          "tier": "pending",
-          "ceiling": 12,
-          "reason": "same reformat"
+          "tier": "enforced",
+          "ceiling": 0,
+          "reason": "formatted by the workspace-wide adoption; a regression fails"
         }
       ]
     }

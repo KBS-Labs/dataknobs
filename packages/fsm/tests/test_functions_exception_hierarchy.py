@@ -121,9 +121,7 @@ class TestTheDetailIsReadableAsContext:
     def test_validation_errors_reach_the_context(self) -> None:
         err = ValidationError("invalid", ["name is required", "age must be > 0"])
         assert err.validation_errors == ["name is required", "age must be > 0"]
-        assert err.context == {
-            "validation_errors": ["name is required", "age must be > 0"]
-        }
+        assert err.context == {"validation_errors": ["name is required", "age must be > 0"]}
 
     def test_no_validation_errors_leaves_the_context_empty(self) -> None:
         err = ValidationError("invalid")
@@ -158,11 +156,13 @@ class TestTheNamesWithNoRaiserAreDeprecated:
     )
     def test_constructing_one_warns(self, cls) -> None:
         with pytest.warns(DeprecationWarning):
-            _ = cls(*{
-                FSMError: ("boom",),
-                StateTransitionError: ("boom", "draft"),
-                ConfigurationError: ("boom",),
-            }[cls])
+            _ = cls(
+                *{
+                    FSMError: ("boom",),
+                    StateTransitionError: ("boom", "draft"),
+                    ConfigurationError: ("boom",),
+                }[cls]
+            )
 
     @pytest.mark.parametrize(
         "cls",

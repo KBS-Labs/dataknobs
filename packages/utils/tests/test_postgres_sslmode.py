@@ -33,9 +33,7 @@ def _capture_connect(monkeypatch: Any) -> dict[str, Any]:
 class TestConnectorSslmode:
     def test_sslmode_omitted_by_default(self, monkeypatch: Any) -> None:
         captured = _capture_connect(monkeypatch)
-        conn = DotenvPostgresConnector(
-            host="h", db="d", user="u", pwd="p", port=5432
-        )
+        conn = DotenvPostgresConnector(host="h", db="d", user="u", pwd="p", port=5432)
         assert conn.sslmode is None
         conn.get_conn()
         assert "sslmode" not in captured

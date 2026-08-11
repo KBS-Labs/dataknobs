@@ -41,8 +41,7 @@ def _three_field_config() -> dict:
         .field("domain_id", field_type="string", required=True)
         .transition(
             "done",
-            "data.get('name') and data.get('domain_name') "
-            "and data.get('domain_id')",
+            "data.get('name') and data.get('domain_name') and data.get('domain_id')",
         )
         .stage("done", is_end=True, prompt="All done!")
         .build()
@@ -103,13 +102,10 @@ class TestPipelineShortCircuit:
             main_responses=["All set!"],
             extraction_results=[
                 # All fields present in initial extraction
-                [{"name": "Alice", "domain_id": "chess-champ",
-                  "domain_name": "Chess Champ"}],
+                [{"name": "Alice", "domain_id": "chess-champ", "domain_name": "Chess Champ"}],
             ],
         ) as harness:
-            await harness.chat(
-                "I'm Alice, domain chess-champ aka Chess Champ"
-            )
+            await harness.chat("I'm Alice, domain chess-champ aka Chess Champ")
             assert harness.wizard_stage == "done"
 
     @pytest.mark.asyncio
@@ -187,8 +183,7 @@ class TestPipelineOrdering:
                 # escalation (wizard_session scope) gives all 3
                 [
                     {"domain_id": "chess-champ"},
-                    {"name": "Alice", "domain_id": "chess-champ",
-                     "domain_name": "Chess Champ"},
+                    {"name": "Alice", "domain_id": "chess-champ", "domain_name": "Chess Champ"},
                 ],
             ],
         ) as harness:
@@ -298,9 +293,7 @@ class TestFocusedRetry:
                 ],
             ],
         ) as harness:
-            await harness.chat(
-                "I'm Alice, domain chess-champ, display Chess Champ"
-            )
+            await harness.chat("I'm Alice, domain chess-champ, display Chess Champ")
             assert harness.wizard_data["domain_name"] == "Chess Champ"
             assert harness.wizard_stage == "done"
 
@@ -337,7 +330,9 @@ class TestFullPipeline:
             .field("domain_id", field_type="string", required=True)
             .field("domain_name", field_type="string", required=True)
             .field(
-                "llm_provider", field_type="string", required=True,
+                "llm_provider",
+                field_type="string",
+                required=True,
                 enum=["ollama", "openai", "anthropic"],
             )
             .transition(
@@ -387,9 +382,7 @@ class TestFullPipeline:
             ],
         ) as harness:
             await harness.chat("I'm Alice")
-            await harness.chat(
-                "Domain chess-champ, use ollama"
-            )
+            await harness.chat("Domain chess-champ, use ollama")
             assert harness.wizard_data["name"] == "Alice"
             assert harness.wizard_data["domain_id"] == "chess-champ"
             assert harness.wizard_data["domain_name"] == "Chess Champ"
@@ -483,8 +476,7 @@ class TestPerStageDisable:
             .field("domain_name", field_type="string", required=True)
             .transition(
                 "done",
-                "data.get('name') and data.get('domain_id') "
-                "and data.get('domain_name')",
+                "data.get('name') and data.get('domain_id') and data.get('domain_name')",
             )
             .stage("done", is_end=True, prompt="All done!")
             .build()
@@ -515,8 +507,7 @@ class TestPerStageDisable:
                 # Escalation fires and returns all 3 fields.
                 [
                     {"domain_id": "chess-champ"},
-                    {"name": "Alice", "domain_id": "chess-champ",
-                     "domain_name": "Chess Champ"},
+                    {"name": "Alice", "domain_id": "chess-champ", "domain_name": "Chess Champ"},
                 ],
             ],
         ) as harness:
@@ -590,7 +581,9 @@ class TestPipelineConfiguration:
             )
             .field("name", field_type="string", required=True)
             .field(
-                "provider", field_type="string", required=True,
+                "provider",
+                field_type="string",
+                required=True,
                 default="ollama",
             )
             .transition(
@@ -672,8 +665,7 @@ class TestPipelineConfiguration:
             wizard_config=config,
             main_responses=["All set!"],
             extraction_results=[
-                [{"name": "Alice", "domain_id": "chess-champ",
-                  "domain_name": "Chess Champ"}],
+                [{"name": "Alice", "domain_id": "chess-champ", "domain_name": "Chess Champ"}],
             ],
         ) as harness:
             await harness.chat("I'm Alice, domain chess-champ, Chess Champ")

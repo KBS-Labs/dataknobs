@@ -69,18 +69,21 @@ def pytest_sessionfinish(session, exitstatus):
         # Clean up any remaining pools
         try:
             from dataknobs_data.backends.elasticsearch_async import _client_manager as es_manager
+
             await es_manager.close_all()
         except Exception:
             pass  # Ignore cleanup errors
 
         try:
             from dataknobs_data.backends.s3_async import _session_manager as s3_manager
+
             await s3_manager.close_all()
         except Exception:
             pass  # Ignore cleanup errors
 
         try:
             from dataknobs_data.backends.postgres_native import _pool_manager as pg_manager
+
             await pg_manager.close_all()
         except Exception:
             pass  # Ignore cleanup errors

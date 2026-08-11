@@ -109,19 +109,23 @@ def test_cached_resolver_lru_eviction() -> None:
 
 
 def test_composite_resolver_first_non_none_wins() -> None:
-    r = CompositeResolver([
-        NullResolver[str, int](),
-        MappingResolver({"a": 99}),
-        MappingResolver({"a": 1}),  # masked by the earlier resolver
-    ])
+    r = CompositeResolver(
+        [
+            NullResolver[str, int](),
+            MappingResolver({"a": 99}),
+            MappingResolver({"a": 1}),  # masked by the earlier resolver
+        ]
+    )
     assert r.resolve("a") == 99
 
 
 def test_composite_resolver_all_none_returns_none() -> None:
-    r = CompositeResolver([
-        NullResolver[str, int](),
-        NullResolver[str, int](),
-    ])
+    r = CompositeResolver(
+        [
+            NullResolver[str, int](),
+            NullResolver[str, int](),
+        ]
+    )
     assert r.resolve("anything") is None
 
 

@@ -301,9 +301,7 @@ async def test_all_upsert_buffer_commits_as_single_batch():
     await db.connect()
     try:
         async with db.transaction() as tx:  # strict; sqlite is transactional
-            await tx.upsert_batch(
-                [Record({"id": "1", "v": "a"}), Record({"id": "2", "v": "b"})]
-            )
+            await tx.upsert_batch([Record({"id": "1", "v": "a"}), Record({"id": "2", "v": "b"})])
             await tx.upsert("3", Record({"v": "c"}))  # explicit-id form, coalesced
             assert tx.is_atomic is True  # single-kind all-upsert
         assert await db.count() == 3
@@ -319,15 +317,11 @@ async def test_all_upsert_buffer_is_idempotent_and_persists():
     db = await _sqlite_db()
     try:
         async with db.transaction() as tx:
-            await tx.upsert_batch(
-                [Record({"id": "1", "v": "a"}), Record({"id": "2", "v": "b"})]
-            )
+            await tx.upsert_batch([Record({"id": "1", "v": "a"}), Record({"id": "2", "v": "b"})])
         assert await db.count() == 2
         # Re-commit the same ids: overwrite, not duplicate (idempotent).
         async with db.transaction() as tx:
-            await tx.upsert_batch(
-                [Record({"id": "1", "v": "A"}), Record({"id": "2", "v": "B"})]
-            )
+            await tx.upsert_batch([Record({"id": "1", "v": "A"}), Record({"id": "2", "v": "B"})])
         assert await db.count() == 2
         rec = await db.read("1")
         assert rec is not None and rec.get_value("v") == "A"
@@ -372,9 +366,7 @@ async def test_all_upsert_commit_failure_persists_nothing():
     await db.connect()
     try:
         tx = await db.begin_transaction()
-        await tx.upsert_batch(
-            [Record({"id": "1", "v": "a"}), Record({"id": "2", "v": "b"})]
-        )
+        await tx.upsert_batch([Record({"id": "1", "v": "a"}), Record({"id": "2", "v": "b"})])
         assert tx.is_atomic is True
         with pytest.raises(RuntimeError, match="upsert batch failed"):
             await tx.commit()
@@ -390,9 +382,7 @@ async def test_mixed_create_upsert_buffer_commits_all_rows():
     try:
         tx = await db.begin_transaction()
         await tx.create(Record({"id": "c1", "v": "created"}))
-        await tx.upsert_batch(
-            [Record({"id": "u1", "v": "up1"}), Record({"id": "u2", "v": "up2"})]
-        )
+        await tx.upsert_batch([Record({"id": "u1", "v": "up1"}), Record({"id": "u2", "v": "up2"})])
         assert tx.is_atomic is True  # spans 2 kinds, one native txn → atomic
         res = await tx.commit()
         # The coalescer must not drop or reorder ops: all 3 rows land.
@@ -406,9 +396,7 @@ async def test_all_upsert_buffer_on_memory_is_best_effort():
     db = await _memory_db()
     try:
         tx = await db.begin_transaction(policy="emulate")
-        await tx.upsert_batch(
-            [Record({"id": "1", "v": "a"}), Record({"id": "2", "v": "b"})]
-        )
+        await tx.upsert_batch([Record({"id": "1", "v": "a"}), Record({"id": "2", "v": "b"})])
         # Non-transactional: coalescing still happens, but the backend does not
         # wrap the batch in a transaction, so the buffer is not atomic.
         assert tx.is_atomic is False
@@ -465,9 +453,7 @@ async def test_create_batch_staging_flushes_all():
     db = await _memory_db()
     try:
         async with db.transaction(policy="emulate") as tx:
-            await tx.create_batch(
-                [Record({"i": 1}), Record({"i": 2}), Record({"i": 3})]
-            )
+            await tx.create_batch([Record({"i": 1}), Record({"i": 2}), Record({"i": 3})])
         assert await db.count() == 3
     finally:
         await db.close()

@@ -100,9 +100,7 @@ class _CacheDropTool(Tool):
         if self.bot is not None and self.conv_id is not None and not self.dropped:
             # Capture the cached manager, then evict it out from under the
             # in-flight turn.
-            self.captured_manager = self.bot._conversation_managers.get(
-                self.conv_id
-            )
+            self.captured_manager = self.bot._conversation_managers.get(self.conv_id)
             self.bot._drop_conversation_cache(self.conv_id)
             self.dropped = True
         return {"ok": True}
@@ -119,8 +117,7 @@ def _tool_history_delay(delay: float) -> Callable[[list[LLMMessage]], float]:
 
     def _fn(messages: list[LLMMessage]) -> float:
         has_tool_history = any(
-            getattr(m, "tool_calls", None) or getattr(m, "role", None) == "tool"
-            for m in messages
+            getattr(m, "tool_calls", None) or getattr(m, "role", None) == "tool" for m in messages
         )
         return delay if has_tool_history else 0.0
 
@@ -313,39 +310,24 @@ class TestRecallDeadlineAsymmetry:
 class TestCapHitWarnings:
     """Verifies the per-mode cap-hit strings survived the verbatim copy."""
 
-    async def test_buffered_cap_hit_warns(
-        self, caplog: pytest.LogCaptureFixture
-    ) -> None:
+    async def test_buffered_cap_hit_warns(self, caplog: pytest.LogCaptureFixture) -> None:
         async with await BotTestHarness.create(
             bot_config=_config(max_tool_iterations=2),
-            main_responses=[
-                tool_call_response("echo", {"text": f"iter{i}"})
-                for i in range(4)
-            ],
+            main_responses=[tool_call_response("echo", {"text": f"iter{i}"}) for i in range(4)],
             tools=[_EchoTool()],
         ) as harness:
             with caplog.at_level(logging.WARNING):
                 await harness.chat("loop forever")
 
-        assert (
-            "Tool execution loop reached max iterations" in caplog.text
-        )
+        assert "Tool execution loop reached max iterations" in caplog.text
 
-    async def test_streaming_cap_hit_warns(
-        self, caplog: pytest.LogCaptureFixture
-    ) -> None:
+    async def test_streaming_cap_hit_warns(self, caplog: pytest.LogCaptureFixture) -> None:
         async with await BotTestHarness.create(
             bot_config=_config(max_tool_iterations=2),
-            main_responses=[
-                tool_call_response("echo", {"text": f"iter{i}"})
-                for i in range(4)
-            ],
+            main_responses=[tool_call_response("echo", {"text": f"iter{i}"}) for i in range(4)],
             tools=[_EchoTool()],
         ) as harness:
             with caplog.at_level(logging.WARNING):
                 await harness.stream_chat("loop forever")
 
-        assert (
-            "Streaming tool execution loop reached max iterations"
-            in caplog.text
-        )
+        assert "Streaming tool execution loop reached max iterations" in caplog.text

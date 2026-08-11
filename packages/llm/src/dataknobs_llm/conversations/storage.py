@@ -167,6 +167,7 @@ class ConversationNode:
         ...     branch_name="polite-variant"
         ... )
     """
+
     message: LLMMessage
     node_id: str
     timestamp: datetime = field(default_factory=datetime.now)
@@ -182,7 +183,7 @@ class ConversationNode:
             "timestamp": self.timestamp.isoformat(),
             "prompt_name": self.prompt_name,
             "branch_name": self.branch_name,
-            "metadata": self.metadata
+            "metadata": self.metadata,
         }
 
     @classmethod
@@ -195,7 +196,7 @@ class ConversationNode:
             timestamp=datetime.fromisoformat(data["timestamp"]),
             prompt_name=data.get("prompt_name"),
             branch_name=data.get("branch_name"),
-            metadata=data.get("metadata", {})
+            metadata=data.get("metadata", {}),
         )
 
 
@@ -328,11 +329,7 @@ def get_nodes_for_path(tree: Tree, node_id: str) -> List["ConversationNode"]:
 
     path = tree_node.get_path()
 
-    return [
-        n.data
-        for n in path
-        if isinstance(n.data, ConversationNode)
-    ]
+    return [n.data for n in path if isinstance(n.data, ConversationNode)]
 
 
 @dataclass
@@ -383,6 +380,7 @@ class ConversationState:
         >>> tree.add_child(Tree(user_node))
         >>> state.current_node_id = "0"
     """
+
     conversation_id: str
     message_tree: Tree  # Tree[ConversationNode]
     current_node_id: str = ""
@@ -433,13 +431,10 @@ class ConversationState:
             All ``ConversationNode`` objects in chronological order.
         """
         all_tree_nodes = self.message_tree.find_nodes(
-            lambda n: True, traversal="bfs",  # noqa: ARG005
+            lambda n: True,  # noqa: ARG005 - match-everything predicate; the arg is the API's
+            traversal="bfs",
         )
-        nodes = [
-            tn.data
-            for tn in all_tree_nodes
-            if isinstance(tn.data, ConversationNode)
-        ]
+        nodes = [tn.data for tn in all_tree_nodes if isinstance(tn.data, ConversationNode)]
         nodes.sort(key=lambda n: n.timestamp)
         return nodes
 
@@ -493,7 +488,7 @@ class ConversationState:
             "current_node_id": self.current_node_id,
             "metadata": self.metadata,
             "created_at": self.created_at.isoformat(),
-            "updated_at": self.updated_at.isoformat()
+            "updated_at": self.updated_at.isoformat(),
         }
 
     @classmethod
@@ -551,7 +546,7 @@ class ConversationState:
             metadata=data["metadata"],
             created_at=datetime.fromisoformat(data["created_at"]),
             updated_at=datetime.fromisoformat(data["updated_at"]),
-            schema_version=SCHEMA_VERSION  # Always use current version after migration
+            schema_version=SCHEMA_VERSION,  # Always use current version after migration
         )
 
     @classmethod
@@ -629,13 +624,12 @@ class ConversationState:
 
         # If we get here and versions still don't match, it's unsupported
         if from_major > to_major:
-            raise SchemaVersionError(
-                f"Cannot downgrade from schema {from_version} to {to_version}"
-            )
+            raise SchemaVersionError(f"Cannot downgrade from schema {from_version} to {to_version}")
 
         logger.warning(
             "No migration path defined from %s to %s. Using data as-is.",
-            from_version, to_version,
+            from_version,
+            to_version,
         )
         data["schema_version"] = to_version
         return data
@@ -726,10 +720,7 @@ class ConversationStorage(ABC):
         pass
 
     @abstractmethod
-    async def load_conversation(
-        self,
-        conversation_id: str
-    ) -> ConversationState | None:
+    async def load_conversation(self, conversation_id: str) -> ConversationState | None:
         """Load conversation state.
 
         Args:
@@ -1053,10 +1044,7 @@ class DataknobsConversationStorage(ConversationStorage):
         except Exception as e:
             raise StorageError(f"Failed to save conversation: {e}") from e
 
-    async def load_conversation(
-        self,
-        conversation_id: str
-    ) -> ConversationState | None:
+    async def load_conversation(self, conversation_id: str) -> ConversationState | None:
         """Load conversation from backend."""
         try:
             # Read record by ID
@@ -1117,10 +1105,7 @@ class DataknobsConversationStorage(ConversationStorage):
             # Post-query content filtering
             if content_contains:
                 needle = content_contains.lower()
-                states = [
-                    s for s in states
-                    if self._conversation_contains_text(s, needle)
-                ]
+                states = [s for s in states if self._conversation_contains_text(s, needle)]
 
             # Delete each matching conversation
             deleted_ids: List[str] = []
@@ -1137,11 +1122,7 @@ class DataknobsConversationStorage(ConversationStorage):
         except Exception as e:
             raise StorageError(f"Failed to delete conversations: {e}") from e
 
-    async def update_metadata(
-        self,
-        conversation_id: str,
-        metadata: Dict[str, Any]
-    ) -> None:
+    async def update_metadata(self, conversation_id: str, metadata: Dict[str, Any]) -> None:
         """Update conversation metadata.
 
         Loads the conversation, updates its metadata, and saves it back.
@@ -1295,7 +1276,7 @@ class DataknobsConversationStorage(ConversationStorage):
 
             # Apply offset/limit after content filtering
             if content_contains:
-                states = states[offset:offset + limit]
+                states = states[offset : offset + limit]
 
             return states
 
@@ -1305,9 +1286,7 @@ class DataknobsConversationStorage(ConversationStorage):
             raise StorageError(f"Failed to search conversations: {e}") from e
 
     @staticmethod
-    def _conversation_contains_text(
-        state: ConversationState, needle: str
-    ) -> bool:
+    def _conversation_contains_text(state: ConversationState, needle: str) -> bool:
         """Check if any message in the conversation tree contains the text.
 
         Args:
@@ -1318,7 +1297,8 @@ class DataknobsConversationStorage(ConversationStorage):
             True if any message content contains the needle.
         """
         all_nodes = state.message_tree.find_nodes(
-            lambda n: True, traversal="bfs"  # noqa: ARG005
+            lambda n: True,  # noqa: ARG005 - match-everything predicate; the arg is the API's
+            traversal="bfs",
         )
         for tree_node in all_nodes:
             if isinstance(tree_node.data, ConversationNode):

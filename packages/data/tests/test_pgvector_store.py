@@ -18,7 +18,7 @@ from dataknobs_common.testing import safe_sql_ident
 # Skip all tests if PostgreSQL is not available
 pytestmark = pytest.mark.skipif(
     not os.environ.get("TEST_POSTGRES", "").lower() == "true",
-    reason="pgvector tests require TEST_POSTGRES=true and a running PostgreSQL instance with pgvector"
+    reason="pgvector tests require TEST_POSTGRES=true and a running PostgreSQL instance with pgvector",
 )
 
 # Check if asyncpg is available
@@ -76,6 +76,7 @@ def ensure_pgvector_extension():
     if loop and loop.is_running():
         # If there's already a running loop, create a new one in a thread
         import concurrent.futures
+
         with concurrent.futures.ThreadPoolExecutor() as executor:
             executor.submit(asyncio.run, setup_extension()).result()
     else:
@@ -202,10 +203,12 @@ class TestPgVectorStoreConfiguration:
         """Test that postgresql+asyncpg:// URLs are normalized."""
         conn_str = get_test_connection_string()
         asyncpg_url = conn_str.replace("postgresql://", "postgresql+asyncpg://")
-        store = PgVectorStore({
-            "connection_string": asyncpg_url,
-            "dimensions": 768,
-        })
+        store = PgVectorStore(
+            {
+                "connection_string": asyncpg_url,
+                "dimensions": 768,
+            }
+        )
         assert store.connection_string == conn_str
 
     def test_column_mappings_default(self, pgvector_config):
@@ -250,9 +253,7 @@ class TestPgVectorStoreBasicOperations:
         ids = [str(uuid.uuid4()) for _ in range(5)]
         metadata = [{"index": i} for i in range(5)]
 
-        result_ids = await pgvector_store.add_vectors(
-            vectors, ids=ids, metadata=metadata
-        )
+        result_ids = await pgvector_store.add_vectors(vectors, ids=ids, metadata=metadata)
 
         assert result_ids == ids
         count = await pgvector_store.count()
@@ -287,9 +288,7 @@ class TestPgVectorStoreBasicOperations:
 
     async def test_get_vectors_not_found(self, pgvector_store):
         """Test retrieving non-existent vectors."""
-        results = await pgvector_store.get_vectors(
-            [str(uuid.uuid4())], include_metadata=True
-        )
+        results = await pgvector_store.get_vectors([str(uuid.uuid4())], include_metadata=True)
         assert len(results) == 1
         assert results[0] == (None, None)
 
@@ -376,11 +375,14 @@ class TestPgVectorStoreSearch:
             similar_vector = base_vector + np.random.rand(128).astype(np.float32) * 0.1
             different_vector = np.random.rand(128).astype(np.float32)
 
-            vectors = np.array([
-                base_vector,
-                similar_vector,
-                different_vector,
-            ], dtype=np.float32)
+            vectors = np.array(
+                [
+                    base_vector,
+                    similar_vector,
+                    different_vector,
+                ],
+                dtype=np.float32,
+            )
             ids = ["base", "similar", "different"]
             metadata = [{"type": name} for name in ids]
 
@@ -397,7 +399,9 @@ class TestPgVectorStoreSearch:
             assert results[1][0] == "similar"
         finally:
             async with store._pool.acquire() as conn:
-                await conn.execute(f"DROP TABLE IF EXISTS {safe_sql_ident(store.schema)}.{safe_sql_ident(store.table_name)}")
+                await conn.execute(
+                    f"DROP TABLE IF EXISTS {safe_sql_ident(store.schema)}.{safe_sql_ident(store.table_name)}"
+                )
             await store.close()
 
     async def test_search_with_filter(self, pgvector_store):
@@ -464,12 +468,15 @@ class TestPgVectorStoreDistanceMetrics:
 
         try:
             # Add vectors
-            vectors = np.array([
-                [0.0, 0.0] + [0.0] * 126,
-                [1.0, 0.0] + [0.0] * 126,
-                [0.0, 1.0] + [0.0] * 126,
-                [3.0, 4.0] + [0.0] * 126,
-            ], dtype=np.float32)
+            vectors = np.array(
+                [
+                    [0.0, 0.0] + [0.0] * 126,
+                    [1.0, 0.0] + [0.0] * 126,
+                    [0.0, 1.0] + [0.0] * 126,
+                    [3.0, 4.0] + [0.0] * 126,
+                ],
+                dtype=np.float32,
+            )
             ids = ["origin", "x1", "y1", "far"]
             await store.add_vectors(vectors, ids=ids)
 
@@ -482,7 +489,9 @@ class TestPgVectorStoreDistanceMetrics:
             assert results[0][0] == "origin"
         finally:
             async with store._pool.acquire() as conn:
-                await conn.execute(f"DROP TABLE IF EXISTS {safe_sql_ident(store.schema)}.{safe_sql_ident(store.table_name)}")
+                await conn.execute(
+                    f"DROP TABLE IF EXISTS {safe_sql_ident(store.schema)}.{safe_sql_ident(store.table_name)}"
+                )
             await store.close()
 
     async def test_inner_product_metric(self, ensure_pgvector_extension):
@@ -511,7 +520,9 @@ class TestPgVectorStoreDistanceMetrics:
             assert results[0][1] >= results[1][1]
         finally:
             async with store._pool.acquire() as conn:
-                await conn.execute(f"DROP TABLE IF EXISTS {safe_sql_ident(store.schema)}.{safe_sql_ident(store.table_name)}")
+                await conn.execute(
+                    f"DROP TABLE IF EXISTS {safe_sql_ident(store.schema)}.{safe_sql_ident(store.table_name)}"
+                )
             await store.close()
 
 
@@ -526,22 +537,26 @@ class TestPgVectorStoreDomainIsolation:
         conn_str = get_test_connection_string()
 
         # Create stores for two domains
-        store1 = PgVectorStore({
-            "connection_string": conn_str,
-            "dimensions": 128,
-            "schema": "public",
-            "table_name": table_name,
-            "domain_id": "domain-1",
-            "auto_create_table": True,
-        })
-        store2 = PgVectorStore({
-            "connection_string": conn_str,
-            "dimensions": 128,
-            "schema": "public",
-            "table_name": table_name,
-            "domain_id": "domain-2",
-            "auto_create_table": False,  # Table already created by store1
-        })
+        store1 = PgVectorStore(
+            {
+                "connection_string": conn_str,
+                "dimensions": 128,
+                "schema": "public",
+                "table_name": table_name,
+                "domain_id": "domain-1",
+                "auto_create_table": True,
+            }
+        )
+        store2 = PgVectorStore(
+            {
+                "connection_string": conn_str,
+                "dimensions": 128,
+                "schema": "public",
+                "table_name": table_name,
+                "domain_id": "domain-2",
+                "auto_create_table": False,  # Table already created by store1
+            }
+        )
 
         await store1.initialize()
         await store2.initialize()
@@ -615,7 +630,9 @@ class TestPgVectorStoreTextIds:
             assert await store.count() == 2
         finally:
             async with store._pool.acquire() as conn:
-                await conn.execute(f"DROP TABLE IF EXISTS {safe_sql_ident(store.schema)}.{safe_sql_ident(store.table_name)}")
+                await conn.execute(
+                    f"DROP TABLE IF EXISTS {safe_sql_ident(store.schema)}.{safe_sql_ident(store.table_name)}"
+                )
             await store.close()
 
 
@@ -728,9 +745,7 @@ class TestPgVectorStoreIdTypeDefaults:
                 )
             await store.close()
 
-    async def test_uuid_type_with_text_id_raises_guided_error(
-        self, ensure_pgvector_extension
-    ):
+    async def test_uuid_type_with_text_id_raises_guided_error(self, ensure_pgvector_extension):
         """Defect C: uuid-typed store + non-UUID id → guided ``ValueError``.
 
         The raw ``asyncpg.DataError`` is wrapped in a ``ValueError`` whose
@@ -837,7 +852,8 @@ class TestPgVectorStoreIdTypeDefaults:
         try:
             with pytest.raises(ValueError) as excinfo:
                 await store.update_metadata(
-                    ["not-a-uuid"], [{"tag": "updated"}],
+                    ["not-a-uuid"],
+                    [{"tag": "updated"}],
                 )
             msg = str(excinfo.value)
             assert "id_type" in msg
@@ -850,7 +866,8 @@ class TestPgVectorStoreIdTypeDefaults:
             await store.close()
 
     async def test_delete_vectors_names_specific_bad_id(
-        self, ensure_pgvector_extension,
+        self,
+        ensure_pgvector_extension,
     ):
         """Bulk delete names the offending id, not the whole list.
 
@@ -889,7 +906,8 @@ class TestPgVectorStoreIdTypeDefaults:
             await store.close()
 
     async def test_guided_error_for_text_config_against_uuid_table(
-        self, ensure_pgvector_extension,
+        self,
+        ensure_pgvector_extension,
     ):
         """Defect C inverse: id_type='text' but table column is UUID.
 
@@ -903,34 +921,39 @@ class TestPgVectorStoreIdTypeDefaults:
 
         # Pre-create a table with a UUID id column (simulating a
         # pre-flip deployment).
-        uuid_store = PgVectorStore({
-            "connection_string": get_test_connection_string(),
-            "dimensions": 128,
-            "schema": "public",
-            "table_name": table_name,
-            "id_type": "uuid",
-            "auto_create_table": True,
-        })
+        uuid_store = PgVectorStore(
+            {
+                "connection_string": get_test_connection_string(),
+                "dimensions": 128,
+                "schema": "public",
+                "table_name": table_name,
+                "id_type": "uuid",
+                "auto_create_table": True,
+            }
+        )
         await uuid_store.initialize()
         await uuid_store.close()
 
         # Now instantiate against the same table with id_type="text"
         # — add_vectors should raise the inverse guided error.
-        text_store = PgVectorStore({
-            "connection_string": get_test_connection_string(),
-            "dimensions": 128,
-            "schema": "public",
-            "table_name": table_name,
-            "id_type": "text",
-            "auto_create_table": True,
-        })
+        text_store = PgVectorStore(
+            {
+                "connection_string": get_test_connection_string(),
+                "dimensions": 128,
+                "schema": "public",
+                "table_name": table_name,
+                "id_type": "text",
+                "auto_create_table": True,
+            }
+        )
         await text_store.initialize()
 
         try:
             vectors = np.random.rand(1, 128).astype(np.float32)
             with pytest.raises(ValueError) as excinfo:
                 await text_store.add_vectors(
-                    vectors, ids=["01-fundamentals_0"],
+                    vectors,
+                    ids=["01-fundamentals_0"],
                 )
             msg = str(excinfo.value)
             # Inverse guidance: point at adding id_type: "uuid"
@@ -938,9 +961,7 @@ class TestPgVectorStoreIdTypeDefaults:
             assert "01-fundamentals_0" in msg
         finally:
             async with text_store._pool.acquire() as conn:
-                await conn.execute(
-                    f"DROP TABLE IF EXISTS public.{safe_sql_ident(table_name)}"
-                )
+                await conn.execute(f"DROP TABLE IF EXISTS public.{safe_sql_ident(table_name)}")
             await text_store.close()
 
 
@@ -982,7 +1003,9 @@ class TestPgVectorStoreCustomColumns:
             assert len(results) == 2
         finally:
             async with store._pool.acquire() as conn:
-                await conn.execute(f"DROP TABLE IF EXISTS {safe_sql_ident(store.schema)}.{safe_sql_ident(store.table_name)}")
+                await conn.execute(
+                    f"DROP TABLE IF EXISTS {safe_sql_ident(store.schema)}.{safe_sql_ident(store.table_name)}"
+                )
             await store.close()
 
 
@@ -1018,9 +1041,7 @@ class TestPgVectorStoreEdgeCases:
         assert await pgvector_store.count() == 1
 
         # Add second vector with same ID - should upsert
-        await pgvector_store.add_vectors(
-            vector2, ids=[id_], metadata=[{"updated": True}]
-        )
+        await pgvector_store.add_vectors(vector2, ids=[id_], metadata=[{"updated": True}])
         assert await pgvector_store.count() == 1
 
         # Verify the vector was updated
@@ -1054,9 +1075,7 @@ class TestPgVectorStoreEdgeCases:
         # the metadata blob). The id-column cast depends on the store's
         # configured ``id_type`` — do not hardcode ``::uuid`` here.
         id_cast = "::uuid" if pgvector_store.id_type == "uuid" else ""
-        id_value: Any = (
-            uuid.UUID(id_) if pgvector_store.id_type == "uuid" else id_
-        )
+        id_value: Any = uuid.UUID(id_) if pgvector_store.id_type == "uuid" else id_
         async with pgvector_store._pool.acquire() as conn:
             row = await conn.fetchrow(
                 f"SELECT content, document_id FROM "
@@ -1097,11 +1116,13 @@ class TestPgVectorStoreIndexConfiguration:
         conn_str = get_test_connection_string()
 
         for idx_type in ("none", "hnsw", "ivfflat"):
-            store = PgVectorStore({
-                "connection_string": conn_str,
-                "dimensions": 128,
-                "index_type": idx_type,
-            })
+            store = PgVectorStore(
+                {
+                    "connection_string": conn_str,
+                    "dimensions": 128,
+                    "index_type": idx_type,
+                }
+            )
             assert store.index_type == idx_type
 
     def test_config_index_defaults(self, pgvector_config):
@@ -1167,7 +1188,9 @@ class TestPgVectorStoreIndexOperations:
             assert created is False
         finally:
             async with store._pool.acquire() as conn:
-                await conn.execute(f"DROP TABLE IF EXISTS {safe_sql_ident(store.schema)}.{safe_sql_ident(store.table_name)}")
+                await conn.execute(
+                    f"DROP TABLE IF EXISTS {safe_sql_ident(store.schema)}.{safe_sql_ident(store.table_name)}"
+                )
             await store.close()
 
     async def test_create_index_ivfflat_explicit(self, ensure_pgvector_extension):
@@ -1193,7 +1216,9 @@ class TestPgVectorStoreIndexOperations:
             assert await store._check_index_exists() is True
         finally:
             async with store._pool.acquire() as conn:
-                await conn.execute(f"DROP TABLE IF EXISTS {safe_sql_ident(store.schema)}.{safe_sql_ident(store.table_name)}")
+                await conn.execute(
+                    f"DROP TABLE IF EXISTS {safe_sql_ident(store.schema)}.{safe_sql_ident(store.table_name)}"
+                )
             await store.close()
 
     async def test_create_index_invalid_type(self, pgvector_store):
@@ -1225,7 +1250,9 @@ class TestPgVectorStoreIndexOperations:
             assert await store._check_index_exists() is True
         finally:
             async with store._pool.acquire() as conn:
-                await conn.execute(f"DROP TABLE IF EXISTS {safe_sql_ident(store.schema)}.{safe_sql_ident(store.table_name)}")
+                await conn.execute(
+                    f"DROP TABLE IF EXISTS {safe_sql_ident(store.schema)}.{safe_sql_ident(store.table_name)}"
+                )
             await store.close()
 
     async def test_ivfflat_not_auto_created_below_threshold(self, ensure_pgvector_extension):
@@ -1256,7 +1283,9 @@ class TestPgVectorStoreIndexOperations:
             assert await store._check_index_exists() is False
         finally:
             async with store._pool.acquire() as conn:
-                await conn.execute(f"DROP TABLE IF EXISTS {safe_sql_ident(store.schema)}.{safe_sql_ident(store.table_name)}")
+                await conn.execute(
+                    f"DROP TABLE IF EXISTS {safe_sql_ident(store.schema)}.{safe_sql_ident(store.table_name)}"
+                )
             await store.close()
 
     async def test_ivfflat_auto_created_above_threshold(self, ensure_pgvector_extension):
@@ -1291,7 +1320,9 @@ class TestPgVectorStoreIndexOperations:
             assert await store._check_index_exists() is True
         finally:
             async with store._pool.acquire() as conn:
-                await conn.execute(f"DROP TABLE IF EXISTS {safe_sql_ident(store.schema)}.{safe_sql_ident(store.table_name)}")
+                await conn.execute(
+                    f"DROP TABLE IF EXISTS {safe_sql_ident(store.schema)}.{safe_sql_ident(store.table_name)}"
+                )
             await store.close()
 
     async def test_no_auto_create_when_disabled(self, ensure_pgvector_extension):
@@ -1322,7 +1353,9 @@ class TestPgVectorStoreIndexOperations:
             assert await store._check_index_exists() is False
         finally:
             async with store._pool.acquire() as conn:
-                await conn.execute(f"DROP TABLE IF EXISTS {safe_sql_ident(store.schema)}.{safe_sql_ident(store.table_name)}")
+                await conn.execute(
+                    f"DROP TABLE IF EXISTS {safe_sql_ident(store.schema)}.{safe_sql_ident(store.table_name)}"
+                )
             await store.close()
 
     async def test_index_with_different_metrics(self, ensure_pgvector_extension):
@@ -1346,7 +1379,9 @@ class TestPgVectorStoreIndexOperations:
                 assert await store._check_index_exists() is True
             finally:
                 async with store._pool.acquire() as conn:
-                    await conn.execute(f"DROP TABLE IF EXISTS {safe_sql_ident(store.schema)}.{safe_sql_ident(store.table_name)}")
+                    await conn.execute(
+                        f"DROP TABLE IF EXISTS {safe_sql_ident(store.schema)}.{safe_sql_ident(store.table_name)}"
+                    )
                 await store.close()
 
 
@@ -1421,9 +1456,7 @@ class TestPgVectorStoreUpdatedAtColumn:
 
         assert row["created_at"] is not None
         assert row["updated_at"] is not None
-        assert abs(
-            (row["updated_at"] - row["created_at"]).total_seconds()
-        ) < 1.0
+        assert abs((row["updated_at"] - row["created_at"]).total_seconds()) < 1.0
 
     async def test_updated_at_refreshed_on_upsert(self, pgvector_store):
         """Second add_vectors with same ID advances updated_at, preserves created_at."""
@@ -1456,12 +1489,8 @@ class TestPgVectorStoreUpdatedAtColumn:
                 "test-id-upsert",
             )
 
-        assert second["created_at"] == first["created_at"], (
-            "created_at must be preserved on upsert"
-        )
-        assert second["updated_at"] > first["updated_at"], (
-            "updated_at must advance on upsert"
-        )
+        assert second["created_at"] == first["created_at"], "created_at must be preserved on upsert"
+        assert second["updated_at"] > first["updated_at"], "updated_at must advance on upsert"
 
     async def test_update_metadata_refreshes_updated_at(self, pgvector_store):
         """update_metadata advances updated_at, preserves created_at."""
@@ -1481,9 +1510,7 @@ class TestPgVectorStoreUpdatedAtColumn:
 
         await asyncio.sleep(0.05)
 
-        updated_count = await pgvector_store.update_metadata(
-            ids, [{"k": "v2"}]
-        )
+        updated_count = await pgvector_store.update_metadata(ids, [{"k": "v2"}])
         assert updated_count == 1
 
         async with pgvector_store._pool.acquire() as conn:
@@ -1514,9 +1541,7 @@ class TestPgVectorStoreUpdatedAtColumn:
         await pgvector_store.initialize()
         assert pgvector_store._initialized is True
 
-    async def test_migration_adds_updated_at_to_preexisting_table(
-        self, pgvector_config
-    ):
+    async def test_migration_adds_updated_at_to_preexisting_table(self, pgvector_config):
         """Pre-existing table without updated_at gains the column on init.
 
         Simulates a consumer upgrading from a release predating
@@ -1534,7 +1559,9 @@ class TestPgVectorStoreUpdatedAtColumn:
         try:
             await conn.execute(f"CREATE SCHEMA IF NOT EXISTS {safe_sql_ident(schema)}")
             # Drop table if left from prior flaky test run.
-            await conn.execute(f"DROP TABLE IF EXISTS {safe_sql_ident(schema)}.{safe_sql_ident(old_schema_table)}")
+            await conn.execute(
+                f"DROP TABLE IF EXISTS {safe_sql_ident(schema)}.{safe_sql_ident(old_schema_table)}"
+            )
             await conn.execute(f"""
                 CREATE TABLE {safe_sql_ident(schema)}.{safe_sql_ident(old_schema_table)} (
                     id TEXT PRIMARY KEY,
@@ -1601,9 +1628,7 @@ class TestPgVectorStoreUpdatedAtColumn:
                 pass
             await store.close()
 
-    async def test_migration_skipped_when_auto_create_disabled(
-        self, pgvector_config
-    ):
+    async def test_migration_skipped_when_auto_create_disabled(self, pgvector_config):
         """auto_create_table=False: migration does NOT run on pre-existing table.
 
         Consumers with ``auto_create_table=False`` own their DDL. If
@@ -1618,7 +1643,9 @@ class TestPgVectorStoreUpdatedAtColumn:
         conn = await asyncpg.connect(conn_str)
         try:
             await conn.execute(f"CREATE SCHEMA IF NOT EXISTS {safe_sql_ident(schema)}")
-            await conn.execute(f"DROP TABLE IF EXISTS {safe_sql_ident(schema)}.{safe_sql_ident(table)}")
+            await conn.execute(
+                f"DROP TABLE IF EXISTS {safe_sql_ident(schema)}.{safe_sql_ident(table)}"
+            )
             await conn.execute(f"""
                 CREATE TABLE {safe_sql_ident(schema)}.{safe_sql_ident(table)} (
                     id TEXT PRIMARY KEY,
@@ -1686,13 +1713,9 @@ class TestPgVectorStoreIncludeTimestamps:
         """Default format (iso): both keys present, ISO-8601 strings."""
         vectors = np.random.rand(1, 128).astype(np.float32)
         ids = ["ts-id-1"]
-        await pgvector_store.add_vectors(
-            vectors, ids=ids, metadata=[{"topic": "math"}]
-        )
+        await pgvector_store.add_vectors(vectors, ids=ids, metadata=[{"topic": "math"}])
 
-        results = await pgvector_store.get_vectors(
-            ids, include_timestamps=True
-        )
+        results = await pgvector_store.get_vectors(ids, include_timestamps=True)
         assert len(results) == 1
         _, meta = results[0]
         assert meta is not None
@@ -1716,9 +1739,7 @@ class TestPgVectorStoreIncludeTimestamps:
         )
 
         query = vectors[0]
-        results = await pgvector_store.search(
-            query, k=3, include_timestamps=True
-        )
+        results = await pgvector_store.search(query, k=3, include_timestamps=True)
         assert len(results) >= 1
         for _, _, meta in results:
             assert meta is not None
@@ -1727,9 +1748,7 @@ class TestPgVectorStoreIncludeTimestamps:
             assert isinstance(meta["_created_at"], str)
             assert isinstance(meta["_updated_at"], str)
 
-    async def test_include_timestamps_noop_without_metadata(
-        self, pgvector_store
-    ):
+    async def test_include_timestamps_noop_without_metadata(self, pgvector_store):
         """include_metadata=False + include_timestamps=True: no injection, no error."""
         vectors = np.random.rand(1, 128).astype(np.float32)
         ids = ["ts-nometa-1"]
@@ -1741,9 +1760,7 @@ class TestPgVectorStoreIncludeTimestamps:
         )
         assert len(results) == 1
         _, meta = results[0]
-        assert meta is None, (
-            "Timestamps must not be injected when metadata is suppressed."
-        )
+        assert meta is None, "Timestamps must not be injected when metadata is suppressed."
 
         # search
         search_results = await pgvector_store.search(
@@ -1762,9 +1779,7 @@ class TestPgVectorStoreIncludeTimestamps:
             vectors = np.random.rand(1, 128).astype(np.float32)
             await store.add_vectors(vectors, ids=["ts-epoch-1"])
 
-            results = await store.get_vectors(
-                ["ts-epoch-1"], include_timestamps=True
-            )
+            results = await store.get_vectors(["ts-epoch-1"], include_timestamps=True)
             _, meta = results[0]
             assert meta is not None
             assert isinstance(meta["_created_at"], float)
@@ -1795,9 +1810,7 @@ class TestPgVectorStoreIncludeTimestamps:
             vectors = np.random.rand(1, 128).astype(np.float32)
             await store.add_vectors(vectors, ids=["ts-custom-1"])
 
-            results = await store.get_vectors(
-                ["ts-custom-1"], include_timestamps=True
-            )
+            results = await store.get_vectors(["ts-custom-1"], include_timestamps=True)
             _, meta = results[0]
             assert meta is not None
             assert "freshness.created" in meta
@@ -1807,9 +1820,7 @@ class TestPgVectorStoreIncludeTimestamps:
         finally:
             await store.close()
 
-    async def test_include_timestamps_legacy_row_nullable(
-        self, pgvector_config
-    ):
+    async def test_include_timestamps_legacy_row_nullable(self, pgvector_config):
         """Pre-migration row with updated_at=NULL → key present, value None.
 
         Honest signal: distinguishes "not re-ingested since column was
@@ -1838,9 +1849,11 @@ class TestPgVectorStoreIncludeTimestamps:
                     created_at TIMESTAMP DEFAULT NOW()
                 )
             """)
-            vec_literal = "[" + ",".join(
-                str(x) for x in np.random.rand(128).astype(np.float32).tolist()
-            ) + "]"
+            vec_literal = (
+                "["
+                + ",".join(str(x) for x in np.random.rand(128).astype(np.float32).tolist())
+                + "]"
+            )
             await conn.execute(
                 f"INSERT INTO {safe_sql_ident(schema)}.{safe_sql_ident(old_schema_table)} "
                 f"(id, content, embedding, metadata) "
@@ -1856,17 +1869,13 @@ class TestPgVectorStoreIncludeTimestamps:
         store = PgVectorStore(pgvector_config)
         try:
             await store.initialize()
-            results = await store.get_vectors(
-                ["legacy-ts-row"], include_timestamps=True
-            )
+            results = await store.get_vectors(["legacy-ts-row"], include_timestamps=True)
             _, meta = results[0]
             assert meta is not None
             assert meta["legacy"] is True
             assert "_created_at" in meta
             assert "_updated_at" in meta
-            assert meta["_created_at"] is not None, (
-                "Legacy rows kept the pre-existing created_at."
-            )
+            assert meta["_created_at"] is not None, "Legacy rows kept the pre-existing created_at."
             assert meta["_updated_at"] is None, (
                 "Legacy rows have NULL updated_at until re-ingested — "
                 "the framework surfaces this as None, not a stale value."

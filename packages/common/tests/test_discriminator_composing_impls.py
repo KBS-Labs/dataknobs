@@ -81,10 +81,12 @@ def test_multi_field_discriminator_classifies_each_field() -> None:
         mapping={"yes": _Kind.A, "no": _Kind.B},
         default=_Kind.UNKNOWN,
     )
-    d = MultiFieldDiscriminator({
-        "key_kind": backend_classifier,
-        "intent": intent_classifier,
-    })
+    d = MultiFieldDiscriminator(
+        {
+            "key_kind": backend_classifier,
+            "intent": intent_classifier,
+        }
+    )
     result = d.classify({"key_kind": "content", "intent": "yes"})
     assert result == {"key_kind": _Kind.A, "intent": _Kind.A}
 
@@ -92,10 +94,12 @@ def test_multi_field_discriminator_classifies_each_field() -> None:
 def test_multi_field_discriminator_missing_field_returns_none() -> None:
     """Missing fields are classified as None, not omitted from result."""
     classifier = MappingDiscriminator(mapping={"x": _Kind.A}, default=_Kind.UNKNOWN)
-    d = MultiFieldDiscriminator({
-        "present": classifier,
-        "absent": classifier,
-    })
+    d = MultiFieldDiscriminator(
+        {
+            "present": classifier,
+            "absent": classifier,
+        }
+    )
     result = d.classify({"present": "x"})
     assert result == {"present": _Kind.A, "absent": None}
 
@@ -111,11 +115,13 @@ def test_multi_field_discriminator_preserves_field_order() -> None:
         mapping={"x": _Kind.A},
         default=_Kind.UNKNOWN,
     )
-    d = MultiFieldDiscriminator({
-        "first": classifier,
-        "second": classifier,
-        "third": classifier,
-    })
+    d = MultiFieldDiscriminator(
+        {
+            "first": classifier,
+            "second": classifier,
+            "third": classifier,
+        }
+    )
     result = d.classify({"first": "x", "second": "x", "third": "x"})
     assert list(result.keys()) == ["first", "second", "third"]
 
@@ -137,22 +143,18 @@ def test_chained_discriminator_first_non_default_wins() -> None:
         default=_Kind.UNKNOWN,
     )
     assert d.classify("yes") == _Kind.A  # caught by keyword
-    assert d.classify("ok") == _Kind.A   # caught by llm
-    assert d.classify("no") == _Kind.B   # caught by llm
+    assert d.classify("ok") == _Kind.A  # caught by llm
+    assert d.classify("no") == _Kind.B  # caught by llm
     assert d.classify("maybe") == _Kind.UNKNOWN  # neither catches
 
 
 def test_chained_discriminator_empty_chain_returns_default() -> None:
-    d: ChainedDiscriminator[str, _Kind] = ChainedDiscriminator(
-        inner=[], default=_Kind.UNKNOWN
-    )
+    d: ChainedDiscriminator[str, _Kind] = ChainedDiscriminator(inner=[], default=_Kind.UNKNOWN)
     assert d.classify("anything") == _Kind.UNKNOWN
 
 
 def test_chained_discriminator_conforms_to_protocol() -> None:
-    d: ChainedDiscriminator[str, _Kind] = ChainedDiscriminator(
-        inner=[], default=_Kind.UNKNOWN
-    )
+    d: ChainedDiscriminator[str, _Kind] = ChainedDiscriminator(inner=[], default=_Kind.UNKNOWN)
     assert isinstance(d, Discriminator)
 
 
@@ -197,8 +199,8 @@ async def test_async_chained_handles_sync_inner() -> None:
         inner=[sync_keyword, async_llm],
         default=_Kind.UNKNOWN,
     )
-    assert (await d.classify("yes")) == _Kind.A   # sync caught
-    assert (await d.classify("no")) == _Kind.B    # async caught
+    assert (await d.classify("yes")) == _Kind.A  # sync caught
+    assert (await d.classify("no")) == _Kind.B  # async caught
     assert (await d.classify("maybe")) == _Kind.UNKNOWN
 
 

@@ -40,9 +40,7 @@ async def _make_manager() -> ConversationManager:
     llm = EchoProvider(LLMConfig(provider="echo", model="echo-model"))
     builder = AsyncPromptBuilder(library=None)
     storage = DataknobsConversationStorage(AsyncMemoryDatabase())
-    return await ConversationManager.create(
-        llm=llm, prompt_builder=builder, storage=storage
-    )
+    return await ConversationManager.create(llm=llm, prompt_builder=builder, storage=storage)
 
 
 async def _append_iteration(manager: ConversationManager, i: int) -> None:
@@ -55,12 +53,8 @@ async def _append_iteration(manager: ConversationManager, i: int) -> None:
     """
     call_id = f"call_{i}"
     node = await manager.add_message(role="assistant", content=f"step {i}")
-    node.message.tool_calls = [
-        ToolCall(name="lookup", parameters={"n": i}, id=call_id)
-    ]
-    await manager.add_message(
-        role="tool", content=f"observation {i}", tool_call_id=call_id
-    )
+    node.message.tool_calls = [ToolCall(name="lookup", parameters={"n": i}, id=call_id)]
+    await manager.add_message(role="tool", content=f"observation {i}", tool_call_id=call_id)
 
 
 async def _build_loop(manager: ConversationManager, n_iterations: int) -> None:
@@ -158,9 +152,7 @@ class TestCompactHistorySummarizing:
         """With a summarizer, dropped iterations fold into one summary node."""
         manager = await _make_manager()
         await _build_loop(manager, 5)
-        summarizer = LLMSummarizer(
-            EchoProvider(LLMConfig(provider="echo", model="echo-model"))
-        )
+        summarizer = LLMSummarizer(EchoProvider(LLMConfig(provider="echo", model="echo-model")))
         assert isinstance(summarizer, Summarizer)
 
         dropped = await manager.compact_history(2, summarizer=summarizer)
@@ -171,9 +163,7 @@ class TestCompactHistorySummarizing:
         assert len(after) == 2 + 1 + 2 * 2
         # Exactly one summary message inserted, at the head of the loop body.
         summaries = [
-            m
-            for m in after
-            if m.role == "system" and "observation 0" in (m.content or "")
+            m for m in after if m.role == "system" and "observation 0" in (m.content or "")
         ]
         assert len(summaries) == 1  # the echoed summary carries the folded text
         contents = [m.content for m in after]
@@ -190,9 +180,7 @@ def _assert_valid_anthropic_sequence(adapted: list[dict]) -> None:
     Anthropic 400 enforces on a re-sent history.
     """
     for prev, cur in itertools.pairwise(adapted):
-        assert prev["role"] != cur["role"], (
-            f"consecutive {cur['role']} messages: {adapted}"
-        )
+        assert prev["role"] != cur["role"], f"consecutive {cur['role']} messages: {adapted}"
     open_ids: set[str] = set()
     for msg in adapted:
         content = msg["content"]
@@ -202,9 +190,7 @@ def _assert_valid_anthropic_sequence(adapted: list[dict]) -> None:
             if block.get("type") == "tool_use":
                 open_ids.add(block["id"])
             elif block.get("type") == "tool_result":
-                assert block["tool_use_id"] in open_ids, (
-                    f"tool_result before its tool_use: {block}"
-                )
+                assert block["tool_use_id"] in open_ids, f"tool_result before its tool_use: {block}"
 
 
 class TestCompactHistoryAdapterValidity:
@@ -223,9 +209,7 @@ class TestCompactHistoryAdapterValidity:
         """
         manager = await _make_manager()
         await _build_loop(manager, 5)
-        summarizer = LLMSummarizer(
-            EchoProvider(LLMConfig(provider="echo", model="echo-model"))
-        )
+        summarizer = LLMSummarizer(EchoProvider(LLMConfig(provider="echo", model="echo-model")))
         await manager.compact_history(2, summarizer=summarizer)
         history = await manager.get_history()
 

@@ -53,15 +53,11 @@ class VectorStoreBase(StructuredConfigConsumer[VectorStoreConfig]):
 
         # Distance metric: keep the string in config, derive the enum here.
         self.metric = (
-            cfg.metric
-            if isinstance(cfg.metric, DistanceMetric)
-            else DistanceMetric(cfg.metric)
+            cfg.metric if isinstance(cfg.metric, DistanceMetric) else DistanceMetric(cfg.metric)
         )
 
         # Expand ~ to home directory for persistent storage.
-        self.persist_path = (
-            Path(cfg.persist_path).expanduser() if cfg.persist_path else None
-        )
+        self.persist_path = Path(cfg.persist_path).expanduser() if cfg.persist_path else None
         self.batch_size = cfg.batch_size
 
         if cfg.persist_path:
@@ -110,7 +106,7 @@ class VectorStoreBase(StructuredConfigConsumer[VectorStoreConfig]):
 
     def _validate_dimensions(self) -> None:
         """Validate vector dimensions.
-        
+
         Raises:
             ValueError: If dimensions are invalid
         """
@@ -121,10 +117,10 @@ class VectorStoreBase(StructuredConfigConsumer[VectorStoreConfig]):
 
     def _normalize_vector(self, vector: np.ndarray) -> np.ndarray:
         """Normalize a vector for cosine similarity.
-        
+
         Args:
             vector: Vector to normalize
-            
+
         Returns:
             Normalized vector
         """
@@ -137,11 +133,11 @@ class VectorStoreBase(StructuredConfigConsumer[VectorStoreConfig]):
 
     def _calculate_similarity(self, vec1: np.ndarray, vec2: np.ndarray) -> float:
         """Calculate similarity between two vectors based on configured metric.
-        
+
         Args:
             vec1: First vector
             vec2: Second vector
-            
+
         Returns:
             Similarity score
         """
@@ -179,10 +175,10 @@ class VectorStoreBase(StructuredConfigConsumer[VectorStoreConfig]):
 
     def _convert_distance_to_score(self, distance: float) -> float:
         """Convert a distance to a similarity score based on metric.
-        
+
         Args:
             distance: Distance value
-            
+
         Returns:
             Similarity score (higher is more similar)
         """
@@ -199,13 +195,15 @@ class VectorStoreBase(StructuredConfigConsumer[VectorStoreConfig]):
             # For dot product and others, higher is better
             return distance
 
-    def _prepare_vector(self, vector: np.ndarray | list[float] | list[np.ndarray], normalize: bool = False) -> np.ndarray:
+    def _prepare_vector(
+        self, vector: np.ndarray | list[float] | list[np.ndarray], normalize: bool = False
+    ) -> np.ndarray:
         """Prepare a vector for storage or search.
-        
+
         Args:
             vector: Input vector (numpy array, list of floats, or list of arrays)
             normalize: Whether to normalize for cosine similarity
-            
+
         Returns:
             Prepared numpy array
         """
@@ -238,9 +236,7 @@ class VectorStoreBase(StructuredConfigConsumer[VectorStoreConfig]):
 
         return cast("np.ndarray", vector)
 
-    def _effective_filter(
-        self, filter: dict[str, Any] | None
-    ) -> dict[str, Any] | None:
+    def _effective_filter(self, filter: dict[str, Any] | None) -> dict[str, Any] | None:
         """AND-merge the config-level ``domain_id`` scope into ``filter``.
 
         When no config ``domain_id`` is set this is the identity
@@ -411,9 +407,7 @@ class VectorStoreBase(StructuredConfigConsumer[VectorStoreConfig]):
         now = datetime.now(UTC)
         updated = 0
         for key, meta in metadata_items:
-            if filter is not None and not self._match_metadata_filter(
-                meta, filter
-            ):
+            if filter is not None and not self._match_metadata_filter(meta, filter):
                 continue
             meta.update(set_)
             if timestamps is not None and key in timestamps:
@@ -448,9 +442,7 @@ class VectorStoreBase(StructuredConfigConsumer[VectorStoreConfig]):
             # use aware UTC.
             return dt.timestamp()
         # Unreachable — validated in VectorStoreTimestampConfig.__post_init__.
-        raise ValueError(
-            f"Unknown timestamps.format: {self.timestamps_format!r}"
-        )
+        raise ValueError(f"Unknown timestamps.format: {self.timestamps_format!r}")
 
     def _inject_timestamps(
         self,
@@ -500,7 +492,5 @@ class VectorStoreBase(StructuredConfigConsumer[VectorStoreConfig]):
     def __repr__(self) -> str:
         """String representation."""
         return (
-            f"{self.__class__.__name__}("
-            f"dimensions={self.dimensions}, "
-            f"metric={self.metric.value})"
+            f"{self.__class__.__name__}(dimensions={self.dimensions}, metric={self.metric.value})"
         )

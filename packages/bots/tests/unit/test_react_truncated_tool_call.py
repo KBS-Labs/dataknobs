@@ -154,9 +154,7 @@ def _make_provider(responses: list[Any]) -> EchoProvider:
 
 
 async def _make_manager(provider: EchoProvider) -> ConversationManager:
-    library = ConfigPromptLibrary(
-        {"system": {"assistant": {"template": "You are a test bot."}}}
-    )
+    library = ConfigPromptLibrary({"system": {"assistant": {"template": "You are a test bot."}}})
     builder = AsyncPromptBuilder(library=library)
     storage = DataknobsConversationStorage(AsyncMemoryDatabase())
     mgr = await ConversationManager.create(
@@ -305,9 +303,7 @@ class TestTruncatedToolCallAfterSuccessfulCall:
                 tool_call_response("echo_tool", {"message": "first"}),
                 # iter1: truncated mid-call, different (incomplete) args —
                 # abandoned, not executed.
-                tool_call_response(
-                    "echo_tool", {"message": "second"}, truncated=True
-                ),
+                tool_call_response("echo_tool", {"message": "second"}, truncated=True),
                 # synthesis after the abandoned second call.
                 text_response("Synthesized answer"),
             ],

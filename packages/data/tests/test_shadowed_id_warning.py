@@ -275,9 +275,7 @@ def test_one_time_signal_is_thread_safe(caplog: pytest.LogCaptureFixture) -> Non
         barrier.wait()  # release all threads into the check-then-set at once
         db.create(_shadowed_record(f"sk-{index}"))
 
-    threads = [
-        threading.Thread(target=worker, args=(i,)) for i in range(thread_count)
-    ]
+    threads = [threading.Thread(target=worker, args=(i,)) for i in range(thread_count)]
     for thread in threads:
         thread.start()
     for thread in threads:
@@ -338,9 +336,7 @@ def test_every_backend_write_method_carries_the_inspection() -> None:
                 continue
             if not getattr(fn, "_write_inspected", False):
                 gaps.append(f"{cls.__name__}.{name}")
-    assert not gaps, "write methods missing the pre-write inspection: " + ", ".join(
-        sorted(gaps)
-    )
+    assert not gaps, "write methods missing the pre-write inspection: " + ", ".join(sorted(gaps))
 
 
 # ---- behavior identity (the seam changed no write behavior) -----------------

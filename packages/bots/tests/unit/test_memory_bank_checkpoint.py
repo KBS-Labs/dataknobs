@@ -145,9 +145,7 @@ class TestMemoryBankAddSourceNodeId:
 
     def test_add_stores_source_node_id(self):
         bank = _make_bank()
-        rid = bank.add(
-            {"name": "flour"}, source_stage="collect", source_node_id="0.0.0"
-        )
+        rid = bank.add({"name": "flour"}, source_stage="collect", source_node_id="0.0.0")
         record = bank.get(rid)
         assert record is not None
         assert record.source_node_id == "0.0.0"
@@ -353,9 +351,7 @@ class TestAsyncMemoryBankAddSourceNodeId:
     @pytest.mark.asyncio
     async def test_add_stores_source_node_id(self):
         bank = await _make_async_bank()
-        rid = await bank.add(
-            {"name": "flour"}, source_stage="collect", source_node_id="0.0.0"
-        )
+        rid = await bank.add({"name": "flour"}, source_stage="collect", source_node_id="0.0.0")
         record = await bank.get(rid)
         assert record is not None
         assert record.source_node_id == "0.0.0"

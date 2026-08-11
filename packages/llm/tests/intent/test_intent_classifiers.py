@@ -10,6 +10,7 @@ without forking — directly answers the user feedback question
 "could we swap this for an I18N-aware version or an LLM-only
 classifier."
 """
+
 from __future__ import annotations
 
 from typing import Any
@@ -38,7 +39,8 @@ class TestKeywordIntentClassifier:
     async def test_default_tokenizer_word_boundary_match(self) -> None:
         clf = KeywordIntentClassifier(vocabulary={"accept": frozenset({"yes"})})
         result = await clf.classify(
-            "yes please", [IntentSpec(name="accept", target="t")],
+            "yes please",
+            [IntentSpec(name="accept", target="t")],
         )
         assert result.intent is not None
         assert result.intent.name == "accept"
@@ -79,6 +81,7 @@ class TestKeywordIntentClassifier:
         """Consumer can swap the tokenizer for an I18N / fuzzy / N-gram
         variant — the central use case justifying the protocol.
         """
+
         # Toy tokenizer: strip "extra-" prefixes before word matching
         def stripped_tokenizer(keyword: str, message: str) -> bool:
             return keyword in message.lower().replace("extra-", "")
@@ -159,15 +162,21 @@ class TestLLMIntentClassifier:
         from dataknobs_llm.testing import text_response
 
         provider = EchoProvider({"provider": "echo", "model": "test"})
-        provider.set_responses([
-            text_response('{"intent": "alternative", "extracted": "AIAM"}'),
-        ])
+        provider.set_responses(
+            [
+                text_response('{"intent": "alternative", "extracted": "AIAM"}'),
+            ]
+        )
         clf = LLMIntentClassifier(llm=provider)
         result = await clf.classify(
             "use AIAM instead",
-            [IntentSpec(
-                name="alternative", target="t", extract="framework_name",
-            )],
+            [
+                IntentSpec(
+                    name="alternative",
+                    target="t",
+                    extract="framework_name",
+                )
+            ],
         )
         assert result.intent is not None
         assert result.intent.name == "alternative"
@@ -237,7 +246,8 @@ class TestLLMIntentClassifier:
             ('{"intent": "alt", "extracted": null}', None),
             ('{"intent": "alt", "extracted": ""}', None),
             (
-                '{"intent": "alt", "extracted": ["a", "b"]}', None,
+                '{"intent": "alt", "extracted": ["a", "b"]}',
+                None,
             ),
             ('{"intent": "alt", "extracted": {"k": 1}}', None),
         ]
@@ -247,9 +257,13 @@ class TestLLMIntentClassifier:
             clf = LLMIntentClassifier(llm=provider)
             result = await clf.classify(
                 "use AIAM instead",
-                [IntentSpec(
-                    name="alt", target="t", extract="framework_name",
-                )],
+                [
+                    IntentSpec(
+                        name="alt",
+                        target="t",
+                        extract="framework_name",
+                    )
+                ],
             )
             assert result.intent is not None and result.intent.name == "alt"
             assert result.extracted == expected, (
@@ -267,9 +281,11 @@ class TestLLMIntentClassifier:
         from dataknobs_llm.testing import text_response
 
         provider = EchoProvider({"provider": "echo", "model": "test"})
-        provider.set_responses([
-            text_response('{"intent": null, "extracted": null}'),
-        ])
+        provider.set_responses(
+            [
+                text_response('{"intent": null, "extracted": null}'),
+            ]
+        )
         clf = LLMIntentClassifier(llm=provider)
         await clf.classify(
             "hello",
@@ -319,7 +335,7 @@ class TestCompositeIntentClassifier:
         assert result.intent is not None
         assert result.intent.name == "accept"
         assert result.rule_based is True
-        assert llm_provider.call_count == 0   # short-circuited
+        assert llm_provider.call_count == 0  # short-circuited
 
     @pytest.mark.asyncio
     async def test_first_match_strategy_falls_through_to_llm(self) -> None:
@@ -335,7 +351,8 @@ class TestCompositeIntentClassifier:
         )
         llm = LLMIntentClassifier(llm=provider)
         composite = CompositeIntentClassifier(
-            classifiers=[keyword, llm], strategy="first_match",
+            classifiers=[keyword, llm],
+            strategy="first_match",
         )
 
         result = await composite.classify(
@@ -361,7 +378,7 @@ class TestCompositeIntentClassifier:
         keyword = KeywordIntentClassifier(vocabulary=DEFAULT_VOCABULARY)
         llm = LLMIntentClassifier(llm=provider)
         composite = CompositeIntentClassifier(
-            classifiers=[llm, keyword],   # LLM first
+            classifiers=[llm, keyword],  # LLM first
             strategy="first_match",
         )
         await composite.classify("yes", [IntentSpec(name="accept", target="t")])
@@ -432,19 +449,27 @@ class TestClassifierBackendRegistry:
         embedding-similarity classifier, fuzzy-match, locale-specific
         keyword variants, etc.
         """
+
         class _FuzzyMatch(IntentClassifier):
             async def classify(
-                self, message: str, intents: Any, **_: Any,
+                self,
+                message: str,
+                intents: Any,
+                **_: Any,
             ) -> IntentMatchResult:
                 # toy: matches if any intent name is a substring of message
                 for spec in intents:
                     if spec.name in message.lower():
                         return IntentMatchResult(
-                            intent=spec, extracted=None,
-                            rule_based=True, raw_reply=message,
+                            intent=spec,
+                            extracted=None,
+                            rule_based=True,
+                            raw_reply=message,
                         )
                 return IntentMatchResult(
-                    intent=None, extracted=None, rule_based=False,
+                    intent=None,
+                    extracted=None,
+                    rule_based=False,
                     raw_reply=message,
                 )
 
@@ -452,7 +477,9 @@ class TestClassifierBackendRegistry:
             return _FuzzyMatch()
 
         intent_classifier_backends.register(
-            "fuzzy_match", _factory, allow_overwrite=True,
+            "fuzzy_match",
+            _factory,
+            allow_overwrite=True,
         )
         try:
             # ``PluginRegistry.get_factory`` returns the stored factory
@@ -503,11 +530,14 @@ class TestClassifierBackendRegistry:
         from dataknobs_llm.intent import create_intent_classifier
 
         with pytest.raises(ValueError) as exc_info:
-            create_intent_classifier("composite", {
-                "classifiers": [
-                    {"classifer": "keyword"},  # typo
-                ],
-            })
+            create_intent_classifier(
+                "composite",
+                {
+                    "classifiers": [
+                        {"classifer": "keyword"},  # typo
+                    ],
+                },
+            )
         assert "missing required 'classifier'" in str(exc_info.value)
         assert "classifer" in str(exc_info.value)
 
@@ -515,18 +545,24 @@ class TestClassifierBackendRegistry:
         from dataknobs_llm.intent import create_intent_classifier
 
         with pytest.raises(ValueError) as exc_info:
-            create_intent_classifier("composite", {
-                "classifiers": ["keyword"],
-            })
+            create_intent_classifier(
+                "composite",
+                {
+                    "classifiers": ["keyword"],
+                },
+            )
         assert "must be a mapping" in str(exc_info.value)
 
     def test_composite_unknown_child_name_raises(self) -> None:
         from dataknobs_llm.intent import create_intent_classifier
 
         with pytest.raises(ValueError) as exc_info:
-            create_intent_classifier("composite", {
-                "classifiers": [
-                    {"classifier": "does_not_exist"},
-                ],
-            })
+            create_intent_classifier(
+                "composite",
+                {
+                    "classifiers": [
+                        {"classifier": "does_not_exist"},
+                    ],
+                },
+            )
         assert "does_not_exist" in str(exc_info.value)

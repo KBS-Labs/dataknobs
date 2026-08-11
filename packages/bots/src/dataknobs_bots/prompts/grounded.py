@@ -27,9 +27,7 @@ from dataknobs_llm.prompts.base.types import PromptTemplateDict
 # ============================================================================
 
 GROUNDED_SYNTHESIS_BASE_INSTRUCTION: PromptTemplateDict = {
-    "template": (
-        "Base your response on the knowledge base content provided above."
-    ),
+    "template": ("Base your response on the knowledge base content provided above."),
     "template_syntax": "format",
 }
 

@@ -69,7 +69,6 @@ __all__ = [
     "VersioningError",
     "VersionStatus",
     "MetricEvent",
-
     # Managers
     "VersionManager",
     "ABTestManager",

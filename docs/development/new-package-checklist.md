@@ -245,7 +245,7 @@ uv run mypy packages/<name>/src/
 # Auto-fix issues
 uv run ruff check --fix packages/<name>/src/
 
-# Format code
+# Format code — checked by bin/validate.sh, so this is required, not optional
 uv run ruff format packages/<name>/src/
 ```
 

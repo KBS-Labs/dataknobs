@@ -132,9 +132,7 @@ _RESERVED_FIELDS: frozenset[str] = frozenset(
 #: divergence: the sync memory backend keys a collection ``create`` off a
 #: payload ``id`` field while the async backend mints a fresh UUID, so the same
 #: payload would land under different ids across variants.
-_ID_KEYING_FIELDS: frozenset[str] = frozenset(
-    {"id", "storage_id", "_id", "record_id"}
-)
+_ID_KEYING_FIELDS: frozenset[str] = frozenset({"id", "storage_id", "_id", "record_id"})
 
 
 # --------------------------------------------------------------------- #
@@ -142,9 +140,7 @@ _ID_KEYING_FIELDS: frozenset[str] = frozenset(
 # --------------------------------------------------------------------- #
 
 
-def _document_id(
-    namespace: str, tenant_id: str | None, user_id: str, section: str
-) -> str:
+def _document_id(namespace: str, tenant_id: str | None, user_id: str, section: str) -> str:
     """Derive a deterministic document id from the scope tuple.
 
     Each component is length-prefixed before hashing so no two distinct
@@ -181,9 +177,7 @@ def _scope_fields(
     return fields
 
 
-def _read_filter(
-    query: Query | None, user_id: str, section: str, tenant_id: str | None
-) -> Query:
+def _read_filter(query: Query | None, user_id: str, section: str, tenant_id: str | None) -> Query:
     """AND-compose the scope filters into a caller's query.
 
     ``user_id`` and ``section`` are coordinator-owned: any caller-supplied
@@ -196,9 +190,7 @@ def _read_filter(
     its sort / limit / offset / projection.
     """
     base = query if query is not None else Query()
-    caller_filters = [
-        f for f in base.filters if f.field not in ("user_id", "section")
-    ]
+    caller_filters = [f for f in base.filters if f.field not in ("user_id", "section")]
     caller_has_tenant = any(f.field == "tenant_id" for f in caller_filters)
     scoped = [
         Filter("user_id", Operator.EQ, user_id),
@@ -209,9 +201,7 @@ def _read_filter(
     return replace(base, filters=scoped + caller_filters)
 
 
-def _in_scope(
-    record: Record, user_id: str, section: str, tenant_id: str | None
-) -> bool:
+def _in_scope(record: Record, user_id: str, section: str, tenant_id: str | None) -> bool:
     """Return whether ``record`` belongs to the given ``(user, section, tenant)``.
 
     The pure predicate behind both the raising :func:`_verify_scope` guard
@@ -226,9 +216,7 @@ def _in_scope(
     )
 
 
-def _verify_scope(
-    record: Record, user_id: str, section: str, tenant_id: str | None
-) -> None:
+def _verify_scope(record: Record, user_id: str, section: str, tenant_id: str | None) -> None:
     """Raise if ``record`` does not belong to the given scope.
 
     Guards collection mutation-by-id: a record id from another user's scope
@@ -238,9 +226,7 @@ def _verify_scope(
     a different record.
     """
     if not _in_scope(record, user_id, section, tenant_id):
-        raise ValueError(
-            "Target record does not belong to the given user/section scope."
-        )
+        raise ValueError("Target record does not belong to the given user/section scope.")
 
 
 def _visible_sections(
@@ -261,9 +247,7 @@ def _public_data(record: Record) -> dict[str, Any]:
     return {k: v for k, v in record.data.items() if k not in _RESERVED_FIELDS}
 
 
-def _is_expired(
-    record: Record, retention_days: int | None, now: datetime
-) -> bool:
+def _is_expired(record: Record, retention_days: int | None, now: datetime) -> bool:
     """Return whether ``record`` has aged past its ``retention_days`` window.
 
     Pure and fail-safe: an unbounded window (``retention_days is None``) never
@@ -392,9 +376,7 @@ def _granted_scopes(consent_record: Record | None) -> frozenset[str]:
     )
 
 
-def _grant_map(
-    grants: Mapping[str, Any], scope: str, *, granted: bool, now: str
-) -> dict[str, Any]:
+def _grant_map(grants: Mapping[str, Any], scope: str, *, granted: bool, now: str) -> dict[str, Any]:
     """Return a new grants map with ``scope`` set granted / revoked at ``now``.
 
     Pure: the caller reads the current grants, this composes the next map, the
@@ -424,11 +406,7 @@ def _snapshot_sections(
     than raising the way a direct :meth:`get_document` / :meth:`query` does.
     """
     visible = _visible_sections(specs, include_sensitive)
-    return [
-        s
-        for s in visible
-        if s.consent_scope is None or s.consent_scope in granted_scopes
-    ]
+    return [s for s in visible if s.consent_scope is None or s.consent_scope in granted_scopes]
 
 
 # --------------------------------------------------------------------- #
@@ -482,9 +460,7 @@ class _UserStateStoreCommon:
         self._db = self.components.get("db")
         tenant = self.components.get("tenant")
         self._tenant = (
-            tenant
-            if tenant is not None
-            else SingleTenantContext(domain_id=self.config.namespace)
+            tenant if tenant is not None else SingleTenantContext(domain_id=self.config.namespace)
         )
         self._sections = {s.name: s for s in self.config.sections}
         self._reserved_sections = set()
@@ -494,11 +470,7 @@ class _UserStateStoreCommon:
         # to wall-clock UTC. It stamps ``_written_at`` and drives retention
         # expiry, so a test can advance a fake clock instead of sleeping.
         injected_now = self.components.get("now")
-        self._now = (
-            injected_now
-            if injected_now is not None
-            else (lambda: datetime.now(UTC))
-        )
+        self._now = injected_now if injected_now is not None else (lambda: datetime.now(UTC))
         self._callbacks = CallbackRegistry()
         event_bus = self.components.get("event_bus")
         if event_bus is not None:
@@ -515,9 +487,7 @@ class _UserStateStoreCommon:
                 )
             self._callbacks.also_publish_to(event_bus)
 
-    def _require_kind(
-        self, section: str, kind: SectionKind
-    ) -> UserStateSectionSpec:
+    def _require_kind(self, section: str, kind: SectionKind) -> UserStateSectionSpec:
         """Return the spec for ``section``, or raise if unknown / wrong kind.
 
         A coordinator-managed reserved section (the ``consent`` grant ledger)
@@ -544,8 +514,7 @@ class _UserStateStoreCommon:
             )
         if spec.kind != kind:
             raise ValueError(
-                f"Section {section!r} is a {spec.kind.value} section, "
-                f"not a {kind.value} section."
+                f"Section {section!r} is a {spec.kind.value} section, not a {kind.value} section."
             )
         return spec
 
@@ -624,9 +593,7 @@ class _UserStateStoreCommon:
             )
         return spec
 
-    def _sections_to_prune(
-        self, section: str | None
-    ) -> list[UserStateSectionSpec]:
+    def _sections_to_prune(self, section: str | None) -> list[UserStateSectionSpec]:
         """Resolve which collection sections a :meth:`prune` pass considers.
 
         With ``section=None`` every collection section carrying a
@@ -641,14 +608,11 @@ class _UserStateStoreCommon:
         return [
             spec
             for spec in self._sections.values()
-            if spec.kind == SectionKind.COLLECTION
-            and spec.retention_days is not None
+            if spec.kind == SectionKind.COLLECTION and spec.retention_days is not None
         ]
 
     def _doc_id(self, user_id: str, section: str) -> str:
-        return _document_id(
-            self.config.namespace, self._tenant.tenant_id, user_id, section
-        )
+        return _document_id(self.config.namespace, self._tenant.tenant_id, user_id, section)
 
     def _consent_record(
         self, user_id: str, grants: Mapping[str, Any]
@@ -703,17 +667,11 @@ class _UserStateStoreCommon:
                 "collection ids are backend-generated). Rename the field(s)."
             )
         payload = dict(data)
-        payload.update(
-            _scope_fields(
-                user_id, section, self._tenant.tenant_id, spec.version
-            )
-        )
+        payload.update(_scope_fields(user_id, section, self._tenant.tenant_id, spec.version))
         payload["_written_at"] = self._now().isoformat()
         return Record(payload, storage_id=storage_id)
 
-    def _base_event_payload(
-        self, user_id: str, section: str | None, op: str
-    ) -> dict[str, Any]:
+    def _base_event_payload(self, user_id: str, section: str | None, op: str) -> dict[str, Any]:
         """Shared metadata-only base for every delta event (write and delete).
 
         Extracting the four fields both streams share keeps the write and
@@ -798,9 +756,7 @@ class _UserStateStoreCommon:
             payload["op_count"] = op_count
         if op_sections is not None:
             payload["op_sections"] = dict(op_sections)
-        return self._build_record(
-            payload, user_id, RESERVED_EVENTS_SECTION, self._events_spec()
-        )
+        return self._build_record(payload, user_id, RESERVED_EVENTS_SECTION, self._events_spec())
 
     def _log_append_failure(self, op: str, user_id: str, exc: Exception) -> None:
         """Log a swallowed audit-append failure (shared by both variants).
@@ -818,9 +774,7 @@ class _UserStateStoreCommon:
             exc,
         )
 
-    def _migrate_on_read(
-        self, record: Record, spec: UserStateSectionSpec
-    ) -> tuple[Record, bool]:
+    def _migrate_on_read(self, record: Record, spec: UserStateSectionSpec) -> tuple[Record, bool]:
         """Resolve and apply on-read migration for one record (no I/O).
 
         The shared, transport-agnostic core of lazy migration: chain lookup is
@@ -928,10 +882,7 @@ class AsyncUserStateStore(
         now: Any = None,
     ) -> None:
         if db is None:
-            raise TypeError(
-                "AsyncUserStateStore.from_components requires a `db` "
-                "collaborator."
-            )
+            raise TypeError("AsyncUserStateStore.from_components requires a `db` collaborator.")
         self._db = db
         self._owns_db = False
 
@@ -939,13 +890,9 @@ class AsyncUserStateStore(
 
     async def _read_consent(self, user_id: str) -> Record | None:
         """Read the reserved consent document for ``user_id`` (or None)."""
-        return await self._db.read(
-            self._doc_id(user_id, RESERVED_CONSENT_SECTION)
-        )
+        return await self._db.read(self._doc_id(user_id, RESERVED_CONSENT_SECTION))
 
-    async def _write_consent(
-        self, user_id: str, grants: Mapping[str, Any], op: str
-    ) -> None:
+    async def _write_consent(self, user_id: str, grants: Mapping[str, Any], op: str) -> None:
         """Persist the reserved consent document (the private write path).
 
         Bypasses the public ``put_document`` — which now refuses the reserved
@@ -958,13 +905,9 @@ class AsyncUserStateStore(
         """
         doc_id, record, spec = self._consent_record(user_id, grants)
         await self._db.upsert(doc_id, record)
-        await self._fire_written(
-            user_id, RESERVED_CONSENT_SECTION, spec, op
-        )
+        await self._fire_written(user_id, RESERVED_CONSENT_SECTION, spec, op)
 
-    async def _require_consent(
-        self, user_id: str, spec: UserStateSectionSpec
-    ) -> None:
+    async def _require_consent(self, user_id: str, spec: UserStateSectionSpec) -> None:
         """Refuse access to a consent-scoped section that is not granted.
 
         A no-op for a section with no ``consent_scope`` (including the reserved
@@ -975,9 +918,7 @@ class AsyncUserStateStore(
         """
         if spec.consent_scope is None:
             return
-        if not _consent_satisfied(
-            await self._read_consent(user_id), spec.consent_scope
-        ):
+        if not _consent_satisfied(await self._read_consent(user_id), spec.consent_scope):
             raise ConsentRequiredError(
                 f"Access to section {spec.name!r} requires consent scope "
                 f"{spec.consent_scope!r}, which has not been granted.",
@@ -1034,9 +975,7 @@ class AsyncUserStateStore(
             return None
         return await self._migrate_read_record(record, spec, doc_id)
 
-    async def document_version(
-        self, user_id: str, section: str
-    ) -> str | None:
+    async def document_version(self, user_id: str, section: str) -> str | None:
         """Return the compare-and-set token for a document (or None if absent).
 
         Pass the returned token as ``expected_version`` to :meth:`put_document`
@@ -1062,12 +1001,8 @@ class AsyncUserStateStore(
         spec = self._require_kind(section, SectionKind.DOCUMENT)
         await self._require_consent(user_id, spec)
         doc_id = self._doc_id(user_id, section)
-        record = self._build_record(
-            data, user_id, section, spec, storage_id=doc_id
-        )
-        result_id = await self._db.upsert(
-            doc_id, record, expected_version=expected_version
-        )
+        record = self._build_record(data, user_id, section, spec, storage_id=doc_id)
+        result_id = await self._db.upsert(doc_id, record, expected_version=expected_version)
         await self._fire_written(user_id, section, spec, "put_document")
         await self._append_event(
             user_id, "put_document", op_section=section, op_record_id=result_id
@@ -1076,9 +1011,7 @@ class AsyncUserStateStore(
 
     # ----- collection sections ----- #
 
-    async def add_record(
-        self, user_id: str, section: str, data: Mapping[str, Any]
-    ) -> str:
+    async def add_record(self, user_id: str, section: str, data: Mapping[str, Any]) -> str:
         """Append a record to a collection section for ``user_id``.
 
         Returns the backend-generated record id.
@@ -1088,14 +1021,10 @@ class AsyncUserStateStore(
         record = self._build_record(data, user_id, section, spec)
         record_id = await self._db.create(record)
         await self._fire_written(user_id, section, spec, "add_record")
-        await self._append_event(
-            user_id, "add_record", op_section=section, op_record_id=record_id
-        )
+        await self._append_event(user_id, "add_record", op_section=section, op_record_id=record_id)
         return record_id
 
-    async def query(
-        self, user_id: str, section: str, query: Query | None = None
-    ) -> list[Record]:
+    async def query(self, user_id: str, section: str, query: Query | None = None) -> list[Record]:
         """Read a collection section's records for ``user_id``.
 
         The optional ``query`` adds payload filters / sort / pagination; the
@@ -1118,14 +1047,9 @@ class AsyncUserStateStore(
         records = await self._db.search(
             _read_filter(query, user_id, section, self._tenant.tenant_id)
         )
-        return [
-            await self._migrate_read_record(r, spec, r.storage_id)
-            for r in records
-        ]
+        return [await self._migrate_read_record(r, spec, r.storage_id) for r in records]
 
-    async def query_events(
-        self, user_id: str, query: Query | None = None
-    ) -> list[Record]:
+    async def query_events(self, user_id: str, query: Query | None = None) -> list[Record]:
         """Read ``user_id``'s persisted audit-log records (newest-window first).
 
         The reserved ``events`` section is walled off from the generic content
@@ -1142,9 +1066,7 @@ class AsyncUserStateStore(
         """
         self._events_spec()
         return await self._db.search(
-            _read_filter(
-                query, user_id, RESERVED_EVENTS_SECTION, self._tenant.tenant_id
-            )
+            _read_filter(query, user_id, RESERVED_EVENTS_SECTION, self._tenant.tenant_id)
         )
 
     async def prune(self, user_id: str, section: str | None = None) -> int:
@@ -1214,9 +1136,7 @@ class AsyncUserStateStore(
             )
         return total
 
-    async def record_version(
-        self, user_id: str, section: str, record_id: str
-    ) -> str | None:
+    async def record_version(self, user_id: str, section: str, record_id: str) -> str | None:
         """Return the compare-and-set token for a collection record.
 
         Scope-checked: a ``record_id`` that is absent, or belongs to another
@@ -1227,9 +1147,7 @@ class AsyncUserStateStore(
         """
         self._require_kind(section, SectionKind.COLLECTION)
         existing = await self._db.read(record_id)
-        if existing is None or not _in_scope(
-            existing, user_id, section, self._tenant.tenant_id
-        ):
+        if existing is None or not _in_scope(existing, user_id, section, self._tenant.tenant_id):
             return None
         return await self._db.get_version(record_id)
 
@@ -1249,12 +1167,8 @@ class AsyncUserStateStore(
         if existing is None:
             return False
         _verify_scope(existing, user_id, section, self._tenant.tenant_id)
-        record = self._build_record(
-            data, user_id, section, spec, storage_id=record_id
-        )
-        updated = await self._db.update(
-            record_id, record, expected_version=expected_version
-        )
+        record = self._build_record(data, user_id, section, spec, storage_id=record_id)
+        updated = await self._db.update(record_id, record, expected_version=expected_version)
         if updated:
             await self._fire_written(user_id, section, spec, "update_record")
             await self._append_event(
@@ -1279,9 +1193,7 @@ class AsyncUserStateStore(
         if existing is None:
             return False
         _verify_scope(existing, user_id, section, self._tenant.tenant_id)
-        deleted = await self._db.delete(
-            record_id, expected_version=expected_version
-        )
+        deleted = await self._db.delete(record_id, expected_version=expected_version)
         if deleted:
             await self._fire_deleted(
                 user_id,
@@ -1301,9 +1213,7 @@ class AsyncUserStateStore(
 
     # ----- whole-user ----- #
 
-    async def snapshot(
-        self, user_id: str, *, include_sensitive: bool = False
-    ) -> dict[str, Any]:
+    async def snapshot(self, user_id: str, *, include_sensitive: bool = False) -> dict[str, Any]:
         """Return a whole-user view keyed by section name.
 
         Document sections map to their payload dict (or ``None`` when unset);
@@ -1318,14 +1228,10 @@ class AsyncUserStateStore(
             else frozenset()
         )
         view: dict[str, Any] = {}
-        for spec in _snapshot_sections(
-            self.config.sections, granted, include_sensitive
-        ):
+        for spec in _snapshot_sections(self.config.sections, granted, include_sensitive):
             if spec.kind == SectionKind.DOCUMENT:
                 record = await self.get_document(user_id, spec.name)
-                view[spec.name] = (
-                    _public_data(record) if record is not None else None
-                )
+                view[spec.name] = _public_data(record) if record is not None else None
             else:
                 records = await self.query(user_id, spec.name)
                 view[spec.name] = [_public_data(r) for r in records]
@@ -1346,9 +1252,7 @@ class AsyncUserStateStore(
         results = await self._db.delete_batch(ids)
         deleted = sum(1 for ok in results if ok)
         if deleted:
-            await self._fire_deleted(
-                user_id, section=None, op="clear", count=deleted
-            )
+            await self._fire_deleted(user_id, section=None, op="clear", count=deleted)
         return deleted
 
     async def _clear_ids(self, user_id: str) -> list[str]:
@@ -1364,9 +1268,7 @@ class AsyncUserStateStore(
                 ids.append(self._doc_id(user_id, spec.name))
             else:
                 records = await self._db.search(
-                    _read_filter(
-                        None, user_id, spec.name, self._tenant.tenant_id
-                    )
+                    _read_filter(None, user_id, spec.name, self._tenant.tenant_id)
                 )
                 ids.extend(r.storage_id for r in records if r.storage_id)
         return ids
@@ -1461,9 +1363,7 @@ class AsyncUserStateStore(
             await self._persist_migration(storage_id, migrated)
         return migrated
 
-    async def _persist_migration(
-        self, storage_id: str, migrated: Record
-    ) -> None:
+    async def _persist_migration(self, storage_id: str, migrated: Record) -> None:
         """Write an on-read-migrated record back under a compare-and-set guard.
 
         Best-effort: the guard reads the current version token and writes the
@@ -1477,9 +1377,7 @@ class AsyncUserStateStore(
         """
         try:
             token = await self._db.get_version(storage_id)
-            await self._db.update(
-                storage_id, migrated, expected_version=token
-            )
+            await self._db.update(storage_id, migrated, expected_version=token)
         except ConcurrencyError:
             logger.debug(
                 "persist-on-read migration skipped for %s: a concurrent write "
@@ -1530,9 +1428,7 @@ class UserStateStore(
         now: Any = None,
     ) -> None:
         if db is None:
-            raise TypeError(
-                "UserStateStore.from_components requires a `db` collaborator."
-            )
+            raise TypeError("UserStateStore.from_components requires a `db` collaborator.")
         self._db = db
         self._owns_db = False
 
@@ -1542,9 +1438,7 @@ class UserStateStore(
         """Read the reserved consent document for ``user_id`` (or None)."""
         return self._db.read(self._doc_id(user_id, RESERVED_CONSENT_SECTION))
 
-    def _write_consent(
-        self, user_id: str, grants: Mapping[str, Any], op: str
-    ) -> None:
+    def _write_consent(self, user_id: str, grants: Mapping[str, Any], op: str) -> None:
         """Persist the reserved consent document (sync mirror).
 
         Bypasses the public ``put_document`` (which refuses the reserved
@@ -1557,9 +1451,7 @@ class UserStateStore(
         self._db.upsert(doc_id, record)
         self._fire_written(user_id, RESERVED_CONSENT_SECTION, spec, op)
 
-    def _require_consent(
-        self, user_id: str, spec: UserStateSectionSpec
-    ) -> None:
+    def _require_consent(self, user_id: str, spec: UserStateSectionSpec) -> None:
         """Refuse access to a consent-scoped section that is not granted.
 
         Sync mirror of the async twin: a no-op for a section with no
@@ -1570,9 +1462,7 @@ class UserStateStore(
         """
         if spec.consent_scope is None:
             return
-        if not _consent_satisfied(
-            self._read_consent(user_id), spec.consent_scope
-        ):
+        if not _consent_satisfied(self._read_consent(user_id), spec.consent_scope):
             raise ConsentRequiredError(
                 f"Access to section {spec.name!r} requires consent scope "
                 f"{spec.consent_scope!r}, which has not been granted.",
@@ -1641,37 +1531,25 @@ class UserStateStore(
         spec = self._require_kind(section, SectionKind.DOCUMENT)
         self._require_consent(user_id, spec)
         doc_id = self._doc_id(user_id, section)
-        record = self._build_record(
-            data, user_id, section, spec, storage_id=doc_id
-        )
-        result_id = self._db.upsert(
-            doc_id, record, expected_version=expected_version
-        )
+        record = self._build_record(data, user_id, section, spec, storage_id=doc_id)
+        result_id = self._db.upsert(doc_id, record, expected_version=expected_version)
         self._fire_written(user_id, section, spec, "put_document")
-        self._append_event(
-            user_id, "put_document", op_section=section, op_record_id=result_id
-        )
+        self._append_event(user_id, "put_document", op_section=section, op_record_id=result_id)
         return result_id
 
     # ----- collection sections ----- #
 
-    def add_record(
-        self, user_id: str, section: str, data: Mapping[str, Any]
-    ) -> str:
+    def add_record(self, user_id: str, section: str, data: Mapping[str, Any]) -> str:
         """Append a record to a collection section for ``user_id``."""
         spec = self._require_kind(section, SectionKind.COLLECTION)
         self._require_consent(user_id, spec)
         record = self._build_record(data, user_id, section, spec)
         record_id = self._db.create(record)
         self._fire_written(user_id, section, spec, "add_record")
-        self._append_event(
-            user_id, "add_record", op_section=section, op_record_id=record_id
-        )
+        self._append_event(user_id, "add_record", op_section=section, op_record_id=record_id)
         return record_id
 
-    def query(
-        self, user_id: str, section: str, query: Query | None = None
-    ) -> list[Record]:
+    def query(self, user_id: str, section: str, query: Query | None = None) -> list[Record]:
         """Read a collection section's records for ``user_id``.
 
         A consent-scoped section raises
@@ -1688,16 +1566,10 @@ class UserStateStore(
         # micro-optimization to avoid sync/async drift.
         if self.config.prune_on_query and spec.retention_days is not None:
             self.prune(user_id, section)
-        records = self._db.search(
-            _read_filter(query, user_id, section, self._tenant.tenant_id)
-        )
-        return [
-            self._migrate_read_record(r, spec, r.storage_id) for r in records
-        ]
+        records = self._db.search(_read_filter(query, user_id, section, self._tenant.tenant_id))
+        return [self._migrate_read_record(r, spec, r.storage_id) for r in records]
 
-    def query_events(
-        self, user_id: str, query: Query | None = None
-    ) -> list[Record]:
+    def query_events(self, user_id: str, query: Query | None = None) -> list[Record]:
         """Read ``user_id``'s persisted audit-log records (see async twin).
 
         Dedicated read-only accessor for the reserved ``events`` section, which
@@ -1708,9 +1580,7 @@ class UserStateStore(
         """
         self._events_spec()
         return self._db.search(
-            _read_filter(
-                query, user_id, RESERVED_EVENTS_SECTION, self._tenant.tenant_id
-            )
+            _read_filter(query, user_id, RESERVED_EVENTS_SECTION, self._tenant.tenant_id)
         )
 
     def prune(self, user_id: str, section: str | None = None) -> int:
@@ -1776,9 +1646,7 @@ class UserStateStore(
             )
         return total
 
-    def record_version(
-        self, user_id: str, section: str, record_id: str
-    ) -> str | None:
+    def record_version(self, user_id: str, section: str, record_id: str) -> str | None:
         """Return the compare-and-set token for a collection record.
 
         Scope-checked mirror of the async twin: an absent or out-of-scope
@@ -1786,9 +1654,7 @@ class UserStateStore(
         """
         self._require_kind(section, SectionKind.COLLECTION)
         existing = self._db.read(record_id)
-        if existing is None or not _in_scope(
-            existing, user_id, section, self._tenant.tenant_id
-        ):
+        if existing is None or not _in_scope(existing, user_id, section, self._tenant.tenant_id):
             return None
         return self._db.get_version(record_id)
 
@@ -1808,12 +1674,8 @@ class UserStateStore(
         if existing is None:
             return False
         _verify_scope(existing, user_id, section, self._tenant.tenant_id)
-        record = self._build_record(
-            data, user_id, section, spec, storage_id=record_id
-        )
-        updated = self._db.update(
-            record_id, record, expected_version=expected_version
-        )
+        record = self._build_record(data, user_id, section, spec, storage_id=record_id)
+        updated = self._db.update(record_id, record, expected_version=expected_version)
         if updated:
             self._fire_written(user_id, section, spec, "update_record")
             self._append_event(
@@ -1858,24 +1720,16 @@ class UserStateStore(
 
     # ----- whole-user ----- #
 
-    def snapshot(
-        self, user_id: str, *, include_sensitive: bool = False
-    ) -> dict[str, Any]:
+    def snapshot(self, user_id: str, *, include_sensitive: bool = False) -> dict[str, Any]:
         """Return a whole-user view keyed by section name (see async twin)."""
         granted = (
-            _granted_scopes(self._read_consent(user_id))
-            if self._consent_enabled()
-            else frozenset()
+            _granted_scopes(self._read_consent(user_id)) if self._consent_enabled() else frozenset()
         )
         view: dict[str, Any] = {}
-        for spec in _snapshot_sections(
-            self.config.sections, granted, include_sensitive
-        ):
+        for spec in _snapshot_sections(self.config.sections, granted, include_sensitive):
             if spec.kind == SectionKind.DOCUMENT:
                 record = self.get_document(user_id, spec.name)
-                view[spec.name] = (
-                    _public_data(record) if record is not None else None
-                )
+                view[spec.name] = _public_data(record) if record is not None else None
             else:
                 records = self.query(user_id, spec.name)
                 view[spec.name] = [_public_data(r) for r in records]
@@ -1893,9 +1747,7 @@ class UserStateStore(
         results = self._db.delete_batch(ids)
         deleted = sum(1 for ok in results if ok)
         if deleted:
-            self._fire_deleted(
-                user_id, section=None, op="clear", count=deleted
-            )
+            self._fire_deleted(user_id, section=None, op="clear", count=deleted)
         return deleted
 
     def _clear_ids(self, user_id: str) -> list[str]:
@@ -1910,9 +1762,7 @@ class UserStateStore(
                 ids.append(self._doc_id(user_id, spec.name))
             else:
                 records = self._db.search(
-                    _read_filter(
-                        None, user_id, spec.name, self._tenant.tenant_id
-                    )
+                    _read_filter(None, user_id, spec.name, self._tenant.tenant_id)
                 )
                 ids.extend(r.storage_id for r in records if r.storage_id)
         return ids

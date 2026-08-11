@@ -187,18 +187,18 @@ class NetworkConfig(BaseModel):
     def validate_network(self) -> "NetworkConfig":
         """Validate network consistency."""
         state_names = {state.name for state in self.states}
-        
+
         # Validate arc targets exist
         for state in self.states:
             for arc in state.arcs:
                 if isinstance(arc, ArcConfig) and arc.target not in state_names:
                     raise ValueError(f"Arc target '{arc.target}' not found in network")
-        
+
         # Validate at least one start state
         start_states = [s for s in self.states if s.is_start]
         if not start_states:
             raise ValueError("Network must have at least one start state")
-        
+
         return self
 
 
@@ -208,25 +208,25 @@ class FSMConfig(BaseModel):
     name: str
     version: str = "1.0.0"
     description: str | None = None
-    
+
     # Data handling
     data_mode: DataModeConfig = Field(default_factory=DataModeConfig)
 
     # Resources
     resources: List[ResourceConfig] = Field(default_factory=list)
-    
+
     # Networks
     networks: List[NetworkConfig]
     main_network: str
-    
+
     # Execution
     execution_strategy: ExecutionStrategy = ExecutionStrategy.DEPTH_FIRST
     max_transitions: int = Field(default=1000, ge=1)
     timeout_seconds: int | None = Field(default=None, ge=1)
-    
+
     # Metadata
     metadata: Dict[str, Any] = Field(default_factory=dict)
-    
+
     @model_validator(mode="before")
     @classmethod
     def _warn_on_removed_transaction_key(cls, data: Any) -> Any:
@@ -255,19 +255,19 @@ class FSMConfig(BaseModel):
         network_names = {net.name for net in self.networks}
         if self.main_network not in network_names:
             raise ValueError(f"Main network '{self.main_network}' not found")
-        
+
         # Validate resource references
         resource_names = {res.name for res in self.resources}
         for network in self.networks:
             for res_name in network.resources:
                 if res_name not in resource_names:
                     raise ValueError(f"Resource '{res_name}' not found in FSM resources")
-            
+
             for state in network.states:
                 for res_name in state.resources:
                     if res_name not in resource_names:
                         raise ValueError(f"Resource '{res_name}' not found in FSM resources")
-        
+
         return self
 
 
@@ -292,7 +292,7 @@ class TemplateConfig(BaseModel):
 
 def generate_json_schema() -> Dict[str, Any]:
     """Generate JSON schema for FSM configuration.
-    
+
     Returns:
         JSON schema as a dictionary.
     """
@@ -301,13 +301,13 @@ def generate_json_schema() -> Dict[str, Any]:
 
 def validate_config(config: Dict[str, Any]) -> FSMConfig:
     """Validate a configuration dictionary.
-    
+
     Args:
         config: Configuration dictionary.
-        
+
     Returns:
         Validated FSMConfig instance.
-        
+
     Raises:
         ValidationError: If configuration is invalid.
     """
@@ -361,12 +361,12 @@ def apply_template(
     overrides: Dict[str, Any] | None = None,
 ) -> Dict[str, Any]:
     """Apply a use case template to generate configuration.
-    
+
     Args:
         template: Template to apply.
         params: Template parameters.
         overrides: Configuration overrides.
-        
+
     Returns:
         Configuration dictionary.
     """

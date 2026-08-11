@@ -130,9 +130,12 @@ class TestCaptureReplay:
 
     def test_main_provider_has_responses(self):
         turns = [
-            _make_turn(0, llm_calls=[
-                _make_llm_call(0, role="main", content="hello main"),
-            ]),
+            _make_turn(
+                0,
+                llm_calls=[
+                    _make_llm_call(0, role="main", content="hello main"),
+                ],
+            ),
         ]
         replay = CaptureReplay.from_dict(_make_capture_data(turns=turns))
         provider = replay.main_provider()
@@ -140,9 +143,12 @@ class TestCaptureReplay:
 
     def test_extraction_provider_has_responses(self):
         turns = [
-            _make_turn(0, llm_calls=[
-                _make_llm_call(0, role="extraction", content="extracted"),
-            ]),
+            _make_turn(
+                0,
+                llm_calls=[
+                    _make_llm_call(0, role="extraction", content="extracted"),
+                ],
+            ),
         ]
         replay = CaptureReplay.from_dict(_make_capture_data(turns=turns))
         provider = replay.extraction_provider()
@@ -150,10 +156,13 @@ class TestCaptureReplay:
 
     def test_separates_main_and_extraction_calls(self):
         turns = [
-            _make_turn(0, llm_calls=[
-                _make_llm_call(0, role="main", content="main response"),
-                _make_llm_call(1, role="extraction", content="ext response"),
-            ]),
+            _make_turn(
+                0,
+                llm_calls=[
+                    _make_llm_call(0, role="main", content="main response"),
+                    _make_llm_call(1, role="extraction", content="ext response"),
+                ],
+            ),
         ]
         replay = CaptureReplay.from_dict(_make_capture_data(turns=turns))
         assert len(replay._main_responses) == 1
@@ -175,12 +184,18 @@ class TestCaptureReplay:
     async def test_main_provider_responses_in_order(self) -> None:
         """Main provider delivers captured responses in order."""
         turns = [
-            _make_turn(0, llm_calls=[
-                _make_llm_call(0, role="main", content="first"),
-            ]),
-            _make_turn(1, llm_calls=[
-                _make_llm_call(0, role="main", content="second"),
-            ]),
+            _make_turn(
+                0,
+                llm_calls=[
+                    _make_llm_call(0, role="main", content="first"),
+                ],
+            ),
+            _make_turn(
+                1,
+                llm_calls=[
+                    _make_llm_call(0, role="main", content="second"),
+                ],
+            ),
         ]
         replay = CaptureReplay.from_dict(_make_capture_data(turns=turns))
         provider = replay.main_provider()
@@ -196,10 +211,13 @@ class TestCaptureReplay:
     async def test_extraction_provider_responses_in_order(self) -> None:
         """Extraction provider delivers captured responses in order."""
         turns = [
-            _make_turn(0, llm_calls=[
-                _make_llm_call(0, role="extraction", content="ext1"),
-                _make_llm_call(1, role="extraction", content="ext2"),
-            ]),
+            _make_turn(
+                0,
+                llm_calls=[
+                    _make_llm_call(0, role="extraction", content="ext1"),
+                    _make_llm_call(1, role="extraction", content="ext2"),
+                ],
+            ),
         ]
         replay = CaptureReplay.from_dict(_make_capture_data(turns=turns))
         provider = replay.extraction_provider()
@@ -267,9 +285,11 @@ class TestInjectProviders:
     @pytest.mark.asyncio
     async def test_extractor_kwarg_replaces_extractor(self) -> None:
         bot = await DynaBot.from_config(_wizard_bot_config())
-        ext = ConfigurableExtractor(results=[
-            SimpleExtractionResult(data={"name": "Alice"}, confidence=0.9),
-        ])
+        ext = ConfigurableExtractor(
+            results=[
+                SimpleExtractionResult(data={"name": "Alice"}, confidence=0.9),
+            ]
+        )
         inject_providers(bot, extractor=ext)
         assert bot.reasoning_strategy.extractor is ext
         await bot.close()
@@ -309,10 +329,13 @@ class TestCaptureReplayInjectIntoBot:
     @pytest.mark.asyncio
     async def test_injects_captured_providers(self) -> None:
         turns = [
-            _make_turn(0, llm_calls=[
-                _make_llm_call(0, role="main", content="captured main"),
-                _make_llm_call(1, role="extraction", content="captured ext"),
-            ]),
+            _make_turn(
+                0,
+                llm_calls=[
+                    _make_llm_call(0, role="main", content="captured main"),
+                    _make_llm_call(1, role="extraction", content="captured ext"),
+                ],
+            ),
         ]
         replay = CaptureReplay.from_dict(_make_capture_data(turns=turns))
         bot = await DynaBot.from_config(_wizard_bot_config())
@@ -325,9 +348,12 @@ class TestCaptureReplayInjectIntoBot:
     @pytest.mark.asyncio
     async def test_skips_extraction_when_no_extraction_calls(self) -> None:
         turns = [
-            _make_turn(0, llm_calls=[
-                _make_llm_call(0, role="main", content="only main"),
-            ]),
+            _make_turn(
+                0,
+                llm_calls=[
+                    _make_llm_call(0, role="main", content="only main"),
+                ],
+            ),
         ]
         replay = CaptureReplay.from_dict(_make_capture_data(turns=turns))
         bot = await DynaBot.from_config(_wizard_bot_config())

@@ -190,19 +190,13 @@ class DynaBotConfigSchema:
 
         for name, comp in self._components.items():
             if comp.required and name not in bot:
-                result = result.merge(
-                    ValidationResult.error(f"Missing required component: {name}")
-                )
+                result = result.merge(ValidationResult.error(f"Missing required component: {name}"))
             if name in bot and isinstance(bot[name], dict):
-                result = result.merge(
-                    _validate_against_schema(name, bot[name], comp.schema)
-                )
+                result = result.merge(_validate_against_schema(name, bot[name], comp.schema))
 
         for name, ext in self._extensions.items():
             if name in bot and isinstance(bot[name], dict):
-                result = result.merge(
-                    _validate_against_schema(name, bot[name], ext.schema)
-                )
+                result = result.merge(_validate_against_schema(name, bot[name], ext.schema))
 
         return result
 
@@ -329,8 +323,7 @@ class DynaBotConfigSchema:
                     "backend": {
                         "type": "string",
                         "description": (
-                            "Storage backend type "
-                            "(for default DataknobsConversationStorage)"
+                            "Storage backend type (for default DataknobsConversationStorage)"
                         ),
                         "enum": [
                             "memory",
@@ -375,8 +368,7 @@ class DynaBotConfigSchema:
                     "strategies": {
                         "type": "array",
                         "description": (
-                            "List of sub-strategy configurations "
-                            "(required for composite type)"
+                            "List of sub-strategy configurations (required for composite type)"
                         ),
                         "items": {"type": "object"},
                     },
@@ -459,9 +451,7 @@ class DynaBotConfigSchema:
                             },
                             "generate_embeddings": {
                                 "type": "boolean",
-                                "description": (
-                                    "Generate heading-enriched embedding text"
-                                ),
+                                "description": ("Generate heading-enriched embedding text"),
                             },
                             "transforms": {
                                 "type": "array",

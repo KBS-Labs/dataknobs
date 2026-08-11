@@ -19,7 +19,9 @@ from typing import AsyncIterator, Dict, Any
 from dataknobs_fsm import SimpleFSM, AsyncSimpleFSM
 
 
-async def generate_streaming_data(count: int = 1000, chunk_size: int = 100) -> AsyncIterator[Dict[str, Any]]:
+async def generate_streaming_data(
+    count: int = 1000, chunk_size: int = 100
+) -> AsyncIterator[Dict[str, Any]]:
     """
     Simulate a streaming data source.
 
@@ -34,10 +36,10 @@ async def generate_streaming_data(count: int = 1000, chunk_size: int = 100) -> A
         chunk_data = []
         for j in range(min(chunk_size, count - i)):
             record = {
-                'id': i + j,
-                'value': (i + j) * 10,
-                'category': f'cat_{(i + j) % 5}',
-                'status': 'pending'
+                "id": i + j,
+                "value": (i + j) * 10,
+                "category": f"cat_{(i + j) % 5}",
+                "status": "pending",
             }
             chunk_data.append(record)
 
@@ -60,97 +62,81 @@ def create_streaming_fsm_config():
     4. Formats output for downstream systems
     """
     config = {
-        'name': 'StreamingProcessor',
-        'main_network': 'main',
-        'networks': [{
-            'name': 'main',
-            'states': [
-                {
-                    'name': 'input',
-                    'is_start': True
-                },
-                {
-                    'name': 'validate',
-                    'functions': {
-                        'transform': {
-                            'type': 'inline',
-                            'code': """lambda state: {
+        "name": "StreamingProcessor",
+        "main_network": "main",
+        "networks": [
+            {
+                "name": "main",
+                "states": [
+                    {"name": "input", "is_start": True},
+                    {
+                        "name": "validate",
+                        "functions": {
+                            "transform": {
+                                "type": "inline",
+                                "code": """lambda state: {
                                 **state.data,
                                 'valid': state.data.get('value') is not None and state.data.get('value') >= 0
-                            }"""
-                        }
-                    }
-                },
-                {
-                    'name': 'enrich',
-                    'functions': {
-                        'transform': {
-                            'type': 'inline',
-                            'code': """lambda state: {
+                            }""",
+                            }
+                        },
+                    },
+                    {
+                        "name": "enrich",
+                        "functions": {
+                            "transform": {
+                                "type": "inline",
+                                "code": """lambda state: {
                                 'id': state.data['id'],
                                 'original_value': state.data['value'],
                                 'doubled_value': state.data['value'] * 2,
                                 'squared_value': state.data['value'] ** 2,
                                 'category': state.data['category'],
                                 'status': 'enriched'
-                            }"""
-                        }
-                    }
-                },
-                {
-                    'name': 'categorize',
-                    'functions': {
-                        'transform': {
-                            'type': 'inline',
-                            'code': """lambda state: {
+                            }""",
+                            }
+                        },
+                    },
+                    {
+                        "name": "categorize",
+                        "functions": {
+                            "transform": {
+                                "type": "inline",
+                                "code": """lambda state: {
                                 **state.data,
                                 'value_tier': 'high' if state.data['original_value'] > 5000 else 'medium' if state.data['original_value'] > 1000 else 'low',
                                 'status': 'processed',
                                 'risk_score': min(100, state.data['squared_value'] / 100)
-                            }"""
-                        }
-                    }
-                },
-                {
-                    'name': 'output',
-                    'is_end': True
-                },
-                {
-                    'name': 'error',
-                    'is_end': True
-                }
-            ],
-            'arcs': [
-                {
-                    'from': 'input',
-                    'to': 'validate'
-                },
-                {
-                    'from': 'validate',
-                    'to': 'enrich',
-                    'condition': {
-                        'type': 'inline',
-                        'code': "lambda state: state.data.get('valid', True)"
-                    }
-                },
-                {
-                    'from': 'validate',
-                    'to': 'error',
-                    'condition': {
-                        'type': 'inline',
-                        'code': "lambda state: not state.data.get('valid', True)"
-                    }
-                },
-                {
-                    'from': 'enrich',
-                    'to': 'categorize'
-                },
-                {
-                    'from': 'categorize',
-                    'to': 'output'
-                }
-            ]
-        }]
+                            }""",
+                            }
+                        },
+                    },
+                    {"name": "output", "is_end": True},
+                    {"name": "error", "is_end": True},
+                ],
+                "arcs": [
+                    {"from": "input", "to": "validate"},
+                    {
+                        "from": "validate",
+                        "to": "enrich",
+                        "condition": {
+                            "type": "inline",
+                            "code": "lambda state: state.data.get('valid', True)",
+                        },
+                    },
+                    {
+                        "from": "validate",
+                        "to": "error",
+                        "condition": {
+                            "type": "inline",
+                            "code": "lambda state: not state.data.get('valid', True)",
+                        },
+                    },
+                    {"from": "enrich", "to": "categorize"},
+                    {"from": "categorize", "to": "output"},
+                ],
+            }
+        ],
     }
 
     return config
@@ -163,26 +149,21 @@ async def example_file_to_file_streaming():
     This demonstrates the most common use case: processing large files
     without loading them entirely into memory.
     """
-    print("\n" + "="*60)
+    print("\n" + "=" * 60)
     print("Example 1: File-to-File Streaming with FSM Processing")
-    print("="*60)
+    print("=" * 60)
 
     # Create temporary input file with test data
-    with tempfile.NamedTemporaryFile(mode='w', suffix='.jsonl', delete=False) as input_file:
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".jsonl", delete=False) as input_file:
         input_path = Path(input_file.name)
 
         # Write test data (simulating a large file)
         for i in range(100):
-            record = {
-                'id': i,
-                'value': i * 100,
-                'category': f'cat_{i % 3}',
-                'status': 'raw'
-            }
-            input_file.write(json.dumps(record) + '\n')
+            record = {"id": i, "value": i * 100, "category": f"cat_{i % 3}", "status": "raw"}
+            input_file.write(json.dumps(record) + "\n")
 
     # Create temporary output file
-    with tempfile.NamedTemporaryFile(mode='w', suffix='.jsonl', delete=False) as output_file:
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".jsonl", delete=False) as output_file:
         output_path = Path(output_file.name)
 
     try:
@@ -201,7 +182,7 @@ async def example_file_to_file_streaming():
             sink=str(output_path),
             chunk_size=10,  # Process 10 records at a time
             use_streaming=True,  # Enable memory-efficient streaming
-            on_progress=lambda p: print(f"  Processed {p.records_processed} records...")
+            on_progress=lambda p: print(f"  Processed {p.records_processed} records..."),
         )
 
         print(f"\nStreaming complete!")
@@ -211,7 +192,7 @@ async def example_file_to_file_streaming():
 
         # Read and display a few output records
         print("\nSample output records:")
-        with open(output_path, 'r') as f:
+        with open(output_path, "r") as f:
             for i, line in enumerate(f):
                 if i < 3:  # Show first 3 records
                     record = json.loads(line)
@@ -236,12 +217,12 @@ async def example_generator_to_file_streaming():
     - Database cursors
     - Live sensor data
     """
-    print("\n" + "="*60)
+    print("\n" + "=" * 60)
     print("Example 2: Real-time Stream Processing (Generator to File)")
-    print("="*60)
+    print("=" * 60)
 
     # Create temporary output file
-    with tempfile.NamedTemporaryFile(mode='w', suffix='.jsonl', delete=False) as output_file:
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".jsonl", delete=False) as output_file:
         output_path = Path(output_file.name)
 
     try:
@@ -259,7 +240,7 @@ async def example_generator_to_file_streaming():
             source=generate_streaming_data(count=50, chunk_size=10),
             sink=str(output_path),
             chunk_size=5,  # Process 5 records at a time
-            on_progress=lambda p: print(f"  Streamed {p.records_processed} records...")
+            on_progress=lambda p: print(f"  Streamed {p.records_processed} records..."),
         )
 
         print(f"\nReal-time processing complete!")
@@ -267,7 +248,7 @@ async def example_generator_to_file_streaming():
         print(f"  Processing time: {results.get('processing_time', 0):.2f}s")
 
         # Verify output
-        with open(output_path, 'r') as f:
+        with open(output_path, "r") as f:
             lines = f.readlines()
             print(f"  Output file contains {len(lines)} processed records")
 
@@ -283,55 +264,48 @@ async def example_pipeline_streaming():
     This demonstrates how to chain multiple FSMs in a streaming pipeline,
     where output from one FSM streams directly into the next.
     """
-    print("\n" + "="*60)
+    print("\n" + "=" * 60)
     print("Example 3: Multi-Stage Streaming Pipeline")
-    print("="*60)
+    print("=" * 60)
 
     # Stage 1 FSM: Data cleaning and normalization
     stage1_config = {
-        'name': 'DataCleaner',
-        'main_network': 'main',
-        'networks': [{
-            'name': 'main',
-            'states': [
-                {
-                    'name': 'input',
-                    'is_start': True
-                },
-                {
-                    'name': 'clean',
-                    'functions': {
-                        'transform': {
-                            'type': 'inline',
-                            'code': """lambda state: {
+        "name": "DataCleaner",
+        "main_network": "main",
+        "networks": [
+            {
+                "name": "main",
+                "states": [
+                    {"name": "input", "is_start": True},
+                    {
+                        "name": "clean",
+                        "functions": {
+                            "transform": {
+                                "type": "inline",
+                                "code": """lambda state: {
                                 'id': state.data['id'],
                                 'value': max(0, state.data.get('value', 0)),
                                 'category': state.data.get('category', '').upper(),
                                 'timestamp': __import__('time').time()
-                            }"""
-                        }
-                    }
-                },
-                {
-                    'name': 'output',
-                    'is_end': True
-                }
-            ],
-            'arcs': [
-                {'from': 'input', 'to': 'clean'},
-                {'from': 'clean', 'to': 'output'}
-            ]
-        }]
+                            }""",
+                            }
+                        },
+                    },
+                    {"name": "output", "is_end": True},
+                ],
+                "arcs": [{"from": "input", "to": "clean"}, {"from": "clean", "to": "output"}],
+            }
+        ],
     }
 
     # Stage 2 FSM: Use our main processing FSM
     stage2_config = create_streaming_fsm_config()
 
     # Create temporary files for intermediate results
-    with tempfile.NamedTemporaryFile(mode='w', suffix='.jsonl', delete=False) as stage1_output:
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".jsonl", delete=False) as stage1_output:
         stage1_path = Path(stage1_output.name)
 
-    with tempfile.NamedTemporaryFile(mode='w', suffix='.jsonl', delete=False) as final_output:
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".jsonl", delete=False) as final_output:
         final_path = Path(final_output.name)
 
     try:
@@ -342,7 +316,7 @@ async def example_pipeline_streaming():
         stage1_results = await stage1_fsm.process_stream(
             source=generate_streaming_data(count=30, chunk_size=10),
             sink=str(stage1_path),
-            chunk_size=5
+            chunk_size=5,
         )
         print(f"  Cleaned {stage1_results.get('total_records', 0)} records")
 
@@ -351,10 +325,7 @@ async def example_pipeline_streaming():
 
         # Stream stage 1 output to stage 2
         stage2_results = await stage2_fsm.process_stream(
-            source=str(stage1_path),
-            sink=str(final_path),
-            chunk_size=5,
-            use_streaming=True
+            source=str(stage1_path), sink=str(final_path), chunk_size=5, use_streaming=True
         )
         print(f"  Processed {stage2_results.get('total_records', 0)} records")
 
@@ -362,7 +333,7 @@ async def example_pipeline_streaming():
         print(f"  Final output: {final_path}")
 
         # Show sample final output
-        with open(final_path, 'r') as f:
+        with open(final_path, "r") as f:
             first_line = f.readline()
             if first_line:
                 record = json.loads(first_line)
@@ -377,9 +348,9 @@ async def example_pipeline_streaming():
 
 async def main():
     """Run all streaming examples."""
-    print("\n" + "#"*60)
+    print("\n" + "#" * 60)
     print("# FSM End-to-End Streaming Examples")
-    print("#"*60)
+    print("#" * 60)
     print("\nThese examples demonstrate how data can be streamed through")
     print("an FSM network with transformations applied at each state,")
     print("all while maintaining memory efficiency for large datasets.")
@@ -389,9 +360,9 @@ async def main():
     await example_generator_to_file_streaming()
     await example_pipeline_streaming()
 
-    print("\n" + "#"*60)
+    print("\n" + "#" * 60)
     print("# All Examples Complete!")
-    print("#"*60)
+    print("#" * 60)
     print("\nKey Features Demonstrated:")
     print("- Memory-efficient chunk-based processing")
     print("- Real-time data stream handling")

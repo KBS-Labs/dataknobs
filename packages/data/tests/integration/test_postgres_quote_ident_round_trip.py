@@ -141,13 +141,15 @@ class TestVectorSearchMixedCaseField:
 
             vec = [0.1, 0.2, 0.3, 0.4]
             record = Record(
-                data=OrderedDict({
-                    "MyEmbedding": VectorField(
-                        name="MyEmbedding",
-                        value=vec,
-                        dimensions=4,
-                    )
-                }),
+                data=OrderedDict(
+                    {
+                        "MyEmbedding": VectorField(
+                            name="MyEmbedding",
+                            value=vec,
+                            dimensions=4,
+                        )
+                    }
+                ),
                 metadata={"label": "test"},
             )
             await db.create(record)
@@ -186,13 +188,15 @@ class TestVectorUpdateMixedCaseField:
             record_id = await db.create(Record({"placeholder": True}))
 
             updated_record = Record(
-                data=OrderedDict({
-                    "MyEmbedding": VectorField(
-                        name="MyEmbedding",
-                        value=vec,
-                        dimensions=4,
-                    )
-                }),
+                data=OrderedDict(
+                    {
+                        "MyEmbedding": VectorField(
+                            name="MyEmbedding",
+                            value=vec,
+                            dimensions=4,
+                        )
+                    }
+                ),
                 metadata={"label": "updated"},
             )
             ok = await db.update(record_id, updated_record)
@@ -221,13 +225,15 @@ class TestVectorUpsertMixedCaseField:
 
             vec = [0.1, 0.2, 0.3, 0.4]
             record = Record(
-                data=OrderedDict({
-                    "MyEmbedding": VectorField(
-                        name="MyEmbedding",
-                        value=vec,
-                        dimensions=4,
-                    )
-                }),
+                data=OrderedDict(
+                    {
+                        "MyEmbedding": VectorField(
+                            name="MyEmbedding",
+                            value=vec,
+                            dimensions=4,
+                        )
+                    }
+                ),
                 metadata={"label": "upserted"},
             )
             await db.upsert(record)
@@ -259,13 +265,15 @@ class TestVectorUpsertMixedCaseField:
 
             # Upsert the same id with a vector — exercises the ON CONFLICT path
             record = Record(
-                data=OrderedDict({
-                    "MyEmbedding": VectorField(
-                        name="MyEmbedding",
-                        value=vec2,
-                        dimensions=4,
-                    )
-                }),
+                data=OrderedDict(
+                    {
+                        "MyEmbedding": VectorField(
+                            name="MyEmbedding",
+                            value=vec2,
+                            dimensions=4,
+                        )
+                    }
+                ),
                 metadata={"label": "conflict-update"},
                 id=record_id,
             )

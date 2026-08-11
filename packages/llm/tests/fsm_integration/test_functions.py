@@ -64,9 +64,7 @@ class TestSchemaValidationErrorShape:
         )
 
         with pytest.raises(ValidationError) as excinfo:
-            validator.validate(
-                {"llm_response": '{"account": 42, "balance": "not-a-number"}'}
-            )
+            validator.validate({"llm_response": '{"account": 42, "balance": "not-a-number"}'})
 
         message = str(excinfo.value)
         assert "not-a-number" not in message

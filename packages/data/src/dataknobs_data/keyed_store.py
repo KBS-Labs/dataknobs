@@ -289,9 +289,7 @@ class AsyncKeyedRecordStore(Generic[T]):
         """Stream values matching the supplied filters one at a time."""
         q: Query | None = None
         if filter_data or filter_metadata:
-            q = _build_query(
-                filter_data=filter_data, filter_metadata=filter_metadata
-            )
+            q = _build_query(filter_data=filter_data, filter_metadata=filter_metadata)
         async for record in self._db.stream_read(q, config):
             yield self._deserializer(record)
 
@@ -420,9 +418,7 @@ class SyncKeyedRecordStore(Generic[T]):
         """See ``AsyncKeyedRecordStore.stream``."""
         q: Query | None = None
         if filter_data or filter_metadata:
-            q = _build_query(
-                filter_data=filter_data, filter_metadata=filter_metadata
-            )
+            q = _build_query(filter_data=filter_data, filter_metadata=filter_metadata)
         for record in self._db.stream_read(q, config):
             yield self._deserializer(record)
 

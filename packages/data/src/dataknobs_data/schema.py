@@ -190,20 +190,22 @@ class DatabaseSchema:
                 if "source_field" in options:
                     field_metadata["source_field"] = options["source_field"]
 
-                schema.add_field(FieldSchema(
-                    name=name,
-                    type=field_type,
-                    metadata=field_metadata,
-                    required=options.get("required", False),
-                    default=options.get("default")
-                ))
+                schema.add_field(
+                    FieldSchema(
+                        name=name,
+                        type=field_type,
+                        metadata=field_metadata,
+                        required=options.get("required", False),
+                        default=options.get("default"),
+                    )
+                )
             else:
                 raise ValueError(f"Invalid field definition for {name}: {definition}")
         return schema
 
     def add_field(self, field_schema: FieldSchema) -> DatabaseSchema:
         """Add a field to the schema.
-        
+
         Returns self for chaining.
         """
         self.fields[field_schema.name] = field_schema
@@ -214,19 +216,17 @@ class DatabaseSchema:
         return self.add_field(FieldSchema(name=name, type=FieldType.TEXT, required=required))
 
     def add_vector_field(
-        self,
-        name: str,
-        dimensions: int,
-        source_field: str | None = None,
-        required: bool = False
+        self, name: str, dimensions: int, source_field: str | None = None, required: bool = False
     ) -> DatabaseSchema:
         """Add a vector field to the schema."""
-        return self.add_field(FieldSchema(
-            name=name,
-            type=FieldType.VECTOR,
-            metadata={"dimensions": dimensions, "source_field": source_field},
-            required=required
-        ))
+        return self.add_field(
+            FieldSchema(
+                name=name,
+                type=FieldType.VECTOR,
+                metadata={"dimensions": dimensions, "source_field": source_field},
+                required=required,
+            )
+        )
 
     def remove_field(self, name: str) -> bool:
         """Remove a field from the schema."""
@@ -237,11 +237,7 @@ class DatabaseSchema:
 
     def get_vector_fields(self) -> dict[str, FieldSchema]:
         """Get all vector fields in the schema."""
-        return {
-            name: field
-            for name, field in self.fields.items()
-            if field.is_vector_field()
-        }
+        return {name: field for name, field in self.fields.items() if field.is_vector_field()}
 
     def get_source_fields(self) -> dict[str, list[str]]:
         """Get mapping of source fields to their dependent vector fields."""
@@ -265,19 +261,19 @@ class DatabaseSchema:
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> DatabaseSchema:
         """Create from dictionary representation.
-        
+
         Supports multiple formats:
         1. Full format with FieldSchema dicts
         2. Simple format with just field types
         3. Mixed format
-        
+
         Examples:
             # Simple format
             {"fields": {"content": "text", "score": "float"}}
-            
+
             # Full format
             {"fields": {"content": {"type": "text", "required": true}}}
-            
+
             # Vector fields
             {"fields": {"embedding": {"type": "vector", "dimensions": 384}}}
         """
@@ -286,10 +282,7 @@ class DatabaseSchema:
         for name, field_data in data.get("fields", {}).items():
             if isinstance(field_data, str):
                 # Simple string type
-                schema.fields[name] = FieldSchema(
-                    name=name,
-                    type=FieldType(field_data)
-                )
+                schema.fields[name] = FieldSchema(name=name, type=FieldType(field_data))
             elif isinstance(field_data, dict):
                 if "type" in field_data:
                     # Full field schema dict
@@ -311,7 +304,7 @@ class DatabaseSchema:
                         type=field_type,
                         metadata=metadata,
                         required=field_data.get("required", False),
-                        default=field_data.get("default")
+                        default=field_data.get("default"),
                     )
                 else:
                     # Try to parse as FieldSchema dict

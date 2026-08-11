@@ -53,8 +53,8 @@ class VectorQueryFn(Protocol):
         top_k: int,
         *,
         filter_metadata: dict[str, Any] | None = None,
-    ) -> list[SourceResult]:
-        ...
+    ) -> list[SourceResult]: ...
+
 
 DEFAULT_LABEL_MIN_WORD_LENGTH: int = 3
 """Default minimum word length for auto-generated cluster labels."""
@@ -292,8 +292,10 @@ class ClusterTopicIndex:
 
         if filtered_chunks:
             idx._clusters = _build_clusters(
-                filtered_chunks, filtered_embeddings,
-                config=idx._config, labels=labels,
+                filtered_chunks,
+                filtered_embeddings,
+                config=idx._config,
+                labels=labels,
             )
 
         return idx
@@ -331,12 +333,10 @@ class ClusterTopicIndex:
             )
 
         all_embeddings = await batch_embed_fn(texts)
-        embeddings_map = {
-            chunk.source_id: emb
-            for chunk, emb in zip(chunks, all_embeddings)
-        }
+        embeddings_map = {chunk.source_id: emb for chunk, emb in zip(chunks, all_embeddings)}
         return cls.from_chunks(
-            chunks, embeddings_map,
+            chunks,
+            embeddings_map,
             embed_fn=embed_fn,
             vector_query_fn=vector_query_fn,
             source_name=source_name,
@@ -378,9 +378,9 @@ class ClusterTopicIndex:
         params = _resolve_params(self._config, intent)
 
         logger.info(
-            "ClusterTopicIndex resolving for source '%s': "
-            "top_clusters=%d, centroid_threshold=%.2f",
-            self._source_name, params.top_clusters,
+            "ClusterTopicIndex resolving for source '%s': top_clusters=%d, centroid_threshold=%.2f",
+            self._source_name,
+            params.top_clusters,
             params.centroid_score_threshold,
         )
 
@@ -390,7 +390,8 @@ class ClusterTopicIndex:
         except Exception:
             logger.warning(
                 "Query embedding failed for source '%s'",
-                self._source_name, exc_info=True,
+                self._source_name,
+                exc_info=True,
             )
             return []
 
@@ -404,7 +405,9 @@ class ClusterTopicIndex:
 
         # Get chunks, embeddings, and clusters for this turn
         chunks, embeddings, clusters = await self._get_clusters(
-            query, params, filter_metadata=filter_metadata,
+            query,
+            params,
+            filter_metadata=filter_metadata,
         )
 
         if not clusters:
@@ -416,7 +419,9 @@ class ClusterTopicIndex:
 
         logger.info(
             "ClusterTopicIndex: %d seeds -> %d clusters for source '%s'",
-            len(chunks), len(clusters), self._source_name,
+            len(chunks),
+            len(clusters),
+            self._source_name,
         )
 
         # Score clusters by centroid similarity
@@ -428,20 +433,22 @@ class ClusterTopicIndex:
 
         # Sort by score descending, take top N
         cluster_scores.sort(key=lambda x: x[1], reverse=True)
-        cluster_scores = cluster_scores[:params.top_clusters]
+        cluster_scores = cluster_scores[: params.top_clusters]
 
         if not cluster_scores:
             logger.info(
-                "ClusterTopicIndex: no clusters matched query for source '%s' "
-                "(threshold=%.2f)",
-                self._source_name, params.centroid_score_threshold,
+                "ClusterTopicIndex: no clusters matched query for source '%s' (threshold=%.2f)",
+                self._source_name,
+                params.centroid_score_threshold,
             )
             return []
 
         matched_labels = [c.label for c, _ in cluster_scores]
         logger.info(
             "ClusterTopicIndex: query matched %d clusters for source '%s': %s",
-            len(cluster_scores), self._source_name, matched_labels,
+            len(cluster_scores),
+            self._source_name,
+            matched_labels,
         )
 
         # Collect chunks from matched clusters, ranked by query similarity
@@ -472,9 +479,10 @@ class ClusterTopicIndex:
             all_results = all_results[:effective_max]
 
         logger.info(
-            "ClusterTopicIndex: %d matched clusters -> %d chunks "
-            "for source '%s'",
-            len(cluster_scores), len(all_results), self._source_name,
+            "ClusterTopicIndex: %d matched clusters -> %d chunks for source '%s'",
+            len(cluster_scores),
+            len(all_results),
+            self._source_name,
         )
 
         return all_results
@@ -521,16 +529,14 @@ class ClusterTopicIndex:
         In eager mode, returns pre-built state.
         In lazy mode, fetches seeds and clusters them per-turn.
         """
-        if (
-            self._chunks is not None
-            and self._embeddings is not None
-            and self._clusters is not None
-        ):
+        if self._chunks is not None and self._embeddings is not None and self._clusters is not None:
             return self._chunks, self._embeddings, self._clusters
 
         # Lazy mode: fetch seeds and cluster per-turn
         seed_results = await self._fetch_vector_seeds(
-            query, params, filter_metadata=filter_metadata,
+            query,
+            params,
+            filter_metadata=filter_metadata,
         )
         if not seed_results:
             return [], [], []
@@ -542,7 +548,9 @@ class ClusterTopicIndex:
             return [], [], []
 
         clusters = _build_clusters(
-            seed_chunks, seed_embeddings, config=self._config,
+            seed_chunks,
+            seed_embeddings,
+            config=self._config,
         )
         return seed_chunks, seed_embeddings, clusters
 
@@ -556,8 +564,7 @@ class ClusterTopicIndex:
         """Fetch seed results via vector search."""
         if self._vector_query_fn is None:
             logger.debug(
-                "No vector_query_fn configured for source '%s', "
-                "cannot fetch seeds in lazy mode",
+                "No vector_query_fn configured for source '%s', cannot fetch seeds in lazy mode",
                 self._source_name,
             )
             return []
@@ -571,14 +578,12 @@ class ClusterTopicIndex:
         except Exception:
             logger.warning(
                 "Vector query failed for source '%s'",
-                self._source_name, exc_info=True,
+                self._source_name,
+                exc_info=True,
             )
             return []
 
-        return [
-            r for r in results
-            if r.relevance >= params.seed_score_threshold
-        ]
+        return [r for r in results if r.relevance >= params.seed_score_threshold]
 
     async def _embed_seeds(
         self,
@@ -659,12 +664,14 @@ def _build_clusters(
         else:
             label = _auto_label(chunks, members, config)
 
-        result.append(_Cluster(
-            cluster_id=cid,
-            label=label,
-            member_indices=members,
-            centroid=centroid,
-        ))
+        result.append(
+            _Cluster(
+                cluster_id=cid,
+                label=label,
+                member_indices=members,
+                centroid=centroid,
+            )
+        )
 
     return result
 

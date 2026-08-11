@@ -14,7 +14,7 @@ from dataknobs_data.query import Filter, Operator, SortOrder, SortSpec
 # Skip all tests if PostgreSQL is not available
 pytestmark = pytest.mark.skipif(
     not os.environ.get("TEST_POSTGRES", "").lower() == "true",
-    reason="PostgreSQL tests require TEST_POSTGRES=true and a running PostgreSQL instance"
+    reason="PostgreSQL tests require TEST_POSTGRES=true and a running PostgreSQL instance",
 )
 
 
@@ -23,41 +23,37 @@ def ensure_test_database():
     """Ensure the test database exists."""
     if not os.environ.get("TEST_POSTGRES", "").lower() == "true":
         return
-    
+
     host = os.environ.get("POSTGRES_HOST", "localhost")
     port = int(os.environ.get("POSTGRES_PORT", 5432))
     user = os.environ.get("POSTGRES_USER", "postgres")
     password = os.environ.get("POSTGRES_PASSWORD", "postgres")
     db_name = os.environ.get("POSTGRES_DB", "test_dataknobs")
-    
+
     # Connect to postgres database to create test database
     try:
         conn = psycopg2.connect(
-            host=host,
-            port=port,
-            user=user,
-            password=password,
-            database="postgres"
+            host=host, port=port, user=user, password=password, database="postgres"
         )
         conn.set_isolation_level(ISOLATION_LEVEL_AUTOCOMMIT)
         cur = conn.cursor()
-        
+
         # Check if database exists
         cur.execute("SELECT 1 FROM pg_database WHERE datname = %s", (db_name,))
         exists = cur.fetchone()
-        
+
         if not exists:
             # Create the database
             cur.execute(f"CREATE DATABASE {safe_sql_ident(db_name)}")
-        
+
         cur.close()
         conn.close()
     except Exception as e:
         # If we can't create the database, the tests will fail anyway
         print(f"Warning: Could not ensure test database exists: {e}")
-    
+
     yield
-    
+
     # Cleanup is optional - we can leave the test database for future runs
 
 
@@ -269,10 +265,7 @@ class TestSyncPostgresDatabase:
     def test_batch_operations(self, sync_db):
         """Test batch operations."""
         # Create batch
-        records = [
-            Record({"batch": 1, "item": i})
-            for i in range(5)
-        ]
+        records = [Record({"batch": 1, "item": i}) for i in range(5)]
         ids = sync_db.create_batch(records)
         assert len(ids) == 5
         assert all(isinstance(id, str) for id in ids)
@@ -315,10 +308,7 @@ class TestSyncPostgresDatabase:
 
     def test_metadata_handling(self, sync_db):
         """Test metadata storage and retrieval."""
-        record = Record(
-            data={"name": "Test"},
-            metadata={"created_by": "user1", "version": 1}
-        )
+        record = Record(data={"name": "Test"}, metadata={"created_by": "user1", "version": 1})
         id = sync_db.create(record)
 
         retrieved = sync_db.read(id)
@@ -327,15 +317,17 @@ class TestSyncPostgresDatabase:
 
     def test_special_characters(self, sync_db):
         """Test handling of special characters in data."""
-        record = Record({
-            "name": "Test's \"quoted\" value",
-            "json": {"nested": {"key": "value"}},
-            "unicode": "Hello 世界 🌍",
-        })
+        record = Record(
+            {
+                "name": 'Test\'s "quoted" value',
+                "json": {"nested": {"key": "value"}},
+                "unicode": "Hello 世界 🌍",
+            }
+        )
         id = sync_db.create(record)
 
         retrieved = sync_db.read(id)
-        assert retrieved.get_value("name") == "Test's \"quoted\" value"
+        assert retrieved.get_value("name") == 'Test\'s "quoted" value'
         assert retrieved.get_value("json") == {"nested": {"key": "value"}}
         assert retrieved.get_value("unicode") == "Hello 世界 🌍"
 

@@ -23,7 +23,6 @@ def _make_library() -> ConfigPromptLibrary:
 
 
 class TestReviewSharedFragments:
-
     def test_response_format_present(self) -> None:
         assert "review.format.response" in REVIEW_PROMPT_KEYS
 
@@ -44,7 +43,6 @@ class TestReviewSharedFragments:
 
 
 class TestPersonaKeyCompleteness:
-
     @pytest.mark.parametrize("persona", BUILT_IN_PERSONAS)
     def test_persona_has_all_keys(self, persona: str) -> None:
         expected = [
@@ -71,7 +69,6 @@ class TestPersonaKeyCompleteness:
 
 
 class TestPersonaMetaPromptComposition:
-
     @pytest.mark.parametrize("persona", BUILT_IN_PERSONAS)
     def test_persona_meta_renders(self, persona: str) -> None:
         library = _make_library()

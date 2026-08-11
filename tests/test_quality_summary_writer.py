@@ -46,39 +46,60 @@ GATE = ROOT / "bin" / "run-quality-checks.sh"
 #: it, and kept verbatim: it is the reference the swap is measured against.
 HEREDOC_CHECKS = {
     "documentation": {
-        "status": "pass", "exit_code": 0, "skipped": False,
-        "tool": "mkdocs", "duration_seconds": 25,
+        "status": "pass",
+        "exit_code": 0,
+        "skipped": False,
+        "tool": "mkdocs",
+        "duration_seconds": 25,
     },
     "documentation_versions": {
-        "status": "pass", "exit_code": 0, "skipped": False,
-        "tool": "docs-update-versions.sh", "duration_seconds": 0,
+        "status": "pass",
+        "exit_code": 0,
+        "skipped": False,
+        "tool": "docs-update-versions.sh",
+        "duration_seconds": 0,
     },
     "documentation_mirrors": {
-        "status": "pass", "exit_code": 0, "skipped": False,
-        "tool": "docs-mirror-check.py", "duration_seconds": 0,
+        "status": "pass",
+        "exit_code": 0,
+        "skipped": False,
+        "tool": "docs-mirror-check.py",
+        "duration_seconds": 0,
     },
     "validation": {
-        "status": "pass", "exit_code": 0, "skipped": False,
-        "tool": "validate.sh", "duration_seconds": 39,
+        "status": "pass",
+        "exit_code": 0,
+        "skipped": False,
+        "tool": "validate.sh",
+        "duration_seconds": 39,
     },
     # No "skipped": nothing gates these two, so there is no state in which they
     # did not run. The absence is part of what the writer has to reproduce.
     "shell_lint": {
-        "status": "pass", "exit_code": 0,
-        "tool": "lint-shell.sh", "duration_seconds": 4,
+        "status": "pass",
+        "exit_code": 0,
+        "tool": "lint-shell.sh",
+        "duration_seconds": 4,
     },
     "workflow_lint": {
-        "status": "pass", "exit_code": 0,
-        "tool": "lint-workflows.sh", "duration_seconds": 1,
+        "status": "pass",
+        "exit_code": 0,
+        "tool": "lint-workflows.sh",
+        "duration_seconds": 1,
     },
     # No "tool": a suite is not one tool's verdict. The extra span is the
     # workspace guards, folded into the unit status but timed separately.
     "unit_tests": {
-        "status": "pass", "exit_code": 0, "skipped": False,
-        "duration_seconds": 78, "workspace_guards_seconds": 27,
+        "status": "pass",
+        "exit_code": 0,
+        "skipped": False,
+        "duration_seconds": 78,
+        "workspace_guards_seconds": 27,
     },
     "integration_tests": {
-        "status": "pass", "exit_code": 0, "skipped": False,
+        "status": "pass",
+        "exit_code": 0,
+        "skipped": False,
         "duration_seconds": 54,
     },
 }
@@ -123,16 +144,32 @@ def _metadata(omit: str | None = None, **overrides: object) -> list[str]:
 
 def _record(records: Path, name: str, code: int, *rest: str) -> None:
     writer.main(
-        ["quality-summary.py", "record", "--records", str(records), "--name", name,
-         "--exit-code", str(code), *rest]
+        [
+            "quality-summary.py",
+            "record",
+            "--records",
+            str(records),
+            "--name",
+            name,
+            "--exit-code",
+            str(code),
+            *rest,
+        ]
     )
 
 
 def _build(tmp_path: Path, records: Path, **overrides: object) -> dict:
     output = tmp_path / "quality-summary.json"
     writer.main(
-        ["quality-summary.py", "build", "--records", str(records),
-         "--output", str(output), *_metadata(**overrides)]
+        [
+            "quality-summary.py",
+            "build",
+            "--records",
+            str(records),
+            "--output",
+            str(output),
+            *_metadata(**overrides),
+        ]
     )
     return json.loads(output.read_text(encoding="utf-8"))
 
@@ -198,20 +235,32 @@ def test_the_fields_of_a_check_land_in_the_documented_order(tmp_path):
     """
     records = tmp_path / "records.jsonl"
     _record(
-        records, "unit_tests", 0,
-        "--skipped", "false", "--duration", "41",
-        "--field", "workspace_guards_seconds=7",
+        records,
+        "unit_tests",
+        0,
+        "--skipped",
+        "false",
+        "--duration",
+        "41",
+        "--field",
+        "workspace_guards_seconds=7",
     )
     _record(records, "shell_lint", 0, "--tool", "lint-shell.sh", "--duration", "3")
 
     checks = _build(tmp_path, records)["checks"]
 
     assert list(checks["unit_tests"]) == [
-        "status", "exit_code", "skipped", "duration_seconds",
+        "status",
+        "exit_code",
+        "skipped",
+        "duration_seconds",
         "workspace_guards_seconds",
     ]
     assert list(checks["shell_lint"]) == [
-        "status", "exit_code", "tool", "duration_seconds",
+        "status",
+        "exit_code",
+        "tool",
+        "duration_seconds",
     ]
 
 
@@ -248,8 +297,15 @@ def test_a_forgotten_top_level_field_fails_the_build(tmp_path):
 
     with pytest.raises(SystemExit, match="coverage_percent"):
         writer.main(
-            ["quality-summary.py", "build", "--records", str(records),
-             "--output", str(output), *_metadata(omit="coverage_percent")]
+            [
+                "quality-summary.py",
+                "build",
+                "--records",
+                str(records),
+                "--output",
+                str(output),
+                *_metadata(omit="coverage_percent"),
+            ]
         )
 
 
@@ -261,8 +317,17 @@ def test_a_top_level_field_the_writer_does_not_know_is_refused(tmp_path):
 
     with pytest.raises(SystemExit, match="does not know how to place"):
         writer.main(
-            ["quality-summary.py", "build", "--records", str(records),
-             "--output", str(output), *_metadata(), "--str", "mystery=1"]
+            [
+                "quality-summary.py",
+                "build",
+                "--records",
+                str(records),
+                "--output",
+                str(output),
+                *_metadata(),
+                "--str",
+                "mystery=1",
+            ]
         )
 
 
@@ -283,8 +348,10 @@ def test_the_writer_reproduces_a_heredoc_summary_exactly(tmp_path):
     """
     records = tmp_path / "records.jsonl"
     for name, entry in HEREDOC_CHECKS.items():
-        rest = ["--duration", "null" if entry["duration_seconds"] is None
-                else str(entry["duration_seconds"])]
+        rest = [
+            "--duration",
+            "null" if entry["duration_seconds"] is None else str(entry["duration_seconds"]),
+        ]
         if "tool" in entry:
             rest += ["--tool", entry["tool"]]
         if "skipped" in entry:
@@ -363,9 +430,7 @@ def test_a_garbled_test_entry_does_not_reach_the_grouping_arithmetic():
     non-mapping entry would still raise before it ever got there. The rows go
     out ungrouped rather than not at all.
     """
-    rows = _rendered(
-        {"unit_tests": "pass", "integration_tests": _entry()}, mode="dev"
-    )
+    rows = _rendered({"unit_tests": "pass", "integration_tests": _entry()}, mode="dev")
 
     assert rows == [
         "  Unit Tests:        ✗ FAILED",
@@ -456,7 +521,7 @@ def test_dev_mode_reports_a_skipped_run_as_skipped():
 
 
 def test_a_run_with_no_package_changed_names_the_guards_it_did_run():
-    """"Unit Tests: PASSED" for a run that collected none is green for work not done.
+    """ "Unit Tests: PASSED" for a run that collected none is green for work not done.
 
     The workspace guards did run and the unit entry carries their status, so the
     row is labelled as what it is and the package suites are named apart.
@@ -506,7 +571,8 @@ def test_the_banner_derives_no_verdict_of_its_own():
     # structural guard comes to check nothing and report green.
     header = rules[0]
     borders = [
-        i for i, line in enumerate(lines[header + 1 :], header + 1)
+        i
+        for i, line in enumerate(lines[header + 1 :], header + 1)
         if line.startswith('echo -e "${BLUE}═')
     ]
     assert len(borders) >= 2, "the banner's closing rule moved — re-point this guard"

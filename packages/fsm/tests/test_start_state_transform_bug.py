@@ -186,9 +186,7 @@ class TestIntermediateTransformsStillWork:
                 }
             ],
         }
-        fsm = AsyncSimpleFSM(
-            config, custom_functions={"mid_transform": intermediate_transform}
-        )
+        fsm = AsyncSimpleFSM(config, custom_functions={"mid_transform": intermediate_transform})
         result = await fsm.process({"input": "data"})
         assert result["success"] is True
         assert call_count == 1

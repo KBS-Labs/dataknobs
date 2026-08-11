@@ -23,6 +23,7 @@ def test_template_strategy_enum():
 
 # MessageTemplate with SIMPLE strategy tests
 
+
 def test_prompt_template_simple_basic():
     """Test basic MessageTemplate with SIMPLE strategy."""
     template = MessageTemplate("Hello {name}!", ["name"])
@@ -61,10 +62,7 @@ def test_prompt_template_simple_partial():
 
 def test_prompt_template_simple_multiple_variables():
     """Test SIMPLE template with multiple variables."""
-    template = MessageTemplate(
-        "Name: {name}\nAge: {age}\nCity: {city}",
-        ["name", "age", "city"]
-    )
+    template = MessageTemplate("Name: {name}\nAge: {age}\nCity: {city}", ["name", "age", "city"])
     result = template.format(name="Charlie", age=35, city="NYC")
     assert "Name: Charlie" in result
     assert "Age: 35" in result
@@ -72,6 +70,7 @@ def test_prompt_template_simple_multiple_variables():
 
 
 # MessageTemplate with CONDITIONAL strategy tests
+
 
 def test_prompt_template_conditional_basic():
     """Test basic CONDITIONAL template."""
@@ -83,26 +82,20 @@ def test_prompt_template_conditional_basic():
 
 def test_prompt_template_conditional_auto_extract_variables():
     """Test CONDITIONAL template auto-extracts variables."""
-    template = MessageTemplate.from_conditional(
-        "Hello {{name}}((, you have {{count}} messages))"
-    )
+    template = MessageTemplate.from_conditional("Hello {{name}}((, you have {{count}} messages))")
     assert set(template.variables) == {"name", "count"}
 
 
 def test_prompt_template_conditional_with_value():
     """Test CONDITIONAL template includes section when variable has value."""
-    template = MessageTemplate.from_conditional(
-        "Hello {{name}}((, you have {{count}} messages))"
-    )
+    template = MessageTemplate.from_conditional("Hello {{name}}((, you have {{count}} messages))")
     result = template.format(name="Alice", count=5)
     assert result == "Hello Alice, you have 5 messages"
 
 
 def test_prompt_template_conditional_without_value():
     """Test CONDITIONAL template removes section when variable is missing."""
-    template = MessageTemplate.from_conditional(
-        "Hello {{name}}((, you have {{count}} messages))"
-    )
+    template = MessageTemplate.from_conditional("Hello {{name}}((, you have {{count}} messages))")
     result = template.format(name="Bob")
     assert result == "Hello Bob"
     assert "messages" not in result
@@ -118,9 +111,7 @@ def test_prompt_template_conditional_missing_variable():
 
 def test_prompt_template_conditional_partial():
     """Test CONDITIONAL template partial substitution."""
-    template = MessageTemplate.from_conditional(
-        "Hello {{name}}((, you have {{count}} messages))"
-    )
+    template = MessageTemplate.from_conditional("Hello {{name}}((, you have {{count}} messages))")
     partial = template.partial(name="Alice")
     # name should be replaced, count should remain
     result = partial.format(count=10)
@@ -398,7 +389,7 @@ Notes: {{notes}}))"""
         "city": "Anytown",
         "state": "CA",
         "zip": "12345",
-        "notes": "VIP customer"
+        "notes": "VIP customer",
     }
     result = render_conditional_template(template, params)
     assert "Phone: 555-1234" in result
@@ -406,14 +397,14 @@ Notes: {{notes}}))"""
     assert "Notes: VIP customer" in result
 
     # Minimal profile
-    params = {
-        "name": "Jane Smith",
-        "email": "jane@example.com"
-    }
+    params = {"name": "Jane Smith", "email": "jane@example.com"}
     result = render_conditional_template(template, params)
-    assert result == """User Profile:
+    assert (
+        result
+        == """User Profile:
 Name: Jane Smith
 Email: jane@example.com"""
+    )
 
 
 def test_render_conditional_unmatched_parentheses():
@@ -624,6 +615,7 @@ def test_render_conditional_whitespace_edge_cases():
 
 # MessageBuilder tests
 
+
 def test_message_builder_basic():
     """Test MessageBuilder basic usage."""
     builder = MessageBuilder()
@@ -667,11 +659,7 @@ def test_message_builder_function():
 def test_message_builder_from_template():
     """Test MessageBuilder from_template."""
     template = MessageTemplate("Hello {name}, you are {age} years old.")
-    messages = (
-        MessageBuilder()
-        .from_template("user", template, name="Alice", age=30)
-        .build()
-    )
+    messages = MessageBuilder().from_template("user", template, name="Alice", age=30).build()
 
     assert len(messages) == 1
     assert messages[0].role == "user"
@@ -694,6 +682,7 @@ def test_message_builder_clear():
 
 # ResponseParser tests
 
+
 def test_response_parser_extract_json_simple():
     """Test ResponseParser extract_json with simple object."""
     text = '{"name": "Alice", "age": 30}'
@@ -710,21 +699,18 @@ def test_response_parser_extract_json_in_text():
 
 def test_response_parser_extract_json_code_block():
     """Test ResponseParser extract_json with markdown code block."""
-    text = '''Here's the JSON:
+    text = """Here's the JSON:
 ```json
 {"name": "Charlie", "age": 35}
 ```
-'''
+"""
     result = ResponseParser.extract_json(text)
     assert result == {"name": "Charlie", "age": 35}
 
 
 def test_response_parser_extract_json_from_response():
     """Test ResponseParser extract_json with LLMResponse."""
-    response = LLMResponse(
-        content='{"result": "success"}',
-        model="gpt-4"
-    )
+    response = LLMResponse(content='{"result": "success"}', model="gpt-4")
     result = ResponseParser.extract_json(response)
     assert result == {"result": "success"}
 
@@ -738,20 +724,20 @@ def test_response_parser_extract_json_none():
 
 def test_response_parser_extract_code_basic():
     """Test ResponseParser extract_code basic usage."""
-    text = '''Here's some code:
+    text = """Here's some code:
 ```python
 def hello():
     print("Hello")
 ```
-'''
+"""
     result = ResponseParser.extract_code(text)
     assert len(result) == 1
-    assert 'def hello():' in result[0]
+    assert "def hello():" in result[0]
 
 
 def test_response_parser_extract_code_multiple():
     """Test ResponseParser extract_code with multiple blocks."""
-    text = '''
+    text = """
 ```python
 print("First")
 ```
@@ -759,23 +745,23 @@ Some text
 ```python
 print("Second")
 ```
-'''
+"""
     result = ResponseParser.extract_code(text)
     assert len(result) == 2
-    assert 'First' in result[0]
-    assert 'Second' in result[1]
+    assert "First" in result[0]
+    assert "Second" in result[1]
 
 
 def test_response_parser_extract_code_language_filter():
     """Test ResponseParser extract_code with language filter."""
-    text = '''
+    text = """
 ```python
 print("Python")
 ```
 ```javascript
 console.log("JS")
 ```
-'''
+"""
     python_result = ResponseParser.extract_code(text, language="python")
     assert len(python_result) == 1
     assert "Python" in python_result[0]
@@ -787,12 +773,12 @@ console.log("JS")
 
 def test_response_parser_extract_list_bullets():
     """Test ResponseParser extract_list with bullet points."""
-    text = '''
+    text = """
 Here are items:
 - First item
 - Second item
 - Third item
-'''
+"""
     result = ResponseParser.extract_list(text)
     assert len(result) == 3
     assert result[0] == "First item"
@@ -802,12 +788,12 @@ Here are items:
 
 def test_response_parser_extract_list_numbered():
     """Test ResponseParser extract_list with numbered list."""
-    text = '''
+    text = """
 Steps:
 1. First step
 2. Second step
 3. Third step
-'''
+"""
     result = ResponseParser.extract_list(text, numbered=True)
     assert len(result) == 3
     assert result[0] == "First step"
@@ -815,7 +801,7 @@ Steps:
 
 def test_response_parser_extract_sections():
     """Test ResponseParser extract_sections."""
-    text = '''
+    text = """
 # Introduction
 This is the intro.
 
@@ -824,7 +810,7 @@ This is the body.
 
 # Conclusion
 This is the end.
-'''
+"""
     result = ResponseParser.extract_sections(text)
     assert "Introduction" in result
     assert "Body" in result
@@ -835,6 +821,7 @@ This is the end.
 
 
 # TokenCounter tests
+
 
 def test_token_counter_estimate_basic():
     """Test TokenCounter estimate_tokens basic usage."""
@@ -860,7 +847,7 @@ def test_token_counter_estimate_messages():
     messages = [
         LLMMessage(role="system", content="You are helpful"),
         LLMMessage(role="user", content="Hello"),
-        LLMMessage(role="assistant", content="Hi there!")
+        LLMMessage(role="assistant", content="Hi there!"),
     ]
     tokens = TokenCounter.estimate_messages_tokens(messages)
     # Should include role tokens (4 per message) plus content
@@ -926,16 +913,13 @@ def test_token_counter_fits_in_context():
 
 # CostCalculator tests
 
+
 def test_cost_calculator_calculate_cost():
     """Test CostCalculator calculate_cost."""
     response = LLMResponse(
         content="Hello",
         model="gpt-4",
-        usage={
-            "prompt_tokens": 100,
-            "completion_tokens": 50,
-            "total_tokens": 150
-        }
+        usage={"prompt_tokens": 100, "completion_tokens": 50, "total_tokens": 150},
     )
     cost = CostCalculator.calculate_cost(response)
     assert cost is not None
@@ -956,7 +940,7 @@ def test_cost_calculator_calculate_cost_unknown_model():
     response = LLMResponse(
         content="Hello",
         model="unknown-model",
-        usage={"prompt_tokens": 100, "completion_tokens": 50}
+        usage={"prompt_tokens": 100, "completion_tokens": 50},
     )
     cost = CostCalculator.calculate_cost(response)
     assert cost is None
@@ -971,6 +955,7 @@ def test_cost_calculator_estimate_cost():
 
 
 # chain_prompts tests
+
 
 def test_chain_prompts_basic():
     """Test chain_prompts basic usage."""
@@ -1032,12 +1017,13 @@ def test_chain_prompts_conditional():
 
 # create_few_shot_prompt tests
 
+
 def test_create_few_shot_prompt_basic():
     """Test create_few_shot_prompt basic usage."""
     instruction = "Translate English to French"
     examples = [
         {"input": "Hello", "output": "Bonjour"},
-        {"input": "Goodbye", "output": "Au revoir"}
+        {"input": "Goodbye", "output": "Au revoir"},
     ]
 
     template = create_few_shot_prompt(instruction, examples)
@@ -1054,16 +1040,10 @@ def test_create_few_shot_prompt_basic():
 def test_create_few_shot_prompt_custom_keys():
     """Test create_few_shot_prompt with custom keys."""
     instruction = "Calculate result"
-    examples = [
-        {"question": "2+2", "answer": "4"},
-        {"question": "3*3", "answer": "9"}
-    ]
+    examples = [{"question": "2+2", "answer": "4"}, {"question": "3*3", "answer": "9"}]
 
     template = create_few_shot_prompt(
-        instruction,
-        examples,
-        query_key="question",
-        response_key="answer"
+        instruction, examples, query_key="question", response_key="answer"
     )
     assert "2+2" in template.template
     assert "4" in template.template
@@ -1071,10 +1051,7 @@ def test_create_few_shot_prompt_custom_keys():
 
 def test_create_few_shot_prompt_multiple_examples():
     """Test create_few_shot_prompt with many examples."""
-    examples = [
-        {"input": f"Test {i}", "output": f"Result {i}"}
-        for i in range(5)
-    ]
+    examples = [{"input": f"Test {i}", "output": f"Result {i}"} for i in range(5)]
     template = create_few_shot_prompt("Task", examples)
 
     for i in range(5):

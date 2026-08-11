@@ -137,7 +137,9 @@ class TestFsmStepLlmParameter:
         state = _make_state(reasoning, data={"go": "yes", "_intent": "test_intent"})
 
         await reasoning._execute_fsm_step(
-            state, user_message="hello world", llm=sentinel.llm,
+            state,
+            user_message="hello world",
+            llm=sentinel.llm,
         )
 
         assert len(_captured_contexts) == 1
@@ -193,7 +195,9 @@ class TestAdvanceLlmThreading:
 
         fake_llm = sentinel.advance_llm
         await reasoning.advance(
-            {"go": "yes"}, state, llm=fake_llm,
+            {"go": "yes"},
+            state,
+            llm=fake_llm,
         )
 
         assert len(_captured_contexts) == 1
@@ -409,7 +413,8 @@ class TestAutoAdvanceLlmThreading:
         # see the LLM.
         await reasoning._execute_fsm_step(state, llm=fake_llm)
         await reasoning._run_post_transition_lifecycle(
-            state, llm=fake_llm,
+            state,
+            llm=fake_llm,
         )
 
         assert len(_captured_contexts) == 1, (
@@ -418,8 +423,7 @@ class TestAutoAdvanceLlmThreading:
         )
         ctx = _captured_contexts[0]
         assert ctx.config.get("llm") is fake_llm, (
-            f"Auto-advance transform should see the LLM, "
-            f"got config={ctx.config}"
+            f"Auto-advance transform should see the LLM, got config={ctx.config}"
         )
 
 

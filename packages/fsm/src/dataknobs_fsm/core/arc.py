@@ -17,6 +17,7 @@ logger = logging.getLogger(__name__)
 
 class DataIsolationMode(Enum):
     """Data isolation modes for push arcs."""
+
     COPY = "copy"  # Deep copy data when pushing
     REFERENCE = "reference"  # Pass data by reference
     SERIALIZE = "serialize"  # Serialize/deserialize for isolation
@@ -35,9 +36,11 @@ class DataIsolationMode(Enum):
         """
         if self is DataIsolationMode.COPY:
             import copy
+
             return copy.deepcopy(data)
         if self is DataIsolationMode.SERIALIZE:
             from dataknobs_fsm.utils.json_encoder import dumps, loads
+
             return loads(dumps(data))
         return data
 
@@ -78,39 +81,33 @@ class ArcDefinition:
         """Make ArcDefinition hashable."""
         if isinstance(self.transform, list):
             transform_key = tuple(
-                t.name if isinstance(t, TransformSpec) else t
-                for t in self.transform
+                t.name if isinstance(t, TransformSpec) else t for t in self.transform
             )
         elif isinstance(self.transform, TransformSpec):
             transform_key = self.transform.name
         else:
             transform_key = self.transform
-        return hash((
-            self.target_state,
-            self.pre_test,
-            transform_key,
-            self.priority
-        ))
+        return hash((self.target_state, self.pre_test, transform_key, self.priority))
 
 
 @dataclass
 class PushArc(ArcDefinition):
     """Arc that pushes to a sub-network.
-    
+
     Push arcs allow hierarchical state machine composition
     by pushing execution to a sub-network and returning
     when the sub-network completes.
     """
-    
+
     target_network: str = ""  # Name of the target network
     return_state: str | None = None  # State to return to after sub-network
     isolation_mode: DataIsolationMode = DataIsolationMode.COPY
     pass_context: bool = True  # Whether to pass execution context
-    
+
     # Mapping of data from parent to child network
     data_mapping: Dict[str, str] = field(default_factory=dict)
     # e.g., {'parent_field': 'child_field'}
-    
+
     # Mapping of results from child to parent network
     result_mapping: Dict[str, str] = field(default_factory=dict)
     # e.g., {'child_result': 'parent_field'}
@@ -118,18 +115,13 @@ class PushArc(ArcDefinition):
 
 class ArcExecution:
     """Handles the execution of arc transitions.
-    
+
     This class manages the runtime execution of arcs,
     including resource allocation, streaming support,
     and transaction participation.
     """
-    
-    def __init__(
-        self,
-        arc_def: ArcDefinition,
-        source_state: str,
-        function_registry
-    ):
+
+    def __init__(self, arc_def: ArcDefinition, source_state: str, function_registry):
         """Initialize arc execution.
 
         Args:
@@ -162,12 +154,8 @@ class ArcExecution:
             message: Error message to log.
         """
         logger.error(message)
-    
-    async def can_execute_async(
-        self,
-        context: "ExecutionContext",
-        data: Any = None
-    ) -> bool:
+
+    async def can_execute_async(self, context: "ExecutionContext", data: Any = None) -> bool:
         """Check if arc can be executed, awaiting async pre-tests.
 
         Resolves the arc's ``pre_test`` function, normalizes a bare
@@ -185,7 +173,7 @@ class ArcExecution:
             return True
 
         # Handle both FunctionRegistry and dict for pre-test function lookup
-        if hasattr(self.function_registry, 'get_function'):
+        if hasattr(self.function_registry, "get_function"):
             pre_test_func = self.function_registry.get_function(self.arc_def.pre_test)
         elif isinstance(self.function_registry, dict):
             pre_test_func = self.function_registry.get(self.arc_def.pre_test)
@@ -196,7 +184,7 @@ class ArcExecution:
             raise FunctionError(
                 f"Pre-test function '{self.arc_def.pre_test}' not found",
                 from_state=self.source_state,
-                to_state=self.arc_def.target_state
+                to_state=self.arc_def.target_state,
             )
 
         resources: Dict[str, Any] = {}
@@ -204,11 +192,9 @@ class ArcExecution:
             # Allocate the arc's declared resources (merging state resources) so
             # a resource-bearing pre-test condition can reach them, then build
             # the function context carrying them (+ the role map).
-            state_resources = getattr(context, 'current_state_resources', None)
+            state_resources = getattr(context, "current_state_resources", None)
             resources = self._allocate_resources(context, state_resources)
-            func_context = self._create_function_context(
-                context, resources, apply_factory=False
-            )
+            func_context = self._create_function_context(context, resources, apply_factory=False)
 
             # A bare IStateTestFunction instance is not callable; normalize it to
             # its bound .test method so an interface-instance arc condition is
@@ -230,7 +216,7 @@ class ArcExecution:
             raise FunctionError(
                 f"Pre-test execution failed: {e}",
                 from_state=self.source_state,
-                to_state=self.arc_def.target_state
+                to_state=self.arc_def.target_state,
             ) from e
         finally:
             self._release_resources(context)
@@ -261,6 +247,7 @@ class ArcExecution:
             Transformed data.
         """
         import time
+
         start_time = time.time()
 
         # When the caller hands in pre-acquired resources it owns their
@@ -270,7 +257,7 @@ class ArcExecution:
         try:
             if owns_resources:
                 # Get state resources from context if available
-                state_resources = getattr(context, 'current_state_resources', None)
+                state_resources = getattr(context, "current_state_resources", None)
                 # Allocate required resources (merging with state resources)
                 resources = self._allocate_resources(context, state_resources)
             else:
@@ -286,17 +273,20 @@ class ArcExecution:
                 )
 
                 # Create function context with resources (shared across all transforms)
-                func_context = self._create_function_context(
-                    context,
-                    resources,
-                    stream_enabled
-                )
+                func_context = self._create_function_context(context, resources, stream_enabled)
 
                 result = data
                 for transform_ref in transform_refs:
-                    name = transform_ref.name if isinstance(transform_ref, TransformSpec) else transform_ref
+                    name = (
+                        transform_ref.name
+                        if isinstance(transform_ref, TransformSpec)
+                        else transform_ref
+                    )
                     result = await self._execute_single_transform_async(
-                        name, result, func_context, stream_enabled,
+                        name,
+                        result,
+                        func_context,
+                        stream_enabled,
                         transform_ref=transform_ref,
                     )
             else:
@@ -316,7 +306,7 @@ class ArcExecution:
             raise FunctionError(
                 f"Arc execution failed: {e}",
                 from_state=self.source_state,
-                to_state=self.arc_def.target_state
+                to_state=self.arc_def.target_state,
             ) from e
         finally:
             elapsed = time.time() - start_time
@@ -324,7 +314,7 @@ class ArcExecution:
 
             # Release only resources we allocated; caller-owned (pre-acquired)
             # resources are released by the caller.
-            if owns_resources and 'resources' in locals():
+            if owns_resources and "resources" in locals():
                 self._release_resources(context)
 
     async def _execute_single_transform_async(
@@ -353,7 +343,7 @@ class ArcExecution:
             FunctionError: If the transform function is not found or fails.
         """
         # Look up the transform function
-        if hasattr(self.function_registry, 'get_function'):
+        if hasattr(self.function_registry, "get_function"):
             transform_func = self.function_registry.get_function(transform_name)
         elif isinstance(self.function_registry, dict):
             transform_func = self.function_registry.get(transform_name)
@@ -364,21 +354,33 @@ class ArcExecution:
             raise FunctionError(
                 f"Transform function '{transform_name}' not found",
                 from_state=self.source_state,
-                to_state=self.arc_def.target_state
+                to_state=self.arc_def.target_state,
             )
 
         # Resolve params from TransformSpec if present
-        params = transform_ref.params if isinstance(transform_ref, TransformSpec) and transform_ref.params else {}
+        params = (
+            transform_ref.params
+            if isinstance(transform_ref, TransformSpec) and transform_ref.params
+            else {}
+        )
 
         # Handle streaming vs non-streaming execution
-        if stream_enabled and hasattr(transform_func, 'stream_capable'):
+        if stream_enabled and hasattr(transform_func, "stream_capable"):
             return self._execute_streaming(transform_func, data, func_context)
 
         # Call the transform function, passing params as kwargs if present
-        if hasattr(transform_func, 'transform'):
-            result = transform_func.transform(data, func_context, **params) if params else transform_func.transform(data, func_context)
+        if hasattr(transform_func, "transform"):
+            result = (
+                transform_func.transform(data, func_context, **params)
+                if params
+                else transform_func.transform(data, func_context)
+            )
         elif callable(transform_func):
-            result = transform_func(data, func_context, **params) if params else transform_func(data, func_context)
+            result = (
+                transform_func(data, func_context, **params)
+                if params
+                else transform_func(data, func_context)
+            )
         else:
             raise ValueError(f"Transform {transform_name} is not callable")
 
@@ -388,13 +390,14 @@ class ArcExecution:
 
         # Handle ExecutionResult objects
         from dataknobs_fsm.functions.base import ExecutionResult
+
         if isinstance(result, ExecutionResult):
             if result.success:
                 return result.data
             raise FunctionError(
                 result.error or "Transform failed",
                 from_state=self.source_state,
-                to_state=self.arc_def.target_state
+                to_state=self.arc_def.target_state,
             )
 
         # Transforms that mutate data in-place return None;
@@ -447,31 +450,27 @@ class ArcExecution:
             state_name=self.source_state,
             function_name=func_name,
             metadata={
-                'source_state': self.source_state,
-                'target_state': self.arc_def.target_state,
-                'arc_priority': self.arc_def.priority,
-                'stream_enabled': stream_enabled,
+                "source_state": self.source_state,
+                "target_state": self.arc_def.target_state,
+                "arc_priority": self.arc_def.priority,
+                "stream_enabled": stream_enabled,
                 # {role: name} map for role-based access via
                 # FunctionContext.resource_for_role(role).
-                'resource_roles': dict(self.arc_def.required_resources),
+                "resource_roles": dict(self.arc_def.required_resources),
             },
             resources=resources or {},
             variables=exec_context.variables,
             network_name=(
-                exec_context.network_stack[-1][0]
-                if exec_context.network_stack
-                else None
+                exec_context.network_stack[-1][0] if exec_context.network_stack else None
             ),
         )
 
         if apply_factory and exec_context.transform_context_factory:
             return exec_context.transform_context_factory(func_context)
         return func_context
-    
+
     def _allocate_resources(
-        self,
-        context: "ExecutionContext",
-        state_resources: Dict[str, Any] | None = None
+        self, context: "ExecutionContext", state_resources: Dict[str, Any] | None = None
     ) -> Dict[str, Any]:
         """Allocate required resources for arc execution, merging with state resources.
 
@@ -486,7 +485,7 @@ class ArcExecution:
         resources = dict(state_resources) if state_resources else {}
 
         # Get resource manager from context
-        resource_manager = getattr(context, 'resource_manager', None)
+        resource_manager = getattr(context, "resource_manager", None)
         if not resource_manager:
             # No resource manager available - return existing resources
             return resources
@@ -525,22 +524,21 @@ class ArcExecution:
                 resources[resource_name] = resource
 
                 # Track for cleanup (only arc-specific resources)
-                if not hasattr(context, '_arc_acquired_resources'):
+                if not hasattr(context, "_arc_acquired_resources"):
                     context._arc_acquired_resources = {}
                 context._arc_acquired_resources[resource_name] = owner_id
 
             except Exception as e:
                 # Resource acquisition failed - clean up only arc-specific resources
-                self._release_arc_resources(context, getattr(context, '_arc_acquired_resources', {}))
+                self._release_arc_resources(
+                    context, getattr(context, "_arc_acquired_resources", {})
+                )
                 # Bounded message AND bounded details: `details` is echoed by
                 # generic renderers just as the message is, so relaying the
                 # provider's text there would reopen what the message closes.
                 raise ResourceError(
                     resource_id=resource_name,
-                    message=(
-                        f"Failed to acquire arc resource "
-                        f"({type(e).__name__})"
-                    ),
+                    message=(f"Failed to acquire arc resource ({type(e).__name__})"),
                     details={
                         "operation": "acquire",
                         "error_type": type(e).__name__,
@@ -550,9 +548,7 @@ class ArcExecution:
         return resources
 
     def _release_arc_resources(
-        self,
-        context: "ExecutionContext",
-        arc_resources: Dict[str, str]
+        self, context: "ExecutionContext", arc_resources: Dict[str, str]
     ) -> None:
         """Release only arc-specific resources, not state resources.
 
@@ -563,7 +559,7 @@ class ArcExecution:
         if not arc_resources:
             return
 
-        resource_manager = getattr(context, 'resource_manager', None)
+        resource_manager = getattr(context, "resource_manager", None)
         if not resource_manager:
             return
 
@@ -574,9 +570,9 @@ class ArcExecution:
                 self._log_error(f"Failed to release arc resource {resource_name}: {e}")
 
         # Clear arc resources tracking
-        if hasattr(context, '_arc_acquired_resources'):
+        if hasattr(context, "_arc_acquired_resources"):
             context._arc_acquired_resources = {}
-    
+
     def _release_resources(
         self,
         context: "ExecutionContext",
@@ -594,52 +590,46 @@ class ArcExecution:
         Args:
             context: Execution context.
         """
-        arc_acquired = getattr(context, '_arc_acquired_resources', None)
+        arc_acquired = getattr(context, "_arc_acquired_resources", None)
         if not arc_acquired:
             return
         # _release_arc_resources releases by (name, owner_id) and clears the map.
         self._release_arc_resources(context, dict(arc_acquired))
-    
-    def _execute_streaming(
-        self,
-        func: Callable,
-        data: Any,
-        context: FunctionContext
-    ) -> Any:
+
+    def _execute_streaming(self, func: Callable, data: Any, context: FunctionContext) -> Any:
         """Execute function with streaming support.
-        
+
         Args:
             func: Function to execute.
             data: Input data.
             context: Function context.
-            
+
         Returns:
             Streamed result.
         """
         # This would integrate with the streaming system
         # For now, we just execute normally
         return func(data, context)
-    
+
     def get_statistics(self) -> Dict[str, Any]:
         """Get execution statistics.
-        
+
         Returns:
             Dictionary of statistics.
         """
         avg_time = 0.0
         if self.execution_count > 0:
             avg_time = self.total_execution_time / self.execution_count
-        
+
         return {
-            'source_state': self.source_state,
-            'target_state': self.arc_def.target_state,
-            'execution_count': self.execution_count,
-            'success_count': self.success_count,
-            'failure_count': self.failure_count,
-            'total_execution_time': self.total_execution_time,
-            'average_execution_time': avg_time,
-            'success_rate': (
-                self.success_count / self.execution_count
-                if self.execution_count > 0 else 0.0
-            )
+            "source_state": self.source_state,
+            "target_state": self.arc_def.target_state,
+            "execution_count": self.execution_count,
+            "success_count": self.success_count,
+            "failure_count": self.failure_count,
+            "total_execution_time": self.total_execution_time,
+            "average_execution_time": avg_time,
+            "success_rate": (
+                self.success_count / self.execution_count if self.execution_count > 0 else 0.0
+            ),
         }

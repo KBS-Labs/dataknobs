@@ -14,7 +14,6 @@ from dataknobs_bots.reasoning.wizard_loader import WizardConfigLoader
 import pytest
 
 
-
 class TestWizardConditionEvaluation:
     """Tests for wizard condition function creation and evaluation."""
 
@@ -473,7 +472,9 @@ class TestYamlBooleanLiterals:
             ("false", "start"),
         ],
     )
-    def test_boolean_literal_variants(self, condition, expected_stage, wizard_loader: WizardConfigLoader):
+    def test_boolean_literal_variants(
+        self, condition, expected_stage, wizard_loader: WizardConfigLoader
+    ):
         """Both Python and YAML boolean literals work in conditions."""
         wizard_config = {
             "name": "test-wizard",
@@ -482,9 +483,7 @@ class TestYamlBooleanLiterals:
                     "name": "start",
                     "is_start": True,
                     "prompt": "Start",
-                    "transitions": [
-                        {"target": "end", "condition": condition}
-                    ],
+                    "transitions": [{"target": "end", "condition": condition}],
                 },
                 {"name": "end", "is_end": True, "prompt": "Done"},
             ],
@@ -502,7 +501,9 @@ class TestYamlBooleanLiterals:
             ("None", "start"),  # Python None, which is falsy
         ],
     )
-    def test_null_none_literal_variants(self, condition, expected_stage, wizard_loader: WizardConfigLoader):
+    def test_null_none_literal_variants(
+        self, condition, expected_stage, wizard_loader: WizardConfigLoader
+    ):
         """null/none/None all evaluate to Python None (falsy)."""
         wizard_config = {
             "name": "test-wizard",
@@ -511,9 +512,7 @@ class TestYamlBooleanLiterals:
                     "name": "start",
                     "is_start": True,
                     "prompt": "Start",
-                    "transitions": [
-                        {"target": "end", "condition": condition}
-                    ],
+                    "transitions": [{"target": "end", "condition": condition}],
                 },
                 {"name": "end", "is_end": True, "prompt": "Done"},
             ],

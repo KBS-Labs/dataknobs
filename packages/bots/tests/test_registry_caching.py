@@ -239,9 +239,7 @@ class TestConfigCachingManager:
         assert not manager.is_cached("test-1")
 
     @pytest.mark.asyncio
-    async def test_get_raw_config_does_not_bump_last_accessed_at(
-        self, manager, backend
-    ):
+    async def test_get_raw_config_does_not_bump_last_accessed_at(self, manager, backend):
         """get_raw_config is an inspection path — does not register an access.
 
         Routes through ``RegistryBackend.peek_config`` so consumers reading
@@ -255,15 +253,11 @@ class TestConfigCachingManager:
         raw = await manager.get_raw_config("audit-1")
         assert raw == {"key": "value"}
 
-        after = next(
-            r for r in await backend.list_all() if r.bot_id == "audit-1"
-        ).last_accessed_at
+        after = next(r for r in await backend.list_all() if r.bot_id == "audit-1").last_accessed_at
         assert after == baseline
 
     @pytest.mark.asyncio
-    async def test_get_or_create_cache_miss_does_not_bump_last_accessed_at(
-        self, manager, backend
-    ):
+    async def test_get_or_create_cache_miss_does_not_bump_last_accessed_at(self, manager, backend):
         """Cache-miss reads route through peek_config — no activity bump.
 
         Higher-level activity tracking belongs at the get_or_create call
@@ -278,9 +272,7 @@ class TestConfigCachingManager:
         # Cache miss: forces backend round-trip
         await manager.get_or_create("miss-1")
 
-        after = next(
-            r for r in await backend.list_all() if r.bot_id == "miss-1"
-        ).last_accessed_at
+        after = next(r for r in await backend.list_all() if r.bot_id == "miss-1").last_accessed_at
         assert after == baseline
 
     @pytest.mark.asyncio

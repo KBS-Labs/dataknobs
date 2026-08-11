@@ -50,13 +50,15 @@ logger = logging.getLogger(__name__)
 # Framework-level keys that are always transient (non-persistent).
 # These are either non-serializable runtime objects or ephemeral per-step
 # data that should never reach persistent storage.
-DEFAULT_EPHEMERAL_KEYS: frozenset[str] = frozenset({
-    "_corpus",              # Live ArtifactCorpus (non-serializable)
-    "_message",             # Per-step raw user message (already popped)
-    "_intent",              # Per-step intent detection result
-    "_transform_error",     # Per-step error (may be Exception)
-    "_bank_fn",             # Per-step bank accessor (non-serializable callable)
-})
+DEFAULT_EPHEMERAL_KEYS: frozenset[str] = frozenset(
+    {
+        "_corpus",  # Live ArtifactCorpus (non-serializable)
+        "_message",  # Per-step raw user message (already popped)
+        "_intent",  # Per-step intent detection result
+        "_transform_error",  # Per-step error (may be Exception)
+        "_bank_fn",  # Per-step bank accessor (non-serializable callable)
+    }
+)
 
 # Extraction scope breadth ordering — used by scope escalation to
 # determine whether the current scope is narrower than the target.
@@ -87,13 +89,15 @@ DEFAULT_RECOVERY_PIPELINE: list[str] = [
 # Note: "clarification" is a no-op placeholder — clarification is
 # handled by the confidence gate, not the pipeline engine.  Including
 # it in a pipeline documents intent but doesn't change behavior.
-VALID_RECOVERY_STRATEGIES: frozenset[str] = frozenset({
-    RECOVERY_DERIVATION,
-    RECOVERY_SCOPE_ESCALATION,
-    RECOVERY_FOCUSED_RETRY,
-    RECOVERY_BOOLEAN,
-    RECOVERY_CLARIFICATION,
-})
+VALID_RECOVERY_STRATEGIES: frozenset[str] = frozenset(
+    {
+        RECOVERY_DERIVATION,
+        RECOVERY_SCOPE_ESCALATION,
+        RECOVERY_FOCUSED_RETRY,
+        RECOVERY_BOOLEAN,
+        RECOVERY_CLARIFICATION,
+    }
+)
 
 # Default signal words for boolean extraction recovery.
 # Overridable per-field via x-extraction.affirmative_signals
@@ -108,25 +112,57 @@ VALID_RECOVERY_STRATEGIES: frozenset[str] = frozenset({
 # vocabularies diverge in the future (e.g. intent classification
 # adopts a richer phrase list), the duplication makes that
 # divergence easy.
-_DEFAULT_AFFIRMATIVE_SIGNALS: frozenset[str] = frozenset({
-    "yes", "confirm", "save", "approve", "correct", "sure",
-    "ok", "okay", "agreed", "accept", "absolutely", "definitely",
-    "yep", "yeah",
-})
-
-_DEFAULT_AFFIRMATIVE_PHRASES: tuple[str, ...] = (
-    "looks good", "go ahead", "that's right", "sounds good",
-    "i confirm", "let's do it", "let's go",
+_DEFAULT_AFFIRMATIVE_SIGNALS: frozenset[str] = frozenset(
+    {
+        "yes",
+        "confirm",
+        "save",
+        "approve",
+        "correct",
+        "sure",
+        "ok",
+        "okay",
+        "agreed",
+        "accept",
+        "absolutely",
+        "definitely",
+        "yep",
+        "yeah",
+    }
 )
 
-_DEFAULT_NEGATIVE_SIGNALS: frozenset[str] = frozenset({
-    "no", "wait", "stop", "cancel", "wrong", "redo", "nope",
-    "nah", "incorrect",
-})
+_DEFAULT_AFFIRMATIVE_PHRASES: tuple[str, ...] = (
+    "looks good",
+    "go ahead",
+    "that's right",
+    "sounds good",
+    "i confirm",
+    "let's do it",
+    "let's go",
+)
+
+_DEFAULT_NEGATIVE_SIGNALS: frozenset[str] = frozenset(
+    {
+        "no",
+        "wait",
+        "stop",
+        "cancel",
+        "wrong",
+        "redo",
+        "nope",
+        "nah",
+        "incorrect",
+    }
+)
 
 _DEFAULT_NEGATIVE_PHRASES: tuple[str, ...] = (
-    "not yet", "hold on", "start over", "go back", "not right",
-    "don't save", "i disagree",
+    "not yet",
+    "hold on",
+    "start over",
+    "go back",
+    "not right",
+    "don't save",
+    "i disagree",
 )
 
 # Navigation keyword defaults
@@ -333,9 +369,7 @@ class WizardState:
 
     def increment_render_count(self, stage_name: str) -> int:
         """Increment and return the render count for a stage."""
-        counts: dict[str, int] = self.data.setdefault(
-            "_stage_render_counts", {}
-        )
+        counts: dict[str, int] = self.data.setdefault("_stage_render_counts", {})
         counts[stage_name] = counts.get(stage_name, 0) + 1
         return counts[stage_name]
 
@@ -345,13 +379,9 @@ class WizardState:
 
     def save_stage_snapshot(self, stage_name: str, schema_props: set[str]) -> None:
         """Save current schema property values for confirm_on_new_data comparison."""
-        snapshots: dict[str, dict[str, Any]] = self.data.setdefault(
-            "_stage_rendered_snapshot", {}
-        )
+        snapshots: dict[str, dict[str, Any]] = self.data.setdefault("_stage_rendered_snapshot", {})
         snapshots[stage_name] = {
-            k: self.data[k]
-            for k in schema_props
-            if k in self.data and self.data[k] is not None
+            k: self.data[k] for k in schema_props if k in self.data and self.data[k] is not None
         }
 
     def get_stage_snapshot(self, stage_name: str) -> dict[str, Any]:
@@ -359,7 +389,9 @@ class WizardState:
         return self.data.get("_stage_rendered_snapshot", {}).get(stage_name, {})
 
     def set_stage_snapshot(
-        self, stage_name: str, snapshot: dict[str, Any],
+        self,
+        stage_name: str,
+        snapshot: dict[str, Any],
     ) -> None:
         """Set an arbitrary snapshot for a stage.
 
@@ -369,7 +401,8 @@ class WizardState:
         detection.
         """
         snapshots: dict[str, dict[str, Any]] = self.data.setdefault(
-            "_stage_rendered_snapshot", {},
+            "_stage_rendered_snapshot",
+            {},
         )
         snapshots[stage_name] = dict(snapshot)
 
@@ -409,20 +442,10 @@ class WizardState:
             history=data.get("history", []),
             completed=data.get("completed", False),
             clarification_attempts=data.get("clarification_attempts", 0),
-            transitions=[
-                TransitionRecord.from_dict(t)
-                for t in data.get("transitions", [])
-            ],
+            transitions=[TransitionRecord.from_dict(t) for t in data.get("transitions", [])],
             stage_entry_time=data.get("stage_entry_time", time.time()),
-            tasks=(
-                WizardTaskList.from_dict(tasks_data)
-                if tasks_data
-                else WizardTaskList()
-            ),
-            subflow_stack=[
-                SubflowContext.from_dict(s)
-                for s in data.get("subflow_stack", [])
-            ],
+            tasks=(WizardTaskList.from_dict(tasks_data) if tasks_data else WizardTaskList()),
+            subflow_stack=[SubflowContext.from_dict(s) for s in data.get("subflow_stack", [])],
             skip_extraction=data.get("skip_extraction", False),
         )
 
@@ -894,7 +917,8 @@ class NavigationConfig(StructuredConfig):
 
 
 def validate_strategy_names(
-    default_reasoning: str, wizard_fsm: WizardFSM,
+    default_reasoning: str,
+    wizard_fsm: WizardFSM,
 ) -> None:
     """Warn at config-load time if strategy names are unregistered.
 
@@ -920,9 +944,10 @@ def validate_strategy_names(
     for name, location in names_to_check:
         if not registry.is_registered(name.lower()):
             logger.warning(
-                "Unknown reasoning strategy '%s' in %s; "
-                "registered strategies: %s",
-                name, location, registry.list_keys(),
+                "Unknown reasoning strategy '%s' in %s; registered strategies: %s",
+                name,
+                location,
+                registry.list_keys(),
             )
 
 
@@ -946,16 +971,11 @@ def is_json_safe(value: Any) -> bool:
     if value is None or isinstance(value, (str, int, float, bool)):
         return True
     if isinstance(value, dict):
-        return all(
-            isinstance(k, str) and is_json_safe(v) for k, v in value.items()
-        )
+        return all(isinstance(k, str) and is_json_safe(v) for k, v in value.items())
     if isinstance(value, (list, tuple)):
         return all(is_json_safe(item) for item in value)
     if dataclasses.is_dataclass(value) and not isinstance(value, type):
-        return all(
-            is_json_safe(getattr(value, f.name))
-            for f in dataclasses.fields(value)
-        )
+        return all(is_json_safe(getattr(value, f.name)) for f in dataclasses.fields(value))
     return False
 
 
@@ -1064,9 +1084,7 @@ def normalize_enum_value(
     best_match: str | None = None
     best_score = 0.0
     for ev in str_enums:
-        ev_tokens = set(
-            ev.lower().replace("_", " ").replace("-", " ").split()
-        )
+        ev_tokens = set(ev.lower().replace("_", " ").replace("-", " ").split())
         if not ev_tokens:
             continue
         overlap = val_tokens & ev_tokens

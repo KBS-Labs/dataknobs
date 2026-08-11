@@ -207,10 +207,7 @@ class UserStateStoreConfig(StructuredConfig):
         negative version has no registrable upgrade path and would otherwise
         surface as a confusing read-time migration error.
         """
-        if (
-            self.event_log_retention_days is not None
-            and self.event_log_retention_days < 1
-        ):
+        if self.event_log_retention_days is not None and self.event_log_retention_days < 1:
             raise ConfigurationError(
                 "event_log_retention_days="
                 f"{self.event_log_retention_days} is invalid: a retention "
@@ -226,10 +223,7 @@ class UserStateStoreConfig(StructuredConfig):
                     "User-state section names must be non-empty.",
                     context={"namespace": self.namespace},
                 )
-            if (
-                spec.retention_days is not None
-                and spec.kind == SectionKind.DOCUMENT
-            ):
+            if spec.retention_days is not None and spec.kind == SectionKind.DOCUMENT:
                 raise ConfigurationError(
                     f"Section {spec.name!r} is a document section and cannot "
                     "carry retention_days: a document section holds one "
@@ -237,10 +231,7 @@ class UserStateStoreConfig(StructuredConfig):
                     "applies to collection sections.",
                     context={"namespace": self.namespace, "name": spec.name},
                 )
-            if (
-                spec.retention_days is not None
-                and spec.retention_days < 1
-            ):
+            if spec.retention_days is not None and spec.retention_days < 1:
                 raise ConfigurationError(
                     f"Section {spec.name!r} declares retention_days="
                     f"{spec.retention_days}: a retention window must be a "
