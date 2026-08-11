@@ -97,19 +97,27 @@ explicit_package_bases = true
 mypy_path = "packages/common/src:packages/config/src:packages/data/src:packages/llm/src:packages/bots/src:packages/structures/src:packages/utils/src:packages/xization/src:packages/fsm/src"
 cache_dir = ".mypy_cache"
 incremental = true
-# Note: For focused type checking that suppresses less critical errors,
-# use: uv run mypy --config-file mypy.ini
-# This configuration shows all type issues for comprehensive analysis.
+# The only mypy configuration. There used to be a second — mypy.ini — which
+# disabled twenty error codes and was what bin/validate.sh read by default,
+# while the quality contract measured under this one. Two configurations meant
+# two answers to "is this clean", and the weaker one was the one a developer
+# saw. The ceilings in .dataknobs/quality-contract.json are what makes a single
+# strict configuration usable against a tree that is not yet strict-clean.
 
 # Per-module options
+#
+# A section here that matches no module suppresses nothing. mypy reports that as
+# a *note*, so nothing fails on it, and the quality contract's mypy check reads
+# the note and does. Three sections were dead when that check was written, and
+# two of them had been written to waive findings that were still being reported:
+# `dataknobs_legacy.*` (the package's module is `dataknobs`) and `python_nmap.*`
+# (the library imported is `nmap3`, from a different distribution entirely).
 [[tool.mypy.overrides]]
 module = [
     "nltk.*",
     "graphviz.*",
     "pyparsing.*",
     "json_stream.*",
-    "sklearn.*",
-    "python_nmap.*",
     "more_itertools.*",
     "flask.*",
     "asyncpg.*",
@@ -130,12 +138,6 @@ ignore_missing_imports = true
 [[tool.mypy.overrides]]
 module = "numpy.*"
 ignore_missing_imports = true
-
-[[tool.mypy.overrides]]
-module = "dataknobs_legacy.*"
-disallow_untyped_defs = false
-disallow_incomplete_defs = false
-check_untyped_defs = false
 
 # Relaxed type checking for dataknobs_xization (complex NLP/annotation code)
 [[tool.mypy.overrides]]

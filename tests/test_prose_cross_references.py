@@ -79,6 +79,11 @@ ALLOWED_UNRESOLVED = {
     "test_the_lint_deferrals_still_describe_the_repository": (
         "retired; same history comment, naming the two checks that took over its two directions"
     ),
+    "test_mypy_configs_declare_the_same_search_path": (
+        "retired with the second mypy config; the comment where it appears exists "
+        "to say why comparing two configs to each other could not catch a search-"
+        "path entry both of them omitted, and what replaces it"
+    ),
 }
 
 #: Floors under the scan. Real figures when written: 34 files, 18 distinct

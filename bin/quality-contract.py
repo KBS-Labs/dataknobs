@@ -152,10 +152,19 @@ class Measurement(NamedTuple):
     case — but mypy follows imports, and a finding reported against something
     outside the population would otherwise be dropped in silence, which is this
     repository's own defect class: an absence rendered as a pass.
+
+    ``output`` is what the tool actually said, kept because two callers need the
+    prose rather than the tally: a developer who has just been told a ceiling is
+    breached needs the messages to act on, and the run reports on its own
+    configuration in the same stream — a measurement taken under a section that
+    has stopped applying is not the measurement it claims to be. Only mypy fills
+    it; ruff and the formatter are read from JSON that *is* the tally, so
+    echoing it would show the developer the parse rather than the findings.
     """
 
     by_cell: dict[str, Counter[str]]
     unattributed: Counter[str]
+    output: str = ""
 
 
 def _tally(cells: list[dict[str, Any]], names: list[str]) -> Measurement:
@@ -171,6 +180,26 @@ def _tally(cells: list[dict[str, Any]], names: list[str]) -> Measurement:
     return Measurement(dict(by_cell), unattributed)
 
 
+def _restrict(cells: list[dict[str, Any]], only: set[str] | None) -> list[dict[str, Any]]:
+    """The subset of cells a scoped call named, or all of them.
+
+    ``only`` restricts what is *measured and compared*, never what findings are
+    *attributed to*: a scoped run still tallies against the full cell list, so a
+    finding outside the requested cells is reported as belonging to the cell it
+    is in rather than silently becoming unattributed.
+    """
+    return cells if only is None else [cell for cell in cells if cell["path"] in only]
+
+
+def _files_in(
+    cells: list[dict[str, Any]], files: list[PurePosixPath], only: set[str] | None
+) -> list[PurePosixPath]:
+    """The population narrowed to the cells a scoped call named."""
+    if only is None:
+        return files
+    return [path for path in files if _cell_for(cells, str(path)) in only]
+
+
 def _run(command: list[str]) -> subprocess.CompletedProcess[str]:
     """Run a measuring tool from the repository root.
 
@@ -180,10 +209,15 @@ def _run(command: list[str]) -> subprocess.CompletedProcess[str]:
     return subprocess.run(command, cwd=_ROOT, capture_output=True, text=True, check=False)
 
 
-def measure_ruff(contract: dict[str, Any], files: list[PurePosixPath]) -> Measurement:
+def measure_ruff(
+    contract: dict[str, Any], files: list[PurePosixPath], only: set[str] | None = None
+) -> Measurement:
     """Findings per cell, from one ruff pass over the whole population."""
     cells = contract["tools"]["ruff"]["cells"]
     config = contract["tools"]["ruff"]["config"]
+    files = _files_in(cells, files, only)
+    if not files:
+        return Measurement({}, Counter())
     result = _run(
         [
             "uv",
@@ -208,7 +242,9 @@ def measure_ruff(contract: dict[str, Any], files: list[PurePosixPath]) -> Measur
     return _tally(cells, [_relative(finding.get("filename", "")) for finding in findings])
 
 
-def measure_mypy(contract: dict[str, Any], _files: list[PurePosixPath]) -> Measurement:
+def measure_mypy(
+    contract: dict[str, Any], _files: list[PurePosixPath], only: set[str] | None = None
+) -> Measurement:
     """Findings per cell, from one mypy pass over the cells it actually covers.
 
     Takes the population and ignores it, so the three measurers share one
@@ -218,16 +254,23 @@ def measure_mypy(contract: dict[str, Any], _files: list[PurePosixPath]) -> Measu
     reached it first.
 
     The target set is taken from the contract rather than from
-    ``bin/validate.sh --print-targets``: the two must agree, and a guard asserts
-    they do, but deriving it from the script would make this measurement move
-    silently whenever that script's default changed.
+    ``bin/validate.sh --print-targets``. That used to be a statement about two
+    lists that had to agree; it is now the only list there is, since the script
+    reaches its mypy verdict by calling this. Deriving it the other way round
+    would make the ratchet move whenever that script's default changed.
+
+    Scoping to ``only`` measures fewer cells, not fewer files within one: a
+    ceiling is a whole-cell property, so a partial count compared against it is
+    not a verdict. That the two agree is not an assumption — the per-cell
+    numbers from a run over one package are identical to that package's numbers
+    from a run over all fourteen.
     """
     cells = contract["tools"]["mypy"]["cells"]
     config = contract["tools"]["mypy"]["config"]
     targets = sorted(
         {
             str(path)
-            for cell in cells
+            for cell in _restrict(cells, only)
             if cell["tier"] not in _UNMEASURED_TIERS
             for path in _expand(cell["path"])
         }
@@ -241,10 +284,12 @@ def measure_mypy(contract: dict[str, Any], _files: list[PurePosixPath]) -> Measu
         for line in result.stdout.splitlines()
         if (match := re.match(r"([^:]+):\d+:(?:\d+:)?\s*error:", line))
     ]
-    return _tally(cells, reported)
+    return _tally(cells, reported)._replace(output=result.stdout)
 
 
-def measure_format(contract: dict[str, Any], files: list[PurePosixPath]) -> Measurement:
+def measure_format(
+    contract: dict[str, Any], files: list[PurePosixPath], only: set[str] | None = None
+) -> Measurement:
     """Files the formatter would rewrite, per cell.
 
     Counted in files rather than findings because that is the unit the formatter
@@ -266,6 +311,9 @@ def measure_format(contract: dict[str, Any], files: list[PurePosixPath]) -> Meas
     """
     cells = contract["tools"]["format"]["cells"]
     config = contract["tools"]["format"]["config"]
+    files = _files_in(cells, files, only)
+    if not files:
+        return Measurement({}, Counter())
     result = _run(
         [
             "uv",
@@ -331,6 +379,65 @@ def _relative(name: str) -> str:
         return name
 
 
+#: How mypy reports a per-module override section that matched nothing this run.
+_UNUSED_SECTIONS_RE = re.compile(r": note: unused section\(s\): module = \[(.*)\]$", re.MULTILINE)
+
+#: A quoted name, in either of TOML's two spellings.
+_QUOTED_RE = re.compile(r"['\"]([^'\"]+)['\"]")
+
+#: A line that declares module patterns: ``module = "x"``, ``module = [``, or a
+#: bare list element. Narrow on purpose — every other quoted string in the
+#: config would otherwise count as a declaration and be excusable by any comment
+#: that happened to precede it.
+_MODULE_LINE_RE = re.compile(r"^\s*(?:module\s*=|['\"][^'\"]+['\"]\s*,?\s*$)")
+
+
+def unused_config_sections(output: str) -> list[str]:
+    """Module patterns the type checker says its own config declared for nothing.
+
+    A section matching no module suppresses nothing, which is only ever one of
+    two things: a waiver whose spelling is wrong, so the findings it was written
+    for are still being reported, or one whose subject is gone. Both read as
+    "handled" to anyone looking at the config. mypy detects this and files it as
+    a *note*, leaving the exit status untouched — so without this it is reported
+    and nothing fails, which is the shape this contract exists to catch.
+
+    Conclusive only over the whole population: scoped to one package, most
+    sections legitimately match nothing. The caller enforces that.
+    """
+    names: list[str] = []
+    for match in _UNUSED_SECTIONS_RE.finditer(output):
+        names += _QUOTED_RE.findall(match.group(1))
+    return sorted(set(names))
+
+
+def excused_config_sections(config: Path) -> set[str]:
+    """Module patterns whose declaration carries a comment saying why.
+
+    An ``ignore_missing_imports`` section for a library imported only inside a
+    ``try/except ImportError`` may legitimately match nothing in a given run —
+    ``psycopg2.*`` is exactly that — so the failure is an entry that suppresses
+    nothing *and says nothing about why*, the same shape the internal-label
+    allowlist uses. A comment on the line above is the reason.
+
+    A superset, deliberately: any commented quoted value that *looks* like a
+    module declaration is collected, including a dependency specifier. Narrowing
+    further would mean parsing TOML while tracking comments, and the excess is
+    inert — this set is only ever consulted against names mypy has already
+    reported as unused module sections, which a dependency specifier is not.
+    """
+    excused: set[str] = set()
+    previous = ""
+    for raw in config.read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        if not line.startswith("#") and previous.startswith("#") and _MODULE_LINE_RE.match(line):
+            excused.update(_QUOTED_RE.findall(line))
+        previous = line
+    return excused
+
+
 def _expand(pattern: str) -> list[PurePosixPath]:
     """The directories or files one cell pattern names on disk."""
     if "*" in pattern:
@@ -339,24 +446,33 @@ def _expand(pattern: str) -> list[PurePosixPath]:
     return [PurePosixPath(pattern)] if target.exists() else []
 
 
-#: One measurer per tool, each ``(contract, files) -> Counter[cell]``.
-MEASURERS: dict[str, Callable[[dict[str, Any], list[PurePosixPath]], Measurement]] = {
+#: One measurer per tool, each ``(contract, files, only) -> Measurement``.
+MEASURERS: dict[
+    str, Callable[[dict[str, Any], list[PurePosixPath], set[str] | None], Measurement]
+] = {
     "ruff": measure_ruff,
     "mypy": measure_mypy,
     "format": measure_format,
 }
 
 
-def _measure(contract: dict[str, Any], tools: list[str]) -> dict[str, Measurement]:
+def _measure(
+    contract: dict[str, Any], tools: list[str], only: set[str] | None = None
+) -> dict[str, Measurement]:
     """Run every requested tool once, over one shared file population.
 
     The single entry point for measuring, so ``check`` and ``update-baseline``
     cannot come to disagree about what a cell measures — which is the failure
     that would be hardest to see, since each would be internally consistent and
     the ratchet would move under one and not the other.
+
+    ``only`` narrows the cells, and every measurer honours it. Implementing it
+    for the one tool that currently asks would leave the other two accepting a
+    restriction and quietly measuring everything — a scope silently wider than
+    the one requested, reported as if it were the one requested.
     """
     files = tracked_python()
-    return {tool: MEASURERS[tool](contract, files) for tool in tools}
+    return {tool: MEASURERS[tool](contract, files, only) for tool in tools}
 
 
 def _measured(measurement: Measurement, cell: dict[str, Any]) -> int:
@@ -451,12 +567,46 @@ def verify(contract: dict[str, Any]) -> list[str]:
     return faults
 
 
-def check(contract: dict[str, Any], tools: list[str]) -> dict[str, Any]:
-    """Measure each tool and compare every cell against its ceiling."""
-    report: dict[str, Any] = {"exceeded": [], "cleared": [], "cells": {}, "unattributed": []}
+def check(
+    contract: dict[str, Any],
+    tools: list[str],
+    only: set[str] | None = None,
+    show_findings: bool = False,
+) -> dict[str, Any]:
+    """Measure each tool, compare every cell against its ceiling, and report.
 
-    for tool, measurement in _measure(contract, tools).items():
-        for cell in contract["tools"][tool]["cells"]:
+    Two things are reported besides the comparison, and both are there because
+    a number produced under conditions that have changed is not the number it
+    claims to be:
+
+    * ``unused_config`` — sections of the measuring tool's own configuration
+      that matched nothing. Collected only on an unrestricted run, since a
+      scoped one makes almost every section look unused.
+    * ``findings`` — what the tool said, when a caller asks for it. A ceiling
+      breach reported as a count leaves a developer with nothing to open.
+    """
+    report: dict[str, Any] = {
+        "exceeded": [],
+        "cleared": [],
+        "cells": {},
+        "unattributed": [],
+        "unused_config": [],
+        "findings": {},
+    }
+
+    for tool, measurement in _measure(contract, tools, only).items():
+        if show_findings and measurement.output:
+            report["findings"][tool] = measurement.output
+        if only is None and measurement.output:
+            config = _ROOT / contract["tools"][tool]["config"]
+            excused = excused_config_sections(config) if config.exists() else set()
+            report["unused_config"] += [
+                {"tool": tool, "config": contract["tools"][tool]["config"], "section": section}
+                for section in unused_config_sections(measurement.output)
+                if section not in excused
+            ]
+
+        for cell in _restrict(contract["tools"][tool]["cells"], only):
             name = f"{tool}/{cell['path']}"
             measured = _measured(measurement, cell)
             report["cells"][name] = {"measured": measured, "ceiling": cell["ceiling"]}
@@ -523,19 +673,104 @@ def update_baseline(
     return lowered, exceeded
 
 
+#: What one caller-named path is, to a tool: a path inside a measured cell, one
+#: inside a cell the contract declares the tool does not read, or one outside
+#: the population entirely.
+SCOPE_MEASURED = "cell"
+SCOPE_UNMEASURED = "unmeasured"
+SCOPE_OUTSIDE = "outside"
+
+
+def scope_paths(
+    contract: dict[str, Any], tool: str, paths: list[str]
+) -> list[tuple[str, str, str]]:
+    """Which cell each caller-named path falls in, as ``(kind, path, cell)``.
+
+    ``bin/validate.sh`` takes packages, directories and single files, and has to
+    turn them into a mypy verdict. It cannot do that by matching cell patterns
+    itself: a second copy of ``cell_matches`` is a second answer waiting to
+    disagree with the one the ceilings are measured under. So it asks.
+
+    The three kinds are three different verdicts, and the middle one is the
+    reason this returns a classification rather than a filtered list. A path
+    under a cell the contract marks unmeasured must not be type-checked *and
+    must not be silently dropped either* — dropping it is how a caller comes to
+    believe a directory was checked when nothing read it.
+    """
+    cells = contract["tools"][tool]["cells"]
+    unmeasured = {cell["path"] for cell in cells if cell.get("tier") in _UNMEASURED_TIERS}
+
+    resolved: list[tuple[str, str, str]] = []
+    for given in paths:
+        cell = _cell_for(cells, _relative(given))
+        if cell is None:
+            resolved.append((SCOPE_OUTSIDE, given, ""))
+        elif cell in unmeasured:
+            resolved.append((SCOPE_UNMEASURED, given, cell))
+        else:
+            resolved.append((SCOPE_MEASURED, given, cell))
+    return resolved
+
+
 def _selected(requested: str | None) -> list[str]:
     return [requested] if requested else sorted(MEASURERS)
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("command", choices=("check", "verify", "update-baseline", "partition"))
+    parser.add_argument(
+        "command", choices=("check", "verify", "update-baseline", "partition", "scope")
+    )
+    parser.add_argument("paths", nargs="*", help="scope: the paths to classify")
     parser.add_argument("--tool", choices=sorted(MEASURERS), help="restrict to one tool")
+    parser.add_argument(
+        "--cell",
+        action="append",
+        default=[],
+        metavar="PATH",
+        help="check: compare only these cells, named exactly as the contract declares them",
+    )
+    parser.add_argument(
+        "--show-findings",
+        action="store_true",
+        help="check: echo what the tool reported, not only the comparison",
+    )
     parser.add_argument("--json", action="store_true", dest="use_json")
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     contract = load_contract()
+
+    if args.command == "scope":
+        if not args.tool:
+            parser.error("scope classifies paths for one tool, so --tool is required")
+        resolved = scope_paths(contract, args.tool, args.paths)
+        if args.use_json:
+            json.dump(
+                [{"kind": kind, "path": path, "cell": cell} for kind, path, cell in resolved],
+                sys.stdout,
+                indent=2,
+            )
+            sys.stdout.write("\n")
+        else:
+            for kind, path, cell in resolved:
+                sys.stdout.write(f"{kind}\t{path}\t{cell}\n")
+        sys.exit(0)
+
+    # Named cells are resolved against the declaration rather than trusted. A
+    # caller that misspells one would otherwise restrict the run to nothing and
+    # be told every cell is within its ceiling.
+    only: set[str] | None = None
+    if args.cell:
+        if not args.tool:
+            parser.error("--cell names cells of one tool, so --tool is required with it")
+        declared = {cell["path"] for cell in contract["tools"][args.tool]["cells"]}
+        unknown = sorted(set(args.cell) - declared)
+        if unknown:
+            parser.error(
+                f"{args.tool} declares no cell named {unknown} — known cells are {sorted(declared)}"
+            )
+        only = set(args.cell)
 
     if args.command == "verify":
         faults = verify(contract)
@@ -583,11 +818,19 @@ def main() -> None:
             )
         sys.exit(0)
 
-    report = check(contract, _selected(args.tool))
+    report = check(contract, _selected(args.tool), only, args.show_findings)
+    failed = bool(report["exceeded"] or report["unused_config"])
     if args.use_json:
         json.dump(report, sys.stdout, indent=2)
         sys.stdout.write("\n")
-        sys.exit(1 if report["exceeded"] else 0)
+        sys.exit(1 if failed else 0)
+
+    # Ahead of every verdict below: a developer told a ceiling is breached needs
+    # the messages, and printing them after the ranked file list would separate
+    # the count from the thing it counted.
+    for tool in sorted(report["findings"]):
+        sys.stdout.write(report["findings"][tool])
+        sys.stdout.flush()
 
     for cleared in report["cleared"]:
         logger.info(
@@ -616,9 +859,18 @@ def main() -> None:
             logger.error("    %s (%d)", offender["file"], offender["count"])
         if exceeded["further_files"]:
             logger.error("    ... and %d more", exceeded["further_files"])
-    if not report["exceeded"]:
+    for dead in report["unused_config"]:
+        logger.error(
+            "%s: the %s section for %r matched nothing, so it suppresses nothing "
+            "— delete it, correct the module it names, or say on the line above "
+            "why it may legitimately match nothing",
+            dead["config"],
+            dead["tool"],
+            dead["section"],
+        )
+    if not failed:
         logger.info("Every cell is within its ceiling.")
-    sys.exit(1 if report["exceeded"] else 0)
+    sys.exit(1 if failed else 0)
 
 
 if __name__ == "__main__":

@@ -396,7 +396,7 @@ print_status "Computing per-package content hashes..."
 PACKAGE_HASHES_JSON=$(uv run python "$SCRIPT_DIR/package-hashes.py" compute 2>/dev/null || echo "{}")
 # Workspace-level inputs (toolchain config, workspace guards) are hashed
 # separately: they carry their own blast radius and never enter the
-# package dependency graph. Without them a change to mypy.ini or a guard
+# package dependency graph. Without them a change to pytest.ini or a guard
 # left every stored hash intact and CI validated a stale artifact.
 WORKSPACE_HASHES_JSON=$(uv run python "$SCRIPT_DIR/package-hashes.py" compute-workspace 2>/dev/null || echo "{}")
 
@@ -875,10 +875,12 @@ record_check shell_lint "$SHELL_LINT_STATUS" \
 # measured whether the run touched it or not. Reusing one answer for the other
 # would make the ratchet depend on which packages happened to change.
 #
-# For ruff the difference is scope alone — both read the root config. For mypy
-# it is scope *and* config, since validate.sh runs under mypy.ini and the
-# contract measures under the root one; that second half disappears when mypy.ini
-# is retired, and the two invocations then differ only in what they cover.
+# The difference is now scope alone, for both tools. It used to be scope *and*
+# config for mypy — validate.sh read mypy.ini while the contract measured under
+# the root one, so a new finding in a transitional package passed there and
+# failed here. mypy.ini is retired and validate.sh reaches its mypy verdict by
+# calling this script scoped to the cells its targets name, so the two cannot
+# disagree about what clean means; only about how much of the tree they read.
 print_status "Checking the quality contract..."
 _check_start=$(date +%s)
 if uv run python "$SCRIPT_DIR/quality-contract.py" check; then

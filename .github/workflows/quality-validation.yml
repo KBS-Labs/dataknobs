@@ -42,7 +42,6 @@ jobs:
               # workspace guards assert against every file listed here, and
               # they cannot run on a job that does not start.
               - 'packages/*/pyproject.toml'
-              - 'mypy.ini'
               - 'pytest.ini'
               - '.python-version'
               - '.pylintrc'

@@ -22,7 +22,6 @@ TARGETS=()
 QUICK=false
 FIX=false
 STATS=false
-ALL_ERRORS=false
 WORKSPACE_ONLY=false
 PRINT_TARGETS=false
 PRINT_FORMAT_TARGETS=false
@@ -45,7 +44,6 @@ usage() {
     echo "  -q, --quick           Quick validation (skip slow checks)"
     echo "  -f, --fix             Attempt to auto-fix issues"
     echo "  -s, --stats           Show detailed error statistics"
-    echo "  -a, --all-errors      Show all errors (bypass suppression rules)"
     echo "  -w, --workspace       Also validate the code belonging to no package"
     echo "                        (tests/, bin/, src/, conftest.py). Additive: with"
     echo "                        no other target it validates that set alone, and"
@@ -66,7 +64,6 @@ usage() {
     echo "  $0 packages/utils/src/dataknobs_utils/*.py  # Validate specific files"
     echo "  $0 -f                                     # Validate and fix issues"
     echo "  $0 -s data                                # Show error statistics for data package"
-    echo "  $0 -s -a data                             # Show ALL error statistics (including suppressed)"
     echo "  $0 -w                                     # Validate only the code belonging to no package"
     echo "  $0 data -w                                # Validate the data package and that code"
     exit 0
@@ -85,10 +82,6 @@ while [[ $# -gt 0 ]]; do
             ;;
         -s|--stats)
             STATS=true
-            shift
-            ;;
-        -a|--all-errors)
-            ALL_ERRORS=true
             shift
             ;;
         -w|--workspace)
@@ -277,57 +270,36 @@ if [[ "$STATS" == true ]]; then
     echo -e "\n${BLUE}Ruff Linting Statistics:${NC}"
     for target in "${VALIDATE_TARGETS[@]}"; do
         echo -e "${YELLOW}  $target:${NC}"
-        if [[ "$ALL_ERRORS" == true ]]; then
-            # Show all errors without config (no suppression)
-            uv run ruff check "$target" --statistics 2>/dev/null || true
-        else
-            # Normal mode with configured suppressions from pyproject.toml
-            uv run ruff check "$target" --statistics --config "$ROOT_DIR/pyproject.toml" 2>/dev/null || true
-        fi
+        uv run ruff check "$target" --statistics --config "$ROOT_DIR/pyproject.toml" 2>/dev/null || true
     done
-    
-    # MyPy statistics
+
+    # MyPy statistics: a breakdown by error code, which is a different product
+    # from a verdict and so is produced here rather than by the contract.
+    #
+    # There used to be a "Total MyPy Errors" block below it, counting with
+    # `grep -c "error:"`. That was a third implementation of a number the
+    # contract already produces from `measure_mypy`, and two counters of the
+    # same thing are two answers waiting to disagree — an unanchored substring
+    # match against an anchored `path:line: error:` one. The count belongs to
+    # whoever compares it against a ceiling.
     if [[ "$QUICK" != true ]]; then
         echo -e "\n${BLUE}MyPy Type Checking Statistics:${NC}"
         for target in "${VALIDATE_TARGETS[@]}"; do
             echo -e "${YELLOW}  $target:${NC}"
-            # Count errors by type
-            if [[ "$ALL_ERRORS" == true ]]; then
-                # Use pyproject.toml for comprehensive checking (more errors shown)
-                uv run mypy "$target" --config-file "$ROOT_DIR/pyproject.toml" 2>&1 | \
-                    grep "error:" | \
-                    sed 's/.*error: //' | \
-                    sed 's/  \[/\n[/' | \
-                    grep '^\[' | \
-                    sed 's/\[//' | \
-                    sed 's/\]//' | \
-                    sort | uniq -c | sort -rn || echo "    No type errors found"
-            else
-                # Use mypy.ini for focused checking (fewer errors shown)
-                uv run mypy "$target" --config-file "$ROOT_DIR/mypy.ini" 2>&1 | \
-                    grep "error:" | \
-                    sed 's/.*error: //' | \
-                    sed 's/  \[/\n[/' | \
-                    grep '^\[' | \
-                    sed 's/\[//' | \
-                    sed 's/\]//' | \
-                    sort | uniq -c | sort -rn || echo "    No type errors found"
-            fi
+            uv run mypy "$target" --config-file "$ROOT_DIR/pyproject.toml" 2>&1 | \
+                grep "error:" | \
+                sed 's/.*error: //' | \
+                sed 's/  \[/\n[/' | \
+                grep '^\[' | \
+                sed 's/\[//' | \
+                sed 's/\]//' | \
+                sort | uniq -c | sort -rn || echo "    No type errors found"
         done
-        
-        # Show total mypy errors
-        echo -e "\n${BLUE}Total MyPy Errors:${NC}"
-        for target in "${VALIDATE_TARGETS[@]}"; do
-            if [[ "$ALL_ERRORS" == true ]]; then
-                ERROR_COUNT=$(uv run mypy "$target" --config-file "$ROOT_DIR/pyproject.toml" 2>&1 | grep -c "error:" || echo "0")
-                echo -e "  ${YELLOW}$target:${NC} $ERROR_COUNT errors (comprehensive)"
-            else
-                ERROR_COUNT=$(uv run mypy "$target" --config-file "$ROOT_DIR/mypy.ini" 2>&1 | grep -c "error:" || echo "0")
-                echo -e "  ${YELLOW}$target:${NC} $ERROR_COUNT errors (focused)"
-            fi
-        done
+
+        echo -e "\n${BLUE}Per-cell totals against their ceilings:${NC}"
+        echo -e "  ${YELLOW}bin/quality-contract.py check --tool mypy${NC}"
     fi
-    
+
     # TODO/FIXME count
     echo -e "\n${BLUE}TODO/FIXME Comments:${NC}"
     for target in "${VALIDATE_TARGETS[@]}"; do
@@ -385,41 +357,18 @@ for target in "${VALIDATE_TARGETS[@]}"; do
     
     if [[ "$FIX" == true ]]; then
         # Run ruff with auto-fix (matching fix.sh behavior)
-        if [[ "$ALL_ERRORS" == true ]]; then
-            # No config = show all errors
-            if uv run ruff check "$target" --fix --no-unsafe-fixes; then
-                echo -e "${GREEN}    ✓ Ruff checks passed${NC}"
-            else
-                echo -e "${YELLOW}    ⚠ Some issues remain that need manual fixing${NC}"
-                FAILED=true
-            fi
+        if uv run ruff check "$target" --fix --no-unsafe-fixes --config "$ROOT_DIR/pyproject.toml"; then
+            echo -e "${GREEN}    ✓ Ruff checks passed${NC}"
         else
-            # Use config for suppressions
-            if uv run ruff check "$target" --fix --no-unsafe-fixes --config "$ROOT_DIR/pyproject.toml"; then
-                echo -e "${GREEN}    ✓ Ruff checks passed${NC}"
-            else
-                echo -e "${YELLOW}    ⚠ Some issues remain that need manual fixing${NC}"
-                FAILED=true
-            fi
+            echo -e "${YELLOW}    ⚠ Some issues remain that need manual fixing${NC}"
+            FAILED=true
         fi
     else
-        # Run ruff without fixing
-        if [[ "$ALL_ERRORS" == true ]]; then
-            # No config = show all errors
-            if uv run ruff check "$target" --no-fix; then
-                echo -e "${GREEN}    ✓ Ruff checks passed${NC}"
-            else
-                echo -e "${RED}    ✗ Ruff found issues${NC}"
-                FAILED=true
-            fi
+        if uv run ruff check "$target" --no-fix --config "$ROOT_DIR/pyproject.toml"; then
+            echo -e "${GREEN}    ✓ Ruff checks passed${NC}"
         else
-            # Use config for suppressions
-            if uv run ruff check "$target" --no-fix --config "$ROOT_DIR/pyproject.toml"; then
-                echo -e "${GREEN}    ✓ Ruff checks passed${NC}"
-            else
-                echo -e "${RED}    ✗ Ruff found issues${NC}"
-                FAILED=true
-            fi
+            echo -e "${RED}    ✗ Ruff found issues${NC}"
+            FAILED=true
         fi
     fi
 done
@@ -490,50 +439,117 @@ fi
 # was never set, so mypy could not fail a validation run. Reading the exit status
 # is the whole fix; the output is printed rather than matched.
 #
-# One function for both call sites below, which differ only by
-# --follow-imports=skip. Two copies of this is how the two of them came to share
-# a defect.
+# Now reached only for a path outside the contract's population, where there is
+# no ceiling and so any finding is a breach. Everything inside a cell goes
+# through the contract — see the step below.
 run_mypy() {
-    local target="$1"
-    shift
     local output rc
-    output=$(uv run mypy "$target" --config-file "$MYPY_CONFIG" "$@" 2>&1) && rc=0 || rc=$?
+    output=$(uv run mypy "$@" --config-file "$ROOT_DIR/pyproject.toml" 2>&1) && rc=0 || rc=$?
     if [[ -n "$output" ]]; then
         printf '%s\n' "$output"
     fi
     return "$rc"
 }
 
+# Whether a value is already in the rest of the arguments.
+_contains() {
+    local needle="$1"
+    shift
+    local item
+    for item in "$@"; do
+        [[ "$item" == "$needle" ]] && return 0
+    done
+    return 1
+}
+
 # 5. Type checking with mypy (unless quick mode)
+#
+# The verdict is the quality contract's, not this script's. There is one mypy
+# configuration now, and under it the tree has thousands of findings — so "any
+# error means FAILED", which is what this step used to say, would fail every
+# pull request touching a package that has not been adopted yet. The number that
+# decides is `measured <= ceiling`, per cell, and that comparison already exists
+# in bin/quality-contract.py. Calling it is what keeps the two from disagreeing.
+#
+# They *did* disagree, in the direction that matters least and hurts most: a new
+# finding in a transitional package passed here and failed the gate, because
+# this step read a second configuration under which the code was clean. A
+# developer validated locally, saw green, pushed, and learned about it from CI.
+#
+# A ceiling is a whole-cell property, so a caller naming one file inside a cell
+# gets that whole cell measured — a partial count compared against a whole-cell
+# ceiling is not a verdict. That is also what retires --follow-imports=skip for
+# this case: its reason for existing was to stop a single-file run dragging in
+# the rest of the tree, and the cell is now the unit either way.
+#
+# Which paths are in which cell is asked, never matched here: a second copy of
+# the contract's matcher is a second answer waiting to disagree with the one the
+# ceilings were measured under.
 if [[ "$QUICK" != true ]]; then
     echo -e "\n${BLUE}5. Running mypy type checking...${NC}"
-    for target in "${VALIDATE_TARGETS[@]}"; do
-        echo -e "${YELLOW}  Checking $target...${NC}"
-        
-        # Choose config based on all-errors flag
-        if [[ "$ALL_ERRORS" == true ]]; then
-            MYPY_CONFIG="$ROOT_DIR/pyproject.toml"
-        else
-            MYPY_CONFIG="$ROOT_DIR/mypy.ini"
-        fi
-        
-        # For individual files, skip following imports to avoid checking the whole codebase
-        mypy_ok=true
-        if [[ -f "$target" ]]; then
-            # Single file - don't follow imports
-            run_mypy "$target" --follow-imports=skip || mypy_ok=false
-        else
-            # Directory or package - normal behavior
-            run_mypy "$target" || mypy_ok=false
-        fi
 
-        if [[ "$mypy_ok" == true ]]; then
-            echo -e "${GREEN}    ✓ Type checks passed${NC}"
-        else
-            echo -e "${RED}    ✗ Type errors found${NC}"
-            FAILED=true
+    MYPY_CELLS=()
+    MYPY_OUTSIDE=()
+    mypy_ok=true
+
+    # Captured into a variable rather than read from a process substitution, for
+    # the reason recorded at the package-discovery loop above: a substitution's
+    # exit status is reported nowhere, so a failing classifier would yield an
+    # empty list and this step would check nothing and pass.
+    _mypy_scope=$(uv run python "$ROOT_DIR/bin/quality-contract.py" \
+        scope --tool mypy "${VALIDATE_TARGETS[@]}")
+    while IFS=$'\t' read -r _kind _path _cell; do
+        case "$_kind" in
+            cell)
+                if ! _contains "$_cell" ${MYPY_CELLS[@]+"${MYPY_CELLS[@]}"}; then
+                    MYPY_CELLS+=("$_cell")
+                fi
+                ;;
+            unmeasured)
+                # Reported rather than dropped. Silently skipping it is how a
+                # caller comes to believe a directory was type-checked.
+                echo -e "${YELLOW}  Skipping $_path — $_cell is not type-checked by the contract${NC}"
+                ;;
+            outside)
+                MYPY_OUTSIDE+=("$_path")
+                ;;
+            *)
+                # Including the empty kind, which is what a truncated
+                # classification looks like. Failing is the point: a target the
+                # classifier did not place is one nothing below type-checks, and
+                # skipping it would report success over unread code.
+                echo -e "${RED}  Could not place '$_path' — the contract reported scope '$_kind'${NC}"
+                mypy_ok=false
+                ;;
+        esac
+    done <<< "$_mypy_scope"
+
+    if [[ ${#MYPY_CELLS[@]} -gt 0 ]]; then
+        echo -e "${YELLOW}  Checking ${MYPY_CELLS[*]}...${NC}"
+        _cell_args=()
+        for _cell in "${MYPY_CELLS[@]}"; do
+            _cell_args+=(--cell "$_cell")
+        done
+        if ! uv run python "$ROOT_DIR/bin/quality-contract.py" \
+            check --tool mypy --show-findings "${_cell_args[@]}"; then
+            mypy_ok=false
         fi
+    fi
+
+    # Outside every cell there is no ceiling to be within, so any finding is a
+    # breach. Imports are not followed: the path is outside the population, and
+    # following them would put the population's backlog into its verdict.
+    for _path in ${MYPY_OUTSIDE[@]+"${MYPY_OUTSIDE[@]}"}; do
+        echo -e "${YELLOW}  Checking $_path (outside the contract, so it must be clean)...${NC}"
+        run_mypy "$_path" --follow-imports=skip || mypy_ok=false
     done
+
+    if [[ "$mypy_ok" == true ]]; then
+        echo -e "${GREEN}    ✓ Type checks passed${NC}"
+    else
+        echo -e "${RED}    ✗ Type errors found${NC}"
+        FAILED=true
+    fi
 fi
 
 # 6. Check for common issues
