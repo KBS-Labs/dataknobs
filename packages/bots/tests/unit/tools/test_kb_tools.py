@@ -548,3 +548,62 @@ class TestKBToolsRejectPathTraversal:
         assert result["success"] is False
         assert "outside" in result["error"]
         assert not (tmp_path / "escape" / "manifest.json").exists()
+
+
+class TestKBToolsAcceptARelativeKnowledgeDir:
+    """A knowledge directory of ``.`` is inside itself.
+
+    The containment guard used to compare normalized path *strings*, and
+    ``normpath(".")`` is ``"."`` while ``normpath("./kb/x.md")`` is
+    ``"kb/x.md"`` — so a curdir base was a prefix of nothing and every
+    composed path read as an escape.
+
+    Supplied through wizard data, which is where a relative directory
+    realistically arrives from: the constructor takes a ``Path``, but a
+    deployment writes ``_knowledge_dir`` as a string in its own config.
+    """
+
+    @pytest.mark.asyncio
+    async def test_add_inline_writes_under_a_curdir_knowledge_dir(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.chdir(tmp_path)
+        wizard_data: dict[str, Any] = {
+            "_kb_resources": [],
+            "domain_id": "test-bot",
+            "_knowledge_dir": ".",
+        }
+        tool = AddKBResourceTool()
+
+        result = await tool.execute_with_context(
+            _make_context(wizard_data),
+            path="intro.md",
+            resource_type="inline",
+            content="hello",
+        )
+
+        assert result["success"] is True
+        assert (tmp_path / "test-bot" / "intro.md").read_text() == "hello"
+
+    @pytest.mark.asyncio
+    async def test_a_curdir_knowledge_dir_still_refuses_an_escape(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The relative base is contained, not unbounded."""
+        monkeypatch.chdir(tmp_path)
+        wizard_data: dict[str, Any] = {
+            "_kb_resources": [],
+            "domain_id": "test-bot",
+            "_knowledge_dir": ".",
+        }
+        tool = AddKBResourceTool()
+
+        result = await tool.execute_with_context(
+            _make_context(wizard_data),
+            path="../../escape.md",
+            resource_type="inline",
+            content="pwned",
+        )
+
+        assert result["success"] is False
+        assert "outside" in result["error"]

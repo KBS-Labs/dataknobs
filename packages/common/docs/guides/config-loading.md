@@ -11,7 +11,7 @@ dict" checks across `dataknobs_config`, `dataknobs_xization`,
 
 | Helper | Role |
 |---|---|
-| `find_config_file(config_dir, name, *, extensions=...)` | Probe a directory for `name.{yaml,yml,json}` (or any custom extensions) and return the first existing path, or `None`. |
+| `find_config_file(config_dir, name, *, extensions=..., allow_outside=False)` | Probe a directory for `name.{yaml,yml,json}` (or any custom extensions) and return the first existing path, or `None`. `name` must stay inside `config_dir` — see [Names Are Bounded by `config_dir`](#names-are-bounded-by-config_dir). |
 | `load_yaml_or_json(path, *, require_dict=True, encoding="utf-8")` | Open a path and parse it according to its extension. Optionally requires a dict at the root. |
 | `parse_yaml_or_json(data, *, format, source_name=None, require_dict=True)` | Parse already-loaded bytes or text content. Used by consumers that pull bytes from non-filesystem sources (e.g. `KnowledgeResourceBackend`). |
 
@@ -23,6 +23,7 @@ catch the base type and re-raise as its own error class:
 ```text
 ConfigLoadError              (base)
 ├── ConfigParseError         (YAML/JSON parser failed)
+├── ConfigPathEscapeError    (name addresses a file outside config_dir)
 ├── ConfigShapeError         (require_dict=True and root is not a dict)
 ├── ConfigUnsupportedFormatError  (extension or format hint not recognized)
 └── ConfigYAMLNotInstalledError   (YAML payload requested, PyYAML missing)
@@ -94,6 +95,60 @@ If you want substitution, wire `dataknobs_config.substitute_env_vars`
 in at the consumer level after `load_yaml_or_json` returns. See
 `docs/packages/config/environment-variables.md` for the substitution
 reference.
+
+## Names Are Bounded by `config_dir`
+
+`find_config_file` composes `config_dir / name`, and the result has to
+stay inside `config_dir`. A name may address a **subdirectory** — that
+is how a layout convention is expressed — but a name that walks out of
+the directory with `..`, or an absolute name (which discards
+`config_dir` entirely, because that is what `Path("/base") / "/etc/x"`
+evaluates to), raises `ConfigPathEscapeError`:
+
+```python
+find_config_file(config_dir, "domains/child")   # fine: inside config_dir
+find_config_file(config_dir, "../../etc/x")     # ConfigPathEscapeError
+find_config_file(config_dir, "/etc/x")          # ConfigPathEscapeError
+```
+
+The check runs **before** any file is probed, so an escaping name fails
+identically whether or not the file it names exists — the guard is not
+also an existence oracle.
+
+This matters because the `name` reaching this helper is often not a
+literal the calling code wrote. It can be an `extends:` value read out
+of a config file, an environment name read from the process
+environment, or the output of a consumer-supplied name resolver. The
+loader recursing into those names never returns to the caller in
+between, so bounding them at the join is the only place that covers all
+of them.
+
+A caller that deliberately addresses a tree outside its search
+directory passes `allow_outside=True`; the escaping name is then logged
+at WARNING and probed anyway, so the bypass is auditable rather than
+silent. No in-tree caller passes it.
+
+### The primitive underneath
+
+The containment test is `dataknobs_common.paths.safe_join`, exported
+from the package root, for consumers composing a path from a name of
+their own:
+
+```python
+from dataknobs_common import safe_join
+
+target = safe_join(knowledge_dir, domain_id, resource_path)
+if target is None:
+    raise ValueError("resource path resolves outside the knowledge directory")
+```
+
+It returns the joined path with `.` and `..` segments collapsed, or
+`None` when the result addresses anything outside the base. Containment
+is judged lexically — no filesystem call — which means it is safe to
+run on an event loop and works on paths that do not exist yet, and also
+means a symlink is not followed: a symlinked file inside the base is
+contained, deliberately. A write that must not be redirected through
+such a symlink wants a `Path.resolve()` check of its own, off the loop.
 
 ## Custom Extension Sets
 

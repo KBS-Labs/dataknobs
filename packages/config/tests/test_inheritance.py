@@ -1481,3 +1481,125 @@ class TestBothModesAtOnceIsReported:
         with warnings.catch_warnings():
             warnings.simplefilter("error")
             Unrelated(tmp_path, resolver=MappingResolver({"a": "b"}))
+
+
+class TestNamesCannotEscapeTheConfigDir:
+    """``config_dir`` bounds what a name can address.
+
+    Three of the four names reaching the loader are not the caller's own
+    literal: an ``extends:`` value is read out of a config file, a
+    ``resolve_name`` result comes from a consumer-supplied resolver, and a
+    cleared name is mapped through the same resolver. All four go through
+    one join, so all four are bounded at that join.
+    """
+
+    @pytest.fixture
+    def tree(self, tmp_path):
+        """``<root>/configs`` beside a readable ``<root>/outside``."""
+        configs = tmp_path / "configs"
+        configs.mkdir()
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        (outside / "secret.yaml").write_text(yaml.dump({"leaked": True}))
+        return tmp_path, configs
+
+    def test_an_extends_value_cannot_escape(self, tree):
+        """The name is read from config *content*, not from the caller."""
+        _, configs = tree
+        (configs / "child.yaml").write_text(yaml.dump({"extends": "../outside/secret", "b": 2}))
+        loader = InheritableConfigLoader(configs)
+
+        with pytest.raises(InheritanceError, match="outside the configuration directory"):
+            loader.load("child")
+
+    def test_a_requested_name_cannot_escape(self, tree):
+        _, configs = tree
+        loader = InheritableConfigLoader(configs)
+
+        with pytest.raises(InheritanceError, match="outside the configuration directory"):
+            loader.load("../outside/secret")
+
+    def test_an_absolute_requested_name_cannot_escape(self, tree):
+        """Joining an absolute name discards ``config_dir`` entirely."""
+        root, configs = tree
+        loader = InheritableConfigLoader(configs)
+
+        with pytest.raises(InheritanceError, match="outside the configuration directory"):
+            loader.load(str(root / "outside" / "secret"))
+
+    def test_a_resolver_result_cannot_escape(self, tree):
+        """The seam maps names; it does not widen what a name may address."""
+        _, configs = tree
+        loader = InheritableConfigLoader(
+            configs, resolver=CallableResolver(lambda n: f"../outside/{n}")
+        )
+
+        with pytest.raises(InheritanceError, match="outside the configuration directory"):
+            loader.load("secret")
+
+    def test_the_failure_names_the_config_not_the_resolved_path(self, tree):
+        """Bounded message: the name the deployment wrote, not a server path."""
+        _, configs = tree
+        loader = InheritableConfigLoader(configs)
+
+        with pytest.raises(InheritanceError) as excinfo:
+            loader.load("../outside/secret")
+
+        message = str(excinfo.value)
+        assert "../outside/secret" in message
+        assert "secret.yaml" not in message
+
+    def test_nothing_is_cached_when_a_name_is_rejected(self, tree):
+        """A rejected load leaves no entry a later contained load could hit."""
+        _, configs = tree
+        loader = InheritableConfigLoader(configs)
+
+        with pytest.raises(InheritanceError):
+            loader.load("../outside/secret")
+
+        assert loader._cache == {}
+        assert loader._loading == set()
+
+    def test_validate_reports_it_rather_than_raising(self, tree):
+        """`validate` returns a verdict, so the rejection has to arrive as one."""
+        _, configs = tree
+        loader = InheritableConfigLoader(configs)
+
+        is_valid, error = loader.validate("../outside/secret")
+
+        assert is_valid is False
+        assert error is not None
+        assert "outside the configuration directory" in error
+
+    def test_a_subdirectory_layout_still_loads(self, tree):
+        """A resolver may still steer a name into a subdirectory of the tree."""
+        _, configs = tree
+        (configs / "domains").mkdir()
+        (configs / "domains" / "parent.yaml").write_text(yaml.dump({"a": 1}))
+        (configs / "domains" / "child.yaml").write_text(yaml.dump({"extends": "parent", "b": 2}))
+        loader = InheritableConfigLoader(
+            configs, resolver=CallableResolver(lambda n: f"domains/{n}")
+        )
+
+        assert loader.load("child") == {"a": 1, "b": 2}
+
+    def test_load_from_file_still_reads_an_arbitrary_path(self, tree):
+        """The bound is on *names*, not on the caller's own explicit path.
+
+        ``load_from_file`` rebinds ``config_dir`` to the file's own
+        directory, so a path the caller chose is unaffected -- and the
+        ``extends:`` targets under it are bounded by that new directory.
+        """
+        root, configs = tree
+        loader = InheritableConfigLoader(configs)
+
+        assert loader.load_from_file(root / "outside" / "secret.yaml") == {"leaked": True}
+
+    def test_load_from_file_bounds_the_subtree_it_rebinds_to(self, tree):
+        root, configs = tree
+        (root / "outside" / "child.yaml").write_text(yaml.dump({"extends": "../configs/reachable"}))
+        (configs / "reachable.yaml").write_text(yaml.dump({"a": 1}))
+        loader = InheritableConfigLoader(configs)
+
+        with pytest.raises(InheritanceError, match="outside the configuration directory"):
+            loader.load_from_file(root / "outside" / "child.yaml")

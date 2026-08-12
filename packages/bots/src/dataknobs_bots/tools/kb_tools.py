@@ -33,11 +33,11 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import os
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
+from dataknobs_common.paths import safe_join
 from dataknobs_llm.tools.context import ToolExecutionContext
 from dataknobs_llm.tools.context_aware import ContextAwareTool
 
@@ -97,35 +97,6 @@ def _write_text_with_parents(path: Path, text: str) -> None:
     """
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text, encoding="utf-8")
-
-
-def _safe_join(base: Path, *parts: str) -> Path | None:
-    """Join ``parts`` onto ``base``, returning ``None`` if the result escapes.
-
-    The ``domain_id`` and resource ``path`` components flow from user-driven
-    wizard data and LLM tool arguments; a ``..`` segment or an absolute
-    component could otherwise compose a path outside the configured knowledge
-    directory (path traversal). A resource ``path`` may legitimately contain
-    subdirectories, so containment is enforced by normalizing the composed
-    path rather than rejecting separators outright.
-
-    Containment is checked **lexically** via :func:`os.path.normpath` — no
-    filesystem I/O, so the guard is safe to run on the event loop (a
-    ``Path.resolve()`` would stat the filesystem and block the loop). The
-    destination directory is created fresh by the caller, so symlink
-    resolution does not apply to the leaf. The guard trusts that ``base``
-    itself is a real (non-symlinked) directory; a symlink within ``base``
-    that, if followed, would widen the effective containment region is the
-    caller's responsibility (``base`` comes from trusted config here).
-    Returns the normalized joined ``Path`` (``..``/``.`` segments collapsed)
-    when it stays within ``base``, else ``None``.
-    """
-    candidate = base.joinpath(*parts)
-    base_norm = os.path.normpath(base)
-    candidate_norm = os.path.normpath(candidate)
-    if candidate_norm != base_norm and not candidate_norm.startswith(base_norm + os.sep):
-        return None
-    return Path(candidate_norm)
 
 
 class CheckKnowledgeSourceTool(ContextAwareTool):
@@ -446,7 +417,15 @@ class AddKBResourceTool(ContextAwareTool):
                     "error": "No knowledge directory configured",
                 }
             domain_id = wizard_data.get("domain_id", "default")
-            target_path = _safe_join(kb_dir, domain_id, path)
+            # `domain_id` and `path` are user-driven wizard data and an LLM
+            # tool argument. A `..` segment or an absolute component would
+            # compose a destination outside the knowledge directory, so the
+            # join goes through `safe_join`, which returns None instead. A
+            # resource path may legitimately name a subdirectory, so
+            # containment is enforced by normalizing the composed path rather
+            # than by rejecting separators outright. The check is lexical --
+            # no filesystem I/O, so it is safe on the event loop.
+            target_path = safe_join(kb_dir, domain_id, path)
             if target_path is None:
                 return {
                     "success": False,
@@ -658,8 +637,9 @@ class IngestKnowledgeBaseTool(ContextAwareTool):
                 "error": "No knowledge directory configured",
             }
 
-        # Write manifest
-        manifest_dir = _safe_join(kb_dir, domain_id)
+        # Write manifest. `domain_id` is user-driven wizard data, so the
+        # destination is composed through the containment guard here too.
+        manifest_dir = safe_join(kb_dir, domain_id)
         if manifest_dir is None:
             return {
                 "success": False,

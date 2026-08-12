@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import builtins
+import logging
 from pathlib import Path
 
 import pytest
@@ -11,6 +12,7 @@ from dataknobs_common.config_loading import (
     DEFAULT_CONFIG_EXTENSIONS,
     ConfigLoadError,
     ConfigParseError,
+    ConfigPathEscapeError,
     ConfigShapeError,
     ConfigUnsupportedFormatError,
     ConfigYAMLNotInstalledError,
@@ -66,6 +68,109 @@ class TestFindConfigFile:
         match = find_config_file(tmp_path, "x", extensions=("yaml",))
         assert match is not None
         assert match.suffix == ".yaml"
+
+
+class TestFindConfigFileContainment:
+    """A name addresses a file *inside* ``config_dir``, and nowhere else.
+
+    The name reaching this helper is not always the caller's own literal:
+    it can be an ``extends:`` value read out of a config file, an
+    environment name read from ``DATAKNOBS_ENVIRONMENT``, or the output of
+    a consumer-supplied resolver. A name that composes a path outside the
+    search directory is rejected before any file is probed.
+    """
+
+    @staticmethod
+    def _tree(tmp_path: Path) -> tuple[Path, Path]:
+        """Build ``<tmp>/configs`` beside a readable ``<tmp>/outside``."""
+        configs = tmp_path / "configs"
+        configs.mkdir()
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        (outside / "secret.yaml").write_text("leaked: true\n")
+        return configs, outside
+
+    def test_parent_segment_raises(self, tmp_path: Path) -> None:
+        configs, _ = self._tree(tmp_path)
+        with pytest.raises(ConfigPathEscapeError) as excinfo:
+            find_config_file(configs, "../outside/secret")
+        assert "../outside/secret" in str(excinfo.value)
+
+    def test_absolute_name_raises(self, tmp_path: Path) -> None:
+        """``Path.__truediv__`` discards the directory for an absolute name."""
+        configs, outside = self._tree(tmp_path)
+        with pytest.raises(ConfigPathEscapeError):
+            find_config_file(configs, str(outside / "secret"))
+
+    def test_parent_segment_after_a_subdirectory_raises(self, tmp_path: Path) -> None:
+        configs, _ = self._tree(tmp_path)
+        with pytest.raises(ConfigPathEscapeError):
+            find_config_file(configs, "sub/../../outside/secret")
+
+    def test_it_fails_closed_before_probing(self, tmp_path: Path) -> None:
+        """No file exists at the escaping name -- it still raises, not ``None``.
+
+        A guard that only fired when the target happened to exist would
+        report "not found" for a probe and "escaped" for a hit, which is a
+        disclosure oracle rather than a guard.
+        """
+        configs, _ = self._tree(tmp_path)
+        with pytest.raises(ConfigPathEscapeError):
+            find_config_file(configs, "../outside/does-not-exist")
+
+    def test_the_error_is_a_config_load_error(self, tmp_path: Path) -> None:
+        """Consumers already catch the base type and re-raise as their own."""
+        configs, _ = self._tree(tmp_path)
+        with pytest.raises(ConfigLoadError):
+            find_config_file(configs, "../outside/secret")
+
+    def test_a_subdirectory_name_still_resolves(self, tmp_path: Path) -> None:
+        """The layout-convention case: a name may address a subdirectory."""
+        configs, _ = self._tree(tmp_path)
+        (configs / "domains").mkdir()
+        (configs / "domains" / "child.yaml").write_text("a: 1\n")
+        match = find_config_file(configs, "domains/child")
+        assert match == configs / "domains" / "child.yaml"
+
+    def test_an_interior_parent_segment_that_stays_inside_resolves(self, tmp_path: Path) -> None:
+        """``sub/../x`` never leaves the directory, so the guard allows it.
+
+        The probe still composes the name as written, so ``sub`` has to
+        exist for the candidate to resolve — the guard reads the name, it
+        does not rewrite what gets probed.
+        """
+        configs, _ = self._tree(tmp_path)
+        (configs / "sub").mkdir()
+        (configs / "x.yaml").write_text("a: 1\n")
+        match = find_config_file(configs, "sub/../x")
+        assert match is not None
+        assert match.exists()
+
+    def test_allow_outside_opts_back_out(self, tmp_path: Path) -> None:
+        """The escape hatch for a caller that deliberately addresses a sibling tree."""
+        configs, outside = self._tree(tmp_path)
+        match = find_config_file(configs, "../outside/secret", allow_outside=True)
+        assert match is not None
+        assert match.resolve() == (outside / "secret.yaml").resolve()
+
+    def test_allow_outside_warns_when_it_is_load_bearing(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Silent bypass would leave the guard unauditable in a deployment."""
+        configs, _ = self._tree(tmp_path)
+        with caplog.at_level(logging.WARNING, logger="dataknobs_common.config_loading"):
+            find_config_file(configs, "../outside/secret", allow_outside=True)
+        assert any("../outside/secret" in r.getMessage() for r in caplog.records)
+
+    def test_allow_outside_is_silent_for_a_contained_name(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """The warning marks a name that *did* escape, not the flag being set."""
+        configs, _ = self._tree(tmp_path)
+        (configs / "x.yaml").write_text("a: 1\n")
+        with caplog.at_level(logging.WARNING, logger="dataknobs_common.config_loading"):
+            assert find_config_file(configs, "x", allow_outside=True) is not None
+        assert caplog.records == []
 
 
 class TestLoadYamlOrJson:

@@ -353,6 +353,36 @@ find are *locations*, and mapping a location through `resolve_name` addresses
 something else again. `list_available()` delegates here, so an override
 reaches both callers.
 
+### A name cannot leave `config_dir`
+
+Resolution decides *where inside* `config_dir` a name lives; it does not
+widen what a name may address. Every name the loader turns into a file —
+the one you passed `load`, every `extends:` target it recursed into, and
+whatever `resolve_name` returned for either — has to stay inside
+`config_dir`:
+
+```python
+loader.load("domains/child")     # fine: a subdirectory is inside config_dir
+loader.load("../../etc/secrets") # InheritanceError
+loader.load("/etc/secrets")      # InheritanceError -- an absolute name
+                                 # would discard config_dir entirely
+```
+
+```yaml
+# configs/child.yaml
+extends: "../../etc/secrets"     # InheritanceError, on load("child")
+```
+
+The rejection happens before the file is read, so it does not depend on
+the named file existing. The failure names the config, not the path it
+composed.
+
+This is the reason the bound is on names rather than on paths: an
+`extends:` value is written in a config *file*, and a resolver result
+comes from consumer code, so neither is something the caller of `load`
+inspected. Reading a file by path stays entirely the caller's decision —
+see `load_from_file` below.
+
 ### What resolution does not cover
 
 `load_from_file` suppresses resolution for the file **and** its `extends:`
@@ -506,15 +536,16 @@ def load_config_with_inheritance(
 
 ```python
 class InheritanceError(Exception):
-    """Error during configuration inheritance resolution.
-
-    Raised for:
-    - Config file not found
-    - Circular inheritance detected
-    - Invalid YAML/JSON
-    - Config is not a dictionary
-    """
+    """Error during configuration inheritance resolution."""
 ```
+
+Raised for:
+
+- config file not found
+- a config name that addresses a file outside `config_dir`
+- circular inheritance
+- invalid YAML/JSON
+- a config whose root is not a dictionary
 
 ## Caching
 

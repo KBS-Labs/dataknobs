@@ -473,6 +473,16 @@ The environment is automatically detected in this order:
 
 For cloud environments, the actual environment name (staging, production) is read from the `ENVIRONMENT` variable if present.
 
+The detected name becomes a file name under the environment config
+directory, so it is bounded by that directory: a name may address a
+subdirectory (`tier/production`), but one containing `..`, or an
+absolute one, raises `EnvironmentConfigError` rather than reading the
+file it points at. The same bound applies to the `app_name` passed to
+`EnvironmentAwareConfig.load_app`, which raises
+`EnvironmentAwareConfigError`. A missing environment file is unaffected:
+`EnvironmentConfig.load` still returns an empty configuration for an
+environment that has no file.
+
 ## Best Practices
 
 ### 1. Store Portable Configs

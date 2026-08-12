@@ -1015,3 +1015,60 @@ class TestProvenanceIsRecordedOnEveryConstructionPath:
 
         assert merged.substituted is True
         assert merged.resources["databases"]["main"]["dsn"] == "postgres://real"
+
+
+class TestEnvironmentNamesCannotEscapeTheConfigDir:
+    """The environment name can come from the process environment.
+
+    ``detect_environment`` reads ``DATAKNOBS_ENVIRONMENT`` (or
+    ``ENVIRONMENT`` under the cloud indicators) and hands the value
+    straight to the file lookup, so the name is not always a literal the
+    caller wrote.
+    """
+
+    @pytest.fixture
+    def tree(self, tmp_path):
+        """``<root>/environments`` beside a readable ``<root>/outside``."""
+        environments = tmp_path / "environments"
+        environments.mkdir()
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        (outside / "secret.yaml").write_text(yaml.dump({"name": "secret", "settings": {"k": 1}}))
+        return tmp_path, environments
+
+    def test_a_parent_segment_is_rejected(self, tree):
+        _, environments = tree
+        with pytest.raises(EnvironmentConfigError, match="outside the configuration directory"):
+            EnvironmentConfig.load("../outside/secret", environments)
+
+    def test_a_detected_environment_is_rejected_too(self, tree, monkeypatch):
+        """Same guard on the path where the name came from the environment."""
+        _, environments = tree
+        monkeypatch.setenv("DATAKNOBS_ENVIRONMENT", "../outside/secret")
+
+        with pytest.raises(EnvironmentConfigError, match="outside the configuration directory"):
+            EnvironmentConfig.load(None, environments)
+
+    def test_an_absolute_name_is_rejected(self, tree):
+        root, environments = tree
+        with pytest.raises(EnvironmentConfigError, match="outside the configuration directory"):
+            EnvironmentConfig.load(str(root / "outside" / "secret"), environments)
+
+    def test_a_missing_environment_is_still_an_empty_config(self, tree):
+        """Fail-closed applies to escapes, not to the documented empty case."""
+        _, environments = tree
+        config = EnvironmentConfig.load("nonexistent", environments)
+
+        assert config.name == "nonexistent"
+        assert config.settings == {}
+
+    def test_a_subdirectory_name_still_loads(self, tree):
+        _, environments = tree
+        (environments / "tier").mkdir()
+        (environments / "tier" / "prod.yaml").write_text(
+            yaml.dump({"name": "prod", "settings": {"k": 1}})
+        )
+
+        config = EnvironmentConfig.load("tier/prod", environments)
+
+        assert config.settings == {"k": 1}

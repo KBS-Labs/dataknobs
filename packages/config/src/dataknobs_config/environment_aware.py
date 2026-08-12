@@ -79,6 +79,7 @@ from typing import Any
 
 from dataknobs_common.config_loading import (
     ConfigLoadError,
+    ConfigPathEscapeError,
     find_config_file,
     load_yaml_or_json,
 )
@@ -274,14 +275,25 @@ class EnvironmentAwareConfig:
     def _find_config_file(cls, config_dir: Path, name: str) -> Path | None:
         """Find a config file by name.
 
+        The name is bounded by ``config_dir``: it may address a subdirectory,
+        but a name containing ``..`` or an absolute one raises rather than
+        reading the file it points at.
+
         Args:
             config_dir: Directory to search
             name: Config name (without extension)
 
         Returns:
             Path to config file, or None if not found
+
+        Raises:
+            EnvironmentAwareConfigError: If ``name`` addresses a file outside
+                ``config_dir``
         """
-        return find_config_file(config_dir, name)
+        try:
+            return find_config_file(config_dir, name)
+        except ConfigPathEscapeError as e:
+            raise EnvironmentAwareConfigError(str(e)) from e
 
     @classmethod
     def _load_file(cls, path: Path) -> dict[str, Any]:

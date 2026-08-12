@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Security
+
+- **A configuration name could address a file outside the directory it was
+  loaded from.** `InheritableConfigLoader`, `EnvironmentConfig`, and
+  `EnvironmentAwareConfig` all compose a name into their configured
+  directory, and none of them bounded it: a name containing `..` walked out
+  of the directory, and an absolute name discarded the directory entirely.
+  All three now reject such a name — `InheritanceError`,
+  `EnvironmentConfigError`, and `EnvironmentAwareConfigError` respectively,
+  each naming the config rather than the resolved filesystem path.
+
+  Three of the four names this affects are not a caller's own literal, which
+  is what makes the bound worth having:
+
+  - an `extends:` value is read out of a config file, and the loader
+    recurses into parents entirely on its own, so `extends: "../../etc/x"`
+    was followed with nothing between it and the read;
+  - an environment name comes from `DATAKNOBS_ENVIRONMENT` or `ENVIRONMENT`
+    whenever `EnvironmentConfig.load()` is called without one;
+  - a resolved name comes from a consumer-supplied `ResourceResolver` or a
+    `resolve_name` override.
+
+  A name addressing a *subdirectory* is unaffected — `domains/child`, and
+  every `extends:` target under a layout convention, resolves exactly as
+  before. `load_from_file` is also unaffected in the direction that matters:
+  the path the caller passes is the caller's own choice, so it still reads
+  any file, and the `extends:` targets under it are bounded by the directory
+  that file lives in.
+
 ## v0.5.0 - 2026-08-11
 
 ### Fixed

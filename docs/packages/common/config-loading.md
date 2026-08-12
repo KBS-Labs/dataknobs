@@ -43,7 +43,7 @@ from dataknobs_common.config_loading import (
 )
 ```
 
-### `find_config_file(config_dir, name, *, extensions=...)`
+### `find_config_file(config_dir, name, *, extensions=..., allow_outside=False)`
 
 Probes a directory for `name.{yaml,yml,json}` (or any custom set of
 extensions). Returns the first existing path or `None`.
@@ -55,6 +55,9 @@ from dataknobs_common.config_loading import find_config_file
 path = find_config_file(Path("config/environments"), "production")
 # -> Path("config/environments/production.yaml") if it exists, else None
 ```
+
+The name has to stay inside `config_dir` — see
+[Names Cannot Leave `config_dir`](#names-cannot-leave-config_dir).
 
 ### `load_yaml_or_json(path, *, require_dict=True, encoding="utf-8")`
 
@@ -104,6 +107,7 @@ data = parse_yaml_or_json(
 ```text
 ConfigLoadError                  (base)
 ├── ConfigParseError             (YAML/JSON parser failed)
+├── ConfigPathEscapeError        (name addresses a file outside config_dir)
 ├── ConfigShapeError             (require_dict=True and root is not a dict)
 ├── ConfigUnsupportedFormatError (extension or format hint not recognized)
 └── ConfigYAMLNotInstalledError  (YAML payload requested, PyYAML not installed)
@@ -141,6 +145,70 @@ class MyLoader:
 This is how `dataknobs-config`, `dataknobs-xization`, `dataknobs-fsm`,
 `dataknobs-bots`, and `dataknobs-llm` all route through the shared
 helper while keeping their existing public error types unchanged.
+
+## Names Cannot Leave `config_dir`
+
+A config **name** addresses a file inside the directory it is looked up
+in. Naming a subdirectory is fine — `domains/child` is how a layout
+convention is written — but a name that walks out with `..`, or an
+absolute name, raises `ConfigPathEscapeError` before any file is
+probed:
+
+| Name | Result |
+|---|---|
+| `production` | `config/environments/production.yaml` |
+| `tier/production` | `config/environments/tier/production.yaml` |
+| `../../etc/secrets` | `ConfigPathEscapeError` |
+| `/etc/secrets` | `ConfigPathEscapeError` — joining an absolute name discards `config_dir` |
+
+The bound is on the *name*, and the names that reach a loader are
+frequently not written by the calling code:
+
+- an `extends:` value comes out of a config file, and
+  `InheritableConfigLoader` recurses into parents without returning to
+  its caller in between;
+- an environment name comes from `DATAKNOBS_ENVIRONMENT` or
+  `ENVIRONMENT` whenever `EnvironmentConfig.load()` is called without
+  one;
+- a resolved name comes from a `ResourceResolver` a consumer injected.
+
+Each consumer surfaces the rejection as its own error class, the same
+way it surfaces a parse failure — `InheritanceError`,
+`EnvironmentConfigError`, `EnvironmentAwareConfigError`.
+
+Reading a file by **path** is unaffected: a path the caller chose is
+the caller's own decision, so `InheritableConfigLoader.load_from_file`
+still reads any file it is handed (the `extends:` names under it are
+then bounded by that file's own directory).
+
+Pass `allow_outside=True` to `find_config_file` if a caller genuinely
+addresses a tree outside its search directory. The escaping name is
+logged at WARNING and probed anyway, so the bypass shows up in the
+deployment's logs.
+
+### `safe_join`, the primitive underneath
+
+The containment test is `dataknobs_common.paths.safe_join`, exported
+from the package root and usable directly by any code that composes a
+path out of a name it did not write:
+
+```python
+from dataknobs_common import safe_join
+
+target = safe_join(knowledge_dir, domain_id, resource_path)
+if target is None:
+    raise ValueError("resource path resolves outside the knowledge directory")
+```
+
+It returns the joined path with `.` and `..` collapsed, or `None` if
+the result lands outside the base. The check is lexical — no
+filesystem access — so it is safe on an event loop and works on a path
+that does not exist yet, which is the case whenever the composed path
+is about to be written. The trade-off is that symlinks are not
+followed: a symlinked file inside the base is treated as contained
+(deliberately — a Kubernetes ConfigMap mount is built out of
+symlinks), so a write that must not be redirected should also check
+`Path.resolve()`, off the loop.
 
 ## PyYAML Is Optional
 

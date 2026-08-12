@@ -7,6 +7,57 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Added
+
+- **`safe_join(base, *parts)` — compose a path from untrusted parts without
+  leaving a base directory.** Returns the joined path with `.` and `..`
+  segments collapsed, or `None` when it addresses anything outside `base`.
+  Turning a *name* into a *location* is a recurring shape here — a config
+  name, a domain id, a resource path — and it was being written out
+  independently at each site, so this is now the one implementation the tree
+  shares.
+
+  It rejects both spellings of an escape, which is the point of having one:
+  a `..` segment that walks out (including `sub/../../x`, which no
+  single-segment check sees) **and** an absolute part, because
+  `Path("/base") / "/etc/passwd"` evaluates to `/etc/passwd` — the base is
+  discarded, silently. A guard that stops at `..` leaves that open.
+
+  Containment is judged lexically, so no filesystem call is made: the guard
+  is safe on an event loop and works on a path that does not exist yet,
+  which is the case whenever the composed path is about to be written. The
+  consequence, stated in the docstring rather than left to be discovered: a
+  symlink is not followed, so a symlink inside `base` is contained
+  (deliberately — a Kubernetes ConfigMap mount is built out of them), and a
+  write that must not be redirected still wants a `Path.resolve()` check of
+  its own, off the loop.
+
+### Security
+
+- **`find_config_file` let a config name address a file outside the
+  directory it was given.** The name was joined to `config_dir` and probed
+  with no containment check at all, so `../../etc/secrets` read outside the
+  search directory and an absolute name discarded `config_dir` entirely.
+  Both are now rejected before any file is probed — an escaping name fails
+  the same way whether or not the file it names exists, so the guard is not
+  also an existence oracle — and the failure is a new
+  `ConfigPathEscapeError` (a `ConfigLoadError`, so a consumer already
+  catching the base type and re-raising as its own class keeps its error
+  surface).
+
+  A name that addresses a *subdirectory* (`domains/child`) is still
+  contained and still resolves: that is how a deployment expresses a layout
+  convention, and bounding the name is not the same as flattening it.
+
+  Why this is more than a caller passing its own literal: the name reaching
+  this helper is frequently not one. It can be an `extends:` value read out
+  of a config file, an environment name read from the process environment,
+  or the output of a consumer-supplied name resolver. Pass
+  `allow_outside=True` to opt a call back out — an escaping name is then
+  logged at WARNING and probed anyway, so a deployment that needs the old
+  behaviour has one argument to reach for and the bypass is visible in its
+  logs rather than silent.
+
 ## v2.0.0 - 2026-08-11
 
 ### Added

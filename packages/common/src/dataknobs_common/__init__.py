@@ -96,6 +96,7 @@ from dataknobs_common.config_loading import (
     DEFAULT_CONFIG_EXTENSIONS,
     ConfigLoadError,
     ConfigParseError,
+    ConfigPathEscapeError,
     ConfigShapeError,
     ConfigUnsupportedFormatError,
     ConfigYAMLNotInstalledError,
@@ -160,6 +161,9 @@ from dataknobs_common.packs import (
     Reducer,
     compose_packs,
     merge_bindings,
+)
+from dataknobs_common.paths import (
+    safe_join,
 )
 from dataknobs_common.postgres_config import (
     normalize_postgres_connection_config,
@@ -361,12 +365,15 @@ __all__ = [
     "DEFAULT_CONFIG_EXTENSIONS",
     "ConfigLoadError",
     "ConfigParseError",
+    "ConfigPathEscapeError",
     "ConfigShapeError",
     "ConfigUnsupportedFormatError",
     "ConfigYAMLNotInstalledError",
     "find_config_file",
     "load_yaml_or_json",
     "parse_yaml_or_json",
+    # Path containment
+    "safe_join",
     # Discriminators
     "Discriminator",
     "AsyncDiscriminator",

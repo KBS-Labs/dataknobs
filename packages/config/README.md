@@ -443,7 +443,10 @@ class InheritableConfigLoader:
 
     # Map a config name to a location under config_dir. Applied to the
     # requested config AND to every `extends:` target; identity by default.
-    # Not applied under load_from_file.
+    # Not applied under load_from_file. A name -- requested, resolved, or
+    # read from an `extends:` -- may address a subdirectory of config_dir
+    # but may not leave it: `..` or an absolute name raises
+    # InheritanceError. load_from_file is unaffected; the path is yours.
     def resolve_name(self, name: str) -> str
 
     # The names load() accepts. Defaults to the stems directly under

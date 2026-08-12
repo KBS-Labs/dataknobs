@@ -62,6 +62,7 @@ from typing import Any
 
 from dataknobs_common.config_loading import (
     ConfigLoadError,
+    ConfigPathEscapeError,
     find_config_file,
     load_yaml_or_json,
 )
@@ -346,14 +347,27 @@ class EnvironmentConfig:
     def _find_config_file(cls, config_dir: Path, environment: str) -> Path | None:
         """Find the config file for an environment.
 
+        The environment name is bounded by ``config_dir``: it may address a
+        subdirectory, but a name containing ``..`` or an absolute one raises
+        rather than reading the file it points at. The name is frequently not
+        a literal the caller wrote -- :meth:`detect_environment` reads it from
+        ``DATAKNOBS_ENVIRONMENT`` or ``ENVIRONMENT``.
+
         Args:
             config_dir: Directory to search
             environment: Environment name
 
         Returns:
             Path to config file, or None if not found
+
+        Raises:
+            EnvironmentConfigError: If ``environment`` addresses a file
+                outside ``config_dir``
         """
-        return find_config_file(config_dir, environment)
+        try:
+            return find_config_file(config_dir, environment)
+        except ConfigPathEscapeError as e:
+            raise EnvironmentConfigError(str(e)) from e
 
     @classmethod
     def _load_file(cls, path: Path) -> dict[str, Any]:
