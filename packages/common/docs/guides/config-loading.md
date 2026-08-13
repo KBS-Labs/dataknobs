@@ -248,6 +248,24 @@ directory comes inside the tree and nothing else does, which an on/off
 escape hatch could not express. A `root` that does not contain the entry
 is refused rather than reinterpreted: the two arguments disagree about
 which tree is being loaded, and no reading of that is not a mistake.
+The entry and the root must be spelled the same way, both absolute or
+both relative, since containment is judged lexically and comparing the
+two forms would mean reading the working directory.
+
+The position is checked to be inside the root **on construction**, so a
+`descend` that leaves the tree raises there rather than yielding an
+anchor that looks usable:
+
+```python
+PathAnchor(Path("/srv/cfg")).descend("../../../etc/passwd.yaml")
+# PathEscapeError: anchor position addresses a location outside its root
+```
+
+That check is on the type rather than at the loader's call sites because
+`resolve` is not the only way out of an anchor: `base` is a plain join,
+and is the accessor a caller reaches for first. A loader that resolves
+each hop before descending it can never construct an escaping position —
+but the invariant should not rest on every caller keeping that order.
 <!-- --8<-- [end:safe-join-primitive] -->
 
 

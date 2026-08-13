@@ -218,19 +218,54 @@ class PathAnchor:
     fields together also make one call site — :meth:`resolve` — instead of a
     join whose arguments each caller assembles.
 
+    The invariant is **enforced here**, not left to call order.
+    :meth:`resolve` bounds what it returns, but :attr:`base` is a plain join
+    and is the accessor a caller reaches for first, so a position that
+    escaped would hand out a path nothing on the way had checked. Every
+    anchor therefore validates its own position on construction, which makes
+    :meth:`descend` refuse at the hop that left the tree rather than at some
+    later use of the result.
+
     Attributes:
         root: The tree. Every name resolved through this anchor, at any
-            depth, addresses inside it.
+            depth, addresses inside it. Coerced to :class:`~pathlib.Path` and
+            normalised lexically.
         rel_base: Directory of the file currently being read, relative to
-            ``root``. ``""`` when that file is at the root.
+            ``root``. ``""`` when that file is at the root. An absolute
+            position inside ``root`` is re-expressed relative to it — a
+            reference may be spelled absolutely and still land in the tree,
+            and two spellings of one directory should be one anchor.
     """
 
     root: Path
     rel_base: str = ""
 
+    def __post_init__(self) -> None:
+        """Normalise the pair, and refuse a position outside the root.
+
+        Raises:
+            PathEscapeError: ``rel_base`` addresses outside ``root``.
+        """
+        root = Path(os.path.normpath(Path(self.root)))
+        object.__setattr__(self, "root", root)
+
+        position = str(self.rel_base)
+        contained = safe_join(root, position) if position else root
+        if contained is None:
+            raise PathEscapeError(
+                f"anchor position addresses a location outside its root: "
+                f"{position!r} is not under {str(root)!r}"
+            )
+
+        relative = str(contained.relative_to(root))
+        object.__setattr__(self, "rel_base", "" if relative == os.curdir else relative)
+
     @property
     def base(self) -> Path:
-        """The directory references currently resolve from."""
+        """The directory references currently resolve from.
+
+        Inside :attr:`root` by construction — see the class docstring.
+        """
         return self.root / self.rel_base
 
     @classmethod
@@ -279,16 +314,29 @@ class PathAnchor:
 
         Raises:
             PathEscapeError: ``root`` was given and does not contain
-                ``directory``.
+                ``directory``, or the two are not spelled the same way.
         """
         if root is None:
             return cls(Path(directory))
 
         root_path = Path(os.path.normpath(Path(root)))
+        dir_path = Path(os.path.normpath(Path(directory)))
+        shown = _named if _named is not None else str(directory)
+
+        # Containment is judged lexically, so a relative path cannot be
+        # compared against an absolute one without reading the working
+        # directory. Named separately because the two may well denote the
+        # same place, and "lies outside the tree" reads as a mistake about
+        # *where* the file is rather than about how it was spelled.
+        if root_path.is_absolute() != dir_path.is_absolute():
+            raise PathEscapeError(
+                f"entry file and the tree it declares must both be absolute or "
+                f"both relative: {shown!r} against {str(root_path)!r}"
+            )
+
         try:
-            rel = str(Path(os.path.normpath(Path(directory))).relative_to(root_path))
+            rel = str(dir_path.relative_to(root_path))
         except ValueError:
-            shown = _named if _named is not None else str(directory)
             raise PathEscapeError(
                 f"entry file lies outside the tree it declares: "
                 f"{shown!r} is not under {str(root_path)!r}"
@@ -339,12 +387,16 @@ class PathAnchor:
         Returns:
             An anchor with the same root, positioned at the referenced file's
             directory.
+
+        Raises:
+            PathEscapeError: The reference leaves ``root``. Unreachable
+                through a loader that calls :meth:`resolve` on each hop
+                before descending it, which is why the check belongs on the
+                type rather than at those call sites.
         """
         joined = str(PurePath(self.rel_base, *parts)) if parts else self.rel_base
         moved = PurePath(os.path.normpath(joined)).parent
-        # ``PurePath.parent`` spells "here" as ``"."`` while an anchor at the
-        # root spells it ``""``. They compose identically -- pathlib drops a
-        # curdir component -- but only one of them compares equal to a fresh
-        # ``PathAnchor(root)``, so they are collapsed rather than left to
-        # surprise a caller comparing two anchors that mean the same place.
-        return PathAnchor(self.root, "" if str(moved) == os.curdir else str(moved))
+        # Curdir and absolute spellings are collapsed by ``__post_init__``,
+        # so two anchors meaning the same directory compare equal however
+        # each of them got here.
+        return PathAnchor(self.root, str(moved))

@@ -315,17 +315,63 @@ class TestPathAnchorDescends:
         assert deep.root == Path("/tree")
         assert deep.rel_base == "a"
 
-    def test_descending_out_of_the_tree_leaves_a_position_the_root_refuses(self) -> None:
-        """`descend` does no checking; `resolve` is where the boundary lives.
+    def test_descending_out_of_the_tree_is_refused_where_it_happens(self) -> None:
+        """The invariant is enforced, not merely asserted in the docstring.
 
         A hop is only ever descended *after* its own `resolve` allowed it, so
         the pair cannot legitimately reach here — but the position is a plain
-        string and the invariant should not rest on call order alone.
+        string, and an invariant that rests on call order is one an unrelated
+        caller can walk straight out of.
         """
-        stray = PathAnchor(Path("/tree")).descend("../../elsewhere/x.yaml")
+        with pytest.raises(PathEscapeError, match="outside its root"):
+            PathAnchor(Path("/tree")).descend("../../elsewhere/x.yaml")
 
+
+class TestPathAnchorPositionStaysInsideItsRoot:
+    """The pair's stated invariant holds however the anchor was built."""
+
+    def test_a_position_outside_the_root_cannot_be_constructed(self) -> None:
+        with pytest.raises(PathEscapeError, match="outside its root"):
+            PathAnchor(Path("/tree"), "../elsewhere")
+
+    def test_base_cannot_address_outside_the_root(self) -> None:
+        """`base` is the exit `resolve` does not cover.
+
+        `resolve` bounds what it returns, but `base` is a plain join and is
+        the accessor the docs present as the natural one. A position the
+        constructor accepted and `base` then composed would hand out a path
+        that `open()` resolves outside the tree, with no check anywhere on
+        the way.
+        """
         with pytest.raises(PathEscapeError):
-            stray.resolve("y.yaml", what="ref", outside="the tree")
+            _ = PathAnchor(Path("/srv/cfg"), "../../../etc").base
+
+    def test_an_absolute_position_inside_the_root_is_expressed_relative_to_it(
+        self,
+    ) -> None:
+        """Two spellings of one position are one anchor.
+
+        A reference may be absolute and still land inside the tree, so
+        `descend` can arrive here holding an absolute position. Left as-is it
+        contradicts the field's documented meaning and makes two anchors for
+        the same directory compare unequal.
+        """
+        assert PathAnchor(Path("/tree"), "/tree/sub") == PathAnchor(Path("/tree"), "sub")
+
+    def test_descending_through_an_absolute_reference_keeps_the_root(self) -> None:
+        moved = PathAnchor(Path("/tree")).descend("/tree/sub/frag.yaml")
+
+        assert moved == PathAnchor(Path("/tree"), "sub")
+
+    def test_a_curdir_position_is_the_root(self) -> None:
+        assert PathAnchor(Path("/tree"), ".") == PathAnchor(Path("/tree"))
+
+    def test_a_string_root_is_coerced(self) -> None:
+        """`base` would raise `TypeError` on a str root while `resolve` worked."""
+        anchor = PathAnchor("/tree")  # type: ignore[arg-type]
+
+        assert anchor.root == Path("/tree")
+        assert anchor.base == Path("/tree")
 
 
 class TestPathAnchorAnchoredAt:
@@ -366,6 +412,17 @@ class TestPathAnchorAnchoredAt:
     def test_a_root_that_does_not_contain_the_entry_file_is_refused(self) -> None:
         with pytest.raises(PathEscapeError, match="entry file"):
             PathAnchor.anchored_at(Path("/app/fsm/flow.yaml"), Path("/elsewhere"))
+
+    def test_a_root_spelled_differently_from_the_entry_says_so(self) -> None:
+        """The two may denote one directory and still not be comparable.
+
+        Containment is lexical, so a relative entry cannot be measured
+        against an absolute root without reading the working directory.
+        Reporting that as "lies outside the tree" sends the caller looking
+        for a misplaced file rather than at how they spelled the pair.
+        """
+        with pytest.raises(PathEscapeError, match="both be absolute or both relative"):
+            PathAnchor.anchored_at(Path("configs/main.yaml"), Path("/srv/configs"))
 
     def test_an_unnormalised_root_still_matches(self) -> None:
         anchor = PathAnchor.anchored_at(Path("/app/./fsm/flow.yaml"), Path("/app/x/../"))

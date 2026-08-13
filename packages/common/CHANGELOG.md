@@ -27,6 +27,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `descend(*parts)` moves the position to a referenced file's directory and
   carries the same root.
 
+  The pair's invariant — the position is inside the root — is enforced on
+  construction rather than resting on call order, so `descend` refuses at the
+  hop that left the tree. `resolve` bounds what it returns, but `base` is a
+  plain join and is the accessor a caller reaches for first; an unchecked
+  position would hand out a path that `open()` resolves outside the tree with
+  nothing on the way having looked. An absolute position inside the root is
+  re-expressed relative to it, so two spellings of one directory are one
+  anchor, and `root` is coerced to `Path`.
+
   Extracted rather than written twice: two loaders in two packages needed the
   same threading, which is the shape that produced `safe_join_or_raise` — four
   hand-written copies of one adapter — one release earlier.
