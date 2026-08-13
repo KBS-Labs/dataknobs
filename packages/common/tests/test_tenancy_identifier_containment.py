@@ -78,8 +78,15 @@ def test_the_state_key_collision_is_no_longer_constructible() -> None:
     ``(t="acme", d="proj/_state/secret")`` and
     ``(t="acme/_state/proj", d="secret")``, so the second tenant read the
     first's ingest state through a key-string backend. Rejecting the
-    structured ``tenant_id`` removes the only crafted half — a
-    ``domain_id`` may legitimately name a subdirectory, and does.
+    structured ``tenant_id`` removes the crafted half *at this layer*.
+
+    This docstring used to add "a ``domain_id`` may legitimately name a
+    subdirectory, and does", which was wrong: a nested domain addresses
+    the literal segments a knowledge-base layout puts around it, and the
+    backends now refuse it. What is still true is narrower and is the
+    reason ``innocent`` below constructs — a ``TenantContext`` does not
+    check ``domain_id``, because at *this* layer it is not one invariant
+    (see :func:`test_a_domain_id_is_not_checked_at_this_layer`).
     """
     innocent = BoundTenantContext(tenant_id="acme", domain_id="proj/_state/secret")
 
@@ -96,11 +103,35 @@ def test_an_ordinary_tenant_id_is_untouched() -> None:
         assert ctx.state_key_prefix() == f"tenants/{tenant_id}/_state/"
 
 
-def test_a_domain_id_may_still_name_a_subdirectory() -> None:
-    """The guard is on the isolation segment, not on every identifier."""
+def test_a_domain_id_is_not_checked_at_this_layer() -> None:
+    """``domain_id`` is not one invariant here, so there is no one check.
+
+    This test used to assert the same thing for the opposite reason —
+    that a ``domain_id`` "may legitimately name a subdirectory". It may
+    not, where it reaches a knowledge-base layout: the backends refuse a
+    structured ``domain_id``, because a nested one addresses the literal
+    segments the layout puts around it.
+
+    The check is not *also* here because a ``TenantContext`` does not
+    know which of those a consumer will do with the value. It is a path
+    segment when it reaches a KB layout; it is a hash input in
+    ``dataknobs_data.user.store``, whose ``_document_id`` length-prefixes
+    every component precisely so a separator inside one is structurally
+    safe, and which builds a ``SingleTenantContext`` from that namespace.
+    Rejecting a separator here would retract that documented tolerance to
+    fail a case that is already refused where it actually composes.
+
+    So the value passes through, and the composing site decides. The one
+    thing this loses is fail-fast, which is the open question rather than
+    the settled one.
+    """
     ctx = BoundTenantContext(tenant_id="acme", domain_id="team/alpha")
 
     assert ctx.domain_id == "team/alpha"
+    # And it never reaches this impl's own state prefix — only a
+    # PrefixedTenantContext whose pattern interpolates {domain_id} does
+    # that, and both knowledge backends bound the formatted result.
+    assert ctx.state_key_prefix() == "tenants/acme/_state/"
 
 
 def test_a_prefix_pattern_may_still_be_any_convention() -> None:
