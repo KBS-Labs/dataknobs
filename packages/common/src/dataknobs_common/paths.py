@@ -11,9 +11,10 @@ the composed path lands in another knowledge base's metadata slot. Ask
 the second question wherever the name occupies a *slot* rather than
 naming a *location*.
 
-Containment first. One check, two spellings of the answer. :func:`safe_join` joins parts
-onto a base directory and returns the result only when it stays inside
-that directory, so a caller that turns a *name* into a *location* — a
+Containment first. One check, two spellings of the answer.
+:func:`safe_join` joins parts onto a base directory and returns the
+result only when it stays inside that directory, so a caller that turns
+a *name* into a *location* — a
 config name, a domain id, a resource path — cannot be talked into
 addressing a file the deployment did not put there.
 :func:`safe_join_or_raise` is the same check for the common case where
@@ -158,6 +159,18 @@ def safe_segment(value: str, *, what: str, within: str) -> str:
             actionable; a caller who reads only "invalid" reaches for a
             different name rather than a different design.
 
+    **What this does not decide.** One segment is necessary, not
+    sufficient — a caller whose layout has literal segments of its own
+    must also keep the name out of *those*, which is a question about
+    that layout rather than about the name, and belongs with it. Nor
+    does this normalise: comparison is over raw code points, so on a
+    case-insensitive or Unicode-normalising filesystem two names this
+    accepts as distinct (``Acme`` and ``acme``; NFC and NFD spellings of
+    ``café``) may still address one directory, while a key-string store
+    over the same layout keeps them apart. A caller whose identifiers
+    come from user input and reach a filesystem should fold them to a
+    canonical form before they get here.
+
     Returns:
         ``value`` unchanged, so the check can wrap the value at the
         point of use rather than sitting above it as a bare statement
@@ -168,9 +181,14 @@ def safe_segment(value: str, *, what: str, within: str) -> str:
             ``.`` or ``..``, or contains a path separator or NUL.
     """
     if not value or not value.strip():
-        raise SegmentEscapeError(f"{what} must be a non-empty name: {value!r}")
+        raise SegmentEscapeError(
+            f"{what} must be a non-empty name: {value!r}. It is interpolated into {within}."
+        )
     if value in (os.curdir, os.pardir):
-        raise SegmentEscapeError(f"{what} must be a name, not a directory reference: {value!r}")
+        raise SegmentEscapeError(
+            f"{what} must be a name, not a directory reference: {value!r}. "
+            f"It is interpolated into {within}."
+        )
     found = [c for c in _SEPARATORS_IN_SEGMENT if c in value]
     if found:
         raise SegmentEscapeError(

@@ -130,7 +130,9 @@ def test_a_domain_id_is_not_checked_at_this_layer() -> None:
     assert ctx.domain_id == "team/alpha"
     # And it never reaches this impl's own state prefix — only a
     # PrefixedTenantContext whose pattern interpolates {domain_id} does
-    # that, and both knowledge backends bound the formatted result.
+    # that, and a consumer of the prefix is responsible for bounding it.
+    # (The knowledge backends do, on one shared path; that is their
+    # property, not something this value guarantees on its own.)
     assert ctx.state_key_prefix() == "tenants/acme/_state/"
 
 
