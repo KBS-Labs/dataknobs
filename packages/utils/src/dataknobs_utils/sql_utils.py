@@ -10,7 +10,6 @@ import os
 from abc import ABC, abstractmethod
 from typing import IO, Any, Dict, List
 
-import numpy as np
 import pandas as pd
 import psycopg2
 
@@ -372,25 +371,54 @@ class PostgresDB:
         """Build a single quoted column definition line for CREATE TABLE."""
         q_col = quote_ident(col)
         dtype = df[col].dtype
-        # isinstance check distinguishes numpy dtypes from pandas ExtensionDtypes
-        # (e.g. StringDtype) that have a .type attribute but are not np.issubdtype-safe
-        if isinstance(dtype, np.dtype):
-            if np.issubdtype(dtype, np.integer):
-                return f"{q_col} integer"
-            if np.issubdtype(dtype, np.floating):
-                return f"{q_col} real"
-            raw = df[col].str.len().max()
-            maxlen = int(raw) if pd.notna(raw) else 1
-            return f"{q_col} varchar({maxlen})"
-        # ExtensionDtype: nullable numeric types (Int8/Int64/Float32/Float64 etc.)
-        # and string/categorical — detect before falling through to varchar
+        # ``pd.api.types`` predicates rather than ``np.issubdtype``: the latter
+        # raises TypeError on every pandas ExtensionDtype — which is why this
+        # ladder used to be written twice, once per branch of an
+        # ``isinstance(dtype, np.dtype)`` split — and it reports timedelta64 as
+        # an integer, since timedelta64 subclasses np.signedinteger. One ladder
+        # answers correctly for numpy dtypes and ExtensionDtypes alike.
+        if pd.api.types.is_bool_dtype(dtype):
+            return f"{q_col} boolean"
         if pd.api.types.is_integer_dtype(dtype):
             return f"{q_col} integer"
         if pd.api.types.is_float_dtype(dtype):
             return f"{q_col} real"
-        raw = df[col].str.len().max()
-        maxlen = int(raw) if pd.notna(raw) else 1
-        return f"{q_col} varchar({maxlen})"
+        # Tz-aware first: is_datetime64_any_dtype is True for both, and emitting
+        # a bare ``timestamp`` for a tz-aware column silently drops the offset.
+        if isinstance(dtype, pd.DatetimeTZDtype):
+            return f"{q_col} timestamptz"
+        if pd.api.types.is_datetime64_any_dtype(dtype):
+            return f"{q_col} timestamp"
+        if pd.api.types.is_timedelta64_dtype(dtype):
+            return f"{q_col} interval"
+        return f"{q_col} varchar({PostgresDB._psql_varchar_width(df[col])})"
+
+    @staticmethod
+    def _psql_varchar_width(values: pd.Series) -> int:
+        """Width of the widest value in ``values`` once rendered as text.
+
+        ``upload`` sends ``str(value)`` for every cell, so the width that has to
+        fit is the rendered one — and it is measured with that same ``str``.
+        ``astype(str)`` is a different renderer and disagrees on some object
+        payloads (``bytes`` renders as ``abc`` there and ``b'abc'`` here),
+        which would declare the column narrower than the text written into it.
+        Calling ``.str.len()`` on the column instead assumed it already held
+        strings and raised ``AttributeError`` on any object column that did
+        not, so the assumption is dropped rather than guarded.
+
+        The floor of 1 covers a column with nothing to measure and one whose
+        values are all the empty string alike: PostgreSQL rejects ``varchar(0)``
+        at declaration, so a width of 0 costs the whole table rather than a
+        value.
+
+        Nulls are excluded, which is narrower than what ``upload`` currently
+        sends — it renders them as the text ``'nan'``/``'<NA>'`` rather than as
+        SQL ``NULL``. Widening for them is not the fix: a typed column rejects
+        those strings at any width, so the rendering is what has to change.
+        This measures the values, and null handling stays the caller's.
+        """
+        raw = values.dropna().map(str).str.len().max()
+        return max(1, int(raw)) if pd.notna(raw) else 1
 
     def upload(self, table_name: str, df: pd.DataFrame) -> None:
         """Upload DataFrame data to a database table.

@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-08-13T00:39:32Z",
+  "timestamp": "2026-08-13T02:06:23Z",
   "python_version": "Python 3.12.12",
   "uv_version": "uv 0.12.3 (Homebrew 2026-08-07 aarch64-apple-darwin)",
   "os": "Darwin",
   "os_version": "24.6.0",
-  "git_branch": "sbk/config-path-containment",
-  "git_commit": "e22ccee702677f6cd8cf47a8af2382f82a2a4e47",
+  "git_branch": "sbk/sql-schema-dtype-ladder",
+  "git_commit": "76e5b2cbef3f844dfd0cef2b65465a2ebd2323ba",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }
