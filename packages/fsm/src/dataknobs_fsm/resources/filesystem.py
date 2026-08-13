@@ -5,6 +5,8 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, BinaryIO, TextIO, Union
 
+from dataknobs_common.paths import PathEscapeError, safe_join_or_raise
+
 from dataknobs_fsm.functions.base import ResourceError
 from dataknobs_fsm.resources.base import (
     BaseResourceProvider,
@@ -95,7 +97,9 @@ class FileSystemResource(BaseResourceProvider):
             FileHandle wrapper with the open file.
 
         Raises:
-            ResourceError: If file operation fails.
+            PathEscapeError: ``path`` addresses a location outside
+                ``base_path``.
+            ResourceError: If the file operation itself fails.
         """
         try:
             if temp:
@@ -127,8 +131,8 @@ class FileSystemResource(BaseResourceProvider):
                         operation="acquire",
                     )
 
-                # Resolve path relative to base
-                file_path = self.base_path / path
+                # Resolve path relative to base, bounded to it
+                file_path = self._resolve(path)
 
                 # Create parent directories if writing
                 if any(m in mode for m in ["w", "a", "x"]):
@@ -150,6 +154,14 @@ class FileSystemResource(BaseResourceProvider):
 
             return file_handle
 
+        except PathEscapeError:
+            # A refusal is the caller's name being wrong, not this resource
+            # failing. Rewriting it into ResourceError would lose the type
+            # -- leaving one condition raising two different ones across
+            # this class's four methods -- and marking the resource ERROR
+            # would report a healthy resource as broken because someone
+            # asked it for a bad path.
+            raise
         except Exception as e:
             self.status = ResourceStatus.ERROR
             raise ResourceError(
@@ -300,6 +312,31 @@ class FileSystemResource(BaseResourceProvider):
         with self.open(path, "wb", encoding=None) as f:
             f.write(content)
 
+    def _resolve(self, path: str) -> Path:
+        """Compose ``path`` onto ``base_path``, or refuse to leave it.
+
+        Every method on this class that turns a caller-supplied string
+        into a location goes through here. ``base_path`` is resolved in
+        ``__init__``, which is only meaningful if it is a boundary — but
+        nothing checked a composed path against it, so ``open``,
+        ``unlink`` and ``exists`` all accepted a ``..`` segment or an
+        absolute path that discards the base outright.
+
+        A path naming a subdirectory is legal; nesting is the point of a
+        file resource. One that leaves the base is not.
+
+        Raises:
+            PathEscapeError: ``path`` addresses a location outside
+                ``base_path``.
+        """
+        return safe_join_or_raise(
+            self.base_path,
+            path,
+            what="path",
+            outside="the resource's base path",
+            supplied=path,
+        )
+
     def exists(self, path: str) -> bool:
         """Check if a file exists.
 
@@ -308,9 +345,13 @@ class FileSystemResource(BaseResourceProvider):
 
         Returns:
             True if file exists.
+
+        Raises:
+            PathEscapeError: ``path`` addresses a location outside
+                ``base_path``. Answering ``True``/``False`` about a file
+                outside the base is still answering about it.
         """
-        file_path = self.base_path / path
-        return file_path.exists()
+        return self._resolve(path).exists()
 
     def delete(self, path: str) -> bool:
         """Delete a file.
@@ -320,9 +361,19 @@ class FileSystemResource(BaseResourceProvider):
 
         Returns:
             True if file was deleted.
+
+        Raises:
+            PathEscapeError: ``path`` addresses a location outside
+                ``base_path``.
         """
+        # Resolved OUTSIDE the try: the blanket ``except Exception`` below
+        # would turn a refusal into ``False``, which is this method's
+        # ordinary "file was not there" answer — so an escaping path would
+        # be refused invisibly, and a caller could not tell the guard from
+        # a no-op. (That the except swallows real errors too is a separate
+        # defect, and not this change's to fix.)
+        file_path = self._resolve(path)
         try:
-            file_path = self.base_path / path
             if file_path.exists():
                 file_path.unlink()
                 return True
@@ -334,11 +385,19 @@ class FileSystemResource(BaseResourceProvider):
         """List files matching a pattern.
 
         Args:
-            pattern: Glob pattern.
+            pattern: Glob pattern, relative to ``base_path``. It may
+                descend (``sub/*.txt``); it may not climb out.
 
         Returns:
             List of file paths.
+
+        Raises:
+            PathEscapeError: ``pattern`` addresses locations outside
+                ``base_path``. Checked lexically before globbing, so a
+                pattern that would have matched nothing is refused the
+                same way as one that would have matched a secret.
         """
+        self._resolve(pattern)
         files = []
         for path in self.base_path.glob(pattern):
             if path.is_file():
