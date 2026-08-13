@@ -17,7 +17,18 @@ Both escape spellings are covered per site, because a guard that catches
 one is not a guard: a ``..`` segment, and an **absolute** part, which
 discards the base outright (``Path("/base") / "/etc/passwd"`` is
 ``/etc/passwd``). A contained name that merely *looks* dangerous — a
-subdirectory, or an interior ``a/../b`` — must still work.
+subdirectory, or an interior ``a/../b`` — must still work **where the
+name is a location**: that is a resource ``path`` inside ``content/``,
+whose whole purpose is to nest.
+
+It is not true of ``domain_id``, and several tests here used to assert
+that it was. A domain occupies one *slot* of the layout rather than
+naming a location within it, so a separator inside it reaches the
+literal segments the layout puts around it — a different knowledge
+base's metadata document, or its whole subtree under a prefix delete.
+Containment cannot see that: the name never leaves the base. Those
+tests are rewritten in place rather than deleted, each stating what it
+used to assert and why the invariant was the wrong one.
 
 Two further shapes are covered below, and neither is "an identifier
 escaped the base":
@@ -38,7 +49,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from dataknobs_common.paths import PathEscapeError
+from dataknobs_common.paths import PathEscapeError, SegmentEscapeError
 from dataknobs_common.tenancy import BoundTenantContext
 
 from dataknobs_bots.knowledge.storage.file import FileKnowledgeBackend
@@ -111,45 +122,54 @@ async def test_get_info_refuses_a_domain_id_that_walks_out(base: Path) -> None:
         await backend.get_info("../outside")
 
 
-async def test_a_domain_id_naming_a_subdirectory_still_works(base: Path) -> None:
-    """Containment is not a ``/``-rejecting character class."""
-    backend = await _backend(base)
+async def test_a_domain_id_naming_a_subdirectory_is_now_refused(base: Path) -> None:
+    """BEHAVIOUR CHANGE, and the old assertion had the wrong invariant.
 
-    info = await backend.create_kb("team/alpha")
+    This test read ``create_kb("team/alpha")`` succeeding as proof that
+    "containment is not a ``/``-rejecting character class" — true of
+    containment, and containment was the wrong question. A nested domain
+    stays inside the base, so the guard passed it, while the path it
+    composes lands in the layout's own slots: ``acme/content`` addresses
+    exactly what an ordinary content file named ``_metadata.json`` under
+    ``acme`` addresses, and ``delete_kb("acme")`` removes the whole of
+    it. Nor was the nesting usable — ``list_kbs`` enumerates one level,
+    so the KB this test created could never be found again.
 
-    assert info.domain_id == "team/alpha"
-    assert (base / "team" / "alpha").is_dir()
-
-
-async def test_a_domain_id_with_an_interior_parent_ref_is_contained_but_aliases(
-    base: Path,
-) -> None:
-    """``a/../b`` never leaves the base, so the guard contains it.
-
-    What the guard does *not* do is canonicalize the *identifier*. The
-    path is collapsed to ``beta``; the ``domain_id`` written into the
-    KB's metadata is the raw string, and that is what every read hands
-    back — so one directory is addressable under two names and reports
-    only one of them.
-
-    This characterizes pre-existing behaviour rather than reproducing a
-    bug: it passes on both sides of this change. It is here so the
-    interior-``..`` support this PR documents is pinned together with
-    the inconsistency that comes with it, instead of the first half
-    being advertised alone. The aliasing itself is filed separately.
+    So the rule is one segment, and it is checked before containment.
+    Containment still applies to what is genuinely a location: a
+    resource ``path`` inside ``content/``, where nesting IS the point,
+    is unaffected — see the ``_file_path`` tests below.
     """
     backend = await _backend(base)
 
-    info = await backend.create_kb("team/../beta")
+    with pytest.raises(SegmentEscapeError, match="domain_id"):
+        await backend.create_kb("team/alpha")
 
-    assert (base / "beta").is_dir()
     assert not (base / "team").exists()
-    # Contained — but the two names are never reconciled with each other.
-    assert info.domain_id == "team/../beta"
-    assert [kb.domain_id for kb in await backend.list_kbs()] == ["team/../beta"]
-    reached_by_collapsed_name = await backend.get_info("beta")
-    assert reached_by_collapsed_name is not None
-    assert reached_by_collapsed_name.domain_id == "team/../beta"
+
+
+async def test_an_interior_parent_ref_can_no_longer_alias_one_directory(
+    base: Path,
+) -> None:
+    """The aliasing this test characterised is gone, not merely filed.
+
+    It used to record that ``team/../beta`` was *contained* — the path
+    collapses to ``beta`` and never leaves the base — while the
+    identifier was not canonicalized, so one directory answered to two
+    names and reported only one of them. That was left as a separate
+    finding on the grounds that containment had done its job.
+
+    The segment rule removes the shape entirely: an identifier with no
+    separator cannot collapse, so there is no second spelling for a
+    directory to answer to.
+    """
+    backend = await _backend(base)
+
+    with pytest.raises(SegmentEscapeError, match="domain_id"):
+        await backend.create_kb("team/../beta")
+
+    assert not (base / "beta").exists()
+    assert await backend.list_kbs() == []
 
 
 # --- resource path -> _file_path (S2) ------------------------------------
@@ -251,8 +271,15 @@ async def test_a_domain_id_must_not_cross_into_another_tenants_state(base: Path)
     bobs_token = await backend.get_state_version("proj", ctx=bob)
     assert bobs_token is not None
 
-    # base/tenants/acme/_state/../../bob/_state/proj == base/tenants/bob/_state/proj
-    with pytest.raises(PathEscapeError, match="tenant"):
+    # base/_scoped/tenants/acme/_state/../../bob/_state/proj
+    # == base/_scoped/tenants/bob/_state/proj
+    #
+    # Refused by the segment rule now, which runs first and rejects the
+    # name for carrying any structure at all. The tenant-subtree bound
+    # below it is unchanged and still the thing that would catch this if
+    # the segment rule were ever relaxed — the two answer different
+    # questions and neither subsumes the other.
+    with pytest.raises(SegmentEscapeError, match="domain_id"):
         await backend.get_state_version("../../bob/_state/proj", ctx=acme)
 
     # And acme's own view is unchanged by the attempt.
@@ -269,23 +296,33 @@ async def test_each_tenant_still_reaches_its_own_state(base: Path) -> None:
     await backend.set_ingestion_status("proj", "ready", ctx=acme)
     await backend.set_ingestion_status("proj", "pending", ctx=bob)
 
-    assert (base / "tenants" / "acme" / "_state" / "proj").is_dir()
-    assert (base / "tenants" / "bob" / "_state" / "proj").is_dir()
+    assert (base / "_scoped" / "tenants" / "acme" / "_state" / "proj").is_dir()
+    assert (base / "_scoped" / "tenants" / "bob" / "_state" / "proj").is_dir()
     acme_token = await backend.get_state_version("proj", ctx=acme)
     bob_token = await backend.get_state_version("proj", ctx=bob)
     assert acme_token is not None and bob_token is not None
     assert acme_token != bob_token
 
 
-async def test_a_tenant_may_still_nest_its_domain(base: Path) -> None:
-    """Nesting inside the tenant subtree stays legal."""
+async def test_a_tenant_reaches_its_own_state_under_a_plain_domain(base: Path) -> None:
+    """The tenant subtree still works; the domain inside it is one segment.
+
+    This replaces a test asserting that a tenant could nest its domain
+    (``team/alpha`` under ``_scoped/tenants/acme/_state/``). Nesting is refused
+    now for the reason the domain tests above give, and what actually
+    needed pinning here — that the tenant's state lands under its own
+    prefix and nowhere else — is pinned without it.
+    """
     backend = await _backend(base)
-    ctx = BoundTenantContext(tenant_id="acme", domain_id="team/alpha")
+    ctx = BoundTenantContext(tenant_id="acme", domain_id="alpha")
 
-    await backend.create_kb("team/alpha")
-    await backend.set_ingestion_status("team/alpha", "ready", ctx=ctx)
+    await backend.create_kb("alpha")
+    await backend.set_ingestion_status("alpha", "ready", ctx=ctx)
 
-    assert (base / "tenants" / "acme" / "_state" / "team" / "alpha").is_dir()
+    assert (base / "_scoped" / "tenants" / "acme" / "_state" / "alpha").is_dir()
+
+    with pytest.raises(SegmentEscapeError, match="domain_id"):
+        await backend.set_ingestion_status("team/alpha", "ready", ctx=ctx)
 
 
 # --- components appended AFTER a guard are not covered by it -------------
@@ -326,15 +363,30 @@ async def test_key_pattern_must_not_build_a_glob_outside_the_base(base: Path) ->
         backend.key_pattern(KnowledgeKeyKind.CONTENT, domain_id="../../elsewhere")
 
 
-async def test_key_pattern_still_serves_its_two_legitimate_shapes(base: Path) -> None:
-    """The wildcard form and a nested domain must both survive the guard."""
+async def test_key_pattern_still_serves_its_legitimate_shapes(base: Path) -> None:
+    """The wildcard form and a plain domain survive; a nested one does not.
+
+    The nested case this used to assert (``team/alpha``) built a watch
+    over another knowledge base's tree — the same defect as the key
+    composition, one layer out, since a pattern is what a subscription
+    is installed from.
+
+    ``domain_id=None`` is the all-domains spelling and is not a name, so
+    it is untouched. An *empty* domain is refused rather than read as
+    the same thing: widening a watch to every domain because a name came
+    back empty is precisely the failure being guarded.
+    """
     backend = await _backend(base)
 
     assert backend.key_pattern(KnowledgeKeyKind.CONTENT) == f"{base}/*/content/**"
     assert (
-        backend.key_pattern(KnowledgeKeyKind.CONTENT, domain_id="team/alpha")
-        == f"{base}/team/alpha/content/**"
+        backend.key_pattern(KnowledgeKeyKind.CONTENT, domain_id="alpha")
+        == f"{base}/alpha/content/**"
     )
+    with pytest.raises(SegmentEscapeError, match="domain_id"):
+        backend.key_pattern(KnowledgeKeyKind.CONTENT, domain_id="team/alpha")
+    with pytest.raises(SegmentEscapeError, match="domain_id"):
+        backend.key_pattern(KnowledgeKeyKind.CONTENT, domain_id="")
 
 
 # --- the refusal is one catchable type ------------------------------------

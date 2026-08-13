@@ -153,6 +153,12 @@ class InMemoryKnowledgeBackend(KnowledgeResourceBackendMixin):
         metadata: dict | None = None,
     ) -> KnowledgeFile:
         """Upload or update a file."""
+        # Every public entry point checks the name before it is used as
+        # a key. This backend composes nothing, so its boundary is the
+        # API rather than a key helper -- and the checks below answer
+        # "absent" for an unknown domain, which would turn a refused
+        # name into a silent miss if the rule ran after them.
+        self._validate_domain_id(domain_id)
         if domain_id not in self._kb_info:
             raise ValueError(f"Knowledge base '{domain_id}' does not exist")
 
@@ -202,6 +208,7 @@ class InMemoryKnowledgeBackend(KnowledgeResourceBackendMixin):
 
     async def get_file(self, domain_id: str, path: str) -> bytes | None:
         """Get file content."""
+        self._validate_domain_id(domain_id)
         if domain_id not in self._files:
             return None
         return self._files[domain_id].get(path)
@@ -226,6 +233,7 @@ class InMemoryKnowledgeBackend(KnowledgeResourceBackendMixin):
 
     async def delete_file(self, domain_id: str, path: str) -> bool:
         """Delete a file."""
+        self._validate_domain_id(domain_id)
         if domain_id not in self._files:
             return False
 
@@ -249,6 +257,7 @@ class InMemoryKnowledgeBackend(KnowledgeResourceBackendMixin):
 
     async def list_files(self, domain_id: str, prefix: str | None = None) -> list[KnowledgeFile]:
         """List all files in a knowledge base."""
+        self._validate_domain_id(domain_id)
         if domain_id not in self._file_metadata:
             return []
 
@@ -263,12 +272,14 @@ class InMemoryKnowledgeBackend(KnowledgeResourceBackendMixin):
 
     async def file_exists(self, domain_id: str, path: str) -> bool:
         """Check if a file exists."""
+        self._validate_domain_id(domain_id)
         return domain_id in self._files and path in self._files[domain_id]
 
     # --- Knowledge Base Operations ---
 
     async def create_kb(self, domain_id: str, metadata: dict | None = None) -> KnowledgeBaseInfo:
         """Create a new knowledge base."""
+        self._validate_domain_id(domain_id)
         if domain_id in self._kb_info:
             raise ValueError(f"Knowledge base '{domain_id}' already exists")
 
@@ -322,6 +333,7 @@ class InMemoryKnowledgeBackend(KnowledgeResourceBackendMixin):
         wrote, and would diverge from the file / S3 backends (whose
         per-tenant metadata-document miss yields the same fresh default).
         """
+        self._validate_domain_id(domain_id)
         base = self._kb_info.get(domain_id)
         if base is None:
             return None
@@ -335,6 +347,7 @@ class InMemoryKnowledgeBackend(KnowledgeResourceBackendMixin):
 
     async def delete_kb(self, domain_id: str) -> bool:
         """Delete entire knowledge base and all files."""
+        self._validate_domain_id(domain_id)
         if domain_id not in self._kb_info:
             return False
 
@@ -387,6 +400,7 @@ class InMemoryKnowledgeBackend(KnowledgeResourceBackendMixin):
         :meth:`create_kb`, so it returns ``"0"`` immediately after
         creation. See the protocol for the round-trip contract.
         """
+        self._validate_domain_id(domain_id)
         if domain_id not in self._kb_info:
             return None
         counter = self._state_versions.get(self._state_version_key(domain_id, ctx))
@@ -419,6 +433,7 @@ class InMemoryKnowledgeBackend(KnowledgeResourceBackendMixin):
         race-free. Every write — conditional or not — advances the
         counter, so a stale token from before any write conflicts.
         """
+        self._validate_domain_id(domain_id)
         if domain_id not in self._kb_info:
             raise ValueError(f"Knowledge base '{domain_id}' does not exist")
 
@@ -501,8 +516,22 @@ class InMemoryKnowledgeBackend(KnowledgeResourceBackendMixin):
         arguments are accepted for protocol symmetry but ignored — note
         this backend does not raise for ``UNKNOWN`` either, since it
         produces no pattern to be wrong about.
+
+        ``domain_id`` is nonetheless **validated** before being ignored.
+        Producing no pattern is a property of this store; accepting a
+        name the other two refuse is not, and this is the backend a
+        consumer develops against. Leaving it unchecked is what made the
+        rule that ``key_pattern("")`` is refused rather than read as the
+        all-domains wildcard true of only two backends out of three.
+
+        Raises:
+            SegmentEscapeError: ``domain_id`` is not a single legal
+                segment. ``None`` is the all-domains spelling and is
+                accepted.
         """
-        del kind, domain_id, ctx  # accepted for protocol symmetry, ignored
+        if domain_id is not None:
+            self._validate_domain_id(domain_id)
+        del kind, domain_id, ctx  # no pattern is meaningful for in-process storage
         return ""
 
     # --- Change Detection ---

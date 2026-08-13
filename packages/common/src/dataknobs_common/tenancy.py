@@ -63,6 +63,8 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, Protocol, runtime_checkable
 
+from dataknobs_common.paths import safe_segment
+
 __all__ = [
     "BoundTenantContext",
     "PrefixedTenantContext",
@@ -73,11 +75,6 @@ __all__ = [
     "tenant_context_from_env",
     "validate_tenant_id",
 ]
-
-# Characters that give a tenant_id structure. A separator is the whole
-# problem: state_key_prefix() interpolates the id into a structured key
-# namespace, so one turns a single isolation segment into several.
-_TENANT_ID_FORBIDDEN = ("/", "\\", "\x00")
 
 
 def validate_tenant_id(tenant_id: str) -> None:
@@ -101,25 +98,32 @@ def validate_tenant_id(tenant_id: str) -> None:
     this on its own: there is no path there to contain. So the check is
     here, at construction, where every backend inherits it.
 
-    ``domain_id`` is deliberately *not* checked. It legitimately names a
-    subdirectory (``team/alpha``) and the backends treat it as a
-    location; the isolation guarantee does not rest on it.
+    The rule itself is :func:`~dataknobs_common.paths.safe_segment`,
+    shared with every other identifier that occupies one slot of a
+    layout. ``domain_id`` is one of them — an earlier version of this
+    docstring said it was "deliberately not checked" because it
+    "legitimately names a subdirectory (``team/alpha``)", and that was
+    wrong in both halves. A nested domain addresses the literal segments
+    the layout puts around it (``{domain}/content/``,
+    ``{domain}/_metadata.json``), so ``acme/content`` names the same
+    object as an ordinary content file called ``_metadata.json`` under
+    ``acme``; and such a knowledge base was never visible to
+    ``list_kbs()`` on either persistent backend, so the subdirectory
+    spelling was not a supported feature to preserve. The knowledge
+    backends apply the same check to it.
 
     Raises:
         ValueError: If ``tenant_id`` is empty, is a bare ``.`` / ``..``,
-            or contains a path separator or NUL.
+            or contains a path separator or NUL. Concretely a
+            :class:`~dataknobs_common.paths.SegmentEscapeError`, which
+            is a ``ValueError`` — callers catching the broader type are
+            unaffected.
     """
-    if not tenant_id or not tenant_id.strip():
-        raise ValueError("tenant_id must be a non-empty string.")
-    if tenant_id in (os.curdir, os.pardir):
-        raise ValueError(f"tenant_id must name a tenant, not a directory reference: {tenant_id!r}")
-    found = [c for c in _TENANT_ID_FORBIDDEN if c in tenant_id]
-    if found:
-        raise ValueError(
-            f"tenant_id must not contain a path separator or NUL "
-            f"(found {found!r} in {tenant_id!r}): it is interpolated into a "
-            f"state-key prefix, where a separator merges tenant namespaces."
-        )
+    safe_segment(
+        tenant_id,
+        what="tenant_id",
+        within="a state-key prefix, where a separator merges tenant namespaces",
+    )
 
 
 @runtime_checkable

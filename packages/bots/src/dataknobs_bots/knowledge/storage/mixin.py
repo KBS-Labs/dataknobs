@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import logging
 import mimetypes
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterable
 from contextlib import asynccontextmanager
@@ -39,6 +40,7 @@ from dataknobs_common.capabilities import (
     CapabilityLike,
     CapabilityMixin,
 )
+from dataknobs_common.paths import PathEscapeError, SegmentEscapeError, safe_join, safe_segment
 
 from ..events import INGEST_METADATA_WRITE, INGEST_SNAPSHOT_WRITE
 from .key_layout import KnowledgeKeyKind
@@ -49,6 +51,8 @@ if TYPE_CHECKING:
     from dataknobs_common.tenancy import TenantContext
 
     from .models import KnowledgeBaseInfo, KnowledgeFile
+
+logger = logging.getLogger(__name__)
 
 
 class KnowledgeResourceBackendMixin(CapabilityMixin):
@@ -104,10 +108,186 @@ class KnowledgeResourceBackendMixin(CapabilityMixin):
         }
     )
 
-    # --- Tenant-context scoping (shared) ---
+    # --- Identifier admissibility (shared) ---
+
+    #: The one segment under which *all* context-scoped state is rooted.
+    #:
+    #: A tenant context contributes a prefix to every state key, and that
+    #: prefix's first segment lands at the same level as a domain root —
+    #: so before this constant existed, ``delete_kb("tenants")`` deleted
+    #: by a prefix that contained every tenant's state for every domain.
+    #: The segment rule does not catch it: ``tenants`` is one segment.
+    #:
+    #: A reserved-word list cannot close it either, because
+    #: :class:`~dataknobs_common.tenancy.PrefixedTenantContext` takes its
+    #: whole prefix from consumer configuration — the colliding name is
+    #: one this package never sees. Rooting the scoped-state namespace in
+    #: a segment the *layout* owns makes the two namespaces disjoint by
+    #: construction, whatever a context contributes underneath.
+    SCOPED_STATE_ROOT: ClassVar[str] = "_scoped"
+
+    #: Leading character reserved for the layout's own slots at every
+    #: level. Already the convention inside a knowledge base
+    #: (``_metadata.json``, ``_snapshots/``); reserving the prefix rather
+    #: than today's four names is what keeps a slot added later from
+    #: reopening the collision by itself.
+    RESERVED_DOMAIN_PREFIX: ClassVar[str] = "_"
+
+    @classmethod
+    def _validate_domain_id(cls, domain_id: str) -> str:
+        """Refuse a ``domain_id`` that names more than one knowledge base.
+
+        Every backend interleaves ``domain_id`` with literal segments of
+        its own layout — ``{domain}/content/{path}``,
+        ``{domain}/_metadata.json``, ``{domain}/_snapshots/{version}`` —
+        so a separator inside it addresses another knowledge base's
+        slots. ``acme/content`` composes the *same* key as an ordinary
+        content file named ``_metadata.json`` under ``acme``: writing the
+        file replaces the other base's metadata document, and
+        ``delete_kb("acme")`` takes the whole of ``acme/content`` with it,
+        because both persistent backends delete by prefix.
+
+        **Containment does not catch this**, which is why it survived the
+        pass that bounded these backends: ``acme/content`` never leaves
+        the base directory, so the composition is contained while the
+        slot collides. The invariant is one segment, not one tree.
+
+        Nothing is lost by refusing it. A nested domain was never visible
+        to :meth:`list_kbs` on either persistent backend — both enumerate
+        one level — so it produced a knowledge base that could not be
+        found, on top of one that could be overwritten.
+
+        The rule is shared rather than per-backend on purpose. The three
+        backends disagreed about this exact call sequence: S3 overwrote,
+        the file backend refused at ``create_kb`` for an unrelated
+        reason, and the memory backend did nothing at all. A name refused
+        in production has to be refused in the backend a consumer
+        develops against.
+
+        Args:
+            domain_id: The identifier to check.
+
+        Returns:
+            ``domain_id`` unchanged, so a composing site can wrap the
+            value where it uses it.
+
+        One segment is necessary and not sufficient: the name must also
+        not be a segment the layout had already spoken for. See
+        :attr:`SCOPED_STATE_ROOT` for the collision that closes, and
+        :attr:`RESERVED_DOMAIN_PREFIX` for why the whole ``_`` prefix is
+        reserved rather than the names in use today.
+
+        Raises:
+            SegmentEscapeError: ``domain_id`` is empty, is a directory
+                reference, contains a path separator or NUL, or names a
+                segment the layout reserves for itself. A ``ValueError``,
+                as this argument's rejections already were.
+        """
+        safe_segment(
+            domain_id,
+            what="domain_id",
+            within=(
+                "a knowledge base's layout, where a separator addresses "
+                "another knowledge base's metadata and content slots"
+            ),
+        )
+        if domain_id.startswith(cls.RESERVED_DOMAIN_PREFIX):
+            raise SegmentEscapeError(
+                f"domain_id must not begin with {cls.RESERVED_DOMAIN_PREFIX!r}, which is "
+                f"reserved for the layout's own slots ({cls.SCOPED_STATE_ROOT!r} roots every "
+                f"tenant's ingest state; '_metadata.json' and '_snapshots' are a knowledge "
+                f"base's own): {domain_id!r}"
+            )
+        return domain_id
+
+    @classmethod
+    def _is_addressable_domain(cls, name: str) -> bool:
+        """Whether a name *discovered in the store* names a knowledge base.
+
+        Every other admissibility check in this layer answers a name a
+        **caller** supplied, where refusing is the whole point. A listing
+        asks the opposite question about names it read out of the store
+        itself, and there the layout's own segments are legitimately
+        present — so refusing is not an answer a listing can act on.
+
+        :attr:`SCOPED_STATE_ROOT` is what makes this reachable. It roots
+        the scoped-state namespace as a *sibling* of every domain root
+        rather than inside one, which is exactly what makes the two
+        namespaces disjoint — and also what puts ``_scoped/`` in front of
+        a backend enumerating one level under its own base. Feeding that
+        back to :meth:`_validate_domain_id` raised, and took the whole
+        listing with it rather than the one pseudo-entry.
+
+        Derived from the validator rather than restating its rule, so a
+        segment reserved later cannot be reserved for callers and left
+        addressable through discovery.
+
+        Skipping :attr:`SCOPED_STATE_ROOT` is the expected case and is
+        silent. Skipping anything *else* reserved is not: it is a
+        knowledge base a deployment created under an earlier release,
+        before the ``_`` prefix was reserved, which this release can no
+        longer address — so it is logged rather than disappearing from a
+        listing with nothing said. Nothing is deleted; the name is what
+        became unusable.
+
+        Args:
+            name: A candidate read from the store — an S3 common prefix,
+                a directory entry — not a caller's argument.
+
+        Returns:
+            Whether the name is admissible as a ``domain_id``.
+        """
+        try:
+            cls._validate_domain_id(name)
+        except SegmentEscapeError:
+            if name != cls.SCOPED_STATE_ROOT:
+                logger.warning(
+                    "Skipping %r, which is stored beside the knowledge bases but is "
+                    "not an addressable domain_id (names beginning with %r are "
+                    "reserved for the layout's own slots). Its data is untouched and "
+                    "unreachable through this API; rename it to restore access.",
+                    name,
+                    cls.RESERVED_DOMAIN_PREFIX,
+                )
+            return False
+        return True
 
     @staticmethod
-    def _state_prefix(ctx: TenantContext | None) -> str:
+    def _validate_snapshot_version(version: str) -> str:
+        """Refuse a snapshot ``version`` that is not one segment.
+
+        ``version`` occupies a slot in ``{domain}/_snapshots/{version}``
+        for exactly the reason ``domain_id`` occupies one, so it gets the
+        same rule rather than a similar one. Every *producer* in this
+        repository is a computed hex digest that cannot carry a
+        separator; the *consumer* is the caller —
+        :meth:`list_changes_since` takes back a token it persisted, and
+        nothing on the way in constrains it to what was handed out.
+
+        Shared because the two persistent backends answered differently
+        while both looked guarded: S3 applied the segment rule and the
+        file backend applied containment, so ``a/b`` composed a contained
+        ``_snapshots/a/b.json`` and was accepted on one store and refused
+        on the other. Containment is the wrong question for a name that
+        has one slot, and a rule spelled twice is a rule that drifts.
+
+        Raises:
+            SegmentEscapeError: ``version`` is empty, is a directory
+                reference, or contains a path separator or NUL.
+        """
+        return safe_segment(
+            version,
+            what="snapshot version",
+            within=(
+                "a snapshot key, where a separator addresses outside the "
+                "knowledge base's snapshot lineage"
+            ),
+        )
+
+    # --- Tenant-context scoping (shared) ---
+
+    @classmethod
+    def _state_prefix(cls, ctx: TenantContext | None) -> str:
         """State-key prefix for ``ctx`` (``""`` for the no-tenant case).
 
         When ``ctx`` is ``None`` (every single-tenant call site) the
@@ -119,8 +299,50 @@ class KnowledgeResourceBackendMixin(CapabilityMixin):
         lineage). **Content** stays keyed by ``domain_id`` alone — a
         backend routes only its state key/path construction through this
         helper, never its content paths.
+
+        What a context contributes is rooted under
+        :attr:`SCOPED_STATE_ROOT` rather than used as-is, which is what
+        keeps the scoped-state namespace disjoint from the domain
+        namespace. The context is not doing anything wrong when it
+        returns ``tenants/acme/_state/`` — the layout is, if it drops
+        that beside its own domain roots where a ``domain_id`` can name
+        the first segment.
+
+        The contributed prefix is also **checked** here rather than in
+        one backend. ``PrefixedTenantContext`` formats it from a
+        consumer-supplied pattern, so it is untrusted input like any
+        other: it must stay inside the namespace it is rooted in, and it
+        must already be canonical. A non-canonical prefix is refused
+        rather than normalised, because normalising it would silently
+        move every state document that tenant has already written.
+
+        Only one backend bounded this before, and only in three of its
+        four composing helpers — ``key_pattern`` composed the raw value
+        and returned a pattern matching keys no write would ever produce.
+        A guard a backend has to remember to call is one it can forget in
+        a method added later, so it lives at the single point every
+        composition already goes through.
+
+        Raises:
+            PathEscapeError: the context's prefix addresses outside the
+                scoped-state namespace, or is not canonical.
         """
-        return ctx.state_key_prefix() if ctx is not None else ""
+        if ctx is None:
+            return ""
+        supplied = ctx.state_key_prefix()
+        if not supplied:
+            return ""
+        contained = safe_join(cls.SCOPED_STATE_ROOT, supplied)
+        if (
+            contained is None
+            or contained.as_posix() != f"{cls.SCOPED_STATE_ROOT}/{supplied.rstrip('/')}"
+        ):
+            raise PathEscapeError(
+                f"the tenant state prefix addresses a location outside the backend's "
+                f"scoped-state namespace ({cls.SCOPED_STATE_ROOT!r}/), or is not "
+                f"canonical: {supplied!r}"
+            )
+        return f"{contained.as_posix()}/"
 
     # --- Required of any backend (supplied by the concrete class) ---
 

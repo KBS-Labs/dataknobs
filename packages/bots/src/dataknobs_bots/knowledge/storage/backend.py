@@ -58,6 +58,21 @@ class KnowledgeResourceBackend(Protocol):
             _snapshots/           # DK-managed state (do NOT trigger on)
                 <version>.json
 
+    ``domain_id`` occupies **one segment** of that layout, and an
+    implementation MUST refuse one that carries a separator — the shared
+    check is ``KnowledgeResourceBackendMixin._validate_domain_id``, over
+    ``dataknobs_common.paths.safe_segment``. The layout above is why: the
+    domain sits beside literal segments of its own, so ``acme/content``
+    addresses the same location as an ordinary content file named
+    ``_metadata.json`` under ``acme``, and a prefix-scoped delete of
+    ``acme`` takes it with it. Containment does not cover this — the name
+    never leaves the base — so a backend that only bounds its
+    compositions is not compliant.
+
+    A resource ``path`` is the opposite case: it names a location inside
+    ``content/``, nesting is its purpose, and it must be *bounded* rather
+    than restricted to a single segment.
+
     External event-trigger wiring (S3 → EventBridge / SQS / SNS / Lambda;
     filesystem inotify; GCS Pub/Sub; etc.) MUST filter to the ``content/``
     subtree and exclude ``_metadata.json`` and ``_snapshots/``. The
@@ -282,6 +297,18 @@ class KnowledgeResourceBackend(Protocol):
 
     async def list_kbs(self) -> list[KnowledgeBaseInfo]:
         """List all knowledge bases.
+
+        An implementation that derives domain ids by **enumerating its
+        store** — S3 common prefixes, directory entries — must exclude
+        the segments its own layout owns before treating one as a
+        ``domain_id``. The scoped-state root is a sibling of every domain
+        root, not a child of one, so it appears in exactly such an
+        enumeration as soon as any tenant has written state; every other
+        admissibility check in this layer answers a name a *caller*
+        supplied, and none of them is reachable from here.
+        ``KnowledgeResourceBackendMixin._is_addressable_domain`` is the
+        shared predicate, derived from the ``domain_id`` validator so the
+        two cannot disagree about what is reserved.
 
         Returns:
             List of KnowledgeBaseInfo for all knowledge bases

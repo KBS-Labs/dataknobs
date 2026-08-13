@@ -208,6 +208,42 @@ built out of symlinks. Two consequences that belong together:
 - A write that must not be redirected through such a symlink wants a
   `Path.resolve()` check of its own as well, off the loop.
 
+### `safe_segment`, when the name is a slot rather than a location
+
+Containment answers *may this name address here?* There is a second
+question it does not answer, and reading one as the other is how a whole
+class of defect survives an audit: *is this name one segment?*
+
+An identifier interpolated into a layout that has literal segments of
+its own — `{domain}/content/{path}`, `tenants/{tenant}/_state/` — has
+exactly one slot to occupy. A separator inside it quietly occupies
+several, and on a key-string store nothing traverses at all, so
+containment is trivially satisfied while two different identifiers
+compose to one key:
+
+```python
+from dataknobs_common import safe_segment
+
+safe_segment(
+    domain_id,
+    what="domain_id",
+    within="a knowledge base's layout, where a separator addresses "
+           "another knowledge base's metadata and content slots",
+)
+```
+
+It raises `SegmentEscapeError`, a subclass of `PathEscapeError` (and so
+still a `ValueError`), so a consumer translating "this name addressed
+somewhere it may not" into a 400 keeps one `except` clause. The `within`
+clause is the consequence, not decoration — a caller who reads only
+"invalid" reaches for a different name rather than a different design.
+
+Ask this question wherever the name occupies a slot, and the containment
+question wherever it names a location. Many layouts need both, on
+different arguments: a knowledge backend's `domain_id` is a slot, while
+a resource `path` inside `content/` is a location whose whole purpose is
+to nest.
+
 ### `PathAnchor`, when references chase each other
 
 A loader that follows references from one file to another — an

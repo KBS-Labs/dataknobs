@@ -166,8 +166,10 @@ from dataknobs_common.packs import (
 from dataknobs_common.paths import (
     PathAnchor,
     PathEscapeError,
+    SegmentEscapeError,
     safe_join,
     safe_join_or_raise,
+    safe_segment,
 )
 from dataknobs_common.postgres_config import (
     normalize_postgres_connection_config,
@@ -379,8 +381,10 @@ __all__ = [
     # Path containment
     "PathAnchor",
     "PathEscapeError",
+    "SegmentEscapeError",
     "safe_join",
     "safe_join_or_raise",
+    "safe_segment",
     # Discriminators
     "Discriminator",
     "AsyncDiscriminator",

@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`safe_segment` — the second question a composed name has to answer.**
+  `safe_join` asks *may this name address here?*; this asks *is this name one
+  segment?* They are not interchangeable, and reading one as the other hides a
+  whole class of defect: an identifier interpolated into a layout that has
+  literal segments of its own (`{domain}/content/`, `tenants/{tenant}/_state/`)
+  occupies exactly one slot, and a separator inside it occupies several while
+  never leaving the base — so containment passes and the composed key lands in
+  a neighbour's slot. On a key-string store nothing traverses at all, so there
+  is no path there to contain; the failure is namespace *merge*. Raises
+  `SegmentEscapeError`, a `PathEscapeError` subclass (and so still a
+  `ValueError`), so one `except` clause covers both refusals.
+
 - **`PathAnchor` — a boundary that stays fixed while the position inside it
   moves.** For a loader that follows references from file to file (an
   `$include` chain, a wizard subflow naming another wizard), the base a name
@@ -100,6 +112,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`validate_tenant_id` is now `safe_segment` under a different name.** Same
+  rule, same rejections, same `ValueError` — it raises `SegmentEscapeError`
+  now, which is one — so no caller changes. What moved is where the rule lives:
+  `tenant_id` was never the only identifier that has to occupy one slot, and
+  keeping a private copy of the check beside one of them is how the others went
+  unchecked. Its docstring also carried a claim that turned out to be wrong in
+  both halves — that `domain_id` is "deliberately not checked" because it
+  "legitimately names a subdirectory (`team/alpha`)" — and now records what
+  actually happens to a nested domain instead.
+
 - **`ConfigPathEscapeError` also subclasses `PathEscapeError`.** It keeps
   `ConfigLoadError`, so catching "this config would not load" is unchanged;
   the second base makes it the same refusal every other composing site
@@ -135,9 +157,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `SharedCorpusTenantContext` now reject a `tenant_id` that is empty, is a
   bare `.` or `..`, or contains `/`, `\` or NUL — at construction, so every
   backend inherits the check, and `create_tenant_context` /
-  `tenant_context_from_env` raise for it too. `domain_id` is deliberately
-  unchecked: it legitimately names a subdirectory, and the isolation
-  guarantee does not rest on it.
+  `tenant_context_from_env` raise for it too. `domain_id` is not checked
+  here, because at this layer it is not one invariant: it is a path
+  segment where it reaches a knowledge-base layout — and the knowledge
+  backends do refuse a structured one — but a hash input in
+  `dataknobs_data.user.store`, where a separator is structurally safe.
+  The composing site decides.
 
   **This is a breaking change for a deployment whose `tenant_id` contains a
   separator** — construction now raises `ValueError` where it previously

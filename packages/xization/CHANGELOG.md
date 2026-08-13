@@ -7,6 +7,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Security
+
+- **A `DocumentFileRef` can no longer read outside a `LocalDocumentSource`'s
+  root.** `read_bytes` and `read_streaming` composed `root / ref.path` and
+  opened the result unchecked, so a caller-built ref carrying `..` read a file
+  from outside the tree — and an absolute `ref.path` discarded the root
+  outright, which is the wider of the two spellings rather than a narrower
+  case. Both readers now raise `PathEscapeError` before any filesystem call,
+  so an escaping ref fails identically whether or not it names something that
+  exists.
+  Nesting is untouched — `sub/a.md` and an interior `a/../b` still read, and
+  so does an absolute ref that lands back inside the root, because
+  containment is judged on where the ref lands rather than on how it is
+  spelled. The `DocumentSource` protocol now states the rule, so a
+  consumer-written implementation over a bounded store inherits it.
+
+- **A glob pattern could enumerate outside a `LocalDocumentSource`'s root.**
+  `iter_files` handed each pattern straight to `Path.glob`, which treats `..`
+  as an ordinary literal segment and descends through it — so a pattern of
+  `../secrets/*.env` yielded refs for files outside the tree, each carrying
+  that file's real size and its resolved absolute `source_uri`, which travel
+  onward into chunk metadata. Patterns arrive from `IngestionConfig`, the
+  same config plane every other guard in this area exists for.
+
+  The claim that no check was needed here — that the class "already treats
+  the root as its boundary" because every ref is derived with
+  `relative_to(root)` — does not hold: `relative_to` re-expresses a path
+  lexically and enforces nothing, returning `../outside/x` rather than
+  raising. A match outside the root is now skipped and logged, and a ref's
+  path is recorded in its canonical spelling so one file has one ref path
+  whichever pattern found it. **Breaking** for a configuration whose patterns
+  deliberately reached outside the declared root — such an ingest previously
+  enumerated those files and then failed on the first read, since reading was
+  already bounded; it now consistently ignores them.
+
 ## v2.0.0 - 2026-08-11
 
 ### Changed

@@ -27,6 +27,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
+from dataknobs_common.paths import safe_join, safe_join_or_raise
+
 if TYPE_CHECKING:
     from collections.abc import Callable
 
@@ -110,13 +112,25 @@ class DocumentSource(Protocol):
         ...
 
     async def read_bytes(self, ref: DocumentFileRef) -> bytes:
-        """Read the full contents of a file."""
+        """Read the full contents of a file.
+
+        ``ref.path`` names a file *within this source*. An
+        implementation backed by a bounded store must refuse a ref
+        addressing anything outside it rather than reading whatever the
+        composition lands on — including a ref spelled absolutely, which
+        replaces the base rather than escaping it. Refs are not
+        guaranteed to have come from :meth:`iter_files`: the type is
+        public and delta-ingest hands refs back in.
+        """
         ...
 
     async def read_streaming(
         self, ref: DocumentFileRef, chunk_size: int = 8192
     ) -> AsyncIterator[bytes]:
-        """Stream file contents in byte-sized chunks."""
+        """Stream file contents in byte-sized chunks.
+
+        Bounded by the same rule as :meth:`read_bytes`.
+        """
         ...
 
 
@@ -149,6 +163,28 @@ class LocalDocumentSource:
         event loop free, like :meth:`read_bytes` / :meth:`read_streaming`).
         Only the lightweight :class:`DocumentFileRef` list is
         materialized — file *contents* are still read lazily per file.
+
+        **A match outside the root is skipped**, and the root is what
+        decides — not the shape of the pattern. ``patterns`` reaches here
+        from ``IngestionConfig``, so it is config content, the same plane
+        this guard exists for everywhere else. :meth:`Path.glob` treats
+        ``..`` as an ordinary literal segment and descends through it, so
+        a pattern can walk out; ``sub/../sub/*.md`` walks out and back in
+        and is kept, because the question is where a match lands.
+
+        Deriving each ref with ``relative_to(root)`` is not the check it
+        resembles. ``relative_to`` re-expresses a path lexically and
+        enforces nothing — it returns ``../outside/x`` rather than
+        raising — so before this filter existed a pattern could publish
+        an outside file's size and resolved URI into ref metadata even
+        though :meth:`_resolve` would later refuse to read it. That
+        disagreement between enumerating and reading is the second cost:
+        an ingest that reports work to do and then fails part-way.
+
+        Skipped rather than raised. One pattern that reaches too far
+        should not abort an otherwise valid ingest, and a glob matching
+        nothing is already the ordinary outcome for a pattern that fits
+        no file. Each skip is logged, so the silence is diagnosable.
         """
         patterns_list = list(patterns)
 
@@ -159,6 +195,20 @@ class LocalDocumentSource:
                     if not path.is_file():
                         continue
                     rel = path.relative_to(self._root).as_posix()
+                    contained = safe_join(self._root, rel)
+                    if contained is None:
+                        logger.warning(
+                            "Skipping a match outside the document source root: "
+                            "pattern %r reached %r, which is not under %s",
+                            pattern,
+                            rel,
+                            self._root,
+                        )
+                        continue
+                    # Canonical spelling, so one file has one ref path
+                    # whichever pattern found it — two spellings would
+                    # otherwise defeat the caller's own deduplication.
+                    rel = contained.relative_to(self._root).as_posix()
                     try:
                         size = path.stat().st_size
                     except OSError:
@@ -175,9 +225,47 @@ class LocalDocumentSource:
         for ref in await asyncio.to_thread(_collect):
             yield ref
 
+    def _resolve(self, ref: DocumentFileRef) -> Path:
+        """Locate ``ref`` under ``root``, refusing a ref that leaves it.
+
+        ``ref.path`` is a *name within this source*, not a path to open.
+        A ref can arrive two ways and this bounds both.
+        :class:`DocumentFileRef` is an exported dataclass and the
+        delta-ingest seam hands refs back in, so one can come from a
+        caller; :meth:`iter_files` produces the rest, and bounds them at
+        enumeration for its own reasons — but that check is over there
+        and this one does not lean on it. ``relative_to`` would not have
+        been a check to lean on anyway: it re-expresses a path lexically
+        and enforces nothing, returning ``../outside/x`` rather than
+        raising.
+
+        Both escaping spellings are refused, and the absolute one is the
+        wider of the two: ``Path("/root") / "/etc/passwd"`` discards the
+        root rather than climbing out of it, so exempting it would leave
+        the larger hole. Containment is judged on where the ref *lands*,
+        so an absolute ref pointing back inside the root still reads, and
+        nesting — the point of a document tree — is untouched.
+
+        The check is lexical and precedes every filesystem call, so an
+        escaping ref fails identically whether or not it names something
+        that exists.
+        """
+        return safe_join_or_raise(
+            self._root,
+            ref.path,
+            what="document ref",
+            outside="the source's root",
+            supplied=ref.path,
+        )
+
     async def read_bytes(self, ref: DocumentFileRef) -> bytes:
-        """Read the full contents of ``ref``."""
-        path = self._root / ref.path
+        """Read the full contents of ``ref``.
+
+        Raises :class:`~dataknobs_common.paths.PathEscapeError` when
+        ``ref`` addresses a file outside :attr:`root` — see
+        :meth:`_resolve`.
+        """
+        path = self._resolve(ref)
         return await asyncio.to_thread(path.read_bytes)
 
     async def read_streaming(
@@ -192,8 +280,14 @@ class LocalDocumentSource:
         early (via ``break``, exception, or cancellation), the file
         handle is released by the generator's finalizer and no thread
         is left waiting to hand off a chunk.
+
+        Raises :class:`~dataknobs_common.paths.PathEscapeError` when
+        ``ref`` addresses a file outside :attr:`root` — see
+        :meth:`_resolve`. The refusal happens on the first ``__anext__``
+        rather than at call time, because this is a generator; that is
+        before any ``open``, which is what matters.
         """
-        path = self._root / ref.path
+        path = self._resolve(ref)
 
         def _open_and_read() -> tuple[Any, bytes]:
             f = open(path, "rb")

@@ -1,8 +1,20 @@
-"""Compose a filesystem path from untrusted parts without leaving a base.
+"""Turn an untrusted name into a location without it addressing elsewhere.
 
-One check, two spellings of the answer. :func:`safe_join` joins parts
-onto a base directory and returns the result only when it stays inside
-that directory, so a caller that turns a *name* into a *location* — a
+**Two questions, and a name usually has to answer both.** *May this name
+address here?* is containment — :func:`safe_join` and its raising
+spelling. *Is this name one segment?* is :func:`safe_segment`, for an
+identifier interpolated into a layout that has literal segments of its
+own. They are not interchangeable, and reading one as the other is how a
+whole defect class survives a containment audit: ``acme/content`` as a
+domain id never leaves the backend's base, so containment passes, while
+the composed path lands in another knowledge base's metadata slot. Ask
+the second question wherever the name occupies a *slot* rather than
+naming a *location*.
+
+Containment first. One check, two spellings of the answer.
+:func:`safe_join` joins parts onto a base directory and returns the
+result only when it stays inside that directory, so a caller that turns
+a *name* into a *location* — a
 config name, a domain id, a resource path — cannot be talked into
 addressing a file the deployment did not put there.
 :func:`safe_join_or_raise` is the same check for the common case where
@@ -60,7 +72,22 @@ import os
 from dataclasses import dataclass
 from pathlib import Path, PurePath
 
-__all__ = ["PathAnchor", "PathEscapeError", "safe_join", "safe_join_or_raise"]
+__all__ = [
+    "PathAnchor",
+    "PathEscapeError",
+    "SegmentEscapeError",
+    "safe_join",
+    "safe_join_or_raise",
+    "safe_segment",
+]
+
+#: Characters that give a name structure. A separator is the whole
+#: problem: the name is interpolated into a layout that already has
+#: segments of its own, so one turns a single slot into several.
+#: Backslash is included because a filesystem backend on Windows reads
+#: it as a separator while a key-string backend does not — the check
+#: cannot be platform-dependent when the same name reaches both.
+_SEPARATORS_IN_SEGMENT = ("/", "\\", "\x00")
 
 #: Characters a path component may not contain whatever it addresses. A
 #: NUL terminates the string inside the C library, so ``"a\x00b.yaml"``
@@ -82,6 +109,93 @@ class PathEscapeError(ValueError):
     consumer translating "your name addressed outside" into a 400 could
     not tell it apart from a malformed payload.
     """
+
+
+class SegmentEscapeError(PathEscapeError):
+    """Raised when a name that must occupy one slot spans several.
+
+    A sibling of the containment refusal rather than a separate idiom,
+    and a subclass so that a consumer translating "this name addressed
+    somewhere it may not" into a 400 keeps one ``except`` clause. The
+    two questions are genuinely different, though, and confusing them is
+    how this defect survived a containment audit: ``acme/content`` as a
+    domain id never *leaves* the backend's base directory, so
+    :func:`safe_join` is satisfied — while the composed path lands
+    squarely in another knowledge base's metadata slot. Containment asks
+    whether the name stayed in the tree; this asks whether it stayed in
+    its own segment of it.
+    """
+
+
+def safe_segment(value: str, *, what: str, within: str) -> str:
+    """Return ``value`` if it is one segment, else raise.
+
+    For an identifier that is interpolated into a structured layout
+    beside literal segments of that layout's own — ``{domain}/content/``,
+    ``tenants/{tenant}/_state/``. Such a name has exactly one slot to
+    occupy, and a separator inside it silently occupies several, which
+    breaks two ways depending on the store underneath:
+
+    * a **filesystem** backend resolves ``..``, so the name can leave
+      the base entirely — the case :func:`safe_join` already covers;
+    * a **key-string** backend (an S3 prefix, an in-memory dict)
+      resolves nothing, so nothing traverses and containment is
+      trivially satisfied. The failure is *merge*: the name reaches the
+      literal segments the layout puts around it, and two different
+      identifiers compose to one key.
+
+    The second is the reason this check exists next to :func:`safe_join`
+    rather than being expressed with it. No composition is bounded here
+    and no path is built; the question is only about the name.
+
+    Args:
+        value: The identifier to check.
+        what: What it is, named as the caller would recognise it
+            (``"tenant_id"``, ``"domain_id"``). It opens the message.
+        within: What it is interpolated into, and what a separator does
+            there, as a clause following "it is interpolated into" —
+            ``"a state-key prefix, where a separator merges tenant
+            namespaces"``. The consequence is what makes the refusal
+            actionable; a caller who reads only "invalid" reaches for a
+            different name rather than a different design.
+
+    **What this does not decide.** One segment is necessary, not
+    sufficient — a caller whose layout has literal segments of its own
+    must also keep the name out of *those*, which is a question about
+    that layout rather than about the name, and belongs with it. Nor
+    does this normalise: comparison is over raw code points, so on a
+    case-insensitive or Unicode-normalising filesystem two names this
+    accepts as distinct (``Acme`` and ``acme``; NFC and NFD spellings of
+    ``café``) may still address one directory, while a key-string store
+    over the same layout keeps them apart. A caller whose identifiers
+    come from user input and reach a filesystem should fold them to a
+    canonical form before they get here.
+
+    Returns:
+        ``value`` unchanged, so the check can wrap the value at the
+        point of use rather than sitting above it as a bare statement
+        that a later edit can drift away from.
+
+    Raises:
+        SegmentEscapeError: ``value`` is empty or blank, is a bare
+            ``.`` or ``..``, or contains a path separator or NUL.
+    """
+    if not value or not value.strip():
+        raise SegmentEscapeError(
+            f"{what} must be a non-empty name: {value!r}. It is interpolated into {within}."
+        )
+    if value in (os.curdir, os.pardir):
+        raise SegmentEscapeError(
+            f"{what} must be a name, not a directory reference: {value!r}. "
+            f"It is interpolated into {within}."
+        )
+    found = [c for c in _SEPARATORS_IN_SEGMENT if c in value]
+    if found:
+        raise SegmentEscapeError(
+            f"{what} must name one segment and must not contain a path separator "
+            f"or NUL (found {found!r} in {value!r}): it is interpolated into {within}."
+        )
+    return value
 
 
 def _significant(parts: tuple[str, ...]) -> tuple[str, ...]:
