@@ -7,6 +7,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Fixed
+
+- **`PostgresDB` generated a `CREATE TABLE` that crashed on boolean and
+  timestamp columns, and typed duration columns as `integer`.**
+  `_psql_schema_line` named only integer and float, and fell through to
+  `df[col].str.len()` for everything else — encoding "not integer and not
+  float, therefore a string". A `bool`, `datetime64[ns]`, nullable `boolean` or
+  tz-aware `datetime64[ns, tz]` column reached `.str` and raised
+  `AttributeError`, so the table could not be created at all; a
+  `timedelta64[ns]` column was emitted as `integer`, because `timedelta64`
+  subclasses `np.signedinteger` and `np.issubdtype(dtype, np.integer)` reports
+  it as one.
+
+  The ladder now maps `bool` → `boolean`, `datetime64` → `timestamp`, tz-aware
+  `datetime64` → `timestamptz` (a bare `timestamp` would discard the offset),
+  and `timedelta64` → `interval`, alongside the existing `integer` / `real` /
+  `varchar`. An integration test uploads one column per family into a live
+  PostgreSQL and reads it back, so the emitted types are checked against real
+  type input functions rather than only against expected strings.
+
+### Changed
+
+- **`_psql_schema_line` is one ladder rather than two.** It previously branched
+  on `isinstance(dtype, np.dtype)` and repeated the whole ladder in each half,
+  because `np.issubdtype` raises `TypeError` on every pandas `ExtensionDtype`.
+  `pd.api.types` predicates answer correctly for numpy dtypes and
+  `ExtensionDtype`s alike, so the split — and the drift it allowed between the
+  two copies — is gone. This removes the last `np.issubdtype` calls in the
+  workspace.
+
+- **The `varchar` width is measured on the rendered value.** `upload` sends
+  `str(value)` for every cell, so `_psql_varchar_width` measures
+  `dropna().astype(str).str.len()` instead of calling `.str` on the column
+  directly. An object column holding non-strings previously raised
+  `AttributeError`; string columns are unaffected, nulls are still excluded,
+  and an empty column still yields `varchar(1)`.
+
 ## v2.0.0 - 2026-08-11
 
 ### Changed
