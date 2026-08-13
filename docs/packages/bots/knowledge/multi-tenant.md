@@ -237,6 +237,73 @@ lock-free. Two replicas running the *same* tenant's ingest for the
 configured with a `postgres` lock backend) — see the ingest-orchestrator
 docs. The manager does not (and should not) hold its own lock.
 
+### `tenant_id` must be a flat identifier
+
+The state-key prefix is *structured* — `BoundTenantContext` projects
+`tenant_id` into `"tenants/{tenant_id}/_state/"`, and the backend
+concatenates the `domain_id` onto it. The tenant segment is the one part
+of that key whose whole job is keeping tenants apart, so it must not
+carry structure of its own. A `tenant_id` containing `/`, `\` or NUL, or
+one that is a bare `.` / `..`, is rejected at construction:
+
+```python
+BoundTenantContext(tenant_id="acme", domain_id="prompts")        # fine
+BoundTenantContext(tenant_id="acme/eu-west", domain_id="prompts")  # ValueError
+```
+
+The rejection is not only about path traversal. On a filesystem backend a
+`..` does resolve and a state write leaves the base directory — but on a
+key-string backend (an S3 object-key prefix, an in-memory dict key)
+nothing resolves at all, and the failure is subtler: because the prefix
+and the `domain_id` are concatenated, a structured tenant id can produce
+the *same* key as a different tenant/domain pair. `(tenant="acme",
+domain="proj/_state/x")` and `(tenant="acme/_state/proj", domain="x")`
+both key on `tenants/acme/_state/proj/_state/x`, so the second tenant
+reads the first's ingest state. Nothing traverses; the namespaces merge.
+
+`domain_id` is deliberately unconstrained — it legitimately names a
+subdirectory (`team/alpha`), and the file backend bounds it where it
+composes it rather than forbidding the shape. Where a nested tenant
+convention is genuinely wanted, express it with `PrefixedTenantContext`,
+whose `prefix_pattern` is a deployment's own convention and stays
+free-form:
+
+```python
+PrefixedTenantContext(
+    tenant_id="acme",
+    domain_id="prompts",
+    prefix_pattern="regions/eu-west/{tenant_id}/",
+)
+```
+
+#### Choose a pattern that keeps the tenant segment unambiguous
+
+`prefix_pattern` is the one place a deployment can reintroduce the
+merge that `tenant_id` validation just closed, because the check cannot
+know what *your* pattern treats as a delimiter:
+
+```python
+pattern = "legacy/{tenant_id}-{domain_id}/"
+
+# tenant_id="acme",   domain_id="x-y"  ->  "legacy/acme-x-y/"
+# tenant_id="acme-x", domain_id="y"    ->  "legacy/acme-x-y/"
+```
+
+Both `tenant_id`s are flat and both are accepted, yet two different
+tenants land on one state namespace. Pick a delimiter your tenant ids
+cannot contain, or give `{tenant_id}` its own path segment the way
+`BoundTenantContext` does.
+
+#### The domain is bounded to the tenant's subtree, not just the base
+
+Where a tenant prefix is in play, the file backend composes in two hops
+— `base_path`, then the tenant's state prefix — and checks each against
+the one before it. Checking only the outer boundary would not be enough:
+a `domain_id` of `../../bob/_state/proj` under `tenants/acme/_state/`
+resolves to `tenants/bob/_state/proj`, which never leaves `base_path`
+and is squarely inside the wrong tenant. `domain_id` may nest freely
+*within* the tenant subtree; it may not leave it.
+
 ## Capability advertisement
 
 `RAGKnowledgeBase` and `KnowledgeIngestionManager` declare

@@ -292,6 +292,16 @@
           "site": "guides/wizard-subflows.md"
         }
       ],
+      "mirror": [
+        {
+          "package": "knowledge/multi-tenant.md",
+          "site": "knowledge/multi-tenant.md"
+        },
+        {
+          "package": "knowledge/event-triggers.md",
+          "site": "knowledge/event-triggers.md"
+        }
+      ],
       "package_only": [
         "API.md",
         "ARCHITECTURE.md",

@@ -32,7 +32,97 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   write that must not be redirected still wants a `Path.resolve()` check of
   its own, off the loop.
 
+- **`safe_join_or_raise(...)` and `PathEscapeError` — the same check with the
+  refusal spelled as an exception.** `safe_join`'s `None` has to become an
+  error at almost every call site, and each site was writing that adapter by
+  hand: four of them across this repo, raising three different exception
+  types and wording one refusal four ways. A consumer could not write one
+  `except` for one condition.
+
+  `safe_join_or_raise(base, *parts, what=..., outside=...)` returns the
+  joined path or raises `PathEscapeError`, which subclasses `ValueError` —
+  so the sites that raised a bare `ValueError` stay catchable exactly as
+  before, and code that needs to tell "your name addressed outside" from an
+  unrelated `ValueError` on the same call now can. That distinction is not
+  hypothetical: `pydantic.ValidationError` is also a `ValueError`, and a
+  test in this repo went green against unguarded code because of it.
+
+  Prefer it over the sentinel form. `safe_join` keeps its two remaining
+  callers, for two different reasons. `find_config_file` weighs every
+  extension before deciding, so a refusal there is one outcome among
+  several rather than a failure. The knowledge tools compose inline, in
+  the same frame that returns the tool's structured
+  `{"success": False, ...}`, so the sentinel is read where it is produced.
+  Contrast the config tool, which does raise-and-catch: its composition
+  happens several frames down, inside `_persist_config` and `finalize` and
+  behind `asyncio.to_thread`, where no sentinel can be threaded back. The
+  rule is not "exceptions everywhere" — it is that a refusal crossing a
+  frame boundary has to be an exception, and one type of exception.
+
+- **`validate_tenant_id(tenant_id)` is exported.** The reference
+  `TenantContext` impls call it from `__post_init__`, but the module invites
+  consumers to write their own impl and nothing runs `__post_init__` on a
+  class this module never sees. A consumer following that invitation would
+  have accepted a structured id and merged two tenants' namespaces, with no
+  supported way to opt into the check. The Protocol's `tenant_id` docstring
+  now states the requirement and names the function.
+
+### Changed
+
+- **`ConfigPathEscapeError` also subclasses `PathEscapeError`.** It keeps
+  `ConfigLoadError`, so catching "this config would not load" is unchanged;
+  the second base makes it the same refusal every other composing site
+  raises, so one `except PathEscapeError` reaches all of them. Purely
+  additive — nothing that caught it before stops catching it.
+
 ### Security
+
+- **`safe_join` accepted a NUL inside a path part.** A NUL terminates the
+  string inside the C library, so `a\x00b.yaml` addresses `a` — the name the
+  guard measured is not the one the kernel would see. Nothing was
+  exploitable through it (`open()` raises its own `ValueError` for an
+  embedded NUL, and `Path.exists()` answers `False`), but the refusal
+  arrived from a different place as a different type than every other
+  rejection of a bad name. It is now refused by the guard, so one kind of
+  bad name produces one kind of error from one place.
+
+- **A `tenant_id` containing a path separator merged two tenants' state.**
+  The tenant contexts accepted any non-empty string and interpolated it into
+  `state_key_prefix()` as `"tenants/{tenant_id}/_state/"` — a *structured*
+  key namespace that three kinds of backend consume, and a separator inside
+  the one segment whose job is isolation broke each of them differently. On
+  a filesystem backend the OS resolved `..`, so a tenant's state write left
+  the backend's base directory. On a key-string backend (an S3 object-key
+  prefix, an in-memory dict key) nothing resolved — but the prefix is
+  concatenated with `domain_id`, so `(tenant="acme", domain="proj/_state/x")`
+  and `(tenant="acme/_state/proj", domain="x")` produced the *same* state
+  key and the second tenant read the first's ingest state. No traversal is
+  involved in that one; the namespaces simply merge, which is why bounding
+  the composition at the filesystem backend could not have caught it.
+
+  `BoundTenantContext`, `PrefixedTenantContext` and
+  `SharedCorpusTenantContext` now reject a `tenant_id` that is empty, is a
+  bare `.` or `..`, or contains `/`, `\` or NUL — at construction, so every
+  backend inherits the check, and `create_tenant_context` /
+  `tenant_context_from_env` raise for it too. `domain_id` is deliberately
+  unchecked: it legitimately names a subdirectory, and the isolation
+  guarantee does not rest on it.
+
+  **This is a breaking change for a deployment whose `tenant_id` contains a
+  separator** — construction now raises `ValueError` where it previously
+  succeeded. Such a deployment currently has two tenants able to share a
+  state namespace, so failing at construction is the intent; the migration
+  is to use a flat tenant identifier and, where a nested convention is
+  genuinely wanted, express it through `PrefixedTenantContext`'s
+  `prefix_pattern`, which remains free-form.
+
+  One caveat on that migration, now stated on the class: a pattern chooses
+  its own delimiter, and this check cannot know what it is. A pattern of
+  `"legacy/{tenant_id}-{domain_id}/"` gives `legacy/acme-x-y/` for both
+  `(tenant="acme", domain="x-y")` and `(tenant="acme-x", domain="y")` —
+  the same namespace merge, reached without a separator and with two ids
+  that both validate. Choose a delimiter your tenant ids cannot contain,
+  or give `{tenant_id}` its own path segment.
 
 - **`find_config_file` let a config name address a file outside the
   directory it was given.** The name was joined to `config_dir` and probed

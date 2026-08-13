@@ -1,10 +1,23 @@
 """Compose a filesystem path from untrusted parts without leaving a base.
 
-One function. :func:`safe_join` joins parts onto a base directory and
-returns the result only when it stays inside that directory, so a caller
-that turns a *name* into a *location* — a config name, a domain id, a
-resource path — cannot be talked into addressing a file the deployment
-did not put there.
+One check, two spellings of the answer. :func:`safe_join` joins parts
+onto a base directory and returns the result only when it stays inside
+that directory, so a caller that turns a *name* into a *location* — a
+config name, a domain id, a resource path — cannot be talked into
+addressing a file the deployment did not put there.
+:func:`safe_join_or_raise` is the same check for the common case where
+``None`` has nothing useful to mean, and raises :class:`PathEscapeError`
+instead.
+
+**Which to call.** Take :func:`safe_join_or_raise` unless the caller has
+a real second interpretation of ``None``. Returning the sentinel is
+right when the caller probes several candidates and a refusal is one
+outcome among them (:func:`~dataknobs_common.config_loading.find_config_file`
+weighs every extension before deciding); everywhere else the sentinel
+just becomes an ``if x is None: raise`` at the call site, and those
+adapters drift — the four in this repo carried three different exception
+types and worded the same refusal four ways before they were collapsed
+here.
 
 Two spellings escape a base, and both are easy to miss:
 
@@ -46,7 +59,28 @@ from __future__ import annotations
 import os
 from pathlib import Path, PurePath
 
-__all__ = ["safe_join"]
+__all__ = ["PathEscapeError", "safe_join", "safe_join_or_raise"]
+
+#: Characters a path component may not contain whatever it addresses. A
+#: NUL terminates the string inside the C library, so ``"a\x00b.yaml"``
+#: opens ``a`` — the suffix the guard measured is not the one the kernel
+#: sees. It is refused here rather than left to ``open()``, so that every
+#: rejection of a bad name arrives as one type from one place.
+_FORBIDDEN_IN_PART = ("\x00",)
+
+
+class PathEscapeError(ValueError):
+    """Raised when composing a name onto a base would leave that base.
+
+    Subclasses :class:`ValueError`, which is what the containment sites
+    raised before this type existed, so catching the old type still
+    works and catching this one is strictly more precise. That precision
+    is the point: ``except ValueError`` around a path composition also
+    swallows every unrelated ``ValueError`` on the same call —
+    ``pydantic.ValidationError`` among them, which subclasses it — so a
+    consumer translating "your name addressed outside" into a 400 could
+    not tell it apart from a malformed payload.
+    """
 
 
 def _significant(parts: tuple[str, ...]) -> tuple[str, ...]:
@@ -81,9 +115,13 @@ def safe_join(base: str | Path, *parts: str) -> Path | None:
 
     Returns:
         The joined path with ``.`` and ``..`` segments collapsed, or
-        ``None`` when it addresses anything outside ``base``. ``base``
-        itself is contained, so joining no parts returns it.
+        ``None`` when it addresses anything outside ``base``, or when a
+        part contains NUL. ``base`` itself is contained, so joining no
+        parts returns it.
     """
+    if any(c in part for part in parts for c in _FORBIDDEN_IN_PART):
+        return None
+
     base_path = Path(base)
     candidate = base_path.joinpath(*parts)
 
@@ -108,3 +146,49 @@ def safe_join(base: str | Path, *parts: str) -> Path | None:
         return None
 
     return Path(candidate_norm)
+
+
+def safe_join_or_raise(
+    base: str | Path,
+    *parts: str,
+    what: str,
+    outside: str,
+    supplied: str | None = None,
+) -> Path:
+    """Join ``parts`` onto ``base``, or raise :class:`PathEscapeError`.
+
+    :func:`safe_join` with the refusal spelled as an exception. Use it
+    wherever a refusal is simply an error — which is every composing
+    site that is about to read, write or delete the result.
+
+    Args:
+        base: Directory the composed path must stay inside.
+        parts: Path components to append, as :func:`safe_join` takes
+            them.
+        what: What the caller supplied, named as the caller would
+            recognise it (``"domain_id"``, ``"subflow name"``). It opens
+            the message, so it reads as a sentence about the input
+            rather than about this function.
+        outside: The boundary, named in the deployment's own terms
+            (``"the backend's base path"``). Phrase it as a noun that
+            follows "outside".
+        supplied: The value to quote back. Defaults to the last part —
+            pass it explicitly when the last part is a *derived* string
+            (a name with ``.yaml`` appended, a prefixed draft filename)
+            so the message names what the caller actually passed.
+
+    Returns:
+        The joined path, with its segments collapsed. Open **this**
+        rather than recomposing from the raw name: a symlinked
+        subdirectory inside ``base`` plus a ``..`` resolves through the
+        link's target, so the two are not the same path.
+
+    Raises:
+        PathEscapeError: The composed path addresses something outside
+            ``base``, or a part contains NUL.
+    """
+    joined = safe_join(base, *parts)
+    if joined is None:
+        shown = supplied if supplied is not None else (parts[-1] if parts else "")
+        raise PathEscapeError(f"{what} addresses a location outside {outside}: {shown!r}")
+    return joined

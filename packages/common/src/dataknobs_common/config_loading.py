@@ -34,7 +34,7 @@ import logging
 from pathlib import Path
 from typing import Any, Literal, overload
 
-from dataknobs_common.paths import safe_join
+from dataknobs_common.paths import PathEscapeError, safe_join
 
 logger = logging.getLogger(__name__)
 
@@ -65,8 +65,18 @@ class ConfigYAMLNotInstalledError(ConfigLoadError):
     """Raised when a YAML payload is requested but PyYAML is not installed."""
 
 
-class ConfigPathEscapeError(ConfigLoadError):
-    """Raised when a config name addresses a file outside the search directory."""
+class ConfigPathEscapeError(ConfigLoadError, PathEscapeError):
+    """Raised when a config name addresses a file outside the search directory.
+
+    Both bases are load-bearing. :class:`ConfigLoadError` keeps it with
+    the other config-loading failures, which is how a consumer catches
+    "this config would not load" as one thing.
+    :class:`~dataknobs_common.paths.PathEscapeError` makes it the same
+    refusal every other composing site raises, so a consumer that cares
+    about the *containment* question rather than about config loading
+    can catch that instead and reach all of them at once. Adding the
+    second base only widens what already caught this.
+    """
 
 
 def find_config_file(

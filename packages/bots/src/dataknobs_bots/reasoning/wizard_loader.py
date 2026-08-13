@@ -15,6 +15,7 @@ from typing import Any
 import yaml
 
 from dataknobs_common.expressions import safe_eval
+from dataknobs_common.paths import PathEscapeError, safe_join_or_raise
 from dataknobs_fsm.api.advanced import AdvancedFSM
 from dataknobs_fsm.config.builder import FSMBuilder
 
@@ -954,6 +955,15 @@ class WizardConfigLoader:
                 if subflow_fsm:
                     subflow_registry[subflow_name] = subflow_fsm
                     logger.debug("Loaded subflow: %s", subflow_name)
+            except PathEscapeError:
+                # Refusing a name that addresses outside the config
+                # directory is not "this subflow failed to load" — it is
+                # the config asking for something it may not have.
+                # Rewriting it into a bare ValueError here would undo the
+                # narrowing the guard exists to provide, one frame above
+                # the guard.
+                logger.error("Refused subflow '%s': addresses outside the config dir", subflow_name)
+                raise
             except Exception as e:
                 logger.error("Failed to load subflow '%s': %s", subflow_name, e)
                 raise ValueError(f"Failed to load subflow '{subflow_name}': {e}") from e
@@ -974,6 +984,14 @@ class WizardConfigLoader:
         2. File path relative to config_base_path
         3. File path in subflows/ subdirectory
 
+        The name comes out of config *content* — a ``subflows:`` key or a
+        transition's ``subflow.network`` value — so both file probes are
+        bounded to ``config_base_path``. A name that leaves it, via
+        ``..`` or by being absolute, raises :class:`ValueError` rather
+        than loading a state machine from outside the wizard's own tree.
+        A name in a subdirectory is legal; the ``subflows/`` layout the
+        second probe serves is exactly that.
+
         Args:
             subflow_name: Name of the subflow to load
             wizard_config: Main wizard configuration dict
@@ -982,6 +1000,15 @@ class WizardConfigLoader:
 
         Returns:
             WizardFSM for the subflow, or None if not found
+
+        Raises:
+            PathEscapeError: If ``subflow_name`` addresses a file outside
+                ``config_base_path`` under *either* probe. Both are
+                candidate readings of one name, so a name that escapes
+                under either is refused rather than silently reinterpreted
+                as the other — the same rule
+                :func:`~dataknobs_common.config_loading.find_config_file`
+                applies across its extensions.
         """
         # Check for inline subflow definition
         explicit_subflows = wizard_config.get("subflows", {})
@@ -997,15 +1024,19 @@ class WizardConfigLoader:
             )
             return None
 
-        # Try direct path (subflow_name.yaml)
-        subflow_path = config_base_path / f"{subflow_name}.yaml"
-        if subflow_path.exists():
-            return self.load(str(subflow_path), custom_functions)
-
-        # Try subflows/ subdirectory
-        subflow_path = config_base_path / "subflows" / f"{subflow_name}.yaml"
-        if subflow_path.exists():
-            return self.load(str(subflow_path), custom_functions)
+        # Both probes are guarded, and each opens the path the guard
+        # returned rather than recomposing from the raw name: a symlinked
+        # subdirectory plus a ``..`` resolves through the link's target.
+        for parts in ((f"{subflow_name}.yaml",), ("subflows", f"{subflow_name}.yaml")):
+            subflow_path = safe_join_or_raise(
+                config_base_path,
+                *parts,
+                what="subflow name",
+                outside="the wizard's config directory",
+                supplied=subflow_name,
+            )
+            if subflow_path.exists():
+                return self.load(str(subflow_path), custom_functions)
 
         logger.warning(
             "Subflow '%s' not found in config or as file at %s",

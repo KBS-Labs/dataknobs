@@ -87,6 +87,48 @@ supports patterns — filtering upstream avoids paying the
 message-receive cost for state writes. Fall back to `classify_key`
 when patterns aren't available.
 
+### Multi-tenant deployments: pass the context
+
+`domain_id` and `ctx` scope two different axes, and confusing them is
+the one way to build a watch that looks healthy and reports nothing.
+
+State writes (`METADATA`, `SNAPSHOT`) land under
+`ctx.state_key_prefix()`, so a state pattern built without a context
+names the domain-keyed document instead — the one `create_kb()` writes
+once. A watch on it fires at creation and then never again, no matter
+how many ingestion-status transitions the tenant records:
+
+```python
+# WRONG in a tenanted deployment: matches the domain document, which
+# no tenant state write ever touches.
+pattern = backend.key_pattern(KnowledgeKeyKind.METADATA, domain_id="acme")
+
+# RIGHT: the tenant's own state subtree.
+pattern = backend.key_pattern(
+    KnowledgeKeyKind.METADATA, domain_id="acme", ctx=ctx,
+)
+```
+
+Leaving `domain_id` out wildcards the *domain*, not the tenant — the
+pattern stays anchored under the bound tenant:
+
+```python
+pattern = backend.key_pattern(KnowledgeKeyKind.METADATA, ctx=ctx)
+# e.g. "/srv/kb/tenants/acme/_state/*/_metadata.json"
+```
+
+There is deliberately no all-tenants spelling. The prefix comes from
+`ctx.state_key_prefix()`, and for `PrefixedTenantContext` that is a
+consumer-supplied format string, so no wildcard form of an arbitrary
+convention can be derived. To watch a whole deployment, subscribe to
+the backend's base prefix and sort the events with `classify_key`, or
+install one pattern per tenant you serve.
+
+`CONTENT` is unaffected: content is keyed by `domain_id` alone, since
+tenants share a corpus and are isolated on ingest *state*. Passing a
+`ctx` with `kind=CONTENT` is accepted and ignored, so a loop building
+watches for all three kinds needs no special case.
+
 ## Per-source wiring
 
 ### S3 → EventBridge (`s3.event.detail.object.key` wildcard)
@@ -111,7 +153,8 @@ events.EventPattern(
 )
 ```
 
-Single-domain scope (e.g. routing per-tenant):
+Single-domain scope (one KB, not one tenant — see "Multi-tenant
+deployments" above for the tenant axis):
 
 ```python
 pattern = s3_backend.key_pattern(

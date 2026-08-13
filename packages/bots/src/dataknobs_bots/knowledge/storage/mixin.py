@@ -157,12 +157,59 @@ class KnowledgeResourceBackendMixin(CapabilityMixin):
         """
         raise NotImplementedError  # pragma: no cover - overridden by backends
 
+    #: The kinds :meth:`key_pattern` can express. ``UNKNOWN`` is excluded
+    #: by definition — there is no shape for "unrecognized keys".
+    PATTERNED_KINDS: ClassVar[frozenset[KnowledgeKeyKind]] = frozenset(
+        {
+            KnowledgeKeyKind.CONTENT,
+            KnowledgeKeyKind.METADATA,
+            KnowledgeKeyKind.SNAPSHOT,
+        }
+    )
+
+    @classmethod
+    def _pattern_state_prefix(
+        cls,
+        kind: KnowledgeKeyKind,
+        ctx: TenantContext | None,
+    ) -> str:
+        """State prefix a :meth:`key_pattern` of ``kind`` roots under.
+
+        One place answers "which kinds are tenant-scoped", because that
+        rule is what silently drifted: tenancy was added to the
+        key-derivation helpers while every backend's ``key_pattern``
+        composed its own root, so the patterns kept naming the
+        pre-tenancy location and the watches built from them quietly
+        matched the wrong document. A backend that derives the answer
+        itself can drift again; one that calls this cannot.
+
+        Content is keyed by ``domain_id`` alone — tenants share a corpus
+        and are isolated on ingest *state* — so ``CONTENT`` gets ``""``
+        whatever the context, mirroring :meth:`_state_prefix`'s contract.
+
+        Raises:
+            ValueError: ``kind`` is not in :attr:`PATTERNED_KINDS`.
+        """
+        if kind not in cls.PATTERNED_KINDS:
+            raise ValueError(
+                f"key_pattern is not defined for kind {kind!r} (only CONTENT / METADATA / SNAPSHOT)"
+            )
+        return "" if kind is KnowledgeKeyKind.CONTENT else cls._state_prefix(ctx)
+
     def key_pattern(
         self,
         kind: KnowledgeKeyKind = KnowledgeKeyKind.CONTENT,
         domain_id: str | None = None,
+        *,
+        ctx: TenantContext | None = None,
     ) -> str:
-        """Backend-native pattern for keys of ``kind`` (see the protocol)."""
+        """Backend-native pattern for keys of ``kind`` (see the protocol).
+
+        A backend that produces a real pattern must take its root from
+        :meth:`_pattern_state_prefix`, the same rule its key-derivation
+        methods follow — the pattern and the key it is meant to match
+        have to come from one source or they drift apart silently.
+        """
         raise NotImplementedError  # pragma: no cover - overridden by backends
 
     # --- Canonical change-detection algorithm (shared) ---

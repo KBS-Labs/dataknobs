@@ -47,6 +47,13 @@ Extend the family by writing a frozen, hashable class satisfying
 small factory). The four reference impls plus :class:`PrefixedTenantContext`'s
 format-string escape hatch cover the common conventions, so there is
 intentionally no plugin registry here.
+
+**A consumer impl must call** :func:`validate_tenant_id` **on its own
+tenant_id.** The reference impls call it from ``__post_init__``; nothing
+enforces it on a class this module never sees, so a consumer impl that skips
+it accepts a structured id and silently merges two tenants' state namespaces —
+the failure the check exists to prevent. It is exported for exactly this
+reason.
 """
 
 from __future__ import annotations
@@ -64,7 +71,55 @@ __all__ = [
     "TenantContext",
     "create_tenant_context",
     "tenant_context_from_env",
+    "validate_tenant_id",
 ]
+
+# Characters that give a tenant_id structure. A separator is the whole
+# problem: state_key_prefix() interpolates the id into a structured key
+# namespace, so one turns a single isolation segment into several.
+_TENANT_ID_FORBIDDEN = ("/", "\\", "\x00")
+
+
+def validate_tenant_id(tenant_id: str) -> None:
+    """Reject a ``tenant_id`` that would carry structure into a state key.
+
+    ``tenant_id`` is an *isolation segment*: the one part of a state key
+    whose entire job is keeping tenants apart. It is interpolated into
+    ``"tenants/{tenant_id}/_state/"``, which reaches three kinds of
+    backend, and a separator inside it breaks isolation differently in
+    each:
+
+    * a **filesystem** backend resolves ``..``, so a state write leaves
+      the backend's base directory;
+    * a **key-string** backend (S3 prefix, in-memory dict) resolves
+      nothing — but the prefix is concatenated with ``domain_id``, so a
+      structured id can produce the same key as a different
+      ``(tenant, domain)`` pair and read that tenant's state. Nothing
+      traverses; the namespaces simply merge.
+
+    The second is why containment at the composing site cannot cover
+    this on its own: there is no path there to contain. So the check is
+    here, at construction, where every backend inherits it.
+
+    ``domain_id`` is deliberately *not* checked. It legitimately names a
+    subdirectory (``team/alpha``) and the backends treat it as a
+    location; the isolation guarantee does not rest on it.
+
+    Raises:
+        ValueError: If ``tenant_id`` is empty, is a bare ``.`` / ``..``,
+            or contains a path separator or NUL.
+    """
+    if not tenant_id or not tenant_id.strip():
+        raise ValueError("tenant_id must be a non-empty string.")
+    if tenant_id in (os.curdir, os.pardir):
+        raise ValueError(f"tenant_id must name a tenant, not a directory reference: {tenant_id!r}")
+    found = [c for c in _TENANT_ID_FORBIDDEN if c in tenant_id]
+    if found:
+        raise ValueError(
+            f"tenant_id must not contain a path separator or NUL "
+            f"(found {found!r} in {tenant_id!r}): it is interpolated into a "
+            f"state-key prefix, where a separator merges tenant namespaces."
+        )
 
 
 @runtime_checkable
@@ -96,6 +151,13 @@ class TenantContext(Protocol):
         Returns ``None`` for :class:`SingleTenantContext`; a ``str`` for
         tenant-scoped impls. Backends without tenancy awareness MAY ignore
         this value entirely.
+
+        A tenant-scoped impl MUST validate this with
+        :func:`validate_tenant_id` at construction. It is the one part of
+        a state key whose job is keeping tenants apart, and it is
+        interpolated into :meth:`state_key_prefix` — so an id carrying a
+        separator stops being one segment and merges two tenants'
+        namespaces. The reference impls do this in ``__post_init__``.
         """
         ...
 
@@ -236,6 +298,9 @@ class BoundTenantContext:
     tenant_id: str
     domain_id: str
 
+    def __post_init__(self) -> None:
+        validate_tenant_id(self.tenant_id)
+
     def lock_key(self, operation: str) -> str:
         return f"{operation}:{self.tenant_id}:{self.domain_id}"
 
@@ -269,6 +334,23 @@ class PrefixedTenantContext:
     construction time (an unknown placeholder or malformed braces raise
     ``ValueError`` immediately, rather than deep inside a later lock /
     state-key call).
+
+    **The pattern must keep the tenant segment unambiguous — this class
+    cannot check that for you.** :func:`validate_tenant_id` keeps a
+    separator out of ``tenant_id``, but it cannot know what *your*
+    pattern treats as a delimiter, and an ambiguous one merges tenant
+    namespaces exactly as a separator would::
+
+        "legacy/{tenant_id}-{domain_id}/"
+
+        tenant_id="acme",   domain_id="x-y"  ->  "legacy/acme-x-y/"
+        tenant_id="acme-x", domain_id="y"    ->  "legacy/acme-x-y/"
+
+    Two different tenants, one state namespace. Choose a delimiter that
+    cannot occur in your ``tenant_id`` values, or put ``{tenant_id}`` in
+    its own path segment as :class:`BoundTenantContext` does. Validating
+    this automatically would mean parsing the pattern against the space
+    of ids a deployment might use, which this class does not attempt.
     """
 
     tenant_id: str
@@ -276,6 +358,7 @@ class PrefixedTenantContext:
     prefix_pattern: str
 
     def __post_init__(self) -> None:
+        validate_tenant_id(self.tenant_id)
         # Fail fast on a bad template instead of at first lock_key /
         # state_key_prefix call. Dry-run the format with the instance's own
         # values across both placeholder sets the accessors use.
@@ -351,6 +434,9 @@ class SharedCorpusTenantContext:
     tenant_id: str
     domain_id: str
     shared_corpus_id: str
+
+    def __post_init__(self) -> None:
+        validate_tenant_id(self.tenant_id)
 
     def lock_key(self, operation: str) -> str:
         # Lock on (tenant, shared_corpus) — state writes serialize

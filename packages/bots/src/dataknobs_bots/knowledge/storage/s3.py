@@ -308,6 +308,8 @@ class S3KnowledgeBackend(KnowledgeResourceBackendMixin):
         self,
         kind: KnowledgeKeyKind = KnowledgeKeyKind.CONTENT,
         domain_id: str | None = None,
+        *,
+        ctx: TenantContext | None = None,
     ) -> str:
         """S3-native wildcard pattern matching keys of the given kind.
 
@@ -318,17 +320,22 @@ class S3KnowledgeBackend(KnowledgeResourceBackendMixin):
 
         :attr:`KnowledgeKeyKind.UNKNOWN` raises :class:`ValueError`
         (fails closed — there is no shape for "unrecognized keys").
+
+        The state kinds carry :meth:`_state_prefix` between the backend
+        prefix and the domain segment, exactly as :meth:`_metadata_key`
+        and :meth:`_snapshot_key` do — a pattern that omits it names the
+        pre-tenancy key and matches the domain-keyed document instead of
+        the tenant's. See the protocol for why there is no all-tenants
+        spelling.
         """
+        state_prefix = self._pattern_state_prefix(kind, ctx)
         domain_segment = domain_id if domain_id else "*"
+        root = f"{self._prefix}{state_prefix}{domain_segment}"
         if kind is KnowledgeKeyKind.CONTENT:
-            return f"{self._prefix}{domain_segment}/{self.CONTENT_DIR}/*"
+            return f"{root}/{self.CONTENT_DIR}/*"
         if kind is KnowledgeKeyKind.METADATA:
-            return f"{self._prefix}{domain_segment}/{self.METADATA_FILE}"
-        if kind is KnowledgeKeyKind.SNAPSHOT:
-            return f"{self._prefix}{domain_segment}/{self.SNAPSHOTS_DIR}/*"
-        raise ValueError(
-            f"key_pattern is not defined for kind {kind!r} (only CONTENT / METADATA / SNAPSHOT)"
-        )
+            return f"{root}/{self.METADATA_FILE}"
+        return f"{root}/{self.SNAPSHOTS_DIR}/*"
 
     async def _load_metadata(self, domain_id: str, ctx: TenantContext | None = None) -> dict:
         """Load metadata from S3 (tenant-scoped via ``ctx``)."""

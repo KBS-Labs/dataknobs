@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Security
+
+- **A path handed to `FileSystemResource` could address any file on the
+  volume.** `__init__` does `Path(base_path).resolve()`, which is only
+  meaningful if that directory is a boundary — but no composed path was ever
+  checked back against it. Four methods each did `self.base_path / path`
+  independently and acted on the result: `acquire`/`open` opened it in read
+  *or* write mode (creating parent directories on the way for a write),
+  `exists` reported on it, `delete` `unlink`ed it, and `list_files` globbed
+  a caller-supplied pattern. A `..` segment walked out; an absolute path
+  discarded the base outright.
+
+  All four now compose through one bounded resolver. A path or pattern
+  naming a subdirectory is still legal — nesting is the point of a file
+  resource — and one that leaves the base raises
+  `dataknobs_common.PathEscapeError`, a `ValueError` subclass.
+
+  Two placements are deliberate and load-bearing. In `delete`, the check
+  runs *before* the blanket `except Exception: return False`, because
+  `False` is also that method's ordinary "no such file" answer — a refusal
+  raised inside the `try` would have been swallowed into a result
+  indistinguishable from a no-op. In `acquire`, the refusal is re-raised
+  ahead of the handler that rewrites everything into `ResourceError`,
+  because a caller passing a bad name is not this resource failing and
+  should not mark it `ERROR`. (That `delete`'s handler also swallows real
+  errors is a separate pre-existing defect, untouched here.)
+
 ## v0.4.0 - 2026-08-11
 
 ### Security
