@@ -27,6 +27,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
+from dataknobs_common.paths import safe_join_or_raise
+
 if TYPE_CHECKING:
     from collections.abc import Callable
 
@@ -110,13 +112,25 @@ class DocumentSource(Protocol):
         ...
 
     async def read_bytes(self, ref: DocumentFileRef) -> bytes:
-        """Read the full contents of a file."""
+        """Read the full contents of a file.
+
+        ``ref.path`` names a file *within this source*. An
+        implementation backed by a bounded store must refuse a ref
+        addressing anything outside it rather than reading whatever the
+        composition lands on — including a ref spelled absolutely, which
+        replaces the base rather than escaping it. Refs are not
+        guaranteed to have come from :meth:`iter_files`: the type is
+        public and delta-ingest hands refs back in.
+        """
         ...
 
     async def read_streaming(
         self, ref: DocumentFileRef, chunk_size: int = 8192
     ) -> AsyncIterator[bytes]:
-        """Stream file contents in byte-sized chunks."""
+        """Stream file contents in byte-sized chunks.
+
+        Bounded by the same rule as :meth:`read_bytes`.
+        """
         ...
 
 
@@ -175,9 +189,43 @@ class LocalDocumentSource:
         for ref in await asyncio.to_thread(_collect):
             yield ref
 
+    def _resolve(self, ref: DocumentFileRef) -> Path:
+        """Locate ``ref`` under ``root``, refusing a ref that leaves it.
+
+        ``ref.path`` is a *name within this source*, not a path to open:
+        :meth:`iter_files` derives every ref it yields with
+        ``relative_to(self._root)``, so the class already treats the root
+        as its boundary. :class:`DocumentFileRef` is an exported
+        dataclass and the delta-ingest seam hands refs back in, so a ref
+        can also arrive from a caller — and that is the one this bounds.
+
+        Both escaping spellings are refused, and the absolute one is the
+        wider of the two: ``Path("/root") / "/etc/passwd"`` discards the
+        root rather than climbing out of it, so exempting it would leave
+        the larger hole. Containment is judged on where the ref *lands*,
+        so an absolute ref pointing back inside the root still reads, and
+        nesting — the point of a document tree — is untouched.
+
+        The check is lexical and precedes every filesystem call, so an
+        escaping ref fails identically whether or not it names something
+        that exists.
+        """
+        return safe_join_or_raise(
+            self._root,
+            ref.path,
+            what="document ref",
+            outside="the source's root",
+            supplied=ref.path,
+        )
+
     async def read_bytes(self, ref: DocumentFileRef) -> bytes:
-        """Read the full contents of ``ref``."""
-        path = self._root / ref.path
+        """Read the full contents of ``ref``.
+
+        Raises :class:`~dataknobs_common.paths.PathEscapeError` when
+        ``ref`` addresses a file outside :attr:`root` — see
+        :meth:`_resolve`.
+        """
+        path = self._resolve(ref)
         return await asyncio.to_thread(path.read_bytes)
 
     async def read_streaming(
@@ -192,8 +240,14 @@ class LocalDocumentSource:
         early (via ``break``, exception, or cancellation), the file
         handle is released by the generator's finalizer and no thread
         is left waiting to hand off a chunk.
+
+        Raises :class:`~dataknobs_common.paths.PathEscapeError` when
+        ``ref`` addresses a file outside :attr:`root` — see
+        :meth:`_resolve`. The refusal happens on the first ``__anext__``
+        rather than at call time, because this is a generator; that is
+        before any ``open``, which is what matters.
         """
-        path = self._root / ref.path
+        path = self._resolve(ref)
 
         def _open_and_read() -> tuple[Any, bytes]:
             f = open(path, "rb")

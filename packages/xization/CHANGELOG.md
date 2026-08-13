@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Security
+
+- **A `DocumentFileRef` can no longer read outside a `LocalDocumentSource`'s
+  root.** `read_bytes` and `read_streaming` composed `root / ref.path` and
+  opened the result unchecked, so a caller-built ref carrying `..` read a file
+  from outside the tree — and an absolute `ref.path` discarded the root
+  outright, which is the wider of the two spellings rather than a narrower
+  case. The source already treated its root as a boundary (`iter_files`
+  derives every ref it yields via `relative_to(root)`); now both readers do
+  too, raising `PathEscapeError` before any filesystem call, so an escaping
+  ref fails identically whether or not it names something that exists.
+  Nesting is untouched — `sub/a.md` and an interior `a/../b` still read, and
+  so does an absolute ref that lands back inside the root, because
+  containment is judged on where the ref lands rather than on how it is
+  spelled. The `DocumentSource` protocol now states the rule, so a
+  consumer-written implementation over a bounded store inherits it.
+
 ## v2.0.0 - 2026-08-11
 
 ### Changed
