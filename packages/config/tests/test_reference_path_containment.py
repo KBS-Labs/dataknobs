@@ -19,6 +19,7 @@ import yaml
 from dataknobs_common.paths import PathEscapeError
 
 from dataknobs_config import Config
+from dataknobs_config.exceptions import ConfigError
 
 # Matches the containment failure specifically, so an unrelated `ValueError`
 # from a malformed config cannot report this green.
@@ -91,16 +92,17 @@ def test_the_refusal_names_the_reference_the_config_supplied(tree: Path) -> None
     assert "../outside/secret.yaml" in str(excinfo.value)
 
 
-class TestTheDocumentedOptOut:
-    """`allow_reference_outside_config_root` — off by default, per-deployment.
+class TestTheOptOutIsNotReachableFromConfigContent:
+    """The guard exists because config content is the lower-trust plane.
 
-    `dataknobs-config` has the shared-directory case a file resource does not:
-    `configs/app.yaml` with `extends: ../shared/base` is the documented layout
-    this package already supports, so a deployment that references across
-    trees on purpose needs a migration that is not "restructure your files".
+    That is the whole premise: a reference is bounded *because* it comes out
+    of a config file rather than from a caller. An off-switch readable from
+    the same file leaves the guard bounding an input that can switch it off,
+    which is not a boundary — so `settings:` refuses the key outright rather
+    than honouring or silently dropping it.
     """
 
-    def test_the_opt_out_admits_a_reference_outside_the_root(self, tree: Path) -> None:
+    def test_a_config_file_may_not_switch_off_its_own_guard(self, tree: Path) -> None:
         entry = _write(
             tree / "configs" / "main.yaml",
             {
@@ -109,42 +111,88 @@ class TestTheDocumentedOptOut:
             },
         )
 
-        config = Config(entry)
+        with pytest.raises(ConfigError, match="allow_reference_outside_config_root"):
+            Config(entry)
 
-        assert config.get("database")["name"] == "stolen"
-
-    def test_the_opt_out_admits_an_absolute_reference(self, tree: Path) -> None:
+    def test_the_refusal_says_where_the_opt_out_does_live(self, tree: Path) -> None:
+        """A silent drop fails closed and leaves the operator with no thread."""
         entry = _write(
             tree / "configs" / "main.yaml",
-            {
-                "settings": {"allow_reference_outside_config_root": True},
-                "database": [f"@{tree / 'outside' / 'secret.yaml'}"],
-            },
+            {"settings": {"allow_reference_outside_config_root": True}},
         )
 
-        config = Config(entry)
+        with pytest.raises(ConfigError) as excinfo:
+            Config(entry)
 
-        assert config.get("database")["name"] == "stolen"
+        assert "Config(" in str(excinfo.value)
 
-    def test_the_opt_out_is_not_applied_as_a_default_attribute(self, tree: Path) -> None:
-        """Settings beside `config_root` are configuration, not config values.
+    def test_a_dict_source_may_not_switch_it_off_either(self, tree: Path) -> None:
+        """A parsed dict is the same plane as the file it was parsed from."""
+        with pytest.raises(ConfigError, match="allow_reference_outside_config_root"):
+            Config({"settings": {"allow_reference_outside_config_root": True}})
 
-        `apply_defaults` copies every dotless setting onto every atomic config
-        as a default attribute, with `config_root` and friends excluded by
-        name. A new sibling that is not excluded would silently appear as an
-        `allow_reference_outside_config_root` key on every loaded object.
+    def test_an_unsubstituted_placeholder_cannot_switch_the_guard_off(self, tree: Path) -> None:
+        """The sharpest spelling of the same defect, and the least visible.
+
+        `substitute_env_vars` runs on atomic configs only, after settings are
+        taken raw — so a placeholder in `settings:` stays the literal string
+        `"${...}"`. Read as a bare truthy value it disabled the guard
+        permanently, whatever the variable was set to and including unset,
+        for an operator doing the ordinary thing of templating a flag from
+        the environment.
         """
         entry = _write(
             tree / "configs" / "main.yaml",
             {
-                "settings": {"allow_reference_outside_config_root": True},
-                "database": [{"name": "plain"}],
+                "settings": {"allow_reference_outside_config_root": "${DK_ALLOW_OUTSIDE}"},
+                "database": ["@../outside/secret.yaml"],
             },
         )
 
-        config = Config(entry)
+        with pytest.raises(ConfigError, match="allow_reference_outside_config_root"):
+            Config(entry)
 
-        assert "allow_reference_outside_config_root" not in config.get("database")
+
+class TestTheCallerSuppliedOptOut:
+    """`allow_reference_outside_config_root=` — off by default, caller-only.
+
+    `dataknobs-config` has the shared-directory case a file resource does not:
+    `configs/app.yaml` with `extends: ../shared/base` is the documented layout
+    this package already supports, so a deployment that references across
+    trees on purpose needs a migration that is not "restructure your files".
+
+    It is a constructor argument, which is where every sibling opt-out in this
+    package already sits — `find_config_file(allow_outside=)`,
+    `InheritableConfigLoader(allow_outside=)`, `EnvironmentConfig.load(allow_outside=)`.
+    """
+
+    def test_the_opt_out_admits_a_reference_outside_the_root(self, tree: Path) -> None:
+        entry = _entry(tree, "../outside/secret.yaml")
+
+        config = Config(entry, allow_reference_outside_config_root=True)
+
+        assert config.get("database")["name"] == "stolen"
+
+    def test_the_opt_out_admits_an_absolute_reference(self, tree: Path) -> None:
+        entry = _entry(tree, str(tree / "outside" / "secret.yaml"))
+
+        config = Config(entry, allow_reference_outside_config_root=True)
+
+        assert config.get("database")["name"] == "stolen"
+
+    def test_it_is_off_by_default(self, tree: Path) -> None:
+        entry = _entry(tree, "../outside/secret.yaml")
+
+        with pytest.raises(PathEscapeError, match=_ESCAPE):
+            Config(entry)
+
+    def test_from_file_takes_it_too(self, tree: Path) -> None:
+        """The classmethod is the documented entry point for a file load."""
+        entry = _entry(tree, "../outside/secret.yaml")
+
+        config = Config.from_file(entry, allow_reference_outside_config_root=True)
+
+        assert config.get("database")["name"] == "stolen"
 
     def test_the_opt_out_logs_only_when_a_reference_actually_escapes(
         self, tree: Path, caplog: pytest.LogCaptureFixture
@@ -154,31 +202,41 @@ class TestTheDocumentedOptOut:
         Warning on every load while the flag is on trains the reader to
         ignore it, which is the same as not warning at all.
         """
-        entry = _write(
-            tree / "configs" / "main.yaml",
-            {
-                "settings": {"allow_reference_outside_config_root": True},
-                "database": ["@fragment.yaml"],
-            },
-        )
+        entry = _entry(tree, "fragment.yaml")
 
         with caplog.at_level("WARNING"):
-            Config(entry)
+            Config(entry, allow_reference_outside_config_root=True)
 
         assert not [r for r in caplog.records if "outside" in r.getMessage()]
 
     def test_an_escape_under_the_opt_out_is_logged(
         self, tree: Path, caplog: pytest.LogCaptureFixture
     ) -> None:
+        entry = _entry(tree, "../outside/secret.yaml")
+
+        with caplog.at_level("WARNING"):
+            Config(entry, allow_reference_outside_config_root=True)
+
+        assert [r for r in caplog.records if "outside" in r.getMessage()]
+
+
+class TestTheRootItselfIsNotWidenableFromContent:
+    """The same plane argument, for the boundary rather than the switch.
+
+    `config_root` is a settings key, so a config file naming its own root
+    would widen the tree it is bounded to — the off-switch again, spelled as
+    a boundary. A file load pins the root to the entry file's own directory
+    before the file's `settings:` block is read, so it cannot.
+    """
+
+    def test_an_entry_file_may_not_name_its_own_root(self, tree: Path) -> None:
         entry = _write(
             tree / "configs" / "main.yaml",
             {
-                "settings": {"allow_reference_outside_config_root": True},
+                "settings": {"config_root": str(tree)},
                 "database": ["@../outside/secret.yaml"],
             },
         )
 
-        with caplog.at_level("WARNING"):
+        with pytest.raises(PathEscapeError, match=_ESCAPE):
             Config(entry)
-
-        assert [r for r in caplog.records if "outside" in r.getMessage()]

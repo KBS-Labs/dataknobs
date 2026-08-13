@@ -144,8 +144,11 @@ databases:
     host: localhost
 ```
 
-The reference resolves against `config_root`, which defaults to the directory
-of the first file loaded and can be set explicitly under `settings:`.
+The reference resolves against `config_root`. Loading a file pins it to that
+file's own directory, before the file's own `settings:` block is read — so an
+entry file cannot name the root it is bounded to. A `Config` built from
+dictionaries has no such directory, and takes `config_root` from `settings:`
+like any other setting.
 
 ### References stay inside `config_root`
 
@@ -170,19 +173,46 @@ With no `config_root` set there is no tree: an absolute reference is unbounded,
 and a relative one raises `ConfigError` because there is nothing to resolve it
 against.
 
+Containment is judged **lexically** — the reference is what gets checked, and
+no symlink is followed while checking it. A symlink *inside* `config_root`
+pointing outside it is therefore contained by this guard, and can still widen
+where a permitted reference lands. That is deliberate: the symlink is part of
+the deployment's own tree (a mounted ConfigMap is built out of them), so it is
+a different question from the one asked here, which is whether the *reference*
+addressed outside.
+
 ### Opting out
 
-A deployment whose configs deliberately reference across trees sets one
-setting:
+A deployment whose configs deliberately reference across trees passes an
+argument to the constructor:
 
-```yaml
-settings:
-  allow_reference_outside_config_root: true
+```python
+config = Config("app/configs/main.yaml", allow_reference_outside_config_root=True)
 ```
 
 Each reference that actually escapes is then logged at `WARNING` and read
 anyway, so the bypass is visible in the deployment's logs rather than silent.
 A load whose references all stay inside the root logs nothing.
+
+**It is a caller argument, and cannot be set from a config file.** The guard
+exists precisely because a reference comes out of config content rather than
+from the calling code; a switch readable from a `settings:` block would let
+that content turn off the check that bounds it, which is not a boundary at all.
+A `settings:` block naming it is refused:
+
+```yaml
+settings:
+  allow_reference_outside_config_root: true   # ConfigError — not settable here
+```
+
+The refusal is deliberate rather than a silent drop: ignoring the key would
+fail closed, but would leave an operator who wrote it in YAML watching their
+references raise with nothing pointing at why.
+
+This puts the opt-out where every sibling in this package already keeps one —
+`find_config_file(allow_outside=...)`, `InheritableConfigLoader(allow_outside=...)`,
+and `EnvironmentConfig.load(allow_outside=...)` are all caller parameters
+defaulting to `False`.
 
 ## Cross-References
 
