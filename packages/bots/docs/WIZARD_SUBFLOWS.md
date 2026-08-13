@@ -268,7 +268,38 @@ project/
 
 The loader tries each location in order and uses the first match. If the subflow is defined both inline and as a file, the inline definition takes precedence.
 
-Both locations are bounded to the directory the parent config was loaded from. A subflow name may address a subdirectory (`shared/kb_acquisition` resolves under the config directory), but one that leaves it — with `..`, or by being an absolute path — raises `PathEscapeError` (a `ValueError` subclass, so an existing `except ValueError` still catches it) rather than loading. Both candidate locations are checked, and a name that escapes under either is refused rather than silently resolved as the other. The name comes out of config *content* rather than from a caller, so an escaping one would otherwise pull in a foreign state machine along with its transitions, transforms and function references.
+#### Where a subflow name may point
+
+Both locations are bounded to the wizard's **config tree**, which is fixed when the outermost wizard is loaded and does not move as the loader follows names from one file to the next.
+
+A subflow name may address a subdirectory (`shared/kb_acquisition` resolves under the config directory), and a nested subflow may name a sibling *above* its own directory — `cfg/subflows/a.yaml` naming `../shared` reaches `cfg/shared.yaml`, which is plainly inside the tree and is the ordinary shape of a shared-fragment directory. A name that leaves the tree — with `..`, or by being an absolute path — raises `PathEscapeError` (a `ValueError` subclass, so an existing `except ValueError` still catches it) rather than loading.
+
+The distinction matters because a name is spelled relative to the file that wrote it, so *where it resolves from* moves with each hop while *what it may reach* does not. Bounding each hop to its own directory instead would refuse the `../shared` case above; resolving everything from the outermost directory would silently load a different file rather than refuse.
+
+Both candidate locations are checked, and a name that escapes under either is refused rather than silently resolved as the other. The name comes out of config *content* rather than from a caller, so an escaping one would otherwise pull in a foreign state machine along with its transitions, transforms and function references.
+
+#### Which tree
+
+The tree is the directory the load started from. Two callers set it explicitly:
+
+| Caller | Argument | Tree |
+|---|---|---|
+| `WizardConfigLoader.load(path, ...)` | *(none)* | `path`'s own directory |
+| `WizardConfigLoader.load(path, ..., config_root=...)` | `config_root` | the given directory, which must contain `path` |
+| `WizardReasoning.from_config` | `config_base_path` beside `wizard_config` | the declared base — `wizard_config` is bounded to it too |
+
+Pass `config_root` for a wizard whose subflows deliberately live in a directory beside its own:
+
+```python
+# app/wizards/main.yaml naming ../shared/kb_acquisition
+loader.load("app/wizards/main.yaml", config_root="app")
+```
+
+Widening the root keeps it a boundary — `app/shared/` comes inside the tree and nothing else does — where an on/off switch would admit everything. A `config_root` that does not contain the entry file is refused, since the two arguments then disagree about which tree is being loaded.
+
+Declaring no `config_base_path` on a bot declares no tree and bounds nothing, which is the migration for a deployment that genuinely wants an absolute `wizard_config`.
+
+> Containment is judged **lexically**: the name is what gets checked, and no symlink is followed while checking it. A symlink *inside* the tree that points outside it is therefore contained by this guard and can still widen where a permitted name lands — deliberately, since the symlink is part of the deployment's own tree rather than something a config name chose.
 
 File-based subflows use the exact same YAML structure as any wizard config:
 

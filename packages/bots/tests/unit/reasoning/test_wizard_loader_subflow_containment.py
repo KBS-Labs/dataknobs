@@ -101,15 +101,24 @@ def test_an_absolute_subflow_name_cannot_replace_the_config_directory(
         WizardConfigLoader().load(host)
 
 
-def test_the_subflows_subdirectory_probe_is_bounded_too(config_dir: Path, outside: Path) -> None:
-    """The second composition inserts ``subflows/``, which a ``..`` undoes.
+def test_a_name_spelled_for_the_nested_layout_is_refused_too(
+    config_dir: Path, outside: Path
+) -> None:
+    """A name aimed at the ``subflows/`` reading escapes on the way to it.
 
-    ``{base}/subflows/../../elsewhere/x`` leaves the base just as the
-    first probe does, so guarding only the first would leave a live path.
-    The name is spelled with one more ``..`` than the first probe needs,
-    so only this second composition resolves onto the outside file — and
-    ``subflows/`` has to exist for the kernel to walk through it, which
-    is why the directory is created here.
+    The refusal here comes from the **first** probe, and that is worth
+    stating rather than leaving to be rediscovered: the second probe is the
+    first with ``subflows/`` inserted, so it is strictly one level deeper.
+    A name climbing far enough to leave the tree under the second has
+    already left it under the first, which is checked before it — so the
+    second can never be the first failure, and no name reaching this loader
+    isolates it.
+
+    The second probe is still guarded. Its guard is not redundant defence
+    in a code sense but an ordering-independent one: it keeps containment a
+    property of each composition rather than of the sequence they happen to
+    be tried in, which is what would silently change if a probe were
+    reordered or a third added.
     """
     (config_dir / "subflows").mkdir()
     host = config_dir / "host.yaml"
