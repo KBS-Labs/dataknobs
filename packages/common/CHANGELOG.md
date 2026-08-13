@@ -32,7 +32,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   write that must not be redirected still wants a `Path.resolve()` check of
   its own, off the loop.
 
+- **`safe_join_or_raise(...)` and `PathEscapeError` — the same check with the
+  refusal spelled as an exception.** `safe_join`'s `None` has to become an
+  error at almost every call site, and each site was writing that adapter by
+  hand: four of them across this repo, raising three different exception
+  types and wording one refusal four ways. A consumer could not write one
+  `except` for one condition.
+
+  `safe_join_or_raise(base, *parts, what=..., outside=...)` returns the
+  joined path or raises `PathEscapeError`, which subclasses `ValueError` —
+  so the sites that raised a bare `ValueError` stay catchable exactly as
+  before, and code that needs to tell "your name addressed outside" from an
+  unrelated `ValueError` on the same call now can. That distinction is not
+  hypothetical: `pydantic.ValidationError` is also a `ValueError`, and a
+  test in this repo went green against unguarded code because of it.
+
+  Prefer it over the sentinel form. `safe_join` remains right where a
+  refusal is one outcome among several — `find_config_file` weighs every
+  extension before deciding — and is unchanged for those callers.
+
+- **`validate_tenant_id(tenant_id)` is exported.** The reference
+  `TenantContext` impls call it from `__post_init__`, but the module invites
+  consumers to write their own impl and nothing runs `__post_init__` on a
+  class this module never sees. A consumer following that invitation would
+  have accepted a structured id and merged two tenants' namespaces, with no
+  supported way to opt into the check. The Protocol's `tenant_id` docstring
+  now states the requirement and names the function.
+
+### Changed
+
+- **`ConfigPathEscapeError` also subclasses `PathEscapeError`.** It keeps
+  `ConfigLoadError`, so catching "this config would not load" is unchanged;
+  the second base makes it the same refusal every other composing site
+  raises, so one `except PathEscapeError` reaches all of them. Purely
+  additive — nothing that caught it before stops catching it.
+
 ### Security
+
+- **`safe_join` accepted a NUL inside a path part.** A NUL terminates the
+  string inside the C library, so `a\x00b.yaml` addresses `a` — the name the
+  guard measured is not the one the kernel would see. Nothing was
+  exploitable through it (`open()` raises its own `ValueError` for an
+  embedded NUL, and `Path.exists()` answers `False`), but the refusal
+  arrived from a different place as a different type than every other
+  rejection of a bad name. It is now refused by the guard, so one kind of
+  bad name produces one kind of error from one place.
 
 - **A `tenant_id` containing a path separator merged two tenants' state.**
   The tenant contexts accepted any non-empty string and interpolated it into
@@ -63,6 +107,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   is to use a flat tenant identifier and, where a nested convention is
   genuinely wanted, express it through `PrefixedTenantContext`'s
   `prefix_pattern`, which remains free-form.
+
+  One caveat on that migration, now stated on the class: a pattern chooses
+  its own delimiter, and this check cannot know what it is. A pattern of
+  `"legacy/{tenant_id}-{domain_id}/"` gives `legacy/acme-x-y/` for both
+  `(tenant="acme", domain="x-y")` and `(tenant="acme-x", domain="y")` —
+  the same namespace merge, reached without a separator and with two ids
+  that both validate. Choose a delimiter your tenant ids cannot contain,
+  or give `{tenant_id}` its own path segment.
 
 - **`find_config_file` let a config name address a file outside the
   directory it was given.** The name was joined to `config_dir` and probed

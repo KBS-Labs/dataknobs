@@ -10,7 +10,9 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from dataknobs_common.paths import safe_join
+import pytest
+
+from dataknobs_common.paths import PathEscapeError, safe_join, safe_join_or_raise
 
 
 class TestSafeJoinAllows:
@@ -122,3 +124,94 @@ class TestSafeJoinRejects:
         """The comparison bounds the base, it does not blocklist the name."""
         base = tmp_path / "base"
         assert safe_join(base, "base-other/x.yaml") == base / "base-other" / "x.yaml"
+
+
+class TestSafeJoinOrRaise:
+    """The raising spelling, and why the sentinel one is not enough.
+
+    Four call sites in this repo turned ``None`` into an exception by
+    hand, and between them they used three different exception types and
+    worded the same refusal four ways. A caller could not write one
+    ``except`` for one condition. These pin the collapsed form.
+    """
+
+    def test_it_returns_the_collapsed_path_when_contained(self) -> None:
+        result = safe_join_or_raise(
+            Path("/srv/configs"),
+            "domains/../child.yaml",
+            what="config name",
+            outside="the config directory",
+        )
+
+        assert result == Path("/srv/configs/child.yaml")
+
+    def test_it_raises_rather_than_returning_none(self) -> None:
+        with pytest.raises(PathEscapeError):
+            safe_join_or_raise(
+                Path("/srv/configs"),
+                "../../etc/passwd",
+                what="config name",
+                outside="the config directory",
+            )
+
+    def test_the_message_names_the_input_not_the_deployment_layout(self) -> None:
+        """A caller learns what to correct without learning where the
+        deployment keeps its files.
+        """
+        with pytest.raises(PathEscapeError) as excinfo:
+            safe_join_or_raise(
+                Path("/srv/secret-location/configs"),
+                "../../etc/passwd",
+                what="config name",
+                outside="the config directory",
+            )
+
+        message = str(excinfo.value)
+        assert "config name" in message
+        assert "'../../etc/passwd'" in message
+        assert "/srv/secret-location" not in message
+
+    def test_supplied_overrides_what_is_quoted_back(self) -> None:
+        """The last part is often derived — a name with a suffix appended,
+        or a prefixed draft filename. The message should quote what the
+        caller actually passed, not what we built from it.
+        """
+        with pytest.raises(PathEscapeError) as excinfo:
+            safe_join_or_raise(
+                Path("/base"),
+                "_draft-a/../../x.yaml",
+                what="draft id",
+                outside="the output directory",
+                supplied="a/../../x",
+            )
+
+        assert "'a/../../x'" in str(excinfo.value)
+        assert "_draft-" not in str(excinfo.value)
+
+    def test_it_is_still_a_value_error(self) -> None:
+        """Narrowing, not a breaking change: the sites that raised bare
+        ``ValueError`` before this type existed stay catchable that way.
+        """
+        with pytest.raises(ValueError):
+            safe_join_or_raise(Path("/base"), "/etc/passwd", what="path", outside="the base")
+
+
+class TestNulIsRefused:
+    """A NUL is not a containment question, but it arrives the same way.
+
+    ``open()`` rejects an embedded NUL with its own ``ValueError``, so
+    nothing was exploitable — but the width measured by the guard is not
+    the string the C library sees, and the refusal arrived as a fourth
+    error surface for the same class of bad name. It is refused here so
+    every rejection of a name comes from one place as one type.
+    """
+
+    def test_safe_join_refuses_a_nul(self) -> None:
+        assert safe_join(Path("/base"), "a\x00b.yaml") is None
+
+    def test_safe_join_or_raise_refuses_a_nul(self) -> None:
+        with pytest.raises(PathEscapeError):
+            safe_join_or_raise(Path("/base"), "a\x00b.yaml", what="config name", outside="the base")
+
+    def test_a_nul_in_any_part_is_refused(self) -> None:
+        assert safe_join(Path("/base"), "sub", "a\x00b") is None

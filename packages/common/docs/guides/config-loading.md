@@ -149,21 +149,50 @@ process environment variable can address.
 
 The containment test is `dataknobs_common.paths.safe_join`, exported
 from the package root and usable directly by any code that composes a
-path out of a name it did not write:
+path out of a name it did not write. It comes in two spellings, and
+most callers want the raising one:
+
+```python
+from dataknobs_common import safe_join_or_raise
+
+target = safe_join_or_raise(
+    knowledge_dir, domain_id, resource_path,
+    what="resource path",
+    outside="the knowledge directory",
+)
+```
+
+That raises `PathEscapeError` — a `ValueError` subclass — when the
+result lands outside the base, and returns the joined path otherwise.
+Reach for the sentinel form instead only when a refusal is genuinely
+one outcome among several, as it is inside `find_config_file`, which
+weighs every extension before deciding:
 
 ```python
 from dataknobs_common import safe_join
 
 target = safe_join(knowledge_dir, domain_id, resource_path)
 if target is None:
-    raise ValueError("resource path resolves outside the knowledge directory")
+    ...  # one candidate refused; others may still resolve
 ```
 
-It returns the joined path with `.` and `..` segments collapsed, or
-`None` when the result lands outside the base. Containment is judged on
-where the path **lands**, not on how it was spelled: an interior
-`a/../b` is contained, and so is an absolute part that points back
-inside the base.
+Prefer `safe_join_or_raise` otherwise. A hand-written `if ... is None:
+raise` at each call site is how this repo ended up with four adapters
+raising three different exception types and wording one refusal four
+ways, which is a contract no consumer can catch in one place.
+
+Either spelling returns the joined path with `.` and `..` segments
+collapsed. Containment is judged on where the path **lands**, not on how
+it was spelled: an interior `a/../b` is contained, and so is an absolute
+part that points back inside the base. A part containing NUL is refused,
+because the string the guard measured is not the one the C library would
+see.
+
+**The base you pass is the boundary you get.** Where a layout nests one
+bounded region inside another — a per-tenant subtree inside a storage
+root — check each hop against the hop before it. A single check against
+the outermost base accepts a name that walks *sideways* into a sibling
+region without ever leaving the root.
 
 The check is lexical — no filesystem access — so it is safe to run on
 an event loop and works on a path that does not exist yet, which is the

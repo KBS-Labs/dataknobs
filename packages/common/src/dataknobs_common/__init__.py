@@ -164,7 +164,9 @@ from dataknobs_common.packs import (
     merge_bindings,
 )
 from dataknobs_common.paths import (
+    PathEscapeError,
     safe_join,
+    safe_join_or_raise,
 )
 from dataknobs_common.postgres_config import (
     normalize_postgres_connection_config,
@@ -374,7 +376,9 @@ __all__ = [
     "load_yaml_or_json",
     "parse_yaml_or_json",
     # Path containment
+    "PathEscapeError",
     "safe_join",
+    "safe_join_or_raise",
     # Discriminators
     "Discriminator",
     "AsyncDiscriminator",

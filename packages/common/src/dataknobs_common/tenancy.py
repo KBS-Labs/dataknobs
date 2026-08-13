@@ -47,6 +47,13 @@ Extend the family by writing a frozen, hashable class satisfying
 small factory). The four reference impls plus :class:`PrefixedTenantContext`'s
 format-string escape hatch cover the common conventions, so there is
 intentionally no plugin registry here.
+
+**A consumer impl must call** :func:`validate_tenant_id` **on its own
+tenant_id.** The reference impls call it from ``__post_init__``; nothing
+enforces it on a class this module never sees, so a consumer impl that skips
+it accepts a structured id and silently merges two tenants' state namespaces —
+the failure the check exists to prevent. It is exported for exactly this
+reason.
 """
 
 from __future__ import annotations
@@ -64,6 +71,7 @@ __all__ = [
     "TenantContext",
     "create_tenant_context",
     "tenant_context_from_env",
+    "validate_tenant_id",
 ]
 
 # Characters that give a tenant_id structure. A separator is the whole
@@ -72,7 +80,7 @@ __all__ = [
 _TENANT_ID_FORBIDDEN = ("/", "\\", "\x00")
 
 
-def _validate_tenant_id(tenant_id: str) -> None:
+def validate_tenant_id(tenant_id: str) -> None:
     """Reject a ``tenant_id`` that would carry structure into a state key.
 
     ``tenant_id`` is an *isolation segment*: the one part of a state key
@@ -143,6 +151,13 @@ class TenantContext(Protocol):
         Returns ``None`` for :class:`SingleTenantContext`; a ``str`` for
         tenant-scoped impls. Backends without tenancy awareness MAY ignore
         this value entirely.
+
+        A tenant-scoped impl MUST validate this with
+        :func:`validate_tenant_id` at construction. It is the one part of
+        a state key whose job is keeping tenants apart, and it is
+        interpolated into :meth:`state_key_prefix` — so an id carrying a
+        separator stops being one segment and merges two tenants'
+        namespaces. The reference impls do this in ``__post_init__``.
         """
         ...
 
@@ -284,7 +299,7 @@ class BoundTenantContext:
     domain_id: str
 
     def __post_init__(self) -> None:
-        _validate_tenant_id(self.tenant_id)
+        validate_tenant_id(self.tenant_id)
 
     def lock_key(self, operation: str) -> str:
         return f"{operation}:{self.tenant_id}:{self.domain_id}"
@@ -319,6 +334,23 @@ class PrefixedTenantContext:
     construction time (an unknown placeholder or malformed braces raise
     ``ValueError`` immediately, rather than deep inside a later lock /
     state-key call).
+
+    **The pattern must keep the tenant segment unambiguous — this class
+    cannot check that for you.** :func:`validate_tenant_id` keeps a
+    separator out of ``tenant_id``, but it cannot know what *your*
+    pattern treats as a delimiter, and an ambiguous one merges tenant
+    namespaces exactly as a separator would::
+
+        "legacy/{tenant_id}-{domain_id}/"
+
+        tenant_id="acme",   domain_id="x-y"  ->  "legacy/acme-x-y/"
+        tenant_id="acme-x", domain_id="y"    ->  "legacy/acme-x-y/"
+
+    Two different tenants, one state namespace. Choose a delimiter that
+    cannot occur in your ``tenant_id`` values, or put ``{tenant_id}`` in
+    its own path segment as :class:`BoundTenantContext` does. Validating
+    this automatically would mean parsing the pattern against the space
+    of ids a deployment might use, which this class does not attempt.
     """
 
     tenant_id: str
@@ -326,7 +358,7 @@ class PrefixedTenantContext:
     prefix_pattern: str
 
     def __post_init__(self) -> None:
-        _validate_tenant_id(self.tenant_id)
+        validate_tenant_id(self.tenant_id)
         # Fail fast on a bad template instead of at first lock_key /
         # state_key_prefix call. Dry-run the format with the instance's own
         # values across both placeholder sets the accessors use.
@@ -404,7 +436,7 @@ class SharedCorpusTenantContext:
     shared_corpus_id: str
 
     def __post_init__(self) -> None:
-        _validate_tenant_id(self.tenant_id)
+        validate_tenant_id(self.tenant_id)
 
     def lock_key(self, operation: str) -> str:
         # Lock on (tenant, shared_corpus) — state writes serialize

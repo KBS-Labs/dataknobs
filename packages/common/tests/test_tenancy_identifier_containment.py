@@ -22,13 +22,17 @@ The identifier is checked where it is constructed.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 import pytest
 
+from dataknobs_common import tenancy
 from dataknobs_common.tenancy import (
     BoundTenantContext,
     PrefixedTenantContext,
     SharedCorpusTenantContext,
     create_tenant_context,
+    validate_tenant_id,
 )
 
 ESCAPING_IDS = [
@@ -108,7 +112,73 @@ def test_a_prefix_pattern_may_still_be_any_convention() -> None:
     and is not checked here.
     """
     ctx = PrefixedTenantContext(
-        tenant_id="acme", domain_id="dom", prefix_pattern="legacy/{tenant_id}-{domain_id}/"
+        tenant_id="acme", domain_id="dom", prefix_pattern="legacy/{tenant_id}/{domain_id}/"
     )
 
-    assert ctx.state_key_prefix() == "legacy/acme-dom/"
+    assert ctx.state_key_prefix() == "legacy/acme/dom/"
+
+
+def test_an_ambiguous_prefix_pattern_still_merges_two_tenants() -> None:
+    """The ``tenant_id`` guard cannot see a delimiter the *pattern* chose.
+
+    ``validate_tenant_id`` keeps path separators and NUL out of the id,
+    but a pattern is free to join ``{tenant_id}`` and ``{domain_id}``
+    with a character the ids may legally contain. Two different tenants
+    then share one state namespace — the same failure the guard closes
+    for separators, reached without one.
+
+    **Pinned rather than fixed.** Deciding this automatically means
+    parsing the pattern against the space of ids a deployment might use,
+    which is a design question rather than a missing check. The class
+    docstring tells a consumer to choose a delimiter their ids cannot
+    contain; this test is the evidence for why that sentence exists, and
+    it fails if a later change makes the collision impossible — at which
+    point the docstring and this test both want revisiting rather than
+    one of them silently going stale.
+    """
+    pattern = "legacy/{tenant_id}-{domain_id}/"
+    a = PrefixedTenantContext(tenant_id="acme", domain_id="x-y", prefix_pattern=pattern)
+    b = PrefixedTenantContext(tenant_id="acme-x", domain_id="y", prefix_pattern=pattern)
+
+    assert a.state_key_prefix() == b.state_key_prefix() == "legacy/acme-x-y/"
+
+
+def test_the_invariant_is_reachable_from_the_documented_extension_point() -> None:
+    """A consumer impl must be able to enforce what the reference impls do.
+
+    The module docstring invites writing a frozen class satisfying
+    ``TenantContext``, and nothing calls ``__post_init__`` on a class
+    this module never sees. If the check were private, a consumer
+    following that invitation would accept a structured id and merge two
+    tenants' namespaces — the failure the check exists to prevent, in the
+    one construction path the reference impls do not cover.
+    """
+    assert "validate_tenant_id" in tenancy.__all__
+    assert validate_tenant_id("acme") is None
+    with pytest.raises(ValueError):
+        validate_tenant_id("acme/eu-west")
+
+
+def test_a_consumer_impl_enforcing_the_invariant_behaves_like_the_references() -> None:
+    """The exported check, used the way a consumer would use it."""
+
+    @dataclass(frozen=True)
+    class ConsumerTenantContext:
+        tenant_id: str
+        domain_id: str
+
+        def __post_init__(self) -> None:
+            validate_tenant_id(self.tenant_id)
+
+        def lock_key(self, operation: str) -> str:
+            return f"{operation}:{self.tenant_id}:{self.domain_id}"
+
+        def state_key_prefix(self) -> str:
+            return f"custom/{self.tenant_id}/"
+
+        def matches(self, other: object) -> bool:
+            return self == other
+
+    assert ConsumerTenantContext("acme", "dom").state_key_prefix() == "custom/acme/"
+    with pytest.raises(ValueError, match="separator"):
+        ConsumerTenantContext("acme/eu-west", "dom")
