@@ -20,6 +20,7 @@ from dataknobs_common.config_loading import (
     ConfigYAMLNotInstalledError,
     load_yaml_or_json,
 )
+from dataknobs_common.paths import PathAnchor
 from dataknobs_config import Config as DataknobsConfig
 from dataknobs_config import deep_merge, substitute_env_vars
 
@@ -124,6 +125,7 @@ class ConfigLoader:
         file_path: Union[str, Path],
         resolve_env: bool = True,
         resolve_references: bool = True,
+        config_root: Union[str, Path, None] = None,
     ) -> FSMConfig:
         """Load configuration from a file.
 
@@ -131,6 +133,15 @@ class ConfigLoader:
             file_path: Path to configuration file (JSON or YAML).
             resolve_env: Whether to resolve environment variables.
             resolve_references: Whether to resolve file references.
+            config_root: Directory that ``$include`` and ``$import`` may
+                address within, at any depth. Defaults to ``file_path``'s own
+                directory, which is the tree for the usual layout. Widen it for
+                a deployment whose configs deliberately span sibling
+                directories — ``app/fsm/flow.yaml`` referencing
+                ``../shared/common.yaml`` needs ``config_root=app/``. Widening
+                the anchor rather than disabling the check keeps the boundary a
+                boundary: the shared directory comes inside the tree, and
+                everything else stays outside it.
 
         Returns:
             Validated FSMConfig instance.
@@ -138,6 +149,8 @@ class ConfigLoader:
         Raises:
             FileNotFoundError: If file doesn't exist.
             ValueError: If file format is not supported.
+            PathEscapeError: A ``$include`` or ``$import`` addresses a file
+                outside ``config_root``.
         """
         file_path = Path(file_path)
 
@@ -158,9 +171,11 @@ class ConfigLoader:
         if resolve_env:
             processed_config = self._resolve_environment_vars(processed_config)
 
-        # Resolve file references (includes/imports)
+        # Resolve file references (includes/imports), bounded to the tree
         if resolve_references:
-            processed_config = self._resolve_references(processed_config, file_path.parent)
+            processed_config = self._resolve_references(
+                processed_config, PathAnchor.anchored_at(file_path, config_root)
+            )
 
         # Apply common transformations and validate
         return self._finalize_config(processed_config)
@@ -633,26 +648,41 @@ class ConfigLoader:
 
         return config
 
-    def _resolve_references(self, config: Dict[str, Any], base_path: Path) -> Dict[str, Any]:
+    @staticmethod
+    def _reference(anchor: PathAnchor, value: str, what: str) -> Path:
+        """Resolve one reference from where the referencing file sits."""
+        return anchor.resolve(value, what=what, outside="the configuration tree", supplied=value)
+
+    def _resolve_references(self, config: Dict[str, Any], anchor: PathAnchor) -> Dict[str, Any]:
         """Resolve file references (includes/imports) in configuration.
 
         Supports:
         - $include: path/to/file.yaml
         - $import: { file: path/to/file.yaml, path: some.nested.path }
 
+        A reference is spelled relative to the file that wrote it, and a chain
+        of them may descend and climb back within the tree — but not out of it.
+        The value comes out of config content rather than from a caller, so a
+        ``..`` or an absolute path in one addresses a file the deployment did
+        not put in the tree.
+
         Args:
             config: Configuration dictionary.
-            base_path: Base path for resolving relative paths.
+            anchor: The config tree, and where within it the file this config
+                came from sits.
 
         Returns:
             Configuration with resolved references.
+
+        Raises:
+            PathEscapeError: A reference addresses a file outside the tree.
         """
         processed = {}
 
         for key, value in config.items():
             if key == "$include" and isinstance(value, str):
                 # Load and merge included file
-                include_path = base_path / value
+                include_path = self._reference(anchor, value, "$include")
                 if include_path.as_posix() not in self._included_configs:
                     included = self._load_file(include_path)
                     self._included_configs[include_path.as_posix()] = included
@@ -660,7 +690,7 @@ class ConfigLoader:
                     included = self._included_configs[include_path.as_posix()]
 
                 # Recursively resolve references in included content
-                included = self._resolve_references(included, include_path.parent)
+                included = self._resolve_references(included, anchor.descend(value))
 
                 # Merge with current config
                 for inc_key, inc_value in included.items():
@@ -669,7 +699,7 @@ class ConfigLoader:
 
             elif key == "$import" and isinstance(value, dict):
                 # Import specific path from file
-                file_path = base_path / value["file"]
+                file_path = self._reference(anchor, value["file"], "$import")
                 path_expr = value.get("path", "")
 
                 if file_path.as_posix() not in self._included_configs:
@@ -685,16 +715,16 @@ class ConfigLoader:
 
                 # Recursively resolve references
                 if isinstance(imported, dict):
-                    imported = self._resolve_references(imported, file_path.parent)
+                    imported = self._resolve_references(imported, anchor.descend(value["file"]))
 
                 return imported
 
             elif isinstance(value, dict):
-                processed[key] = self._resolve_references(value, base_path)
+                processed[key] = self._resolve_references(value, anchor)
 
             elif isinstance(value, list):
                 processed[key] = [
-                    self._resolve_references(item, base_path) if isinstance(item, dict) else item
+                    self._resolve_references(item, anchor) if isinstance(item, dict) else item
                     for item in value
                 ]
 

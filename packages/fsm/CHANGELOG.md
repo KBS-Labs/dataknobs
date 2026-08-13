@@ -9,6 +9,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- **A `$include` or `$import` could read any file on the volume.**
+  `ConfigLoader._resolve_references` composed the reference onto a base
+  directory and opened the result with no containment, at both sites. A `..`
+  segment climbed out of the config tree and an absolute value discarded the
+  base outright — and because the loader rebases to each included file's own
+  parent before recursing, a chain of references walked wherever the first hop
+  reached. The value comes out of config *content*, so this is the same
+  provenance as `extends:`, which is already bounded.
+
+  Both sites now resolve through one bounded helper. Resolution is unchanged —
+  a reference is still spelled relative to the file that wrote it — but
+  containment is judged against the **config tree**, fixed once when the load
+  starts. A fragment in a subdirectory may still reach a sibling above it
+  (`sub/frag.yaml` naming `../shared.yaml`); leaving the tree raises
+  `dataknobs_common.PathEscapeError`, a `ValueError` subclass.
+
+  `load_from_file` takes a new `config_root` argument for a deployment whose
+  configs deliberately span sibling directories: `app/fsm/flow.yaml`
+  referencing `../shared/common.yaml` needs `config_root=app/`. Widening the
+  anchor rather than switching the check off keeps the boundary a boundary —
+  the shared directory comes inside the tree and nothing else does. A
+  `config_root` that does not contain the entry file is itself refused.
+
 - **A path handed to `FileSystemResource` could address any file on the
   volume.** `__init__` does `Path(base_path).resolve()`, which is only
   meaningful if that directory is a boundary — but no composed path was ever
@@ -33,6 +56,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   because a caller passing a bad name is not this resource failing and
   should not mark it `ERROR`. (That `delete`'s handler also swallows real
   errors is a separate pre-existing defect, untouched here.)
+
+### Added
+
+- **Behavioural tests for `$include` and `$import`.** The feature had none:
+  neither directive appeared anywhere in this package's suite, nor in any
+  example configuration in the repository. Merging a fragment, resolving a
+  nested reference relative to its own file, reaching a sibling fragment from a
+  subdirectory, and importing one nested path are now all pinned, so the
+  containment work above cannot buy a boundary by breaking the feature.
 
 ## v0.4.0 - 2026-08-11
 
