@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Fixed
+
+- **The KB tools rejected every resource path when the knowledge directory
+  was `.`.** Their containment guard compared normalized path strings, and
+  `os.path.normpath(".")` is `"."` while `normpath("./kb/x.md")` is
+  `"kb/x.md"` — so with a relative knowledge directory of `.` nothing was
+  ever a prefix of anything, and `add_kb_resource` / `ingest_knowledge_base`
+  answered *"resolves outside the knowledge directory"* for paths that were
+  plainly inside it. The guard is now `dataknobs_common.paths.safe_join`,
+  which compares path components and treats a `.` base as the empty prefix
+  it is. Behaviour is otherwise unchanged: a `..` segment or an absolute
+  component is still refused, and a resource path may still name a
+  subdirectory.
+
 ## v0.10.0 - 2026-08-11
 
 ### Changed

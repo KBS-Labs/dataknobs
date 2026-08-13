@@ -473,6 +473,32 @@ The environment is automatically detected in this order:
 
 For cloud environments, the actual environment name (staging, production) is read from the `ENVIRONMENT` variable if present.
 
+The detected name becomes a file name under the environment config
+directory, so it is bounded by that directory: a name may address a
+subdirectory (`tier/production`), but one that *lands* outside — whether
+spelled with `..` or as an absolute path — raises
+`EnvironmentConfigError` rather than reading the file it points at. The
+same bound applies to the `app_name` passed to
+`EnvironmentAwareConfig.load_app`, which raises
+`EnvironmentAwareConfigError`. A missing environment file is unaffected:
+`EnvironmentConfig.load` still returns an empty configuration for an
+environment that has no file.
+
+Both entry points take `allow_outside=True` to lift the bound for a
+layout that genuinely spans sibling trees:
+
+```python
+EnvironmentConfig.load(env, config_dir, allow_outside=True)
+EnvironmentAwareConfig.load_app(app, app_dir, env_dir, allow_outside=True)
+```
+
+Weigh it here more carefully than elsewhere. Called without an explicit
+`environment`, these read the name from `DATAKNOBS_ENVIRONMENT` or
+`ENVIRONMENT`, so opting out widens what a process environment variable
+can address; and `load_app` applies the flag to **both** of its lookups,
+the app name and the environment name, rather than silently covering
+only one. Off by default, and an escaping name is logged at WARNING.
+
 ## Best Practices
 
 ### 1. Store Portable Configs

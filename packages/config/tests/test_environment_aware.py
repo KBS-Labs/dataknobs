@@ -1410,3 +1410,56 @@ class TestADefaultsKeyIsExpandedEvenIfTheDefaultIsDiscarded:
 
         with pytest.raises(ValueError, match="names a default"):
             app.resolve_for_build()
+
+
+class TestAppNamesCannotEscapeTheAppDir:
+    """``load_app`` composes ``app_name`` into ``app_dir``.
+
+    The app name reaches a filesystem join the same way an environment
+    name does, so it is bounded the same way.
+    """
+
+    @pytest.fixture
+    def tree(self, tmp_path):
+        """``<root>/apps`` beside a readable ``<root>/outside``."""
+        apps = tmp_path / "apps"
+        apps.mkdir()
+        environments = tmp_path / "environments"
+        environments.mkdir()
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        (outside / "secret.yaml").write_text(yaml.dump({"name": "secret"}))
+        return tmp_path, apps, environments
+
+    def test_a_parent_segment_is_rejected(self, tree):
+        _, apps, environments = tree
+        with pytest.raises(
+            EnvironmentAwareConfigError, match="outside the configuration directory"
+        ):
+            EnvironmentAwareConfig.load_app("../outside/secret", apps, env_dir=environments)
+
+    def test_an_absolute_name_is_rejected(self, tree):
+        root, apps, environments = tree
+        with pytest.raises(
+            EnvironmentAwareConfigError, match="outside the configuration directory"
+        ):
+            EnvironmentAwareConfig.load_app(
+                str(root / "outside" / "secret"), apps, env_dir=environments
+            )
+
+    def test_allow_outside_reaches_a_sibling_tree(self, tree):
+        """The opt-out, off by default -- every other test here proves that."""
+        _, apps, environments = tree
+        config = EnvironmentAwareConfig.load_app(
+            "../outside/secret", apps, env_dir=environments, allow_outside=True
+        )
+        assert config.app_name == "../outside/secret"
+
+    def test_a_subdirectory_name_still_loads(self, tree):
+        _, apps, environments = tree
+        (apps / "team").mkdir()
+        (apps / "team" / "bot.yaml").write_text(yaml.dump({"name": "bot", "version": "1.0.0"}))
+
+        config = EnvironmentAwareConfig.load_app("team/bot", apps, env_dir=environments)
+
+        assert config.get("name") == "bot"

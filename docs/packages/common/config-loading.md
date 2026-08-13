@@ -43,7 +43,7 @@ from dataknobs_common.config_loading import (
 )
 ```
 
-### `find_config_file(config_dir, name, *, extensions=...)`
+### `find_config_file(config_dir, name, *, extensions=..., allow_outside=False)`
 
 Probes a directory for `name.{yaml,yml,json}` (or any custom set of
 extensions). Returns the first existing path or `None`.
@@ -55,6 +55,9 @@ from dataknobs_common.config_loading import find_config_file
 path = find_config_file(Path("config/environments"), "production")
 # -> Path("config/environments/production.yaml") if it exists, else None
 ```
+
+The name has to stay inside `config_dir` — see
+[Names Cannot Leave `config_dir`](#names-cannot-leave-config_dir).
 
 ### `load_yaml_or_json(path, *, require_dict=True, encoding="utf-8")`
 
@@ -104,6 +107,7 @@ data = parse_yaml_or_json(
 ```text
 ConfigLoadError                  (base)
 ├── ConfigParseError             (YAML/JSON parser failed)
+├── ConfigPathEscapeError        (name addresses a file outside config_dir)
 ├── ConfigShapeError             (require_dict=True and root is not a dict)
 ├── ConfigUnsupportedFormatError (extension or format hint not recognized)
 └── ConfigYAMLNotInstalledError  (YAML payload requested, PyYAML not installed)
@@ -141,6 +145,64 @@ class MyLoader:
 This is how `dataknobs-config`, `dataknobs-xization`, `dataknobs-fsm`,
 `dataknobs-bots`, and `dataknobs-llm` all route through the shared
 helper while keeping their existing public error types unchanged.
+
+## Names Cannot Leave `config_dir`
+
+A config **name** addresses a file inside the directory it is looked up
+in. Naming a subdirectory is fine — `domains/child` is how a layout
+convention is written — but a name that *lands* outside, whether it
+walks out with `..` or is spelled as an absolute path, raises
+`ConfigPathEscapeError` before any file is probed:
+
+| Name | Result |
+|---|---|
+| `production` | `config/environments/production.yaml` |
+| `tier/production` | `config/environments/tier/production.yaml` |
+| `../../etc/secrets` | `ConfigPathEscapeError` |
+| `/etc/secrets` | `ConfigPathEscapeError` — joining an absolute name discards `config_dir` |
+
+The bound is on the *name*, and the names that reach a loader are
+frequently not written by the calling code:
+
+- an `extends:` value comes out of a config file, and
+  `InheritableConfigLoader` recurses into parents without returning to
+  its caller in between;
+- an environment name comes from `DATAKNOBS_ENVIRONMENT` or
+  `ENVIRONMENT` whenever `EnvironmentConfig.load()` is called without
+  one;
+- a resolved name comes from a `ResourceResolver` a consumer injected.
+
+Each consumer surfaces the rejection as its own error class, the same
+way it surfaces a parse failure — `InheritanceError`,
+`EnvironmentConfigError`, `EnvironmentAwareConfigError`.
+
+Reading a file by **path** is unaffected: a path the caller chose is
+the caller's own decision, so `InheritableConfigLoader.load_from_file`
+still reads any file it is handed (the `extends:` names under it are
+then bounded by that file's own directory).
+
+A deployment whose layout genuinely spans sibling trees opts out with
+`allow_outside=True`. The escaping name is logged at WARNING and probed
+anyway, so the bypass shows up in the deployment's logs; a contained
+name logs nothing, which keeps the signal meaningful. It is reachable
+from each of the three loaders, not only from the helper:
+
+```python
+find_config_file(config_dir, name, allow_outside=True)
+
+InheritableConfigLoader(config_dir, allow_outside=True)
+EnvironmentConfig.load(env, config_dir, allow_outside=True)
+EnvironmentAwareConfig.load_app(app, app_dir, env_dir, allow_outside=True)
+```
+
+Weigh it before turning it on where the name comes from the process
+environment. `EnvironmentConfig.load()` without an explicit
+`environment` takes the name from `DATAKNOBS_ENVIRONMENT` or
+`ENVIRONMENT`, and `load_app` applies the flag to **both** of its
+lookups — the app name and the environment name — so opting out widens
+what an environment variable can address.
+
+--8<-- "packages/common/docs/guides/config-loading.md:safe-join-primitive"
 
 ## PyYAML Is Optional
 
