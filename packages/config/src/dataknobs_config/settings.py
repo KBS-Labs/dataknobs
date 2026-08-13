@@ -14,9 +14,24 @@ class SettingsManager:
         - global_root: Global root directory for all types
         - <type>.global_root: Type-specific root directory
         - path_resolution_attributes: List of attributes to resolve as paths
+        - allow_reference_outside_config_root: Permit an ``@``-reference that
+          addresses outside ``config_root``, logging each escape at WARNING
         - <type>.<attribute>: Type-specific defaults
         - <attribute>: Global defaults
     """
+
+    #: Settings that configure the loader rather than the objects it loads.
+    #: Every other dotless setting becomes a default attribute on every
+    #: atomic config, so a loader setting not named here would silently
+    #: appear as a key on everything the config produces.
+    _LOADER_SETTINGS = frozenset(
+        {
+            "config_root",
+            "global_root",
+            "path_resolution_attributes",
+            "allow_reference_outside_config_root",
+        }
+    )
 
     def __init__(self) -> None:
         """Initialize the settings manager."""
@@ -70,7 +85,7 @@ class SettingsManager:
         for key, value in self._settings.items():
             if "." not in key and key not in result:
                 # Global default for any attribute
-                if key not in ["config_root", "global_root", "path_resolution_attributes"]:
+                if key not in self._LOADER_SETTINGS:
                     result[key] = copy.deepcopy(value)
 
         # Apply type-specific defaults

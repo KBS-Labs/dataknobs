@@ -132,6 +132,58 @@ services:
 }
 ```
 
+## File References
+
+Any entry in a type's list may be a string beginning with `@`, which reads
+that entry from another file:
+
+```yaml
+databases:
+  - "@databases/primary.yaml"     # read from a file
+  - name: secondary               # written inline
+    host: localhost
+```
+
+The reference resolves against `config_root`, which defaults to the directory
+of the first file loaded and can be set explicitly under `settings:`.
+
+### References stay inside `config_root`
+
+A reference is read out of a config *file*, not supplied by the calling code,
+so it addresses a file **inside** `config_root`. Naming a subdirectory is how
+a layout convention is expressed and is fine; two spellings that leave the
+root are not:
+
+| Reference | Result |
+|---|---|
+| `@databases/primary.yaml` | resolved under `config_root` |
+| `@sub/../primary.yaml` | resolved — an interior `..` that stays inside |
+| `@../../etc/secrets.yaml` | `ConfigPathEscapeError` |
+| `@/etc/secrets.yaml` | `ConfigPathEscapeError` — an absolute reference discards `config_root` entirely |
+
+Containment is judged on where the reference **lands**, not on how it is
+spelled, so an absolute reference pointing back inside `config_root` is
+allowed. `ConfigPathEscapeError` is a `ValueError` and a `ConfigLoadError`, so
+existing handlers for either still catch it.
+
+With no `config_root` set there is no tree: an absolute reference is unbounded,
+and a relative one raises `ConfigError` because there is nothing to resolve it
+against.
+
+### Opting out
+
+A deployment whose configs deliberately reference across trees sets one
+setting:
+
+```yaml
+settings:
+  allow_reference_outside_config_root: true
+```
+
+Each reference that actually escapes is then logged at `WARNING` and read
+anyway, so the bypass is visible in the deployment's logs rather than silent.
+A load whose references all stay inside the root logs nothing.
+
 ## Cross-References
 
 The xref syntax allows referencing configurations across types:

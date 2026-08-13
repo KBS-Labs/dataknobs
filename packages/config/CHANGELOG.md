@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Security
+
+- **An `@`-reference could read any file on the volume.**
+  `Config._load_referenced_file` composed a reference read out of a config
+  *value* onto `config_root` and read the result with no containment. Any
+  string in a config list beginning with `@` is a file reference, so a `..`
+  segment climbed out of the config tree — and the absolute branch never
+  consulted `config_root` at all, which is the wider hole of the two: it
+  discards the root rather than climbing out of it. Both spellings loaded a
+  file carrying an `api_key` from outside the tree.
+
+  Both branches are now bounded, and the branch itself is gone — containment
+  is judged on where the reference *lands*, so an absolute reference pointing
+  back inside `config_root` is still fine and naming a subdirectory is still
+  how a layout convention is expressed. Leaving the root raises
+  `ConfigPathEscapeError` (a `ValueError`, and a `ConfigLoadError`). With no
+  `config_root` set there is no tree, and nothing is bounded.
+
+  **Breaking for a deployment that references across trees deliberately.** The
+  migration is one line: set `allow_reference_outside_config_root: true` under
+  `settings:`. Each actual escape is then logged at WARNING and read anyway —
+  the convention `find_config_file`'s `allow_outside` already follows, so the
+  bypass is visible in a deployment's logs rather than silent. Only a real
+  escape warns; a load that never leaves the root is quiet.
+
 ### Added
 
 - **`allow_outside=True` lifts the name-containment bound, on all three
