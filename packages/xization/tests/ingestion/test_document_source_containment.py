@@ -133,3 +133,61 @@ class TestContainedRefsStillRead:
         source = LocalDocumentSource(tree)
         read = [await source.read_bytes(ref) async for ref in source.iter_files(["**/*.md"])]
         assert read == [b"# A\n"]
+
+
+class TestEnumerationIsBoundedToo:
+    """A pattern is config, and config is the plane this series bounds.
+
+    ``iter_files`` took its patterns from ``IngestionConfig.patterns`` —
+    the same untrusted plane as ``extends:``, ``$include:`` and
+    ``wizard_config`` — and handed each one straight to
+    :meth:`Path.glob`. ``glob`` treats ``..`` as an ordinary literal
+    segment and descends through it, so a pattern could enumerate
+    outside the root.
+
+    The docstring justifying the absence of a check said the class
+    "already treats the root as its boundary" because every ref is
+    derived with ``relative_to(root)``. That does not follow:
+    ``relative_to`` re-expresses a path lexically and enforces nothing —
+    ``PurePath("/root/../a.md").relative_to("/root")`` returns
+    ``../a.md`` rather than raising. Reading was bounded; enumeration
+    was not.
+
+    The disclosure is the point even though no content is read here:
+    each ref carries a resolved ``source_uri`` and a real ``size_bytes``,
+    and those travel into chunk metadata.
+    """
+
+    async def test_a_pattern_may_not_enumerate_outside_the_root(self, tree: Path) -> None:
+        source = LocalDocumentSource(tree)
+
+        found = [ref async for ref in source.iter_files(["../outside/*.env"])]
+
+        assert found == []
+
+    async def test_a_pattern_climbing_back_inside_still_enumerates(self, tree: Path) -> None:
+        """Containment is judged on where it lands, not how it is spelled."""
+        source = LocalDocumentSource(tree)
+
+        found = [ref async for ref in source.iter_files(["sub/../sub/*.md"])]
+
+        assert [ref.path for ref in found] == ["sub/a.md"]
+
+    async def test_an_ordinary_pattern_is_untouched(self, tree: Path) -> None:
+        source = LocalDocumentSource(tree)
+
+        found = [ref async for ref in source.iter_files(["**/*.md"])]
+
+        assert [ref.path for ref in found] == ["sub/a.md"]
+
+    async def test_enumeration_and_reading_agree(self, tree: Path) -> None:
+        """The second-order defect, independent of the disclosure.
+
+        A ref that enumerates but cannot be read is worse than one that
+        does neither: the ingest reports work to do and then fails on the
+        first read, part-way through.
+        """
+        source = LocalDocumentSource(tree)
+
+        async for ref in source.iter_files(["../outside/*.env", "**/*.md"]):
+            assert await source.read_bytes(ref)
