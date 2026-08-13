@@ -57,9 +57,10 @@ Example:
 from __future__ import annotations
 
 import os
+from dataclasses import dataclass
 from pathlib import Path, PurePath
 
-__all__ = ["PathEscapeError", "safe_join", "safe_join_or_raise"]
+__all__ = ["PathAnchor", "PathEscapeError", "safe_join", "safe_join_or_raise"]
 
 #: Characters a path component may not contain whatever it addresses. A
 #: NUL terminates the string inside the C library, so ``"a\x00b.yaml"``
@@ -192,3 +193,158 @@ def safe_join_or_raise(
         shown = supplied if supplied is not None else (parts[-1] if parts else "")
         raise PathEscapeError(f"{what} addresses a location outside {outside}: {shown!r}")
     return joined
+
+
+@dataclass(frozen=True)
+class PathAnchor:
+    """A boundary that stays fixed, and a position inside it that moves.
+
+    For a loader that follows references from one file to another — an
+    ``$include`` chain, a wizard subflow naming another wizard — the base a
+    name *resolves* against and the boundary it may not *leave* are two
+    different things, and conflating them breaks one of two ways.
+
+    Bounding each hop to its own file's directory rejects
+    ``sub/frag.yaml`` naming ``../shared.yaml``, which is inside the tree and
+    is the ordinary shape of a shared-fragment directory. Bounding to the
+    outermost base but *resolving* from it changes what every nested name
+    means. Keeping the two separate — resolve per hop, contain against the
+    root — is neither.
+
+    Why a type rather than two arguments: the pair has an invariant (the
+    position is inside the root, expressed relative to it) that nothing
+    checks if the two travel separately, and a recursive loader is exactly
+    where a swapped or stale one is easy to write and hard to see. Both
+    fields together also make one call site — :meth:`resolve` — instead of a
+    join whose arguments each caller assembles.
+
+    Attributes:
+        root: The tree. Every name resolved through this anchor, at any
+            depth, addresses inside it.
+        rel_base: Directory of the file currently being read, relative to
+            ``root``. ``""`` when that file is at the root.
+    """
+
+    root: Path
+    rel_base: str = ""
+
+    @property
+    def base(self) -> Path:
+        """The directory references currently resolve from."""
+        return self.root / self.rel_base
+
+    @classmethod
+    def anchored_at(cls, entry: str | Path, root: str | Path | None = None) -> PathAnchor:
+        """Anchor a tree around the file a load starts from.
+
+        Args:
+            entry: The file being loaded. Its directory becomes the starting
+                position.
+            root: The tree it may address within. Defaults to ``entry``'s own
+                directory, which is the tree for the usual single-directory
+                layout. Pass a wider one for a deployment that deliberately
+                spans sibling directories — widening the boundary keeps it a
+                boundary, where switching the check off does not.
+
+        Returns:
+            An anchor positioned at ``entry``'s directory.
+
+        Raises:
+            PathEscapeError: ``root`` was given and does not contain
+                ``entry``. The two arguments disagree about which tree is
+                being loaded, and no reading of that is not a mistake.
+        """
+        return cls.rooted_at(Path(entry).parent, root, _named=str(entry))
+
+    @classmethod
+    def rooted_at(
+        cls,
+        directory: str | Path,
+        root: str | Path | None = None,
+        _named: str | None = None,
+    ) -> PathAnchor:
+        """Anchor a tree around the directory a load resolves from.
+
+        :meth:`anchored_at` for a caller that holds the directory rather than
+        a file — a loader given a base path with the configuration already in
+        hand, for instance.
+
+        Args:
+            directory: Where references resolve from.
+            root: The tree they may address within. Defaults to ``directory``.
+            _named: What to call ``directory`` in a refusal. Internal.
+
+        Returns:
+            An anchor positioned at ``directory``.
+
+        Raises:
+            PathEscapeError: ``root`` was given and does not contain
+                ``directory``.
+        """
+        if root is None:
+            return cls(Path(directory))
+
+        root_path = Path(os.path.normpath(Path(root)))
+        try:
+            rel = str(Path(os.path.normpath(Path(directory))).relative_to(root_path))
+        except ValueError:
+            shown = _named if _named is not None else str(directory)
+            raise PathEscapeError(
+                f"entry file lies outside the tree it declares: "
+                f"{shown!r} is not under {str(root_path)!r}"
+            ) from None
+        return cls(root_path, rel)
+
+    def resolve(self, *parts: str, what: str, outside: str, supplied: str | None = None) -> Path:
+        """Resolve a referenced name from here, or refuse to leave the root.
+
+        Args:
+            parts: The reference as the referencing file spelled it, resolved
+                relative to :attr:`rel_base`. Several parts join as one name,
+                for a caller assembling a layout convention around it
+                (``"subflows", f"{name}.yaml"``).
+            what: What the reference is, named as its author would recognise
+                it (``"$include"``, ``"subflow name"``).
+            outside: The boundary in the deployment's own terms
+                (``"the configuration tree"``).
+            supplied: The value to quote back, when ``parts`` is a derived
+                spelling rather than what the author wrote.
+
+        Returns:
+            The resolved path, with its segments collapsed. Open this rather
+            than recomposing from the raw name.
+
+        Raises:
+            PathEscapeError: The reference addresses outside :attr:`root`.
+        """
+        return safe_join_or_raise(
+            self.root,
+            self.rel_base,
+            *parts,
+            what=what,
+            outside=outside,
+            supplied=supplied,
+        )
+
+    def descend(self, *parts: str) -> PathAnchor:
+        """Move to the directory of a file this one references.
+
+        The new position is computed from the reference rather than from a
+        resolved path, so it stays a pure string operation with nothing to
+        re-derive against a base the path might not be under.
+
+        Args:
+            parts: The same reference passed to :meth:`resolve`.
+
+        Returns:
+            An anchor with the same root, positioned at the referenced file's
+            directory.
+        """
+        joined = str(PurePath(self.rel_base, *parts)) if parts else self.rel_base
+        moved = PurePath(os.path.normpath(joined)).parent
+        # ``PurePath.parent`` spells "here" as ``"."`` while an anchor at the
+        # root spells it ``""``. They compose identically -- pathlib drops a
+        # curdir component -- but only one of them compares equal to a fresh
+        # ``PathAnchor(root)``, so they are collapsed rather than left to
+        # surprise a caller comparing two anchors that mean the same place.
+        return PathAnchor(self.root, "" if str(moved) == os.curdir else str(moved))

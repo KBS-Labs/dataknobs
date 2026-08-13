@@ -9,6 +9,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`PathAnchor` — a boundary that stays fixed while the position inside it
+  moves.** For a loader that follows references from file to file (an
+  `$include` chain, a wizard subflow naming another wizard), the base a name
+  *resolves* against and the boundary it may not *leave* are two different
+  things. Conflating them breaks one of two ways: bounding each hop to its own
+  file's directory refuses `sub/frag.yaml` naming `../shared.yaml`, which is
+  inside the tree and is how a shared-fragment directory is spelled; bounding
+  to the outermost base but resolving from it changes what every nested name
+  means.
+
+  `PathAnchor(root, rel_base)` keeps the two apart. `anchored_at(entry, root)`
+  and `rooted_at(directory, root)` fix the tree at the start of a load — `root`
+  defaults to the entry's own directory, and one that does not contain the
+  entry is refused rather than silently reinterpreted. `resolve(*parts, ...)`
+  composes from the current position and bounds against the root;
+  `descend(*parts)` moves the position to a referenced file's directory and
+  carries the same root.
+
+  Extracted rather than written twice: two loaders in two packages needed the
+  same threading, which is the shape that produced `safe_join_or_raise` — four
+  hand-written copies of one adapter — one release earlier.
+
 - **`safe_join(base, *parts)` — compose a path from untrusted parts without
   leaving a base directory.** Returns the joined path with `.` and `..`
   segments collapsed, or `None` when it addresses anything outside `base`.

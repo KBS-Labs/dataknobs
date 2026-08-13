@@ -207,6 +207,47 @@ built out of symlinks. Two consequences that belong together:
   a `..` resolves through the link's target and lands outside the base.
 - A write that must not be redirected through such a symlink wants a
   `Path.resolve()` check of its own as well, off the loop.
+
+### `PathAnchor`, when references chase each other
+
+A loader that follows references from one file to another — an
+`$include` chain, a wizard subflow naming another wizard — has *two*
+bases, and they are not the same one:
+
+- the directory a name **resolves** against, which moves with each hop,
+  because a reference is spelled relative to the file that wrote it;
+- the directory it may not **leave**, which must not move, or the tree
+  widens one hop at a time until it is the whole volume.
+
+Conflating them breaks in one of two directions. Bound each hop to its
+own file's directory and `sub/frag.yaml` naming `../shared.yaml` is
+refused — a reference plainly inside the tree, and the ordinary shape of
+a shared-fragment directory. Resolve everything against the outermost
+base instead and every nested name silently means a different file.
+
+`PathAnchor` keeps them apart:
+
+```python
+from dataknobs_common import PathAnchor
+
+anchor = PathAnchor.anchored_at(entry_file)          # root = its directory
+target = anchor.resolve(value, what="$include", outside="the config tree")
+nested = anchor.descend(value)                       # same root, new position
+```
+
+`resolve` composes from the current position and bounds against the
+root; `descend` moves the position to the referenced file's directory
+and carries the same root down. `rooted_at(directory, root)` is the same
+thing for a caller holding a directory rather than a file.
+
+Both constructors take an explicit `root`, which is the migration for a
+layout that deliberately spans sibling directories:
+`app/fsm/flow.yaml` referencing `../shared/common.yaml` passes
+`root=app/`. **Widening the boundary keeps it a boundary** — the shared
+directory comes inside the tree and nothing else does, which an on/off
+escape hatch could not express. A `root` that does not contain the entry
+is refused rather than reinterpreted: the two arguments disagree about
+which tree is being loaded, and no reading of that is not a mistake.
 <!-- --8<-- [end:safe-join-primitive] -->
 
 
