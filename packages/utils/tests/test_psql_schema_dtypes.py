@@ -130,3 +130,41 @@ class TestEmptyFrames:
     def test_empty_bool_column(self):
         df = pd.DataFrame({"flag": pd.Series([], dtype="bool")})
         assert PostgresDB._psql_schema_line(df, "flag") == '"flag" boolean'
+
+
+class TestVarcharWidthFitsWhatUploadSends:
+    """A declared ``varchar(n)`` has to be a width PostgreSQL takes and values fit.
+
+    The empty-column guard above answers "no values to measure". Two cases sit
+    beside it that it does not answer, and both produce a column the data
+    cannot be written into:
+
+    * a column whose values are all the empty string measures 0, and
+      PostgreSQL rejects the declaration itself -- ``length for type varchar
+      must be at least 1`` -- so the table cannot be created at all. It is the
+      empty-column case with one value in it, and routine in CSV/ETL loads.
+    * ``astype(str)`` is not the renderer ``upload`` uses. ``upload`` sends
+      ``str(value)``, and for a ``bytes`` payload the two disagree: ``astype``
+      yields ``abc`` where ``str`` yields ``b'abc'``. The column is then
+      declared narrower than the text written into it, and the INSERT fails
+      with ``value too long for type character varying``.
+
+    The second is what the helper's own docstring already claims it does, so
+    these pin the claim rather than adding one.
+    """
+
+    def test_all_empty_strings_do_not_produce_varchar_zero(self):
+        df = pd.DataFrame({"tag": ["", ""]})
+        assert PostgresDB._psql_schema_line(df, "tag") == '"tag" varchar(1)'
+
+    def test_an_empty_string_beside_a_null_does_not_produce_varchar_zero(self):
+        df = pd.DataFrame({"tag": ["", None]})
+        assert PostgresDB._psql_schema_line(df, "tag") == '"tag" varchar(1)'
+
+    def test_width_is_measured_with_the_renderer_upload_uses(self):
+        df = pd.DataFrame({"payload": pd.Series([b"abc"], dtype=object)})
+        # The width that has to fit is the one upload actually writes, so the
+        # expectation is derived from upload's own rendering rather than restated.
+        sent = [str(record["payload"]) for record in df.to_records()]
+        assert sent == ["b'abc'"]
+        assert PostgresDB._psql_schema_line(df, "payload") == f'"payload" varchar({len(sent[0])})'

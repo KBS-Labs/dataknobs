@@ -398,13 +398,27 @@ class PostgresDB:
         """Width of the widest value in ``values`` once rendered as text.
 
         ``upload`` sends ``str(value)`` for every cell, so the width that has to
-        fit is the rendered one. Measuring it with ``.str.len()`` assumed the
-        column already held strings and raised ``AttributeError`` on any object
-        column that did not — so the assumption is dropped rather than guarded.
-        Nulls are excluded, matching what ``.str.len()`` skipped.
+        fit is the rendered one — and it is measured with that same ``str``.
+        ``astype(str)`` is a different renderer and disagrees on some object
+        payloads (``bytes`` renders as ``abc`` there and ``b'abc'`` here),
+        which would declare the column narrower than the text written into it.
+        Calling ``.str.len()`` on the column instead assumed it already held
+        strings and raised ``AttributeError`` on any object column that did
+        not, so the assumption is dropped rather than guarded.
+
+        The floor of 1 covers a column with nothing to measure and one whose
+        values are all the empty string alike: PostgreSQL rejects ``varchar(0)``
+        at declaration, so a width of 0 costs the whole table rather than a
+        value.
+
+        Nulls are excluded, which is narrower than what ``upload`` currently
+        sends — it renders them as the text ``'nan'``/``'<NA>'`` rather than as
+        SQL ``NULL``. Widening for them is not the fix: a typed column rejects
+        those strings at any width, so the rendering is what has to change.
+        This measures the values, and null handling stays the caller's.
         """
-        raw = values.dropna().astype(str).str.len().max()
-        return int(raw) if pd.notna(raw) else 1
+        raw = values.dropna().map(str).str.len().max()
+        return max(1, int(raw)) if pd.notna(raw) else 1
 
     def upload(self, table_name: str, df: pd.DataFrame) -> None:
         """Upload DataFrame data to a database table.

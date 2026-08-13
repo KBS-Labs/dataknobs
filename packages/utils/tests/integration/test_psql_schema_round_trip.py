@@ -11,11 +11,25 @@ this exercises the rendered forms — ``'True'`` for a bool, ISO-8601 with a ``T
 for a timestamp, ``'86400000000 microseconds'`` for a timedelta — against real
 type input functions.
 
-**Nulls are deliberately absent from the frames below.** ``str`` renders them as
-the text ``'nan'``/``'<NA>'``, which no typed column accepts; that is a defect in
-``upload``'s value rendering rather than in the schema ladder, and it is
-recorded separately. Including a null here would fail this test for a reason it
-is not testing.
+Three things these frames deliberately do not cover, each because it would fail
+for a reason this test is not testing. They are recorded separately; stated here
+so a green run is not read as more coverage than it is.
+
+**Nulls are absent.** ``str`` renders them as the text ``'nan'``/``'<NA>'``,
+which no typed column accepts at any width. That is a defect in ``upload``'s
+value rendering rather than in the schema ladder.
+
+**The timedelta column is microsecond-resolution**, which is what
+``pd.to_timedelta`` yields on pandas 3.x. ``str`` follows the column's
+resolution, so a ``timedelta64[ns]`` column renders ``'86400000000000
+nanoseconds'`` and PostgreSQL rejects it — ``interval`` has no unit finer than a
+microsecond. ``interval`` is still the right type for the family; the rendering
+is what does not reach it.
+
+**The float values are exactly representable in ``float4``.** ``real`` carries
+about 7 significant digits, so a ``float64`` column with more precision than
+that is silently rounded rather than rejected, and no assertion here would see
+it. Round-tripping ``0.1`` or ``1/3`` is what would.
 
 Requires a reachable PostgreSQL instance (``bin/dk up``).
 """

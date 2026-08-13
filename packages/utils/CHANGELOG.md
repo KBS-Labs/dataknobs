@@ -37,12 +37,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   two copies — is gone. This removes the last `np.issubdtype` calls in the
   workspace.
 
-- **The `varchar` width is measured on the rendered value.** `upload` sends
-  `str(value)` for every cell, so `_psql_varchar_width` measures
-  `dropna().astype(str).str.len()` instead of calling `.str` on the column
-  directly. An object column holding non-strings previously raised
-  `AttributeError`; string columns are unaffected, nulls are still excluded,
-  and an empty column still yields `varchar(1)`.
+- **The `varchar` width is measured on the rendered value, with the renderer
+  that sends it.** `upload` sends `str(value)` for every cell, so
+  `_psql_varchar_width` measures `dropna().map(str).str.len()` instead of
+  calling `.str` on the column directly. An object column holding non-strings
+  previously raised `AttributeError`. `map(str)` rather than `astype(str)`
+  because the two disagree on some object payloads — a `bytes` value measures
+  3 under `astype` and is sent as the 6-character `b'abc'` — which declared the
+  column narrower than the text written into it. String columns are unaffected,
+  nulls are still excluded, and an empty column still yields `varchar(1)`.
+
+- **A column of empty strings no longer emits `varchar(0)`.** The width guard
+  covered "nothing to measure" but not "measures zero", so a column whose
+  values are all `""` — routine in CSV and ETL loads — produced a declaration
+  PostgreSQL refuses outright (`length for type varchar must be at least 1`),
+  losing the whole table rather than a value. The floor is now 1 in both cases.
 
 ## v2.0.0 - 2026-08-11
 
