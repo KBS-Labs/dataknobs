@@ -10,7 +10,6 @@ import asyncio
 import hashlib
 import json
 import logging
-import os
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, BinaryIO, ClassVar
@@ -20,7 +19,7 @@ from botocore.exceptions import ClientError
 from dataknobs_common.aws import AwsSessionConfig, create_aioboto3_session
 from dataknobs_common.capabilities import Capability, CapabilityLike
 from dataknobs_common.exceptions import ConcurrencyError
-from dataknobs_common.paths import PathEscapeError, safe_join, safe_segment
+from dataknobs_common.paths import PathEscapeError, safe_join
 
 from .key_layout import KnowledgeKeyKind
 from .mixin import KnowledgeResourceBackendMixin
