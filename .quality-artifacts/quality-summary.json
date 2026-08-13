@@ -1,5 +1,5 @@
 {
-  "timestamp": "2026-08-13T01:34:02Z",
+  "timestamp": "2026-08-13T02:06:23Z",
   "overall_status": "PASS",
   "run_mode": "pr",
   "environment": "host",
@@ -23,34 +23,34 @@
     "legacy": "f77592a12b3780ae22e0ac113ff15dc537020de05664eea34c0a2734bb91e5a8",
     "llm": "0f17877d03b7a32ea16a01cce5b1574814289f73184e9f00c53b9429462fd2f2",
     "structures": "8c4a5934ee70717bfee003f0800b0dee7d5f106d85713217db7e44a8649bc5d5",
-    "utils": "239d18d092330972d270530ac5a88d55d281468e665bbf5f822073cbd0bc3f5a",
+    "utils": "7714095f3d697d249db418c5c9dc64406d7102ec17aa72ae4b0a98b9d4c764ae",
     "xization": "8b323909ac9bcb3373d46acee43d1d4a94d1fb78213f36218e7b1859345bbb5e",
     "_algorithm_version": 3
   },
   "workspace_hashes": {
     "toolchain": "7a8cb88834cf842ee240296b5e7762873fe7fc12554495154826e402a399080c",
     "workspace_tests": "b37c8ef42bca51d8d028519827bbcfbed50bdb155d6d884b56b024443d015193",
-    "docs": "c931196fb1a48d703aae6958898c64d78ecc440d7098ec874e752cccca414cf7"
+    "docs": "2a53324b7441285b2f6fac006bca7ac4ade5c731ed88f5a339ce2f7a1d4abec2"
   },
-  "total_seconds": 183,
+  "total_seconds": 187,
   "checks": {
     "workflow_lint": {
       "status": "pass",
       "exit_code": 0,
       "tool": "lint-workflows.sh",
-      "duration_seconds": 0
+      "duration_seconds": 1
     },
     "shell_lint": {
       "status": "pass",
       "exit_code": 0,
       "tool": "lint-shell.sh",
-      "duration_seconds": 5
+      "duration_seconds": 4
     },
     "contract": {
       "status": "pass",
       "exit_code": 0,
       "tool": "quality-contract.py",
-      "duration_seconds": 1
+      "duration_seconds": 2
     },
     "validation": {
       "status": "pass",
@@ -64,7 +64,7 @@
       "exit_code": 0,
       "skipped": false,
       "tool": "mkdocs",
-      "duration_seconds": 24
+      "duration_seconds": 25
     },
     "documentation_versions": {
       "status": "pass",
@@ -91,7 +91,7 @@
       "status": "pass",
       "exit_code": 0,
       "skipped": false,
-      "duration_seconds": 55
+      "duration_seconds": 57
     }
   }
 }
