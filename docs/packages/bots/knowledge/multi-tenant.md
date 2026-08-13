@@ -237,6 +237,44 @@ lock-free. Two replicas running the *same* tenant's ingest for the
 configured with a `postgres` lock backend) — see the ingest-orchestrator
 docs. The manager does not (and should not) hold its own lock.
 
+### `tenant_id` must be a flat identifier
+
+The state-key prefix is *structured* — `BoundTenantContext` projects
+`tenant_id` into `"tenants/{tenant_id}/_state/"`, and the backend
+concatenates the `domain_id` onto it. The tenant segment is the one part
+of that key whose whole job is keeping tenants apart, so it must not
+carry structure of its own. A `tenant_id` containing `/`, `\` or NUL, or
+one that is a bare `.` / `..`, is rejected at construction:
+
+```python
+BoundTenantContext(tenant_id="acme", domain_id="prompts")        # fine
+BoundTenantContext(tenant_id="acme/eu-west", domain_id="prompts")  # ValueError
+```
+
+The rejection is not only about path traversal. On a filesystem backend a
+`..` does resolve and a state write leaves the base directory — but on a
+key-string backend (an S3 object-key prefix, an in-memory dict key)
+nothing resolves at all, and the failure is subtler: because the prefix
+and the `domain_id` are concatenated, a structured tenant id can produce
+the *same* key as a different tenant/domain pair. `(tenant="acme",
+domain="proj/_state/x")` and `(tenant="acme/_state/proj", domain="x")`
+both key on `tenants/acme/_state/proj/_state/x`, so the second tenant
+reads the first's ingest state. Nothing traverses; the namespaces merge.
+
+`domain_id` is deliberately unconstrained — it legitimately names a
+subdirectory (`team/alpha`), and the backends bound it where they compose
+it rather than forbidding the shape. Where a nested tenant convention is
+genuinely wanted, express it with `PrefixedTenantContext`, whose
+`prefix_pattern` is a deployment's own convention and stays free-form:
+
+```python
+PrefixedTenantContext(
+    tenant_id="acme",
+    domain_id="prompts",
+    prefix_pattern="regions/eu-west/{tenant_id}/",
+)
+```
+
 ## Capability advertisement
 
 `RAGKnowledgeBase` and `KnowledgeIngestionManager` declare

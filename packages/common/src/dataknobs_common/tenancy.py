@@ -66,6 +66,53 @@ __all__ = [
     "tenant_context_from_env",
 ]
 
+# Characters that give a tenant_id structure. A separator is the whole
+# problem: state_key_prefix() interpolates the id into a structured key
+# namespace, so one turns a single isolation segment into several.
+_TENANT_ID_FORBIDDEN = ("/", "\\", "\x00")
+
+
+def _validate_tenant_id(tenant_id: str) -> None:
+    """Reject a ``tenant_id`` that would carry structure into a state key.
+
+    ``tenant_id`` is an *isolation segment*: the one part of a state key
+    whose entire job is keeping tenants apart. It is interpolated into
+    ``"tenants/{tenant_id}/_state/"``, which reaches three kinds of
+    backend, and a separator inside it breaks isolation differently in
+    each:
+
+    * a **filesystem** backend resolves ``..``, so a state write leaves
+      the backend's base directory;
+    * a **key-string** backend (S3 prefix, in-memory dict) resolves
+      nothing — but the prefix is concatenated with ``domain_id``, so a
+      structured id can produce the same key as a different
+      ``(tenant, domain)`` pair and read that tenant's state. Nothing
+      traverses; the namespaces simply merge.
+
+    The second is why containment at the composing site cannot cover
+    this on its own: there is no path there to contain. So the check is
+    here, at construction, where every backend inherits it.
+
+    ``domain_id`` is deliberately *not* checked. It legitimately names a
+    subdirectory (``team/alpha``) and the backends treat it as a
+    location; the isolation guarantee does not rest on it.
+
+    Raises:
+        ValueError: If ``tenant_id`` is empty, is a bare ``.`` / ``..``,
+            or contains a path separator or NUL.
+    """
+    if not tenant_id or not tenant_id.strip():
+        raise ValueError("tenant_id must be a non-empty string.")
+    if tenant_id in (os.curdir, os.pardir):
+        raise ValueError(f"tenant_id must name a tenant, not a directory reference: {tenant_id!r}")
+    found = [c for c in _TENANT_ID_FORBIDDEN if c in tenant_id]
+    if found:
+        raise ValueError(
+            f"tenant_id must not contain a path separator or NUL "
+            f"(found {found!r} in {tenant_id!r}): it is interpolated into a "
+            f"state-key prefix, where a separator merges tenant namespaces."
+        )
+
 
 @runtime_checkable
 class TenantContext(Protocol):
@@ -236,6 +283,9 @@ class BoundTenantContext:
     tenant_id: str
     domain_id: str
 
+    def __post_init__(self) -> None:
+        _validate_tenant_id(self.tenant_id)
+
     def lock_key(self, operation: str) -> str:
         return f"{operation}:{self.tenant_id}:{self.domain_id}"
 
@@ -276,6 +326,7 @@ class PrefixedTenantContext:
     prefix_pattern: str
 
     def __post_init__(self) -> None:
+        _validate_tenant_id(self.tenant_id)
         # Fail fast on a bad template instead of at first lock_key /
         # state_key_prefix call. Dry-run the format with the instance's own
         # values across both placeholder sets the accessors use.
@@ -351,6 +402,9 @@ class SharedCorpusTenantContext:
     tenant_id: str
     domain_id: str
     shared_corpus_id: str
+
+    def __post_init__(self) -> None:
+        _validate_tenant_id(self.tenant_id)
 
     def lock_key(self, operation: str) -> str:
         # Lock on (tenant, shared_corpus) — state writes serialize

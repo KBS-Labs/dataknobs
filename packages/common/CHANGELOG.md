@@ -34,6 +34,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- **A `tenant_id` containing a path separator merged two tenants' state.**
+  The tenant contexts accepted any non-empty string and interpolated it into
+  `state_key_prefix()` as `"tenants/{tenant_id}/_state/"` — a *structured*
+  key namespace that three kinds of backend consume, and a separator inside
+  the one segment whose job is isolation broke each of them differently. On
+  a filesystem backend the OS resolved `..`, so a tenant's state write left
+  the backend's base directory. On a key-string backend (an S3 object-key
+  prefix, an in-memory dict key) nothing resolved — but the prefix is
+  concatenated with `domain_id`, so `(tenant="acme", domain="proj/_state/x")`
+  and `(tenant="acme/_state/proj", domain="x")` produced the *same* state
+  key and the second tenant read the first's ingest state. No traversal is
+  involved in that one; the namespaces simply merge, which is why bounding
+  the composition at the filesystem backend could not have caught it.
+
+  `BoundTenantContext`, `PrefixedTenantContext` and
+  `SharedCorpusTenantContext` now reject a `tenant_id` that is empty, is a
+  bare `.` or `..`, or contains `/`, `\` or NUL — at construction, so every
+  backend inherits the check, and `create_tenant_context` /
+  `tenant_context_from_env` raise for it too. `domain_id` is deliberately
+  unchecked: it legitimately names a subdirectory, and the isolation
+  guarantee does not rest on it.
+
+  **This is a breaking change for a deployment whose `tenant_id` contains a
+  separator** — construction now raises `ValueError` where it previously
+  succeeded. Such a deployment currently has two tenants able to share a
+  state namespace, so failing at construction is the intent; the migration
+  is to use a flat tenant identifier and, where a nested convention is
+  genuinely wanted, express it through `PrefixedTenantContext`'s
+  `prefix_pattern`, which remains free-form.
+
 - **`find_config_file` let a config name address a file outside the
   directory it was given.** The name was joined to `config_dir` and probed
   with no containment check at all, so `../../etc/secrets` read outside the
