@@ -7,6 +7,63 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Security
+
+- **A knowledge-base `domain_id` or resource path could address any file on
+  the volume.** `FileKnowledgeBackend` composed both identifiers straight
+  onto its base directory with no containment, and every sink was live:
+  `create_kb("../elsewhere/x")` created directories outside the base,
+  `delete_kb("../elsewhere/x")` `shutil.rmtree`'d a tree outside it and
+  returned `True`, and a resource path reached `put_file`'s atomic write,
+  `get_file`'s read and `delete_file`'s `unlink` in the same way. An
+  absolute identifier discarded the base outright.
+
+  Both identifiers are now bounded with `safe_join` at `_kb_path` and
+  `_file_path`, the two methods that compose them — every path helper on the
+  class routes through one of those, so each public method inherits the
+  guard — and the path the guard returned is what gets opened, rather than a
+  recomposition from the raw name. Nesting is unaffected: a `domain_id` of `team/alpha`, a resource
+  path of `subdir/file.md`, and an interior `a/../b` that never leaves the
+  base are all still legal. An escaping identifier raises `ValueError`
+  before any filesystem call — including from the read-shaped `get_file`,
+  `file_exists`, `stream_file` and `get_info`, which previously answered
+  *successfully* about a file outside the base rather than returning
+  `None`/`False`.
+
+- **A wizard's subflow name could load a state machine from outside its
+  config directory.** `WizardConfigLoader` probes `{base}/{name}.yaml` and
+  `{base}/subflows/{name}.yaml` for a subflow, and the name comes from
+  config *content* — a `subflows:` key or a transition's `subflow.network`
+  value — so a wizard config naming `../../elsewhere/other-wizard` pulled in
+  a foreign FSM together with its transitions, transforms and function
+  references. Both probes are now bounded to the directory the wizard was
+  loaded from; the `subflows/` layout the second probe exists to serve is
+  unaffected, and an escaping name raises `ValueError`.
+
+- **A config name or draft id could write or delete outside the draft
+  manager's output directory.** `ConfigDraftManager` composed three paths
+  from identifiers it did not check — the final name in `finalize`, the
+  alias name in `update_draft`, and `draft_id` — reaching a YAML write and
+  two `unlink`s. The name is not only caller-supplied: `finalize()` without
+  an explicit `final_name` reads it back out of the draft file's own
+  metadata, and `SaveConfigTool` feeds the manager from LLM tool arguments
+  and wizard data.
+
+  Containment now lives at the manager, where the paths are composed, via
+  the new public `ConfigDraftManager.config_path(name)`. Two consequences
+  beyond the direct fix:
+
+  - `SaveConfigTool._persist_config` used to compose its own path and
+    re-check it with `resolve().is_relative_to`. That check guarded its own
+    `open()` but ran *after* the `finalize()` above it had already written
+    through the unguarded manager — so an escaping name was refused *and*
+    the file appeared outside the directory. It now resolves through the
+    manager before finalizing, and fails closed with nothing written.
+  - the tool's entry-point `config_name` check remains, and still returns a
+    structured `{"success": False, "error": ...}` the model can correct
+    rather than raising. It is now documented as the naming policy it is —
+    deliberately stricter than containment — rather than as the boundary.
+
 ### Fixed
 
 - **The KB tools rejected every resource path when the knowledge directory

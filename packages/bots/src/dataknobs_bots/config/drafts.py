@@ -36,6 +36,7 @@ from pathlib import Path
 from typing import Any
 
 import yaml
+from dataknobs_common.paths import safe_join
 from dataknobs_common.structured_config import StructuredConfig
 
 logger = logging.getLogger(__name__)
@@ -262,8 +263,9 @@ class ConfigDraftManager:
             raise ValueError("No final_name provided and draft has no config_name set")
 
         # Write final file without metadata
+        final_path = self.config_path(name)
         self._ensure_output_dir()
-        final_path = self._output_dir / f"{name}.yaml"
+        final_path.parent.mkdir(parents=True, exist_ok=True)
         self._write_yaml(final_path, config)
 
         # Remove draft file
@@ -368,9 +370,62 @@ class ConfigDraftManager:
 
     # -- Private helpers --
 
+    def config_path(self, name: str) -> Path:
+        """Path of the named config file, checked to be inside the output dir.
+
+        The name reaches this manager from wizard data and LLM tool
+        arguments, and in :meth:`finalize` it can be read back out of a
+        draft file's own metadata — so it is treated as untrusted at the
+        point the path is composed rather than at whichever entry point
+        happened to supply it.
+
+        A name addressing a subdirectory of the output directory is
+        legal; one that leaves it, via ``..`` or by being absolute,
+        raises :class:`ValueError` before anything is written. The
+        ``.yaml`` suffix is appended first, because appending a suffix is
+        itself part of what has to stay inside.
+        """
+        return self._resolve_in_output_dir(f"{name}.yaml", "config name", name)
+
     def _draft_path(self, draft_id: str) -> Path:
-        """Get the file path for a draft ID."""
-        return self._output_dir / f"{self._draft_prefix}{draft_id}.yaml"
+        """Get the file path for a draft ID, checked for containment.
+
+        ``draft_id`` is caller-supplied on :meth:`update_draft`,
+        :meth:`get_draft`, :meth:`discard` and :meth:`finalize`, and the
+        latter two ``unlink`` the result.
+
+        The ``draft_prefix`` anchors the first path segment, so a leading
+        ``..`` yields the literal directory name ``_draft-..`` and does
+        not escape; an *interior* one (``a/../../elsewhere/y``) does,
+        once ``_draft-a`` exists as a directory. The guard is on the
+        composed path for that reason — a leading-``..`` check would pass
+        exactly the spelling that escapes.
+        """
+        return self._resolve_in_output_dir(
+            f"{self._draft_prefix}{draft_id}.yaml", "draft id", draft_id
+        )
+
+    def _resolve_in_output_dir(self, relative: str, kind: str, supplied: str) -> Path:
+        """Join ``relative`` onto the output dir, or raise if it escapes.
+
+        The single containment idiom for this class: every path built
+        from an identifier goes through here, and the returned path — not
+        a recomposition of the raw name — is what callers open. Composing
+        again from the raw parts would discard the collapsing this does,
+        and a symlinked subdirectory inside the output dir plus a ``..``
+        resolves through the link's target.
+
+        The message names the identifier that was supplied rather than
+        the path it resolved to, so a caller learns what to correct
+        without being told about the deployment's layout.
+        """
+        resolved = safe_join(self._output_dir, relative)
+        if resolved is None:
+            raise ValueError(
+                f"{kind} addresses a file outside the draft manager's "
+                f"output directory: {supplied!r}"
+            )
+        return resolved
 
     def _ensure_output_dir(self) -> None:
         """Ensure the output directory exists."""
@@ -395,10 +450,11 @@ class ConfigDraftManager:
         metadata: DraftMetadata,
     ) -> None:
         """Write a named config file with draft metadata."""
+        path = self.config_path(name)
         self._ensure_output_dir()
+        path.parent.mkdir(parents=True, exist_ok=True)
         data = dict(config)
         data[self._metadata_key] = metadata.to_dict()
-        path = self._output_dir / f"{name}.yaml"
         self._write_yaml(path, data)
 
     @staticmethod

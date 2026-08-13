@@ -20,6 +20,7 @@ from typing import TYPE_CHECKING, BinaryIO, ClassVar
 
 from dataknobs_common.capabilities import Capability, CapabilityLike
 from dataknobs_common.exceptions import ConcurrencyError
+from dataknobs_common.paths import safe_join
 
 from .key_layout import KnowledgeKeyKind
 from .mixin import KnowledgeResourceBackendMixin
@@ -143,8 +144,26 @@ class FileKnowledgeBackend(KnowledgeResourceBackendMixin):
         base and the domain, isolating per-tenant **state**. Content
         helpers (:meth:`_content_path`, :meth:`_file_path`) call this
         without a context so content stays keyed by ``domain_id``.
+
+        ``domain_id`` addresses a location *inside* ``base_path``. A name
+        that walks out of it (``../elsewhere``) or replaces it outright
+        (an absolute path) raises :class:`ValueError` before any
+        filesystem call, so it fails identically whether or not the
+        location it names exists. A name in a subdirectory
+        (``team/alpha``) is legal, and so is an interior ``a/../b`` that
+        never leaves the base. The tenant state prefix is bounded on the
+        same call: :class:`~dataknobs_common.tenancy.PrefixedTenantContext`
+        takes a consumer-supplied pattern, so the segment it contributes
+        is checked here rather than trusted.
         """
-        return self._base_path / self._state_prefix(ctx) / domain_id
+        kb_path = safe_join(self._base_path, self._state_prefix(ctx), domain_id)
+        if kb_path is None:
+            raise ValueError(
+                f"domain_id addresses a knowledge base outside the backend's "
+                f"base path: {domain_id!r}"
+                + (f" (with tenant state prefix {self._state_prefix(ctx)!r})" if ctx else "")
+            )
+        return kb_path
 
     def _metadata_path(self, domain_id: str, ctx: TenantContext | None = None) -> Path:
         """Get the path to a KB's metadata file (tenant-scoped via ``ctx``)."""
@@ -168,8 +187,21 @@ class FileKnowledgeBackend(KnowledgeResourceBackendMixin):
         return self._snapshots_path(domain_id, ctx) / f"{version}.json"
 
     def _file_path(self, domain_id: str, path: str) -> Path:
-        """Get the full path to a file (domain-keyed content)."""
-        return self._content_path(domain_id) / path
+        """Get the full path to a file (domain-keyed content).
+
+        ``path`` addresses a file *inside* the KB's ``content/`` tree.
+        Nesting is the point of that tree, so ``subdir/file.md`` is
+        legal; a path that leaves it — via ``..`` or by being absolute —
+        raises :class:`ValueError` rather than reading, writing, or
+        unlinking whatever it landed on.
+        """
+        file_path = safe_join(self._content_path(domain_id), path)
+        if file_path is None:
+            raise ValueError(
+                f"file path addresses a location outside the knowledge base's "
+                f"content directory: {path!r}"
+            )
+        return file_path
 
     def key_pattern(
         self,

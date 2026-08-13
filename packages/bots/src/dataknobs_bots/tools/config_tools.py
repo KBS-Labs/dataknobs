@@ -88,13 +88,20 @@ def _get_wizard_data_ref(context: ToolExecutionContext) -> dict[str, Any]:
 
 
 def _is_safe_config_name(name: str) -> bool:
-    """Return True if ``name`` is safe to use as a ``<name>.yaml`` filename.
+    """Return True if ``name`` is a well-formed flat ``<name>.yaml`` filename.
 
-    The config name flows from LLM tool arguments and user-driven wizard
-    data, then becomes a filename under the draft manager's output dir. A
-    value containing a path separator, a NUL byte, or a bare current/parent
-    directory reference could escape that directory (path traversal), so it
-    is rejected before the path is composed.
+    This is a **naming policy**, not the containment boundary. Containment
+    is enforced where the path is composed, by
+    :meth:`~dataknobs_bots.config.drafts.ConfigDraftManager.config_path`,
+    which is what actually stops a write from leaving the output
+    directory — and which reaches every caller, not only this tool.
+
+    The policy exists on top of it because this name arrives from LLM tool
+    arguments and user-driven wizard data: rejecting it here returns a
+    structured ``{"success": False, "error": ...}`` the model can correct
+    on its next turn, where the manager's guard raises. It is deliberately
+    stricter than containment — a config name is flat, so a separator is
+    refused even though ``team/alpha`` would be safely inside.
     """
     if not name or not name.strip() or name in (".", ".."):
         return False
@@ -745,7 +752,18 @@ class SaveConfigTool(ContextAwareTool):
         Synchronous, blocking disk I/O (draft finalize, ``mkdir``, YAML
         write); :meth:`execute_with_context` runs it via
         :func:`asyncio.to_thread` so the event loop is never blocked.
+
+        Raises:
+            ValueError: If ``name`` addresses a file outside the draft
+                manager's output directory. Resolved before anything is
+                written, so an escaping name leaves no partial state.
         """
+        # Resolve before writing anything. This method used to compose the
+        # path itself and re-check it afterwards, which guarded its own
+        # open() but not the finalize() below — that write went through
+        # the manager, where the check could not see it.
+        final_path = self._draft_manager.config_path(name)
+
         # Finalize cleans up the draft file, but we always write the
         # freshly-built config (the draft may be stale).
         if draft_id:
@@ -754,13 +772,8 @@ class SaveConfigTool(ContextAwareTool):
             except FileNotFoundError:
                 logger.warning("Draft %s not found, saving directly", draft_id)
 
-        output_dir = self._draft_manager.output_dir
-        output_dir.mkdir(parents=True, exist_ok=True)
-        final_path = output_dir / f"{name}.yaml"
-        # Defense in depth: the name is validated at the entry point, but
-        # re-check the composed path never escapes the output directory.
-        if not final_path.resolve().is_relative_to(output_dir.resolve()):
-            raise ValueError(f"Refusing to write config outside the output directory: {name}")
+        self._draft_manager.output_dir.mkdir(parents=True, exist_ok=True)
+        final_path.parent.mkdir(parents=True, exist_ok=True)
         with open(final_path, "w") as f:
             yaml.dump(final_config, f, default_flow_style=False, sort_keys=False)
         return final_path

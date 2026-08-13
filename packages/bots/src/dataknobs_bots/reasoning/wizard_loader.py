@@ -15,6 +15,7 @@ from typing import Any
 import yaml
 
 from dataknobs_common.expressions import safe_eval
+from dataknobs_common.paths import safe_join
 from dataknobs_fsm.api.advanced import AdvancedFSM
 from dataknobs_fsm.config.builder import FSMBuilder
 
@@ -974,6 +975,14 @@ class WizardConfigLoader:
         2. File path relative to config_base_path
         3. File path in subflows/ subdirectory
 
+        The name comes out of config *content* — a ``subflows:`` key or a
+        transition's ``subflow.network`` value — so both file probes are
+        bounded to ``config_base_path``. A name that leaves it, via
+        ``..`` or by being absolute, raises :class:`ValueError` rather
+        than loading a state machine from outside the wizard's own tree.
+        A name in a subdirectory is legal; the ``subflows/`` layout the
+        second probe serves is exactly that.
+
         Args:
             subflow_name: Name of the subflow to load
             wizard_config: Main wizard configuration dict
@@ -982,6 +991,10 @@ class WizardConfigLoader:
 
         Returns:
             WizardFSM for the subflow, or None if not found
+
+        Raises:
+            ValueError: If ``subflow_name`` addresses a file outside
+                ``config_base_path``.
         """
         # Check for inline subflow definition
         explicit_subflows = wizard_config.get("subflows", {})
@@ -997,15 +1010,18 @@ class WizardConfigLoader:
             )
             return None
 
-        # Try direct path (subflow_name.yaml)
-        subflow_path = config_base_path / f"{subflow_name}.yaml"
-        if subflow_path.exists():
-            return self.load(str(subflow_path), custom_functions)
-
-        # Try subflows/ subdirectory
-        subflow_path = config_base_path / "subflows" / f"{subflow_name}.yaml"
-        if subflow_path.exists():
-            return self.load(str(subflow_path), custom_functions)
+        # Both probes are guarded, and each opens the path the guard
+        # returned rather than recomposing from the raw name: a symlinked
+        # subdirectory plus a ``..`` resolves through the link's target.
+        for parts in ((f"{subflow_name}.yaml",), ("subflows", f"{subflow_name}.yaml")):
+            subflow_path = safe_join(config_base_path, *parts)
+            if subflow_path is None:
+                raise ValueError(
+                    f"subflow name addresses a config outside the wizard's "
+                    f"config directory: {subflow_name!r}"
+                )
+            if subflow_path.exists():
+                return self.load(str(subflow_path), custom_functions)
 
         logger.warning(
             "Subflow '%s' not found in config or as file at %s",

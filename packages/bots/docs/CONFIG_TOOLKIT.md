@@ -259,6 +259,32 @@ final = manager.finalize(draft_id, final_name="my-bot")
 cleaned = manager.cleanup_stale()
 ```
 
+### Names stay inside the output directory
+
+Every path the manager composes — the final config name, the alias name
+passed as `config_name`, and the `draft_id` — is checked to land inside
+`output_dir` before anything is written or unlinked. A name that walks
+out with `..`, or one that is absolute and so discards the directory
+entirely, raises `ValueError`:
+
+```python
+manager.finalize(draft_id, final_name="../../etc/cron.d/job")  # ValueError
+manager.config_path("reports/quarterly")                       # fine
+```
+
+This matters because the name is not always the caller's. `finalize()`
+with no `final_name` reads it back out of the draft file's own metadata,
+and `SaveConfigTool` supplies it from LLM tool arguments and wizard data
+— so the check is at the point the path is composed rather than at any
+one entry point. `config_path(name)` is public for callers that need the
+resolved path themselves; use it instead of joining onto `output_dir`.
+
+Nesting is still legal — `team/alpha` resolves to
+`{output_dir}/team/alpha.yaml`, and the parent directory is created. Note
+that `SaveConfigTool` applies a stricter *naming policy* on top of this,
+rejecting any separator in a config name and returning a structured tool
+error rather than raising, so an LLM can correct it on the next turn.
+
 ## Tool Catalog
 
 `ToolCatalog` maps tool names to fully-qualified class paths and default configuration. It serves as a single source of truth for tools available to config builders and wizard flows.
