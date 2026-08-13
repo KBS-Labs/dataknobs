@@ -47,9 +47,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   hypothetical: `pydantic.ValidationError` is also a `ValueError`, and a
   test in this repo went green against unguarded code because of it.
 
-  Prefer it over the sentinel form. `safe_join` remains right where a
-  refusal is one outcome among several — `find_config_file` weighs every
-  extension before deciding — and is unchanged for those callers.
+  Prefer it over the sentinel form. `safe_join` keeps its two remaining
+  callers, for two different reasons. `find_config_file` weighs every
+  extension before deciding, so a refusal there is one outcome among
+  several rather than a failure. The knowledge tools compose inline, in
+  the same frame that returns the tool's structured
+  `{"success": False, ...}`, so the sentinel is read where it is produced.
+  Contrast the config tool, which does raise-and-catch: its composition
+  happens several frames down, inside `_persist_config` and `finalize` and
+  behind `asyncio.to_thread`, where no sentinel can be threaded back. The
+  rule is not "exceptions everywhere" — it is that a refusal crossing a
+  frame boundary has to be an exception, and one type of exception.
 
 - **`validate_tenant_id(tenant_id)` is exported.** The reference
   `TenantContext` impls call it from `__post_init__`, but the module invites
