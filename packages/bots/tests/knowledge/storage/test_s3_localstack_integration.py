@@ -29,6 +29,7 @@ from typing import Any
 import pytest
 
 from dataknobs_bots.knowledge.storage.s3 import S3KnowledgeBackend
+from dataknobs_common.tenancy import BoundTenantContext
 from dataknobs_common.testing import (
     assert_no_blocking,
     requires_blockbuster,
@@ -209,5 +210,38 @@ async def test_concurrent_put_and_get(s3_kb_config) -> None:
 
         exists = await asyncio.gather(*(backend.file_exists("d", p) for p in paths))
         assert all(exists)
+    finally:
+        await backend.close()
+
+
+# ---------------------------------------------------------------------------
+# Discovery — a listing reads names from the store, not from a caller
+# ---------------------------------------------------------------------------
+
+
+async def test_list_kbs_survives_a_tenant_scoped_write(s3_kb_config) -> None:
+    """A segment the layout reserved must not be enumerated as a domain.
+
+    Scoped state roots under ``SCOPED_STATE_ROOT``, which is a *sibling*
+    of every domain root under the backend prefix rather than something
+    nested inside one. So the first tenant-scoped write creates a
+    top-level ``_scoped/`` prefix, ``list_kbs`` discovers it as a common
+    prefix and asks ``get_info`` about it, and ``get_info`` composes a
+    metadata key — which validates the name and refuses a leading ``_``.
+
+    FAILS with ``SegmentEscapeError`` before the discovery filter exists,
+    and fails the whole listing rather than the one pseudo-entry. The
+    guard has to be here because this name came from the *store*: every
+    other refusal in this layer answers a name a caller supplied.
+    """
+    backend = await _backend(s3_kb_config)
+    ctx = BoundTenantContext(tenant_id="acme", domain_id="proj")
+    try:
+        await backend.create_kb("proj")
+        await backend.set_ingestion_status("proj", "ready", ctx=ctx)
+
+        kbs = await backend.list_kbs()
+
+        assert [kb.domain_id for kb in kbs] == ["proj"]
     finally:
         await backend.close()

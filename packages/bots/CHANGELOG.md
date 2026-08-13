@@ -35,6 +35,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   layouts are untouched: a context contributing no prefix (`ctx=None` or
   `SingleTenantContext`) still composes exactly the pre-tenancy key.
 
+  **Breaking, separately, for any deployment holding a knowledge base
+  whose `domain_id` already begins with `_`** — an internal `_staging` or
+  `_archive`, say. The reservation applies at every entry point, not only
+  at `create_kb`, so such a base becomes unaddressable: `get_info`,
+  `get_file`, `list_files` and `delete_kb` all raise for it, and
+  `list_kbs()` stops returning it. Nothing is deleted — the objects and
+  files are exactly where they were — but the API can no longer name
+  them, so rename the base before upgrading. If one slips through,
+  `list_kbs()` logs a WARNING naming it rather than dropping it silently;
+  the layout's own `_scoped` root is skipped without one, since it is
+  expected there.
+
 - **A knowledge base could overwrite and delete another one, on every
   persistent backend.** `domain_id` is interleaved with the layout's own
   literal segments — `{domain}/content/{path}`, `{domain}/_metadata.json`,

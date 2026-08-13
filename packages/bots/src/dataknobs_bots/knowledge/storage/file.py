@@ -772,6 +772,14 @@ class FileKnowledgeBackend(KnowledgeResourceBackendMixin):
     def _list_kb_domain_ids(self) -> list[str]:
         """Scan the base directory for KB domain ids (those with metadata).
 
+        The metadata test already excludes the layout's own
+        ``SCOPED_STATE_ROOT`` directory, which holds a tenant prefix
+        rather than a knowledge base and so carries no direct metadata
+        document. That is an accident of where the state layout puts its
+        levels, not a rule, and the same accident does not hold for a
+        backend that enumerates key prefixes — so the rule is asked for
+        explicitly here too, where a reader can see it being asked.
+
         Blocking — call via ``asyncio.to_thread`` from async methods.
         """
         if not self._base_path.exists():
@@ -779,7 +787,9 @@ class FileKnowledgeBackend(KnowledgeResourceBackendMixin):
         return [
             path.name
             for path in self._base_path.iterdir()
-            if path.is_dir() and (path / self.METADATA_FILE).exists()
+            if path.is_dir()
+            and self._is_addressable_domain(path.name)
+            and (path / self.METADATA_FILE).exists()
         ]
 
     # --- Ingestion Status ---

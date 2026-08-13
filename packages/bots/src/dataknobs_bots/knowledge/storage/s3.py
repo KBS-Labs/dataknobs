@@ -814,7 +814,11 @@ class S3KnowledgeBackend(KnowledgeResourceBackendMixin):
                     # Extract domain_id from prefix
                     prefix_path = prefix_obj["Prefix"]
                     domain_id = prefix_path[len(self._prefix) :].rstrip("/")
-                    if domain_id:
+                    # A common prefix here is whatever is one level under
+                    # the backend prefix, which includes the layout's own
+                    # SCOPED_STATE_ROOT once any tenant has written state.
+                    # Asking get_info about it raises rather than missing.
+                    if domain_id and self._is_addressable_domain(domain_id):
                         domain_ids.append(domain_id)
 
         kbs = []

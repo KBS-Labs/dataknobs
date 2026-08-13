@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import logging
 import mimetypes
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterable
 from contextlib import asynccontextmanager
@@ -50,6 +51,8 @@ if TYPE_CHECKING:
     from dataknobs_common.tenancy import TenantContext
 
     from .models import KnowledgeBaseInfo, KnowledgeFile
+
+logger = logging.getLogger(__name__)
 
 
 class KnowledgeResourceBackendMixin(CapabilityMixin):
@@ -196,6 +199,58 @@ class KnowledgeResourceBackendMixin(CapabilityMixin):
                 f"base's own): {domain_id!r}"
             )
         return domain_id
+
+    @classmethod
+    def _is_addressable_domain(cls, name: str) -> bool:
+        """Whether a name *discovered in the store* names a knowledge base.
+
+        Every other admissibility check in this layer answers a name a
+        **caller** supplied, where refusing is the whole point. A listing
+        asks the opposite question about names it read out of the store
+        itself, and there the layout's own segments are legitimately
+        present — so refusing is not an answer a listing can act on.
+
+        :attr:`SCOPED_STATE_ROOT` is what makes this reachable. It roots
+        the scoped-state namespace as a *sibling* of every domain root
+        rather than inside one, which is exactly what makes the two
+        namespaces disjoint — and also what puts ``_scoped/`` in front of
+        a backend enumerating one level under its own base. Feeding that
+        back to :meth:`_validate_domain_id` raised, and took the whole
+        listing with it rather than the one pseudo-entry.
+
+        Derived from the validator rather than restating its rule, so a
+        segment reserved later cannot be reserved for callers and left
+        addressable through discovery.
+
+        Skipping :attr:`SCOPED_STATE_ROOT` is the expected case and is
+        silent. Skipping anything *else* reserved is not: it is a
+        knowledge base a deployment created under an earlier release,
+        before the ``_`` prefix was reserved, which this release can no
+        longer address — so it is logged rather than disappearing from a
+        listing with nothing said. Nothing is deleted; the name is what
+        became unusable.
+
+        Args:
+            name: A candidate read from the store — an S3 common prefix,
+                a directory entry — not a caller's argument.
+
+        Returns:
+            Whether the name is admissible as a ``domain_id``.
+        """
+        try:
+            cls._validate_domain_id(name)
+        except SegmentEscapeError:
+            if name != cls.SCOPED_STATE_ROOT:
+                logger.warning(
+                    "Skipping %r, which is stored beside the knowledge bases but is "
+                    "not an addressable domain_id (names beginning with %r are "
+                    "reserved for the layout's own slots). Its data is untouched and "
+                    "unreachable through this API; rename it to restore access.",
+                    name,
+                    cls.RESERVED_DOMAIN_PREFIX,
+                )
+            return False
+        return True
 
     @staticmethod
     def _validate_snapshot_version(version: str) -> str:

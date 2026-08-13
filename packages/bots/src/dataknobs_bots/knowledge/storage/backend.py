@@ -298,6 +298,18 @@ class KnowledgeResourceBackend(Protocol):
     async def list_kbs(self) -> list[KnowledgeBaseInfo]:
         """List all knowledge bases.
 
+        An implementation that derives domain ids by **enumerating its
+        store** — S3 common prefixes, directory entries — must exclude
+        the segments its own layout owns before treating one as a
+        ``domain_id``. The scoped-state root is a sibling of every domain
+        root, not a child of one, so it appears in exactly such an
+        enumeration as soon as any tenant has written state; every other
+        admissibility check in this layer answers a name a *caller*
+        supplied, and none of them is reachable from here.
+        ``KnowledgeResourceBackendMixin._is_addressable_domain`` is the
+        shared predicate, derived from the ``domain_id`` validator so the
+        two cannot disagree about what is reserved.
+
         Returns:
             List of KnowledgeBaseInfo for all knowledge bases
         """

@@ -279,3 +279,126 @@ class TestDeletingTheCollidingDomainLeavesTenantStateAlone:
         info = await file_backend.create_kb(COLLIDING)
 
         assert info.domain_id == COLLIDING
+
+
+class TestTheReservedRootIsNotDiscoverableAsADomain:
+    """Rooting the state namespace puts a reserved name in front of a listing.
+
+    Making the two namespaces disjoint is what makes ``_scoped`` a
+    *sibling* of every domain root under the backend's base, so a backend
+    that enumerates one level there now meets a name its own layout owns.
+    Feeding that back to the ``domain_id`` validator raised — and took
+    the whole listing with it, not just the pseudo-entry.
+
+    The asymmetry is the point: every other admissibility check in this
+    layer answers a name a **caller** supplied, where refusing is the
+    answer. A listing asks about names it read out of the store, where
+    refusing is not something it can act on.
+    """
+
+    def test_the_scoped_root_is_what_a_listing_would_derive(
+        self, bound: BoundTenantContext
+    ) -> None:
+        """Pinned on the key, so the mechanism does not need a transport."""
+        backend = _s3()
+
+        key = backend._metadata_key("proj", ctx=bound)
+        first_segment = key[len(PREFIX) :].split("/")[0]
+
+        assert first_segment == backend.SCOPED_STATE_ROOT
+
+    def test_that_name_is_not_an_addressable_domain(self) -> None:
+        backend = _s3()
+
+        assert backend._is_addressable_domain(backend.SCOPED_STATE_ROOT) is False
+
+    @pytest.mark.parametrize("name", ["acme", "acme_content", "a_b", "ACME2", "acme.v2"])
+    def test_an_ordinary_name_still_is(self, name: str) -> None:
+        backend = _s3()
+
+        assert backend._is_addressable_domain(name) is True
+
+    def test_the_predicate_follows_the_validator(self) -> None:
+        """Derived rather than restated, so the two cannot drift apart.
+
+        A segment reserved later must not end up reserved for callers and
+        still addressable through discovery, which is the shape of the
+        defect this closes.
+        """
+        backend = _s3()
+
+        for refused in ("_scoped", "_metadata.json", "..", "", "a/b"):
+            assert backend._is_addressable_domain(refused) is False
+            with pytest.raises(SegmentEscapeError):
+                backend._validate_domain_id(refused)
+
+    async def test_a_file_listing_survives_a_tenant_scoped_write(
+        self, file_backend: FileKnowledgeBackend, bound: BoundTenantContext
+    ) -> None:
+        """The same sequence that broke the key-string backend's listing.
+
+        This backend happened to survive it — it filters to directories
+        holding a direct metadata document, and the scoped root holds a
+        tenant prefix instead. That is where the state layout puts its
+        levels rather than a rule, so it is asserted rather than assumed.
+        """
+        await file_backend.create_kb("proj")
+        await file_backend.set_ingestion_status("proj", "ready", ctx=bound)
+
+        kbs = await file_backend.list_kbs()
+
+        assert [kb.domain_id for kb in kbs] == ["proj"]
+
+    async def test_a_memory_listing_survives_it_too(
+        self, memory_backend: InMemoryKnowledgeBackend, bound: BoundTenantContext
+    ) -> None:
+        """It lists validated ids it was given, so no name is ever derived."""
+        await memory_backend.create_kb("proj")
+        await memory_backend.set_ingestion_status("proj", "ready", ctx=bound)
+
+        kbs = await memory_backend.list_kbs()
+
+        assert [kb.domain_id for kb in kbs] == ["proj"]
+
+    async def test_a_pre_existing_underscore_domain_is_skipped_and_reported(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """A base created before the reservation existed must not vanish quietly.
+
+        Its data is untouched and its name is what stopped working, and
+        the two look identical from a listing. Silence here would be the
+        shape of failure this whole change is about.
+        """
+        base = tmp_path / "kb"
+        backend = FileKnowledgeBackend(base_path=base)
+        await backend.initialize()
+        await backend.create_kb("proj")
+        # Written directly: no public call can create this name any more,
+        # which is the situation an upgrading deployment is already in.
+        legacy = base / "_staging"
+        legacy.mkdir(parents=True)
+        (legacy / FileKnowledgeBackend.METADATA_FILE).write_text(
+            '{"info": {"domain_id": "_staging"}}'
+        )
+
+        with caplog.at_level("WARNING"):
+            kbs = await backend.list_kbs()
+
+        assert [kb.domain_id for kb in kbs] == ["proj"]
+        assert "_staging" in caplog.text
+        # The distinctive phrase, so the assertion cannot be satisfied by
+        # some other warning that happens to name the directory.
+        assert "not an addressable domain_id" in caplog.text
+        assert legacy.exists(), "the data is unreachable, not deleted"
+
+    async def test_the_layouts_own_root_is_skipped_silently(
+        self, file_backend: FileKnowledgeBackend, bound: BoundTenantContext, caplog
+    ) -> None:
+        """It is expected there, so warning about it would train the reader to ignore."""
+        await file_backend.create_kb("proj")
+        await file_backend.set_ingestion_status("proj", "ready", ctx=bound)
+
+        with caplog.at_level("WARNING"):
+            await file_backend.list_kbs()
+
+        assert FileKnowledgeBackend.SCOPED_STATE_ROOT not in caplog.text
