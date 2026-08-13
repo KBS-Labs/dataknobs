@@ -202,3 +202,105 @@ def test_the_subflows_subdirectory_probe_still_resolves(config_dir: Path) -> Non
     host.write_text(_wizard_naming("nested"))
 
     assert WizardConfigLoader().load(host) is not None
+
+
+class TestTheBoundaryIsTheTreeNotTheLastHop:
+    """A nested subflow is bounded to the wizard's tree, not to its own folder.
+
+    ``load()`` sets ``config_base_path`` to the file it just opened, so a
+    subflow's own subflows resolve from the subflow's directory. Bounding
+    each hop to *that* directory refuses ``../shared``, which is inside the
+    wizard's tree and is how a shared-subflow directory is spelled — the
+    boundary has to be fixed where the load started, while resolution stays
+    per hop.
+    """
+
+    def test_a_nested_subflow_may_reach_a_sibling_higher_in_the_tree(
+        self, config_dir: Path
+    ) -> None:
+        (config_dir / "shared.yaml").write_text(_SUBFLOW_YAML)
+        subflows = config_dir / "subflows"
+        subflows.mkdir()
+        (subflows / "mid.yaml").write_text(_wizard_naming("../shared"))
+        host = config_dir / "host.yaml"
+        host.write_text(_wizard_naming("mid"))
+
+        assert WizardConfigLoader().load(host) is not None
+
+    def test_a_nested_subflow_still_may_not_leave_the_tree(
+        self, config_dir: Path, outside: Path
+    ) -> None:
+        """The root travels down the recursion; it does not widen with it."""
+        subflows = config_dir / "subflows"
+        subflows.mkdir()
+        (subflows / "mid.yaml").write_text(_wizard_naming("../../elsewhere/other-wizard"))
+        host = config_dir / "host.yaml"
+        host.write_text(_wizard_naming("mid"))
+
+        with pytest.raises(PathEscapeError, match=_ESCAPE):
+            WizardConfigLoader().load(host)
+
+    def test_a_nested_subflow_resolves_its_own_names_from_its_own_directory(
+        self, config_dir: Path
+    ) -> None:
+        """Widening the boundary must not make names root-relative.
+
+        Both directories hold a ``peer.yaml``. The one beside the nested
+        subflow is the one it means — reading the name against the root
+        instead would load the wrong wizard silently rather than refuse.
+        """
+        (config_dir / "peer.yaml").write_text(
+            _SUBFLOW_YAML.replace("name: only", "name: wrong_at_root")
+        )
+        subflows = config_dir / "subflows"
+        subflows.mkdir()
+        (subflows / "peer.yaml").write_text(
+            _SUBFLOW_YAML.replace("name: only", "name: right_beside_the_caller")
+        )
+        (subflows / "mid.yaml").write_text(_wizard_naming("peer"))
+        host = config_dir / "host.yaml"
+        host.write_text(_wizard_naming("mid"))
+
+        fsm = WizardConfigLoader().load(host)
+
+        mid = fsm.get_subflow("mid")
+        assert mid is not None
+        peer = mid.get_subflow("peer")
+        assert peer is not None
+        assert peer.stage_names == ["right_beside_the_caller"]
+
+
+class TestAWiderConfigRoot:
+    """The migration for a wizard whose subflows live beside its directory."""
+
+    def test_a_wider_root_admits_a_shared_directory_beside_the_wizard(self, tmp_path: Path) -> None:
+        (tmp_path / "shared").mkdir()
+        (tmp_path / "shared" / "common.yaml").write_text(_SUBFLOW_YAML)
+        wizards = tmp_path / "wizards"
+        wizards.mkdir()
+        host = wizards / "host.yaml"
+        host.write_text(_wizard_naming("../shared/common"))
+
+        with pytest.raises(PathEscapeError, match=_ESCAPE):
+            WizardConfigLoader().load(host)
+
+        assert WizardConfigLoader().load(host, config_root=tmp_path) is not None
+
+    def test_a_wider_root_is_still_a_boundary(self, tmp_path: Path, outside: Path) -> None:
+        wizards = tmp_path / "wizards"
+        wizards.mkdir()
+        host = wizards / "host.yaml"
+        host.write_text(_wizard_naming("../../elsewhere/other-wizard"))
+
+        with pytest.raises(PathEscapeError, match=_ESCAPE):
+            WizardConfigLoader().load(host, config_root=tmp_path)
+
+    def test_a_root_that_does_not_contain_the_wizard_is_refused(
+        self, config_dir: Path, tmp_path: Path
+    ) -> None:
+        (config_dir / "sibling.yaml").write_text(_SUBFLOW_YAML)
+        host = config_dir / "host.yaml"
+        host.write_text(_wizard_naming("sibling"))
+
+        with pytest.raises(PathEscapeError, match="entry file"):
+            WizardConfigLoader().load(host, config_root=tmp_path / "elsewhere")

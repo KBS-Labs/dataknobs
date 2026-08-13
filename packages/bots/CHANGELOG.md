@@ -58,9 +58,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   config *content* — a `subflows:` key or a transition's `subflow.network`
   value — so a wizard config naming `../../elsewhere/other-wizard` pulled in
   a foreign FSM together with its transitions, transforms and function
-  references. Both probes are now bounded to the directory the wizard was
-  loaded from; the `subflows/` layout the second probe exists to serve is
-  unaffected, and an escaping name raises `ValueError`.
+  references. Both probes are now bounded to the wizard's **config tree**,
+  fixed where the load started; the `subflows/` layout the second probe
+  exists to serve is unaffected, and an escaping name raises
+  `dataknobs_common.PathEscapeError`.
+
+- **A `wizard_config` path could load a wizard from outside the base declared
+  beside it.** `WizardReasoning.from_config` composed
+  `config_base_path / wizard_config` and opened the result unchecked — and
+  when `wizard_config` was absolute it skipped the composition entirely, so a
+  declared base could be bypassed outright. Both operands come out of the
+  bot's typed config, the same provenance as the subflow name one call below,
+  which was already bounded.
+
+  `config_base_path` now means the tree: `wizard_config` is bounded to it, and
+  the same root threads down through every subflow name at any depth. A wizard
+  in a subdirectory of the base may name a subflow above itself, because the
+  boundary is the tree rather than the last directory a load landed in.
+  Declaring no `config_base_path` declares no tree and bounds nothing, which
+  is the migration for a deployment that genuinely wants an absolute
+  `wizard_config`.
+
+  **Breaking**: an absolute `wizard_config` outside a declared
+  `config_base_path` now raises. A nested subflow reaching a sibling *inside*
+  the tree, which the previous release refused, now loads.
+
+  `WizardConfigLoader.load` and `load_from_dict` take a `config_root` argument
+  for a wizard whose subflows live in a directory beside its own — widening
+  the boundary keeps it a boundary, where switching the check off would not.
 
 - **A config name or draft id could write or delete outside the draft
   manager's output directory.** `ConfigDraftManager` composed three paths

@@ -15,7 +15,7 @@ from typing import Any
 import yaml
 
 from dataknobs_common.expressions import safe_eval
-from dataknobs_common.paths import PathEscapeError, safe_join_or_raise
+from dataknobs_common.paths import PathAnchor, PathEscapeError
 from dataknobs_fsm.api.advanced import AdvancedFSM
 from dataknobs_fsm.config.builder import FSMBuilder
 
@@ -256,6 +256,7 @@ class WizardConfigLoader:
         config_path: str | Path,
         custom_functions: dict[str, Callable[..., Any] | str] | None = None,
         transform_context_factory: Callable[..., Any] | None = None,
+        config_root: str | Path | None = None,
     ) -> WizardFSM:
         """Load wizard config and create WizardFSM.
 
@@ -267,6 +268,12 @@ class WizardConfigLoader:
                 :class:`FunctionContext` and returns the application-specific
                 context for transforms. If ``None``, a default factory is
                 used.
+            config_root: Directory that subflow names may address within, at
+                any depth. Defaults to ``config_path``'s own directory. A
+                nested subflow resolves its own subflows relative to *itself*
+                but stays bounded to this root, so a shared subflow directory
+                beside the wizard is reachable while the tree is still a
+                boundary.
 
         Returns:
             Configured WizardFSM instance
@@ -275,6 +282,9 @@ class WizardConfigLoader:
             FileNotFoundError: If config file doesn't exist
             yaml.YAMLError: If config is invalid YAML
             ValueError: If config structure is invalid
+            PathEscapeError: A subflow name addresses a file outside
+                ``config_root``, or ``config_root`` does not contain
+                ``config_path``.
         """
         config_path = Path(config_path)
 
@@ -286,6 +296,7 @@ class WizardConfigLoader:
             custom_functions,
             config_base_path=config_path.parent,
             transform_context_factory=transform_context_factory,
+            config_root=config_root,
         )
 
     def load_from_dict(
@@ -294,6 +305,7 @@ class WizardConfigLoader:
         custom_functions: dict[str, Callable[..., Any] | str] | None = None,
         config_base_path: Path | None = None,
         transform_context_factory: Callable[..., Any] | None = None,
+        config_root: str | Path | None = None,
     ) -> WizardFSM:
         """Load wizard config from dict and create WizardFSM.
 
@@ -310,12 +322,16 @@ class WizardConfigLoader:
                 If ``None``, a default factory is used that wraps the
                 :class:`FunctionContext` in a minimal
                 :class:`TransformContext`.
+            config_root: Directory that subflow names may address within, at
+                any depth. Defaults to ``config_base_path``.
 
         Returns:
             Configured WizardFSM instance
 
         Raises:
             ValueError: If config structure is invalid
+            PathEscapeError: A subflow name addresses a file outside
+                ``config_root``.
 
         Example:
             ```python
@@ -369,10 +385,13 @@ class WizardConfigLoader:
         fsm = builder.build(fsm_config)
         advanced_fsm = AdvancedFSM(fsm)
 
-        # Load subflow networks
-        subflow_registry = self._load_subflow_networks(
-            wizard_config, custom_functions, config_base_path
+        # Load subflow networks, bounded to the wizard's config tree
+        anchor = (
+            PathAnchor.rooted_at(config_base_path, config_root)
+            if config_base_path is not None
+            else None
         )
+        subflow_registry = self._load_subflow_networks(wizard_config, custom_functions, anchor)
 
         # Use provided factory or default that wraps FunctionContext
         # in a minimal TransformContext
@@ -908,7 +927,7 @@ class WizardConfigLoader:
         self,
         wizard_config: dict[str, Any],
         custom_functions: dict[str, Callable[..., Any] | str] | None,
-        config_base_path: Path | None,
+        anchor: PathAnchor | None,
     ) -> dict[str, WizardFSM]:
         """Load subflow networks referenced in transitions.
 
@@ -918,7 +937,9 @@ class WizardConfigLoader:
         Args:
             wizard_config: Main wizard configuration dict
             custom_functions: Custom functions to pass to subflows
-            config_base_path: Base path for resolving relative paths
+            anchor: The wizard's config tree and the position within it that
+                names resolve from, or ``None`` when no base path was given
+                and file probes are therefore skipped
 
         Returns:
             Dict mapping subflow names to WizardFSM instances
@@ -950,7 +971,7 @@ class WizardConfigLoader:
                     subflow_name,
                     wizard_config,
                     custom_functions,
-                    config_base_path,
+                    anchor,
                 )
                 if subflow_fsm:
                     subflow_registry[subflow_name] = subflow_fsm
@@ -962,7 +983,9 @@ class WizardConfigLoader:
                 # Rewriting it into a bare ValueError here would undo the
                 # narrowing the guard exists to provide, one frame above
                 # the guard.
-                logger.error("Refused subflow '%s': addresses outside the config dir", subflow_name)
+                logger.error(
+                    "Refused subflow '%s': addresses outside the config tree", subflow_name
+                )
                 raise
             except Exception as e:
                 logger.error("Failed to load subflow '%s': %s", subflow_name, e)
@@ -975,38 +998,47 @@ class WizardConfigLoader:
         subflow_name: str,
         wizard_config: dict[str, Any],
         custom_functions: dict[str, Callable[..., Any] | str] | None,
-        config_base_path: Path | None,
+        anchor: PathAnchor | None,
     ) -> WizardFSM | None:
         """Load a single subflow network.
 
         Attempts to load the subflow from:
         1. Explicit subflow definition in wizard_config["subflows"]
-        2. File path relative to config_base_path
-        3. File path in subflows/ subdirectory
+        2. File path relative to the loading wizard's own directory
+        3. File path in that directory's subflows/ subdirectory
 
         The name comes out of config *content* — a ``subflows:`` key or a
         transition's ``subflow.network`` value — so both file probes are
-        bounded to ``config_base_path``. A name that leaves it, via
-        ``..`` or by being absolute, raises :class:`ValueError` rather
-        than loading a state machine from outside the wizard's own tree.
-        A name in a subdirectory is legal; the ``subflows/`` layout the
-        second probe serves is exactly that.
+        bounded. A name that leaves the tree, via ``..`` or by being
+        absolute, raises :class:`~dataknobs_common.paths.PathEscapeError`
+        rather than loading a state machine from outside it. A name in a
+        subdirectory is legal; the ``subflows/`` layout the second probe
+        serves is exactly that.
+
+        **Resolution is per-hop; the boundary is not.** A subflow loads its
+        own subflows relative to *itself*, because that is where a nested
+        wizard's names have always been read from. What it may reach is the
+        anchor's root, fixed when the outermost wizard was loaded — so
+        ``cfg/subflows/a.yaml`` naming ``../shared`` reaches
+        ``cfg/shared.yaml``, which is inside the wizard's tree, while
+        nothing reaches outside it at any depth.
 
         Args:
             subflow_name: Name of the subflow to load
             wizard_config: Main wizard configuration dict
             custom_functions: Custom functions to pass to subflow
-            config_base_path: Base path for resolving relative paths
+            anchor: The config tree and the position within it that this
+                wizard's names resolve from, or ``None`` if no base path
+                was given
 
         Returns:
             WizardFSM for the subflow, or None if not found
 
         Raises:
-            PathEscapeError: If ``subflow_name`` addresses a file outside
-                ``config_base_path`` under *either* probe. Both are
-                candidate readings of one name, so a name that escapes
-                under either is refused rather than silently reinterpreted
-                as the other — the same rule
+            PathEscapeError: If ``subflow_name`` addresses a file outside the
+                tree under *either* probe. Both are candidate readings of one
+                name, so a name that escapes under either is refused rather
+                than silently reinterpreted as the other — the same rule
                 :func:`~dataknobs_common.config_loading.find_config_file`
                 applies across its extensions.
         """
@@ -1014,10 +1046,15 @@ class WizardConfigLoader:
         explicit_subflows = wizard_config.get("subflows", {})
         if subflow_name in explicit_subflows:
             subflow_config = explicit_subflows[subflow_name]
-            return self.load_from_dict(subflow_config, custom_functions, config_base_path)
+            return self.load_from_dict(
+                subflow_config,
+                custom_functions,
+                config_base_path=anchor.base if anchor else None,
+                config_root=anchor.root if anchor else None,
+            )
 
         # Try to load from file
-        if config_base_path is None:
+        if anchor is None:
             logger.warning(
                 "Cannot load subflow '%s' from file: no config_base_path provided",
                 subflow_name,
@@ -1028,20 +1065,21 @@ class WizardConfigLoader:
         # returned rather than recomposing from the raw name: a symlinked
         # subdirectory plus a ``..`` resolves through the link's target.
         for parts in ((f"{subflow_name}.yaml",), ("subflows", f"{subflow_name}.yaml")):
-            subflow_path = safe_join_or_raise(
-                config_base_path,
+            subflow_path = anchor.resolve(
                 *parts,
                 what="subflow name",
-                outside="the wizard's config directory",
+                outside="the wizard's config tree",
                 supplied=subflow_name,
             )
             if subflow_path.exists():
-                return self.load(str(subflow_path), custom_functions)
+                # The root travels with the recursion; the position moves to
+                # the subflow's own directory when `load` re-anchors there.
+                return self.load(str(subflow_path), custom_functions, config_root=anchor.root)
 
         logger.warning(
             "Subflow '%s' not found in config or as file at %s",
             subflow_name,
-            config_base_path,
+            anchor.base,
         )
         return None
 

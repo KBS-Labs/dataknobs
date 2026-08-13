@@ -11,6 +11,7 @@ from typing import Any
 
 import pytest
 import yaml
+from dataknobs_common.paths import PathEscapeError
 
 from dataknobs_bots.reasoning.wizard import WizardReasoning
 
@@ -49,18 +50,48 @@ class TestWizardConfigPathResolution:
         assert reasoning is not None
         assert reasoning._wizard_fsm is not None
 
-    def test_absolute_path_ignores_config_base_path(self, tmp_path: Path) -> None:
-        """Absolute wizard_config paths should work regardless of config_base_path."""
+    def test_an_absolute_path_inside_the_base_still_works(self, tmp_path: Path) -> None:
+        """An absolute spelling is fine; addressing outside the base is not."""
+        wizard_dir = tmp_path / "wizards"
+        wizard_dir.mkdir()
+        wizard_file = wizard_dir / "flow.yaml"
+        wizard_file.write_text(yaml.dump(_minimal_wizard_yaml()))
+
+        config = {
+            "strategy": "wizard",
+            "wizard_config": str(wizard_file),
+            "config_base_path": str(wizard_dir),
+        }
+        reasoning = WizardReasoning.from_config(config)
+        assert reasoning is not None
+
+    def test_an_absolute_path_no_longer_ignores_config_base_path(self, tmp_path: Path) -> None:
+        """BEHAVIOUR CHANGE, and the previous behaviour was the wider hole.
+
+        This test used to assert that an absolute ``wizard_config`` "should
+        work regardless of ``config_base_path``" — skipping the composition
+        entirely. That is not a narrower case than a ``..`` walking out of the
+        base; it is the *wider* one, because it discards the base outright
+        rather than climbing out of it, and both values have the same
+        provenance (the bot's typed config).
+
+        ``config_base_path`` now means the tree, for the wizard path and for
+        every subflow name below it. A deployment that genuinely wants a
+        wizard from anywhere on the volume says so by declaring no
+        ``config_base_path`` — see
+        ``test_relative_path_without_base_path_uses_cwd`` below, which is
+        unchanged.
+        """
         wizard_file = tmp_path / "flow.yaml"
         wizard_file.write_text(yaml.dump(_minimal_wizard_yaml()))
 
         config = {
             "strategy": "wizard",
             "wizard_config": str(wizard_file),
-            "config_base_path": "/nonexistent/path",
+            "config_base_path": str(tmp_path / "wizards"),
         }
-        reasoning = WizardReasoning.from_config(config)
-        assert reasoning is not None
+        with pytest.raises(PathEscapeError, match="outside"):
+            WizardReasoning.from_config(config)
 
     def test_relative_path_without_base_path_uses_cwd(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
