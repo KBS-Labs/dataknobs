@@ -18,6 +18,17 @@ check on :meth:`SaveConfigTool.execute_with_context` stays, but as a
 *naming policy* that returns a structured tool error the LLM can act on
 — not as the containment boundary. These tests exercise the path that
 policy does not cover: a direct ``_persist_config`` call.
+
+**Which of these reproduce, and which guard.** Only
+``test_..._before_finalizing_the_draft`` reproduced the ordering defect:
+the deleted re-check did refuse a bare escaping ``name`` before its own
+``open()``, so the first two tests would have passed against the
+unfixed tree on containment alone. What they discriminate now is the
+error *type* — the old sites raised a bare ``ValueError``, which a
+consumer cannot tell from an unrelated one on the same call, and this
+suite was itself caught by that ambiguity elsewhere. Asserting
+:class:`~dataknobs_common.paths.PathEscapeError` fails against the
+unfixed tree and keeps the containment coverage as a regression guard.
 """
 
 from __future__ import annotations
@@ -25,9 +36,12 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from dataknobs_common.paths import PathEscapeError
 
 from dataknobs_bots.config.drafts import ConfigDraftManager
 from dataknobs_bots.tools.config_tools import SaveConfigTool
+
+from .test_config_tools import _make_context
 
 
 @pytest.fixture
@@ -43,7 +57,7 @@ def tool(output_dir: Path) -> SaveConfigTool:
 
 
 def test_persist_config_refuses_a_name_that_walks_out(tool: SaveConfigTool, tmp_path: Path) -> None:
-    with pytest.raises(ValueError):
+    with pytest.raises(PathEscapeError):
         tool._persist_config("../escaped", None, {"bot": {"name": "x"}})
 
     assert not (tmp_path / "escaped.yaml").exists()
@@ -57,7 +71,7 @@ def test_persist_config_refuses_an_absolute_name(tool: SaveConfigTool, tmp_path:
     """
     target = tmp_path / "escaped-absolute"
 
-    with pytest.raises(ValueError):
+    with pytest.raises(PathEscapeError):
         tool._persist_config(str(target), None, {"bot": {"name": "x"}})
 
     assert not target.with_suffix(".yaml").exists()
@@ -74,7 +88,7 @@ def test_persist_config_refuses_an_escaping_name_before_finalizing_the_draft(
     """
     draft_id = tool._draft_manager.create_draft({"bot": {"name": "x"}})
 
-    with pytest.raises(ValueError):
+    with pytest.raises(PathEscapeError):
         tool._persist_config("../escaped-via-finalize", draft_id, {"bot": {"name": "x"}})
 
     assert not (tmp_path / "escaped-via-finalize.yaml").exists()
@@ -87,3 +101,39 @@ def test_persist_config_writes_an_ordinary_name(tool: SaveConfigTool, output_dir
 
     assert written == output_dir / "my-bot.yaml"
     assert written.exists()
+
+
+async def test_an_escaping_draft_id_returns_a_tool_error_rather_than_raising(
+    tool: SaveConfigTool, output_dir: Path, tmp_path: Path
+) -> None:
+    """Every other refusal in this tool returns; the guard raises.
+
+    ``_is_safe_config_name`` covers ``name`` at the entry point and
+    returns ``{"success": False, "error": ...}`` the model can act on.
+    ``_draft_id`` comes from wizard data and reaches the manager
+    unchecked, so the manager's guard is what catches it — and a raise
+    out of ``execute_with_context`` is a tool-call crash, not something
+    the model can correct on its next turn. One condition, one contract.
+    """
+    (output_dir / "_draft-a").mkdir()
+    context = _make_context(
+        {"_draft_id": "a/../../outside/y", "bot": {"name": "x"}},
+    )
+
+    result = await tool.execute_with_context(context, config_name="fine")
+
+    assert result["success"] is False
+    assert "draft id" in result["error"]
+    assert not (tmp_path / "outside" / "y.yaml").exists()
+
+
+async def test_an_ordinary_save_still_reports_success(
+    tool: SaveConfigTool, output_dir: Path
+) -> None:
+    """The translation must not swallow the happy path."""
+    context = _make_context({"bot": {"name": "x"}})
+
+    result = await tool.execute_with_context(context, config_name="my-bot")
+
+    assert result["success"] is True
+    assert (output_dir / "my-bot.yaml").exists()

@@ -21,6 +21,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from dataknobs_common.paths import PathEscapeError
 
 from dataknobs_bots.reasoning.wizard_loader import WizardConfigLoader
 
@@ -85,7 +86,7 @@ def test_a_subflow_name_cannot_walk_out_of_the_config_directory(
     host = config_dir / "host.yaml"
     host.write_text(_wizard_naming("../elsewhere/other-wizard"))
 
-    with pytest.raises(ValueError, match=_ESCAPE):
+    with pytest.raises(PathEscapeError, match=_ESCAPE):
         WizardConfigLoader().load(host)
 
 
@@ -96,7 +97,7 @@ def test_an_absolute_subflow_name_cannot_replace_the_config_directory(
     host = config_dir / "host.yaml"
     host.write_text(_wizard_naming(str(outside / "other-wizard")))
 
-    with pytest.raises(ValueError, match=_ESCAPE):
+    with pytest.raises(PathEscapeError, match=_ESCAPE):
         WizardConfigLoader().load(host)
 
 
@@ -114,7 +115,7 @@ def test_the_subflows_subdirectory_probe_is_bounded_too(config_dir: Path, outsid
     host = config_dir / "host.yaml"
     host.write_text(_wizard_naming("../../elsewhere/other-wizard"))
 
-    with pytest.raises(ValueError, match=_ESCAPE):
+    with pytest.raises(PathEscapeError, match=_ESCAPE):
         WizardConfigLoader().load(host)
 
 
@@ -162,3 +163,42 @@ subflows:
     fsm = WizardConfigLoader().load(host)
 
     assert fsm is not None
+
+
+def test_a_name_escaping_under_either_probe_is_refused_not_reinterpreted(
+    config_dir: Path,
+) -> None:
+    """Two probes are two readings of one name, not two chances to pass.
+
+    ``../x`` escapes under the first probe (``{base}/../x.yaml``) while
+    the second (``{base}/subflows/../x.yaml``) lands back inside as
+    ``{base}/x.yaml``. Falling through to the second reading would make
+    the guard depend on which spelling of a directory layout the
+    deployment happened to use, and would let a name that plainly
+    addresses outside succeed. It is refused on the first, which is the
+    rule ``find_config_file`` already applies across its extensions.
+
+    Pinned because it is a deliberate choice that reads like an
+    off-by-one: a reader could 'fix' this into a fall-through without
+    realising it reopens the escape.
+    """
+    outside_target = config_dir.parent / "x.yaml"
+    outside_target.write_text(_SUBFLOW_YAML)
+    reachable_inside = config_dir / "x.yaml"
+    reachable_inside.write_text(_SUBFLOW_YAML)
+    host = config_dir / "host.yaml"
+    host.write_text(_wizard_naming("../x"))
+
+    with pytest.raises(PathEscapeError, match="subflow name"):
+        WizardConfigLoader().load(host)
+
+
+def test_the_subflows_subdirectory_probe_still_resolves(config_dir: Path) -> None:
+    """The second probe is the documented layout; it must keep working."""
+    subflows = config_dir / "subflows"
+    subflows.mkdir()
+    (subflows / "nested.yaml").write_text(_SUBFLOW_YAML)
+    host = config_dir / "host.yaml"
+    host.write_text(_wizard_naming("nested"))
+
+    assert WizardConfigLoader().load(host) is not None

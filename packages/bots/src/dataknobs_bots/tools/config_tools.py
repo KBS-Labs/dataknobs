@@ -39,6 +39,7 @@ from typing import Any, Callable
 
 import yaml
 from dataknobs_common.imports import resolve_callable
+from dataknobs_common.paths import PathEscapeError
 from dataknobs_llm.tools.context import ToolExecutionContext
 from dataknobs_llm.tools.context_aware import ContextAwareTool
 
@@ -717,7 +718,22 @@ class SaveConfigTool(ContextAwareTool):
         # Finalizing the draft and writing the config are blocking disk I/O;
         # offload the whole persist tail so the tool never stalls the loop.
         draft_id = wizard_data.get("_draft_id")
-        final_path = await asyncio.to_thread(self._persist_config, name, draft_id, config)
+        try:
+            final_path = await asyncio.to_thread(self._persist_config, name, draft_id, config)
+        except PathEscapeError as e:
+            # The entry-point check above covers ``name``. ``draft_id``
+            # comes from wizard data and reaches the manager unchecked,
+            # so the manager's guard is what catches it — and it raises,
+            # where every other refusal in this tool returns. Translating
+            # it here keeps one contract: the model gets an error it can
+            # correct on its next turn instead of a tool-call crash.
+            logger.warning(
+                "Refused to save configuration %r: %s",
+                name,
+                e,
+                extra={"config_name": name, "conversation_id": context.conversation_id},
+            )
+            return {"success": False, "error": str(e)}
 
         logger.info(
             "Saved configuration '%s' to %s",
@@ -754,9 +770,12 @@ class SaveConfigTool(ContextAwareTool):
         :func:`asyncio.to_thread` so the event loop is never blocked.
 
         Raises:
-            ValueError: If ``name`` addresses a file outside the draft
-                manager's output directory. Resolved before anything is
-                written, so an escaping name leaves no partial state.
+            PathEscapeError: If ``name`` or ``draft_id`` addresses a file
+                outside the draft manager's output directory. Resolved
+                before anything is written, so an escaping name leaves no
+                partial state. :meth:`execute_with_context` translates it
+                into this tool's structured error rather than letting it
+                surface as a raise.
         """
         # Resolve before writing anything. This method used to compose the
         # path itself and re-check it afterwards, which guarded its own
@@ -772,7 +791,8 @@ class SaveConfigTool(ContextAwareTool):
             except FileNotFoundError:
                 logger.warning("Draft %s not found, saving directly", draft_id)
 
-        self._draft_manager.output_dir.mkdir(parents=True, exist_ok=True)
+        # ``parents=True`` creates the output dir itself when the name is
+        # flat, so this is the only mkdir needed for either shape.
         final_path.parent.mkdir(parents=True, exist_ok=True)
         with open(final_path, "w") as f:
             yaml.dump(final_config, f, default_flow_style=False, sort_keys=False)

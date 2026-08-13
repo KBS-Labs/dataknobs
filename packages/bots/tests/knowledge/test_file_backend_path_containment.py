@@ -18,6 +18,19 @@ one is not a guard: a ``..`` segment, and an **absolute** part, which
 discards the base outright (``Path("/base") / "/etc/passwd"`` is
 ``/etc/passwd``). A contained name that merely *looks* dangerous — a
 subdirectory, or an interior ``a/../b`` — must still work.
+
+Two further shapes are covered below, and neither is "an identifier
+escaped the base":
+
+* **the boundary is not always the base.** With a tenant context the
+  composition has two hops, and containment has to be judged against the
+  inner one — a ``domain_id`` that walks sideways into a sibling tenant
+  never leaves ``base_path``, so every base-anchored assertion passes
+  while tenant isolation is gone.
+* **a guard does not cover what is appended after it.** ``_snapshot_file``
+  and ``key_pattern`` each build on ``domain_id``'s guard and then add a
+  second untrusted component, which is why "every helper routes through a
+  guarded method" was true and still left two holes.
 """
 
 from __future__ import annotations
@@ -25,8 +38,11 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from dataknobs_common.paths import PathEscapeError
+from dataknobs_common.tenancy import BoundTenantContext
 
 from dataknobs_bots.knowledge.storage.file import FileKnowledgeBackend
+from dataknobs_bots.knowledge.storage.key_layout import KnowledgeKeyKind
 
 
 @pytest.fixture
@@ -105,13 +121,35 @@ async def test_a_domain_id_naming_a_subdirectory_still_works(base: Path) -> None
     assert (base / "team" / "alpha").is_dir()
 
 
-async def test_a_domain_id_with_an_interior_parent_ref_still_works(base: Path) -> None:
-    """``a/../b`` never leaves the base, so it is contained."""
+async def test_a_domain_id_with_an_interior_parent_ref_is_contained_but_aliases(
+    base: Path,
+) -> None:
+    """``a/../b`` never leaves the base, so the guard contains it.
+
+    What the guard does *not* do is canonicalize the *identifier*. The
+    path is collapsed to ``beta``; the ``domain_id`` written into the
+    KB's metadata is the raw string, and that is what every read hands
+    back — so one directory is addressable under two names and reports
+    only one of them.
+
+    This characterizes pre-existing behaviour rather than reproducing a
+    bug: it passes on both sides of this change. It is here so the
+    interior-``..`` support this PR documents is pinned together with
+    the inconsistency that comes with it, instead of the first half
+    being advertised alone. The aliasing itself is filed separately.
+    """
     backend = await _backend(base)
 
-    await backend.create_kb("team/../beta")
+    info = await backend.create_kb("team/../beta")
 
     assert (base / "beta").is_dir()
+    assert not (base / "team").exists()
+    # Contained — but the two names are never reconciled with each other.
+    assert info.domain_id == "team/../beta"
+    assert [kb.domain_id for kb in await backend.list_kbs()] == ["team/../beta"]
+    reached_by_collapsed_name = await backend.get_info("beta")
+    assert reached_by_collapsed_name is not None
+    assert reached_by_collapsed_name.domain_id == "team/../beta"
 
 
 # --- resource path -> _file_path (S2) ------------------------------------
@@ -188,3 +226,132 @@ async def test_a_resource_path_in_a_subdirectory_still_works(base: Path) -> None
     await backend.put_file("dom", "subdir/nested.md", b"fine")
 
     assert await backend.get_file("dom", "subdir/nested.md") == b"fine"
+
+
+# --- the tenant subtree is the boundary, not the base --------------------
+
+
+async def test_a_domain_id_must_not_cross_into_another_tenants_state(base: Path) -> None:
+    """Bug: containment was judged against ``base_path``, but with a tenant
+    context the boundary is ``base_path/{state_prefix}``.
+
+    A ``domain_id`` that walks *sideways* satisfies the outer bound and
+    lands in a sibling tenant's subtree — no ``..`` escapes the base, so
+    every test that checks only "did it leave base_path" passes. Tenant
+    ``acme`` could read tenant ``bob``'s state-version token through the
+    public ``get_state_version``, which is the isolation the state prefix
+    exists to provide.
+    """
+    backend = await _backend(base)
+    acme = BoundTenantContext(tenant_id="acme", domain_id="proj")
+    bob = BoundTenantContext(tenant_id="bob", domain_id="proj")
+
+    await backend.create_kb("proj")
+    await backend.set_ingestion_status("proj", "ready", ctx=bob)
+    bobs_token = await backend.get_state_version("proj", ctx=bob)
+    assert bobs_token is not None
+
+    # base/tenants/acme/_state/../../bob/_state/proj == base/tenants/bob/_state/proj
+    with pytest.raises(PathEscapeError, match="tenant"):
+        await backend.get_state_version("../../bob/_state/proj", ctx=acme)
+
+    # And acme's own view is unchanged by the attempt.
+    assert await backend.get_state_version("proj", ctx=acme) is None
+
+
+async def test_each_tenant_still_reaches_its_own_state(base: Path) -> None:
+    """The tighter bound must not break the layout it is protecting."""
+    backend = await _backend(base)
+    acme = BoundTenantContext(tenant_id="acme", domain_id="proj")
+    bob = BoundTenantContext(tenant_id="bob", domain_id="proj")
+
+    await backend.create_kb("proj")
+    await backend.set_ingestion_status("proj", "ready", ctx=acme)
+    await backend.set_ingestion_status("proj", "pending", ctx=bob)
+
+    assert (base / "tenants" / "acme" / "_state" / "proj").is_dir()
+    assert (base / "tenants" / "bob" / "_state" / "proj").is_dir()
+    acme_token = await backend.get_state_version("proj", ctx=acme)
+    bob_token = await backend.get_state_version("proj", ctx=bob)
+    assert acme_token is not None and bob_token is not None
+    assert acme_token != bob_token
+
+
+async def test_a_tenant_may_still_nest_its_domain(base: Path) -> None:
+    """Nesting inside the tenant subtree stays legal."""
+    backend = await _backend(base)
+    ctx = BoundTenantContext(tenant_id="acme", domain_id="team/alpha")
+
+    await backend.create_kb("team/alpha")
+    await backend.set_ingestion_status("team/alpha", "ready", ctx=ctx)
+
+    assert (base / "tenants" / "acme" / "_state" / "team" / "alpha").is_dir()
+
+
+# --- components appended AFTER a guard are not covered by it -------------
+
+
+async def test_a_snapshot_version_must_not_address_outside_the_snapshot_dir(
+    base: Path, outside: Path
+) -> None:
+    """Bug: ``_snapshot_file`` routed through the guarded ``_kb_path`` and
+    then appended ``f"{version}.json"`` on top of the approved path.
+
+    ``version`` arrives from the public ``list_changes_since`` as a token
+    the caller persisted and handed back, so routing through a guard that
+    a sibling component is appended after covers ``domain_id`` and not
+    this. The read returns the file's top-level keys to the caller as
+    ``ChangeSet.deleted``.
+    """
+    backend = await _backend(base)
+    await backend.create_kb("dom")
+    secret = outside / "secret.json"
+    secret.write_text('{"private-key-name": "x"}')
+
+    with pytest.raises(PathEscapeError, match="snapshot version"):
+        await backend.list_changes_since("dom", "../../../outside/secret")
+
+
+async def test_key_pattern_must_not_build_a_glob_outside_the_base(base: Path) -> None:
+    """Bug: ``key_pattern`` composed ``domain_id`` into an f-string over
+    ``str(self._base_path)``, reaching neither guard.
+
+    Its output is handed to ``Path.glob`` or an inotify watch, so an
+    escaping domain installs a watch over a tree the deployment did not
+    choose — a leak with no filesystem call on this class at all.
+    """
+    backend = await _backend(base)
+
+    with pytest.raises(PathEscapeError, match="domain_id"):
+        backend.key_pattern(KnowledgeKeyKind.CONTENT, domain_id="../../elsewhere")
+
+
+async def test_key_pattern_still_serves_its_two_legitimate_shapes(base: Path) -> None:
+    """The wildcard form and a nested domain must both survive the guard."""
+    backend = await _backend(base)
+
+    assert backend.key_pattern(KnowledgeKeyKind.CONTENT) == f"{base}/*/content/**"
+    assert (
+        backend.key_pattern(KnowledgeKeyKind.CONTENT, domain_id="team/alpha")
+        == f"{base}/team/alpha/content/**"
+    )
+
+
+# --- the refusal is one catchable type ------------------------------------
+
+
+async def test_a_refusal_is_distinguishable_from_any_other_value_error(base: Path) -> None:
+    """The guards raised bare ``ValueError``, which a consumer cannot tell
+    from an unrelated one on the same call — ``pydantic.ValidationError``
+    subclasses it, and this repo's own test suite was caught by exactly
+    that ambiguity. ``PathEscapeError`` narrows it while staying a
+    ``ValueError``, so catching the old type still works.
+    """
+    backend = await _backend(base)
+    await backend.create_kb("dom")
+
+    with pytest.raises(PathEscapeError):
+        await backend.get_file("dom", "../../etc/passwd")
+    # Still a ValueError: narrowing, not a breaking change.
+    with pytest.raises(ValueError):
+        await backend.get_file("dom", "../../etc/passwd")

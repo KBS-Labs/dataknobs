@@ -36,7 +36,7 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-from dataknobs_common.paths import safe_join
+from dataknobs_common.paths import safe_join_or_raise
 from dataknobs_common.structured_config import StructuredConfig
 
 logger = logging.getLogger(__name__)
@@ -264,8 +264,6 @@ class ConfigDraftManager:
 
         # Write final file without metadata
         final_path = self.config_path(name)
-        self._ensure_output_dir()
-        final_path.parent.mkdir(parents=True, exist_ok=True)
         self._write_yaml(final_path, config)
 
         # Remove draft file
@@ -368,8 +366,6 @@ class ConfigDraftManager:
 
         return cleaned
 
-    # -- Private helpers --
-
     def config_path(self, name: str) -> Path:
         """Path of the named config file, checked to be inside the output dir.
 
@@ -381,11 +377,20 @@ class ConfigDraftManager:
 
         A name addressing a subdirectory of the output directory is
         legal; one that leaves it, via ``..`` or by being absolute,
-        raises :class:`ValueError` before anything is written. The
-        ``.yaml`` suffix is appended first, because appending a suffix is
-        itself part of what has to stay inside.
+        raises :class:`~dataknobs_common.paths.PathEscapeError` before
+        anything is written. The ``.yaml`` suffix is appended first,
+        because appending a suffix is itself part of what has to stay
+        inside.
         """
-        return self._resolve_in_output_dir(f"{name}.yaml", "config name", name)
+        return safe_join_or_raise(
+            self._output_dir,
+            f"{name}.yaml",
+            what="config name",
+            outside="the draft manager's output directory",
+            supplied=name,
+        )
+
+    # -- Private helpers --
 
     def _draft_path(self, draft_id: str) -> Path:
         """Get the file path for a draft ID, checked for containment.
@@ -401,35 +406,13 @@ class ConfigDraftManager:
         composed path for that reason — a leading-``..`` check would pass
         exactly the spelling that escapes.
         """
-        return self._resolve_in_output_dir(
-            f"{self._draft_prefix}{draft_id}.yaml", "draft id", draft_id
+        return safe_join_or_raise(
+            self._output_dir,
+            f"{self._draft_prefix}{draft_id}.yaml",
+            what="draft id",
+            outside="the draft manager's output directory",
+            supplied=draft_id,
         )
-
-    def _resolve_in_output_dir(self, relative: str, kind: str, supplied: str) -> Path:
-        """Join ``relative`` onto the output dir, or raise if it escapes.
-
-        The single containment idiom for this class: every path built
-        from an identifier goes through here, and the returned path — not
-        a recomposition of the raw name — is what callers open. Composing
-        again from the raw parts would discard the collapsing this does,
-        and a symlinked subdirectory inside the output dir plus a ``..``
-        resolves through the link's target.
-
-        The message names the identifier that was supplied rather than
-        the path it resolved to, so a caller learns what to correct
-        without being told about the deployment's layout.
-        """
-        resolved = safe_join(self._output_dir, relative)
-        if resolved is None:
-            raise ValueError(
-                f"{kind} addresses a file outside the draft manager's "
-                f"output directory: {supplied!r}"
-            )
-        return resolved
-
-    def _ensure_output_dir(self) -> None:
-        """Ensure the output directory exists."""
-        self._output_dir.mkdir(parents=True, exist_ok=True)
 
     def _write_draft(
         self,
@@ -438,7 +421,6 @@ class ConfigDraftManager:
         metadata: DraftMetadata,
     ) -> None:
         """Write a draft file with metadata."""
-        self._ensure_output_dir()
         data = dict(config)
         data[self._metadata_key] = metadata.to_dict()
         self._write_yaml(self._draft_path(draft_id), data)
@@ -451,15 +433,23 @@ class ConfigDraftManager:
     ) -> None:
         """Write a named config file with draft metadata."""
         path = self.config_path(name)
-        self._ensure_output_dir()
-        path.parent.mkdir(parents=True, exist_ok=True)
         data = dict(config)
         data[self._metadata_key] = metadata.to_dict()
         self._write_yaml(path, data)
 
     @staticmethod
     def _write_yaml(path: Path, data: dict[str, Any]) -> None:
-        """Write a dict to a YAML file."""
+        """Write a dict to a YAML file, creating its parent directory.
+
+        The ``mkdir`` is here because this is the one place every write
+        in this class funnels through. It used to sit at the call sites,
+        where two of the three had it and the third did not — so a
+        nested ``draft_id`` raised ``FileNotFoundError`` while a nested
+        config name of the same shape worked. A directory requirement
+        that each writer has to remember is one each new writer can
+        forget.
+        """
+        path.parent.mkdir(parents=True, exist_ok=True)
         with open(path, "w") as f:
             yaml.dump(data, f, default_flow_style=False, sort_keys=False)
 

@@ -268,7 +268,7 @@ project/
 
 The loader tries each location in order and uses the first match. If the subflow is defined both inline and as a file, the inline definition takes precedence.
 
-Both locations are bounded to the directory the parent config was loaded from. A subflow name may address a subdirectory (`shared/kb_acquisition` resolves under the config directory), but one that leaves it — with `..`, or by being an absolute path — raises `ValueError` rather than loading. The name comes out of config *content* rather than from a caller, so an escaping one would otherwise pull in a foreign state machine along with its transitions, transforms and function references.
+Both locations are bounded to the directory the parent config was loaded from. A subflow name may address a subdirectory (`shared/kb_acquisition` resolves under the config directory), but one that leaves it — with `..`, or by being an absolute path — raises `PathEscapeError` (a `ValueError` subclass, so an existing `except ValueError` still catches it) rather than loading. Both candidate locations are checked, and a name that escapes under either is refused rather than silently resolved as the other. The name comes out of config *content* rather than from a caller, so an escaping one would otherwise pull in a foreign state machine along with its transitions, transforms and function references.
 
 File-based subflows use the exact same YAML structure as any wizard config:
 

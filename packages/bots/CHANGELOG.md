@@ -9,6 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- **One tenant could read another tenant's ingest state.** With a tenant
+  context, `FileKnowledgeBackend` composes a state path in two hops —
+  `base_path`, then the context's `state_key_prefix()` — and containment was
+  judged against the outer one. A `domain_id` that walks *sideways* rather
+  than out satisfies that check: under `tenants/acme/_state/`, a domain of
+  `../../bob/_state/proj` resolves to `tenants/bob/_state/proj`, which never
+  leaves `base_path` and is squarely inside the wrong tenant. Tenant `acme`
+  could read tenant `bob`'s state-version token through the public
+  `get_state_version` — with `acme`'s own view of that domain still empty.
+
+  Each hop is now bounded against the hop before it, so a `domain_id` is
+  contained to the tenant's own subtree and the tenant prefix is contained
+  to `base_path`. Nesting *within* a tenant subtree is unaffected. Without a
+  context the prefix is empty, the two hops collapse to one, and the layout
+  is byte-identical to the single-tenant one.
+
 - **A knowledge-base `domain_id` or resource path could address any file on
   the volume.** `FileKnowledgeBackend` composed both identifiers straight
   onto its base directory with no containment, and every sink was live:
@@ -18,11 +34,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `get_file`'s read and `delete_file`'s `unlink` in the same way. An
   absolute identifier discarded the base outright.
 
-  Both identifiers are now bounded with `safe_join` at `_kb_path` and
-  `_file_path`, the two methods that compose them — every path helper on the
-  class routes through one of those, so each public method inherits the
-  guard — and the path the guard returned is what gets opened, rather than a
-  recomposition from the raw name. Nesting is unaffected: a `domain_id` of `team/alpha`, a resource
+  Both identifiers are now bounded at `_kb_path` and `_file_path`, the two
+  methods that compose them, and the path the guard returned is what gets
+  opened, rather than a recomposition from the raw name. Two further sites
+  compose on top of those and are bounded in their own right, because
+  routing through a guarded method covers only what that method joined:
+  `_snapshot_file` appends a caller-supplied `version` *after* `_kb_path`'s
+  check (the value arrives from the public `list_changes_since` as a token
+  the caller persisted and handed back), and `key_pattern` builds its glob
+  as a string from `str(base_path)` and reaches neither guard — its output
+  goes to `Path.glob` or an inotify watch, so an escaping `domain_id` there
+  installs a watch over a tree the deployment did not choose. Nesting is unaffected: a `domain_id` of `team/alpha`, a resource
   path of `subdir/file.md`, and an interior `a/../b` that never leaves the
   base are all still legal. An escaping identifier raises `ValueError`
   before any filesystem call — including from the read-shaped `get_file`,
@@ -65,6 +87,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     deliberately stricter than containment — rather than as the boundary.
 
 ### Fixed
+
+- **Every path-containment refusal is now one catchable type.** The guards
+  in `FileKnowledgeBackend`, `ConfigDraftManager` and `WizardConfigLoader`
+  raised a bare `ValueError`, which a consumer cannot distinguish from any
+  other `ValueError` on the same call. They now raise
+  `dataknobs_common.PathEscapeError`, a `ValueError` subclass — so existing
+  `except ValueError` handling is unaffected and a consumer translating
+  "your name addressed outside" into a 400 can finally do so precisely. Two
+  places that wrapped the refusal in a broader error, `WizardConfigLoader`'s
+  subflow loop and the FSM file resource's `acquire`, now let it through
+  rather than restating it as something else.
+
+- **`SaveConfigTool` raised out of a tool call for an escaping `_draft_id`.**
+  Its entry-point naming policy covers `config_name`, but `_draft_id` comes
+  from wizard data and reaches the draft manager unchecked — so the
+  manager's guard was what caught it, and it raised where every other
+  refusal in that tool returns `{"success": False, "error": ...}`. It is now
+  translated into that same structured error, which is what the model can
+  act on. The redundant second `mkdir` on the output directory is gone.
+
+- **A config name addressing a subdirectory needed the directory to exist.**
+  `ConfigDraftManager` created the parent in `finalize` and
+  `_write_named_file` but not in `_write_draft`, so a nested `draft_id`
+  would have raised `FileNotFoundError` where a nested config name of the
+  same shape worked. That was latent — `create_draft` generates a flat id
+  and `update_draft` requires the file to exist, so no public call reached
+  it — but the `mkdir` now lives in `_write_yaml`, the one place all three
+  writes funnel through, rather than in two of its three callers.
 
 - **The KB tools rejected every resource path when the knowledge directory
   was `.`.** Their containment guard compared normalized path strings, and

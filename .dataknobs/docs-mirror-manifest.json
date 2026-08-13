@@ -292,6 +292,12 @@
           "site": "guides/wizard-subflows.md"
         }
       ],
+      "mirror": [
+        {
+          "package": "knowledge/multi-tenant.md",
+          "site": "knowledge/multi-tenant.md"
+        }
+      ],
       "package_only": [
         "API.md",
         "ARCHITECTURE.md",

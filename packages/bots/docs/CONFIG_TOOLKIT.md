@@ -265,12 +265,24 @@ Every path the manager composes — the final config name, the alias name
 passed as `config_name`, and the `draft_id` — is checked to land inside
 `output_dir` before anything is written or unlinked. A name that walks
 out with `..`, or one that is absolute and so discards the directory
-entirely, raises `ValueError`:
+entirely, raises `PathEscapeError` — a `ValueError` subclass, so an
+existing `except ValueError` still catches it, and code that needs to
+tell a refused name from any other bad value can now do so:
 
 ```python
-manager.finalize(draft_id, final_name="../../etc/cron.d/job")  # ValueError
+from dataknobs_common import PathEscapeError
+
+manager.finalize(draft_id, final_name="../../etc/cron.d/job")  # PathEscapeError
 manager.config_path("reports/quarterly")                       # fine
 ```
+
+A name addressing a subdirectory is written there whether or not the
+subdirectory exists yet — the manager creates it.
+
+`SaveConfigTool` catches this and returns its ordinary
+`{"success": False, "error": ...}` rather than letting it raise, so a
+model that supplies an escaping name (or an escaping `_draft_id` out of
+wizard data) gets something it can correct on its next turn.
 
 This matters because the name is not always the caller's. `finalize()`
 with no `final_name` reads it back out of the draft file's own metadata,

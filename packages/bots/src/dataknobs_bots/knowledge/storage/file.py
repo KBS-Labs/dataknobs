@@ -20,7 +20,7 @@ from typing import TYPE_CHECKING, BinaryIO, ClassVar
 
 from dataknobs_common.capabilities import Capability, CapabilityLike
 from dataknobs_common.exceptions import ConcurrencyError
-from dataknobs_common.paths import safe_join
+from dataknobs_common.paths import safe_join_or_raise
 
 from .key_layout import KnowledgeKeyKind
 from .mixin import KnowledgeResourceBackendMixin
@@ -145,25 +145,53 @@ class FileKnowledgeBackend(KnowledgeResourceBackendMixin):
         helpers (:meth:`_content_path`, :meth:`_file_path`) call this
         without a context so content stays keyed by ``domain_id``.
 
-        ``domain_id`` addresses a location *inside* ``base_path``. A name
+        **There are two boundaries here, and containment is judged
+        against the inner one.** With a tenant context the path is built
+        in two hops — ``base_path`` then the tenant's state prefix — and
+        each hop is bounded against the one before it. Checking only the
+        outer boundary would accept a ``domain_id`` that never leaves
+        ``base_path`` but walks *sideways* into a sibling tenant:
+        ``../../bob/_state/proj`` under ``tenants/acme/_state/`` lands on
+        ``tenants/bob/_state/proj``, which is inside the base and inside
+        the wrong tenant. That is the isolation this prefix exists to
+        provide, so the domain is bounded against the tenant subtree
+        rather than against the base.
+
+        The prefix itself is bounded too, against ``base_path``:
+        :class:`~dataknobs_common.tenancy.PrefixedTenantContext` takes a
+        consumer-supplied pattern, so the segment it contributes is
+        checked rather than trusted. Without a context the prefix is
+        ``""``, the two hops collapse to one, and the bound is
+        ``base_path`` — byte-identical to the single-tenant layout.
+
+        ``domain_id`` addresses a location *inside* that bound. A name
         that walks out of it (``../elsewhere``) or replaces it outright
-        (an absolute path) raises :class:`ValueError` before any
+        (an absolute path) raises
+        :class:`~dataknobs_common.paths.PathEscapeError` before any
         filesystem call, so it fails identically whether or not the
         location it names exists. A name in a subdirectory
         (``team/alpha``) is legal, and so is an interior ``a/../b`` that
-        never leaves the base. The tenant state prefix is bounded on the
-        same call: :class:`~dataknobs_common.tenancy.PrefixedTenantContext`
-        takes a consumer-supplied pattern, so the segment it contributes
-        is checked here rather than trusted.
+        stays inside.
         """
-        kb_path = safe_join(self._base_path, self._state_prefix(ctx), domain_id)
-        if kb_path is None:
-            raise ValueError(
-                f"domain_id addresses a knowledge base outside the backend's "
-                f"base path: {domain_id!r}"
-                + (f" (with tenant state prefix {self._state_prefix(ctx)!r})" if ctx else "")
-            )
-        return kb_path
+        state_prefix = self._state_prefix(ctx)
+        tenant_root = safe_join_or_raise(
+            self._base_path,
+            state_prefix,
+            what="the tenant state prefix",
+            outside="the backend's base path",
+            supplied=state_prefix,
+        )
+        return safe_join_or_raise(
+            tenant_root,
+            domain_id,
+            what="domain_id",
+            outside=(
+                f"this tenant's state subtree ({state_prefix!r})"
+                if state_prefix
+                else "the backend's base path"
+            ),
+            supplied=domain_id,
+        )
 
     def _metadata_path(self, domain_id: str, ctx: TenantContext | None = None) -> Path:
         """Get the path to a KB's metadata file (tenant-scoped via ``ctx``)."""
@@ -183,8 +211,29 @@ class FileKnowledgeBackend(KnowledgeResourceBackendMixin):
         version: str,
         ctx: TenantContext | None = None,
     ) -> Path:
-        """Path of the snapshot JSON for ``version`` (an MD5 hex id)."""
-        return self._snapshots_path(domain_id, ctx) / f"{version}.json"
+        """Path of the snapshot JSON for ``version`` (an MD5 hex id).
+
+        ``version`` is guarded even though every *producer* in this repo
+        is :meth:`_identity_of_snapshot`, i.e. a computed hex digest that
+        cannot contain a separator. It is guarded because the consumer
+        is the producer for the read path: ``version`` arrives from the
+        public :meth:`list_changes_since` / :meth:`has_changes_since` as
+        a token the caller persisted and passed back, and nothing on the
+        way in constrains it to what we handed out.
+
+        Routing through ``_snapshots_path`` bounds ``domain_id`` but not
+        this — a guard that a sibling component is appended *after* is
+        not covering that component. The bound is the snapshot directory
+        rather than the base, for the same reason ``_kb_path`` bounds
+        the domain against the tenant subtree.
+        """
+        return safe_join_or_raise(
+            self._snapshots_path(domain_id, ctx),
+            f"{version}.json",
+            what="snapshot version",
+            outside="the knowledge base's snapshot directory",
+            supplied=version,
+        )
 
     def _file_path(self, domain_id: str, path: str) -> Path:
         """Get the full path to a file (domain-keyed content).
@@ -195,13 +244,13 @@ class FileKnowledgeBackend(KnowledgeResourceBackendMixin):
         raises :class:`ValueError` rather than reading, writing, or
         unlinking whatever it landed on.
         """
-        file_path = safe_join(self._content_path(domain_id), path)
-        if file_path is None:
-            raise ValueError(
-                f"file path addresses a location outside the knowledge base's "
-                f"content directory: {path!r}"
-            )
-        return file_path
+        return safe_join_or_raise(
+            self._content_path(domain_id),
+            path,
+            what="file path",
+            outside="the knowledge base's content directory",
+            supplied=path,
+        )
 
     def key_pattern(
         self,
@@ -216,15 +265,38 @@ class FileKnowledgeBackend(KnowledgeResourceBackendMixin):
 
         :attr:`KnowledgeKeyKind.UNKNOWN` raises :class:`ValueError`
         (fails closed — there is no shape for "unrecognized keys").
+
+        ``domain_id`` is bounded to ``base_path`` like every other
+        composition on this class. It is composed here as a *string*
+        rather than through a path helper, which is exactly why it needs
+        saying: the guard has to be applied on the way in, or this
+        method quietly becomes the one way to get an unbounded location
+        out of the backend. What it returns is handed to ``Path.glob``
+        or an inotify watch, so an escaping domain would install a watch
+        over a tree the deployment did not choose.
+
+        Raises:
+            PathEscapeError: ``domain_id`` addresses a location outside
+                ``base_path``.
         """
-        domain_segment = domain_id if domain_id else "*"
-        base = str(self._base_path)
+        kb_root = (
+            safe_join_or_raise(
+                self._base_path,
+                domain_id,
+                what="domain_id",
+                outside="the backend's base path",
+                supplied=domain_id,
+            )
+            if domain_id
+            else self._base_path / "*"
+        )
+        base = str(kb_root)
         if kind is KnowledgeKeyKind.CONTENT:
-            return f"{base}/{domain_segment}/{self.CONTENT_DIR}/**"
+            return f"{base}/{self.CONTENT_DIR}/**"
         if kind is KnowledgeKeyKind.METADATA:
-            return f"{base}/{domain_segment}/{self.METADATA_FILE}"
+            return f"{base}/{self.METADATA_FILE}"
         if kind is KnowledgeKeyKind.SNAPSHOT:
-            return f"{base}/{domain_segment}/{self.SNAPSHOTS_DIR}/*"
+            return f"{base}/{self.SNAPSHOTS_DIR}/*"
         raise ValueError(
             f"key_pattern is not defined for kind {kind!r} (only CONTENT / METADATA / SNAPSHOT)"
         )

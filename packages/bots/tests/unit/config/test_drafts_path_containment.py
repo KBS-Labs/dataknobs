@@ -23,6 +23,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from dataknobs_common.paths import PathEscapeError
 
 from dataknobs_bots.config.drafts import ConfigDraftManager
 
@@ -47,7 +48,7 @@ def test_finalize_refuses_a_final_name_that_walks_out(
 ) -> None:
     draft_id = manager.create_draft({"bot": {"name": "x"}})
 
-    with pytest.raises(ValueError):
+    with pytest.raises(PathEscapeError):
         manager.finalize(draft_id, final_name="../escaped")
 
     assert not (tmp_path / "escaped.yaml").exists()
@@ -60,7 +61,7 @@ def test_finalize_refuses_an_absolute_final_name(
     draft_id = manager.create_draft({"bot": {"name": "x"}})
     target = tmp_path / "escaped-absolute"
 
-    with pytest.raises(ValueError):
+    with pytest.raises(PathEscapeError):
         manager.finalize(draft_id, final_name=str(target))
 
     assert not target.with_suffix(".yaml").exists()
@@ -69,14 +70,28 @@ def test_finalize_refuses_an_absolute_final_name(
 def test_finalize_refuses_a_name_read_back_out_of_the_draft(
     manager: ConfigDraftManager, output_dir: Path, tmp_path: Path
 ) -> None:
-    """With no ``final_name`` the name comes from the draft file on disk."""
+    """With no ``final_name`` the name comes from the draft file on disk.
+
+    The edit below is a string replace against the metadata key, which
+    can stop matching without failing: rename ``metadata_key`` (it is a
+    constructor parameter) or change how the YAML is dumped, and the
+    replace silently misses, ``config_name`` stays ``None``, and
+    ``finalize`` raises for a completely different reason — "no
+    final_name provided and draft has no config_name set". A bare
+    ``pytest.raises`` would go green on that, testing nothing. So the
+    setup is asserted before it is used, and the raise is matched on the
+    guard's own words.
+    """
     draft_id = manager.create_draft({"bot": {"name": "x"}})
     draft_file = output_dir / f"_draft-{draft_id}.yaml"
     draft_file.write_text(
         draft_file.read_text().replace("_draft:", "_draft:\n  config_name: ../escaped-readback", 1)
     )
+    # The edit landed and the manager reads it back, or the test below
+    # would pass for the wrong reason.
+    assert manager.get_draft(draft_id)[1].config_name == "../escaped-readback"
 
-    with pytest.raises(ValueError):
+    with pytest.raises(PathEscapeError, match="config name"):
         manager.finalize(draft_id)
 
     assert not (tmp_path / "escaped-readback.yaml").exists()
@@ -88,7 +103,7 @@ def test_update_draft_refuses_an_alias_name_that_walks_out(
     """``config_name`` reaches ``_write_named_file``, a second composition."""
     draft_id = manager.create_draft({"bot": {"name": "x"}})
 
-    with pytest.raises(ValueError):
+    with pytest.raises(PathEscapeError):
         manager.update_draft(draft_id, {"bot": {"name": "x"}}, config_name="../escaped-alias")
 
     assert not (tmp_path / "escaped-alias.yaml").exists()
@@ -124,7 +139,7 @@ def test_discard_refuses_a_draft_id_with_an_interior_parent_ref(
     victim.write_text("keep me")
     (output_dir / "_draft-a").mkdir()
 
-    with pytest.raises(ValueError):
+    with pytest.raises(PathEscapeError):
         manager.discard("a/../../outside/y")
 
     assert victim.read_text() == "keep me"
@@ -139,7 +154,7 @@ def test_finalize_refuses_a_draft_id_with_an_interior_parent_ref(
     (victim_dir / "y.yaml").write_text("keep me")
     (output_dir / "_draft-a").mkdir()
 
-    with pytest.raises(ValueError):
+    with pytest.raises(PathEscapeError):
         manager.finalize("a/../../outside/y", final_name="ok")
 
     assert (victim_dir / "y.yaml").read_text() == "keep me"
@@ -171,3 +186,40 @@ def test_an_ordinary_draft_round_trips(manager: ConfigDraftManager) -> None:
     assert manager.get_draft(draft_id) is not None
     manager.update_draft(draft_id, {"bot": {"name": "y"}}, stage="review")
     assert manager.discard(draft_id) is True
+
+
+def test_finalize_creates_the_subdirectory_it_writes_into(
+    manager: ConfigDraftManager, output_dir: Path
+) -> None:
+    """A nested name must not require the caller to pre-create the tree.
+
+    ``CONFIG_TOOLKIT.md`` advertises ``reports/quarterly``, and nothing
+    in that contract says the directory has to exist first. The sibling
+    test above pre-creates ``team/``, so it would not notice if the
+    ``mkdir`` were lost; this one asserts the manager does it.
+    """
+    draft_id = manager.create_draft({"bot": {"name": "x"}})
+
+    manager.finalize(draft_id, final_name="reports/quarterly")
+
+    assert (output_dir / "reports" / "quarterly.yaml").exists()
+
+
+def test_every_write_path_creates_its_parent(manager: ConfigDraftManager, output_dir: Path) -> None:
+    """The ``mkdir`` belongs to the write, not to two of its three callers.
+
+    ``finalize`` and ``_write_named_file`` each carried their own
+    ``parent.mkdir``; ``_write_draft`` did not. That asymmetry is
+    **latent** rather than live — ``create_draft`` generates a flat
+    uuid and ``update_draft`` refuses an id whose file does not exist,
+    so no public call reaches ``_write_draft`` with a nested id today.
+
+    It is fixed and pinned anyway, because what stood between the
+    asymmetry and a failure was an unrelated property of id *generation*,
+    not anything about writing. This asserts the requirement at the one
+    place all three funnel through, so a fourth writer cannot reintroduce
+    it by forgetting a line.
+    """
+    manager._write_yaml(output_dir / "deep" / "deeper" / "x.yaml", {"a": 1})
+
+    assert (output_dir / "deep" / "deeper" / "x.yaml").exists()

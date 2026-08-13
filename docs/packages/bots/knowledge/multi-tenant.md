@@ -262,10 +262,11 @@ both key on `tenants/acme/_state/proj/_state/x`, so the second tenant
 reads the first's ingest state. Nothing traverses; the namespaces merge.
 
 `domain_id` is deliberately unconstrained — it legitimately names a
-subdirectory (`team/alpha`), and the backends bound it where they compose
-it rather than forbidding the shape. Where a nested tenant convention is
-genuinely wanted, express it with `PrefixedTenantContext`, whose
-`prefix_pattern` is a deployment's own convention and stays free-form:
+subdirectory (`team/alpha`), and the file backend bounds it where it
+composes it rather than forbidding the shape. Where a nested tenant
+convention is genuinely wanted, express it with `PrefixedTenantContext`,
+whose `prefix_pattern` is a deployment's own convention and stays
+free-form:
 
 ```python
 PrefixedTenantContext(
@@ -274,6 +275,34 @@ PrefixedTenantContext(
     prefix_pattern="regions/eu-west/{tenant_id}/",
 )
 ```
+
+#### Choose a pattern that keeps the tenant segment unambiguous
+
+`prefix_pattern` is the one place a deployment can reintroduce the
+merge that `tenant_id` validation just closed, because the check cannot
+know what *your* pattern treats as a delimiter:
+
+```python
+pattern = "legacy/{tenant_id}-{domain_id}/"
+
+# tenant_id="acme",   domain_id="x-y"  ->  "legacy/acme-x-y/"
+# tenant_id="acme-x", domain_id="y"    ->  "legacy/acme-x-y/"
+```
+
+Both `tenant_id`s are flat and both are accepted, yet two different
+tenants land on one state namespace. Pick a delimiter your tenant ids
+cannot contain, or give `{tenant_id}` its own path segment the way
+`BoundTenantContext` does.
+
+#### The domain is bounded to the tenant's subtree, not just the base
+
+Where a tenant prefix is in play, the file backend composes in two hops
+— `base_path`, then the tenant's state prefix — and checks each against
+the one before it. Checking only the outer boundary would not be enough:
+a `domain_id` of `../../bob/_state/proj` under `tenants/acme/_state/`
+resolves to `tenants/bob/_state/proj`, which never leaves `base_path`
+and is squarely inside the wrong tenant. `domain_id` may nest freely
+*within* the tenant subtree; it may not leave it.
 
 ## Capability advertisement
 

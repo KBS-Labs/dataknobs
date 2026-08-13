@@ -15,7 +15,7 @@ from typing import Any
 import yaml
 
 from dataknobs_common.expressions import safe_eval
-from dataknobs_common.paths import safe_join
+from dataknobs_common.paths import PathEscapeError, safe_join_or_raise
 from dataknobs_fsm.api.advanced import AdvancedFSM
 from dataknobs_fsm.config.builder import FSMBuilder
 
@@ -955,6 +955,15 @@ class WizardConfigLoader:
                 if subflow_fsm:
                     subflow_registry[subflow_name] = subflow_fsm
                     logger.debug("Loaded subflow: %s", subflow_name)
+            except PathEscapeError:
+                # Refusing a name that addresses outside the config
+                # directory is not "this subflow failed to load" — it is
+                # the config asking for something it may not have.
+                # Rewriting it into a bare ValueError here would undo the
+                # narrowing the guard exists to provide, one frame above
+                # the guard.
+                logger.error("Refused subflow '%s': addresses outside the config dir", subflow_name)
+                raise
             except Exception as e:
                 logger.error("Failed to load subflow '%s': %s", subflow_name, e)
                 raise ValueError(f"Failed to load subflow '{subflow_name}': {e}") from e
@@ -993,8 +1002,13 @@ class WizardConfigLoader:
             WizardFSM for the subflow, or None if not found
 
         Raises:
-            ValueError: If ``subflow_name`` addresses a file outside
-                ``config_base_path``.
+            PathEscapeError: If ``subflow_name`` addresses a file outside
+                ``config_base_path`` under *either* probe. Both are
+                candidate readings of one name, so a name that escapes
+                under either is refused rather than silently reinterpreted
+                as the other — the same rule
+                :func:`~dataknobs_common.config_loading.find_config_file`
+                applies across its extensions.
         """
         # Check for inline subflow definition
         explicit_subflows = wizard_config.get("subflows", {})
@@ -1014,12 +1028,13 @@ class WizardConfigLoader:
         # returned rather than recomposing from the raw name: a symlinked
         # subdirectory plus a ``..`` resolves through the link's target.
         for parts in ((f"{subflow_name}.yaml",), ("subflows", f"{subflow_name}.yaml")):
-            subflow_path = safe_join(config_base_path, *parts)
-            if subflow_path is None:
-                raise ValueError(
-                    f"subflow name addresses a config outside the wizard's "
-                    f"config directory: {subflow_name!r}"
-                )
+            subflow_path = safe_join_or_raise(
+                config_base_path,
+                *parts,
+                what="subflow name",
+                outside="the wizard's config directory",
+                supplied=subflow_name,
+            )
             if subflow_path.exists():
                 return self.load(str(subflow_path), custom_functions)
 
