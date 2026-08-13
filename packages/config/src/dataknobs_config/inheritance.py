@@ -385,6 +385,7 @@ class InheritableConfigLoader:
         config_dir: str | Path | None = None,
         *,
         resolver: ResourceResolver[str, str] | None = None,
+        allow_outside: bool = False,
     ):
         """Initialize configuration loader.
 
@@ -395,9 +396,20 @@ class InheritableConfigLoader:
                      :meth:`resolve_name`. ``MappingResolver`` and
                      ``CallableResolver`` from ``dataknobs_common`` cover the
                      common layout conventions without a consumer class.
+            allow_outside: Opt this loader out of the containment bound, for
+                     a deployment whose layout genuinely spans sibling trees
+                     (``configs/app.yaml`` with ``extends: ../shared/base``).
+                     Off by default, and it applies to every name the loader
+                     resolves -- the requested config, each ``extends:``
+                     target, and a resolver's output alike, because they
+                     reach the same join. A name that actually escapes is
+                     logged at WARNING when it does, so the widened boundary
+                     is auditable in a deployment's logs rather than silent;
+                     a contained name logs nothing.
         """
         self.config_dir = Path(config_dir) if config_dir else Path("./configs")
         self._resolver = resolver
+        self._allow_outside = allow_outside
         # An override *replaces* `resolve_name`, so a loader given both modes
         # ignores this resolver unless the override delegates to `super()`.
         # Silence is the whole problem -- the loader then reads a different
@@ -462,8 +474,9 @@ class InheritableConfigLoader:
         cannot be correct against a ``config_dir`` the caller did not choose.
 
         A mapping decides *where inside* ``config_dir`` a name lives; it does
-        not widen what a name may address. A resolved name that walks out of
-        ``config_dir`` with ``..``, or that is absolute, raises
+        not widen what a name may address. A resolved name that *lands*
+        outside ``config_dir`` -- whether spelled with ``..`` or as an
+        absolute path -- raises
         :class:`InheritanceError` when the load reaches the filesystem -- the
         bound applies to the resolver's output exactly as it does to a name a
         caller wrote.
@@ -679,7 +692,8 @@ class InheritableConfigLoader:
 
         The name is joined to ``config_dir`` and has to stay inside it. A name
         may address a subdirectory (``domains/child``), which is how a layout
-        convention is expressed; one containing ``..``, or an absolute one,
+        convention is expressed; one that *lands* outside -- whether spelled
+        with ``..`` or as an absolute path --
         raises rather than reading the file it points at. The bound applies to
         every name that reaches here, and most of them are not the caller's
         literal: an ``extends:`` value comes out of a config file, and a
@@ -696,7 +710,7 @@ class InheritableConfigLoader:
                 ``config_dir``, the file is not found, or it fails to parse
         """
         try:
-            filepath = find_config_file(self.config_dir, name)
+            filepath = find_config_file(self.config_dir, name, allow_outside=self._allow_outside)
         except ConfigPathEscapeError as e:
             raise InheritanceError(str(e)) from e
         if filepath is None:

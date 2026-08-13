@@ -77,7 +77,8 @@
         {
           "package": "guides/config-loading.md",
           "site": "config-loading.md",
-          "reason": "Independently written: the package guide leads with the helper API for library authors, the site page with the file-format chain for config authors. Reconciling them is its own task."
+          "reason": "Independently written: the package guide leads with the helper API for library authors, the site page with the file-format chain for config authors. Reconciling them is its own task.",
+          "shared_sections": ["safe-join-primitive"]
         }
       ],
       "package_only": [

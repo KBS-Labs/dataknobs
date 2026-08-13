@@ -150,9 +150,9 @@ helper while keeping their existing public error types unchanged.
 
 A config **name** addresses a file inside the directory it is looked up
 in. Naming a subdirectory is fine — `domains/child` is how a layout
-convention is written — but a name that walks out with `..`, or an
-absolute name, raises `ConfigPathEscapeError` before any file is
-probed:
+convention is written — but a name that *lands* outside, whether it
+walks out with `..` or is spelled as an absolute path, raises
+`ConfigPathEscapeError` before any file is probed:
 
 | Name | Result |
 |---|---|
@@ -181,34 +181,28 @@ the caller's own decision, so `InheritableConfigLoader.load_from_file`
 still reads any file it is handed (the `extends:` names under it are
 then bounded by that file's own directory).
 
-Pass `allow_outside=True` to `find_config_file` if a caller genuinely
-addresses a tree outside its search directory. The escaping name is
-logged at WARNING and probed anyway, so the bypass shows up in the
-deployment's logs.
-
-### `safe_join`, the primitive underneath
-
-The containment test is `dataknobs_common.paths.safe_join`, exported
-from the package root and usable directly by any code that composes a
-path out of a name it did not write:
+A deployment whose layout genuinely spans sibling trees opts out with
+`allow_outside=True`. The escaping name is logged at WARNING and probed
+anyway, so the bypass shows up in the deployment's logs; a contained
+name logs nothing, which keeps the signal meaningful. It is reachable
+from each of the three loaders, not only from the helper:
 
 ```python
-from dataknobs_common import safe_join
+find_config_file(config_dir, name, allow_outside=True)
 
-target = safe_join(knowledge_dir, domain_id, resource_path)
-if target is None:
-    raise ValueError("resource path resolves outside the knowledge directory")
+InheritableConfigLoader(config_dir, allow_outside=True)
+EnvironmentConfig.load(env, config_dir, allow_outside=True)
+EnvironmentAwareConfig.load_app(app, app_dir, env_dir, allow_outside=True)
 ```
 
-It returns the joined path with `.` and `..` collapsed, or `None` if
-the result lands outside the base. The check is lexical — no
-filesystem access — so it is safe on an event loop and works on a path
-that does not exist yet, which is the case whenever the composed path
-is about to be written. The trade-off is that symlinks are not
-followed: a symlinked file inside the base is treated as contained
-(deliberately — a Kubernetes ConfigMap mount is built out of
-symlinks), so a write that must not be redirected should also check
-`Path.resolve()`, off the loop.
+Weigh it before turning it on where the name comes from the process
+environment. `EnvironmentConfig.load()` without an explicit
+`environment` takes the name from `DATAKNOBS_ENVIRONMENT` or
+`ENVIRONMENT`, and `load_app` applies the flag to **both** of its
+lookups — the app name and the environment name — so opting out widens
+what an environment variable can address.
+
+--8<-- "packages/common/docs/guides/config-loading.md:safe-join-primitive"
 
 ## PyYAML Is Optional
 

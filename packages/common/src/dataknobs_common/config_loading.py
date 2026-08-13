@@ -80,9 +80,13 @@ def find_config_file(
 
     ``name`` addresses a file **inside** ``config_dir``. It may name a
     subdirectory (``"domains/child"``), which is how a layout convention
-    is expressed; it may not walk out of the directory with ``..`` and it
-    may not be absolute, because joining an absolute name discards
-    ``config_dir`` altogether. Either is rejected before any file is
+    is expressed; it may not address anything outside. Two spellings can:
+    a ``..`` segment walks up out of the directory, and an absolute name
+    discards ``config_dir`` altogether, because that is what joining an
+    absolute operand evaluates to. Neither is rejected on sight —
+    containment is judged on where the composed path *lands*, so an
+    interior ``sub/../x`` and an absolute name pointing back inside
+    ``config_dir`` are both allowed. Rejection happens before any file is
     probed, so an escaping name fails the same way whether or not the
     file it names exists.
 
@@ -94,8 +98,12 @@ def find_config_file(
     Containment is judged lexically, by
     :func:`dataknobs_common.paths.safe_join`; a symlink inside
     ``config_dir`` is followed as the deployment intended it. The path
-    returned is composed exactly as before — the guard reads the name, it
-    does not rewrite it.
+    returned is **the one the guard approved**, with its segments
+    collapsed, so what was validated is what gets opened. Composing the
+    name as written instead would not be the same path: a symlinked
+    subdirectory inside ``config_dir`` plus a ``..`` in the name resolves
+    through the link's target, landing outside ``config_dir`` on a name
+    the guard read as inside it.
 
     Args:
         config_dir: Directory to search.
@@ -120,7 +128,14 @@ def find_config_file(
             ``config_dir`` and ``allow_outside`` is False.
     """
     directory = Path(config_dir)
-    if safe_join(directory, name) is None:
+    normalized = tuple(ext if ext.startswith(".") else f".{ext}" for ext in extensions)
+    # Every path that might be opened is guarded, not just ``name`` — the
+    # extension is appended to the last component, and appending it can turn
+    # a contained name into an escaping one (``..`` under a base whose own
+    # last component the suffix then leaves).
+    guarded = [safe_join(directory, f"{name}{ext}") for ext in normalized]
+    probes: list[Path]
+    if safe_join(directory, name) is None or any(p is None for p in guarded):
         if not allow_outside:
             raise ConfigPathEscapeError(
                 f"Configuration name addresses a file outside the configuration directory: {name!r}"
@@ -130,9 +145,12 @@ def find_config_file(
             name,
             directory,
         )
-    normalized = tuple(ext if ext.startswith(".") else f".{ext}" for ext in extensions)
-    for ext in normalized:
-        candidate = directory / f"{name}{ext}"
+        # The opt-out restores the previous composition exactly, including
+        # its symlink reachability — that is what opting out means.
+        probes = [directory / f"{name}{ext}" for ext in normalized]
+    else:
+        probes = [p for p in guarded if p is not None]
+    for candidate in probes:
         if candidate.exists():
             return candidate
     return None

@@ -445,8 +445,13 @@ class InheritableConfigLoader:
     # requested config AND to every `extends:` target; identity by default.
     # Not applied under load_from_file. A name -- requested, resolved, or
     # read from an `extends:` -- may address a subdirectory of config_dir
-    # but may not leave it: `..` or an absolute name raises
-    # InheritanceError. load_from_file is unaffected; the path is yours.
+    # but may not land outside it: `..` or an absolute path that leaves
+    # config_dir raises InheritanceError (containment is judged on where
+    # the name lands, not on how it is spelled -- an absolute name
+    # pointing back inside config_dir is fine).
+    # load_from_file is unaffected; the path is yours.
+    # A layout that genuinely spans sibling trees lifts the bound with
+    # InheritableConfigLoader(config_dir, allow_outside=True).
     def resolve_name(self, name: str) -> str
 
     # The names load() accepts. Defaults to the stems directly under

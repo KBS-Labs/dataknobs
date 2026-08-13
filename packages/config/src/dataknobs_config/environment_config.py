@@ -248,6 +248,7 @@ class EnvironmentConfig:
         config_dir: str | Path = "config/environments",
         *,
         substitute_vars: bool = True,
+        allow_outside: bool = False,
     ) -> EnvironmentConfig:
         """Load environment configuration from file.
 
@@ -261,6 +262,14 @@ class EnvironmentConfig:
                 domain configs. Pass ``False`` only if you specifically
                 need to preserve raw refs (e.g., to inspect or transform
                 them).
+            allow_outside: Opt out of the containment bound on
+                ``environment``, for a deployment whose environment configs
+                genuinely live outside ``config_dir``. Off by default, and
+                worth weighing before it is turned on: with no explicit
+                ``environment`` the name comes from ``DATAKNOBS_ENVIRONMENT``
+                or ``ENVIRONMENT``, so opting out widens what a process
+                environment variable can address. A name that actually
+                escapes is logged at WARNING when it does.
 
         Returns:
             Loaded EnvironmentConfig instance
@@ -275,7 +284,7 @@ class EnvironmentConfig:
             environment = cls.detect_environment()
 
         config_dir = Path(config_dir)
-        config_path = cls._find_config_file(config_dir, environment)
+        config_path = cls._find_config_file(config_dir, environment, allow_outside=allow_outside)
 
         if config_path is None:
             # Return empty config for environments without config files
@@ -344,28 +353,32 @@ class EnvironmentConfig:
         )
 
     @classmethod
-    def _find_config_file(cls, config_dir: Path, environment: str) -> Path | None:
+    def _find_config_file(
+        cls, config_dir: Path, environment: str, *, allow_outside: bool = False
+    ) -> Path | None:
         """Find the config file for an environment.
 
         The environment name is bounded by ``config_dir``: it may address a
-        subdirectory, but a name containing ``..`` or an absolute one raises
-        rather than reading the file it points at. The name is frequently not
+        subdirectory, but one that *lands* outside -- whether spelled with
+        ``..`` or as an absolute path -- raises rather than reading the file
+        it points at. The name is frequently not
         a literal the caller wrote -- :meth:`detect_environment` reads it from
         ``DATAKNOBS_ENVIRONMENT`` or ``ENVIRONMENT``.
 
         Args:
             config_dir: Directory to search
             environment: Environment name
+            allow_outside: Lift the bound, per :meth:`load`
 
         Returns:
             Path to config file, or None if not found
 
         Raises:
             EnvironmentConfigError: If ``environment`` addresses a file
-                outside ``config_dir``
+                outside ``config_dir`` and ``allow_outside`` is False
         """
         try:
-            return find_config_file(config_dir, environment)
+            return find_config_file(config_dir, environment, allow_outside=allow_outside)
         except ConfigPathEscapeError as e:
             raise EnvironmentConfigError(str(e)) from e
 

@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Added
+
+- **`allow_outside=True` lifts the name-containment bound, on all three
+  loaders.** `InheritableConfigLoader(config_dir, allow_outside=True)`,
+  `EnvironmentConfig.load(..., allow_outside=True)`, and
+  `EnvironmentAwareConfig.load_app(..., allow_outside=True)` opt a deployment
+  out for a layout that genuinely spans sibling trees — `configs/app.yaml`
+  carrying `extends: ../shared/base`, which the containment bound below
+  otherwise rejects with no remedy short of restructuring the tree.
+
+  Off by default everywhere; the bound is the behaviour you get unless you
+  ask for otherwise. A name that actually escapes is logged at WARNING when
+  it does, so a widened boundary is auditable in a deployment's logs, while
+  a contained name logs nothing and the signal stays meaningful.
+
+  Two scoping notes worth reading before turning it on. On
+  `InheritableConfigLoader` the flag covers every name the loader resolves —
+  the requested config, each `extends:` target, and a resolver's output —
+  because they all reach the same join. On the two environment-driven
+  loaders it widens what a *process environment variable* can address:
+  called without an explicit `environment`, they take the name from
+  `DATAKNOBS_ENVIRONMENT` or `ENVIRONMENT`. `load_app` applies it to both of
+  its lookups, the app name and the environment name, rather than silently
+  covering only one.
+
 ### Security
 
 - **A configuration name could address a file outside the directory it was
@@ -35,6 +60,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the path the caller passes is the caller's own choice, so it still reads
   any file, and the `extends:` targets under it are bounded by the directory
   that file lives in.
+
+### Changed
+
+- **`EnvironmentConfig.load()` now fails at startup on an escaping
+  environment name, where it previously started with an empty config.** An
+  environment name that addressed nothing — including one that addressed
+  outside `config_dir` — used to fall through to "no config file found for
+  this environment" and return an empty `EnvironmentConfig`, so a
+  deployment with a malformed `DATAKNOBS_ENVIRONMENT` booted and ran on
+  defaults. An escaping name now raises `EnvironmentConfigError` instead.
+
+  This is the intended fail-closed direction — a name that tried to leave
+  the configuration directory is a misconfiguration worth halting on rather
+  than silently running unconfigured — but it is a behaviour change for any
+  deployment that was relying on the degraded path. A name that is merely
+  *absent* from `config_dir` still returns an empty config exactly as
+  before; only escaping names raise.
 
 ## v0.5.0 - 2026-08-11
 

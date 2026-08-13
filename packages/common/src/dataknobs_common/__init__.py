@@ -9,6 +9,7 @@ This package provides shared functionality used across all dataknobs packages:
 - **Retry**: Configurable retry execution with backoff strategies
 - **Transitions**: Stateless transition validation for status graphs
 - **Events**: Event bus abstraction for pub/sub messaging
+- **Paths**: Compose a path from an untrusted name without leaving a base
 - **Testing**: Test utilities, markers, and configuration factories
 
 Example:

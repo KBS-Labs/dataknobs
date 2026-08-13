@@ -1447,6 +1447,14 @@ class TestAppNamesCannotEscapeTheAppDir:
                 str(root / "outside" / "secret"), apps, env_dir=environments
             )
 
+    def test_allow_outside_reaches_a_sibling_tree(self, tree):
+        """The opt-out, off by default -- every other test here proves that."""
+        _, apps, environments = tree
+        config = EnvironmentAwareConfig.load_app(
+            "../outside/secret", apps, env_dir=environments, allow_outside=True
+        )
+        assert config.app_name == "../outside/secret"
+
     def test_a_subdirectory_name_still_loads(self, tree):
         _, apps, environments = tree
         (apps / "team").mkdir()

@@ -100,10 +100,13 @@ reference.
 
 `find_config_file` composes `config_dir / name`, and the result has to
 stay inside `config_dir`. A name may address a **subdirectory** — that
-is how a layout convention is expressed — but a name that walks out of
-the directory with `..`, or an absolute name (which discards
+is how a layout convention is expressed — but a name that *lands*
+outside raises `ConfigPathEscapeError`. Two spellings get there: a `..`
+segment walks out of the directory, and an absolute name discards
 `config_dir` entirely, because that is what `Path("/base") / "/etc/x"`
-evaluates to), raises `ConfigPathEscapeError`:
+evaluates to. Neither is rejected on sight — containment is judged on
+where the composed path lands, so `sub/../x` and an absolute name
+pointing back inside `config_dir` are both allowed:
 
 ```python
 find_config_file(config_dir, "domains/child")   # fine: inside config_dir
@@ -126,13 +129,27 @@ of them.
 A caller that deliberately addresses a tree outside its search
 directory passes `allow_outside=True`; the escaping name is then logged
 at WARNING and probed anyway, so the bypass is auditable rather than
-silent. No in-tree caller passes it.
+silent, and a contained name logs nothing. The three `dataknobs-config`
+loaders forward the flag rather than hardcoding the default, so a
+deployment reaches it without dropping to this helper:
 
-### The primitive underneath
+```python
+InheritableConfigLoader(config_dir, allow_outside=True)
+EnvironmentConfig.load(env, config_dir, allow_outside=True)
+EnvironmentAwareConfig.load_app(app, app_dir, env_dir, allow_outside=True)
+```
+
+Every one of them defaults to `False`. Weigh the two environment-driven
+loaders separately before opting out: their name can come from
+`DATAKNOBS_ENVIRONMENT` or `ENVIRONMENT`, so the flag widens what a
+process environment variable can address.
+
+<!-- --8<-- [start:safe-join-primitive] -->
+### `safe_join`, the primitive underneath
 
 The containment test is `dataknobs_common.paths.safe_join`, exported
-from the package root, for consumers composing a path from a name of
-their own:
+from the package root and usable directly by any code that composes a
+path out of a name it did not write:
 
 ```python
 from dataknobs_common import safe_join
@@ -143,12 +160,26 @@ if target is None:
 ```
 
 It returns the joined path with `.` and `..` segments collapsed, or
-`None` when the result addresses anything outside the base. Containment
-is judged lexically — no filesystem call — which means it is safe to
-run on an event loop and works on paths that do not exist yet, and also
-means a symlink is not followed: a symlinked file inside the base is
-contained, deliberately. A write that must not be redirected through
-such a symlink wants a `Path.resolve()` check of its own, off the loop.
+`None` when the result lands outside the base. Containment is judged on
+where the path **lands**, not on how it was spelled: an interior
+`a/../b` is contained, and so is an absolute part that points back
+inside the base.
+
+The check is lexical — no filesystem access — so it is safe to run on
+an event loop and works on a path that does not exist yet, which is the
+case whenever the composed path is about to be written. The trade-off
+is that symlinks are not followed: a symlinked file inside the base is
+treated as contained, deliberately — a Kubernetes ConfigMap mount is
+built out of symlinks. Two consequences that belong together:
+
+- **Use the path it returns**, not the name you passed in. The returned
+  path is the collapsed one. Re-composing the name as written reopens
+  the gap the guard just closed, because a symlinked subdirectory plus
+  a `..` resolves through the link's target and lands outside the base.
+- A write that must not be redirected through such a symlink wants a
+  `Path.resolve()` check of its own as well, off the loop.
+<!-- --8<-- [end:safe-join-primitive] -->
+
 
 ## Custom Extension Sets
 

@@ -135,16 +135,51 @@ class TestFindConfigFileContainment:
     def test_an_interior_parent_segment_that_stays_inside_resolves(self, tmp_path: Path) -> None:
         """``sub/../x`` never leaves the directory, so the guard allows it.
 
-        The probe still composes the name as written, so ``sub`` has to
-        exist for the candidate to resolve — the guard reads the name, it
-        does not rewrite what gets probed.
+        What gets probed is the path the guard approved, with the segments
+        collapsed — so the match is ``x.yaml`` directly and ``sub`` never
+        has to exist. That equivalence is exactly what a symlinked ``sub``
+        would break, which is why the collapsed form is the one used.
         """
         configs, _ = self._tree(tmp_path)
-        (configs / "sub").mkdir()
         (configs / "x.yaml").write_text("a: 1\n")
         match = find_config_file(configs, "sub/../x")
-        assert match is not None
-        assert match.exists()
+        assert match == configs / "x.yaml"
+
+    def test_a_name_whose_suffixed_form_escapes_is_rejected(self, tmp_path: Path) -> None:
+        """The extension lands on the last component, which can move the path.
+
+        ``../base`` under ``base/`` normalizes back to ``base`` itself and is
+        contained. ``../base.yaml`` is a *sibling* of ``base`` and is not.
+        Guarding only the bare name would approve the first and open the
+        second.
+        """
+        base = tmp_path / "base"
+        base.mkdir()
+        (tmp_path / "base.yaml").write_text("leaked: true\n")
+        with pytest.raises(ConfigPathEscapeError):
+            find_config_file(base, "../base")
+
+    def test_a_symlinked_subdirectory_cannot_be_climbed_out_of(self, tmp_path: Path) -> None:
+        """The path the guard approved must be the path that gets opened.
+
+        Lexical ``..`` collapsing and kernel ``..`` resolution agree only
+        when no symlink sits in the prefix. ``mount`` is a symlink inside
+        ``configs`` — the arrangement the module deliberately supports, a
+        ConfigMap-style mount — so composing the name as written sends
+        ``mount/../secret`` to ``outside/../secret``, landing on a file
+        beside ``configs`` that the guard was told was inside it.
+        """
+        configs, outside = self._tree(tmp_path)
+        (tmp_path / "secret.yaml").write_text("leaked: true\n")
+        (configs / "mount").symlink_to(outside, target_is_directory=True)
+
+        # Lexically ``configs/mount/../secret`` is ``configs/secret``, so the
+        # name is contained and this must not raise.
+        match = find_config_file(configs, "mount/../secret")
+
+        # ...and because it is contained, it must not have found the file
+        # sitting *outside* configs/ that the symlink makes reachable.
+        assert match is None or match.resolve().is_relative_to(configs.resolve())
 
     def test_allow_outside_opts_back_out(self, tmp_path: Path) -> None:
         """The escape hatch for a caller that deliberately addresses a sibling tree."""

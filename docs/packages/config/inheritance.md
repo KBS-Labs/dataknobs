@@ -373,9 +373,26 @@ loader.load("/etc/secrets")      # InheritanceError -- an absolute name
 extends: "../../etc/secrets"     # InheritanceError, on load("child")
 ```
 
+Containment is judged on where the composed path *lands*, not on how the
+name was spelled: an interior `sub/../x` stays inside and resolves, and
+an absolute name pointing back inside `config_dir` is likewise fine. The
+two spellings above are rejected because of where they land.
+
 The rejection happens before the file is read, so it does not depend on
 the named file existing. The failure names the config, not the path it
 composed.
+
+A deployment whose layout genuinely spans sibling trees — `configs/`
+alongside a shared `../shared/` — opts the loader out:
+
+```python
+loader = InheritableConfigLoader(config_dir, allow_outside=True)
+```
+
+It is off by default and applies to every name the loader resolves. An
+escaping name is logged at WARNING when it escapes, so the widened
+boundary is visible in the deployment's logs; a contained name logs
+nothing.
 
 This is the reason the bound is on names rather than on paths: an
 `extends:` value is written in a config *file*, and a resolver result

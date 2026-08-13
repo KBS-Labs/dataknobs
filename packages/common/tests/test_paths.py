@@ -49,6 +49,19 @@ class TestSafeJoinAllows:
     def test_a_str_base(self, tmp_path: Path) -> None:
         assert safe_join(str(tmp_path), "child.yaml") == tmp_path / "child.yaml"
 
+    def test_a_root_base(self) -> None:
+        """Everything is inside ``/``.
+
+        The base's own component tuple is empty here, which is the case a
+        string-prefix test gets wrong: ``str(Path("/")) + os.sep`` is
+        ``"//"``, a prefix of nothing.
+        """
+        assert safe_join("/", "etc/passwd") == Path("/etc/passwd")
+
+    def test_a_parent_segment_against_a_root_base(self) -> None:
+        """``/..`` is ``/`` on a real filesystem, so this stays contained."""
+        assert safe_join("/", "../etc/passwd") == Path("/etc/passwd")
+
     def test_nothing_needs_to_exist(self, tmp_path: Path) -> None:
         composed = safe_join(tmp_path, "not/created/yet.yaml")
         assert composed == tmp_path / "not" / "created" / "yet.yaml"
@@ -88,3 +101,24 @@ class TestSafeJoinRejects:
         """``/base-other`` is not inside ``/base`` despite the string prefix."""
         base = tmp_path / "base"
         assert safe_join(base, f"..{os.sep}base-other{os.sep}x.yaml") is None
+
+    def test_a_prefix_sharing_sibling_reached_without_a_parent_segment(
+        self, tmp_path: Path
+    ) -> None:
+        """The same boundary, pinned on the component comparison alone.
+
+        The ``..`` spelling above is rejected by the pardir branch, so it
+        never reaches the prefix test. An absolute part carries no ``..``
+        and exercises the comparison directly -- the case a naive
+        ``startswith`` would wave through.
+        """
+        base = tmp_path / "base"
+        assert safe_join(base, str(tmp_path / "base-other" / "x.yaml")) is None
+        assert safe_join(base, str(tmp_path / "basement" / "x.yaml")) is None
+
+    def test_a_directory_named_like_the_base_but_nested_is_still_inside(
+        self, tmp_path: Path
+    ) -> None:
+        """The comparison bounds the base, it does not blocklist the name."""
+        base = tmp_path / "base"
+        assert safe_join(base, "base-other/x.yaml") == base / "base-other" / "x.yaml"

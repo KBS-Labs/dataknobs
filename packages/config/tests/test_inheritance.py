@@ -1603,3 +1603,32 @@ class TestNamesCannotEscapeTheConfigDir:
 
         with pytest.raises(InheritanceError, match="outside the configuration directory"):
             loader.load_from_file(root / "outside" / "child.yaml")
+
+    def test_allow_outside_reaches_a_sibling_tree(self, tree):
+        """The opt-out a deployment with a shared sibling tree needs.
+
+        ``configs/app.yaml`` extending ``../shared/base`` is a real layout,
+        and without a reachable knob the only remedy is restructuring the
+        tree. Off by default -- every other test in this class asserts the
+        closed behaviour.
+        """
+        root, configs = tree
+        (root / "shared").mkdir()
+        (root / "shared" / "base.yaml").write_text(yaml.dump({"a": 1}))
+        (configs / "app.yaml").write_text(yaml.dump({"extends": "../shared/base", "b": 2}))
+        loader = InheritableConfigLoader(configs, allow_outside=True)
+
+        assert loader.load("app") == {"a": 1, "b": 2}
+
+    def test_allow_outside_warns_so_the_bypass_is_auditable(self, tree, caplog):
+        """A silent widening of the boundary would be unauditable in a deployment."""
+        root, configs = tree
+        (root / "shared").mkdir()
+        (root / "shared" / "base.yaml").write_text(yaml.dump({"a": 1}))
+        (configs / "app.yaml").write_text(yaml.dump({"extends": "../shared/base"}))
+        loader = InheritableConfigLoader(configs, allow_outside=True)
+
+        with caplog.at_level(logging.WARNING, logger="dataknobs_common.config_loading"):
+            loader.load("app")
+
+        assert any("../shared/base" in r.getMessage() for r in caplog.records)

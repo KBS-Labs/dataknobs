@@ -1054,6 +1054,12 @@ class TestEnvironmentNamesCannotEscapeTheConfigDir:
         with pytest.raises(EnvironmentConfigError, match="outside the configuration directory"):
             EnvironmentConfig.load(str(root / "outside" / "secret"), environments)
 
+    def test_allow_outside_reaches_a_sibling_tree(self, tree):
+        """The opt-out, off by default -- every other test here proves that."""
+        _, environments = tree
+        config = EnvironmentConfig.load("../outside/secret", environments, allow_outside=True)
+        assert config.name == "secret"
+
     def test_a_missing_environment_is_still_an_empty_config(self, tree):
         """Fail-closed applies to escapes, not to the documented empty case."""
         _, environments = tree

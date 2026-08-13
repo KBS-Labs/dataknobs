@@ -212,6 +212,8 @@ class EnvironmentAwareConfig:
         app_dir: str | Path = "config/apps",
         env_dir: str | Path = "config/environments",
         environment: str | None = None,
+        *,
+        allow_outside: bool = False,
     ) -> EnvironmentAwareConfig:
         """Load an application configuration with environment bindings.
 
@@ -224,6 +226,16 @@ class EnvironmentAwareConfig:
             app_dir: Directory containing app configs
             env_dir: Directory containing environment configs
             environment: Environment name, or None to auto-detect
+            allow_outside: Opt out of the containment bound, for a deployment
+                whose layout genuinely spans sibling trees. Off by default.
+                It applies to **both** lookups this method performs -- the
+                app name against ``app_dir`` and the environment name against
+                ``env_dir`` -- because a layout that spans trees on one side
+                generally does on the other, and a flag that silently covered
+                only one would be worse than none. Note what that widens: with
+                ``environment=None`` the environment name comes from
+                ``DATAKNOBS_ENVIRONMENT`` or ``ENVIRONMENT``. An escaping name
+                is logged at WARNING when it escapes.
 
         Returns:
             EnvironmentAwareConfig with both app and environment loaded
@@ -232,10 +244,10 @@ class EnvironmentAwareConfig:
             EnvironmentAwareConfigError: If app config not found or invalid
         """
         app_dir = Path(app_dir)
-        env_config = EnvironmentConfig.load(environment, env_dir)
+        env_config = EnvironmentConfig.load(environment, env_dir, allow_outside=allow_outside)
 
         # Find and load app config file
-        config_path = cls._find_config_file(app_dir, app_name)
+        config_path = cls._find_config_file(app_dir, app_name, allow_outside=allow_outside)
         if config_path is None:
             raise EnvironmentAwareConfigError(
                 f"Application config not found: {app_name}.yaml in {app_dir}"
@@ -272,12 +284,14 @@ class EnvironmentAwareConfig:
         return cls(config=config, environment=env_config)
 
     @classmethod
-    def _find_config_file(cls, config_dir: Path, name: str) -> Path | None:
+    def _find_config_file(
+        cls, config_dir: Path, name: str, *, allow_outside: bool = False
+    ) -> Path | None:
         """Find a config file by name.
 
         The name is bounded by ``config_dir``: it may address a subdirectory,
-        but a name containing ``..`` or an absolute one raises rather than
-        reading the file it points at.
+        but one that *lands* outside -- whether spelled with ``..`` or as an
+        absolute path -- raises rather than reading the file it points at.
 
         Args:
             config_dir: Directory to search
@@ -288,10 +302,10 @@ class EnvironmentAwareConfig:
 
         Raises:
             EnvironmentAwareConfigError: If ``name`` addresses a file outside
-                ``config_dir``
+                ``config_dir`` and ``allow_outside`` is False
         """
         try:
-            return find_config_file(config_dir, name)
+            return find_config_file(config_dir, name, allow_outside=allow_outside)
         except ConfigPathEscapeError as e:
             raise EnvironmentAwareConfigError(str(e)) from e
 

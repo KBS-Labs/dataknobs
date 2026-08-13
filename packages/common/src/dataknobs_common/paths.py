@@ -50,11 +50,19 @@ __all__ = ["safe_join"]
 
 
 def _significant(parts: tuple[str, ...]) -> tuple[str, ...]:
-    """Drop a lone ``"."``, which ``normpath`` leaves behind for a curdir base.
+    """Erase ``"."`` components, so a curdir base is a prefix of everything.
 
     ``normpath(".")`` is ``"."`` while ``normpath("./x")`` is ``"x"``, so a
-    base of ``"."`` is not a component prefix of anything joined onto it.
-    Erasing it makes the prefix comparison total over relative bases.
+    base of ``"."`` compared as a *string* is a prefix of nothing joined
+    onto it -- the bug this guard replaced. Comparing ``PurePath.parts``
+    already avoids it, because pathlib drops ``"."`` when it splits
+    (``PurePath(".").parts`` is ``()`` on both flavours), so in practice
+    this filter removes nothing.
+
+    It is kept because the invariant it states -- a curdir base
+    contributes no components -- is what makes the prefix comparison
+    total over relative bases, and stating it here means the guard does
+    not silently depend on that pathlib detail holding.
     """
     return tuple(p for p in parts if p != os.curdir)
 

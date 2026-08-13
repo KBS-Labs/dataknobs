@@ -49,6 +49,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   contained and still resolves: that is how a deployment expresses a layout
   convention, and bounding the name is not the same as flattening it.
 
+  The path returned is the one the guard approved, with its `.` and `..`
+  segments collapsed, so what was validated is what gets opened. Probing the
+  name as written would not be equivalent: a symlinked subdirectory inside
+  `config_dir` — the ConfigMap-mount arrangement this guard deliberately
+  supports — plus a `..` in the name resolves through the link's target and
+  lands outside `config_dir`, on a name the lexical check read as inside it.
+  The visible consequence for a contained name is that `sub/../x` now
+  resolves to `x` without `sub` having to exist.
+
   Why this is more than a caller passing its own literal: the name reaching
   this helper is frequently not one. It can be an `extends:` value read out
   of a config file, an environment name read from the process environment,
