@@ -489,16 +489,20 @@ class InMemoryKnowledgeBackend(KnowledgeResourceBackendMixin):
         self,
         kind: KnowledgeKeyKind = KnowledgeKeyKind.CONTENT,
         domain_id: str | None = None,
+        *,
+        ctx: TenantContext | None = None,
     ) -> str:
         """No event-source filter is meaningful for in-process storage.
 
         Returns ``""`` (an explicitly empty sentinel) so contract tests
         can assert the method exists and is callable for every backend
         without conflating "method missing" with "method present, value
-        meaningfully empty." The ``kind`` and ``domain_id`` arguments
-        are accepted for protocol symmetry but ignored.
+        meaningfully empty." The ``kind``, ``domain_id`` and ``ctx``
+        arguments are accepted for protocol symmetry but ignored — note
+        this backend does not raise for ``UNKNOWN`` either, since it
+        produces no pattern to be wrong about.
         """
-        del kind, domain_id  # accepted for protocol symmetry, ignored
+        del kind, domain_id, ctx  # accepted for protocol symmetry, ignored
         return ""
 
     # --- Change Detection ---

@@ -18,6 +18,8 @@ LocalStack (``bin/dk up``) and skips when it is unavailable; moto's
 
 from __future__ import annotations
 
+import asyncio
+import json
 import tempfile
 from pathlib import Path
 
@@ -30,6 +32,8 @@ from dataknobs_bots.knowledge.storage import (
     KnowledgeResourceBackendMixin,
 )
 from dataknobs_bots.knowledge.storage.s3 import S3KnowledgeBackend
+from dataknobs_common.paths import PathEscapeError
+from dataknobs_common.tenancy import BoundTenantContext
 from dataknobs_common.testing import requires_localstack
 
 BUCKET = "kb-key-layout-bucket"
@@ -191,6 +195,208 @@ def test_key_pattern_file_snapshot_matches_snapshot_path(
     prefix = f"{base}/acme/_snapshots/"
     assert str(snap_path).startswith(prefix)
     assert backend.key_pattern(KnowledgeKeyKind.SNAPSHOT, domain_id="acme") == f"{prefix}*"
+
+
+# ---------------------------------------------------------------------------
+# T4b — the same drift pin, on the tenancy axis
+# ---------------------------------------------------------------------------
+#
+# T4 above pins pattern-vs-key-derivation agreement, but calls every
+# derivation helper with ``ctx`` defaulted to None — the one case where
+# the two agree by construction. Tenancy was added to the helpers
+# afterwards (``_metadata_path(domain, ctx)``, ``_metadata_key(domain,
+# ctx)``) and the pin kept passing while ``key_pattern`` had no ``ctx``
+# at all, so a tenant-scoped pattern named a location nothing writes to.
+#
+# The failure was silent by construction: ``key_pattern``'s whole purpose
+# is to feed ``Path.glob`` or an inotify/EventBridge rule, so the watch
+# installed cleanly, raised nothing, and never fired. These re-pin the
+# same agreement with a bound context, so the next helper change cannot
+# repeat it.
+
+
+def _bound_ctx(tenant_id: str = "acme", domain_id: str = "dom") -> BoundTenantContext:
+    return BoundTenantContext(tenant_id=tenant_id, domain_id=domain_id)
+
+
+def _glob_from_root(pattern: str) -> list[str]:
+    """Resolve an absolute glob pattern the way a watcher would.
+
+    Called through ``asyncio.to_thread`` from the async tests below:
+    ``Path.glob`` is real blocking disk I/O, and the repo's ASYNC guard
+    is right to flag it even here, where the loop has nothing else on it.
+    """
+    root = Path(Path(pattern).anchor)
+    return [str(p) for p in root.glob(pattern[len(str(root)) :])]
+
+
+def test_key_pattern_file_metadata_matches_the_tenant_scoped_path(tmp_path: Path) -> None:
+    backend = _make_file_backend(tmp_path)
+    ctx = _bound_ctx()
+
+    pattern = backend.key_pattern(KnowledgeKeyKind.METADATA, domain_id="dom", ctx=ctx)
+
+    assert pattern == str(backend._metadata_path("dom", ctx))
+    # And it is genuinely somewhere else than the untenanted answer, or
+    # this test would pass against a key_pattern that ignored ctx.
+    assert pattern != str(backend._metadata_path("dom"))
+
+
+def test_key_pattern_file_snapshot_matches_the_tenant_scoped_path(tmp_path: Path) -> None:
+    backend = _make_file_backend(tmp_path)
+    ctx = _bound_ctx()
+
+    pattern = backend.key_pattern(KnowledgeKeyKind.SNAPSHOT, domain_id="dom", ctx=ctx)
+    snap = str(backend._snapshot_file("dom", "deadbeef", ctx))
+
+    assert pattern.endswith("/*")
+    assert snap.startswith(pattern[:-1])
+    assert pattern != backend.key_pattern(KnowledgeKeyKind.SNAPSHOT, domain_id="dom")
+
+
+def test_key_pattern_s3_metadata_matches_the_tenant_scoped_key() -> None:
+    backend = _make_s3_backend()
+    ctx = _bound_ctx()
+
+    pattern = backend.key_pattern(KnowledgeKeyKind.METADATA, domain_id="dom", ctx=ctx)
+
+    assert pattern == backend._metadata_key("dom", ctx)
+    assert pattern != backend._metadata_key("dom")
+
+
+def test_key_pattern_s3_snapshot_matches_the_tenant_scoped_key() -> None:
+    backend = _make_s3_backend()
+    ctx = _bound_ctx()
+
+    pattern = backend.key_pattern(KnowledgeKeyKind.SNAPSHOT, domain_id="dom", ctx=ctx)
+    snap = backend._snapshot_key("dom", "deadbeef", ctx)
+
+    assert pattern.endswith("/*")
+    assert snap.startswith(pattern[:-1])
+
+
+async def test_a_tenant_scoped_watch_actually_matches_the_file_that_gets_written(
+    tmp_path: Path,
+) -> None:
+    """The consequence, not the string: glob the pattern and find the file.
+
+    This is what a consumer's inotify watch does. Before ``key_pattern``
+    took a ``ctx`` the glob returned nothing while the metadata document
+    sat one subtree over, and no error was raised anywhere in the chain.
+    """
+    backend = _make_file_backend(tmp_path)
+    ctx = _bound_ctx()
+    await backend.create_kb("dom")
+    await backend.set_ingestion_status("dom", "ready", ctx=ctx)
+
+    pattern = backend.key_pattern(KnowledgeKeyKind.METADATA, domain_id="dom", ctx=ctx)
+    matched = await asyncio.to_thread(_glob_from_root, pattern)
+
+    assert matched == [str(backend._metadata_path("dom", ctx))]
+
+
+async def test_the_untenanted_pattern_finds_nothing_once_a_tenant_writes(
+    tmp_path: Path,
+) -> None:
+    """Why the parameter had to exist, stated without using it.
+
+    Every other test in this section fails against the pre-fix code with
+    ``TypeError: unexpected keyword argument 'ctx'``, which proves the
+    parameter is missing but not that missing it costs anything. This one
+    uses only the old signature and holds on both sides of the fix.
+
+    The harm is not that the untenanted pattern matches nothing — that
+    would at least be conspicuous. A tenanted deployment has *two*
+    metadata documents per domain: the domain-keyed one ``create_kb``
+    writes, and the per-tenant state document every ``ctx``-scoped write
+    lands in. The untenanted pattern matches the first. So a watch built
+    from it fires, and keeps firing, and simply never sees any tenant's
+    ingestion-status transitions — the failure mode that survives review
+    because the watch looks alive.
+    """
+    backend = _make_file_backend(tmp_path)
+    ctx = _bound_ctx()
+    await backend.create_kb("dom")
+    await backend.set_ingestion_status("dom", "ready", ctx=ctx)
+
+    untenanted = backend.key_pattern(KnowledgeKeyKind.METADATA, domain_id="dom")
+    matched = await asyncio.to_thread(_glob_from_root, untenanted)
+
+    # It matches — the domain document, which no tenant state write touches.
+    assert matched == [str(backend._metadata_path("dom"))]
+    # The document the tenant actually wrote is real, and is not in that list.
+    tenant_doc = backend._metadata_path("dom", ctx)
+    assert tenant_doc.exists()
+    assert str(tenant_doc) not in matched
+    # And the two differ in exactly the way that matters to a watcher: the
+    # document being watched still says 'pending' after the transition to
+    # 'ready' has been durably written one subtree over.
+    status = lambda p: json.loads(p.read_text())["info"]["ingestion_status"]  # noqa: E731
+    assert status(tenant_doc) == "ready"
+    assert status(backend._metadata_path("dom")) == "pending"
+
+
+def test_the_all_domains_wildcard_stays_inside_one_tenant(tmp_path: Path) -> None:
+    """``domain_id=None`` wildcards the domain, not the tenant.
+
+    The two parameters scope independent axes, so the wildcard form must
+    still be anchored under the bound tenant's state prefix.
+    """
+    backend = _make_file_backend(tmp_path)
+    ctx = _bound_ctx()
+    base = str(tmp_path / "kb")
+
+    assert backend.key_pattern(KnowledgeKeyKind.METADATA, ctx=ctx) == (
+        f"{base}/tenants/acme/_state/*/_metadata.json"
+    )
+
+
+def test_content_is_domain_keyed_so_ctx_does_not_move_it(tmp_path: Path) -> None:
+    """Pinned as deliberate, not as an oversight.
+
+    Content is keyed by ``domain_id`` alone — the mixin's ``_state_prefix``
+    contract says a backend routes only *state* construction through it.
+    So a CONTENT pattern is the same with or without a context, and that
+    sameness is the correct answer rather than a missed case.
+    """
+    backend = _make_file_backend(tmp_path)
+    s3 = _make_s3_backend()
+    ctx = _bound_ctx()
+
+    assert backend.key_pattern(KnowledgeKeyKind.CONTENT, domain_id="dom", ctx=ctx) == (
+        backend.key_pattern(KnowledgeKeyKind.CONTENT, domain_id="dom")
+    )
+    assert s3.key_pattern(KnowledgeKeyKind.CONTENT, domain_id="dom", ctx=ctx) == (
+        s3.key_pattern(KnowledgeKeyKind.CONTENT, domain_id="dom")
+    )
+
+
+def test_an_untenanted_call_is_byte_identical_to_before(tmp_path: Path) -> None:
+    """``ctx=None`` keeps the pre-tenancy layout, on every kind."""
+    backend = _make_file_backend(tmp_path)
+    base = str(tmp_path / "kb")
+
+    assert backend.key_pattern(KnowledgeKeyKind.CONTENT) == f"{base}/*/content/**"
+    assert backend.key_pattern(KnowledgeKeyKind.METADATA) == f"{base}/*/_metadata.json"
+    assert backend.key_pattern(KnowledgeKeyKind.SNAPSHOT) == f"{base}/*/_snapshots/*"
+
+
+def test_memory_returns_the_empty_sentinel_with_a_context_too() -> None:
+    backend = _make_memory_backend()
+
+    assert backend.key_pattern(KnowledgeKeyKind.METADATA, ctx=_bound_ctx()) == ""
+
+
+def test_an_escaping_domain_is_still_refused_under_a_tenant(tmp_path: Path) -> None:
+    """The containment guard survives the new composition.
+
+    ``key_pattern`` bounds ``domain_id`` before building its glob; with a
+    context the bound is the tenant's subtree, matching ``_kb_path``.
+    """
+    backend = _make_file_backend(tmp_path)
+
+    with pytest.raises(PathEscapeError):
+        backend.key_pattern(KnowledgeKeyKind.METADATA, domain_id="../elsewhere", ctx=_bound_ctx())
 
 
 # ---------------------------------------------------------------------------

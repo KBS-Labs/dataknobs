@@ -88,6 +88,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`key_pattern()` named the wrong document in a tenanted deployment, and
+  the watch built from it looked healthy.** The method took no
+  `TenantContext` on either production backend, while the key-derivation
+  helpers it exists to mirror all do — `_metadata_path(domain, ctx)` and
+  `_snapshots_path(domain, ctx)` on the file backend, `_metadata_key` and
+  `_snapshot_key` on S3. So a `METADATA` or `SNAPSHOT` pattern was built
+  without `ctx.state_key_prefix()`.
+
+  The consequence is worse than an empty result. A tenanted deployment has
+  *two* metadata documents per domain: the domain-keyed one `create_kb()`
+  writes, and the per-tenant state document every `ctx`-scoped write lands
+  in. The pattern matched the first. A consumer's inotify watch or
+  EventBridge rule therefore installed cleanly, fired once at KB creation,
+  and then never again — never seeing a single ingestion-status transition
+  for any tenant, with nothing anywhere raising an error.
+
+  `key_pattern` now takes a keyword-only `ctx`, matching `get_info` and
+  `set_ingestion_status`. `ctx` and `domain_id` scope independent axes: a
+  context picks the tenant, `domain_id=None` wildcards the domain within
+  it. `ctx=None` reproduces the previous pattern byte for byte, so a
+  single-tenant deployment sees no change. `CONTENT` is deliberately
+  unmoved — content is keyed by `domain_id` alone, because tenants share a
+  corpus and are isolated on ingest state — and passing a `ctx` with
+  `kind=CONTENT` is accepted and ignored so a caller building watches for
+  all three kinds needs no special case.
+
+  There is no all-tenants spelling, and cannot be a derived one: the prefix
+  comes from `TenantContext.state_key_prefix()`, which for
+  `PrefixedTenantContext` is a consumer-supplied format string, so no
+  wildcard form of an arbitrary convention exists to compute. Watch the
+  base prefix and sort with `classify_key`, or install one pattern per
+  tenant.
+
+  The rule "which kinds are tenant-scoped" now lives in one place,
+  `KnowledgeResourceBackendMixin._pattern_state_prefix`, rather than being
+  re-derived by each backend — that re-derivation is what let the patterns
+  drift from the helpers in the first place. The conformance suite's
+  layout-drift pin gained a tenancy axis; it had been asserting
+  pattern-versus-helper agreement while calling every helper with `ctx`
+  defaulted to `None`, the one case where the two agreed by construction.
+
 - **Every path-containment refusal is now one catchable type.** The guards
   in `FileKnowledgeBackend`, `ConfigDraftManager` and `WizardConfigLoader`
   raised a bare `ValueError`, which a consumer cannot distinguish from any

@@ -256,6 +256,8 @@ class FileKnowledgeBackend(KnowledgeResourceBackendMixin):
         self,
         kind: KnowledgeKeyKind = KnowledgeKeyKind.CONTENT,
         domain_id: str | None = None,
+        *,
+        ctx: TenantContext | None = None,
     ) -> str:
         """Filesystem glob pattern matching keys of the given kind.
 
@@ -266,40 +268,60 @@ class FileKnowledgeBackend(KnowledgeResourceBackendMixin):
         :attr:`KnowledgeKeyKind.UNKNOWN` raises :class:`ValueError`
         (fails closed — there is no shape for "unrecognized keys").
 
-        ``domain_id`` is bounded to ``base_path`` like every other
-        composition on this class. It is composed here as a *string*
-        rather than through a path helper, which is exactly why it needs
-        saying: the guard has to be applied on the way in, or this
-        method quietly becomes the one way to get an unbounded location
-        out of the backend. What it returns is handed to ``Path.glob``
-        or an inotify watch, so an escaping domain would install a watch
-        over a tree the deployment did not choose.
+        The state kinds are rooted at the same two hops as
+        :meth:`_kb_path` — ``base_path``, then :meth:`_state_prefix` —
+        because the pattern's whole job is to match what those helpers
+        write. Content is rooted at ``base_path`` alone, since content is
+        keyed by ``domain_id`` and no context moves it. See the protocol
+        for why there is no all-tenants spelling.
+
+        ``domain_id`` is bounded like every other composition on this
+        class, and with a context the bound is the tenant's subtree
+        rather than the base. It is composed here as a *string* rather
+        than through a path helper, which is exactly why it needs saying:
+        the guard has to be applied on the way in, or this method quietly
+        becomes the one way to get an unbounded location out of the
+        backend. What it returns is handed to ``Path.glob`` or an inotify
+        watch, so an escaping domain would install a watch over a tree
+        the deployment did not choose.
 
         Raises:
             PathEscapeError: ``domain_id`` addresses a location outside
-                ``base_path``.
+                the tenant subtree (or ``base_path`` without a context).
         """
-        kb_root = (
+        state_prefix = self._pattern_state_prefix(kind, ctx)
+        root = (
             safe_join_or_raise(
                 self._base_path,
+                state_prefix,
+                what="the tenant state prefix",
+                outside="the backend's base path",
+                supplied=state_prefix,
+            )
+            if state_prefix
+            else self._base_path
+        )
+        kb_root = (
+            safe_join_or_raise(
+                root,
                 domain_id,
                 what="domain_id",
-                outside="the backend's base path",
+                outside=(
+                    f"this tenant's state subtree ({state_prefix!r})"
+                    if state_prefix
+                    else "the backend's base path"
+                ),
                 supplied=domain_id,
             )
             if domain_id
-            else self._base_path / "*"
+            else root / "*"
         )
         base = str(kb_root)
         if kind is KnowledgeKeyKind.CONTENT:
             return f"{base}/{self.CONTENT_DIR}/**"
         if kind is KnowledgeKeyKind.METADATA:
             return f"{base}/{self.METADATA_FILE}"
-        if kind is KnowledgeKeyKind.SNAPSHOT:
-            return f"{base}/{self.SNAPSHOTS_DIR}/*"
-        raise ValueError(
-            f"key_pattern is not defined for kind {kind!r} (only CONTENT / METADATA / SNAPSHOT)"
-        )
+        return f"{base}/{self.SNAPSHOTS_DIR}/*"
 
     def _load_metadata_sync(self, domain_id: str, ctx: TenantContext | None = None) -> dict:
         """Load metadata from disk (blocking; call via :meth:`_load_metadata`)."""

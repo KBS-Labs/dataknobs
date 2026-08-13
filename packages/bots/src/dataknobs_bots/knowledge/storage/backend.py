@@ -497,6 +497,8 @@ class KnowledgeResourceBackend(Protocol):
         self,
         kind: KnowledgeKeyKind = KnowledgeKeyKind.CONTENT,
         domain_id: str | None = None,
+        *,
+        ctx: TenantContext | None = None,
     ) -> str:
         """Backend-native pattern matching all keys of the given kind.
 
@@ -508,6 +510,33 @@ class KnowledgeResourceBackend(Protocol):
         :attr:`KnowledgeKeyKind.SNAPSHOT`, the pattern matches the
         DK-managed state keys — useful for consumers that explicitly want
         to subscribe to state writes (audit logs, snapshot archival).
+
+        ``ctx`` scopes the state kinds to one tenant's subtree, exactly
+        as it does on :meth:`get_info` and :meth:`set_ingestion_status`.
+        It must be supplied for a tenanted deployment: state writes land
+        under ``ctx.state_key_prefix()``, so a pattern built without one
+        names the domain-keyed document instead, and a watch on it fires
+        on KB creation and then never again for that tenant. ``ctx=None``
+        reproduces the pre-tenancy pattern byte for byte.
+
+        ``ctx`` and ``domain_id`` scope independent axes — a context
+        picks the tenant, ``domain_id=None`` wildcards the domain within
+        it. There is deliberately no "every tenant" spelling: the prefix
+        comes from :meth:`~dataknobs_common.tenancy.TenantContext.state_key_prefix`,
+        which for
+        :class:`~dataknobs_common.tenancy.PrefixedTenantContext` is a
+        consumer-supplied format string, so no wildcard form of an
+        arbitrary convention can be derived here. To watch a whole
+        deployment, subscribe to the backend's base prefix and sort the
+        events with :meth:`classify_key`, or install one pattern per
+        tenant you serve.
+
+        ``ctx`` does not move :attr:`~KnowledgeKeyKind.CONTENT`, which is
+        keyed by ``domain_id`` alone by design — tenants share a content
+        corpus and are isolated on ingest *state*. Passing one with
+        ``kind=CONTENT`` is accepted and ignored so a caller building
+        watches for all three kinds need not special-case it; the pattern
+        it returns is the correct one either way.
 
         :attr:`KnowledgeKeyKind.UNKNOWN` is not a meaningful ``kind`` —
         there is no shape for "the pattern of unrecognized keys."
@@ -525,11 +554,14 @@ class KnowledgeResourceBackend(Protocol):
         an opaque string forwarded verbatim to the event source:
 
         - ``S3KnowledgeBackend`` returns S3 wildcard syntax
-          (``{prefix}{domain or '*'}/content/*``) suitable for
+          (``{prefix}{domain or '*'}/content/*``, and for the state
+          kinds ``{prefix}{state}{domain or '*'}/...`` where ``{state}``
+          is ``ctx.state_key_prefix()`` or empty) suitable for
           EventBridge ``wildcard`` rules or S3 bucket notification
           ``prefix`` + ``suffix`` combinations.
         - ``FileKnowledgeBackend`` returns a glob-shaped pattern
-          (``{base}/{domain or '*'}/content/**``) suitable for
+          (``{base}/{domain or '*'}/content/**``, and for the state
+          kinds ``{base}/{state}{domain or '*'}/...``) suitable for
           ``pathlib.Path.glob`` and most inotify wrappers.
         - ``InMemoryKnowledgeBackend`` returns ``""`` — no event-source
           filter is meaningful for in-process storage; the method exists
