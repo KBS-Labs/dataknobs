@@ -261,12 +261,30 @@ domain="proj/_state/x")` and `(tenant="acme/_state/proj", domain="x")`
 both key on `tenants/acme/_state/proj/_state/x`, so the second tenant
 reads the first's ingest state. Nothing traverses; the namespaces merge.
 
-`domain_id` is deliberately unconstrained — it legitimately names a
-subdirectory (`team/alpha`), and the file backend bounds it where it
-composes it rather than forbidding the shape. Where a nested tenant
-convention is genuinely wanted, express it with `PrefixedTenantContext`,
-whose `prefix_pattern` is a deployment's own convention and stays
-free-form:
+`domain_id` is held to the same rule, and for the same reason. An
+earlier release left it unconstrained on the grounds that it
+"legitimately names a subdirectory (`team/alpha`)" and that the file
+backend bounds it where it composes it. Bounding was the wrong
+question: every backend interleaves `domain_id` with literal segments of
+its own layout, so `acme/content` addresses the same key as an ordinary
+content file called `_metadata.json` under `acme`, and `delete_kb("acme")`
+removes the whole of `acme/content` along with it — none of which leaves
+the base, so containment never fired. A nested domain was not usable
+either, since `list_kbs()` enumerates one level on both persistent
+backends.
+
+```python
+await backend.create_kb("prompts")        # fine
+await backend.create_kb("team/alpha")     # SegmentEscapeError
+```
+
+A resource *path* inside `content/` is a different thing — it names a
+location, nesting is its purpose, and it stays bounded rather than
+restricted to one segment.
+
+Where a nested tenant convention is genuinely wanted, express it with
+`PrefixedTenantContext`, whose `prefix_pattern` is a deployment's own
+convention and stays free-form:
 
 ```python
 PrefixedTenantContext(

@@ -58,6 +58,21 @@ class KnowledgeResourceBackend(Protocol):
             _snapshots/           # DK-managed state (do NOT trigger on)
                 <version>.json
 
+    ``domain_id`` occupies **one segment** of that layout, and an
+    implementation MUST refuse one that carries a separator — the shared
+    check is ``KnowledgeResourceBackendMixin._validate_domain_id``, over
+    ``dataknobs_common.paths.safe_segment``. The layout above is why: the
+    domain sits beside literal segments of its own, so ``acme/content``
+    addresses the same location as an ordinary content file named
+    ``_metadata.json`` under ``acme``, and a prefix-scoped delete of
+    ``acme`` takes it with it. Containment does not cover this — the name
+    never leaves the base — so a backend that only bounds its
+    compositions is not compliant.
+
+    A resource ``path`` is the opposite case: it names a location inside
+    ``content/``, nesting is its purpose, and it must be *bounded* rather
+    than restricted to a single segment.
+
     External event-trigger wiring (S3 → EventBridge / SQS / SNS / Lambda;
     filesystem inotify; GCS Pub/Sub; etc.) MUST filter to the ``content/``
     subtree and exclude ``_metadata.json`` and ``_snapshots/``. The

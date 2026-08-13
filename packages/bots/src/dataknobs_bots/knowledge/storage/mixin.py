@@ -39,6 +39,7 @@ from dataknobs_common.capabilities import (
     CapabilityLike,
     CapabilityMixin,
 )
+from dataknobs_common.paths import safe_segment
 
 from ..events import INGEST_METADATA_WRITE, INGEST_SNAPSHOT_WRITE
 from .key_layout import KnowledgeKeyKind
@@ -103,6 +104,61 @@ class KnowledgeResourceBackendMixin(CapabilityMixin):
             Capability.CALLBACK_REGISTRY,
         }
     )
+
+    # --- Identifier admissibility (shared) ---
+
+    @staticmethod
+    def _validate_domain_id(domain_id: str) -> str:
+        """Refuse a ``domain_id`` that names more than one knowledge base.
+
+        Every backend interleaves ``domain_id`` with literal segments of
+        its own layout — ``{domain}/content/{path}``,
+        ``{domain}/_metadata.json``, ``{domain}/_snapshots/{version}`` —
+        so a separator inside it addresses another knowledge base's
+        slots. ``acme/content`` composes the *same* key as an ordinary
+        content file named ``_metadata.json`` under ``acme``: writing the
+        file replaces the other base's metadata document, and
+        ``delete_kb("acme")`` takes the whole of ``acme/content`` with it,
+        because both persistent backends delete by prefix.
+
+        **Containment does not catch this**, which is why it survived the
+        pass that bounded these backends: ``acme/content`` never leaves
+        the base directory, so the composition is contained while the
+        slot collides. The invariant is one segment, not one tree.
+
+        Nothing is lost by refusing it. A nested domain was never visible
+        to :meth:`list_kbs` on either persistent backend — both enumerate
+        one level — so it produced a knowledge base that could not be
+        found, on top of one that could be overwritten.
+
+        The rule is shared rather than per-backend on purpose. The three
+        backends disagreed about this exact call sequence: S3 overwrote,
+        the file backend refused at ``create_kb`` for an unrelated
+        reason, and the memory backend did nothing at all. A name refused
+        in production has to be refused in the backend a consumer
+        develops against.
+
+        Args:
+            domain_id: The identifier to check.
+
+        Returns:
+            ``domain_id`` unchanged, so a composing site can wrap the
+            value where it uses it.
+
+        Raises:
+            SegmentEscapeError: ``domain_id`` is empty, is a directory
+                reference, or contains a path separator or NUL. A
+                ``ValueError``, as this argument's rejections already
+                were.
+        """
+        return safe_segment(
+            domain_id,
+            what="domain_id",
+            within=(
+                "a knowledge base's layout, where a separator addresses "
+                "another knowledge base's metadata and content slots"
+            ),
+        )
 
     # --- Tenant-context scoping (shared) ---
 

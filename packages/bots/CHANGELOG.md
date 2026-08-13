@@ -9,6 +9,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- **A knowledge base could overwrite and delete another one, on every
+  persistent backend.** `domain_id` is interleaved with the layout's own
+  literal segments — `{domain}/content/{path}`, `{domain}/_metadata.json`,
+  `{domain}/_snapshots/{version}` — and nothing constrained it to one of them,
+  so a domain containing a separator addressed a *different* knowledge base's
+  slots. `acme/content` composes exactly the key an ordinary content file named
+  `_metadata.json` under `acme` composes: writing that file replaced the other
+  base's metadata document with whatever the writer supplied. `delete_kb("acme")`
+  removed the whole of `acme/content` with it, because both persistent backends
+  delete by prefix. Executed end to end against real S3 and reproduced on the
+  file backend.
+
+  **Containment did not catch this**, and could not: `acme/content` never
+  leaves the base, so the guard the file backend adopted last release passed it
+  while the slot collided. The invariant is one segment, not one tree, and it
+  now lives on the shared backend mixin
+  (`dataknobs_common.safe_segment` under the hood) rather than in whichever
+  backend noticed. **Breaking** for a deployment using a nested `domain_id` —
+  but such a knowledge base was never visible to `list_kbs()` on either
+  persistent backend, both of which enumerate one level, so it could be created
+  and then not found. The three backends also disagreed about the whole
+  sequence (S3 overwrote, file refused at `create_kb` for an unrelated reason,
+  memory did nothing), so the rule is applied to all three: a name refused in
+  production is refused in the backend you develop against.
+
+  A resource `path` inside `content/` is unaffected. It names a location rather
+  than occupying a slot, nesting is its purpose, and it stays bounded.
+
+- **`S3KnowledgeBackend` composed every key unchecked.** Its file-backend twin
+  was guarded last release and this one was not, so two backends that had been
+  consistently unguarded became inconsistently guarded — the reasoning in the
+  file backend's own guard (that the tenant prefix must be bounded because
+  `PrefixedTenantContext` takes a consumer-supplied pattern) is entirely
+  backend-independent, and this backend consumed the identical value. Now
+  bounded at all of them: the resource `path` against the `content/` tree, the
+  snapshot `version` against its lineage, and the formatted tenant state prefix
+  against the backend's key namespace. A non-canonical prefix is refused rather
+  than silently normalised, since rewriting it would move every state document
+  for that tenant.
+
+  "S3 resolves nothing" is not a defence: a `..` is stored literally, and the
+  bucket is routinely read by something that does resolve — `aws s3 sync`, a
+  CloudFront origin, this repository's own file backend over the same layout. A
+  key that only misbehaves once it is copied is worse than one that misbehaves
+  immediately, because nothing on the write path reports it.
+
 - **One tenant could read another tenant's ingest state.** With a tenant
   context, `FileKnowledgeBackend` composes a state path in two hops —
   `base_path`, then the context's `state_key_prefix()` — and containment was

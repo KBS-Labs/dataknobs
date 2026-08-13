@@ -164,15 +164,23 @@ class FileKnowledgeBackend(KnowledgeResourceBackendMixin):
         ``""``, the two hops collapse to one, and the bound is
         ``base_path`` — byte-identical to the single-tenant layout.
 
-        ``domain_id`` addresses a location *inside* that bound. A name
-        that walks out of it (``../elsewhere``) or replaces it outright
-        (an absolute path) raises
-        :class:`~dataknobs_common.paths.PathEscapeError` before any
-        filesystem call, so it fails identically whether or not the
-        location it names exists. A name in a subdirectory
-        (``team/alpha``) is legal, and so is an interior ``a/../b`` that
-        stays inside.
+        ``domain_id`` occupies exactly one segment inside that bound, and
+        is checked for it first — see
+        :meth:`~.mixin.KnowledgeResourceBackendMixin._validate_domain_id`.
+        Containment alone was not enough: ``acme/content`` stays inside
+        the base, so the join is contained, while the path it produces is
+        the metadata slot of a *different* knowledge base. An earlier
+        version of this docstring called a subdirectory name
+        (``team/alpha``) legal; it was addressable by nothing —
+        :meth:`list_kbs` enumerates one level — and collided with the
+        layout, so it is refused now.
+
+        The remaining containment check is not redundant. It bounds the
+        tenant prefix, which is consumer-supplied free-form text rather
+        than an identifier, and it is what makes this method safe if the
+        segment rule is ever relaxed.
         """
+        self._validate_domain_id(domain_id)
         state_prefix = self._state_prefix(ctx)
         tenant_root = safe_join_or_raise(
             self._base_path,
@@ -275,20 +283,30 @@ class FileKnowledgeBackend(KnowledgeResourceBackendMixin):
         keyed by ``domain_id`` and no context moves it. See the protocol
         for why there is no all-tenants spelling.
 
-        ``domain_id`` is bounded like every other composition on this
-        class, and with a context the bound is the tenant's subtree
-        rather than the base. It is composed here as a *string* rather
-        than through a path helper, which is exactly why it needs saying:
-        the guard has to be applied on the way in, or this method quietly
-        becomes the one way to get an unbounded location out of the
-        backend. What it returns is handed to ``Path.glob`` or an inotify
-        watch, so an escaping domain would install a watch over a tree
-        the deployment did not choose.
+        ``domain_id`` is checked like every other composition on this
+        class — one segment, and bounded, with a context bounding it to
+        the tenant's subtree rather than the base. It is composed here as
+        a *string* rather than through a path helper, which is exactly
+        why it needs saying: the guard has to be applied on the way in,
+        or this method quietly becomes the one way to get an unbounded
+        location out of the backend. What it returns is handed to
+        ``Path.glob`` or an inotify watch, so a domain naming another
+        knowledge base would install a watch over that one.
+
+        ``None`` means every domain and is the wildcard spelling. An
+        *empty* ``domain_id`` is refused rather than read as the same
+        thing: the two arrive by different routes, and silently widening
+        a watch because a name came back empty is the failure this whole
+        check exists to prevent.
 
         Raises:
+            SegmentEscapeError: ``domain_id`` names more than one
+                knowledge base, or is empty.
             PathEscapeError: ``domain_id`` addresses a location outside
                 the tenant subtree (or ``base_path`` without a context).
         """
+        if domain_id is not None:
+            self._validate_domain_id(domain_id)
         state_prefix = self._pattern_state_prefix(kind, ctx)
         root = (
             safe_join_or_raise(

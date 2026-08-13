@@ -10,6 +10,7 @@ import asyncio
 import hashlib
 import json
 import logging
+import os
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, BinaryIO, ClassVar
@@ -19,6 +20,7 @@ from botocore.exceptions import ClientError
 from dataknobs_common.aws import AwsSessionConfig, create_aioboto3_session
 from dataknobs_common.capabilities import Capability, CapabilityLike
 from dataknobs_common.exceptions import ConcurrencyError
+from dataknobs_common.paths import PathEscapeError, safe_join, safe_segment
 
 from .key_layout import KnowledgeKeyKind
 from .mixin import KnowledgeResourceBackendMixin
@@ -273,10 +275,80 @@ class S3KnowledgeBackend(KnowledgeResourceBackendMixin):
         self._initialized = False
 
     def _s3_key(self, domain_id: str, path: str = "") -> str:
-        """Get the S3 key for a path within a domain."""
+        """Get the S3 key for a path within a domain.
+
+        ``domain_id`` occupies one segment of the layout — see
+        :meth:`~.mixin.KnowledgeResourceBackendMixin._validate_domain_id`
+        for why, and for what ``acme/content`` reached before this check
+        existed. With no ``path`` the key is the domain's listing prefix,
+        which is what makes the rule load-bearing here rather than
+        cosmetic: a prefix is what :meth:`delete_kb` paginates over.
+        """
+        self._validate_domain_id(domain_id)
         if path:
-            return f"{self._prefix}{domain_id}/{self.CONTENT_DIR}/{path}"
+            return f"{self._prefix}{domain_id}/{self._content_segment(path)}"
         return f"{self._prefix}{domain_id}/"
+
+    def _content_segment(self, path: str) -> str:
+        """``content/<path>``, refusing a ``path`` that leaves that tree.
+
+        S3 resolves nothing, so ``a/../b`` and ``../b`` are literal keys
+        rather than traversals — which is precisely why they are refused
+        here rather than tolerated. The bucket is routinely read by
+        something that *does* resolve: ``aws s3 sync`` to a local tree, a
+        CloudFront origin, this repository's own file backend over the
+        same layout. A key that only misbehaves once it is copied
+        somewhere is worse than one that misbehaves immediately, because
+        nothing on the write path reports it. Two spellings of one
+        intended file would also be two distinct objects, so the same
+        document would answer to one name and not the other.
+
+        Nesting itself is the point of a content tree, so ``docs/a.md``
+        is untouched. This is containment — the check that governs a
+        *location* — not the one-segment rule that governs ``domain_id``,
+        which names a slot.
+
+        The bound is ``content/`` rather than the domain root: a guard
+        anchored one level up would admit ``../_metadata.json``, which
+        lands on the knowledge base's own metadata document, and a
+        content write must not be able to reach it.
+        """
+        contained = safe_join(self.CONTENT_DIR, path)
+        if contained is None:
+            raise PathEscapeError(
+                f"file path addresses a location outside the knowledge base's "
+                f"content directory: {path!r}"
+            )
+        return contained.as_posix()
+
+    def _bounded_state_prefix(self, ctx: TenantContext | None) -> str:
+        """The tenant state prefix, refusing one that addresses elsewhere.
+
+        Unlike ``domain_id`` this is *not* one segment — a prefix is
+        several by design (``tenants/acme/_state/``) — so the check is
+        containment. It is needed because the value is not an identifier
+        at all: :class:`~dataknobs_common.tenancy.PrefixedTenantContext`
+        formats a **consumer-supplied pattern**, so what arrives here is
+        free-form text that no id check upstream can constrain. The file
+        backend has bounded this since it adopted the guard; this
+        backend consuming the identical value unchecked is the
+        asymmetry, not a difference between the stores.
+
+        A non-canonical prefix is refused rather than rewritten. Silently
+        normalising it would change which key every state document for
+        that tenant lives at, which is a data migration wearing a bug
+        fix's clothes; refusing says so before anything is written.
+        """
+        prefix = self._state_prefix(ctx)
+        if not prefix:
+            return ""
+        contained = safe_join(os.curdir, prefix)
+        if contained is None or contained.as_posix() != prefix.rstrip("/"):
+            raise PathEscapeError(
+                f"the tenant state prefix addresses a location outside the "
+                f"backend's key namespace: {prefix!r}"
+            )
+        return prefix
 
     def _metadata_key(self, domain_id: str, ctx: TenantContext | None = None) -> str:
         """Get the S3 key for a KB's metadata file.
@@ -284,9 +356,13 @@ class S3KnowledgeBackend(KnowledgeResourceBackendMixin):
         With ``ctx=None`` this is the pre-tenancy key
         (``{prefix}{domain}/_metadata.json``); a tenant context inserts
         ``ctx.state_key_prefix()`` between the backend prefix and the
-        domain, isolating per-tenant ingest **state**.
+        domain, isolating per-tenant ingest **state**. Both of those
+        composed parts are checked — see :meth:`_bounded_state_prefix`
+        and
+        :meth:`~.mixin.KnowledgeResourceBackendMixin._validate_domain_id`.
         """
-        return f"{self._prefix}{self._state_prefix(ctx)}{domain_id}/{self.METADATA_FILE}"
+        self._validate_domain_id(domain_id)
+        return f"{self._prefix}{self._bounded_state_prefix(ctx)}{domain_id}/{self.METADATA_FILE}"
 
     def _snapshot_key(
         self,
@@ -298,9 +374,24 @@ class S3KnowledgeBackend(KnowledgeResourceBackendMixin):
 
         Tenant-scoped via ``ctx`` (the per-tenant snapshot lineage lives
         under the state prefix); ``ctx=None`` is the pre-tenancy key.
+
+        ``version`` is checked for the same reason the file backend
+        checks it: every *producer* in this repo is a computed hex
+        digest that cannot carry a separator, but the consumer is the
+        caller — ``list_changes_since`` takes back a token it persisted,
+        and nothing on the way in constrains it to what was handed out.
         """
+        self._validate_domain_id(domain_id)
+        safe_segment(
+            version,
+            what="snapshot version",
+            within=(
+                "a snapshot key, where a separator addresses outside the "
+                "knowledge base's snapshot lineage"
+            ),
+        )
         return (
-            f"{self._prefix}{self._state_prefix(ctx)}"
+            f"{self._prefix}{self._bounded_state_prefix(ctx)}"
             f"{domain_id}/{self.SNAPSHOTS_DIR}/{version}.json"
         )
 
@@ -327,9 +418,18 @@ class S3KnowledgeBackend(KnowledgeResourceBackendMixin):
         pre-tenancy key and matches the domain-keyed document instead of
         the tenant's. See the protocol for why there is no all-tenants
         spelling.
+
+        ``None`` means every domain and is the wildcard spelling; an
+        *empty* ``domain_id`` is refused rather than read as the same
+        thing, so a name that came back empty cannot silently widen a
+        subscription to the whole bucket.
+
+        Raises:
+            SegmentEscapeError: ``domain_id`` names more than one
+                knowledge base, or is empty.
         """
         state_prefix = self._pattern_state_prefix(kind, ctx)
-        domain_segment = domain_id if domain_id else "*"
+        domain_segment = self._validate_domain_id(domain_id) if domain_id is not None else "*"
         root = f"{self._prefix}{state_prefix}{domain_segment}"
         if kind is KnowledgeKeyKind.CONTENT:
             return f"{root}/{self.CONTENT_DIR}/*"
@@ -695,15 +795,25 @@ class S3KnowledgeBackend(KnowledgeResourceBackendMixin):
         return KnowledgeBaseInfo.from_dict(info_dict)
 
     async def delete_kb(self, domain_id: str) -> bool:
-        """Delete entire knowledge base and all files."""
+        """Delete entire knowledge base and all files.
+
+        The delete is by prefix, over every object under
+        ``{prefix}{domain_id}/``, which is why the segment rule matters
+        most here: before it, ``delete_kb("acme")`` also deleted a
+        knowledge base named ``acme/content``, whose every object sits
+        under that prefix. With one-segment domains no knowledge base's
+        prefix contains another's.
+        """
         if not self._session:
             raise RuntimeError("Backend not initialized")
 
         if not await self._kb_exists(domain_id):
             return False
 
-        # Delete all objects with the domain prefix
-        prefix = f"{self._prefix}{domain_id}/"
+        # Composed through the same helper the writers use, rather than
+        # re-spelled here, so this prefix cannot drift from the keys it
+        # is meant to cover -- or from their guard.
+        prefix = self._s3_key(domain_id)
         async with self._session.client("s3", **self._client_kwargs) as s3:
             paginator = s3.get_paginator("list_objects_v2")
             async for page in paginator.paginate(Bucket=self._bucket, Prefix=prefix):
