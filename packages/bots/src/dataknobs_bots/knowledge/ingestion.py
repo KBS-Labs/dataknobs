@@ -22,6 +22,7 @@ from dataknobs_common.capabilities import (
     DynamicCapabilityMixin,
 )
 from dataknobs_common.exceptions import ConfigurationError
+from dataknobs_common.paths import PathEscapeError
 from dataknobs_common.tenancy import BoundTenantContext, create_tenant_context
 
 from .events import INGEST_DOMAIN_END, INGEST_DOMAIN_START
@@ -1195,6 +1196,14 @@ class KnowledgeIngestionManager(DynamicCapabilityMixin):
                         domain_id,
                     )
                     return None
+            except PathEscapeError:
+                # An inadmissible domain_id is not a missing domain. Both
+                # are ValueErrors, so the broad clause below reported a
+                # refused name as "nothing to ingest" and returned None —
+                # the caller's ingest silently did not happen, and the
+                # one diagnostic that named the real problem was
+                # swallowed on the way past.
+                raise
             except ValueError:
                 logger.warning("Domain not found: %s", domain_id)
                 return None

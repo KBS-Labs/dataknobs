@@ -8,8 +8,17 @@ state-touching methods. Two properties are load-bearing:
    exactly the pre-tenancy state keys/paths — so adopting the parameter
    changes nothing for single-tenant consumers.
 2. A ``BoundTenantContext`` isolates state under
-   ``tenants/{tenant_id}/_state/`` — so two tenants of the same
+   ``_scoped/tenants/{tenant_id}/_state/`` — so two tenants of the same
    ``domain_id`` never collide on ingest state.
+
+The ``_scoped/`` root in (2) is the layout's own, prepended to whatever
+the context contributes. These assertions named ``tenants/…`` directly
+until that root existed, and the reason it exists is that they could:
+``tenants`` was reachable as a ``domain_id``, so the prefix these tests
+pin sat inside a knowledge base that ``delete_kb`` would remove wholesale.
+Property (1) is unaffected — a context contributing no prefix still
+composes the pre-tenancy key exactly, which is what these tests are
+primarily here to hold.
 
 These exercise the pure key/path helpers directly (no I/O), so they run
 without initializing a backend or touching the network.
@@ -61,11 +70,11 @@ def test_file_metadata_path_bound_is_isolated(tmp_path: Path) -> None:
     ctx = BoundTenantContext("acme", "my_kb")
     assert (
         b._metadata_path("my_kb", ctx=ctx)
-        == tmp_path / "tenants" / "acme" / "_state" / "my_kb" / "_metadata.json"
+        == tmp_path / "_scoped" / "tenants" / "acme" / "_state" / "my_kb" / "_metadata.json"
     )
     assert (
         b._snapshot_file("my_kb", "v1", ctx)
-        == tmp_path / "tenants" / "acme" / "_state" / "my_kb" / "_snapshots" / "v1.json"
+        == tmp_path / "_scoped" / "tenants" / "acme" / "_state" / "my_kb" / "_snapshots" / "v1.json"
     )
 
 
@@ -102,8 +111,13 @@ def test_s3_content_key_never_tenant_scoped() -> None:
 def test_s3_metadata_key_bound_is_isolated() -> None:
     b = S3KnowledgeBackend(bucket="b", prefix="kbs/")
     ctx = BoundTenantContext("acme", "my_kb")
-    assert b._metadata_key("my_kb", ctx=ctx) == "kbs/tenants/acme/_state/my_kb/_metadata.json"
-    assert b._snapshot_key("my_kb", "v1", ctx) == "kbs/tenants/acme/_state/my_kb/_snapshots/v1.json"
+    assert (
+        b._metadata_key("my_kb", ctx=ctx) == "kbs/_scoped/tenants/acme/_state/my_kb/_metadata.json"
+    )
+    assert (
+        b._snapshot_key("my_kb", "v1", ctx)
+        == "kbs/_scoped/tenants/acme/_state/my_kb/_snapshots/v1.json"
+    )
 
 
 def test_s3_two_tenants_distinct_keys() -> None:
@@ -125,7 +139,10 @@ def test_memory_overlay_key_none_for_single_tenant() -> None:
 
 def test_memory_overlay_key_bound_is_isolated() -> None:
     b = InMemoryKnowledgeBackend()
-    assert b._info_overlay_key("kb", BoundTenantContext("acme", "kb")) == "tenants/acme/_state/kb"
+    assert (
+        b._info_overlay_key("kb", BoundTenantContext("acme", "kb"))
+        == "_scoped/tenants/acme/_state/kb"
+    )
     alpha = b._info_overlay_key("kb", BoundTenantContext("alpha", "kb"))
     beta = b._info_overlay_key("kb", BoundTenantContext("beta", "kb"))
     assert alpha != beta

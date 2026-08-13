@@ -347,7 +347,7 @@ def test_the_all_domains_wildcard_stays_inside_one_tenant(tmp_path: Path) -> Non
     base = str(tmp_path / "kb")
 
     assert backend.key_pattern(KnowledgeKeyKind.METADATA, ctx=ctx) == (
-        f"{base}/tenants/acme/_state/*/_metadata.json"
+        f"{base}/_scoped/tenants/acme/_state/*/_metadata.json"
     )
 
 

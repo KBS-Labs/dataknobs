@@ -271,7 +271,8 @@ async def test_a_domain_id_must_not_cross_into_another_tenants_state(base: Path)
     bobs_token = await backend.get_state_version("proj", ctx=bob)
     assert bobs_token is not None
 
-    # base/tenants/acme/_state/../../bob/_state/proj == base/tenants/bob/_state/proj
+    # base/_scoped/tenants/acme/_state/../../bob/_state/proj
+    # == base/_scoped/tenants/bob/_state/proj
     #
     # Refused by the segment rule now, which runs first and rejects the
     # name for carrying any structure at all. The tenant-subtree bound
@@ -295,8 +296,8 @@ async def test_each_tenant_still_reaches_its_own_state(base: Path) -> None:
     await backend.set_ingestion_status("proj", "ready", ctx=acme)
     await backend.set_ingestion_status("proj", "pending", ctx=bob)
 
-    assert (base / "tenants" / "acme" / "_state" / "proj").is_dir()
-    assert (base / "tenants" / "bob" / "_state" / "proj").is_dir()
+    assert (base / "_scoped" / "tenants" / "acme" / "_state" / "proj").is_dir()
+    assert (base / "_scoped" / "tenants" / "bob" / "_state" / "proj").is_dir()
     acme_token = await backend.get_state_version("proj", ctx=acme)
     bob_token = await backend.get_state_version("proj", ctx=bob)
     assert acme_token is not None and bob_token is not None
@@ -307,7 +308,7 @@ async def test_a_tenant_reaches_its_own_state_under_a_plain_domain(base: Path) -
     """The tenant subtree still works; the domain inside it is one segment.
 
     This replaces a test asserting that a tenant could nest its domain
-    (``team/alpha`` under ``tenants/acme/_state/``). Nesting is refused
+    (``team/alpha`` under ``_scoped/tenants/acme/_state/``). Nesting is refused
     now for the reason the domain tests above give, and what actually
     needed pinning here — that the tenant's state lands under its own
     prefix and nowhere else — is pinned without it.
@@ -318,7 +319,7 @@ async def test_a_tenant_reaches_its_own_state_under_a_plain_domain(base: Path) -
     await backend.create_kb("alpha")
     await backend.set_ingestion_status("alpha", "ready", ctx=ctx)
 
-    assert (base / "tenants" / "acme" / "_state" / "alpha").is_dir()
+    assert (base / "_scoped" / "tenants" / "acme" / "_state" / "alpha").is_dir()
 
     with pytest.raises(SegmentEscapeError, match="domain_id"):
         await backend.set_ingestion_status("team/alpha", "ready", ctx=ctx)

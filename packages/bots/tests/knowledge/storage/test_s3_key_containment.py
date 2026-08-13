@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import pytest
 
+from dataknobs_bots.knowledge.storage.key_layout import KnowledgeKeyKind
 from dataknobs_bots.knowledge.storage.s3 import S3KnowledgeBackend
 from dataknobs_common.paths import PathEscapeError, SegmentEscapeError
 from dataknobs_common.tenancy import PrefixedTenantContext
@@ -133,11 +134,47 @@ class TestTheTenantStatePrefixIsBounded:
         ctx = PrefixedTenantContext(
             tenant_id="acme", domain_id="proj", prefix_pattern="tenants/{tenant_id}/_state/"
         )
-        assert backend._metadata_key("proj", ctx) == ("kb/tenants/acme/_state/proj/_metadata.json")
+        assert backend._metadata_key("proj", ctx) == (
+            "kb/_scoped/tenants/acme/_state/proj/_metadata.json"
+        )
 
     def test_the_no_context_key_is_byte_identical(self, backend: S3KnowledgeBackend) -> None:
         """``ctx=None`` contributes no prefix, so nothing moved."""
         assert backend._metadata_key("proj") == "kb/proj/_metadata.json"
+
+    @pytest.mark.parametrize("pattern", ["../../{tenant_id}/", "tenants/../{tenant_id}/"])
+    def test_key_pattern_is_bounded_by_the_same_check(
+        self, backend: S3KnowledgeBackend, pattern: str
+    ) -> None:
+        """The method that composed the raw prefix while its siblings did not.
+
+        Every other helper on this class was routed through the bounded
+        prefix; ``key_pattern`` kept calling the unbounded one, so a
+        pattern that ``_metadata_key`` refused outright was returned here
+        as a perfectly well-formed string naming a location no write will
+        ever produce — an EventBridge rule or bucket notification that
+        silently matches nothing, which is the failure mode that reports
+        success.
+
+        The bound now lives at the single point every composition goes
+        through, rather than being something each new helper has to
+        remember.
+        """
+        ctx = PrefixedTenantContext(tenant_id="acme", domain_id="proj", prefix_pattern=pattern)
+        with pytest.raises(PathEscapeError, match="tenant state prefix"):
+            backend.key_pattern(KnowledgeKeyKind.METADATA, "proj", ctx=ctx)
+
+    def test_key_pattern_and_the_key_it_matches_share_a_root(
+        self, backend: S3KnowledgeBackend
+    ) -> None:
+        """A pattern that does not cover its own key is the whole point."""
+        ctx = PrefixedTenantContext(
+            tenant_id="acme", domain_id="proj", prefix_pattern="tenants/{tenant_id}/_state/"
+        )
+
+        pattern = backend.key_pattern(KnowledgeKeyKind.METADATA, "proj", ctx=ctx)
+
+        assert pattern == backend._metadata_key("proj", ctx)
 
 
 class TestTheTwoBackendsNowAgree:
@@ -154,13 +191,37 @@ class TestTheTwoBackendsNowAgree:
         with pytest.raises(PathEscapeError):
             backend._s3_key("acme", "../../etc/passwd")
 
+    @pytest.mark.parametrize("version", ["../../../outside/secret", "a/b", "", ".."])
     def test_both_backends_refuse_the_same_snapshot_version(
-        self, backend: S3KnowledgeBackend, tmp_path
+        self, backend: S3KnowledgeBackend, tmp_path, version: str
     ) -> None:
+        """``a/b`` is the case that showed the two rules were different.
+
+        This assertion was made on ``../../../outside/secret`` alone, and
+        that is the one input where containment and the segment rule
+        happen to give the same answer — so the class asserting agreement
+        asserted it on the only case that could not detect disagreement.
+        ``a/b`` composes ``_snapshots/a/b.json``, which never leaves the
+        snapshot directory: contained, so the file backend accepted it
+        while S3 refused it. Both now ask the segment question, which is
+        the right one for a name with one slot.
+        """
         from dataknobs_bots.knowledge.storage.file import FileKnowledgeBackend
 
         file_backend = FileKnowledgeBackend(base_path=tmp_path)
         with pytest.raises(ValueError, match="snapshot version"):
-            file_backend._snapshot_file("acme", "../../../outside/secret")
+            file_backend._snapshot_file("acme", version)
         with pytest.raises(ValueError, match="snapshot version"):
-            backend._snapshot_key("acme", "../../../outside/secret")
+            backend._snapshot_key("acme", version)
+
+    def test_both_backends_accept_the_digest_every_producer_emits(
+        self, backend: S3KnowledgeBackend, tmp_path
+    ) -> None:
+        """The rule must not have been bought by breaking the feature."""
+        from dataknobs_bots.knowledge.storage.file import FileKnowledgeBackend
+
+        file_backend = FileKnowledgeBackend(base_path=tmp_path)
+        digest = "12f7f01abb460de3d1f65d16d755b3f3"
+
+        assert file_backend._snapshot_file("acme", digest).name == f"{digest}.json"
+        assert backend._snapshot_key("acme", digest).endswith(f"{digest}.json")

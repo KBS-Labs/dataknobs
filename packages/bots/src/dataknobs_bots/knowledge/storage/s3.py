@@ -321,35 +321,6 @@ class S3KnowledgeBackend(KnowledgeResourceBackendMixin):
             )
         return contained.as_posix()
 
-    def _bounded_state_prefix(self, ctx: TenantContext | None) -> str:
-        """The tenant state prefix, refusing one that addresses elsewhere.
-
-        Unlike ``domain_id`` this is *not* one segment — a prefix is
-        several by design (``tenants/acme/_state/``) — so the check is
-        containment. It is needed because the value is not an identifier
-        at all: :class:`~dataknobs_common.tenancy.PrefixedTenantContext`
-        formats a **consumer-supplied pattern**, so what arrives here is
-        free-form text that no id check upstream can constrain. The file
-        backend has bounded this since it adopted the guard; this
-        backend consuming the identical value unchecked is the
-        asymmetry, not a difference between the stores.
-
-        A non-canonical prefix is refused rather than rewritten. Silently
-        normalising it would change which key every state document for
-        that tenant lives at, which is a data migration wearing a bug
-        fix's clothes; refusing says so before anything is written.
-        """
-        prefix = self._state_prefix(ctx)
-        if not prefix:
-            return ""
-        contained = safe_join(os.curdir, prefix)
-        if contained is None or contained.as_posix() != prefix.rstrip("/"):
-            raise PathEscapeError(
-                f"the tenant state prefix addresses a location outside the "
-                f"backend's key namespace: {prefix!r}"
-            )
-        return prefix
-
     def _metadata_key(self, domain_id: str, ctx: TenantContext | None = None) -> str:
         """Get the S3 key for a KB's metadata file.
 
@@ -357,12 +328,12 @@ class S3KnowledgeBackend(KnowledgeResourceBackendMixin):
         (``{prefix}{domain}/_metadata.json``); a tenant context inserts
         ``ctx.state_key_prefix()`` between the backend prefix and the
         domain, isolating per-tenant ingest **state**. Both of those
-        composed parts are checked — see :meth:`_bounded_state_prefix`
+        composed parts are checked — see :meth:`~.mixin.KnowledgeResourceBackendMixin._state_prefix`
         and
         :meth:`~.mixin.KnowledgeResourceBackendMixin._validate_domain_id`.
         """
         self._validate_domain_id(domain_id)
-        return f"{self._prefix}{self._bounded_state_prefix(ctx)}{domain_id}/{self.METADATA_FILE}"
+        return f"{self._prefix}{self._state_prefix(ctx)}{domain_id}/{self.METADATA_FILE}"
 
     def _snapshot_key(
         self,
@@ -375,23 +346,16 @@ class S3KnowledgeBackend(KnowledgeResourceBackendMixin):
         Tenant-scoped via ``ctx`` (the per-tenant snapshot lineage lives
         under the state prefix); ``ctx=None`` is the pre-tenancy key.
 
-        ``version`` is checked for the same reason the file backend
-        checks it: every *producer* in this repo is a computed hex
-        digest that cannot carry a separator, but the consumer is the
-        caller — ``list_changes_since`` takes back a token it persisted,
-        and nothing on the way in constrains it to what was handed out.
+        ``version`` is checked through the same shared rule the file
+        backend uses — see
+        :meth:`~.mixin.KnowledgeResourceBackendMixin._validate_snapshot_version`.
+        The two backends spelled that check differently until they were
+        asked the same question about ``a/b``, and answered differently.
         """
         self._validate_domain_id(domain_id)
-        safe_segment(
-            version,
-            what="snapshot version",
-            within=(
-                "a snapshot key, where a separator addresses outside the "
-                "knowledge base's snapshot lineage"
-            ),
-        )
+        self._validate_snapshot_version(version)
         return (
-            f"{self._prefix}{self._bounded_state_prefix(ctx)}"
+            f"{self._prefix}{self._state_prefix(ctx)}"
             f"{domain_id}/{self.SNAPSHOTS_DIR}/{version}.json"
         )
 

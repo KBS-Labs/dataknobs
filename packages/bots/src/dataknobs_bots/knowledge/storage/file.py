@@ -234,7 +234,15 @@ class FileKnowledgeBackend(KnowledgeResourceBackendMixin):
         not covering that component. The bound is the snapshot directory
         rather than the base, for the same reason ``_kb_path`` bounds
         the domain against the tenant subtree.
+
+        Containment alone was the wrong question, and having asked it
+        here while S3 asked the segment question is how the two backends
+        came to disagree: ``a/b`` composes ``_snapshots/a/b.json``, which
+        never leaves the directory, so this accepted a version S3
+        refused. The shared rule runs first now; the containment join
+        stays because it is what bounds ``domain_id`` on the way in.
         """
+        self._validate_snapshot_version(version)
         return safe_join_or_raise(
             self._snapshots_path(domain_id, ctx),
             f"{version}.json",

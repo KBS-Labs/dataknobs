@@ -9,6 +9,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- **Deleting one knowledge base destroyed every tenant's ingest state.** A
+  tenant context contributes a prefix to every state key, and that prefix's
+  first segment landed at the same level as a knowledge base's own root.
+  `BoundTenantContext` projects `tenants/{tenant_id}/_state/`, so `tenants`
+  was an ordinary legal `domain_id` whose listing prefix contained every
+  tenant's state for every domain — and both persistent backends delete by
+  prefix, so `delete_kb("tenants")` removed all of it and returned `True`.
+  On the file backend the overlap also made `create_kb("tenants")` report a
+  knowledge base nobody had created as already existing.
+
+  Neither existing guard sees it. The segment rule passes `tenants` because
+  it *is* one segment; the prefix check passes `tenants/acme/_state/` because
+  it is contained. Both are satisfied and the slot still collides — the same
+  reading error the segment rule was introduced to close, one level up.
+
+  Scoped state is now rooted under a `_scoped/` segment the layout owns, so
+  the two namespaces are disjoint by construction, and a `domain_id`
+  beginning with `_` is refused. A reserved-word list would not have worked:
+  `PrefixedTenantContext` takes its whole prefix from a deployment's own
+  configuration, so the colliding name is one this package never sees.
+  **Breaking** for an existing multi-tenant deployment — per-tenant state
+  keys move from `{prefix}tenants/…` to `{prefix}_scoped/tenants/…` and
+  must be relocated, or the affected tenants re-ingest. Single-tenant
+  layouts are untouched: a context contributing no prefix (`ctx=None` or
+  `SingleTenantContext`) still composes exactly the pre-tenancy key.
+
 - **A knowledge base could overwrite and delete another one, on every
   persistent backend.** `domain_id` is interleaved with the layout's own
   literal segments — `{domain}/content/{path}`, `{domain}/_metadata.json`,
@@ -45,7 +71,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   backend-independent, and this backend consumed the identical value. Now
   bounded at all of them: the resource `path` against the `content/` tree, the
   snapshot `version` against its lineage, and the formatted tenant state prefix
-  against the backend's key namespace. A non-canonical prefix is refused rather
+  against the backend's key namespace. The prefix check lives on the shared
+  mixin rather than on this backend, because "all of them" was not true of
+  `key_pattern` while each helper had to remember to call it — that one
+  composed the raw prefix and returned a subscription pattern naming a
+  location no write would ever produce, which fails by matching nothing and
+  reporting success. A non-canonical prefix is refused rather
   than silently normalised, since rewriting it would move every state document
   for that tenant.
 
@@ -59,16 +90,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   context, `FileKnowledgeBackend` composes a state path in two hops —
   `base_path`, then the context's `state_key_prefix()` — and containment was
   judged against the outer one. A `domain_id` that walks *sideways* rather
-  than out satisfies that check: under `tenants/acme/_state/`, a domain of
-  `../../bob/_state/proj` resolves to `tenants/bob/_state/proj`, which never
-  leaves `base_path` and is squarely inside the wrong tenant. Tenant `acme`
+  than out satisfies that check: under `_scoped/tenants/acme/_state/`, a domain
+  of `../../bob/_state/proj` resolves to `_scoped/tenants/bob/_state/proj`,
+  which never leaves `base_path` and is squarely inside the wrong tenant. Tenant `acme`
   could read tenant `bob`'s state-version token through the public
   `get_state_version` — with `acme`'s own view of that domain still empty.
 
   Each hop is now bounded against the hop before it, so a `domain_id` is
   contained to the tenant's own subtree and the tenant prefix is contained
-  to `base_path`. Nesting *within* a tenant subtree is unaffected. Without a
-  context the prefix is empty, the two hops collapse to one, and the layout
+  to `base_path`. The segment rule now refuses every nested spelling ahead of
+  that check, so containment survives as the bound on the prefix — free-form
+  text from a `prefix_pattern` — rather than as the constraint on the domain.
+  Without a context the prefix is empty, the two hops collapse to one, and the layout
   is byte-identical to the single-tenant one.
 
 - **A knowledge-base `domain_id` or resource path could address any file on
@@ -157,7 +190,61 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     rather than raising. It is now documented as the naming policy it is —
     deliberately stricter than containment — rather than as the boundary.
 
+### Changed
+
+- **An S3 content key is now normalised, so a non-canonically-spelled object
+  written by an earlier release is unreachable.** `_s3_key` returns the
+  contained, normalised path, so `sub/../guide.md` composes
+  `{prefix}acme/content/guide.md` where it previously composed the literal
+  key `{prefix}acme/content/sub/../guide.md`. Two spellings of one intended
+  file were two distinct objects, which is the defect — but an existing
+  bucket holding such an object needs it re-keyed, and `list_files` still
+  reports the old path out of `_metadata.json` while a read of it now
+  raises. The same applies to a `path` refused outright (`../x`, `/abs/x`):
+  an ingest over such a knowledge base fails rather than degrading. Affects
+  only buckets written with non-canonical or escaping paths.
+
+- **An empty `domain_id` is refused on every method, not only
+  `key_pattern`.** `""` reached `get_file`, `create_kb` and the rest and was
+  composed as a key; `InMemoryKnowledgeBackend.get_file("", "x")` returned
+  `None` where it now raises. `None` remains the all-domains spelling
+  wherever one is accepted — an empty string now means a caller passed an
+  unset variable, which is what it always was.
+
+- **A non-canonical `PrefixedTenantContext` pattern now fails every S3 state
+  call** rather than only the file backend's. The pattern is refused, not
+  rewritten, for the same reason it always was on the file backend:
+  normalising it would move every state document that tenant has written.
+
 ### Fixed
+
+- **An inadmissible `domain_id` was reported as a missing domain.**
+  `KnowledgeIngestionManager.ingest_if_changed` wraps its change-detection
+  call in `except ValueError` to turn "this domain does not exist" into a
+  benign `None`. The identifier guards raise `PathEscapeError`, which *is* a
+  `ValueError` — deliberately, so one `except` reaches every refusal — so
+  that clause swallowed them: the caller asked for an ingest, the name was
+  refused, and the manager logged `Domain not found` and returned `None`.
+  No ingest happened, nothing raised, and the one diagnostic naming the real
+  problem was replaced by one naming a different problem. A refusal now
+  propagates; a genuinely missing domain still returns `None`.
+
+- **The two persistent backends disagreed about a snapshot `version`.** Both
+  looked guarded and asked different questions: S3 applied the segment rule
+  and the file backend applied containment. `a/b` composes
+  `_snapshots/a/b.json`, which never leaves the snapshot directory — so it
+  was accepted on the file backend and refused on S3, through the same
+  public `list_changes_since`. Containment is the wrong question for a name
+  with one slot; both now use the shared segment rule. The test asserting
+  the backends agreed had picked the one input where the two rules happen to
+  give the same answer.
+
+- **`InMemoryKnowledgeBackend.key_pattern` accepted names the others
+  refused.** It returns `""` — no filter is meaningful for in-process
+  storage — and skipped validating its arguments on the way. Producing no
+  pattern is a property of the store; accepting a name the other two refuse
+  is not, and this is the backend consumers develop against. It now
+  validates, then ignores.
 
 - **`key_pattern()` named the wrong document in a tenanted deployment, and
   the watch built from it looked healthy.** The method took no

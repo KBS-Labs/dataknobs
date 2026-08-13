@@ -516,8 +516,22 @@ class InMemoryKnowledgeBackend(KnowledgeResourceBackendMixin):
         arguments are accepted for protocol symmetry but ignored — note
         this backend does not raise for ``UNKNOWN`` either, since it
         produces no pattern to be wrong about.
+
+        ``domain_id`` is nonetheless **validated** before being ignored.
+        Producing no pattern is a property of this store; accepting a
+        name the other two refuse is not, and this is the backend a
+        consumer develops against. Leaving it unchecked is what made the
+        rule that ``key_pattern("")`` is refused rather than read as the
+        all-domains wildcard true of only two backends out of three.
+
+        Raises:
+            SegmentEscapeError: ``domain_id`` is not a single legal
+                segment. ``None`` is the all-domains spelling and is
+                accepted.
         """
-        del kind, domain_id, ctx  # accepted for protocol symmetry, ignored
+        if domain_id is not None:
+            self._validate_domain_id(domain_id)
+        del kind, domain_id, ctx  # no pattern is meaningful for in-process storage
         return ""
 
     # --- Change Detection ---

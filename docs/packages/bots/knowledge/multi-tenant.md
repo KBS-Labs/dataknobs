@@ -258,8 +258,9 @@ nothing resolves at all, and the failure is subtler: because the prefix
 and the `domain_id` are concatenated, a structured tenant id can produce
 the *same* key as a different tenant/domain pair. `(tenant="acme",
 domain="proj/_state/x")` and `(tenant="acme/_state/proj", domain="x")`
-both key on `tenants/acme/_state/proj/_state/x`, so the second tenant
-reads the first's ingest state. Nothing traverses; the namespaces merge.
+both key on `_scoped/tenants/acme/_state/proj/_state/x`, so the second
+tenant reads the first's ingest state. Nothing traverses; the
+namespaces merge.
 
 `domain_id` is held to the same rule, and for the same reason. An
 earlier release left it unconstrained on the grounds that it
@@ -317,10 +318,56 @@ cannot contain, or give `{tenant_id}` its own path segment the way
 Where a tenant prefix is in play, the file backend composes in two hops
 — `base_path`, then the tenant's state prefix — and checks each against
 the one before it. Checking only the outer boundary would not be enough:
-a `domain_id` of `../../bob/_state/proj` under `tenants/acme/_state/`
-resolves to `tenants/bob/_state/proj`, which never leaves `base_path`
-and is squarely inside the wrong tenant. `domain_id` may nest freely
-*within* the tenant subtree; it may not leave it.
+a `domain_id` of `../../bob/_state/proj` under
+`_scoped/tenants/acme/_state/` resolves to
+`_scoped/tenants/bob/_state/proj`, which never leaves `base_path` and is
+squarely inside the wrong tenant.
+
+That containment check is still there and still bounds the tenant
+prefix, but it is no longer what constrains `domain_id`: the segment
+rule above already refuses every spelling with a separator in it, so a
+domain cannot nest within the tenant subtree either. Containment
+survives as the check on the prefix — free-form text from a
+`prefix_pattern` — and as the guarantee that would still hold if the
+segment rule were ever relaxed.
+
+#### Scoped state lives under a reserved root
+
+Every state key a context contributes to is rooted under a `_scoped/`
+segment the layout owns:
+
+```
+kb/acme/content/guide.md                              # content, domain-keyed
+kb/acme/_metadata.json                                # state, no context
+kb/_scoped/tenants/acme/_state/proj/_metadata.json    # state, BoundTenantContext
+```
+
+Without that root, a context's prefix begins at the same level as a
+knowledge base. `BoundTenantContext` projects `tenants/{tenant_id}/_state/`,
+so `tenants` was an ordinary, perfectly legal one-segment `domain_id` —
+and because both persistent backends delete by prefix, `delete_kb("tenants")`
+removed every tenant's ingest state, for every domain, and reported
+success. The segment rule does not catch that: `tenants` *is* one
+segment. Nor would a list of reserved words, because
+`PrefixedTenantContext` takes its whole prefix from a deployment's own
+configuration, so the colliding name is one this package never sees.
+
+Two consequences for a `domain_id`:
+
+- A name beginning with `_` is refused. The layout already spells its
+  own slots that way inside a knowledge base (`_metadata.json`,
+  `_snapshots/`); reserving the prefix rather than today's names is what
+  keeps a slot added later from reopening this. `_` elsewhere in a name
+  is untouched — `acme_prompts` is fine.
+- Nothing else changed. A context that contributes no prefix (`ctx=None`,
+  or `SingleTenantContext`) still composes exactly the pre-tenancy key,
+  so single-tenant layouts are byte-identical.
+
+The prefix a context contributes is also checked where it is composed,
+rather than in one backend: it must land inside `_scoped/` and must
+already be canonical. A non-canonical prefix is **refused rather than
+normalised**, because rewriting it would move every state document that
+tenant has already written.
 
 ## Capability advertisement
 

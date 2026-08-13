@@ -157,6 +157,28 @@ class TestEveryDomainTakingEntryPointIsCovered:
         """``domain_id=None`` means "every domain" and is not a name."""
         assert file_backend.key_pattern() != ""
 
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("domain_id", ["acme/content", ""])
+    async def test_memory_key_pattern_refuses_what_the_others_refuse(
+        self, memory_backend, domain_id: str
+    ) -> None:
+        """It returns no pattern; that is not a reason to accept any name.
+
+        Producing ``""`` is a property of in-process storage — no
+        external observer can filter against it. Validation is a separate
+        question, and skipping it made "an empty ``domain_id`` is refused
+        rather than read as the all-domains wildcard" true of two
+        backends out of three, on the one a consumer develops against.
+        """
+        with pytest.raises(ValueError, match="domain_id"):
+            memory_backend.key_pattern(domain_id=domain_id)
+
+    @pytest.mark.asyncio
+    async def test_memory_key_pattern_still_accepts_the_all_domains_spelling(
+        self, memory_backend
+    ) -> None:
+        assert memory_backend.key_pattern() == ""
+
 
 class TestTheReproducedDamage:
     """The two failures that made this a security fix, not a tidy-up."""
