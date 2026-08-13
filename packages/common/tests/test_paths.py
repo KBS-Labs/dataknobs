@@ -12,7 +12,12 @@ from pathlib import Path
 
 import pytest
 
-from dataknobs_common.paths import PathEscapeError, safe_join, safe_join_or_raise
+from dataknobs_common.paths import (
+    PathAnchor,
+    PathEscapeError,
+    safe_join,
+    safe_join_or_raise,
+)
 
 
 class TestSafeJoinAllows:
@@ -215,3 +220,221 @@ class TestNulIsRefused:
 
     def test_a_nul_in_any_part_is_refused(self) -> None:
         assert safe_join(Path("/base"), "sub", "a\x00b") is None
+
+
+class TestPathAnchorResolvesPerHop:
+    """A reference is spelled relative to its own file, at any depth."""
+
+    def test_a_reference_at_the_root_resolves_beside_the_entry_file(self) -> None:
+        anchor = PathAnchor(Path("/tree"))
+
+        got = anchor.resolve("shared.yaml", what="ref", outside="the tree")
+
+        assert got == Path("/tree/shared.yaml")
+
+    def test_a_reference_below_the_root_resolves_beside_its_own_file(self) -> None:
+        anchor = PathAnchor(Path("/tree"), "sub")
+
+        got = anchor.resolve("leaf.yaml", what="ref", outside="the tree")
+
+        assert got == Path("/tree/sub/leaf.yaml")
+
+    def test_several_parts_join_as_one_name(self) -> None:
+        """For a caller assembling a layout convention around the name."""
+        anchor = PathAnchor(Path("/tree"), "sub")
+
+        got = anchor.resolve("subflows", "checkout.yaml", what="ref", outside="the tree")
+
+        assert got == Path("/tree/sub/subflows/checkout.yaml")
+
+
+class TestPathAnchorContainsAgainstTheRoot:
+    """The boundary does not move when the position does.
+
+    This is the whole reason the two are separate fields: a guard bounding
+    each hop to its own directory would reject the first case below, which
+    is contained and is the ordinary shape of a shared-fragment layout.
+    """
+
+    def test_a_nested_file_may_climb_back_toward_the_root(self) -> None:
+        anchor = PathAnchor(Path("/tree"), "sub")
+
+        got = anchor.resolve("../shared.yaml", what="ref", outside="the tree")
+
+        assert got == Path("/tree/shared.yaml")
+
+    def test_a_nested_file_may_not_climb_past_the_root(self) -> None:
+        anchor = PathAnchor(Path("/tree"), "sub")
+
+        with pytest.raises(PathEscapeError):
+            anchor.resolve("../../outside.yaml", what="ref", outside="the tree")
+
+    def test_an_absolute_reference_is_refused(self) -> None:
+        anchor = PathAnchor(Path("/tree"), "sub")
+
+        with pytest.raises(PathEscapeError):
+            anchor.resolve("/etc/passwd", what="ref", outside="the tree")
+
+    def test_the_refusal_quotes_what_the_caller_supplied(self) -> None:
+        anchor = PathAnchor(Path("/tree"))
+
+        with pytest.raises(PathEscapeError) as excinfo:
+            anchor.resolve(
+                "subflows",
+                "../../x.yaml",
+                what="subflow name",
+                outside="the tree",
+                supplied="../../x",
+            )
+
+        assert "subflow name" in str(excinfo.value)
+        assert "'../../x'" in str(excinfo.value)
+
+
+class TestPathAnchorDescends:
+    """Following a reference moves the position and keeps the root."""
+
+    def test_descending_into_a_subdirectory(self) -> None:
+        assert PathAnchor(Path("/tree")).descend("sub/frag.yaml") == PathAnchor(
+            Path("/tree"), "sub"
+        )
+
+    def test_descending_to_a_sibling_keeps_the_position(self) -> None:
+        assert PathAnchor(Path("/tree"), "sub").descend("other.yaml") == PathAnchor(
+            Path("/tree"), "sub"
+        )
+
+    def test_descending_through_a_climb_returns_toward_the_root(self) -> None:
+        assert PathAnchor(Path("/tree"), "sub").descend("../shared.yaml") == PathAnchor(
+            Path("/tree"), ""
+        )
+
+    def test_the_root_never_moves(self) -> None:
+        deep = PathAnchor(Path("/tree")).descend("a/b/c.yaml").descend("../d.yaml")
+
+        assert deep.root == Path("/tree")
+        assert deep.rel_base == "a"
+
+    def test_descending_out_of_the_tree_is_refused_where_it_happens(self) -> None:
+        """The invariant is enforced, not merely asserted in the docstring.
+
+        A hop is only ever descended *after* its own `resolve` allowed it, so
+        the pair cannot legitimately reach here — but the position is a plain
+        string, and an invariant that rests on call order is one an unrelated
+        caller can walk straight out of.
+        """
+        with pytest.raises(PathEscapeError, match="outside its root"):
+            PathAnchor(Path("/tree")).descend("../../elsewhere/x.yaml")
+
+
+class TestPathAnchorPositionStaysInsideItsRoot:
+    """The pair's stated invariant holds however the anchor was built."""
+
+    def test_a_position_outside_the_root_cannot_be_constructed(self) -> None:
+        with pytest.raises(PathEscapeError, match="outside its root"):
+            PathAnchor(Path("/tree"), "../elsewhere")
+
+    def test_base_cannot_address_outside_the_root(self) -> None:
+        """`base` is the exit `resolve` does not cover.
+
+        `resolve` bounds what it returns, but `base` is a plain join and is
+        the accessor the docs present as the natural one. A position the
+        constructor accepted and `base` then composed would hand out a path
+        that `open()` resolves outside the tree, with no check anywhere on
+        the way.
+        """
+        with pytest.raises(PathEscapeError):
+            _ = PathAnchor(Path("/srv/cfg"), "../../../etc").base
+
+    def test_an_absolute_position_inside_the_root_is_expressed_relative_to_it(
+        self,
+    ) -> None:
+        """Two spellings of one position are one anchor.
+
+        A reference may be absolute and still land inside the tree, so
+        `descend` can arrive here holding an absolute position. Left as-is it
+        contradicts the field's documented meaning and makes two anchors for
+        the same directory compare unequal.
+        """
+        assert PathAnchor(Path("/tree"), "/tree/sub") == PathAnchor(Path("/tree"), "sub")
+
+    def test_descending_through_an_absolute_reference_keeps_the_root(self) -> None:
+        moved = PathAnchor(Path("/tree")).descend("/tree/sub/frag.yaml")
+
+        assert moved == PathAnchor(Path("/tree"), "sub")
+
+    def test_a_curdir_position_is_the_root(self) -> None:
+        assert PathAnchor(Path("/tree"), ".") == PathAnchor(Path("/tree"))
+
+    def test_a_string_root_is_coerced(self) -> None:
+        """`base` would raise `TypeError` on a str root while `resolve` worked."""
+        anchor = PathAnchor("/tree")  # type: ignore[arg-type]
+
+        assert anchor.root == Path("/tree")
+        assert anchor.base == Path("/tree")
+
+
+class TestPathAnchorAnchoredAt:
+    """Where a load starts, and which tree it declares it is in."""
+
+    def test_the_default_tree_is_the_entry_file_s_own_directory(self) -> None:
+        anchor = PathAnchor.anchored_at(Path("/tree/main.yaml"))
+
+        assert anchor == PathAnchor(Path("/tree"), "")
+
+    def test_a_widened_root_positions_the_entry_file_below_it(self) -> None:
+        """The starting position is where the entry file sits, not the root.
+
+        An empty ``rel_base`` here would read every top-level reference as
+        though the entry file were at the root -- silently loading a
+        different file rather than refusing, which is the worse failure.
+        """
+        anchor = PathAnchor.anchored_at(Path("/app/fsm/flow.yaml"), Path("/app"))
+
+        assert anchor == PathAnchor(Path("/app"), "fsm")
+        assert anchor.resolve("common.yaml", what="ref", outside="the tree") == Path(
+            "/app/fsm/common.yaml"
+        )
+
+    def test_a_widened_root_admits_a_sibling_directory(self) -> None:
+        anchor = PathAnchor.anchored_at(Path("/app/fsm/flow.yaml"), Path("/app"))
+
+        got = anchor.resolve("../shared/common.yaml", what="ref", outside="the tree")
+
+        assert got == Path("/app/shared/common.yaml")
+
+    def test_a_widened_root_is_still_a_boundary(self) -> None:
+        anchor = PathAnchor.anchored_at(Path("/app/fsm/flow.yaml"), Path("/app"))
+
+        with pytest.raises(PathEscapeError):
+            anchor.resolve("../../outside/x.yaml", what="ref", outside="the tree")
+
+    def test_a_root_that_does_not_contain_the_entry_file_is_refused(self) -> None:
+        with pytest.raises(PathEscapeError, match="entry file"):
+            PathAnchor.anchored_at(Path("/app/fsm/flow.yaml"), Path("/elsewhere"))
+
+    def test_a_root_spelled_differently_from_the_entry_says_so(self) -> None:
+        """The two may denote one directory and still not be comparable.
+
+        Containment is lexical, so a relative entry cannot be measured
+        against an absolute root without reading the working directory.
+        Reporting that as "lies outside the tree" sends the caller looking
+        for a misplaced file rather than at how they spelled the pair.
+        """
+        with pytest.raises(PathEscapeError, match="both be absolute or both relative"):
+            PathAnchor.anchored_at(Path("configs/main.yaml"), Path("/srv/configs"))
+
+    def test_an_unnormalised_root_still_matches(self) -> None:
+        anchor = PathAnchor.anchored_at(Path("/app/./fsm/flow.yaml"), Path("/app/x/../"))
+
+        assert anchor == PathAnchor(Path("/app"), "fsm")
+
+    def test_a_relative_tree_needs_no_working_directory(self) -> None:
+        """Containment is lexical here too, so a relative root is usable."""
+        anchor = PathAnchor.anchored_at(Path("configs/main.yaml"))
+
+        assert anchor.resolve("shared.yaml", what="ref", outside="the tree") == Path(
+            "configs/shared.yaml"
+        )
+        with pytest.raises(PathEscapeError):
+            anchor.resolve("../outside.yaml", what="ref", outside="the tree")

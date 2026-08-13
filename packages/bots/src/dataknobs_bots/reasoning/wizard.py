@@ -25,6 +25,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, ClassVar
 
 from dataknobs_common.lifecycle import aclose_if_owned
+from dataknobs_common.paths import safe_join_or_raise
 from dataknobs_common.serialization import sanitize_for_json
 from dataknobs_common.structured_config import StructuredConfigConsumer
 from dataknobs_llm import LLMStreamResponse
@@ -1696,7 +1697,12 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
                   ``WizardConfigLoader.load_from_dict()``)
                 - config_base_path: Optional base directory for resolving
                   relative ``wizard_config`` paths. When set, relative
-                  paths are resolved against this directory instead of CWD.
+                  paths are resolved against this directory instead of CWD,
+                  and it is also the **boundary**: ``wizard_config`` and
+                  every subflow name below it, at any depth, must address
+                  inside it. Descending is legal; leaving raises
+                  :class:`~dataknobs_common.paths.PathEscapeError`. Omit it
+                  to declare no tree, in which case nothing is bounded.
                 - extraction_config: Optional extraction configuration
                 - strict_validation: Whether to enforce validation
                 - hooks: Optional hooks configuration dict
@@ -1775,11 +1781,33 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
                 custom_fns,
                 config_base_path=config_base_path,
             )
+        elif config_base_path:
+            # A declared base is the tree, and this is the hop that
+            # establishes it: `wizard_config` is bounded to it here, and the
+            # same root then threads down through every subflow name the
+            # loader resolves. Both operands are config content, so the
+            # provenance is identical to the subflow name one call below —
+            # which is bounded. Leaving this one open would make the boundary
+            # depend on how far down a name happens to appear.
+            #
+            # Absolute values are bounded too, and deliberately: skipping the
+            # composition is how an absolute path discards a base rather than
+            # climbing out of it, so exempting it leaves the wider hole of the
+            # two open. A deployment that means "not inside anything" says so
+            # by declaring no `config_base_path` at all.
+            config_path = safe_join_or_raise(
+                config_base_path,
+                str(wizard_config_value),
+                what="wizard_config",
+                outside="the configured base path",
+                supplied=str(wizard_config_value),
+            )
+            wizard_fsm = loader.load(str(config_path), custom_fns, config_root=config_base_path)
         else:
-            config_path = Path(wizard_config_value)
-            if not config_path.is_absolute() and config_base_path:
-                config_path = config_base_path / config_path
-            wizard_fsm = loader.load(str(config_path), custom_fns)
+            # No declared base, so no tree and nothing to be outside of.
+            # Inventing one from the process CWD would make containment
+            # depend on how the bot was launched.
+            wizard_fsm = loader.load(str(wizard_config_value), custom_fns)
 
         # Create extractor if extraction_config specified
         extractor = None

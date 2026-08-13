@@ -1,5 +1,5 @@
-9f8379604ff1ffe586ef03d03a90fd6de0bf904e2d3f27422a8d002e228ec26f  ./environment.json
+f8790029ecb5063d253dc0a0e150ef7ee0919e39c9eabd0a08c8149c5a725038  ./environment.json
 37396803f20a336044efdd808281a06f39276049cdecfa1135cffd98bcaaceda  ./integration-test-results.xml
-d7de7c1a364797dfbfca8e9114b92d39b3fbc4c10e23b81e6ed6ff0288b8f51e  ./quality-summary.json
+7278d1a6437ef38d22ec80db1ad1b488a91a65b50d770f4dca794bff390976dc  ./quality-summary.json
 4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945  ./style-check.json
 37396803f20a336044efdd808281a06f39276049cdecfa1135cffd98bcaaceda  ./unit-test-results.xml

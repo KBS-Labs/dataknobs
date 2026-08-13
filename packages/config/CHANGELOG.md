@@ -7,6 +7,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Security
+
+- **An `@`-reference could read any file on the volume.**
+  `Config._load_referenced_file` composed a reference read out of a config
+  *value* onto `config_root` and read the result with no containment. Any
+  string in a config list beginning with `@` is a file reference, so a `..`
+  segment climbed out of the config tree — and the absolute branch never
+  consulted `config_root` at all, which is the wider hole of the two: it
+  discards the root rather than climbing out of it. Both spellings loaded a
+  file carrying an `api_key` from outside the tree.
+
+  Both branches are now bounded, and the branch itself is gone — containment
+  is judged on where the reference *lands*, so an absolute reference pointing
+  back inside `config_root` is still fine and naming a subdirectory is still
+  how a layout convention is expressed. Leaving the root raises
+  `ConfigPathEscapeError` (a `ValueError`, and a `ConfigLoadError`). With no
+  `config_root` set there is no tree, and nothing is bounded.
+
+  **Breaking for a deployment that references across trees deliberately.** The
+  migration is one argument: `Config(..., allow_reference_outside_config_root=True)`,
+  also on `from_file` and `from_dict`. Each actual escape is then logged at
+  WARNING and read anyway — the convention `find_config_file`'s `allow_outside`
+  already follows, so the bypass is visible in a deployment's logs rather than
+  silent. Only a real escape warns; a load that never leaves the root is quiet.
+
+  The opt-out is a **caller argument and cannot be set from a config file**,
+  which is the same reason the guard exists: a reference is bounded *because*
+  it comes out of config content rather than from the calling code, so a switch
+  readable from a `settings:` block would let that content turn off the check
+  that bounds it. `SettingsManager.load_settings` refuses the key with a
+  `ConfigError` naming the argument to use instead — refused rather than
+  dropped, since a silent drop fails closed but leaves an operator who wrote it
+  in YAML watching their references raise with nothing pointing at why. This
+  matches every sibling opt-out in the package (`find_config_file`,
+  `InheritableConfigLoader`, `EnvironmentConfig.load`), all caller parameters
+  defaulting to `False`.
+
+  `config_root` could widen the same boundary from content, and does not: a
+  file load pins it to the entry file's own directory before that file's
+  `settings:` block is read, so an entry file cannot name the root it is
+  bounded to.
+
 ### Added
 
 - **`allow_outside=True` lifts the name-containment bound, on all three

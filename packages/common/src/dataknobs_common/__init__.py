@@ -164,6 +164,7 @@ from dataknobs_common.packs import (
     merge_bindings,
 )
 from dataknobs_common.paths import (
+    PathAnchor,
     PathEscapeError,
     safe_join,
     safe_join_or_raise,
@@ -376,6 +377,7 @@ __all__ = [
     "load_yaml_or_json",
     "parse_yaml_or_json",
     # Path containment
+    "PathAnchor",
     "PathEscapeError",
     "safe_join",
     "safe_join_or_raise",

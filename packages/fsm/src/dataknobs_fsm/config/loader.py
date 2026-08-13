@@ -20,6 +20,7 @@ from dataknobs_common.config_loading import (
     ConfigYAMLNotInstalledError,
     load_yaml_or_json,
 )
+from dataknobs_common.paths import PathAnchor
 from dataknobs_config import Config as DataknobsConfig
 from dataknobs_config import deep_merge, substitute_env_vars
 
@@ -86,6 +87,9 @@ class ConfigLoader:
         self.use_dataknobs_config = use_dataknobs_config
         self._env_prefix = "FSM_"
         self._included_configs: Dict[str, Dict[str, Any]] = {}
+        #: Files whose references are being resolved right now, innermost
+        #: last. A chain that re-enters one is a cycle -- see ``_opened``.
+        self._resolving: List[str] = []
         self._registered_functions: Set[str] = set()
 
     def add_registered_function(self, name: str) -> None:
@@ -124,6 +128,7 @@ class ConfigLoader:
         file_path: Union[str, Path],
         resolve_env: bool = True,
         resolve_references: bool = True,
+        config_root: Union[str, Path, None] = None,
     ) -> FSMConfig:
         """Load configuration from a file.
 
@@ -131,6 +136,15 @@ class ConfigLoader:
             file_path: Path to configuration file (JSON or YAML).
             resolve_env: Whether to resolve environment variables.
             resolve_references: Whether to resolve file references.
+            config_root: Directory that ``$include`` and ``$import`` may
+                address within, at any depth. Defaults to ``file_path``'s own
+                directory, which is the tree for the usual layout. Widen it for
+                a deployment whose configs deliberately span sibling
+                directories — ``app/fsm/flow.yaml`` referencing
+                ``../shared/common.yaml`` needs ``config_root=app/``. Widening
+                the anchor rather than disabling the check keeps the boundary a
+                boundary: the shared directory comes inside the tree, and
+                everything else stays outside it.
 
         Returns:
             Validated FSMConfig instance.
@@ -138,6 +152,8 @@ class ConfigLoader:
         Raises:
             FileNotFoundError: If file doesn't exist.
             ValueError: If file format is not supported.
+            PathEscapeError: A ``$include`` or ``$import`` addresses a file
+                outside ``config_root``.
         """
         file_path = Path(file_path)
 
@@ -158,9 +174,16 @@ class ConfigLoader:
         if resolve_env:
             processed_config = self._resolve_environment_vars(processed_config)
 
-        # Resolve file references (includes/imports)
+        # The include cache spans this load, not the loader's lifetime: a
+        # loader held across loads would otherwise serve the first load's
+        # copy of every fragment, whatever the file says now.
+        self._included_configs.clear()
+
+        # Resolve file references (includes/imports), bounded to the tree
         if resolve_references:
-            processed_config = self._resolve_references(processed_config, file_path.parent)
+            processed_config = self._resolve_references(
+                processed_config, PathAnchor.anchored_at(file_path, config_root)
+            )
 
         # Apply common transformations and validate
         return self._finalize_config(processed_config)
@@ -633,26 +656,98 @@ class ConfigLoader:
 
         return config
 
-    def _resolve_references(self, config: Dict[str, Any], base_path: Path) -> Dict[str, Any]:
+    @staticmethod
+    def _reference(anchor: PathAnchor, value: Any, what: str) -> Path:
+        """Resolve one reference from where the referencing file sits.
+
+        Args:
+            anchor: The tree, and the position the reference is spelled from.
+            value: The reference as config content wrote it.
+            what: How to name it in a refusal (``"$include"``, ``"$import"``).
+
+        Returns:
+            The resolved path, bounded to the tree.
+
+        Raises:
+            ConfigLoadError: ``value`` is not a string. Composing it would
+                fail inside ``pathlib`` with a message naming neither the
+                directive nor the file that carried it.
+            PathEscapeError: The reference addresses outside the tree.
+        """
+        if not isinstance(value, str):
+            raise ConfigLoadError(
+                f"{what} needs a file path as a string, got {type(value).__name__}"
+            )
+        return anchor.resolve(value, what=what, outside="the configuration tree", supplied=value)
+
+    @contextlib.contextmanager
+    def _opened(self, path: Path, what: str) -> Iterator[None]:
+        """Mark ``path`` as being resolved, and refuse to re-enter it.
+
+        A file that references itself — directly, or around a chain of any
+        length — recursed until the interpreter gave out. ``RecursionError``
+        is not catchable as a configuration problem, arrives with a
+        thousand-frame traceback, and names no file, so a one-character typo
+        in a fragment surfaced as an apparent interpreter fault.
+
+        The guard is the set of files *currently open*, not the set already
+        seen: a shared fragment pulled in by two siblings is ordinary reuse
+        and is exactly what ``_included_configs`` exists to make cheap.
+        Keying on "seen" would refuse it.
+
+        Args:
+            path: The file about to be resolved.
+            what: How to name the directive in a refusal.
+
+        Yields:
+            None, with ``path`` marked open for the duration.
+
+        Raises:
+            ConfigLoadError: ``path`` is already open further up the chain.
+        """
+        key = path.as_posix()
+        if key in self._resolving:
+            chain = " -> ".join([*(Path(p).name for p in self._resolving), path.name])
+            raise ConfigLoadError(f"{what} cycle in configuration references: {chain}")
+
+        self._resolving.append(key)
+        try:
+            yield
+        finally:
+            self._resolving.pop()
+
+    def _resolve_references(self, config: Dict[str, Any], anchor: PathAnchor) -> Dict[str, Any]:
         """Resolve file references (includes/imports) in configuration.
 
         Supports:
         - $include: path/to/file.yaml
         - $import: { file: path/to/file.yaml, path: some.nested.path }
 
+        A reference is spelled relative to the file that wrote it, and a chain
+        of them may descend and climb back within the tree — but not out of it.
+        The value comes out of config content rather than from a caller, so a
+        ``..`` or an absolute path in one addresses a file the deployment did
+        not put in the tree.
+
         Args:
             config: Configuration dictionary.
-            base_path: Base path for resolving relative paths.
+            anchor: The config tree, and where within it the file this config
+                came from sits.
 
         Returns:
             Configuration with resolved references.
+
+        Raises:
+            ConfigLoadError: A reference is malformed, or a chain of them
+                closes on a file already open.
+            PathEscapeError: A reference addresses a file outside the tree.
         """
         processed = {}
 
         for key, value in config.items():
-            if key == "$include" and isinstance(value, str):
+            if key == "$include":
                 # Load and merge included file
-                include_path = base_path / value
+                include_path = self._reference(anchor, value, "$include")
                 if include_path.as_posix() not in self._included_configs:
                     included = self._load_file(include_path)
                     self._included_configs[include_path.as_posix()] = included
@@ -660,7 +755,8 @@ class ConfigLoader:
                     included = self._included_configs[include_path.as_posix()]
 
                 # Recursively resolve references in included content
-                included = self._resolve_references(included, include_path.parent)
+                with self._opened(include_path, "$include"):
+                    included = self._resolve_references(included, anchor.descend(value))
 
                 # Merge with current config
                 for inc_key, inc_value in included.items():
@@ -669,7 +765,13 @@ class ConfigLoader:
 
             elif key == "$import" and isinstance(value, dict):
                 # Import specific path from file
-                file_path = base_path / value["file"]
+                if "file" not in value:
+                    raise ConfigLoadError(
+                        "$import needs a 'file' key naming the configuration to "
+                        f"import from; got keys {sorted(value)}"
+                    )
+                reference = value["file"]
+                file_path = self._reference(anchor, reference, "$import")
                 path_expr = value.get("path", "")
 
                 if file_path.as_posix() not in self._included_configs:
@@ -685,16 +787,17 @@ class ConfigLoader:
 
                 # Recursively resolve references
                 if isinstance(imported, dict):
-                    imported = self._resolve_references(imported, file_path.parent)
+                    with self._opened(file_path, "$import"):
+                        imported = self._resolve_references(imported, anchor.descend(reference))
 
                 return imported
 
             elif isinstance(value, dict):
-                processed[key] = self._resolve_references(value, base_path)
+                processed[key] = self._resolve_references(value, anchor)
 
             elif isinstance(value, list):
                 processed[key] = [
-                    self._resolve_references(item, base_path) if isinstance(item, dict) else item
+                    self._resolve_references(item, anchor) if isinstance(item, dict) else item
                     for item in value
                 ]
 

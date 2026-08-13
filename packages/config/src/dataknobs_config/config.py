@@ -10,9 +10,11 @@ import yaml
 from dataknobs_common import NotFoundError, Registry
 from dataknobs_common.config_loading import (
     ConfigLoadError,
+    ConfigPathEscapeError,
     ConfigUnsupportedFormatError,
     load_yaml_or_json,
 )
+from dataknobs_common.paths import safe_join
 
 from .builders import ObjectBuilder
 from .environment import EnvironmentOverrides
@@ -36,13 +38,25 @@ class Config:
     configuration dictionaries, organized by type.
     """
 
-    def __init__(self, *sources: Union[str, Path, dict], **kwargs: Any) -> None:
+    def __init__(
+        self,
+        *sources: Union[str, Path, dict],
+        allow_reference_outside_config_root: bool = False,
+        **kwargs: Any,
+    ) -> None:
         """Initialize a Config object from one or more sources.
 
         Args:
             *sources: Variable number of sources (file paths or dictionaries)
+            allow_reference_outside_config_root: Permit an ``@``-reference
+                that addresses outside ``config_root``, logging each actual
+                escape at WARNING rather than silently allowing it. Off by
+                default. A caller argument rather than a ``settings:`` key
+                because config content is the plane the guard bounds — see
+                :meth:`_load_referenced_file`.
             **kwargs: Additional keyword arguments
         """
+        self._allow_reference_outside_config_root = allow_reference_outside_config_root
         self._data: Dict[str, List[Dict[str, Any]]] = {}
         self._settings_manager = SettingsManager()
         self._reference_resolver = ReferenceResolver(self)
@@ -59,28 +73,40 @@ class Config:
             self._apply_environment_overrides()
 
     @classmethod
-    def from_file(cls, path: Union[str, Path]) -> "Config":
+    def from_file(
+        cls, path: Union[str, Path], *, allow_reference_outside_config_root: bool = False
+    ) -> "Config":
         """Create a Config object from a file.
 
         Args:
             path: Path to configuration file (YAML or JSON)
+            allow_reference_outside_config_root: As :meth:`__init__` takes it.
 
         Returns:
             Config object
         """
-        return cls(path)
+        return cls(
+            path,
+            allow_reference_outside_config_root=allow_reference_outside_config_root,
+        )
 
     @classmethod
-    def from_dict(cls, data: dict) -> "Config":
+    def from_dict(
+        cls, data: dict, *, allow_reference_outside_config_root: bool = False
+    ) -> "Config":
         """Create a Config object from a dictionary.
 
         Args:
             data: Configuration dictionary
+            allow_reference_outside_config_root: As :meth:`__init__` takes it.
 
         Returns:
             Config object
         """
-        return cls(data)
+        return cls(
+            data,
+            allow_reference_outside_config_root=allow_reference_outside_config_root,
+        )
 
     def load(self, source: Union[str, Path, dict]) -> None:
         """Load configuration from a source.
@@ -219,20 +245,82 @@ class Config:
                 self._data[type_name].append(config)
 
     def _load_referenced_file(self, path: str) -> dict:
-        """Load a referenced configuration file.
+        """Load a referenced configuration file, bounded to ``config_root``.
+
+        The reference comes out of a config *file* rather than from a caller,
+        so it addresses **inside** ``config_root``. Two spellings do not:
+        a ``..`` segment climbs out of it, and an absolute reference discards
+        it outright — the wider of the two, since it never consults the root
+        at all. Both are refused, and an absolute reference that lands back
+        inside the root is fine, because containment is judged on where the
+        reference *lands* rather than on how it is spelled.
+
+        Naming a subdirectory is legal; that is how a layout convention is
+        expressed. A deployment that references across trees on purpose passes
+        ``allow_reference_outside_config_root=True`` to the constructor, which
+        logs each actual escape at WARNING rather than silently permitting it
+        — the convention
+        :func:`~dataknobs_common.config_loading.find_config_file` already
+        follows, in both respects: it is that function's ``allow_outside``
+        parameter, and it warns only on a real escape.
+
+        **The opt-out is a caller argument, not a setting**, and the reason is
+        the sentence this docstring opens with. The guard exists *because* the
+        reference comes out of config content; a switch readable from a
+        ``settings:`` block would let that same content turn it off, leaving
+        the boundary bounding an input that outranks it. ``SettingsManager``
+        refuses the key outright so the two planes cannot be confused.
+
+        ``config_root`` itself is a settings key and so could widen the tree
+        the same way — but a file load pins it to the entry file's own
+        directory before that file's ``settings:`` block is read, so an entry
+        file cannot name its own root.
+
+        With no ``config_root`` at all there is no tree, so an absolute
+        reference is unbounded and a relative one has nothing to resolve
+        against.
 
         Args:
             path: Path to the referenced file (relative or absolute)
 
         Returns:
             Loaded configuration dictionary
+
+        Raises:
+            ConfigError: The reference is relative and no ``config_root`` is
+                set.
+            ConfigPathEscapeError: The reference addresses a file outside
+                ``config_root`` and the opt-out is off.
         """
-        # Resolve relative paths using config_root
-        if not Path(path).is_absolute():
-            config_root = self._settings_manager.get_setting("config_root")
-            if not config_root:
+        config_root = self._settings_manager.get_setting("config_root")
+
+        if not config_root:
+            if not Path(path).is_absolute():
                 raise ConfigError("config_root not set for relative file reference")
-            path = str(Path(config_root) / path)
+        else:
+            approved = safe_join(config_root, path)
+            if approved is None:
+                if not self._allow_reference_outside_config_root:
+                    raise ConfigPathEscapeError(
+                        f"file reference addresses a location outside config_root: {path!r}"
+                    )
+                logger.warning(
+                    "File reference %r addresses outside config_root %r; permitted by "
+                    "allow_reference_outside_config_root",
+                    path,
+                    str(config_root),
+                )
+                # Composed the way it was before the guard existed, so the
+                # opt-out is a bypass of the *check* and not of the
+                # resolution — an escaping relative reference still means
+                # "from config_root", not "from the process CWD".
+                path = str(Path(config_root) / path)
+            else:
+                # Read what the guard approved, not a recomposition of the
+                # raw reference: a symlinked subdirectory inside the root
+                # plus a ``..`` resolves through the link's target, so the
+                # two are not the same file.
+                path = str(approved)
 
         path_obj = Path(path).resolve()
 

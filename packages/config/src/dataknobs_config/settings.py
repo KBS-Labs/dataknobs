@@ -18,16 +18,58 @@ class SettingsManager:
         - <attribute>: Global defaults
     """
 
+    #: Settings that configure the loader rather than the objects it loads.
+    #: Every other dotless setting becomes a default attribute on every
+    #: atomic config, so a loader setting not named here would silently
+    #: appear as a key on everything the config produces.
+    _LOADER_SETTINGS = frozenset(
+        {
+            "config_root",
+            "global_root",
+            "path_resolution_attributes",
+        }
+    )
+
+    #: Settings a caller may pass but config *content* may not carry, because
+    #: they govern a boundary that content is on the far side of. A config
+    #: file naming one of these would be an input relaxing the check that
+    #: bounds it, which is not a check. They are refused rather than dropped:
+    #: failing closed on a silent drop leaves an operator who wrote one in
+    #: YAML watching their references raise with nothing pointing at why.
+    _CALLER_ONLY_SETTINGS = {
+        "allow_reference_outside_config_root": (
+            "pass allow_reference_outside_config_root=True to Config(...) instead"
+        ),
+    }
+
     def __init__(self) -> None:
         """Initialize the settings manager."""
         self._settings: Dict[str, Any] = {}
 
     def load_settings(self, settings: dict) -> None:
-        """Load settings from a dictionary.
+        """Load settings that came from a configuration source.
+
+        This is the *content* plane — a ``settings:`` block in a loaded file,
+        or the same block in a dict handed to :class:`~dataknobs_config.Config`.
+        :meth:`set_setting` is the caller plane. The split is what keeps a
+        boundary out of reach of the content it bounds, so a setting named in
+        :attr:`_CALLER_ONLY_SETTINGS` is refused here and settable only there.
 
         Args:
             settings: Settings dictionary
+
+        Raises:
+            ConfigError: ``settings`` names a caller-only setting.
         """
+        for key in settings:
+            if key in self._CALLER_ONLY_SETTINGS:
+                from .exceptions import ConfigError
+
+                raise ConfigError(
+                    f"{key!r} may not be set from configuration content: "
+                    f"{self._CALLER_ONLY_SETTINGS[key]}"
+                )
+
         # Merge with existing settings (first seen takes precedence)
         for key, value in settings.items():
             if key not in self._settings:
@@ -70,7 +112,7 @@ class SettingsManager:
         for key, value in self._settings.items():
             if "." not in key and key not in result:
                 # Global default for any attribute
-                if key not in ["config_root", "global_root", "path_resolution_attributes"]:
+                if key not in self._LOADER_SETTINGS:
                     result[key] = copy.deepcopy(value)
 
         # Apply type-specific defaults
@@ -167,7 +209,28 @@ class SettingsManager:
         return None
 
     def _resolve_path(self, path: Union[str, Any], base_path: str | None) -> Union[str, Any]:
-        """Resolve a single path value.
+        """Resolve a single path value against ``global_root``.
+
+        ``global_root`` is a **resolution base, not a boundary**, and this is
+        the one place where the difference is worth stating — the composition
+        below looks like the ``@``-reference one in
+        :meth:`~dataknobs_config.Config._load_referenced_file`, which *is*
+        bounded, and the two are answering different questions.
+
+        Two properties of this feature say it is not a boundary, and both are
+        the published contract rather than an oversight: an absolute value is
+        returned untouched (there is nothing to resolve), and a relative one
+        may climb out — ``config_path: ../configs/db.conf`` resolving to a
+        sibling of ``global_root`` is asserted by
+        ``test_resolve_relative_paths``. Bounding only the relative spelling
+        while the absolute one passes through would be the "reject ``..`` and
+        stop there" half-guard that :mod:`dataknobs_common.paths` exists to
+        name, and bounding both would change what the feature is.
+
+        Nothing is opened here either way: this rewrites a string that a
+        *consumer* later opens, so the boundary that matters is the
+        consumer's. Turning ``global_root`` into one is a deliberate change to
+        ``path_resolution_attributes``, not a fix to make here.
 
         Args:
             path: Path value (may not be a string)
