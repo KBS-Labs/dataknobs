@@ -18,6 +18,7 @@ from pathlib import Path
 
 import pytest
 import yaml
+from dataknobs_common.config_loading import ConfigLoadError
 from dataknobs_common.paths import PathEscapeError
 
 from dataknobs_fsm.config.loader import ConfigLoader
@@ -262,6 +263,117 @@ def test_a_widened_root_still_resolves_references_relative_to_their_own_file(
     config = ConfigLoader().load_from_file(entry, config_root=tree / "app")
 
     assert config.name == "right-beside-the-entry"
+
+
+def test_an_absolute_include_landing_inside_the_tree_still_loads(tree: Path) -> None:
+    """Containment judges where a reference lands, not how it is spelled.
+
+    The refusal of an absolute reference is not a rule against the spelling —
+    it is the same containment question asked of a path that discards the
+    base. One pointing back into the tree is inside it, so it loads, and
+    pinning that here is what stops the guard from being reintroduced as an
+    ``is_absolute()`` rejection.
+    """
+    entry = _write(
+        tree / "configs" / "main.yaml",
+        {"$include": str(tree / "configs" / "shared.yaml")},
+    )
+
+    config = ConfigLoader().load_from_file(entry)
+
+    assert config.name == "from-shared"
+
+
+# ---------------------------------------------------------------------------
+# Malformed references — the feature's other untested edges
+# ---------------------------------------------------------------------------
+
+
+def test_a_self_referential_include_is_refused(tree: Path) -> None:
+    """A file including itself recursed until the interpreter gave out.
+
+    `RecursionError` is not catchable as a config problem, carries a
+    thousand-frame traceback, and names no file — so a one-line typo in a
+    fragment surfaced as an apparent interpreter fault.
+    """
+    entry = _write(tree / "configs" / "main.yaml", {"$include": "main.yaml"})
+
+    with pytest.raises(ConfigLoadError, match="cycle"):
+        ConfigLoader().load_from_file(entry)
+
+
+def test_a_cycle_between_two_fragments_is_refused(tree: Path) -> None:
+    """The same defect one hop out, where a reader is far less likely to see it."""
+    _write(tree / "configs" / "a.yaml", {"$include": "b.yaml"})
+    _write(tree / "configs" / "b.yaml", {"$include": "a.yaml"})
+    entry = _write(tree / "configs" / "main.yaml", {"$include": "a.yaml"})
+
+    with pytest.raises(ConfigLoadError, match="cycle"):
+        ConfigLoader().load_from_file(entry)
+
+
+def test_the_cycle_refusal_names_the_files_involved(tree: Path) -> None:
+    _write(tree / "configs" / "a.yaml", {"$include": "a.yaml"})
+    entry = _write(tree / "configs" / "main.yaml", {"$include": "a.yaml"})
+
+    with pytest.raises(ConfigLoadError) as excinfo:
+        ConfigLoader().load_from_file(entry)
+
+    assert "a.yaml" in str(excinfo.value)
+
+
+def test_the_same_fragment_may_be_included_twice_without_being_a_cycle(
+    tree: Path,
+) -> None:
+    """Re-inclusion is not recursion, and the guard must not confuse them.
+
+    A shared fragment pulled in by two siblings is the ordinary reason the
+    include cache exists; a cycle check keyed on "seen before" rather than on
+    "currently open" would refuse it.
+    """
+    _write(tree / "configs" / "sub" / "one.yaml", {"$include": "../shared.yaml"})
+    _write(tree / "configs" / "sub" / "two.yaml", {"$include": "../shared.yaml"})
+    entry = _write(
+        tree / "configs" / "main.yaml",
+        {"$include": "sub/one.yaml", "metadata": {"$include": "sub/two.yaml"}},
+    )
+
+    config = ConfigLoader().load_from_file(entry)
+
+    assert config.name == "from-shared"
+    assert config.metadata["name"] == "from-shared"
+
+
+def test_a_fragment_changed_between_loads_is_read_again(tree: Path) -> None:
+    """The include cache spans one load, not the loader's lifetime.
+
+    `_included_configs` was never cleared, so a `ConfigLoader` kept across
+    loads — the ordinary way to hold one — served the first load's copy of
+    every fragment forever. Cheap within a load; wrong between them.
+    """
+    loader = ConfigLoader()
+    entry = _write(tree / "configs" / "main.yaml", {"$include": "shared.yaml"})
+
+    assert loader.load_from_file(entry).name == "from-shared"
+
+    _write(tree / "configs" / "shared.yaml", _fsm("edited-on-disk"))
+
+    assert loader.load_from_file(entry).name == "edited-on-disk"
+
+
+def test_an_import_without_a_file_key_is_refused(tree: Path) -> None:
+    """`value["file"]` raised a bare `KeyError` naming only `'file'`."""
+    entry = _write(tree / "configs" / "main.yaml", {"$import": {"path": "networks"}})
+
+    with pytest.raises(ConfigLoadError, match="file"):
+        ConfigLoader().load_from_file(entry)
+
+
+def test_an_import_whose_file_is_not_a_string_is_refused(tree: Path) -> None:
+    entry = _write(tree / "configs" / "main.yaml", {"$import": {"file": ["a", "b"]}})
+
+    with pytest.raises(ConfigLoadError, match="file"):
+        ConfigLoader().load_from_file(entry)
 
 
 def test_references_may_be_left_unresolved(tree: Path) -> None:

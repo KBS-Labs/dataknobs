@@ -57,6 +57,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   should not mark it `ERROR`. (That `delete`'s handler also swallows real
   errors is a separate pre-existing defect, untouched here.)
 
+### Fixed
+
+- **A cyclic `$include` recursed until the interpreter gave out.** A file
+  referencing itself — directly, or around a chain of any length — raised
+  `RecursionError`, which is not catchable as a configuration problem, arrives
+  with a thousand-frame traceback and names no file, so a one-character typo in
+  a fragment surfaced as an apparent interpreter fault. A cycle now raises
+  `ConfigLoadError` naming the chain. The guard tracks the files *currently
+  open*, not those already seen, so a shared fragment pulled in by two siblings
+  — ordinary reuse, and what the include cache exists to make cheap — is
+  unaffected.
+
+- **A malformed reference raised a bare `KeyError` or a `pathlib` error.**
+  `$import` without a `file` key raised `KeyError('file')`, naming neither the
+  directive nor the file that carried it; a non-string reference failed inside
+  `pathlib` the same way. Both now raise `ConfigLoadError` naming what was
+  wrong and what was expected.
+
+- **The include cache outlived the load that filled it.** `_included_configs`
+  was never cleared, so a `ConfigLoader` held across loads — the ordinary way
+  to hold one — served the first load's copy of every fragment however the file
+  had changed since. The cache now spans a single `load_from_file`.
+
 ### Added
 
 - **Behavioural tests for `$include` and `$import`.** The feature had none:

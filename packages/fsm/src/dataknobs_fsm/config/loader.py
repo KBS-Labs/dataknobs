@@ -87,6 +87,9 @@ class ConfigLoader:
         self.use_dataknobs_config = use_dataknobs_config
         self._env_prefix = "FSM_"
         self._included_configs: Dict[str, Dict[str, Any]] = {}
+        #: Files whose references are being resolved right now, innermost
+        #: last. A chain that re-enters one is a cycle -- see ``_opened``.
+        self._resolving: List[str] = []
         self._registered_functions: Set[str] = set()
 
     def add_registered_function(self, name: str) -> None:
@@ -170,6 +173,11 @@ class ConfigLoader:
         # Resolve environment variables
         if resolve_env:
             processed_config = self._resolve_environment_vars(processed_config)
+
+        # The include cache spans this load, not the loader's lifetime: a
+        # loader held across loads would otherwise serve the first load's
+        # copy of every fragment, whatever the file says now.
+        self._included_configs.clear()
 
         # Resolve file references (includes/imports), bounded to the tree
         if resolve_references:
@@ -649,9 +657,64 @@ class ConfigLoader:
         return config
 
     @staticmethod
-    def _reference(anchor: PathAnchor, value: str, what: str) -> Path:
-        """Resolve one reference from where the referencing file sits."""
+    def _reference(anchor: PathAnchor, value: Any, what: str) -> Path:
+        """Resolve one reference from where the referencing file sits.
+
+        Args:
+            anchor: The tree, and the position the reference is spelled from.
+            value: The reference as config content wrote it.
+            what: How to name it in a refusal (``"$include"``, ``"$import"``).
+
+        Returns:
+            The resolved path, bounded to the tree.
+
+        Raises:
+            ConfigLoadError: ``value`` is not a string. Composing it would
+                fail inside ``pathlib`` with a message naming neither the
+                directive nor the file that carried it.
+            PathEscapeError: The reference addresses outside the tree.
+        """
+        if not isinstance(value, str):
+            raise ConfigLoadError(
+                f"{what} needs a file path as a string, got {type(value).__name__}"
+            )
         return anchor.resolve(value, what=what, outside="the configuration tree", supplied=value)
+
+    @contextlib.contextmanager
+    def _opened(self, path: Path, what: str) -> Iterator[None]:
+        """Mark ``path`` as being resolved, and refuse to re-enter it.
+
+        A file that references itself — directly, or around a chain of any
+        length — recursed until the interpreter gave out. ``RecursionError``
+        is not catchable as a configuration problem, arrives with a
+        thousand-frame traceback, and names no file, so a one-character typo
+        in a fragment surfaced as an apparent interpreter fault.
+
+        The guard is the set of files *currently open*, not the set already
+        seen: a shared fragment pulled in by two siblings is ordinary reuse
+        and is exactly what ``_included_configs`` exists to make cheap.
+        Keying on "seen" would refuse it.
+
+        Args:
+            path: The file about to be resolved.
+            what: How to name the directive in a refusal.
+
+        Yields:
+            None, with ``path`` marked open for the duration.
+
+        Raises:
+            ConfigLoadError: ``path`` is already open further up the chain.
+        """
+        key = path.as_posix()
+        if key in self._resolving:
+            chain = " -> ".join([*(Path(p).name for p in self._resolving), path.name])
+            raise ConfigLoadError(f"{what} cycle in configuration references: {chain}")
+
+        self._resolving.append(key)
+        try:
+            yield
+        finally:
+            self._resolving.pop()
 
     def _resolve_references(self, config: Dict[str, Any], anchor: PathAnchor) -> Dict[str, Any]:
         """Resolve file references (includes/imports) in configuration.
@@ -675,12 +738,14 @@ class ConfigLoader:
             Configuration with resolved references.
 
         Raises:
+            ConfigLoadError: A reference is malformed, or a chain of them
+                closes on a file already open.
             PathEscapeError: A reference addresses a file outside the tree.
         """
         processed = {}
 
         for key, value in config.items():
-            if key == "$include" and isinstance(value, str):
+            if key == "$include":
                 # Load and merge included file
                 include_path = self._reference(anchor, value, "$include")
                 if include_path.as_posix() not in self._included_configs:
@@ -690,7 +755,8 @@ class ConfigLoader:
                     included = self._included_configs[include_path.as_posix()]
 
                 # Recursively resolve references in included content
-                included = self._resolve_references(included, anchor.descend(value))
+                with self._opened(include_path, "$include"):
+                    included = self._resolve_references(included, anchor.descend(value))
 
                 # Merge with current config
                 for inc_key, inc_value in included.items():
@@ -699,7 +765,13 @@ class ConfigLoader:
 
             elif key == "$import" and isinstance(value, dict):
                 # Import specific path from file
-                file_path = self._reference(anchor, value["file"], "$import")
+                if "file" not in value:
+                    raise ConfigLoadError(
+                        "$import needs a 'file' key naming the configuration to "
+                        f"import from; got keys {sorted(value)}"
+                    )
+                reference = value["file"]
+                file_path = self._reference(anchor, reference, "$import")
                 path_expr = value.get("path", "")
 
                 if file_path.as_posix() not in self._included_configs:
@@ -715,7 +787,8 @@ class ConfigLoader:
 
                 # Recursively resolve references
                 if isinstance(imported, dict):
-                    imported = self._resolve_references(imported, anchor.descend(value["file"]))
+                    with self._opened(file_path, "$import"):
+                        imported = self._resolve_references(imported, anchor.descend(reference))
 
                 return imported
 
