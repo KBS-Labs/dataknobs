@@ -57,9 +57,7 @@ def resource(base: Path) -> FileSystemResource:
 # --- acquire / open -------------------------------------------------------
 
 
-def test_open_refuses_to_read_outside_the_base(
-    resource: FileSystemResource, outside: Path
-) -> None:
+def test_open_refuses_to_read_outside_the_base(resource: FileSystemResource, outside: Path) -> None:
     """Before the guard this returned the file's contents."""
     with pytest.raises(PathEscapeError):
         with resource.open("../outside/secret.txt") as handle:
