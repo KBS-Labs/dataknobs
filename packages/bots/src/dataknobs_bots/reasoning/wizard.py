@@ -1466,7 +1466,7 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
         shadow the restored snapshot.
 
         Which keys those are is not decided here: it is whatever
-        :meth:`_stage_derived_metadata` produces, the same method the
+        :meth:`_build_wizard_metadata` produces, the same method the
         metadata builder uses. Naming them in a list here is what let the
         derived ones — the stage position, the roadmap, the navigation
         flags — go on describing the stage that was just undone.
@@ -1491,12 +1491,12 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
         # stored keys and stopping there left `stage_index`, the roadmap and
         # the rest describing the stage just undone, and since the flat keys
         # are read ahead of nested `fsm_state` those stale values won
-        # uncontested. `_stage_derived_metadata` is the same method the
+        # uncontested. `_build_wizard_metadata` is the same method the
         # metadata builder uses, so the two writers cannot drift apart on
         # which fields those are.
         wizard_meta = manager.metadata.get("wizard", {})
         wizard_meta["fsm_state"] = fsm_state
-        wizard_meta.update(self._stage_derived_metadata(self._state_for_snapshot(fsm_state)))
+        wizard_meta.update(self._build_wizard_metadata(self._state_for_snapshot(fsm_state)))
         manager.metadata["wizard"] = wizard_meta
 
     def undo_to_checkpoint(
@@ -3096,9 +3096,13 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
     def get_wizard_metadata(self, state: WizardState) -> dict[str, Any]:
         """Build wizard metadata from state without advancing.
 
-        Useful for initial page renders or status checks.  Restores the
-        FSM to match the given state before building metadata so that
-        stage-level queries (prompt, suggestions, etc.) are accurate.
+        Useful for initial page renders or status checks.
+
+        The FSM is restored to match ``state`` first.  That is no longer
+        what makes the metadata accurate — :meth:`_build_wizard_metadata`
+        passes every stage explicitly and never reads the live position —
+        but this is a public entry point, and leaving the FSM positioned
+        where the caller's state says it is remains part of what it does.
 
         Args:
             state: Current wizard state.
@@ -3267,36 +3271,25 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
                 llm=llm,
             )
 
-        # Build result
-        active_fsm = self._subflows.get_active_fsm()
-        stage_meta = active_fsm.current_metadata
+        # Build result.  Every field below that describes the stage is read
+        # out of `metadata` rather than derived a second time: this method
+        # used to render `stage_prompt` and `suggestions` again from
+        # `active_fsm.current_metadata`, three lines after building the dict
+        # that already held both. Inside a turn the two agreed, so the copy
+        # cost nothing and proved nothing -- but it read the FSM's live
+        # position where the builder reads the state, which is the pair that
+        # drifted everywhere else it was written twice.
         metadata = self._build_wizard_metadata(state)
-
-        raw_prompt = active_fsm.get_stage_prompt()
-        raw_suggestions = active_fsm.get_stage_suggestions()
-        nav_context = {
-            "can_skip": active_fsm.can_skip(),
-            "can_go_back": (active_fsm.can_go_back() and len(state.history) > 1),
-        }
+        stage_meta = self._fsm_for_state(state).stages.get(state.current_stage, {})
 
         advance_result = WizardAdvanceResult(
             state=state,
             stage_name=state.current_stage,
-            stage_prompt=self._renderer.render(
-                raw_prompt,
-                stage_meta,
-                state,
-                extra_context=nav_context,
-                fallback=raw_prompt,
-            ),
+            stage_prompt=metadata["stage_prompt"],
             stage_schema=StageSchema.from_stage(stage_meta).raw or None,
-            suggestions=self._renderer.render_list(
-                raw_suggestions,
-                stage_meta,
-                state,
-            ),
-            can_skip=active_fsm.can_skip(),
-            can_go_back=active_fsm.can_go_back() and len(state.history) > 1,
+            suggestions=metadata["suggestions"],
+            can_skip=metadata["can_skip"],
+            can_go_back=metadata["can_go_back"],
             completed=state.completed,
             transitioned=transitioned,
             from_stage=from_stage if transitioned else None,
@@ -3613,7 +3606,7 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
     def _state_for_snapshot(fsm_state: Mapping[str, Any]) -> WizardState:
         """Rebuild just enough ``WizardState`` to describe a stored snapshot.
 
-        Only the fields :meth:`_stage_derived_metadata` reads are restored.
+        Only the fields :meth:`_build_wizard_metadata` reads are restored.
         ``transitions`` and ``tasks`` are deliberately left empty: they cost
         a nested parse and nothing derived from the stage consults them.
 
@@ -3665,45 +3658,57 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
                 return subflow
         return self._fsm
 
-    def _stage_derived_metadata(self, state: WizardState) -> dict[str, Any]:
-        """The wizard metadata that is a function of ``state`` and nothing else.
+    def _build_wizard_metadata(self, state: WizardState) -> dict[str, Any]:
+        """The canonical wizard metadata: a function of ``state`` and nothing else.
 
-        Shared by :meth:`_build_wizard_metadata` and
-        :meth:`restore_from_checkpoint` so the two cannot disagree.  They
-        did: restore wrote the stored keys and left every derived one
-        describing the stage just undone, because "which fields follow the
-        stage" was knowledge each writer held separately.  It is held once,
-        here, and a field added below reaches both writers.
+        The single writer.  Persistence (``_save_wizard_state``), response
+        decoration (``_add_wizard_metadata``), the non-conversational
+        :meth:`advance` result and :meth:`restore_from_checkpoint` all build
+        from here, so none of them can disagree with another about what a
+        stage implies.
 
-        Every lookup passes its stage explicitly.  The FSM's live position
-        is *not* consulted -- it contributes only a stage name, which the
-        state already carries, and outside a turn it is the wrong one.
+        There used to be two, split on "the stage-derived fields" versus
+        "the rendered material, which a restore has no need of".  Restore
+        called only the first, so anything on the far side of that line went
+        on describing the stage just undone.  The line moved twice under
+        review -- ``subflow_stage``, then ``suggestions``, both rendered *and*
+        stage-derived *and* read back by ``normalize_wizard_state`` -- until
+        nothing was left on the near side but ``stage_mode``.  A boundary
+        that has to be redrawn every time someone checks it is not a
+        boundary, so it is gone.
+
+        Two properties hold this together, and the guards in
+        ``test_checkpoint_methods.py`` pin both:
+
+        * **Every key is written on every call**, ``subflow_stage`` as
+          ``None`` outside a subflow.  Restore ``update()``s onto the
+          previous turn's dict, and ``update()`` cannot clear a key this
+          method declines to emit.  A conditional key also makes absence
+          ambiguous between "not in a subflow" and "nobody wrote this",
+          which is a distinction the reader cannot make and so gets wrong.
+        * **Every lookup passes its stage explicitly.**  The FSM's live
+          position is never consulted: it is maintained by a *turn*, so it
+          names the right stage only while one is running, and a restore is
+          exactly the case that runs outside one.
+
+        A field that must *not* follow the stage does not belong here — but
+        there is no such field today, and adding one means answering what a
+        restore should do with it, rather than inheriting an answer.
 
         When inside a subflow, ``stage_index``, ``total_stages``, and
         ``progress`` report **main-flow** progress so the UI can render an
         accurate overall indicator; the subflow's own stage is reported
         separately as ``subflow_stage``.
 
-        Every key below is written on every call, ``subflow_stage`` as
-        ``None`` when there is no subflow.  That totality is what makes
-        the restore path's ``update()`` sound: a key this method omits is
-        a key ``update()`` cannot clear, so it would keep whatever the
-        undone turn left there.  ``subflow_stage`` was conditional and
-        built by the caller, and so was stale in both directions across an
-        undo that crossed a subflow boundary — naming a subflow already
-        left, or absent while inside one, which reads as the main flow.
-        A conditional key also makes absence ambiguous between "not in a
-        subflow" and "nobody wrote this", which is the distinction the
-        reader cannot make and so gets wrong.
-
         Args:
             state: Wizard state to describe.
 
         Returns:
-            The stage-derived subset of the canonical wizard metadata.
+            The canonical wizard metadata dict.
         """
         active_fsm = self._fsm_for_state(state)
         stage = state.current_stage
+        stage_meta = active_fsm.stages.get(stage, {})
 
         # Always report main-flow progress for the roadmap / breadcrumb.
         # During a subflow the "effective" main-flow stage is the parent
@@ -3713,12 +3718,15 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
         )
         position = stage_position(self._fsm.stage_names, effective_main_stage)
 
-        stage_meta = active_fsm.stages.get(stage, {})
         subflow_stage = (
             {"name": stage, "label": stage_meta.get("label", stage)}
             if state.subflow_stack
             else None
         )
+
+        can_skip = active_fsm.can_skip(stage)
+        can_go_back = active_fsm.can_go_back(stage) and len(state.history) > 1
+        raw_prompt = active_fsm.get_stage_prompt(stage)
 
         return {
             "current_stage": stage,
@@ -3729,62 +3737,22 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
             "completed": state.completed,
             "data": sanitize_for_json({**state.data, **state.transient}),
             "history": state.history,
-            "can_skip": active_fsm.can_skip(stage),
-            "can_go_back": active_fsm.can_go_back(stage) and len(state.history) > 1,
+            "can_skip": can_skip,
+            "can_go_back": can_go_back,
             "stages": self._response.build_stages_roadmap(state),
             "subflow_stage": subflow_stage,
             "suggestions": self._response.render_suggestions(
                 active_fsm.get_stage_suggestions(stage), state, stage_meta
             ),
+            "stage_prompt": self._renderer.render(
+                raw_prompt,
+                stage_meta,
+                state,
+                extra_context={"can_skip": can_skip, "can_go_back": can_go_back},
+                fallback=raw_prompt,
+            ),
+            "stage_mode": stage_meta.get("mode") or "structured",
         }
-
-    def _build_wizard_metadata(self, state: WizardState) -> dict[str, Any]:
-        """Build canonical wizard metadata from current state.
-
-        Single source of truth for wizard metadata.  Used by both
-        ``_save_wizard_state`` (persistence) and ``_add_wizard_metadata``
-        (response decoration) to ensure consistency.
-
-        The stage-derived fields come from :meth:`_stage_derived_metadata`,
-        which ``restore_from_checkpoint`` also uses.  What is added here is
-        the material no reader takes back out of stored metadata:
-        ``normalize_wizard_state`` exposes neither ``stage_prompt`` nor
-        ``stage_mode``, so each decorates *this* turn's response and is not
-        consulted again.
-
-        "Rendered" is not the test, and using it as one is what left
-        ``suggestions`` here: it is rendered *and* stage-derived *and*
-        normalized out to callers, so a restore that did not refresh it
-        served the previous stage's quick replies.  It derives with the rest
-        now.  If anything below ever becomes readable through the normalized
-        view, it belongs in the shared method too.
-
-        Args:
-            state: Current wizard state
-
-        Returns:
-            Canonical wizard metadata dict.
-        """
-        active_fsm = self._fsm_for_state(state)
-        stage = state.current_stage
-        stage_meta = active_fsm.stages.get(stage, {})
-
-        metadata: dict[str, Any] = self._stage_derived_metadata(state)
-
-        stage_prompt = active_fsm.get_stage_prompt(stage)
-        metadata["stage_prompt"] = self._renderer.render(
-            stage_prompt,
-            stage_meta,
-            state,
-            extra_context={
-                "can_skip": metadata["can_skip"],
-                "can_go_back": metadata["can_go_back"],
-            },
-            fallback=stage_prompt,
-        )
-        metadata["stage_mode"] = stage_meta.get("mode") or "structured"
-
-        return metadata
 
     async def _save_wizard_state(self, manager: Any, state: WizardState) -> None:
         """Save wizard state to conversation manager.
@@ -4664,7 +4632,7 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
 
         Resolves the stage metadata from ``state`` rather than from the FSM's
         live position, so the delegate is correct outside a turn for the same
-        reason :meth:`_stage_derived_metadata` is.
+        reason :meth:`_build_wizard_metadata` is.
         """
         stage_meta = self._fsm_for_state(state).stages.get(state.current_stage, {})
         return self._response.render_suggestions(suggestions, state, stage_meta)

@@ -394,6 +394,47 @@ class TestWizardRestoreFromCheckpoint:
 
         assert restored == built, case
 
+    def test_restore_refreshes_every_key_the_builder_writes(self) -> None:
+        """Totality, without depending on any fixture value.
+
+        The guards above compare two builds and so can only see a forgotten
+        field when that field's value *differs between the two stages*.  Both
+        fields that were forgotten went unseen exactly there: unset in the
+        configs, equal by being empty on both sides.  Populating the fixtures
+        fixes today's blind spot and leaves the shape of it.
+
+        This poisons every key a real build produces and asserts none of the
+        poison survives the restore.  The key set comes from the builder
+        rather than from a list here, so it cannot fall behind, and a value
+        that differs from itself is not something a fixture can accidentally
+        make agree.
+
+        It also reaches ``stage_prompt`` and ``stage_mode``, which
+        ``normalize_wizard_state`` does not expose -- so their staleness was
+        invisible to every other guard, resting on nobody reading them.
+        """
+        poison = "STALE-FROM-THE-UNDONE-TURN"
+        strategy = _build_subflow_wizard()
+        target = _main_flow_state()
+
+        manager = _StubManager()
+        manager.metadata["wizard"] = dict.fromkeys(
+            strategy._build_wizard_metadata(_in_subflow_state()), poison
+        )
+
+        strategy.restore_from_checkpoint(
+            manager,
+            {"wizard_fsm_state": target.to_dict()},
+        )
+
+        raw = manager.metadata["wizard"]
+        assert [key for key, value in raw.items() if value == poison] == []
+
+        # ...and refreshed to the right values, not merely to something.
+        strategy._restore_fsm_state(target)
+        built = strategy._build_wizard_metadata(target)
+        assert {key: raw[key] for key in built} == built
+
     def test_preserves_other_wizard_meta_keys(self) -> None:
         """Restore writes its keys without wiping out pre-existing ones."""
         strategy = _build_wizard()

@@ -1224,7 +1224,7 @@ class TestSubflowPushRenderCount:
 class TestSubflowMetadataDerivation:
     """The stage-derived metadata is correct while a subflow is active.
 
-    ``_stage_derived_metadata`` resolves the active FSM from the state's
+    ``_build_wizard_metadata`` resolves the active FSM from the state's
     ``subflow_stack`` rather than from ``_subflows.get_active_fsm()``, which
     reads a strategy attribute a *turn* maintains. That attribute is right
     during a turn and stale outside one — after an undo it still names the
