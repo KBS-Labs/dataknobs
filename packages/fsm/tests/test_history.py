@@ -255,11 +255,13 @@ class TestStorageBackends:
     async def test_file_storage(self):
         """Test file storage operations."""
         import tempfile
-        import os
+        from pathlib import Path
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            # Create a file path within the directory, not the directory itself
-            file_path = os.path.join(tmpdir, "fsm_history.json")
+            # Create a file path within the directory, not the directory itself.
+            # Kept a str: it goes into connection_params, which the storage
+            # config carries as configuration data rather than as a path object.
+            file_path = str(Path(tmpdir) / "fsm_history.json")
             config = StorageConfig(
                 backend=StorageBackend.FILE, connection_params={"path": file_path, "format": "json"}
             )

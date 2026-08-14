@@ -19,6 +19,7 @@ import pytest
 import tempfile
 import os
 import uuid
+from pathlib import Path
 
 from dataknobs_fsm.storage.database import UnifiedDatabaseStorage
 from dataknobs_fsm.storage.memory import InMemoryStorage
@@ -470,7 +471,7 @@ class TestDatabaseStorageFactory:
             # to internal framework code.  ``__file__`` may be a
             # bytecode path on some loaders; compare basenames.
             assert len(records) == 1
-            assert os.path.basename(records[0].filename) == os.path.basename(__file__), (
+            assert Path(records[0].filename).name == Path(__file__).name, (
                 f"Warning origin {records[0].filename!r} should be the "
                 f"test file ({__file__!r}); a wrong stacklevel "
                 "attributes the warning to internal dataknobs_fsm code "

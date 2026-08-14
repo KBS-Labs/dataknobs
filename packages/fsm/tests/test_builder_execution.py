@@ -205,8 +205,8 @@ class TestFSMExecute:
     @pytest.mark.asyncio
     async def test_execute_context_creation_error(self, fsm_instance):
         """Test handling when context creation fails."""
-        with patch("dataknobs_fsm.execution.context.ExecutionContext") as MockContext:
-            MockContext.side_effect = RuntimeError("Context error")
+        with patch("dataknobs_fsm.execution.context.ExecutionContext") as mock_context:
+            mock_context.side_effect = RuntimeError("Context error")
 
             result = await fsm_instance.execute_async({"test": "data"})
 
