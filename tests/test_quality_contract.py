@@ -451,6 +451,7 @@ def test_verify_names_each_malformed_cell() -> None:
         "ceiling": ({"ceiling": "twelve"}, "twelve"),
         "boolean ceiling": ({"ceiling": True}, "True"),
         "reason": ({"reason": "   "}, "reason"),
+        "reason stating a number": ({"reason": "20 autofixable"}, "states a number"),
     }
     for label, (override, expected) in cases.items():
         faults = _faults_for(_with_cell("ruff", **override))
@@ -468,6 +469,24 @@ def test_verify_names_each_malformed_cell() -> None:
     assert any("claims a number nothing takes" in fault for fault in _faults_for(unmeasured)), (
         "an unmeasured tier with a positive ceiling produced no fault — the "
         "number would read as a backlog nothing is measuring"
+    )
+
+
+def test_verify_reads_a_rule_name_in_a_reason_as_prose_not_a_count() -> None:
+    r"""The boundary the reason check turns on, pinned rather than left to a regex.
+
+    A rule code carries digits and is not a measurement: ``NPY002`` names a
+    *kind* of finding and stays accurate however many there are, while "130 of
+    them" is the ceiling's job and only the ceiling is compared against
+    anything. A check that rejected both would push every reason into vaguer
+    prose in order to pass, which is the opposite of what it is for.
+
+    Tightening the pattern to a bare ``\d`` is the plausible way to lose this,
+    and it would fail here rather than in review.
+    """
+    named_rule = _with_cell("ruff", reason="the legacy NPY002 global RNG, which has no autofix")
+    assert not any("states a number" in fault for fault in _faults_for(named_rule)), (
+        f"a reason naming a rule was rejected as if it stated a count: {_faults_for(named_rule)}"
     )
 
 
