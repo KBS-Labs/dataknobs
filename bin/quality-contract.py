@@ -180,6 +180,30 @@ def _tally(cells: list[dict[str, Any]], names: list[str]) -> Measurement:
     return Measurement(dict(by_cell), unattributed)
 
 
+class Finding(NamedTuple):
+    """One thing a tool reported: the file it is in, and the rule it broke.
+
+    The second half is what the ratchet throws away. A ceiling is denominated in
+    findings per cell, so the measurement above keeps only the path — which
+    leaves the declaration able to say *where* a backlog is, to the file, and
+    nothing whatever about *what it is*. That is answerable from the same run,
+    and it decides whether a backlog decomposes into a few mechanical rules or
+    into hundreds of separate judgements. It is not a question a total can be
+    asked.
+    """
+
+    path: str
+    code: str
+
+
+#: What a finding whose tool named no rule is counted as. mypy omits the
+#: bracketed code on a few errors and ruff reports ``null`` for a syntax error,
+#: and both must land somewhere a reader sees them: a parse that skips a line
+#: shape measures a tidier tree than the one on disk, which is the direction
+#: every guard in this module exists to refuse.
+UNCODED = "<uncoded>"
+
+
 def _restrict(cells: list[dict[str, Any]], only: set[str] | None) -> list[dict[str, Any]]:
     """The subset of cells a scoped call named, or all of them.
 
@@ -215,10 +239,18 @@ def _run(command: list[str]) -> subprocess.CompletedProcess[str]:
 _RUFF_IO_ERROR = frozenset({"E902", "io-error"})
 
 
-def measure_ruff(
+def _ruff_report(
     contract: dict[str, Any], files: list[PurePosixPath], only: set[str] | None = None
-) -> Measurement:
-    """Findings per cell, from one ruff pass over the whole population.
+) -> list[dict[str, Any]]:
+    """One guarded ruff pass, as the entries ruff reported.
+
+    Split out of ``measure_ruff`` so that a second reader of this run — one
+    interested in which rules were broken rather than how many findings there
+    were — reads it through the same guards rather than through an invocation
+    and a parse of its own. Two readings of one tool are two answers waiting to
+    disagree, and every guard below exists because a parse of this output can
+    fail toward a tidier tree than the one on disk, which is exactly the
+    disagreement nobody would notice.
 
     Guarded the way ``measure_format`` is, and against three further faults the
     decode check alone renders as a clean tree. That measurer earned its checks
@@ -250,7 +282,7 @@ def measure_ruff(
     config = contract["tools"]["ruff"]["config"]
     files = _files_in(cells, files, only)
     if not files:
-        return Measurement({}, Counter())
+        return []
     result = _run(
         [
             "uv",
@@ -277,7 +309,7 @@ def measure_ruff(
         )
 
     try:
-        findings = json.loads(result.stdout or "[]")
+        findings: list[dict[str, Any]] = json.loads(result.stdout or "[]")
     except json.JSONDecodeError as exc:
         raise SystemExit(
             f"ruff did not emit JSON, so nothing was measured: {exc}\n{result.stderr[:800]}"
@@ -304,10 +336,124 @@ def measure_ruff(
             "describing this run"
         )
 
-    # `or ""` rather than a default: a path-less diagnostic carries the key with
-    # a null value, which a default never sees. The empty name lands in
-    # `unattributed`, where it is reported, instead of raising inside the tally.
-    return _tally(cells, [_relative(finding.get("filename") or "") for finding in findings])
+    return findings
+
+
+def ruff_findings(reported: list[dict[str, Any]]) -> list[Finding]:
+    """Each entry ruff reported, as a path and the rule it names.
+
+    ``or`` rather than a default on both halves: a path-less diagnostic carries
+    the key with a null value, which a default never sees, and ruff reports a
+    syntax error with a null ``code``. The empty name lands in ``unattributed``
+    and the missing rule lands in ``UNCODED``, both of which are reported —
+    rather than raising inside the tally, or vanishing from it.
+    """
+    return [
+        Finding(_relative(entry.get("filename") or ""), entry.get("code") or UNCODED)
+        for entry in reported
+    ]
+
+
+def measure_ruff(
+    contract: dict[str, Any], files: list[PurePosixPath], only: set[str] | None = None
+) -> Measurement:
+    """Findings per cell, from one guarded ruff pass over the whole population."""
+    cells = contract["tools"]["ruff"]["cells"]
+    findings = ruff_findings(_ruff_report(contract, files, only))
+    return _tally(cells, [finding.path for finding in findings])
+
+
+#: How mypy reports one finding. The trailing group is the rest of the line,
+#: which is where the rule name is — at the end, in brackets, and absent
+#: altogether on a few errors. So *whether* a line is a finding and *which rule*
+#: it names are two separate questions, and only the first may decide whether
+#: the line is counted: a finding with no bracketed code is still a finding, and
+#: dropping it would make a per-rule reading short of the tally.
+_MYPY_FINDING_RE = re.compile(r"([^:]+):\d+:(?:\d+:)?\s*error:(.*)$")
+
+#: The rule name mypy writes at the end of a finding, in brackets.
+_MYPY_CODE_RE = re.compile(r"\[([a-zA-Z0-9_-]+)\]\s*$")
+
+
+def mypy_findings(output: str) -> list[Finding]:
+    """Every finding in a mypy run's output, as a path and the rule it names.
+
+    The single parse of that output, so that a reading of which rules were
+    broken and a tally of how many findings there were cannot come from two
+    readings of the same text that disagree about which lines are findings. mypy
+    also emits ``note:`` continuations, and a parse that treated one as a
+    finding — or that dropped an ``error:`` line for carrying no bracketed rule
+    — would move the two apart silently.
+    """
+    findings: list[Finding] = []
+    for line in output.splitlines():
+        match = _MYPY_FINDING_RE.match(line)
+        if not match:
+            continue
+        code = _MYPY_CODE_RE.search(match.group(2))
+        findings.append(Finding(_relative(match.group(1)), code.group(1) if code else UNCODED))
+    return findings
+
+
+def mypy_targets(
+    cells: list[dict[str, Any]], only: set[str] | None, include_unmeasured: bool
+) -> list[str]:
+    """The directories one mypy pass is pointed at.
+
+    ``include_unmeasured`` is the whole of what stands between the contract's
+    bottom tier and a number. Those cells are not measured as zero — they are
+    not measured, and the ceiling ``verify`` insists they carry is zero
+    precisely so that nothing reads their silence as a count.
+    """
+    skipped = frozenset() if include_unmeasured else _UNMEASURED_TIERS
+    return sorted(
+        {
+            str(path)
+            for cell in _restrict(cells, only)
+            if cell["tier"] not in skipped
+            for path in _expand(cell["path"])
+        }
+    )
+
+
+def _mypy_report(
+    contract: dict[str, Any],
+    only: set[str] | None = None,
+    *,
+    include_unmeasured: bool = False,
+    config: str | None = None,
+    cache_dir: str | None = None,
+) -> tuple[list[Finding], str]:
+    """One mypy pass, as its findings and the output they were read from.
+
+    mypy is given directories rather than a file list: handed individual files
+    it still follows imports, and the same finding then arrives under whichever
+    file reached it first.
+
+    The target set is taken from the contract rather than from
+    ``bin/validate.sh --print-targets``. That used to be a statement about two
+    lists that had to agree; it is now the only list there is, since the script
+    reaches its mypy verdict by calling this. Deriving it the other way round
+    would make the ratchet move whenever that script's default changed.
+
+    ``config`` and ``cache_dir`` default to the contract's, so the ratchet
+    cannot be measured under anything but the declared configuration. They are
+    parameters because asking what the tree measures under a configuration
+    nobody has adopted yet is a question worth being able to put, and putting it
+    by editing the real configuration in place is how an interrupted run leaves
+    the repository holding a different one.
+    """
+    cells = contract["tools"]["mypy"]["cells"]
+    targets = mypy_targets(cells, only, include_unmeasured)
+    if not targets:
+        return [], ""
+
+    chosen = config or contract["tools"]["mypy"]["config"]
+    command = ["uv", "run", "mypy", *targets, "--config-file", chosen]
+    if cache_dir:
+        command += ["--cache-dir", cache_dir]
+    result = _run(command)
+    return mypy_findings(result.stdout), result.stdout
 
 
 def measure_mypy(
@@ -316,16 +462,7 @@ def measure_mypy(
     """Findings per cell, from one mypy pass over the cells it actually covers.
 
     Takes the population and ignores it, so the three measurers share one
-    signature and ``MEASURERS`` can name them rather than wrap them. mypy is
-    given directories rather than a file list: handed individual files it still
-    follows imports, and the same finding then arrives under whichever file
-    reached it first.
-
-    The target set is taken from the contract rather than from
-    ``bin/validate.sh --print-targets``. That used to be a statement about two
-    lists that had to agree; it is now the only list there is, since the script
-    reaches its mypy verdict by calling this. Deriving it the other way round
-    would make the ratchet move whenever that script's default changed.
+    signature and ``MEASURERS`` can name them rather than wrap them.
 
     Scoping to ``only`` measures fewer cells, not fewer files within one: a
     ceiling is a whole-cell property, so a partial count compared against it is
@@ -334,25 +471,8 @@ def measure_mypy(
     from a run over all fourteen.
     """
     cells = contract["tools"]["mypy"]["cells"]
-    config = contract["tools"]["mypy"]["config"]
-    targets = sorted(
-        {
-            str(path)
-            for cell in _restrict(cells, only)
-            if cell["tier"] not in _UNMEASURED_TIERS
-            for path in _expand(cell["path"])
-        }
-    )
-    if not targets:
-        return Measurement({}, Counter())
-
-    result = _run(["uv", "run", "mypy", *targets, "--config-file", config])
-    reported = [
-        _relative(match.group(1))
-        for line in result.stdout.splitlines()
-        if (match := re.match(r"([^:]+):\d+:(?:\d+:)?\s*error:", line))
-    ]
-    return _tally(cells, reported)._replace(output=result.stdout)
+    findings, output = _mypy_report(contract, only)
+    return _tally(cells, [finding.path for finding in findings])._replace(output=output)
 
 
 def measure_format(
