@@ -480,14 +480,13 @@ dummy-variable-rgx = "^(_+|(_+[a-zA-Z0-9_]*[a-zA-Z0-9]+?))$"
 "packages/bots/tests/test_knowledge_service.py" = ["ASYNC240"]  # two write_text calls creating the documents to be ingested
 "packages/xization/tests/ingestion/test_document_source.py" = ["ASYNC240"]  # one is_file() inside the comprehension that builds the expected set to compare against
 "tests/test_package_interop.py" = ["F401"]  # an import smoke test: the import IS the assertion, so "unused" is the subject rather than a defect
-# SIM115 — the thirteen files that own a handle past the expression that opens
+# SIM115 — the twelve files that own a handle past the expression that opens
 # it, which is the one shape the rule cannot distinguish from a leak. Scoped here
 # rather than declined repo-wide (see the note beside SIM117 above). Each was
-# read before being listed; a fourteenth needs its own line and its own reason.
+# read before being listed; a thirteenth needs its own line and its own reason.
 "packages/data/src/dataknobs_data/backends/file.py" = ["SIM115"]  # the case the global waiver was written for: a lock handle held open across the critical section it protects (msvcrt.locking on its fileno), plus a NamedTemporaryFile used for its path
 "packages/data/tests/test_cross_backend_integration.py" = ["SIM115"]  # NamedTemporaryFile kept on the fixture for the test's lifetime
 "packages/data/examples/vector_multi_backend.py" = ["SIM115"]  # NamedTemporaryFile(delete=False) opened for its name; closed on the next line
-"packages/fsm/docs/active/enhanced_process_stream.py" = ["SIM115"]  # lazily-opened CSV accumulator held across calls via nonlocal (the file_utils.py shape, in a doc example)
 "packages/fsm/src/dataknobs_fsm/resources/filesystem.py" = ["SIM115"]  # NamedTemporaryFile handed to a caller as a managed resource; the pool closes it
 "packages/fsm/src/dataknobs_fsm/streaming/file_stream.py" = ["SIM115"]  # handle stored on self._file_handle for the stream's lifetime, closed by close()
 "packages/fsm/src/dataknobs_fsm/utils/file_utils.py" = ["SIM115"]  # lazily-opened CSV accumulator held across write_csv() calls via nonlocal

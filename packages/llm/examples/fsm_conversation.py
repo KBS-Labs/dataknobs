@@ -823,7 +823,12 @@ async def main():
 
     while True:
         try:
-            user_input = input("\nYou: ").strip()
+            # `input()` blocks until the user presses return, which may be
+            # never. Run on the event loop it would freeze every other task
+            # for that whole time, so it is offloaded to a worker thread.
+            # This shape gets copied into bots and servers verbatim, where a
+            # stalled loop stops answering everyone.
+            user_input = (await asyncio.to_thread(input, "\nYou: ")).strip()
 
             if user_input.lower() == "quit":
                 print("Goodbye!")
