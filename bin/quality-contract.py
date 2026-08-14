@@ -899,6 +899,216 @@ def parse_per_file_waivers(text: str) -> list[PerFileWaiver]:
     return waivers
 
 
+#: What ``explain`` can say about one code at one path. The first is the only
+#: one that means a finding would be shown; the other three are three different
+#: reasons it would not, and collapsing any pair of them loses the answer the
+#: question was asked for.
+EXPLAIN_REPORTED = "reported"
+EXPLAIN_DECLINED = "declined globally"
+EXPLAIN_WAIVED = "waived for this file"
+EXPLAIN_UNSELECTED = "not selected"
+
+#: ``ruff check --show-settings`` prints the fully resolved rule set, one
+#: ``name (CODE),`` per line. Read rather than derived, for a reason measured
+#: here: ``select`` lists the legacy selector ``TCH`` while the rules it enables
+#: are spelled ``TC001``-``TC003``, so a prefix match over the declared families
+#: reports three enforced rules as unselected. Every re-implementation of a
+#: resolution the tool already performs has a case like that in it.
+_ENABLED_BLOCK_RE = re.compile(r"^linter\.rules\.enabled = \[(.*?)^\]", re.DOTALL | re.MULTILINE)
+_RULE_CODE_RE = re.compile(r"\(([A-Z]+\d+)\)")
+
+
+class Explanation(NamedTuple):
+    """Whether a code is reported at a path, and if not, why not."""
+
+    code: str
+    path: str | None
+    verdict: str
+    category: str | None = None
+    reason: str = ""
+    argument: tuple[str, ...] = ()
+    pattern: str | None = None
+
+    @property
+    def reported(self) -> bool:
+        return self.verdict == EXPLAIN_REPORTED
+
+
+def enabled_rules(config: Path = _ROOT / "pyproject.toml") -> frozenset[str]:
+    """Every rule code the configuration actually enables, asked of ruff.
+
+    The authority for *whether* a code is enforced is the tool; this module's
+    business is *why* it is not, which the tool cannot say because the reasons
+    are comments. Splitting the question that way is what keeps ``explain`` from
+    becoming a second implementation of ruff's selector resolution — a thing that
+    can disagree with ruff while looking authoritative, which is worse than not
+    answering.
+    """
+    result = _run(
+        [
+            "uv",
+            "run",
+            "ruff",
+            "check",
+            "--config",
+            str(config),
+            "--show-settings",
+            str(_ROOT / "pyproject.toml"),
+        ]
+    )
+    block = _ENABLED_BLOCK_RE.search(result.stdout)
+    if block is None:
+        raise SystemExit(
+            "ruff --show-settings reported no rule set; explain cannot answer "
+            f"without it:\n{result.stdout}\n{result.stderr}"
+        )
+    return frozenset(_RULE_CODE_RE.findall(block.group(1)))
+
+
+def waiver_covers(waiver: PerFileWaiver, code: str, path: str) -> bool:
+    """Whether a per-file waiver reaches this code at this path.
+
+    Two approximations of ruff, both deliberate and both narrower than the
+    verdict they feed. A waiver may name a family (``["D", "N", "UP"]`` for the
+    legacy package) rather than a code, so codes are matched by prefix. And a
+    pattern with no separator matches a basename, which is how ``__init__.py``
+    reaches every package — with a separator it matches the repo-relative path.
+
+    This decides only the *waived* branch, never *reported*: a path this gets
+    wrong is reported as enforced, which is the direction that sends someone to
+    look rather than the direction that tells them not to.
+    """
+    if not any(code.startswith(named) for named in waiver.codes):
+        return False
+    if "/" in waiver.pattern:
+        return fnmatch.fnmatchcase(path, waiver.pattern)
+    return fnmatch.fnmatchcase(PurePosixPath(path).name, waiver.pattern)
+
+
+def explain_code(
+    code: str,
+    path: str | None = None,
+    config: Path = _ROOT / "pyproject.toml",
+    enabled: frozenset[str] | None = None,
+) -> Explanation:
+    """Is this code reported at this path, and if not, why not.
+
+    The lookup that replaces the argument. A finding a worker "fixed" because it
+    looked wrong, or reported because a narrowed run surfaced it, is a finding
+    nobody asked the configuration about — and until now the configuration could
+    only be asked by reading 500 lines of TOML and knowing which of four
+    mechanisms applied.
+
+    Read-only and always exit 0. It is a lookup, not a check, so it must not
+    become something a script can fail on: that role belongs to ``check``.
+    """
+    text = config.read_text(encoding="utf-8")
+    if enabled is None:
+        enabled = enabled_rules(config)
+
+    if code not in enabled:
+        declined = {d.code: d for d in parse_declines(text)}
+        entry = declined.get(code)
+        if entry is None:
+            return Explanation(code, path, EXPLAIN_UNSELECTED)
+        return Explanation(
+            code,
+            path,
+            EXPLAIN_DECLINED,
+            category=entry.category,
+            reason=entry.reason,
+            argument=entry.argument,
+        )
+
+    if path is not None:
+        relative = _relative(path)
+        for waiver in parse_per_file_waivers(text):
+            if waiver_covers(waiver, code, relative):
+                return Explanation(
+                    code, relative, EXPLAIN_WAIVED, reason=waiver.reason, pattern=waiver.pattern
+                )
+        return Explanation(code, relative, EXPLAIN_REPORTED)
+
+    return Explanation(code, path, EXPLAIN_REPORTED)
+
+
+def explain_report(explanation: Explanation, out: Any) -> None:
+    """One verdict, written the way a reader asked the question."""
+    if explanation.reported:
+        out.write(f"{explanation.verdict}\n")
+        return
+    out.write("not reported\n")
+    if explanation.verdict == EXPLAIN_UNSELECTED:
+        out.write(
+            f"  {EXPLAIN_UNSELECTED} — no family in [tool.ruff.lint] select "
+            f"matches {explanation.code}\n"
+        )
+        return
+    if explanation.verdict == EXPLAIN_WAIVED:
+        out.write(f'  {EXPLAIN_WAIVED} — "{explanation.pattern}"\n')
+        out.write(f"    {explanation.reason}\n" if explanation.reason else "")
+        return
+    marker = f"  [{explanation.category}]" if explanation.category else "  [uncategorized]"
+    out.write(f"  {EXPLAIN_DECLINED}{marker}  {explanation.reason}\n")
+    for line in explanation.argument:
+        out.write(f"    {line}\n")
+
+
+def decline_audit(config: Path = _ROOT / "pyproject.toml") -> dict[str, Any]:
+    """Every decline, by category, with the unargued ones totalled.
+
+    The total is the product. Fifteen fixed sites is what this leg looks like
+    from the diff; a population that was uncounted becoming counted, categorized
+    and guarded is what it actually did, and ``provisional`` is the row whose
+    target is zero.
+    """
+    declines = parse_declines(config.read_text(encoding="utf-8"))
+    by_category: dict[str, list[Decline]] = defaultdict(list)
+    for entry in declines:
+        by_category[entry.category or "uncategorized"].append(entry)
+    return {
+        "total": len(declines),
+        "by_category": {name: sorted(rows) for name, rows in sorted(by_category.items())},
+    }
+
+
+def measure_declines(codes: list[str], config: Path = _ROOT / "pyproject.toml") -> dict[str, int]:
+    """How many findings each declined code stands in front of.
+
+    ``--select`` on the command line overrides the config's ``ignore``, which is
+    what makes this a read rather than a config edit. One run for all of them:
+    83 invocations would take long enough that nobody would ask.
+    """
+    if not codes:
+        return {}
+    result = _run(
+        [
+            "uv",
+            "run",
+            "ruff",
+            "check",
+            "packages",
+            "bin",
+            "src",
+            "tests",
+            "conftest.py",
+            "--config",
+            str(config),
+            "--select",
+            ",".join(sorted(codes)),
+            "--no-cache",
+            "--quiet",
+            "--statistics",
+        ]
+    )
+    counts: dict[str, int] = {}
+    for line in result.stdout.splitlines():
+        fields = line.split(maxsplit=2)
+        if len(fields) >= 2 and fields[0].isdigit():
+            counts[fields[1]] = int(fields[0])
+    return {code: counts.get(code, 0) for code in sorted(codes)}
+
+
 def _expand(pattern: str) -> list[PurePosixPath]:
     """The directories or files one cell pattern names on disk."""
     if "*" in pattern:
@@ -1746,6 +1956,23 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     _add_json(counted)
 
+    why = commands.add_parser(
+        "explain", help="is this rule reported in this file, and if not, why not"
+    )
+    why.add_argument("code", nargs="?", help="a ruff rule code, e.g. RUF012")
+    why.add_argument("path", nargs="?", help="the file to ask about; omit to ask repo-wide")
+    why.add_argument(
+        "--audit",
+        action="store_true",
+        help="every declined rule by category, instead of one lookup",
+    )
+    why.add_argument(
+        "--measure",
+        action="store_true",
+        help="with --audit, also count the findings each decline stands in front of",
+    )
+    _add_json(why)
+
     return parser
 
 
@@ -1776,6 +2003,53 @@ def main() -> None:
 
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     contract = load_contract()
+
+    if args.command == "explain":
+        if args.audit:
+            audit = decline_audit()
+            measured = (
+                measure_declines([e.code for rows in audit["by_category"].values() for e in rows])
+                if args.measure
+                else {}
+            )
+            if args.use_json:
+                json.dump(
+                    {
+                        "total": audit["total"],
+                        "by_category": {
+                            name: [
+                                {
+                                    "code": e.code,
+                                    "reason": e.reason,
+                                    **({"findings": measured[e.code]} if measured else {}),
+                                }
+                                for e in rows
+                            ]
+                            for name, rows in audit["by_category"].items()
+                        },
+                    },
+                    sys.stdout,
+                    indent=2,
+                )
+                sys.stdout.write("\n")
+            else:
+                for name, rows in audit["by_category"].items():
+                    exposure = sum(measured[e.code] for e in rows) if measured else None
+                    tail = f", {exposure} findings" if exposure is not None else ""
+                    sys.stdout.write(f"\n{name}: {len(rows)} rules{tail}\n")
+                    for entry in rows:
+                        count = f"{measured[entry.code]:>7}  " if measured else ""
+                        sys.stdout.write(f"  {count}{entry.code:<10} {entry.reason}\n")
+            sys.exit(0)
+        if not args.code:
+            parser.error("explain takes a rule code, or --audit for the whole table")
+        explanation = explain_code(args.code, args.path)
+        if args.use_json:
+            json.dump(explanation._asdict(), sys.stdout, indent=2)
+            sys.stdout.write("\n")
+        else:
+            explain_report(explanation, sys.stdout)
+        sys.exit(0)
 
     if args.command == "scope":
         if not args.tool:

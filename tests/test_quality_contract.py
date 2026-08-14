@@ -30,6 +30,7 @@ from typing import Any
 import pytest
 
 from tests._workspace import ROOT, biggest_ruff_cells, load_bin_module, rel
+from tests._workspace import load_toml as _load_toml
 
 CONTRACT = ROOT / ".dataknobs" / "quality-contract.json"
 TOOL = ROOT / "bin" / "quality-contract.py"
@@ -818,4 +819,109 @@ def test_the_contract_is_an_input_the_artifacts_are_hashed_over() -> None:
         f"{relative} is in no workspace hash scope, so raising a ceiling leaves "
         "every stored hash intact and CI accepts artifacts produced under the "
         "old one. Declare it in bin/changed-packages.py."
+    )
+
+
+#: One case per verdict ``explain`` can return, each pinned to a code whose real
+#: disposition is known and stated. Written against the live configuration on
+#: purpose: a synthetic config would prove the branch works and say nothing about
+#: whether the branch is reachable, and "reachable" is the whole claim — the
+#: command exists so a worker can ask instead of guessing.
+EXPLAIN_CASES = (
+    ("RUF012", None, "declined globally", "declined repo-wide, and unargued"),
+    ("PGH004", None, "not selected", "the PGH family is in no select entry"),
+    ("F841", "packages/llm/examples/fsm_conversation.py", "reported", "F is selected, undeclined"),
+    (
+        "SIM115",
+        "packages/utils/src/dataknobs_utils/xml_utils.py",
+        "waived for this file",
+        "one of the twelve per-file SIM115 waivers",
+    ),
+)
+
+
+@pytest.mark.parametrize(("code", "path", "verdict", "why"), EXPLAIN_CASES, ids=str)
+def test_explain_returns_the_right_verdict(
+    code: str, path: str | None, verdict: str, why: str
+) -> None:
+    explanation = contract_module.explain_code(code, path)
+    assert explanation.verdict == verdict, (
+        f"explain {code} {path or ''} said {explanation.verdict!r}, expected {verdict!r} — {why}"
+    )
+
+
+def test_explain_reads_the_selected_set_from_ruff_rather_than_the_family_list() -> None:
+    """The re-implementation this command deliberately does not contain.
+
+    ``select`` lists the legacy selector ``TCH`` while the rules it enables are
+    spelled ``TC00x``. A prefix match over the declared families — the obvious
+    implementation, and the first one written here — reports those as unselected,
+    inventing a reason the configuration does not hold.
+
+    ``TC004`` is the case that distinguishes the two, and finding it took a
+    second pass: this test first used ``TC002``, which is *declined*, so both
+    implementations answered "declined globally" and the assertion passed
+    without separating anything. The code has to be one the family enables and
+    the ignore list does not decline, or the check is unfalsifiable — which is
+    the shape this whole leg objects to.
+    """
+    lint = _load_toml(ROOT / "pyproject.toml")["tool"]["ruff"]["lint"]
+    probe = "TC004"
+    assert probe not in set(lint["ignore"]), (
+        f"{probe} is now declined, so it can no longer separate asking ruff from "
+        "deriving the answer — both would say 'declined globally'. Find another."
+    )
+    assert not any(probe.startswith(family) for family in lint["select"]), (
+        f"{probe} now matches a declared family by prefix, so the derived "
+        "implementation would get it right too; find another"
+    )
+
+    assert contract_module.explain_code(probe).verdict == "reported", (
+        f"{probe} is enabled by the TCH selector and declined nowhere, so it is "
+        "reported. Answering otherwise means the selected set is being derived "
+        "from the family list rather than read from ruff."
+    )
+
+
+def test_explain_never_fails_the_caller() -> None:
+    """A lookup, not a check. It must not become something a script can fail on.
+
+    ``check`` owns the pass/fail role, and a second command that also exits
+    non-zero on a condition is how a gate ends up with two verdicts that can
+    disagree. Every verdict here exits 0, including the ones that mean "your
+    finding is real".
+    """
+    for code, path, _verdict, _why in EXPLAIN_CASES:
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(ROOT / "bin" / "quality-contract.py"),
+                "explain",
+                code,
+                *([path] if path else []),
+            ],
+            capture_output=True,
+            text=True,
+            cwd=ROOT,
+            check=False,
+        )
+        assert result.returncode == 0, f"explain {code} exited {result.returncode}: {result.stderr}"
+        assert result.stdout.strip(), f"explain {code} printed nothing"
+
+
+def test_the_audit_accounts_for_every_decline() -> None:
+    """The table has to cover the list, or it is a curated subset like its predecessor.
+
+    The prose page this replaces enumerated 35 of 83 declines and invented one.
+    A summary whose rows do not add to the population is the same artifact in a
+    new format.
+    """
+    audit = contract_module.decline_audit()
+    rows = [entry for group in audit["by_category"].values() for entry in group]
+    assert len(rows) == audit["total"]
+    declared = _load_toml(ROOT / "pyproject.toml")["tool"]["ruff"]["lint"]["ignore"]
+    assert {entry.code for entry in rows} == set(declared)
+    assert "uncategorized" not in audit["by_category"], (
+        "the audit grouped a decline under 'uncategorized' — test_lint_policy "
+        "should have failed first; one of the two is not reading the config"
     )
