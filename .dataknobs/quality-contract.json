@@ -70,8 +70,8 @@
         {
           "path": "packages/config/tests",
           "tier": "deferred",
-          "ceiling": 9,
-          "reason": "7 carry an autofix; the 2 left are one B017 and one RUF043, both of which are read rather than swept"
+          "ceiling": 7,
+          "reason": "every one of the 7 carries an autofix; the two that had to be read — a blind pytest.raises(Exception) and an unescaped match= — are gone"
         },
         {
           "path": "packages/structures/tests",
@@ -88,37 +88,37 @@
         {
           "path": "packages/xization/tests",
           "tier": "deferred",
-          "ceiling": 33,
-          "reason": "26 autofixable; 7 by hand, no rule above 3"
+          "ceiling": 32,
+          "reason": "26 autofixable; 6 by hand, led by 3 PTH118 and no other rule above 2"
         },
         {
           "path": "packages/llm/tests",
           "tier": "deferred",
-          "ceiling": 85,
-          "reason": "72 autofixable; 7 of the remaining 13 are RUF043, where the assertion is looser than it reads"
+          "ceiling": 78,
+          "reason": "72 autofixable; the 6 by hand are 3 E402 and one each of N801, N817 and PTH118 — the RUF043 block that used to dominate this half is gone"
         },
         {
           "path": "packages/common/tests",
           "tier": "deferred",
-          "ceiling": 99,
-          "reason": "79 autofixable; the hand half spreads over N817, B017 and RUF043 with none above 5"
+          "ceiling": 90,
+          "reason": "79 autofixable; the 11 by hand lead with 5 N817 and 3 PLW0603, and nothing else is above 1"
         },
         {
           "path": "packages/fsm/tests",
           "tier": "deferred",
-          "ceiling": 313,
-          "reason": "233 autofixable; 68 of the 80 by hand are ASYNC230/ASYNC240 fixture I/O, and 61 of those sit in three files, so this cell waits on the rule amendment that separates a shared production loop from a single test's"
+          "ceiling": 305,
+          "reason": "229 autofixable; 68 of the 76 by hand are ASYNC230/ASYNC240 fixture I/O, and 61 of those sit in three files, so this cell waits on the rule amendment that separates a shared production loop from a single test's"
         },
         {
           "path": "packages/bots/tests",
           "tier": "deferred",
-          "ceiling": 316,
-          "reason": "265 autofixable; the hand half leads with 17 N806 and 9 RUF043"
+          "ceiling": 303,
+          "reason": "265 autofixable; the 38 by hand lead with 17 N806, then 5 ASYNC240 and 4 each of PTH118 and E402. One is an undefined name in a module skipped in its entirety, left standing deliberately: the module under test does not run against the current registry API at all, so renaming the symbol would quiet the linter and change nothing"
         },
         {
           "path": "packages/data/tests",
           "tier": "deferred",
-          "ceiling": 544,
+          "ceiling": 533,
           "reason": "the largest cell and the only one with a single dominating block: 130 NPY002, the legacy np.random global RNG, which is mechanical but has no autofix"
         },
         {
