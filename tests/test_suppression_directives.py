@@ -55,7 +55,6 @@ in the scan like every other.
 
 from __future__ import annotations
 
-import io
 import json
 import re
 import shutil
@@ -65,7 +64,22 @@ from functools import cache
 
 import pytest
 
-from tests._workspace import ROOT, tracked_python_files
+from tests._workspace import ROOT, load_bin_module, tracked_python_files
+
+#: The parser moved to ``bin/quality-contract.py`` when a second caller wanted
+#: it — the per-cell inline-waiver count in ``explain --audit``. It is still
+#: pinned from here, by ``test_the_parser_agrees_with_ruff`` below, because this
+#: is where the real binary gets driven over every spelling it claims to know.
+#: What changed is only that the thing being pinned is now the one thing both
+#: callers use, instead of one of two copies.
+_contract = load_bin_module("quality-contract")
+
+BLANKET = _contract.BLANKET
+UNREADABLE = _contract.UNREADABLE
+RUN_ON = _contract.RUN_ON
+NOQA_RE = _contract.NOQA_RE
+CODE_RE = _contract.CODE_RE
+directives = _contract.directives
 
 #: How this repo resolves ruff; see ``test_ruff_config_single_source`` for why a bare
 #: ``ruff`` would degrade the checks that use it into a silent skip.
@@ -78,111 +92,9 @@ RUFF = ("uv", "run", "ruff")
 MINIMUM_FILES_SCANNED = 800
 MINIMUM_DIRECTIVES_SCANNED = 40
 
-#: ``noqa`` is case-insensitive, and everything after it is captured raw rather
-#: than pre-split into colon-and-payload. What follows the keyword decides which
-#: of four states the directive is in, and two of those differ by one character:
-#: the keyword then a space is blanket, the keyword run straight into a letter is
-#: not a directive ruff will read at all. A regex that made the colon optional
-#: and skipped to the payload could not tell them apart, and called the second
-#: one blanket. Verified against the binary rather than assumed.
-#:
-#: Spelled without a leading hash above, deliberately. This module is in its own
-#: scan, and a comment here that spelled a directive would be reported by it --
-#: which is the constraint the module docstring describes, met rather than
-#: exempted. The examples live in docstrings and test inputs, which are strings.
-NOQA_RE = re.compile(r"#\s*noqa(?P<trailer>[^#\n]*)", re.IGNORECASE)
-
-#: A rule code as ruff spells one. Deliberately not anchored to the families
-#: this repo selects: a directive naming a real rule from an unselected family
-#: is a waiver that is merely inactive, which is a policy question rather than
-#: a defect.
-CODE_RE = re.compile(r"^[A-Z]+[0-9]+$")
-
-#: The three unhealthy outcomes, named rather than spelled at each use site: the
-#: parity test has to know which of them ruff warns about, and a literal in both
-#: places is how that pair drifts.
-BLANKET = "blanket"
-UNREADABLE = "unreadable"
-RUN_ON = "run_on"
-
 #: The two ruff refuses to read. Both warn on stderr, both suppress nothing, and
 #: the parity test compares exactly this set against the binary's warnings.
 RUFF_REJECTS = frozenset({UNREADABLE, RUN_ON})
-
-
-def _leading_codes(payload: str) -> list[str]:
-    """The codes ruff reads before it stops, which is how ruff itself parses.
-
-    Measured against ruff 0.16.1: it takes comma- or space-separated codes from
-    the front of the payload and stops at the first token that is not one, with
-    no complaint about whatever follows. That is why ``# noqa: F401 - keeps the
-    re-export`` is valid and ``# noqa: not calling`` is not -- the difference is
-    whether *anything* was read, not whether prose is present.
-    """
-    codes = []
-    for token in re.split(r"[,\s]+", payload.strip()):
-        if not CODE_RE.match(token):
-            break
-        codes.append(token)
-    return codes
-
-
-def _classify(trailer: str) -> tuple[str, list[str]]:
-    """Which of ruff's four outcomes the text after ``noqa`` produces.
-
-    ruff reads the keyword and then requires end-of-comment, whitespace, or
-    ``:``. Every other character -- letter, digit, underscore, hyphen, dot,
-    paren -- makes the whole thing an invalid directive, with a warning worded
-    differently from the unreadable-payload one. Measured across all six against
-    ruff 0.16.1; the split is not inferred from the message text.
-    """
-    if trailer.startswith(":"):
-        codes = _leading_codes(trailer[1:])
-        return ("codes" if codes else UNREADABLE), codes
-    if trailer == "" or trailer[0].isspace():
-        return BLANKET, []
-    return RUN_ON, []
-
-
-def directives(source: str) -> list[tuple[int, str, list[str]]]:
-    """Every directive in ``source`` as ``(lineno, kind, codes)``.
-
-    ``kind`` is one of four, because ruff distinguishes four and collapsing any
-    pair of them loses a defect:
-
-    * ``"codes"`` -- a colon and at least one readable code. The only healthy one.
-    * ``BLANKET`` -- the keyword alone, or followed by whitespace. Valid to ruff,
-      rejected here, because it waives rules nobody has written yet.
-    * ``UNREADABLE`` -- a colon whose payload is not codes (``# noqa: not calling``).
-    * ``RUN_ON`` -- the keyword running into other text (``# noqafoo``).
-
-    ``UNREADABLE`` and ``RUN_ON`` are one outcome to ruff -- both warn, both
-    suppress nothing -- and two here, because the remedy differs: one directive
-    needs its payload rewritten, the other is not a directive at all.
-
-    ``RUN_ON`` is the one this parser did not have. It fell into ``BLANKET``,
-    since the only question asked was whether a colon was present, and so
-    ``# noqafoo`` was reported as suppressing every rule on the line when it
-    suppresses none. It surfaced when the parity test below was given inputs of
-    that shape and disagreed with the binary.
-
-    Tokenized rather than scanned line by line, because a line scan reports a
-    directive spelling inside a *string* and ruff does not. That divergence is
-    not theoretical: this module's own test inputs are such strings, and the
-    first draft of this function failed the file it lives in. A guard that
-    disagrees with the tool on its own source is a guard whose first bug report
-    is answered with an exemption.
-    """
-    found = []
-    for token in tokenize.generate_tokens(io.StringIO(source).readline):
-        if token.type != tokenize.COMMENT:
-            continue
-        match = NOQA_RE.search(token.string)
-        if match is None:
-            continue
-        kind, codes = _classify(match.group("trailer"))
-        found.append((token.start[0], kind, codes))
-    return found
 
 
 @cache

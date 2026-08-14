@@ -38,11 +38,13 @@ from __future__ import annotations
 
 import argparse
 import fnmatch
+import io
 import json
 import logging
 import re
 import subprocess
 import sys
+import tokenize
 import tomllib
 from collections import Counter, defaultdict
 from collections.abc import Callable, Iterable, Iterator
@@ -897,6 +899,193 @@ def parse_per_file_waivers(text: str) -> list[PerFileWaiver]:
         codes = tuple(code for code in _QUOTED_RE.findall(match.group(2)))
         waivers.append(PerFileWaiver(match.group(1), codes, (match.group(3) or "").strip()))
     return waivers
+
+
+#: The inline suppression channel, which no artifact reported until this leg.
+#:
+#: Its *spelling* is guarded — a payload ruff cannot read, a keyword run into
+#: other text, a code ruff does not have, a blanket waiver — and its *deadness*
+#: is guarded by RUF100 in the cells that enforce it. Its size was reported
+#: nowhere, and a code is not a reason, so a channel of several hundred waivers
+#: sat outside every count the contract takes.
+#:
+#: The parser below is a re-implementation of ruff's, which is a liability
+#: rather than a convenience, so it is pinned: test_suppression_directives
+#: drives the real binary over every spelling this claims to know and compares
+#: verdicts. It lives here rather than in that test because two callers now
+#: want it — the guard, and the per-cell count in ``inline_waivers`` — and a
+#: second copy is how the two come to disagree about what a directive is while
+#: both report a number.
+
+#: ``noqa`` is case-insensitive, and everything after it is captured raw rather
+#: than pre-split into colon-and-payload. What follows the keyword decides which
+#: of four states the directive is in, and two of those differ by one character:
+#: the keyword then a space is blanket, the keyword run straight into a letter is
+#: not a directive ruff will read at all. A regex that made the colon optional
+#: and skipped to the payload could not tell them apart, and called the second
+#: one blanket. Verified against the binary rather than assumed.
+#:
+#: Spelled without a leading hash above, deliberately. This module is in its own
+#: scan, and a comment here that spelled a directive would be reported by it --
+#: which is the constraint the module docstring describes, met rather than
+#: exempted. The examples live in docstrings and test inputs, which are strings.
+NOQA_RE = re.compile(r"#\s*noqa(?P<trailer>[^#\n]*)", re.IGNORECASE)
+
+#: A rule code as ruff spells one. Deliberately not anchored to the families
+#: this repo selects: a directive naming a real rule from an unselected family
+#: is a waiver that is merely inactive, which is a policy question rather than
+#: a defect.
+CODE_RE = re.compile(r"^[A-Z]+[0-9]+$")
+
+#: The three unhealthy outcomes, named rather than spelled at each use site: the
+#: parity test has to know which of them ruff warns about, and a literal in both
+#: places is how that pair drifts.
+BLANKET = "blanket"
+UNREADABLE = "unreadable"
+RUN_ON = "run_on"
+
+
+def _leading_codes(payload: str) -> list[str]:
+    """The codes ruff reads before it stops, which is how ruff itself parses.
+
+    Measured against ruff 0.16.1: it takes comma- or space-separated codes from
+    the front of the payload and stops at the first token that is not one, with
+    no complaint about whatever follows. That is why ``# noqa: F401 - keeps the
+    re-export`` is valid and ``# noqa: not calling`` is not -- the difference is
+    whether *anything* was read, not whether prose is present.
+    """
+    codes = []
+    for token in re.split(r"[,\s]+", payload.strip()):
+        if not CODE_RE.match(token):
+            break
+        codes.append(token)
+    return codes
+
+
+def _classify(trailer: str) -> tuple[str, list[str]]:
+    """Which of ruff's four outcomes the text after ``noqa`` produces.
+
+    ruff reads the keyword and then requires end-of-comment, whitespace, or
+    ``:``. Every other character -- letter, digit, underscore, hyphen, dot,
+    paren -- makes the whole thing an invalid directive, with a warning worded
+    differently from the unreadable-payload one. Measured across all six against
+    ruff 0.16.1; the split is not inferred from the message text.
+    """
+    if trailer.startswith(":"):
+        codes = _leading_codes(trailer[1:])
+        return ("codes" if codes else UNREADABLE), codes
+    if trailer == "" or trailer[0].isspace():
+        return BLANKET, []
+    return RUN_ON, []
+
+
+def directives(source: str) -> list[tuple[int, str, list[str]]]:
+    """Every directive in ``source`` as ``(lineno, kind, codes)``.
+
+    ``kind`` is one of four, because ruff distinguishes four and collapsing any
+    pair of them loses a defect:
+
+    * ``"codes"`` -- a colon and at least one readable code. The only healthy one.
+    * ``BLANKET`` -- the keyword alone, or followed by whitespace. Valid to ruff,
+      rejected here, because it waives rules nobody has written yet.
+    * ``UNREADABLE`` -- a colon whose payload is not codes (``# noqa: not calling``).
+    * ``RUN_ON`` -- the keyword running into other text (``# noqafoo``).
+
+    ``UNREADABLE`` and ``RUN_ON`` are one outcome to ruff -- both warn, both
+    suppress nothing -- and two here, because the remedy differs: one directive
+    needs its payload rewritten, the other is not a directive at all.
+
+    ``RUN_ON`` is the one this parser did not have. It fell into ``BLANKET``,
+    since the only question asked was whether a colon was present, and so
+    ``# noqafoo`` was reported as suppressing every rule on the line when it
+    suppresses none. It surfaced when the parity test below was given inputs of
+    that shape and disagreed with the binary.
+
+    Tokenized rather than scanned line by line, because a line scan reports a
+    directive spelling inside a *string* and ruff does not. That divergence is
+    not theoretical: this module's own test inputs are such strings, and the
+    first draft of this function failed the file it lives in. A guard that
+    disagrees with the tool on its own source is a guard whose first bug report
+    is answered with an exemption.
+    """
+    found = []
+    for token in tokenize.generate_tokens(io.StringIO(source).readline):
+        if token.type != tokenize.COMMENT:
+            continue
+        match = NOQA_RE.search(token.string)
+        if match is None:
+            continue
+        kind, codes = _classify(match.group("trailer"))
+        found.append((token.start[0], kind, codes))
+    return found
+
+
+#: The type checker's half of the same channel, and the larger half: the
+#: ``type: ignore`` directive, with an optional bracketed code list.
+#:
+#: Spelled without its leading hash above, deliberately, and the reason is not
+#: fastidiousness — it was measured. Written the natural way, this comment was
+#: itself counted as a directive, because a comment token spelling one is one.
+#: The count reported 459 and one of them was this line. The sibling guard
+#: keeps its examples inside docstrings for the same reason and says so; the
+#: rule generalises to anything that scans the tree it lives in.
+_TYPE_IGNORE_RE = re.compile(r"#\s*type:\s*ignore(?P<codes>\[[^\]]*\])?")
+
+
+class InlineCount(NamedTuple):
+    """How many inline waivers one cell holds, by tool."""
+
+    cell: str
+    tier: str
+    suppressions: int
+    bare: int
+
+
+def type_ignores(source: str) -> list[tuple[int, bool]]:
+    """``(lineno, carries_a_code)`` for every ``# type: ignore`` comment."""
+    found = []
+    for token in tokenize.generate_tokens(io.StringIO(source).readline):
+        if token.type != tokenize.COMMENT:
+            continue
+        match = _TYPE_IGNORE_RE.search(token.string)
+        if match is not None:
+            found.append((token.start[0], match.group("codes") is not None))
+    return found
+
+
+def inline_waivers(contract: dict[str, Any], tool: str) -> list[InlineCount]:
+    """Every inline waiver of ``tool``, attributed to the cell it sits in.
+
+    Counted per cell rather than per repository because that is the unit every
+    other number in the contract uses, and because the answer is lopsided in a
+    way a total would hide: the directives concentrate in cells the tool does
+    not read at all, where nothing could report them as unused either.
+
+    The scan reads comment tokens, so a directive spelled inside a string is not
+    counted — which is not a rounding difference. A grep over the same tree
+    returns half again as many ``# noqa`` as this does, and nearly all of the
+    excess is one guard's own test inputs. The tokenized figure is the one that
+    matches what ruff would act on.
+    """
+    scanner = directives if tool == "ruff" else type_ignores
+    cells = contract["tools"][tool]["cells"]
+    per_cell: dict[str, list[int]] = {cell["path"]: [0, 0] for cell in cells}
+    for name in tracked_python():
+        path = _ROOT / name
+        if not path.is_file():
+            continue
+        cell = _cell_for(cells, str(name))
+        if cell is None:
+            continue
+        for record in scanner(path.read_text(encoding="utf-8")):
+            per_cell[cell][0] += 1
+            if (tool == "ruff" and record[1] != "codes") or (tool != "ruff" and not record[1]):
+                per_cell[cell][1] += 1
+    return [
+        InlineCount(cell["path"], cell["tier"], *per_cell[cell["path"]])
+        for cell in cells
+        if per_cell[cell["path"]][0]
+    ]
 
 
 #: What ``explain`` can say about one code at one path. The first is the only
@@ -2040,6 +2229,15 @@ def main() -> None:
                     for entry in rows:
                         count = f"{measured[entry.code]:>7}  " if measured else ""
                         sys.stdout.write(f"  {count}{entry.code:<10} {entry.reason}\n")
+                for tool, label in (("ruff", "# noqa"), ("mypy", "# type: ignore")):
+                    counts = inline_waivers(contract, tool)
+                    total = sum(row.suppressions for row in counts)
+                    bare = sum(row.bare for row in counts)
+                    sys.stdout.write(
+                        f"\ninline {label}: {total} directives, {bare} without a code\n"
+                    )
+                    for row in sorted(counts, key=lambda r: -r.suppressions):
+                        sys.stdout.write(f"  {row.suppressions:>7}  {row.cell:<28} {row.tier}\n")
             sys.exit(0)
         if not args.code:
             parser.error("explain takes a rule code, or --audit for the whole table")

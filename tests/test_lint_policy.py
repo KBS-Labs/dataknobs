@@ -44,6 +44,7 @@ guard that has never been seen to fail is a guard whose passing means nothing.
 
 from __future__ import annotations
 
+import json
 import re
 import tomllib
 from collections.abc import Callable
@@ -92,6 +93,11 @@ _COUNT_RE = re.compile(r"\b\d+\b")
 #: scan and a fully categorized config otherwise produce the same report.
 MINIMUM_DECLINES = 40
 MINIMUM_WAIVERS = 15
+
+#: Floors under the inline scan, whose real counts when written were 77 and 458.
+#: Same purpose as the two above: a scan that resolved to nothing would satisfy
+#: the totality check below, because zero equals zero.
+MINIMUM_INLINE = {"ruff": 30, "mypy": 200}
 
 
 def _config_text() -> str:
@@ -299,3 +305,76 @@ def test_each_check_reads_something(check: Check) -> None:
     declines = parse_declines(_config_text())
     assert declines, "the decline parse returned nothing"
     assert check(declines) == [], check.__name__
+
+
+def _tracked_sources() -> list[tuple[str, str]]:
+    return [
+        (name, (ROOT / name).read_text(encoding="utf-8"))
+        for name in _contract.tracked_python()
+        if (ROOT / str(name)).is_file()
+    ]
+
+
+def test_every_inline_waiver_lands_in_a_cell() -> None:
+    """The count is per cell, so a directive in no cell is a directive nobody counts.
+
+    The same totality property the contract asserts over files, asked of the
+    channel that sits inside them. A waiver outside every cell would be reported
+    by neither the per-cell table nor a ceiling.
+    """
+    contract = json.loads((ROOT / ".dataknobs" / "quality-contract.json").read_text())
+    for tool, scan in (("ruff", _contract.directives), ("mypy", _contract.type_ignores)):
+        counted = sum(row.suppressions for row in _contract.inline_waivers(contract, tool))
+        found = sum(len(scan(source)) for _name, source in _tracked_sources())
+        assert found >= MINIMUM_INLINE[tool], (
+            f"only {found} {tool} inline waivers found, below the floor — the scan "
+            "has stopped reading what it claims to"
+        )
+        assert counted == found, (
+            f"{found - counted} {tool} inline waiver(s) fall in no cell, so the "
+            "per-cell table under-reports the channel it exists to size"
+        )
+
+
+def test_the_inline_count_reads_comments_rather_than_grepping() -> None:
+    """Why the number is tokenized, stated as a measurement rather than a preference.
+
+    A grep over the same tree returns half again as many `noqa` as this does,
+    and nearly all of the excess is one guard's own test inputs — spellings
+    inside strings, which are not directives to ruff and must not be to us. The
+    figure that matches what the tool would act on is the tokenized one.
+
+    Asserted as an inequality rather than a fixed gap: the excess moves whenever
+    that guard gains a case, and a number pinned here would go stale silently,
+    which is the defect this whole file exists to close.
+    """
+    grepped = sum(
+        len(re.findall(r"#\s*noqa", source, re.IGNORECASE)) for _name, source in _tracked_sources()
+    )
+    tokenized = sum(len(_contract.directives(source)) for _name, source in _tracked_sources())
+    assert tokenized < grepped, (
+        "the tokenized and grepped counts now agree, so this no longer "
+        "demonstrates anything — check the scan still skips string literals"
+    )
+
+
+def test_the_counter_does_not_count_its_own_documentation() -> None:
+    """Regression: a module that scans the tree it lives in can report itself.
+
+    Measured, not hypothetical. The comment introducing the type-directive
+    pattern spelled that directive with its leading hash, so the tokenizer read
+    it as a real one and the reported total was one too high — a module counting
+    its own prose as a use of the thing it documents. Rewritten to keep the
+    spelling out of a comment, the way the sibling guard keeps its examples in
+    docstrings.
+    """
+    source = (ROOT / "bin" / "quality-contract.py").read_text(encoding="utf-8")
+    assert not _contract.type_ignores(source), (
+        "bin/quality-contract.py now contains a type-suppression directive in a "
+        "comment. If it is documentation, keep the spelling out of a comment; if "
+        "it is a real waiver, it needs its own reason and this test needs a note."
+    )
+    assert not _contract.directives(source), (
+        "bin/quality-contract.py now contains a lint-suppression directive in a "
+        "comment — same reasoning as above"
+    )
