@@ -29,10 +29,13 @@ it.
 no longer fires -- so that one is left to it rather than duplicated here.
 
 **Scope is every tracked ``*.py``, deliberately wider than what ruff lints.**
-The directive that prompted this sat in ``packages/*/tests``, which the gate does
+The directive that prompted this sat in ``packages/*/tests``, which the gate did
 not lint at all, so it had two independent reasons to survive: nothing would have
 failed on it, and nothing was reading the file. Scoping this guard to the linted
-set would rebuild the second reason inside the check written to close the first.
+set would rebuild the second reason inside the check written to close the first
+-- and would do so *shrinkingly*, since those cells are being promoted into the
+linted set one package at a time. A guard whose scope is "whatever ruff reaches
+today" says less the more of them land, which is backwards.
 
 The parser below is a re-implementation of ruff's, which is a liability rather
 than a convenience -- so it is pinned. ``test_the_parser_agrees_with_ruff``

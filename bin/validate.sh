@@ -126,6 +126,30 @@ while IFS= read -r _pkg; do
     [[ -n "$_pkg" ]] && ALL_PACKAGES+=("$_pkg")
 done <<< "${_discovered// /$'\n'}"
 
+# A promoted package's tests/ rides with its src, wherever that src was added.
+#
+# Called from both branches below, and the second one is the load-bearing call:
+# the gate narrows by package name — `validate.sh $PACKAGES --workspace` — so a
+# promotion wired only into the no-arguments branch would be unreachable on
+# every pull request that triggers it, while `bin/validate.sh` with no argument
+# reported it clean. That is the same shape as the workspace-set defect
+# recorded below, which is why this is a function called twice rather than a
+# line appended once.
+_append_promoted_tests() {
+    local package="$1" promoted
+    # Unquoted on purpose: the helper emits a plain word list.
+    # shellcheck disable=SC2046
+    for promoted in $(lint_promoted_test_packages); do
+        if [[ "$package" == "$promoted" && -d "packages/$package/tests" ]]; then
+            VALIDATE_TARGETS+=("packages/$package/tests")
+            break
+        fi
+    done
+    # Explicit, because the loop's status is the function's and a final
+    # iteration that did not match would make this return 1 under errexit.
+    return 0
+}
+
 # Determine what to validate
 VALIDATE_TARGETS=()
 VALIDATE_PACKAGES=()
@@ -138,6 +162,7 @@ if [[ ${#TARGETS[@]} -eq 0 ]]; then
             if [[ -d "packages/$package/src" ]]; then
                 VALIDATE_TARGETS+=("packages/$package/src")
             fi
+            _append_promoted_tests "$package"
         done
     fi
 else
@@ -149,6 +174,7 @@ else
             if [[ -d "packages/$target/src" ]]; then
                 VALIDATE_TARGETS+=("packages/$target/src")
             fi
+            _append_promoted_tests "$target"
         elif [[ -d "$target" ]]; then
             # It's a directory
             VALIDATE_TARGETS+=("$target")
@@ -219,8 +245,8 @@ fi
 # The formatter's population, resolved the same way and kept separate.
 #
 # It is not VALIDATE_TARGETS. That set is the *linter's*, and it deliberately
-# omits every cell whose ruff tier is deferred — the ten packages/<pkg>/tests
-# cells among them.
+# omits every packages/<pkg>/tests cell still in the ruff deferred tier — nine
+# of the ten, now that fsm's is promoted and rides in the linter's set too.
 # The quality contract enforces `format` at ceiling 0 on all ten of its cells,
 # so borrowing the linter's list here checked 597 of 1,471 files and printed a
 # clean verdict over the other 874.
@@ -234,14 +260,27 @@ fi
 # everything else — a directory or file the caller named, the workspace set —
 # passes through as given. A path the caller named directly is not widened,
 # because naming one is the statement that it is what should be read.
+#
+# Deduplicated on append, which promotion made necessary: a promoted package
+# contributes `packages/<pkg>/tests` to the linter's set directly AND reaches
+# it again through its src widening, so the formatter would open it twice and
+# any count taken over this list would disagree with the file count behind it.
 FORMAT_TARGETS=()
+_format_add() {
+    local candidate="$1" existing
+    for existing in ${FORMAT_TARGETS[@]+"${FORMAT_TARGETS[@]}"}; do
+        [[ "$existing" == "$candidate" ]] && return 0
+    done
+    FORMAT_TARGETS+=("$candidate")
+    return 0
+}
 for target in "${VALIDATE_TARGETS[@]}"; do
     _widened=false
     for package in ${VALIDATE_PACKAGES[@]+"${VALIDATE_PACKAGES[@]}"}; do
         if [[ "$target" == "packages/$package/src" ]]; then
             for _subdir in $(format_subdirs); do
                 if [[ -d "packages/$package/$_subdir" ]]; then
-                    FORMAT_TARGETS+=("packages/$package/$_subdir")
+                    _format_add "packages/$package/$_subdir"
                 fi
             done
             _widened=true
@@ -253,7 +292,7 @@ for target in "${VALIDATE_TARGETS[@]}"; do
     # widened would leave the `for` returning 1 and errexit would abort a run
     # scoped to a single package.
     if [[ "$_widened" == false ]]; then
-        FORMAT_TARGETS+=("$target")
+        _format_add "$target"
     fi
 done
 

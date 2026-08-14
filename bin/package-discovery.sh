@@ -76,13 +76,40 @@ workspace_targets() {
     echo "${targets[@]:-}"
 }
 
+# Function to list the packages whose tests/ the linter has been promoted onto
+#
+# The second of a promotion's two declarations. The first is the quality
+# contract moving that package's `packages/<pkg>/tests` cell from the deferred
+# tier to `checked` with a ceiling of 0; this one is what makes the ceiling a
+# measurement of something, by putting the directory in front of the linter.
+#
+# Add a name here in the SAME change that moves the cell. Not before — the
+# contract would then defer a directory the linter reads, so a finding arriving
+# there is counted against a backlog that is supposed to be shrinking. Not
+# after — a ceiling of zero over files nothing opens, which is the shape 2c
+# shipped and the shape this whole program exists to make impossible. Both
+# directions fail test_a_checked_cell_is_one_the_linter_actually_reaches, which
+# compares the two declarations against each other rather than trusting either.
+#
+# Deliberately NOT derived from the contract. A target set read out of the file
+# whose ceilings it is supposed to justify makes both coverage guards
+# tautologies — they would compare a thing against itself and pass by
+# construction. Two declarations that can disagree are the point.
+#
+# bin/fix.sh needs no equivalent: it already reaches every packages/*/tests,
+# which is why a promoted cell arrives with its remedy already in place.
+lint_promoted_test_packages() {
+    echo "fsm"
+}
+
 # Function to list the per-package directories the formatter covers
 #
 # The formatter's population is NOT the linter's, and the difference is
-# declared rather than incidental. `bin/validate.sh` lints packages/*/src alone
-# because every other per-package directory sits in the quality contract's
-# deferred tier for ruff. The contract holds `format` to a ceiling of 0 on all
-# ten of its cells, so the formatter reaches every one of these.
+# declared rather than incidental. `bin/validate.sh` lints packages/*/src plus
+# the tests/ of each package in `lint_promoted_test_packages`; every other
+# per-package directory sits in the quality contract's deferred tier for ruff.
+# The contract holds `format` to a ceiling of 0 on all ten of its cells, so the
+# formatter reaches every one of these.
 #
 # Kept here, beside workspace_targets, because three entry points need the same
 # answer: the check in validate.sh, its write side in fix.sh, and `dk format`.
