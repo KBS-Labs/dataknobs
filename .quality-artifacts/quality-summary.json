@@ -1,5 +1,5 @@
 {
-  "timestamp": "2026-08-14T20:29:45Z",
+  "timestamp": "2026-08-14T20:46:31Z",
   "overall_status": "PASS",
   "run_mode": "pr",
   "environment": "host",
@@ -21,7 +21,7 @@
   },
   "workspace_hashes": {
     "toolchain": "a1c22c348a7cab098e4a15be84cde37cbdf679b16cb305aa654b300d99a9d28c",
-    "workspace_tests": "9cab49b82faaeca0cd579ef945b0d5888bcc68ace5a3471440ba9af01f15a1bb",
+    "workspace_tests": "bc77273f693e82aa5c6678378d006eb7d91b2edd6c1d2a0b2433a71f359dbb1c",
     "docs": "e5eee1426a0c01542eed850a3aed959cde3ac0799433bd696f775890751c9eef"
   },
   "total_seconds": 47,
@@ -30,13 +30,13 @@
       "status": "pass",
       "exit_code": 0,
       "tool": "lint-workflows.sh",
-      "duration_seconds": 1
+      "duration_seconds": 0
     },
     "shell_lint": {
       "status": "pass",
       "exit_code": 0,
       "tool": "lint-shell.sh",
-      "duration_seconds": 5
+      "duration_seconds": 4
     },
     "contract": {
       "status": "pass",

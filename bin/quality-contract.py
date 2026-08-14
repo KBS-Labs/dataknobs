@@ -59,6 +59,22 @@ _CONTRACT = _ROOT / ".dataknobs" / "quality-contract.json"
 #: zero — a positive one would claim a measurement that nothing takes.
 _UNMEASURED_TIERS = frozenset({"unchecked"})
 
+#: A bare numeral in a cell's reason, which is a measurement written where
+#: nothing compares it.
+#:
+#: The ``about`` block records that the declaration this replaced "carried counts
+#: in comment text, which stayed green at any number", and the replacement fixed
+#: that for the ceiling only. A count in the prose beside it has exactly the old
+#: property: it is true when written, goes false the moment the cell ratchets,
+#: and no run disagrees. Four reasons had gone false that way before this
+#: existed, two of them describing a cell that had been deleted outright.
+#:
+#: Word boundaries keep rule names — ``NPY002``, ``PTH118`` — sayable, and the
+#: distinction is the point rather than a concession to the regex: a rule names
+#: a *kind* of finding and stays accurate however many there are, while "130 of
+#: them" is the ceiling's job and only the ceiling is checked.
+_MEASUREMENT_IN_PROSE = re.compile(r"\b\d+\b")
+
 
 def load_contract(path: Path = _CONTRACT) -> dict[str, Any]:
     """The declaration, or a clear error naming the file rather than a traceback."""
@@ -1291,6 +1307,12 @@ def verify(contract: dict[str, Any]) -> list[str]:
                 faults.append(f"{where}: ceiling {cell.get('ceiling')!r} is not a whole number")
             if not str(cell.get("reason", "")).strip():
                 faults.append(f"{where}: no reason given, which is what makes deferring honest")
+            elif _MEASUREMENT_IN_PROSE.search(str(cell["reason"])):
+                faults.append(
+                    f"{where}: its reason states a number, and nothing compares that "
+                    "number against anything. Say what kind of work the cell holds "
+                    "and leave the counting to the ceiling, which is checked."
+                )
             if cell.get("tier") in _UNMEASURED_TIERS and cell.get("ceiling"):
                 faults.append(
                     f"{where}: tier {cell['tier']!r} is not measured, so its ceiling "

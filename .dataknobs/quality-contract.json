@@ -18,6 +18,15 @@
     "  only, so an entry matching nothing failed while '241 findings' passed at",
     "  400.",
     "",
+    "  Reasons say what, never how many. A reason names the kind of work a cell",
+    "  holds and why it has the tier it has; the counting belongs to the ceiling",
+    "  beside it, which is the half that gets compared. Reasons went false in",
+    "  exactly the way the old comment text did -- four of them, two naming a",
+    "  cell that had been deleted outright -- because fixing that property for",
+    "  the ceiling had left the prose next to it unchecked. verify now rejects a",
+    "  bare numeral in a reason. Rule names keep their digits: NPY002 names a",
+    "  kind of finding and stays true however many there are.",
+    "",
     "A ceiling only ever falls. Raising one is how a backlog grows while it is",
     "supposedly being worked, so it is a change that has to be argued for in a",
     "pull request rather than absorbed by re-running --update-baseline."
@@ -65,43 +74,43 @@
           "path": "packages/legacy/tests",
           "tier": "deferred",
           "ceiling": 0,
-          "reason": "three tracked files and nothing to fix; the zero is genuine rather than an artifact of the packages/legacy/* waiver, measured with that entry removed and still clean"
+          "reason": "the zero is genuine rather than an artifact of the packages/legacy/* waiver — measured with that entry removed and still clean, which is the check a zero here needs"
         },
         {
           "path": "packages/config/tests",
           "tier": "deferred",
           "ceiling": 7,
-          "reason": "every one of the 7 carries an autofix; the two that had to be read — a blind pytest.raises(Exception) and an unescaped match= — are gone"
+          "reason": "outside the default lint target set; a fixer run clears what is here, and the findings that had to be read — a blind pytest.raises(Exception) and an unescaped match= — are already resolved"
         },
         {
           "path": "packages/structures/tests",
           "tier": "deferred",
           "ceiling": 14,
-          "reason": "7 autofixable; the hand half is 5 PTH118 and 2 N806"
+          "reason": "outside the default lint target set; what a fixer leaves behind is os.path call sites and test-local naming"
         },
         {
           "path": "packages/utils/tests",
           "tier": "deferred",
           "ceiling": 30,
-          "reason": "20 autofixable, but only 4 of them safely — a plain --fix barely moves this cell and --unsafe-fixes clears two thirds of it; the 10 by hand are 9 os.path call sites the Path migration wants converted (5 PTH118, 4 PTH119) and one N806"
+          "reason": "outside the default lint target set, and unusual in that most of its fixes are the unsafe kind — a plain --fix barely moves this cell; the hand remainder is the os.path call sites the Path migration wants converted"
         },
         {
           "path": "packages/xization/tests",
           "tier": "deferred",
           "ceiling": 31,
-          "reason": "26 autofixable; the 5 by hand are 3 PTH118 and 2 E402"
+          "reason": "outside the default lint target set; what a fixer leaves behind is os.path call sites and import placement"
         },
         {
           "path": "packages/llm/tests",
           "tier": "deferred",
           "ceiling": 78,
-          "reason": "72 autofixable; the 6 by hand are 3 E402 and one each of N801, N817 and PTH118 — the RUF043 block that used to dominate this half is gone"
+          "reason": "outside the default lint target set; what a fixer leaves behind is import placement and naming — the unescaped-regex block that used to dominate that half is gone"
         },
         {
           "path": "packages/common/tests",
           "tier": "deferred",
           "ceiling": 88,
-          "reason": "78 autofixable; the 10 by hand lead with 5 N817 and 3 PLW0603, and nothing else is above 1"
+          "reason": "outside the default lint target set; what a fixer leaves behind is import aliasing and module-level global statements"
         },
         {
           "path": "packages/fsm/tests",
@@ -113,31 +122,31 @@
           "path": "packages/bots/tests",
           "tier": "deferred",
           "ceiling": 288,
-          "reason": "262 autofixable (203 safe, 59 unsafe); the 26 by hand lead with 17 N806, then 4 PTH118"
+          "reason": "outside the default lint target set; what a fixer leaves behind is dominated by naming inside test helpers"
         },
         {
           "path": "packages/data/tests",
           "tier": "deferred",
           "ceiling": 501,
-          "reason": "the largest cell and the only one with a single dominating block: 130 NPY002, the legacy np.random global RNG, which is mechanical but has no autofix"
+          "reason": "outside the default lint target set; its bulk is one block — the legacy np.random global RNG — which is mechanical but has no autofix, making it the part a fixer run cannot touch"
         },
         {
           "path": "packages/*/examples",
           "tier": "deferred",
           "ceiling": 195,
-          "reason": "92% under data/ and fsm/, and 99% of it autofixable tidy-up — 176 safe, 18 unsafe, and a single finding left to read; needs a policy call on whether an example may carry an unused import for illustration, since this is the code consumers copy"
+          "reason": "the code consumers copy, which is why clearing it needs a policy call first — may an example carry an unused import for illustration? — the rest being tidy-up a fixer clears"
         },
         {
           "path": "packages/*/scripts",
           "tier": "deferred",
           "ceiling": 6,
-          "reason": "one sitting, alongside benchmarks; all 6 carry a safe fix"
+          "reason": "developer utilities that ship to nobody; deferred because the lint target set does not reach them, not because the work is large"
         },
         {
           "path": "packages/*/benchmarks",
           "tier": "deferred",
           "ceiling": 2,
-          "reason": "one sitting, alongside scripts; of the 2, one carries an unsafe fix and the other is a PYI056 to read"
+          "reason": "developer utilities that ship to nobody; deferred because the lint target set does not reach them, not because the work is large"
         }
       ]
     },
@@ -154,13 +163,13 @@
           "path": "packages/structures/src",
           "tier": "strict",
           "ceiling": 0,
-          "reason": "adopted; its one finding was fixed rather than waived"
+          "reason": "adopted; its findings were fixed rather than waived"
         },
         {
           "path": "packages/legacy/src",
           "tier": "strict",
           "ceiling": 0,
-          "reason": "adopted; four of its five findings were a module that could not be imported, now deleted"
+          "reason": "adopted; most of its findings were a module that could not be imported, now deleted"
         },
         {
           "path": "packages/config/src",
@@ -172,13 +181,13 @@
           "path": "packages/utils/src",
           "tier": "strict",
           "ceiling": 0,
-          "reason": "adopted; two of its findings were live defects, one of them a request that carried no timeout at all"
+          "reason": "adopted; among its findings were live defects, one a request that carried no timeout at all"
         },
         {
           "path": "packages/common/src",
           "tier": "strict",
           "ceiling": 0,
-          "reason": "adopted; two overrides had narrowed away the collaborator channel, and ten directives suppressed nothing"
+          "reason": "adopted; overrides had narrowed away the collaborator channel, and directives suppressed nothing"
         },
         {
           "path": "packages/bots/src",
@@ -208,7 +217,7 @@
           "path": "packages/data/src",
           "tier": "transitional",
           "ceiling": 657,
-          "reason": "ratchet group, and the largest single cell in this file"
+          "reason": "ratchet group"
         },
         {
           "path": "tests",
