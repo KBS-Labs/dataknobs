@@ -29,7 +29,7 @@ from typing import Any
 
 import pytest
 
-from tests._workspace import ROOT, load_bin_module, rel
+from tests._workspace import ROOT, biggest_ruff_cells, load_bin_module, rel
 
 CONTRACT = ROOT / ".dataknobs" / "quality-contract.json"
 TOOL = ROOT / "bin" / "quality-contract.py"
@@ -45,35 +45,6 @@ def _contract() -> dict[str, Any]:
 def _cells(tool: str) -> list[dict[str, Any]]:
     cells: list[dict[str, Any]] = _contract()["tools"][tool]["cells"]
     return cells
-
-
-def _biggest_backlogs(contract: dict[str, Any], count: int) -> list[str]:
-    """The ``count`` ruff cells carrying the largest ceilings, largest first.
-
-    Two tests below need a cell that measures well above zero — one to inflate
-    and one to push under — and both used to name ``packages/*/tests`` outright.
-    That cell no longer exists: the tests backlog was one glob until it was split
-    into a cell per package so each could be promoted on its own, and it collapses
-    back to a glob when the last of them clears. A literal name fails with a
-    ``KeyError`` on the day of either move, which is a guard going red over a
-    change it holds no opinion about — and a ``KeyError`` says nothing about the
-    property the test is for.
-
-    Asking the declaration which cell is biggest survives both moves and still
-    picks a cell whose measurement makes the fault visible.
-    """
-    ranked = sorted(
-        contract["tools"]["ruff"]["cells"], key=lambda cell: cell["ceiling"], reverse=True
-    )
-    assert len(ranked) >= count, f"the ruff declaration holds only {len(ranked)} cells"
-    chosen = [cell["path"] for cell in ranked[:count]]
-    assert ranked[count - 1]["ceiling"] > 5, (
-        f"the {count} largest ruff ceilings are {chosen}, and the smallest of them "
-        "is at or below 5 — too small for the faults below to be distinguishable "
-        "from a clean cell. The backlog has been cleared past what these tests "
-        "assume; drive them over a purpose-built cell instead."
-    )
-    return chosen
 
 
 def _validate_targets() -> set[str]:
@@ -288,7 +259,7 @@ def test_a_baseline_update_lowers_a_ceiling_and_never_raises_one(tmp_path: Path)
     contract = _contract()
     ruff_cells = {cell["path"]: cell for cell in contract["tools"]["ruff"]["cells"]}
 
-    inflated, deflated = _biggest_backlogs(contract, 2)
+    inflated, deflated = biggest_ruff_cells(contract, 2)
     true_ceilings = {
         inflated: ruff_cells[inflated]["ceiling"],
         deflated: ruff_cells[deflated]["ceiling"],
@@ -319,6 +290,49 @@ def test_a_baseline_update_lowers_a_ceiling_and_never_raises_one(tmp_path: Path)
     assert any(deflated in line for line in exceeded), (
         f"{deflated} measures above its ceiling and --update-baseline said "
         f"nothing about it; it reported only {exceeded}"
+    )
+
+
+def test_update_baseline_rewrites_only_the_cells_it_was_named(tmp_path: Path) -> None:
+    """``--cell`` was validated and then dropped, so the narrowest command edited all.
+
+    ``main`` resolved the named cells against the declaration — catching a
+    misspelling, listing the known names — and then called ``update_baseline``
+    without them. ``update-baseline --tool ruff --cell <one>`` therefore rewrote
+    the ceiling of every ruff cell: the widest possible edit to the declaration,
+    reached through the command that asks for the narrowest, and unrecoverable by
+    re-running because a ceiling only falls.
+
+    Both directions are asserted, and the second is the one that was broken. That
+    the named cell is lowered is the feature; that an unnamed one is left exactly
+    as declared is the fix.
+
+    Written against ``tmp_path`` for the reason the ratchet test above is: the
+    subject is what this command does to a ceiling, and it may not do it to the
+    declaration this repository is measured against.
+    """
+    contract = _contract()
+    ruff_cells = {cell["path"]: cell for cell in contract["tools"]["ruff"]["cells"]}
+
+    named, untouched = biggest_ruff_cells(contract, 2)
+    ruff_cells[named]["ceiling"] += 500
+    ruff_cells[untouched]["ceiling"] += 500
+    inflated = ruff_cells[untouched]["ceiling"]
+
+    destination = tmp_path / "quality-contract.json"
+    lowered, _exceeded = contract_module.update_baseline(contract, ["ruff"], destination, {named})
+
+    assert lowered, (
+        f"{named} was inflated by 500 and a scoped update-baseline lowered "
+        "nothing, so the assertions below compare a run that did not happen"
+    )
+    assert all(named in line for line in lowered), (
+        f"a scoped update-baseline reported lowering a cell it was not given: {lowered}"
+    )
+    assert ruff_cells[untouched]["ceiling"] == inflated, (
+        f"{untouched} was not named and its ceiling moved anyway. A scoped "
+        "update-baseline that rewrites every cell is the widest edit to the "
+        "declaration, made by the command that asks for the narrowest."
     )
 
 
@@ -420,7 +434,7 @@ def test_a_breached_ceiling_names_the_files_that_breached_it() -> None:
     """
     contract = _contract()
     cells = {cell["path"]: cell for cell in contract["tools"]["ruff"]["cells"]}
-    (breached,) = _biggest_backlogs(contract, 1)
+    (breached,) = biggest_ruff_cells(contract, 1)
     cells[breached]["ceiling"] = 0
 
     report = contract_module.check(contract, ["ruff"])

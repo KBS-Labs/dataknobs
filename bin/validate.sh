@@ -313,30 +313,27 @@ if [[ "$STATS" == true ]]; then
         uv run ruff check "$target" --statistics --config "$ROOT_DIR/pyproject.toml" 2>/dev/null || true
     done
 
-    # MyPy statistics: a breakdown by error code, which is a different product
-    # from a verdict and so is produced here rather than by the contract.
+    # MyPy statistics: the per-rule breakdown and the per-cell totals are both
+    # products bin/quality-contract.py already produces, from a parse anchored at
+    # `path:line: error:` and guarded against a run that measured nothing at all.
     #
-    # There used to be a "Total MyPy Errors" block below it, counting with
-    # `grep -c "error:"`. That was a third implementation of a number the
-    # contract already produces from `measure_mypy`, and two counters of the
-    # same thing are two answers waiting to disagree — an unanchored substring
-    # match against an anchored `path:line: error:` one. The count belongs to
-    # whoever compares it against a ceiling.
+    # This block used to hand-roll both. The total went first: `grep -c "error:"`
+    # was a third implementation of a number the contract compares against a
+    # ceiling, and two counters of the same thing are two answers waiting to
+    # disagree. The breakdown followed it once `census` existed, for the same
+    # reason and with the same disagreement already available — an unanchored
+    # `grep "error:"` counts mypy's own configuration complaints as findings, and
+    # the `grep '^\['` stage dropped every finding mypy names no rule for, which
+    # the census carries as <uncoded> precisely so that its rules keep totalling
+    # to the number the ceiling is compared against.
+    #
+    # Named rather than run, the way the totals line already was. A census reads
+    # whole cells, which is the unit a ceiling is denominated in and not the
+    # per-target unit this block loops over — running it here would answer a
+    # wider question than the one asked and print it under this heading.
     if [[ "$QUICK" != true ]]; then
-        echo -e "\n${BLUE}MyPy Type Checking Statistics:${NC}"
-        for target in "${VALIDATE_TARGETS[@]}"; do
-            echo -e "${YELLOW}  $target:${NC}"
-            uv run mypy "$target" --config-file "$ROOT_DIR/pyproject.toml" 2>&1 | \
-                grep "error:" | \
-                sed 's/.*error: //' | \
-                sed 's/  \[/\n[/' | \
-                grep '^\[' | \
-                sed 's/\[//' | \
-                sed 's/\]//' | \
-                sort | uniq -c | sort -rn || echo "    No type errors found"
-        done
-
-        echo -e "\n${BLUE}Per-cell totals against their ceilings:${NC}"
+        echo -e "\n${BLUE}MyPy findings by rule, and per-cell totals against their ceilings:${NC}"
+        echo -e "  ${YELLOW}bin/quality-contract.py census --tool mypy${NC}"
         echo -e "  ${YELLOW}bin/quality-contract.py check --tool mypy${NC}"
     fi
 

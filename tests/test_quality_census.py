@@ -28,13 +28,14 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+import tomllib
 from collections import Counter
 from pathlib import Path, PurePosixPath
 from typing import Any
 
 import pytest
 
-from tests._workspace import ROOT, load_bin_module
+from tests._workspace import ROOT, biggest_ruff_cells, load_bin_module
 
 CONTRACT = ROOT / ".dataknobs" / "quality-contract.json"
 TOOL = ROOT / "bin" / "quality-contract.py"
@@ -47,24 +48,18 @@ def _contract() -> dict[str, Any]:
     return loaded
 
 
-def _biggest_ruff_cell(contract: dict[str, Any]) -> str:
-    """The ruff cell carrying the largest ceiling.
+def _unmeasured_mypy_cell() -> str:
+    """One mypy cell the contract puts in a tier no tool reads.
 
-    Asked rather than named, for the reason ``test_quality_contract.py`` asks
-    it: the deferred cells are promoted one at a time, so a literal name fails
-    with a ``KeyError`` on the day of a promotion — a guard going red over a
-    change it holds no opinion about, and saying nothing about the property it
-    is for.
+    Named from the declaration for the reason ``biggest_ruff_cells`` is: the
+    bottom tier is what this whole leg exists to empty, so a literal name here
+    fails on the day one of them is promoted, over a change these guards hold no
+    opinion about.
     """
-    ranked = sorted(contract["tools"]["ruff"]["cells"], key=lambda cell: cell["ceiling"])
-    biggest = ranked[-1]
-    assert biggest["ceiling"] > 5, (
-        f"the largest ruff ceiling is {biggest['path']} at {biggest['ceiling']}, "
-        "which is too small for a census over it to distinguish agreement from "
-        "two empty tallies. The backlog has been cleared past what this assumes."
-    )
-    path: str = biggest["path"]
-    return path
+    cells = _contract()["tools"]["mypy"]["cells"]
+    unmeasured: list[str] = sorted(cell["path"] for cell in cells if cell["tier"] == "unchecked")
+    assert unmeasured, "the contract declares no unmeasured mypy cell, so this asserts nothing"
+    return unmeasured[0]
 
 
 #: One mypy run, in the shapes the parse has to survive. Taken from real output
@@ -204,7 +199,7 @@ def test_the_census_agrees_with_the_linter_over_a_real_cell() -> None:
     refused on one path and counted on the other, say.
     """
     contract = _contract()
-    cell = _biggest_ruff_cell(contract)
+    (cell,) = biggest_ruff_cells(contract)
 
     measurement = contract_module.measure_ruff(contract, contract_module.tracked_python(), {cell})
     run = contract_module.take_census(contract, "ruff", {cell})
@@ -370,28 +365,75 @@ def test_removing_the_relaxations_removes_every_first_party_section_and_no_other
     )
 
 
+def test_a_header_carrying_a_comment_is_still_the_section_it_names(tmp_path: Path) -> None:
+    """The likely spelling, which the header match did not accept.
+
+    ``[[tool.mypy.overrides]]  # why this exists`` is valid TOML and, in a
+    configuration where nearly every decision carries its reason on the line
+    beside it, the natural thing to write. It was not the string being compared
+    against, so the block survived while the parsed document still counted it as
+    doomed — the correlation shifted and every later section came out one place
+    wrong.
+
+    The re-parse below caught that and refused, which is what it is for. But a
+    feature that stops working whenever somebody annotates a header is not a
+    usable feature, and its complaint mentions nothing about comments. So the
+    comment comes off before the comparison, and what is pinned here is that the
+    annotated section is the one found.
+    """
+    config = tmp_path / "commented.toml"
+    config.write_text(
+        "[tool.mypy]\n"
+        'mypy_path = "src"\n'
+        "\n"
+        "[[tool.mypy.overrides]]  # ours, relaxed while the backlog clears\n"
+        'module = "ourpkg.*"\n'
+        "warn_return_any = false\n"
+        "\n"
+        "[[tool.mypy.overrides]]\n"
+        'module = "somelib.*"\n'
+        "ignore_missing_imports = true\n",
+        encoding="utf-8",
+    )
+
+    stripped, removed = contract_module.config_without_relaxations(
+        config.read_text(encoding="utf-8"), {"ourpkg"}
+    )
+
+    assert removed == ["ourpkg.*"], f"the annotated section was not the one removed: {removed}"
+    assert "somelib" in stripped, (
+        "the third-party section went instead of, or as well as, the annotated one"
+    )
+    assert "ourpkg" not in stripped, "the first-party section survived its own removal"
+
+
 def test_the_surgery_refuses_a_result_that_does_not_describe_what_was_asked(
     tmp_path: Path,
 ) -> None:
     """Located by header text, checked by re-parsing — because the first can miss.
 
     The blocks are found in the text and correlated with the parsed document by
-    position. A header carrying a trailing comment is not the string being
-    compared against, so its block survives while the parse still counts it as
-    doomed. That is the whole failure mode of text surgery, and it fails toward
-    a *lower* number: the relaxation stays in force and the census reports fewer
-    findings under a heading claiming it was measured without them.
+    position, and any header spelling the match does not accept breaks that
+    correlation. The common one is a trailing comment, which the test above now
+    pins as accepted. What remains are spellings TOML allows and nobody writes:
+    ``[[ tool.mypy.overrides ]]``, with spaces inside the brackets, is one.
 
-    Driven over a small configuration rather than the real one, because the
-    fault has to be introduced and introducing it in ``pyproject.toml`` is not
-    something a test may do.
+    Deliberately unmatched rather than not yet matched. Every spelling the match
+    accepts is one this check no longer has to catch, and a match loose enough to
+    accept anything has stopped locating sections at all. So what is asserted
+    here is the floor under that decision: whatever the match misses comes back
+    as a refusal rather than as a number.
+
+    It needs a floor because it fails toward a *lower* one. The relaxation stays
+    in force, and the census reports fewer findings under a heading claiming it
+    measured without them.
     """
     config = tmp_path / "sample.toml"
     config.write_text(
         "[tool.mypy]\n"
         'mypy_path = "src"\n'
         "\n"
-        "[[tool.mypy.overrides]]  # a comment the header match does not expect\n"
+        "[[ tool.mypy.overrides ]]\n"
         'module = "ourpkg.*"\n'
         "warn_return_any = false\n",
         encoding="utf-8",
@@ -403,6 +445,134 @@ def test_the_surgery_refuses_a_result_that_does_not_describe_what_was_asked(
     assert "does not describe" in str(refusal.value), (
         f"the surgery left a first-party section in place and reported a "
         f"measurement anyway: {refusal.value}"
+    )
+
+
+def test_an_override_section_naming_both_kinds_is_refused_rather_than_resolved(
+    tmp_path: Path,
+) -> None:
+    """A section covering ours and theirs has no right answer, so it gets none.
+
+    The classification was per *section* and decided by ``any``: one first-party
+    name anywhere in a section removed the whole section. Today's configuration
+    carries one holding fifteen third-party patterns, and adding a single
+    ``dataknobs_*`` name to it would have taken all fifteen with it — the census
+    then reporting the absence of type stubs in somebody else's library as our
+    own backlog, under a heading saying the relaxations had been removed.
+
+    Removing it and keeping it are both wrong, so neither is chosen silently.
+    """
+    config = tmp_path / "mixed.toml"
+    config.write_text(
+        "[tool.mypy]\n"
+        'mypy_path = "src"\n'
+        "\n"
+        "[[tool.mypy.overrides]]\n"
+        'module = ["ourpkg.*", "somelib.*"]\n'
+        "ignore_missing_imports = true\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(SystemExit) as refusal:
+        contract_module.config_without_relaxations(config.read_text(encoding="utf-8"), {"ourpkg"})
+
+    message = str(refusal.value)
+    assert "ourpkg.*" in message and "somelib.*" in message, (
+        f"refused without naming both halves of the section it cannot split: {message}"
+    )
+
+
+def test_an_override_pattern_that_names_no_module_is_refused(tmp_path: Path) -> None:
+    """A leading wildcard is unclassifiable, and defaulting it is the quiet answer.
+
+    ``"*.tests.*"`` is a pattern mypy accepts. Split on the first dot it yields
+    ``"*"``, which is in no first-party set — so it classified as third-party,
+    the section survived, and a relaxation over our own code stayed in force
+    through a run taken to remove exactly those. The direction is the one this
+    module refuses everywhere else: fewer findings, under a heading claiming
+    more were looked for.
+    """
+    config = tmp_path / "wild.toml"
+    config.write_text(
+        "[tool.mypy]\n"
+        'mypy_path = "src"\n'
+        "\n"
+        "[[tool.mypy.overrides]]\n"
+        'module = "ourpkg.*"\n'
+        "warn_return_any = false\n"
+        "\n"
+        "[[tool.mypy.overrides]]\n"
+        'module = "*.tests.*"\n'
+        "warn_return_any = false\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(SystemExit) as refusal:
+        contract_module.config_without_relaxations(config.read_text(encoding="utf-8"), {"ourpkg"})
+
+    assert "*.tests.*" in str(refusal.value), (
+        f"refused without naming the pattern it could not classify: {refusal.value}"
+    )
+
+
+def test_a_module_shipped_as_one_file_counts_as_first_party(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Reading only directories misses it, and the miss runs the quiet direction.
+
+    Every module this workspace ships today is a package, so this is a hole
+    rather than a live fault — and it is the hole the rest of this file exists to
+    refuse. A first-party name read as third-party keeps its override sections
+    through a run whose whole purpose was to remove them, and the census then
+    reports a smaller number under a heading saying they are gone.
+
+    Driven against a relocated root, because the set is read from ``mypy_path``
+    relative to the repository and the shape being tested is not in it.
+    """
+    (tmp_path / "src" / "packaged").mkdir(parents=True)
+    (tmp_path / "src" / "solo.py").write_text("", encoding="utf-8")
+    (tmp_path / "src" / "notes.txt").write_text("", encoding="utf-8")
+    config = tmp_path / "sample.toml"
+    config.write_text('[tool.mypy]\nmypy_path = "src"\n', encoding="utf-8")
+    monkeypatch.setattr(contract_module, "_ROOT", tmp_path)
+
+    assert contract_module.first_party_modules(config) == {"packaged", "solo"}, (
+        "a module shipped as a single file was not read as first-party, or "
+        "something that is not a module was"
+    )
+
+
+def test_the_sections_a_census_removes_turn_real_checks_off() -> None:
+    """Removing them has to change the number, or the flag reports the same run.
+
+    The surgery test pins *which* sections go. This pins that going changes
+    something: a section naming first-party modules and setting nothing would be
+    removed, reported in the header as removed, and leave the census identical to
+    the one the ratchet already takes — the two compared, found equal, and read
+    as evidence that the relaxations cost nothing.
+
+    What it does not prove is the size of the difference. That needs two full
+    type-checker runs over the workspace, which is minutes, and belongs to the
+    command rather than to a guard on it.
+    """
+    parsed = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    sections = parsed["tool"]["mypy"]["overrides"]
+    first_party = contract_module.first_party_modules(ROOT / "pyproject.toml")
+
+    doomed = [
+        section
+        for section in sections
+        if contract_module._relaxes_first_party(section, first_party)
+    ]
+    assert doomed, "no section relaxes first-party checking, so this asserts nothing"
+
+    toothless = [
+        section["module"] for section in doomed if not [key for key in section if key != "module"]
+    ]
+    assert not toothless, (
+        f"the sections naming {toothless} would be removed by a census without "
+        "the relaxations, but they relax nothing — so removing them changes no "
+        "finding while the header reports them as removed"
     )
 
 
@@ -485,6 +655,271 @@ def test_the_census_refuses_a_tool_whose_unit_is_not_a_rule() -> None:
     assert result.returncode != 0, "a census of the formatter was accepted"
     assert "category error" in result.stderr, (
         f"refused without saying why the request does not make sense: {result.stderr}"
+    )
+
+
+def test_the_type_checker_measurer_refuses_a_status_that_is_not_a_verdict(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A mypy that never ran must not measure every type-checked cell at zero.
+
+    mypy exits 2 on a config file it cannot find, on a usage error and on a
+    blocking error, having written nothing to stdout — and an empty stdout parses
+    to an empty finding list. So every mypy cell measured 0, ``check`` found
+    nothing above a ceiling and exited 0, and ``bin/validate.sh`` printed a green
+    type-check verdict over a tree nothing had opened. The way back is worse:
+    ``update-baseline`` sees every cell under its ceiling and writes the zeroes
+    down, and a ceiling only ever falls.
+
+    The linter and the formatter both refused this already, each with its own
+    copy of the check; the type checker had neither. The census then added two
+    fresh routes to a mypy that cannot start — a generated config deleted by a
+    concurrent run, and a target set pointed outside ``mypy_path`` — of which the
+    first would have reported "0 findings without the relaxations", the strongest
+    claim this tool can make.
+
+    Injected, because the fault is a tool that did not run and no input to a
+    working mypy produces it.
+    """
+    completed = subprocess.CompletedProcess(
+        args=["mypy"],
+        returncode=2,
+        stdout="",
+        stderr="mypy: error: Cannot find config file '.mypy-census.toml'",
+    )
+    monkeypatch.setattr(contract_module, "_run", lambda _command: completed)
+
+    with pytest.raises(SystemExit) as refusal:
+        contract_module.measure_mypy(_contract(), [])
+
+    assert "exited 2" in str(refusal.value), (
+        f"the measurer refused, but not for the reason it should have: {refusal.value}"
+    )
+
+
+def test_the_type_checker_measurer_refuses_a_status_its_output_contradicts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Exit 1 with nothing the parse recognises is a short count, not a clean tree.
+
+    The half the status check cannot reach. A blocking error — two modules
+    sharing a basename, which ``packages/*/tests`` holds nine of — is reported as
+    ``path: error: ...`` with no line number, a shape ``_MYPY_FINDING_RE`` does
+    not match and must not: a parse loose enough to catch it catches the summary
+    line too. So the status says "found something" while the tally says the tree
+    is clean, and the gap between them is the whole finding.
+
+    Which makes this the guard that keeps ``--include-unmeasured`` honest. That
+    flag points mypy at cells outside ``mypy_path`` with no package structure,
+    and a blocking error there would otherwise report the bottom tier as empty —
+    the one claim that tier is declared specifically not to support.
+    """
+    blocking = 'packages/a/tests/test_registry.py: error: Duplicate module named "test_registry"\n'
+    completed = subprocess.CompletedProcess(args=["mypy"], returncode=1, stdout=blocking, stderr="")
+    monkeypatch.setattr(contract_module, "_run", lambda _command: completed)
+
+    with pytest.raises(SystemExit) as refusal:
+        contract_module.measure_mypy(_contract(), [])
+
+    assert "disagree" in str(refusal.value), (
+        f"refused without saying the status and the output disagree: {refusal.value}"
+    )
+
+
+def test_a_census_of_a_tool_whose_unit_is_not_a_rule_never_reaches_a_measurer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Refused at the layer that dispatches, not only at the command line.
+
+    The refusal lived in ``main``. So ``take_census(contract, "format")`` — which
+    this module already calls directly, and a second subcommand would — fell
+    through a branch meaning "not ruff" into the *type checker's* measurer, and
+    filed mypy's findings under the formatter's cells. The two cell lists
+    overlap, so what came back was a plausible table of type errors under a
+    ``format census`` heading, exit 0, with nothing in it saying the wrong tool
+    had run.
+
+    ``_run`` is replaced with something that fails if it is called at all: what
+    is asserted is not only that the request is refused, but that nothing was
+    measured before refusing it.
+    """
+
+    def _never(command: list[str]) -> subprocess.CompletedProcess[str]:
+        raise AssertionError(f"a census of the formatter invoked {command[:3]}")
+
+    monkeypatch.setattr(contract_module, "_run", _never)
+
+    with pytest.raises(SystemExit) as refusal:
+        contract_module.take_census(_contract(), "format")
+
+    assert "category error" in str(refusal.value), (
+        f"refused, but not for the reason it should have: {refusal.value}"
+    )
+
+
+def test_a_scope_of_cells_nothing_reads_is_refused_rather_than_left_blank() -> None:
+    """``0 finding(s)`` over an empty table is also what a clean tree prints.
+
+    Naming an unmeasured cell asks for a row this run cannot produce: the target
+    set skips the cell and the report filters it back out. What came back was a
+    header reading ``0 finding(s)``, an empty ``per cell`` and an empty ``per
+    rule`` — indistinguishable from a cell measured and found clean, which is the
+    distinction this feature's own documentation says it exists to preserve. A
+    mixed scope was quieter still: the unmeasured cells simply vanished from a
+    table the caller had named them in.
+
+    The inverse guard was already here — the flag refused when no cell needs it.
+    This is the direction it was missing.
+    """
+    with pytest.raises(SystemExit) as refusal:
+        contract_module.census_report(_contract(), "mypy", {_unmeasured_mypy_cell()})
+
+    assert "--include-unmeasured" in str(refusal.value), (
+        f"refused without naming the flag that answers the request: {refusal.value}"
+    )
+
+
+def test_a_generated_configuration_already_in_the_tree_is_refused(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Two censuses share one path, and the first to finish deletes it.
+
+    ``CENSUS_CONFIG`` is a module constant, so concurrent runs in one checkout
+    write the same file: A writes, B writes, A's mypy finishes, A unlinks, and
+    B's mypy starts against a configuration that is no longer there. Before the
+    status guard above, that was ``0 findings under .mypy-census.toml``.
+
+    Refusing also covers the narrower harm, which needs no concurrency at all: an
+    operator with a file of their own at that path used to lose it silently.
+
+    The second assertion is the point of refusing rather than overwriting. A
+    guard that then deleted the file it declined to overwrite would have done the
+    damage it exists to prevent.
+    """
+    (tmp_path / "src" / "ourpkg").mkdir(parents=True)
+    (tmp_path / "pyproject.toml").write_text(
+        "[tool.mypy]\n"
+        'mypy_path = "src"\n'
+        "\n"
+        "[[tool.mypy.overrides]]\n"
+        'module = "ourpkg.*"\n'
+        "warn_return_any = false\n",
+        encoding="utf-8",
+    )
+    squatter = tmp_path / contract_module.CENSUS_CONFIG
+    squatter.write_text("someone else's file\n", encoding="utf-8")
+    monkeypatch.setattr(contract_module, "_ROOT", tmp_path)
+
+    contract = {"tools": {"mypy": {"config": "pyproject.toml"}}}
+    with pytest.raises(SystemExit) as refusal, contract_module.census_config(contract):
+        raise AssertionError("a census ran against a configuration it did not write")
+
+    assert "already in the tree" in str(refusal.value), (
+        f"refused, but not for the reason it should have: {refusal.value}"
+    )
+    assert squatter.read_text(encoding="utf-8") == "someone else's file\n", (
+        "the refusal deleted or rewrote the file it declined to overwrite"
+    )
+
+
+def test_a_census_that_ran_reports_a_backlog_without_failing() -> None:
+    """Not a verdict — the one command whose whole purpose is to read a backlog.
+
+    Exiting non-zero over a tree with findings would make it look like a failing
+    check, and a caller would learn to ignore its status. At which point the
+    refusals above stop being heard, since the status is the only thing carrying
+    them.
+
+    Driven over a real cell with a real backlog, so the zero is a status reported
+    *despite* findings rather than in the absence of any.
+    """
+    (cell,) = biggest_ruff_cells(_contract())
+    result = subprocess.run(
+        [sys.executable, str(TOOL), "census", "--tool", "ruff", "--cell", cell, "--json"],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, (
+        f"a census over a cell carrying a backlog exited {result.returncode}: {result.stderr}"
+    )
+    assert json.loads(result.stdout)["total"] > 0, (
+        f"{cell} carries the largest ruff ceiling and censused nothing, so the "
+        "exit status above was reported over an empty run"
+    )
+
+
+def test_a_census_does_not_move_the_thing_it_measures() -> None:
+    """Not a ratchet move. Only ``update_baseline`` writes the declaration.
+
+    True by inspection today, and guarded by nothing else — which is the
+    combination worth a test rather than a reading. The census and the baseline
+    share the measuring path, so a helper down there that learned to write would
+    be caught here and nowhere else. A measurement that also moved the ceiling it
+    was taken against leaves nobody able to say what the tree looked like
+    beforehand.
+    """
+    before = CONTRACT.read_bytes()
+    (cell,) = biggest_ruff_cells(_contract())
+
+    subprocess.run(
+        [sys.executable, str(TOOL), "census", "--tool", "ruff", "--cell", cell],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert CONTRACT.read_bytes() == before, (
+        "a census rewrote .dataknobs/quality-contract.json, so the measurement "
+        "moved the ceiling it was being compared against"
+    )
+
+
+@pytest.mark.parametrize(
+    ("command", "argv"),
+    [
+        ("verify", ["--cell", "tests"]),
+        ("verify", ["--show-findings"]),
+        ("partition", ["--without-overrides"]),
+        ("partition", ["--include-unmeasured"]),
+    ],
+)
+def test_an_option_a_command_does_not_read_is_a_usage_error(command: str, argv: list[str]) -> None:
+    """Every option used to be global, and no command was obliged to read one.
+
+    ``check --without-overrides`` ran an ordinary check under the declared
+    configuration and said nothing about the flag it discarded;
+    ``update-baseline --cell <one>`` validated the name and rewrote every ceiling
+    the tool has. Both are runs answering a narrower question than the one asked,
+    under a heading saying otherwise — the defect ``take_census`` refuses per
+    tool, one layer up with nothing refusing it.
+
+    Subparsers make it structural rather than a table somebody keeps in step: a
+    command that does not declare an option rejects it, and a new option cannot
+    be added without choosing which commands honour it.
+
+    The pairs driven here are the ones that stay cheap if the guard regresses.
+    ``check`` and ``update-baseline`` would measure the whole tree — and the
+    second would rewrite the declaration — so they are argued from the same
+    parser rather than executed against it.
+    """
+    result = subprocess.run(
+        [sys.executable, str(TOOL), command, *argv],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode != 0, (
+        f"{command} accepted {argv}, which it never reads — so it ran and "
+        f"reported under a heading that does not describe it:\n{result.stdout}"
+    )
+    assert "unrecognized arguments" in result.stderr, (
+        f"{command} {argv} failed, but for some other reason: {result.stderr}"
     )
 
 

@@ -568,9 +568,19 @@ per cell
       assignment: ...
       arg-type: ...
 
-per rule, across every cell read
+per rule, across the cells above
   assignment: ...
 ```
+
+"The cells above", not every cell read: the type checker follows imports, so a
+scoped run reads well past the cells it was pointed at. Those findings are
+attributed to the cell they are in and left out of this total, which is the
+right scoping and would be the wrong heading for it.
+
+For the same reason, naming a cell in a tier no tool reads is refused rather
+than answered — the run would leave it out of the table, and a cell missing from
+a census cannot be told from one that measured nothing. The refusal names the
+flag below that reads it.
 
 Two flags widen the question, and both are type-checker-only — `census` refuses
 them for `ruff`, which has neither an unmeasured tier nor per-module
@@ -582,15 +592,23 @@ configuration sections, rather than accepting them and quietly doing nothing:
 | `--without-overrides` | measures with the `[[tool.mypy.overrides]]` sections that relax strictness over **first-party** code removed. The sections waiving missing stubs for third-party libraries are left in place: their findings are the absence of type annotations in somebody else's library, which is neither our backlog nor ours to fix |
 
 Which modules count as first-party is read from `mypy_path` rather than listed,
-so a package added to the workspace is covered on the day it appears. The
-stripped configuration is generated per run as `.mypy-census.toml` at the
+so a package added to the workspace is covered on the day it appears. Each
+pattern in a section is classified on its own: a section naming both kinds, or a
+pattern that does not begin with a module name, is refused rather than resolved
+— removing it would measure somebody else's missing stubs as our backlog, and
+keeping it would leave our own strictness relaxed through a run taken to remove
+exactly that.
+
+The stripped configuration is generated per run as `.mypy-census.toml` at the
 repository root — it has to be at the root, because `mypy_path` is a list of
 *relative* paths and the same file elsewhere resolves a different tree — and
-deleted afterwards. It is also gitignored, so an interrupted run leaves a stray
-file rather than a second type-checker configuration for a later commit to pick
-up. That run gets its own cache under `.mypy_cache/census`, so a measurement
-taken under a configuration nobody has adopted cannot be served from a cache
-populated under the declared one.
+deleted afterwards. A file already at that path is refused rather than
+overwritten: two censuses in one checkout share it, and the first to finish
+deletes it out from under the second. It is also gitignored, so an interrupted
+run leaves a stray file rather than a second type-checker configuration for a
+later commit to pick up. That run gets its own cache under `.mypy_cache/census`,
+so a measurement taken under a configuration nobody has adopted cannot be served
+from a cache populated under the declared one.
 
 Three things a census is not:
 
@@ -600,7 +618,7 @@ Three things a census is not:
   that *refused* — an unusable contract, a flag the tool has no use for — exits
   non-zero, because that one is a report about the request rather than the tree.
 - **Not a ratchet move.** It never touches `.dataknobs/quality-contract.json`.
-  A cell measuring under its ceiling is a `update-baseline` decision, made
+  A cell measuring under its ceiling is an `update-baseline` decision, made
   deliberately in a pull request; a measurement that also moved the thing it
   measured would leave nobody able to say what the tree looked like beforehand.
 - **Not available for `format`.** That tool's unit is files it would rewrite,

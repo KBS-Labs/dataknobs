@@ -45,7 +45,7 @@ import subprocess
 import sys
 import tomllib
 from collections import Counter, defaultdict
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterable, Iterator
 from contextlib import contextmanager
 from pathlib import Path, PurePosixPath
 from typing import Any, NamedTuple
@@ -178,17 +178,36 @@ class Measurement(NamedTuple):
     output: str = ""
 
 
-def _tally(cells: list[dict[str, Any]], names: list[str]) -> Measurement:
-    """Bucket reported paths into the cell each belongs to."""
+def _bucket(
+    cells: list[dict[str, Any]], counted: Iterable[tuple[str, str]]
+) -> tuple[dict[str, Counter[str]], Counter[str]]:
+    """Bucket ``(path, key)`` pairs into the cell each path belongs to.
+
+    The attribution rule, written once. Both projections of a run need it — the
+    ratchet's counts keyed by file, the census's keyed by rule — and it was
+    written twice, the copies differing in nothing but which key they counted
+    under. The whole claim the census rests on is that the two cannot disagree
+    about which cell a finding is in, and two copies of the rule deciding that
+    hold only until somebody edits one of them.
+
+    A pair whose path resolves to no cell is counted as unattributed rather than
+    dropped. Totality makes that impossible for a tracked file, but mypy follows
+    imports, and a finding against something outside the population would
+    otherwise vanish in silence.
+    """
     by_cell: dict[str, Counter[str]] = defaultdict(Counter)
     unattributed: Counter[str] = Counter()
-    for name in names:
-        cell = _cell_for(cells, name) if name else None
-        if cell:
-            by_cell[cell][name] += 1
-        else:
-            unattributed[name or "<unnamed>"] += 1
-    return Measurement(dict(by_cell), unattributed)
+    for path, key in counted:
+        cell = _cell_for(cells, path) if path else None
+        target = by_cell[cell] if cell else unattributed
+        target[key] += 1
+    return dict(by_cell), unattributed
+
+
+def _tally(cells: list[dict[str, Any]], names: list[str]) -> Measurement:
+    """Bucket reported paths into the cell each belongs to, counted per file."""
+    by_cell, unattributed = _bucket(cells, ((name, name or "<unnamed>") for name in names))
+    return Measurement(by_cell, unattributed)
 
 
 class Finding(NamedTuple):
@@ -234,16 +253,14 @@ class Census(NamedTuple):
 
 
 def _tally_codes(cells: list[dict[str, Any]], findings: list[Finding]) -> Census:
-    """Bucket findings by the cell they are in and the rule they broke."""
-    by_cell: dict[str, Counter[str]] = defaultdict(Counter)
-    unattributed: Counter[str] = Counter()
-    for finding in findings:
-        cell = _cell_for(cells, finding.path) if finding.path else None
-        if cell:
-            by_cell[cell][finding.code] += 1
-        else:
-            unattributed[finding.code] += 1
-    return Census(dict(by_cell), unattributed)
+    """Bucket findings into the cell each is in, counted per rule.
+
+    The same bucketing ``_tally`` does over the same findings, projected through
+    a different key — which is what makes the two comparable rather than a
+    second opinion.
+    """
+    by_cell, unattributed = _bucket(cells, ((f.path, f.code) for f in findings))
+    return Census(by_cell, unattributed)
 
 
 def _restrict(cells: list[dict[str, Any]], only: set[str] | None) -> list[dict[str, Any]]:
@@ -275,6 +292,53 @@ def _run(command: list[str]) -> subprocess.CompletedProcess[str]:
     return subprocess.run(command, cwd=_ROOT, capture_output=True, text=True, check=False)
 
 
+def _refuse_non_verdict(tool: str, result: subprocess.CompletedProcess[str]) -> None:
+    """Refuse a run whose exit status is not a verdict about the tree.
+
+    All three of these tools exit 0 for clean and 1 for "found something".
+    Anything else — a configuration it cannot load, a crash, a missing
+    interpreter, a wrapper eating the invocation — means it read nothing, and
+    what comes back on stdout is *empty*. Every parse below turns that emptiness
+    into a valid and entirely fictional measurement of zero: the ratchet reports
+    a tree it never opened as one with nothing wrong, and ``update-baseline``
+    writes those zeroes down as the new ceilings, which the ratchet then refuses
+    to raise again.
+
+    Shared because it was written twice and missing a third time. The formatter
+    earned the check, the linter was given a copy, and the type checker had
+    neither — so a mypy that failed to start measured every type-checked cell at
+    zero, ``check`` exited 0, and ``bin/validate.sh`` printed a green type-check
+    verdict over a tree nothing had opened. Guarding two tools out of three is
+    what a rule written twice looks like from the side where it was forgotten.
+    """
+    if result.returncode not in (0, 1):
+        raise SystemExit(
+            f"{tool} exited {result.returncode}, so its report is not a "
+            f"measurement:\n{result.stderr[:800]}"
+        )
+
+
+def _refuse_disagreement(
+    tool: str, result: subprocess.CompletedProcess[str], counted: int, unit: str
+) -> None:
+    """Refuse a run whose status and whose output describe different runs.
+
+    The count and the status come from one invocation *by assumption*, and this
+    is the only thing that checks the assumption.
+
+    It also catches the half of a broken parse that the status check cannot. A
+    tool that exits 1 having reported findings this module's parse does not
+    recognise leaves the status saying "found something" and the tally saying
+    the tree is clean — the same fictional zero as above, reached through the
+    reader rather than through the tool.
+    """
+    if bool(counted) != bool(result.returncode):
+        raise SystemExit(
+            f"{tool} exited {result.returncode} but reported {counted} {unit}; "
+            "status and output disagree, so one of them is not describing this run"
+        )
+
+
 #: How ruff reports a file it could not open — the rule code and the rule name
 #: for the same entry. Either spelling identifies it, so renaming one does not
 #: quietly reopen the hole below.
@@ -293,24 +357,17 @@ def _ruff_report(
     output can fail toward a tidier tree than the one on disk, which is exactly
     the disagreement that would go unnoticed.
 
-    Guarded the way ``measure_format`` is, and against three further faults the
-    decode check alone renders as a clean tree. That measurer earned its checks
-    by having a parse fail toward a tidier tree than the one on disk; each of
-    these is the same failure, reached by a route ruff's linter offers and its
-    formatter does not.
+    Guarded the way the other two measurers are — ``_refuse_non_verdict`` and
+    ``_refuse_disagreement``, which every tool here needs — and against two
+    further faults the decode check alone renders as a clean tree. The formatter
+    earned those shared checks by having a parse fail toward a tidier tree than
+    the one on disk; each of these is the same failure, reached by a route ruff's
+    linter offers and its formatter does not.
 
-    * **The exit status has to be a verdict.** ruff exits 2 on a configuration
-      it cannot load — an unknown rule code in ``select``, a malformed table —
-      having read no file, and writes nothing to stdout. The parse below reads
-      ``result.stdout or "[]"``, so that emptiness became an empty finding list
-      and **every cell measured zero**. The ratchet then reports a tree it never
-      opened as one with nothing wrong, and ``update-baseline`` will write those
-      zeroes down. Editing this repository's ruff config is how a cell gets
-      promoted, so the route is the work rather than an accident beside it.
-
-    * **The status has to agree with the count.** 0 means clean and 1 means at
-      least one finding. Either alongside the opposite tally means the two
-      halves of this measurement are describing different runs.
+    The status check matters more here than anywhere else: editing this
+    repository's ruff config is how a cell gets promoted, and ruff exits 2 on a
+    config it cannot load having read no file. So a rejected config arrives at
+    this measurer as part of the work rather than as an accident beside it.
 
     * **An ``E902`` is not a lint verdict.** It is ruff reporting that it could
       not open the file, and it is worse here than the formatter's ``io`` entry
@@ -343,11 +400,7 @@ def _ruff_report(
     # stdout, which the `or "[]"` below turns into a valid, and entirely
     # fictional, measurement of zero. Checked here, the developer gets ruff's
     # own complaint instead.
-    if result.returncode not in (0, 1):
-        raise SystemExit(
-            f"ruff exited {result.returncode}, so its report is not a "
-            f"measurement:\n{result.stderr[:800]}"
-        )
+    _refuse_non_verdict("ruff", result)
 
     try:
         findings: list[dict[str, Any]] = json.loads(result.stdout or "[]")
@@ -370,12 +423,7 @@ def _ruff_report(
             f"however many those files hold:\n{detail}"
         )
 
-    if bool(findings) != bool(result.returncode):
-        raise SystemExit(
-            f"ruff exited {result.returncode} but reported {len(findings)} "
-            "finding(s); status and output disagree, so one of them is not "
-            "describing this run"
-        )
+    _refuse_disagreement("ruff", result, len(findings), "finding(s)")
 
     return findings
 
@@ -481,6 +529,16 @@ def _mypy_report(
     what the tree measures under a configuration nobody has adopted yet. Both
     default to the contract's, so the ratchet cannot be measured under anything
     but the declared one.
+
+    Guarded the way the other two measurers are, which for as long as this
+    function existed it was not. mypy exits 2 on a config file it cannot find,
+    on a usage error and on a blocking error, having written nothing to stdout —
+    and an empty stdout parses to an empty finding list, so **every mypy cell
+    measured zero**, ``check`` exited 0, and the type-check half of the gate
+    reported green. The census widened the ways to reach that: a generated
+    config deleted by a concurrent run is a missing ``--config-file``, and
+    "0 findings without the relaxations" is the strongest claim this tool can
+    make.
     """
     cells = contract["tools"]["mypy"]["cells"]
     targets = mypy_targets(cells, only, include_unmeasured)
@@ -492,7 +550,15 @@ def _mypy_report(
     if cache_dir:
         command += ["--cache-dir", cache_dir]
     result = _run(command)
-    return mypy_findings(result.stdout), result.stdout
+
+    # Both, and in this order. The status catches a mypy that never ran; the
+    # agreement catches one that ran and reported in a shape the parse below
+    # does not recognise — a blocking error carries no `path:line:`, so it exits
+    # non-zero while `mypy_findings` returns nothing at all.
+    _refuse_non_verdict("mypy", result)
+    findings = mypy_findings(result.stdout)
+    _refuse_disagreement("mypy", result, len(findings), "finding(s)")
+    return findings, result.stdout
 
 
 def measure_mypy(
@@ -583,17 +649,8 @@ def measure_format(
     # Anything else is ruff declining to answer, and a disagreement between the
     # status and the count means the two halves of this measurement are reading
     # different runs.
-    if result.returncode not in (0, 1):
-        raise SystemExit(
-            f"ruff format exited {result.returncode}, so its report is not a "
-            f"measurement:\n{result.stderr[:800]}"
-        )
-    if bool(named) != bool(result.returncode):
-        raise SystemExit(
-            f"ruff format exited {result.returncode} but named {len(named)} "
-            "unformatted file(s); status and output disagree, so one of them is "
-            "not describing this run"
-        )
+    _refuse_non_verdict("ruff format", result)
+    _refuse_disagreement("ruff format", result, len(named), "unformatted file(s)")
 
     return _tally(cells, sorted(named))
 
@@ -739,18 +796,26 @@ def first_party_modules(config: Path) -> set[str]:
     A written-down list goes stale on the day a package is added — and it goes
     stale *quietly*, leaving that package's strictness relaxation in force
     through a run whose whole purpose was to measure without them.
+
+    A module shipped as a single ``*.py`` counts, which reading only directories
+    would miss. Every module this workspace ships today is a package, so that is
+    a hole rather than a bug — and it is the same quiet one: the missed name
+    reads as third-party, its overrides survive the removal, and the census
+    reports a smaller number under a heading saying the relaxations are gone.
     """
     parsed = tomllib.loads(config.read_text(encoding="utf-8"))
     declared = parsed.get("tool", {}).get("mypy", {}).get("mypy_path", "")
     roots = declared if isinstance(declared, list) else str(declared).split(":")
 
-    names = {
-        entry.name
-        for root in roots
-        if (source := _ROOT / str(root).strip()).is_dir()
-        for entry in source.iterdir()
-        if entry.is_dir() and entry.name.isidentifier()
-    }
+    names: set[str] = set()
+    for root in roots:
+        source = _ROOT / str(root).strip()
+        if not source.is_dir():
+            continue
+        for entry in source.iterdir():
+            name = entry.name if entry.is_dir() else entry.stem
+            if (entry.is_dir() or entry.suffix == ".py") and name.isidentifier():
+                names.add(name)
     if not names:
         raise SystemExit(
             f"{_relative(str(config))} declares no mypy_path this workspace's own "
@@ -766,6 +831,37 @@ def _module_patterns(section: dict[str, Any]) -> list[str]:
     return [module] if isinstance(module, str) else [str(name) for name in module]
 
 
+def _classified_patterns(
+    section: dict[str, Any], first_party: set[str]
+) -> tuple[list[str], list[str]]:
+    """One override section's module patterns, split into ours and not-ours.
+
+    Decided per pattern, because nothing requires a section to name only one
+    kind and the classification is a property of each name it lists rather than
+    of the section.
+
+    A pattern not beginning with a module name — a leading ``*``, say — is
+    refused rather than defaulted. Defaulting it either way is a silent answer
+    to the question this whole mechanism exists to ask, and the direction it
+    would default is the quiet one: unclassifiable reads as third-party, the
+    section survives, and the census reports fewer findings than the heading
+    over them claims.
+    """
+    ours: list[str] = []
+    theirs: list[str] = []
+    for pattern in _module_patterns(section):
+        head = pattern.split(".")[0]
+        if not head.isidentifier():
+            raise SystemExit(
+                f"the override section pattern {pattern!r} does not begin with a "
+                "module name, so it cannot be told apart from a third-party one "
+                "— a census without the relaxations would keep it and measure "
+                "less than it says it did"
+            )
+        (ours if head in first_party else theirs).append(pattern)
+    return ours, theirs
+
+
 def _relaxes_first_party(section: dict[str, Any], first_party: set[str]) -> bool:
     """Whether an override section relaxes checking over code this repository ships.
 
@@ -774,8 +870,25 @@ def _relaxes_first_party(section: dict[str, Any], first_party: set[str]) -> bool
     and not ours to fix. A section naming ``dataknobs_xization.*`` turns seven
     checks off over code we ship, and every finding it suppresses is one the
     declared configuration would otherwise report.
+
+    A section naming both kinds is refused rather than resolved, because there
+    is no resolution: removing it measures somebody else's missing stubs as our
+    backlog, and keeping it leaves our own strictness relaxed through a run
+    taken to remove exactly that. Answering it either way silently is how a
+    census reports a number under a heading that does not describe it. Today's
+    configuration has no mixed section — the one holding fifteen third-party
+    patterns would flip all fifteen the day a first-party name joined it, which
+    is precisely the edit nobody would think to check.
     """
-    return any(pattern.split(".")[0] in first_party for pattern in _module_patterns(section))
+    ours, theirs = _classified_patterns(section, first_party)
+    if ours and theirs:
+        raise SystemExit(
+            f"the override section naming {sorted(ours + theirs)} covers both "
+            f"code this repository ships ({sorted(ours)}) and code it does not "
+            f"({sorted(theirs)}), so it can be neither removed nor kept without "
+            "measuring the wrong tree — split it into one section per kind"
+        )
+    return bool(ours)
 
 
 def config_without_relaxations(text: str, first_party: set[str]) -> tuple[str, list[str]]:
@@ -812,7 +925,21 @@ def config_without_relaxations(text: str, first_party: set[str]) -> tuple[str, l
     dropping = False
     for line in text.splitlines(keepends=True):
         if line.startswith("["):
-            if line.strip() == "[[tool.mypy.overrides]]":
+            # The comment comes off before the comparison. A header carrying one
+            # is a thing a person writes, and in this repository's style a likely
+            # one — and it was not the string being compared against, so the
+            # block survived while the parse still counted it as doomed. The
+            # correlation shifted and every later section was removed one place
+            # out. The re-parse below caught that, which is what it is for; but a
+            # feature that refuses whenever somebody annotates a header is not a
+            # usable feature, and its complaint does not mention comments.
+            #
+            # Spellings TOML also allows but nobody writes — `[[ tool.mypy.overrides ]]`
+            # with inner spaces — are left to that check rather than matched here.
+            # Every spelling matched is one the re-parse no longer has to catch,
+            # and a match loose enough to accept anything is one that no longer
+            # locates sections.
+            if line.split("#", 1)[0].strip() == "[[tool.mypy.overrides]]":
                 index += 1
                 dropping = index in doomed
             else:
@@ -854,14 +981,35 @@ def census_config(contract: dict[str, Any]) -> Iterator[tuple[str, list[str]]]:
     kept in step with the first is the drift this whole mechanism exists to
     close, and one left behind by an interrupted run is a file a later commit
     could pick up.
+
+    The path is a constant, so it is also shared: two censuses in one checkout
+    write the same file, and the first to finish deletes it out from under the
+    second — whose mypy then cannot find its config, exits 2 and, before the
+    guard in ``_mypy_report``, reported zero findings under a heading claiming
+    the relaxations had been removed. So an existing file is refused rather than
+    overwritten. That covers the operator whose own file is at that path too,
+    and it turns an interrupted run's leftovers into a sentence rather than into
+    a second run that silently inherits them.
     """
     declared = _ROOT / contract["tools"]["mypy"]["config"]
     stripped, removed = config_without_relaxations(
         declared.read_text(encoding="utf-8"), first_party_modules(declared)
     )
     scratch = _ROOT / CENSUS_CONFIG
-    scratch.write_text(stripped, encoding="utf-8")
+    if scratch.exists():
+        raise SystemExit(
+            f"{CENSUS_CONFIG} is already in the tree, so nothing was measured. "
+            "Either a census is running in this checkout — they share this path, "
+            "and the first to finish deletes it out from under the second — or "
+            "one was interrupted before it could. Delete it once no census is "
+            "running."
+        )
+
+    # Inside the `try`, so that a write which fails part way through — a full
+    # disk, a read-only checkout — is cleaned up rather than left as a truncated
+    # configuration at a path the next run refuses.
     try:
+        scratch.write_text(stripped, encoding="utf-8")
         yield CENSUS_CONFIG, removed
     finally:
         scratch.unlink(missing_ok=True)
@@ -882,6 +1030,13 @@ class CensusRun(NamedTuple):
     removed: list[str]
 
 
+#: The tools a census can decompose. Every finding these two report names a
+#: rule, so the number a ceiling is compared against breaks into rules. The
+#: formatter's does not: its unit is files it would rewrite, and "this file is
+#: not formatted" has no rule to attribute it to.
+CENSUS_TOOLS = frozenset({"ruff", "mypy"})
+
+
 def take_census(
     contract: dict[str, Any],
     tool: str,
@@ -892,11 +1047,25 @@ def take_census(
 ) -> CensusRun:
     """Measure one tool once, and bucket the findings by file and by rule.
 
-    The options are refused rather than ignored where they do not apply. A flag
-    a tool silently disregards reports a run that answers a narrower question
-    than the one asked for, under a heading that says otherwise — which is this
-    repository's own defect class, an absence rendered as a result.
+    The request is refused rather than narrowed wherever part of it cannot be
+    honoured. A flag a tool silently disregards — or a cell the run silently
+    declines to visit — reports an answer to a narrower question than the one
+    asked, under a heading that says otherwise, which is this repository's own
+    defect class: an absence rendered as a result.
+
+    All four refusals live here rather than in ``main``. The command line is one
+    caller; the tests are another, and a future subcommand would be a third. A
+    guard only the CLI applies is one the layer that actually dispatches on
+    ``tool`` does not have.
     """
+    if tool not in CENSUS_TOOLS:
+        raise SystemExit(
+            f"a census decomposes a count into the rules that produced it, and "
+            f"{tool} reports files it would rewrite rather than rules broken — "
+            "so this is a category error rather than a smaller version of the "
+            "same question"
+        )
+
     cells = contract["tools"][tool]["cells"]
 
     if without_overrides and tool != "mypy":
@@ -910,10 +1079,31 @@ def take_census(
             "--include-unmeasured would widen the run by nothing"
         )
 
+    # The inverse of the check above, and the one it was missing. Naming a cell
+    # nothing reads asks for a row this run cannot produce: the target set skips
+    # it, and the report filters it back out — so a scope consisting only of them
+    # printed `0 finding(s)` over an empty table, which is exactly what a clean
+    # tree prints. A mixed scope was worse: the unmeasured cells simply vanished
+    # from a table the caller had named them in.
+    if only is not None and not include_unmeasured:
+        silent = sorted(
+            cell["path"] for cell in _restrict(cells, only) if cell.get("tier") in _UNMEASURED_TIERS
+        )
+        if silent:
+            raise SystemExit(
+                f"the contract puts {silent} in a tier no tool reads, so this run "
+                "would leave them out of the table rather than report them as "
+                "zero — and a cell missing from a census cannot be told from one "
+                "that measured nothing. Pass --include-unmeasured to read them."
+            )
+
     config: str = contract["tools"][tool]["config"]
     removed: list[str] = []
     findings: list[Finding]
 
+    # Two branches for mypy rather than one, and no branch for anything else:
+    # the guard above is what makes the final `else` the type checker rather
+    # than whatever tool is not ruff.
     if tool == "ruff":
         findings = ruff_findings(_ruff_report(contract, tracked_python(), only))
     elif without_overrides:
@@ -1153,7 +1343,7 @@ def check(
 
 
 def update_baseline(
-    contract: dict[str, Any], tools: list[str], path: Path
+    contract: dict[str, Any], tools: list[str], path: Path, only: set[str] | None = None
 ) -> tuple[list[str], list[str]]:
     """Lower every ceiling to what the tree currently measures.
 
@@ -1169,12 +1359,19 @@ def update_baseline(
     above said "reported" while the code only ever mentioned the cells it
     lowered, which is the same shape as a status field whose default is a
     verdict.
+
+    ``only`` narrows which ceilings are rewritten, and it is honoured rather
+    than accepted. The command line validated a named cell and then passed none
+    of it here, so ``update-baseline --tool mypy --cell packages/data/src``
+    checked that the name existed and rewrote all fourteen — the widest possible
+    edit to the declaration, reached by the command that asks for the narrowest,
+    and unrecoverable by re-running because the ceilings only fall.
     """
     lowered: list[str] = []
     exceeded: list[str] = []
 
-    for tool, measurement in _measure(contract, tools).items():
-        for cell in contract["tools"][tool]["cells"]:
+    for tool, measurement in _measure(contract, tools, only).items():
+        for cell in _restrict(contract["tools"][tool]["cells"], only):
             measured = _measured(measurement, cell)
             if measured < cell["ceiling"]:
                 lowered.append(f"{tool}/{cell['path']}: {cell['ceiling']} -> {measured}")
@@ -1260,7 +1457,11 @@ def _write_census(report: dict[str, Any]) -> None:
         for code, count in cell["codes"].items():
             out.write(f"      {code}: {count}\n")
 
-    out.write("\nper rule, across every cell read\n")
+    # "the cells above", not "every cell read". The type checker follows imports,
+    # so a scoped run reads well past the cells it was pointed at — those
+    # findings are attributed to the cell they are in and left out of this total,
+    # which is the right scoping and the wrong heading for it.
+    out.write("\nper rule, across the cells above\n")
     for code, count in report["codes"].items():
         out.write(f"  {code}: {count}\n")
 
@@ -1270,40 +1471,122 @@ def _write_census(report: dict[str, Any]) -> None:
             out.write(f"  {code}: {count}\n")
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument(
-        "command", choices=("check", "verify", "update-baseline", "partition", "scope", "census")
-    )
-    parser.add_argument("paths", nargs="*", help="scope: the paths to classify")
-    parser.add_argument("--tool", choices=sorted(MEASURERS), help="restrict to one tool")
-    parser.add_argument(
+def _add_tool(command: argparse.ArgumentParser, help_text: str) -> None:
+    command.add_argument("--tool", choices=sorted(MEASURERS), help=help_text)
+
+
+def _add_cells(command: argparse.ArgumentParser) -> None:
+    command.add_argument(
         "--cell",
         action="append",
         default=[],
         metavar="PATH",
-        help="check: compare only these cells, named exactly as the contract declares them",
+        help="restrict to these cells, named exactly as the contract declares them",
     )
-    parser.add_argument(
+
+
+def _add_json(command: argparse.ArgumentParser) -> None:
+    command.add_argument("--json", action="store_true", dest="use_json")
+
+
+def _build_parser() -> argparse.ArgumentParser:
+    """One subparser per command, each declaring only the options it reads.
+
+    Every option used to be global, which argparse accepts and no command was
+    obliged to read. ``check --without-overrides`` ran an ordinary check under
+    the declared configuration and reported nothing about the flag it discarded;
+    ``update-baseline --cell packages/data/src`` validated the name and rewrote
+    every ceiling the tool has. That is the defect ``take_census`` refuses per
+    tool, one layer up and with nothing refusing it.
+
+    Subparsers close it structurally rather than through a table somebody has to
+    keep in step with the parser. A command that does not declare an option
+    rejects it as a usage error, and a new option cannot be added without
+    choosing which commands honour it — there is nowhere left to put one that
+    means "everywhere".
+    """
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+
+    # Every namespace carries these whether or not the chosen command declares
+    # them, so the resolution below reads one shape. Declaring the *option* is
+    # still per command — a command that does not is the usage error; this only
+    # decides what its namespace looks like once that has passed.
+    parser.set_defaults(tool=None, cell=[], use_json=False)
+    commands = parser.add_subparsers(dest="command", required=True, metavar="command")
+
+    measure = commands.add_parser("check", help="measure the tree and compare every cell")
+    _add_tool(measure, "restrict to one tool")
+    _add_cells(measure)
+    measure.add_argument(
         "--show-findings",
         action="store_true",
-        help="check: echo what the tool reported, not only the comparison",
+        help="echo what the tool reported, not only the comparison",
     )
-    parser.add_argument(
+    _add_json(measure)
+
+    faults = commands.add_parser("verify", help="check the declaration itself, without measuring")
+    _add_json(faults)
+
+    baseline = commands.add_parser(
+        "update-baseline", help="lower every ceiling to what the tree measures"
+    )
+    _add_tool(baseline, "restrict to one tool")
+    _add_cells(baseline)
+
+    split = commands.add_parser("partition", help="which cell each tracked file lands in")
+    _add_tool(split, "restrict to one tool")
+    _add_json(split)
+
+    where = commands.add_parser("scope", help="classify caller-named paths against the cells")
+    _add_tool(where, "the tool whose cells the paths are classified against")
+    where.add_argument("paths", nargs="*", help="the paths to classify")
+    _add_json(where)
+
+    counted = commands.add_parser("census", help="break a cell's findings down by rule")
+    _add_tool(counted, "the tool to read; a census reads one at a time")
+    _add_cells(counted)
+    counted.add_argument(
         "--include-unmeasured",
         action="store_true",
-        help="census: also read the cells whose tier the contract says no tool reads",
+        help="also read the cells whose tier the contract says no tool reads",
     )
-    parser.add_argument(
+    counted.add_argument(
         "--without-overrides",
         action="store_true",
         help=(
-            "census: measure with the type checker's first-party strictness "
-            "relaxations removed, which is the configuration a zeroed backlog "
-            "would have to hold under"
+            "measure with the type checker's first-party strictness relaxations "
+            "removed, which is the configuration a zeroed backlog would have to "
+            "hold under"
         ),
     )
-    parser.add_argument("--json", action="store_true", dest="use_json")
+    _add_json(counted)
+
+    return parser
+
+
+def _scoped_cells(
+    parser: argparse.ArgumentParser, contract: dict[str, Any], args: argparse.Namespace
+) -> set[str] | None:
+    """The cells ``--cell`` named, resolved against the declaration rather than trusted.
+
+    A caller that misspells one would otherwise restrict the run to nothing and
+    be told every cell is within its ceiling.
+    """
+    if not args.cell:
+        return None
+    if not args.tool:
+        parser.error("--cell names cells of one tool, so --tool is required with it")
+    declared = {cell["path"] for cell in contract["tools"][args.tool]["cells"]}
+    unknown = sorted(set(args.cell) - declared)
+    if unknown:
+        parser.error(
+            f"{args.tool} declares no cell named {unknown} — known cells are {sorted(declared)}"
+        )
+    return set(args.cell)
+
+
+def main() -> None:
+    parser = _build_parser()
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(message)s")
@@ -1325,20 +1608,7 @@ def main() -> None:
                 sys.stdout.write(f"{kind}\t{path}\t{cell}\n")
         sys.exit(0)
 
-    # Named cells are resolved against the declaration rather than trusted. A
-    # caller that misspells one would otherwise restrict the run to nothing and
-    # be told every cell is within its ceiling.
-    only: set[str] | None = None
-    if args.cell:
-        if not args.tool:
-            parser.error("--cell names cells of one tool, so --tool is required with it")
-        declared = {cell["path"] for cell in contract["tools"][args.tool]["cells"]}
-        unknown = sorted(set(args.cell) - declared)
-        if unknown:
-            parser.error(
-                f"{args.tool} declares no cell named {unknown} — known cells are {sorted(declared)}"
-            )
-        only = set(args.cell)
+    only = _scoped_cells(parser, contract, args)
 
     if args.command == "verify":
         faults = verify(contract)
@@ -1374,12 +1644,10 @@ def main() -> None:
     if args.command == "census":
         if not args.tool:
             parser.error("a census reads one tool at a time, so --tool is required")
-        if args.tool == "format":
-            parser.error(
-                "the formatter's unit is files it would rewrite rather than rules "
-                "broken, so a per-rule census of it is a category error rather "
-                "than a smaller version of this one"
-            )
+        # Which tools can be censused is `take_census`'s to say, not this
+        # branch's. Refused here, the guard covered the command line and left
+        # the layer that dispatches on the tool routing `format` into the type
+        # checker's measurer and filing its findings under formatting cells.
         counted = census_report(
             contract,
             args.tool,
@@ -1399,7 +1667,7 @@ def main() -> None:
         sys.exit(0)
 
     if args.command == "update-baseline":
-        lowered, exceeded = update_baseline(contract, _selected(args.tool), _CONTRACT)
+        lowered, exceeded = update_baseline(contract, _selected(args.tool), _CONTRACT, only)
         for line in lowered:
             logger.info("%s", line)
         if not lowered:
