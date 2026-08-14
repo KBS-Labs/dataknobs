@@ -75,8 +75,6 @@ class TestDatabaseFactoryElasticsearch:
         factory = DatabaseFactory()
 
         # Use real file backend instead of mocking - tests same factory logic
-        import tempfile
-
         with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as f:
             filepath = f.name
 
@@ -99,8 +97,6 @@ class TestDatabaseFactoryElasticsearch:
 
         # Test aliases using real SQLite backend
         for alias in ["sqlite", "sqlite3"]:
-            import tempfile
-
             with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
                 db_path = f.name
 
@@ -220,8 +216,6 @@ class TestAsyncDatabaseFactory:
         factory = AsyncDatabaseFactory()
 
         # Use real async file backend
-        import tempfile
-
         with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as f:
             filepath = f.name
 
@@ -251,8 +245,6 @@ class TestAsyncDatabaseFactory:
         factory = AsyncDatabaseFactory()
 
         # Use real file backend - tests same factory logic
-        import tempfile
-
         with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as f:
             filepath = f.name
 
@@ -284,8 +276,6 @@ class TestAsyncDatabaseFactory:
 
         # Test real SQLite backend aliases
         for alias in ["sqlite", "sqlite3"]:
-            import tempfile
-
             with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
                 db_path = f.name
 
@@ -315,8 +305,6 @@ class TestAsyncDatabaseFactory:
         factory = AsyncDatabaseFactory()
 
         # Use real file backend - tests factory logic
-        import tempfile
-
         with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as f:
             filepath = f.name
 

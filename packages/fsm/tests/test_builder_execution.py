@@ -308,7 +308,6 @@ class TestFSMExecute:
         assert result["data"]["chunks_processed"] == 1  # One chunk processed
 
         # Now test with multiple chunks by directly manipulating the stream context
-        from dataknobs_fsm.execution.context import ExecutionContext
         from dataknobs_fsm.streaming.core import StreamContext, StreamConfig
 
         context = ExecutionContext(

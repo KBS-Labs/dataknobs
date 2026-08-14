@@ -1,6 +1,7 @@
 """Tests for reasoning strategies."""
 
 import tempfile
+from typing import TYPE_CHECKING
 
 import pytest
 import yaml
@@ -13,6 +14,9 @@ from dataknobs_bots.reasoning import (
     WizardReasoning,
     create_reasoning_from_config,
 )
+
+if TYPE_CHECKING:
+    from dataknobs_llm.tools import Tool
 
 
 class TestSimpleReasoning:
