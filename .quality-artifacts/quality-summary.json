@@ -1,5 +1,5 @@
 {
-  "timestamp": "2026-08-14T01:21:08Z",
+  "timestamp": "2026-08-14T02:38:45Z",
   "overall_status": "PASS",
   "run_mode": "pr",
   "environment": "host",
@@ -18,42 +18,42 @@
   ],
   "coverage_percent": null,
   "package_hashes": {
-    "bots": "83ead236aaded9c0245f80b732d726305dd8e09bcd29493d719abb3384688678",
-    "common": "3e0ed515029c5650b22ea53c77cf5e762fe1d36f52fbacaad6693180f7825f03",
-    "config": "2cf0fca06aee3859a941c33229d0f2c798bd11a27417cb83b727794a23b3b30c",
-    "data": "41c28e3d5588c1f32ca6c44358c221806a11b533cc405d78df9f868c8b26c1b7",
-    "fsm": "faf0644bc82fdfed17b7dbf2c37e0b1a3b42b2ebdfcf7648252adb5aad70719c",
+    "bots": "3a0a1b87fe64840cf66a7401352d6abc35e1dbe2b5d14c79054c2cd69eed70b3",
+    "common": "4da812a75a93c0cc75eab4e9ba8bad8d816ce86582c7d07f520fb18dfd1f7e26",
+    "config": "ff5d307be3c0d7a9cef12b0a625d641c6a906fac133ccf04e4b147b71278dc3f",
+    "data": "670d66d9d1e7009f1151a3a0c491b88272382c81bbfca6347776873288df9b2d",
+    "fsm": "dcbdb42a0c9380d39e04fd5bfacc53b3e4cb705b66dcd3435d93946347af7ff6",
     "legacy": "f77592a12b3780ae22e0ac113ff15dc537020de05664eea34c0a2734bb91e5a8",
-    "llm": "12897312da887aab37a6bfe59a83562f920eaf9bc3264bbce25e3948ef6c5e14",
+    "llm": "d10c43cd6537255e28212ac36c28389e904af7b51420eeb75c276f98f34c0069",
     "structures": "8c4a5934ee70717bfee003f0800b0dee7d5f106d85713217db7e44a8649bc5d5",
     "utils": "7714095f3d697d249db418c5c9dc64406d7102ec17aa72ae4b0a98b9d4c764ae",
-    "xization": "1b191f25b6ce79823c8007d8118446a15622e5a27dff32dda71f3abca49f5a44",
+    "xization": "082d8eb6c51486d7e7c98b54e02e9881d81dc0bca38aa1838413cb6b1baea3e5",
     "_algorithm_version": 3
   },
   "workspace_hashes": {
     "toolchain": "eb141fb0d68b6c70220b3c2ea64982365c35c7075d922198f61f844ddf57fcb6",
-    "workspace_tests": "637206c285c17588a13b7c077d0a2ebb668f6a6c918df23a53396e90425660f0",
+    "workspace_tests": "85b12117cbda242dbbfb3378fa8b8816f9614e7becc76c34774f0f84bccc703e",
     "docs": "27d3e637e7ce9123dcc25dde1ef692449a143a4dcbf3b7590aff707b146e7aa5"
   },
-  "total_seconds": 190,
+  "total_seconds": 186,
   "checks": {
     "workflow_lint": {
       "status": "pass",
       "exit_code": 0,
       "tool": "lint-workflows.sh",
-      "duration_seconds": 1
+      "duration_seconds": 0
     },
     "shell_lint": {
       "status": "pass",
       "exit_code": 0,
       "tool": "lint-shell.sh",
-      "duration_seconds": 4
+      "duration_seconds": 5
     },
     "contract": {
       "status": "pass",
       "exit_code": 0,
       "tool": "quality-contract.py",
-      "duration_seconds": 2
+      "duration_seconds": 1
     },
     "validation": {
       "status": "pass",
@@ -94,7 +94,7 @@
       "status": "pass",
       "exit_code": 0,
       "skipped": false,
-      "duration_seconds": 56
+      "duration_seconds": 53
     }
   }
 }
