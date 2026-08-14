@@ -13,7 +13,6 @@ class TestStateTransformExecution:
 
     def test_state_transform_executed_once_per_state_entry(self):
         """Test that StateTransforms are executed exactly once when entering a state."""
-
         # Track how many times the transform is called
         call_count = 0
         call_data_history = []
@@ -82,7 +81,6 @@ class TestStateTransformExecution:
 
     def test_state_transform_with_chained_transformations(self):
         """Test that StateTransforms work correctly in a chain of transformations."""
-
         transform_calls = []
 
         def first_transform(state):
@@ -155,7 +153,6 @@ class TestStateTransformExecution:
 
     def test_state_transform_vs_arc_transform_separation(self):
         """Test that StateTransforms and ArcTransforms are properly separated."""
-
         execution_log = []
 
         def state_transform(state):
@@ -225,7 +222,6 @@ class TestStateTransformExecution:
 
     def test_state_transform_not_executed_on_state_validation(self):
         """Test that StateTransforms are not executed during state validation phase."""
-
         transform_call_count = 0
         validator_call_count = 0
 

@@ -81,7 +81,6 @@ class TestPreValidators:
 
     async def test_pre_validators_receive_state_resources(self):
         """Test that pre-validators and other state functions receive state resources."""
-
         # Create FSM configuration without actual resources
         # This test verifies the infrastructure is in place
         config = FSMConfig(
@@ -142,7 +141,6 @@ def transform(data, context):
 
     async def test_shared_variables_across_states(self):
         """Test that shared variables work across states."""
-
         # Create FSM configuration
         config = FSMConfig(
             name="test_fsm",
@@ -197,7 +195,6 @@ def transform(data, context):
 
     async def test_arc_definition_order_preserved(self):
         """Test that arcs with equal priority are selected in definition order."""
-
         arc_execution_order = []
 
         # Create FSM configuration with multiple arcs of same priority

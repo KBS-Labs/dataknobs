@@ -61,7 +61,7 @@ def _spy(name: str, calls: list[str]):
 
 
 def _recovery_config() -> dict:
-    """start -> fail(boom) -> cleanup(run_on_failure, spy) -> extra(spy) -> done."""
+    """Flow: start -> fail(boom) -> cleanup(run_on_failure, spy) -> extra(spy) -> done."""
     return {
         "name": "RecoveryFSM",
         "main_network": "main",
@@ -143,7 +143,7 @@ async def test_async_recovery_state_runs_normal_downstream_skipped() -> None:
 
 
 def _within_state_config() -> dict:
-    """start -> multi(transforms=[boom, spy_second]) -> done."""
+    """Flow: start -> multi(transforms=[boom, spy_second]) -> done."""
     return {
         "name": "WithinStateFSM",
         "main_network": "main",
@@ -187,7 +187,8 @@ def test_sync_within_state_second_transform_skipped_after_raise() -> None:
 @pytest.mark.asyncio
 async def test_async_within_state_second_transform_skipped_after_raise() -> None:
     """The async engine has its own transform loop — lock the same within-state
-    skip there too (the sync test alone would not catch async drift)."""
+    skip there too (the sync test alone would not catch async drift).
+    """
     calls: list[str] = []
     fsm = AsyncSimpleFSM(
         _within_state_config(),

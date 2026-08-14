@@ -1,5 +1,4 @@
-"""
-Unit tests for end-to-end streaming example.
+"""Unit tests for end-to-end streaming example.
 
 These tests verify that the streaming example functions correctly,
 including file-to-file streaming, generator-based streaming, and

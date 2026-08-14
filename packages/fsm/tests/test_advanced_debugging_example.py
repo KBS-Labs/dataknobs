@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
-"""
-Unit tests for the advanced_debugging.py example.
+"""Unit tests for the advanced_debugging.py example.
 
 These tests verify that all the synchronous debugging features work correctly,
 including step-by-step execution, breakpoints, tracing, profiling, hooks, and
