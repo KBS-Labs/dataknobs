@@ -1,7 +1,7 @@
 """Integration tests for Elasticsearch vector functionality."""
 
+import asyncio
 import os
-import time
 import pytest
 import numpy as np
 
@@ -58,7 +58,7 @@ class TestElasticsearchVectorIntegration:
             assert record_id is not None
 
             # Wait for indexing (Elasticsearch near real-time)
-            time.sleep(1)
+            await asyncio.sleep(1)
 
             # Retrieve the record
             retrieved = await db.read(record_id)
@@ -126,7 +126,7 @@ class TestElasticsearchVectorIntegration:
                 ids.append(record_id)
 
             # Wait for indexing
-            time.sleep(2)
+            await asyncio.sleep(2)
 
             # Search for similar vectors
             results = await db.vector_search(
@@ -179,7 +179,7 @@ class TestElasticsearchVectorIntegration:
                 ids.append(record_id)
 
             # Wait for indexing
-            time.sleep(2)
+            await asyncio.sleep(2)
 
             # Search with filter for category A
             filter_query = Query().filter("category", Operator.EQ, "A")
@@ -222,7 +222,7 @@ class TestElasticsearchVectorIntegration:
                 await db.create(record)
 
             # Wait for indexing
-            time.sleep(2)
+            await asyncio.sleep(2)
 
             # Search with cosine similarity
             results = await db.vector_search(
@@ -272,7 +272,7 @@ class TestElasticsearchVectorIntegration:
             assert len(ids) == batch_size
 
             # Wait for indexing
-            time.sleep(2)
+            await asyncio.sleep(2)
 
             # Verify all records searchable
             query_vec = records[0].fields["embedding"].value
@@ -305,7 +305,7 @@ class TestElasticsearchVectorIntegration:
 
             # Store and retrieve
             record_id = await db.create(record)
-            time.sleep(1)
+            await asyncio.sleep(1)
 
             retrieved = await db.read(record_id)
             assert retrieved is not None
@@ -350,7 +350,7 @@ class TestElasticsearchVectorIntegration:
                         id=key,
                     )
                 )
-            time.sleep(2)
+            await asyncio.sleep(2)
 
             results = await db.vector_search(
                 query_vector=vectors[0],
@@ -387,7 +387,7 @@ class TestElasticsearchVectorIntegration:
                     id="b",
                 )
             )
-            time.sleep(2)
+            await asyncio.sleep(2)
 
             # Exact match on the full value returns only that record; an analyzed
             # match on the token "apple" would have returned both.

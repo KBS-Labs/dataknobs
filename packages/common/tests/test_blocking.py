@@ -39,7 +39,13 @@ async def test_detects_blocking_sleep_on_loop() -> None:
     """A synchronous ``time.sleep`` on the loop is caught (the red)."""
     with pytest.raises(blocking_error_type()):
         with assert_no_blocking():
-            time.sleep(0.01)
+            # Waived per line, because this file takes no per-file waiver: it is
+            # the detector's own suite, so switching ASYNC off over it would
+            # waive the check across the code most likely to need it. The sleep
+            # must be synchronous and must run on a live loop — that is the
+            # thing being detected — so neither `await` nor a sync test is the
+            # fix here.
+            time.sleep(0.01)  # noqa: ASYNC251
 
 
 @requires_blockbuster
@@ -58,7 +64,9 @@ async def test_detects_blocking_file_read_on_loop(tmp_path: Path) -> None:
 
     with pytest.raises(blocking_error_type()):
         with assert_no_blocking():
-            with open(target) as handle:
+            # Deliberate, and for the same reason as the sleep above: the
+            # blocking open IS the input to the detector under test.
+            with open(target) as handle:  # noqa: ASYNC230
                 handle.read()
 
 

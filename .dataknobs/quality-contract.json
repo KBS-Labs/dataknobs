@@ -88,8 +88,8 @@
         {
           "path": "packages/xization/tests",
           "tier": "deferred",
-          "ceiling": 32,
-          "reason": "26 autofixable; 6 by hand, led by 3 PTH118 and no other rule above 2"
+          "ceiling": 31,
+          "reason": "26 autofixable; the 5 by hand are 3 PTH118 and 2 E402"
         },
         {
           "path": "packages/llm/tests",
@@ -100,25 +100,25 @@
         {
           "path": "packages/common/tests",
           "tier": "deferred",
-          "ceiling": 90,
-          "reason": "79 autofixable; the 11 by hand lead with 5 N817 and 3 PLW0603, and nothing else is above 1"
+          "ceiling": 88,
+          "reason": "78 autofixable; the 10 by hand lead with 5 N817 and 3 PLW0603, and nothing else is above 1"
         },
         {
           "path": "packages/fsm/tests",
           "tier": "deferred",
-          "ceiling": 305,
-          "reason": "229 autofixable; 68 of the 76 by hand are ASYNC230/ASYNC240 fixture I/O, and 61 of those sit in three files, so this cell waits on the rule amendment that separates a shared production loop from a single test's"
+          "ceiling": 237,
+          "reason": "229 autofixable; the 8 by hand are led by 3 PTH118 with nothing else above 2. The 68 ASYNC230/ASYNC240 fixture-I/O findings that used to be this cell's whole hand-fixed half are gone — waived per file under the test-loop conditions rather than fixed, since a loop built for one test has no co-tenant to starve; the three files holding 61 of them have *_offload.py siblings that prove the production readers non-blocking"
         },
         {
           "path": "packages/bots/tests",
           "tier": "deferred",
-          "ceiling": 303,
-          "reason": "265 autofixable; the 38 by hand lead with 17 N806, then 5 ASYNC240 and 4 each of PTH118 and E402. One is an undefined name in a module skipped in its entirety, left standing deliberately: the module under test does not run against the current registry API at all, so renaming the symbol would quiet the linter and change nothing"
+          "ceiling": 295,
+          "reason": "265 autofixable; the 30 by hand lead with 17 N806, then 4 each of PTH118 and E402. One is an undefined name in a module skipped in its entirety, left standing deliberately: the module under test does not run against the current registry API at all, so renaming the symbol would quiet the linter and change nothing"
         },
         {
           "path": "packages/data/tests",
           "tier": "deferred",
-          "ceiling": 533,
+          "ceiling": 501,
           "reason": "the largest cell and the only one with a single dominating block: 130 NPY002, the legacy np.random global RNG, which is mechanical but has no autofix"
         },
         {

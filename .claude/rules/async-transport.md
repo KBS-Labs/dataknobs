@@ -23,6 +23,12 @@ concurrent conversations) one synchronous disk write or socket read freezes
 every other in-flight task. The cost is invisible in single-request tests and
 catastrophic under concurrency.
 
+The harm is therefore to **co-tenants**, and that — not the presence of the
+words `async def` — is what scopes this rule. Shipped code cannot see who else
+is on its loop and must assume the worst. A loop built for one coroutine and
+torn down after it is the one place that assumption is checkable rather than
+assumed; see [Test loops](#test-loops--where-the-named-harm-cannot-occur).
+
 ## Enforcement
 
 - **Static guard:** ruff's `ASYNC` family (`flake8-async`) is enabled in the
@@ -93,9 +99,111 @@ ignore of an `ASYNC2xx` check, and never an ignore on a true-positive blocking
 site. **A guard that ignores the defects it exists to catch is worse than no
 guard**, because it also reports green.
 
+"True positive" there means a call that blocks a loop with something to lose.
+A blocking call on a loop built for one test and torn down after it is not a
+false positive — it really does block — but it starves nothing, and the next
+section governs it under conditions of its own. Nothing in that section
+relaxes this paragraph for `packages/*/src`.
+
 > **Do NOT add `anyio` / `trio` to satisfy `ASYNC240`.** The dependency-free
 > fix is `asyncio.to_thread` around the stat/open; adding an async-filesystem
 > dependency is rejected by the dependency bar.
+
+### Test loops — where the named harm cannot occur
+
+A shipped `async def` runs on a loop whose other occupants it cannot see,
+which is why `packages/*/src` is absolute. A test's loop is not that loop:
+under `pytest-asyncio` the default test loop scope is `function`, so the loop
+is built for one test, carries only that test's coroutine, and is torn down
+after it. A blocking `open()` writing a fixture file spends wall-clock the
+test was going to spend anyway and freezes nothing, because there is nothing
+else there to freeze.
+
+That argument is narrower than it first looks, and it is the easiest one in
+this document to over-apply. It licenses an exemption only when **all three**
+hold:
+
+1. **The loop belongs to this test alone.** Verify rather than assume: the
+   default is `function`, but an `asyncio_default_test_loop_scope` in a
+   `pyproject.toml`, or a `loop_scope=` on the test or a fixture it uses, can
+   widen it. A session- or module-scoped loop has co-tenants again, and with
+   them the exemption ends.
+2. **The enclosing `async def` schedules no concurrency** — no
+   `asyncio.gather`, no `create_task`, no `TaskGroup`. Once a test runs tasks
+   concurrently the interleaving *is* the subject, and a stall in the test's
+   own scaffolding can mask the race the test was written to catch.
+3. **The call is the test's scaffolding, not its subject** — writing a fixture
+   file, stat-ing a path, reading output back to assert on it. Not a call into
+   the code under test, and not standing in for one.
+
+#### Fix it if you can — and the fixes are ordered
+
+A waiver is the last of four options, not the first.
+
+1. **Drop the `async` when the function never awaits.** An `async def` fixture
+   whose whole body is `tempfile.mkstemp` and `os.remove` is async by
+   accident; a plain `@pytest.fixture` runs it before the loop exists. A real
+   fix, and it needs no waiver.
+2. **Move the work to a sync fixture** that runs before the loop, where the
+   enclosing function does genuinely need to be async.
+3. **Waive per file**, under the three conditions above, in the form below.
+4. **Never relocate the blocking call into a sync helper called from the same
+   `async def`.** The `ASYNC2xx` members fire only inside an `async def` body,
+   so a one-line extraction turns the cell green while the loop blocks exactly
+   as before — measured, not assumed: an `open()` and a `time.sleep()` report
+   two findings inline and **zero** from a sync helper one frame away, with no
+   runtime difference between the two. That is a green light bought by moving
+   code, which is the failure this rule exists to make visible.
+
+#### Where the exemption never reaches
+
+- **`packages/*/src`.** Every `ASYNC2xx` member stays enforced, with no
+  test-shaped argument available.
+- **Any helper the shipped code can also reach.** If it is importable from a
+  package it is `src` for this purpose, whichever directory holds it.
+- **`ASYNC251` (`time.sleep`).** Not because the co-tenant argument fails —
+  it holds here as anywhere — but because there is nothing to weigh against
+  it. `await asyncio.sleep(...)` is a drop-in at no cost, so a waiver would
+  switch off a check whose fix is free. A fixed sleep waiting for an external
+  service to catch up is also a flakiness defect in its own right, which the
+  loop argument neither reaches nor excuses.
+- **A file whose subject is blocking behaviour.** A test importing
+  `assert_no_blocking` is *about* the blocking/non-blocking distinction, and a
+  per-file waiver there switches the check off over precisely the code most
+  likely to need it. The offending call in such a file is normally deliberate
+  — the red half of a reproduce-first pair, or a handle opened to hand into
+  the code whose job is to offload it. Waive per line, `# noqa: <code>` with
+  its own reason, never per file.
+
+  This is also the one place `time.sleep` inside an `async def` is correct: a
+  test asserting the detector *catches* a blocking sleep has to perform one,
+  on a live loop, which is why dropping the `async` is the wrong fix there.
+  Per line, named, with the assertion visible beside it.
+
+#### The form of the waiver
+
+Root `per-file-ignores`, one entry per file with its own reason, in the shape
+the `ASYNC` and `SIM115` blocks there already use.
+
+**Name the codes; never `ASYNC` or `ASYNC2` bare.** A file exempted for
+`ASYNC230` still reports a `time.sleep` or a `subprocess.run` added to it next
+year. That precision is the difference between a waiver and a hole.
+
+The reason must say **which of the three conditions carried it**. "It is a
+test" is not one of them, and that omission is the point: a directory name is
+not an argument, and every condition above is a property of the code that
+someone can go and check.
+
+State the cost rather than leaving it implicit: a per-file entry also unflags
+a *future* blocking call of that code in that file. That is the price of not
+writing a per-line directive at every site, and it is paid per file, with the
+file read first.
+
+Where the module a test exercises has a dedicated `*_offload.py` sibling — a
+reproduce-first test driving the production path inside `assert_no_blocking()`
+— name it in the reason. Not a condition, since a fixture that never touches
+production async code needs no sibling; but where one exists it turns "the
+scaffolding is not the subject" from an argument into a file name.
 
 ### Members with no blocking semantics
 

@@ -15,9 +15,15 @@ from dataknobs_data.records import Record
 class TestFileDatabase:
     """Test async FileDatabase implementation."""
 
-    @pytest_asyncio.fixture
-    async def temp_file(self):
-        """Create a temporary file for testing."""
+    @pytest.fixture
+    def temp_file(self):
+        """Create a temporary file for testing.
+
+        Sync on purpose. The body awaits nothing — it is `mkstemp`, `close`
+        and two `remove`s — so running it as a coroutine put blocking disk
+        I/O on the test's event loop for no benefit. As a plain fixture the
+        same calls run before the loop exists.
+        """
         fd, path = tempfile.mkstemp(suffix=".json")
         os.close(fd)
         yield path

@@ -11,7 +11,6 @@ import gzip
 import csv
 
 import pytest
-import pytest_asyncio
 
 from dataknobs_data.backends.file import (
     FileLock,
@@ -245,9 +244,14 @@ class TestFileFormats:
 class TestFileDatabaseEdgeCases:
     """Test FileDatabase edge cases."""
 
-    @pytest_asyncio.fixture
-    async def temp_db_path(self):
-        """Create a temporary database path."""
+    @pytest.fixture
+    def temp_db_path(self):
+        """Create a temporary database path.
+
+        Sync on purpose — the body awaits nothing, so running it as a
+        coroutine only served to put its `mkstemp`/`remove` calls on the
+        test's event loop.
+        """
         fd, path = tempfile.mkstemp(suffix=".json")
         os.close(fd)
         yield path
