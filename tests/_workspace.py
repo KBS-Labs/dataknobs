@@ -50,6 +50,42 @@ def load_toml(path: Path) -> dict:
     return tomllib.loads(path.read_text(encoding="utf-8"))
 
 
+def biggest_ruff_cells(contract: dict, count: int = 1) -> list[str]:
+    """The ``count`` ruff cells carrying the largest ceilings, largest first.
+
+    Asked of the declaration rather than named. Deferred cells are promoted one
+    at a time, and the tests backlog was a single glob until it was split into a
+    cell per package so each could clear on its own — it collapses back to a glob
+    when the last of them does. A literal name fails with a ``KeyError`` on the
+    day of any of those moves: a guard going red over a change it holds no
+    opinion about, saying nothing about the property it exists for.
+
+    The floor is the anti-vacuity assertion, and it is why this returns cells
+    rather than a name. Every caller needs one that measures well above zero — to
+    inflate, to push under a ceiling, or to keep a census agreeing with a
+    measurement from being two empty tallies agreeing because both are empty.
+    Once the backlog clears past this the guards stop distinguishing anything, so
+    they say so and stop, rather than passing quietly over nothing.
+
+    Lives here because two modules ask it. They had a copy each, differing in
+    sort direction and in whether the floor was checked against the smallest of
+    the chosen cells or against the only one — the same divergence the Python
+    floor extraction had before it moved here.
+    """
+    ranked = sorted(
+        contract["tools"]["ruff"]["cells"], key=lambda cell: cell["ceiling"], reverse=True
+    )
+    assert len(ranked) >= count, f"the ruff declaration holds only {len(ranked)} cells"
+    chosen = [cell["path"] for cell in ranked[:count]]
+    assert ranked[count - 1]["ceiling"] > 5, (
+        f"the {count} largest ruff ceilings are {chosen}, and the smallest of them "
+        "is at or below 5 — too small for these guards to tell a real measurement "
+        "from a clean cell. The backlog has been cleared past what they assume; "
+        "drive them over a purpose-built cell instead."
+    )
+    return chosen
+
+
 def python_floor() -> tuple[int, int]:
     """The workspace Python floor, taken from the root ``requires-python``.
 
