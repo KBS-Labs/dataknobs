@@ -3733,6 +3733,9 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
             "can_go_back": active_fsm.can_go_back(stage) and len(state.history) > 1,
             "stages": self._response.build_stages_roadmap(state),
             "subflow_stage": subflow_stage,
+            "suggestions": self._response.render_suggestions(
+                active_fsm.get_stage_suggestions(stage), state, stage_meta
+            ),
         }
 
     def _build_wizard_metadata(self, state: WizardState) -> dict[str, Any]:
@@ -3743,8 +3746,18 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
         (response decoration) to ensure consistency.
 
         The stage-derived fields come from :meth:`_stage_derived_metadata`,
-        which ``restore_from_checkpoint`` also uses; what is added here is
-        the rendered material, which a restore has no need of.
+        which ``restore_from_checkpoint`` also uses.  What is added here is
+        the material no reader takes back out of stored metadata:
+        ``normalize_wizard_state`` exposes neither ``stage_prompt`` nor
+        ``stage_mode``, so each decorates *this* turn's response and is not
+        consulted again.
+
+        "Rendered" is not the test, and using it as one is what left
+        ``suggestions`` here: it is rendered *and* stage-derived *and*
+        normalized out to callers, so a restore that did not refresh it
+        served the previous stage's quick replies.  It derives with the rest
+        now.  If anything below ever becomes readable through the normalized
+        view, it belongs in the shared method too.
 
         Args:
             state: Current wizard state
@@ -3768,9 +3781,6 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
                 "can_go_back": metadata["can_go_back"],
             },
             fallback=stage_prompt,
-        )
-        metadata["suggestions"] = self._response.render_suggestions(
-            active_fsm.get_stage_suggestions(stage), state
         )
         metadata["stage_mode"] = stage_meta.get("mode") or "structured"
 
@@ -4650,8 +4660,14 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
         suggestions: list[str],
         state: WizardState,
     ) -> list[str]:
-        """Delegate to responder.  See :meth:`WizardResponder.render_suggestions`."""
-        return self._response.render_suggestions(suggestions, state)
+        """Delegate to responder.  See :meth:`WizardResponder.render_suggestions`.
+
+        Resolves the stage metadata from ``state`` rather than from the FSM's
+        live position, so the delegate is correct outside a turn for the same
+        reason :meth:`_stage_derived_metadata` is.
+        """
+        stage_meta = self._fsm_for_state(state).stages.get(state.current_stage, {})
+        return self._response.render_suggestions(suggestions, state, stage_meta)
 
     def _build_default_context(
         self,

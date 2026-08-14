@@ -53,7 +53,14 @@ def _wizard_config(
     bank_names: tuple[str, ...] = (),
     with_history: bool = False,
 ) -> dict[str, Any]:
-    """Build a minimal valid wizard config, optionally with named banks."""
+    """Build a minimal valid wizard config, optionally with named banks.
+
+    Every stage-derived field the guard compares is given a value that
+    *differs between the stages*, so a field the restore path forgets shows
+    up as a difference.  A field left unset on both stages compares equal by
+    being empty on both sides, and the guard passes while checking nothing —
+    which is how ``subflow_stage`` and then ``suggestions`` each survived it.
+    """
     config: dict[str, Any] = {
         "name": "checkpoint-test-wizard",
         "version": "1.0",
@@ -62,6 +69,9 @@ def _wizard_config(
                 "name": "collect",
                 "is_start": True,
                 "prompt": "Hello",
+                "label": "Collect",
+                "suggestions": ["collect-one", "collect-two"],
+                "can_skip": True,
                 "schema": {
                     "type": "object",
                     "properties": {"name": {"type": "string"}},
@@ -69,7 +79,14 @@ def _wizard_config(
                 },
                 "transitions": [{"target": "done"}],
             },
-            {"name": "done", "is_end": True, "prompt": "Finished"},
+            {
+                "name": "done",
+                "is_end": True,
+                "prompt": "Finished",
+                "label": "Done",
+                "suggestions": ["done-only"],
+                "can_skip": False,
+            },
         ],
     }
     if bank_names:
@@ -108,9 +125,17 @@ def _subflow_wizard_config() -> dict[str, Any]:
                 "name": "collect",
                 "is_start": True,
                 "prompt": "Hello",
+                "label": "Collect",
+                "suggestions": ["main-one", "main-two"],
                 "transitions": [{"target": "done"}],
             },
-            {"name": "done", "is_end": True, "prompt": "Finished"},
+            {
+                "name": "done",
+                "is_end": True,
+                "prompt": "Finished",
+                "label": "Done",
+                "suggestions": ["main-done"],
+            },
         ],
         "subflows": {
             "detail": {
@@ -119,9 +144,11 @@ def _subflow_wizard_config() -> dict[str, Any]:
                         "name": "detail_start",
                         "is_start": True,
                         "prompt": "Details",
-                        # Differs from every main-flow stage, so a reading
-                        # taken off the wrong FSM is visible rather than
-                        # coinciding.
+                        "label": "Detail Start",
+                        # Distinct from every main-flow stage, so a reading
+                        # taken off the wrong FSM — or the right FSM at the
+                        # wrong stage — is visible rather than coinciding.
+                        "suggestions": ["subflow-only"],
                         "can_skip": True,
                         "transitions": [{"target": "detail_done"}],
                     },
