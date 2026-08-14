@@ -9,6 +9,7 @@ import pytest
 from dataknobs_bots.reasoning.wizard import WizardReasoning, WizardState
 from dataknobs_bots.reasoning.wizard_fsm import WizardFSM
 from dataknobs_bots.reasoning.wizard_loader import WizardConfigLoader
+from dataknobs_llm.conversations import ConversationManager
 
 
 class TestCanAutoAdvance:
@@ -701,8 +702,13 @@ class TestSkipExtractionLifecycle:
         assert fsm_state["current_stage"] == "gather"
 
         # Key assertion: skip_extraction must be False after greet
-        # so the user's first message gets extracted normally
-        assert fsm_state.get("skip_extraction", False) is False
+        # so the user's first message gets extracted normally.
+        #
+        # Subscripted, not `.get(key, False)`: the default form cannot tell a
+        # cleared flag from an unpersisted one, so it read as passing during
+        # the whole period the save path was dropping the field. Subscripting
+        # asserts the clear happened *and* that the state records it.
+        assert fsm_state["skip_extraction"] is False
 
         await provider.close()
 
@@ -868,3 +874,108 @@ class TestAutoAdvanceTransitionRecording:
         assert record.trigger == "auto_advance"
         assert record.condition_evaluated == "data.get('domain_id')"
         assert record.condition_result is True
+
+
+class TestSkipExtractionSurvivesTheTurnBoundary:
+    """The persistence round trip, which is the only way the flag is ever read.
+
+    ``run_auto_advance_loop`` sets ``skip_extraction`` while generating the
+    response at the end of a turn.  ``begin_turn`` reads it back at the start
+    of the *next* one, out of the ``WizardState`` that ``_get_wizard_state``
+    rebuilds from ``manager.metadata``.  No in-memory state object spans the
+    two turns, so a flag that does not survive the round trip is never ``True``
+    at the one place that consumes it, and the skip it names never happens.
+
+    ``TestSkipExtraction`` above covers ``to_dict``/``from_dict``, which has no
+    runtime caller — the persistence the wizard actually performs is a
+    separately maintained field list inside ``_save_wizard_state``.
+    """
+
+    CONFIG = {
+        "name": "test-wizard",
+        "stages": [
+            {
+                "name": "gather",
+                "is_start": True,
+                "prompt": "What is your name?",
+                "schema": {
+                    "type": "object",
+                    "properties": {"name": {"type": "string"}},
+                    "required": ["name"],
+                },
+                "transitions": [{"target": "review"}],
+            },
+            {"name": "review", "prompt": "Review", "transitions": [{"target": "done"}]},
+            {"name": "done", "is_end": True},
+        ],
+    }
+
+    def _reasoning(self, wizard_loader: WizardConfigLoader) -> WizardReasoning:
+        return WizardReasoning(wizard_fsm=wizard_loader.load_from_dict(self.CONFIG))
+
+    @pytest.mark.asyncio
+    async def test_flag_survives_save_and_restore(
+        self,
+        wizard_loader: WizardConfigLoader,
+        conversation_manager: ConversationManager,
+    ) -> None:
+        """A set flag is still set after the wizard's own save/restore pair."""
+        reasoning = self._reasoning(wizard_loader)
+        state = WizardState(
+            current_stage="review",
+            data={"name": "Alice"},
+            history=["gather", "review"],
+            skip_extraction=True,
+        )
+
+        await reasoning._save_wizard_state(conversation_manager, state)
+        restored = reasoning._get_wizard_state(conversation_manager)
+
+        assert restored.skip_extraction is True
+
+    @pytest.mark.asyncio
+    async def test_begin_turn_sees_a_flag_set_by_the_previous_turn(
+        self,
+        wizard_loader: WizardConfigLoader,
+        conversation_manager: ConversationManager,
+    ) -> None:
+        """The consumer's view: ``begin_turn`` hands the flag to the handle.
+
+        This is where the value is actually spent — ``process_input`` reads
+        ``handle.skip_extraction``, never the live state — so it is the
+        assertion that says the feature works rather than that a field exists.
+        """
+        reasoning = self._reasoning(wizard_loader)
+        state = WizardState(
+            current_stage="review",
+            data={"name": "Alice"},
+            history=["gather", "review"],
+            skip_extraction=True,
+        )
+        await reasoning._save_wizard_state(conversation_manager, state)
+
+        handle = await reasoning.begin_turn(conversation_manager, llm=None)
+
+        assert handle.skip_extraction is True
+
+    @pytest.mark.asyncio
+    async def test_persistence_carries_every_field_the_state_declares(
+        self,
+        wizard_loader: WizardConfigLoader,
+        conversation_manager: ConversationManager,
+    ) -> None:
+        """Guard on the class of defect, not the one field that showed it.
+
+        ``_save_wizard_state`` builds the persisted dict from its own field
+        list, so any field added to ``WizardState`` is persisted only if two
+        places are edited.  The reader defaults every key it looks up, which
+        is what turns a forgotten one into a silently wrong value rather than
+        a ``KeyError``.  Comparing key sets is what makes the omission loud.
+        """
+        reasoning = self._reasoning(wizard_loader)
+        state = WizardState(current_stage="gather", data={"name": "Alice"})
+
+        await reasoning._save_wizard_state(conversation_manager, state)
+        persisted = conversation_manager.metadata["wizard"]["fsm_state"]
+
+        assert set(persisted) == set(state.to_dict())
