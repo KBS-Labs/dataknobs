@@ -1219,3 +1219,136 @@ class TestSubflowPushRenderCount:
                 "render_count for team_lead should be 0 after subflow push "
                 f"(streaming), got {harness.wizard_data.get('_stage_render_counts', {}).get('team_lead', 0)}"
             )
+
+
+class TestSubflowMetadataDerivation:
+    """The stage-derived metadata is correct while a subflow is active.
+
+    ``_stage_derived_metadata`` resolves the active FSM from the state's
+    ``subflow_stack`` rather than from ``_subflows.get_active_fsm()``, which
+    reads a strategy attribute a *turn* maintains. That attribute is right
+    during a turn and stale outside one — after an undo it still names the
+    FSM of the turn being undone — so the state is the better source. These
+    pin that the two agree wherever the attribute is fresh, which is what
+    makes the substitution safe.
+    """
+
+    @pytest.fixture
+    def wizard_config_with_subflow(self) -> dict:
+        """Reuse the subflow config shape used by the push-guard tests."""
+        return {
+            "name": "subflow-metadata-wizard",
+            "version": "1.0",
+            "stages": [
+                {
+                    "name": "welcome",
+                    "is_start": True,
+                    "prompt": "Welcome",
+                    "transitions": [{"target": "configure"}],
+                },
+                {
+                    "name": "configure",
+                    "prompt": "Configure the feature",
+                    "can_skip": False,
+                    "transitions": [{"target": "complete"}],
+                },
+                {"name": "complete", "is_end": True, "prompt": "Done!"},
+            ],
+            "subflows": {
+                "feature_setup": {
+                    "stages": [
+                        {
+                            "name": "subflow_start",
+                            "is_start": True,
+                            "prompt": "Configure the feature details",
+                            # Differs from every main-flow stage, so a
+                            # reading taken off the wrong FSM is visible.
+                            "can_skip": True,
+                            "transitions": [{"target": "subflow_complete"}],
+                        },
+                        {
+                            "name": "subflow_complete",
+                            "is_end": True,
+                            "prompt": "Feature configured!",
+                        },
+                    ]
+                }
+            },
+        }
+
+    @pytest.fixture
+    def wizard(self, wizard_config_with_subflow: dict) -> "WizardReasoning":
+        from dataknobs_bots.reasoning.wizard_loader import WizardConfigLoader
+
+        loader = WizardConfigLoader()
+        return WizardReasoning(
+            wizard_fsm=loader.load_from_dict(wizard_config_with_subflow),
+            strict_validation=False,
+        )
+
+    @staticmethod
+    def _in_subflow() -> WizardState:
+        return WizardState(
+            current_stage="subflow_start",
+            data={"domain": "test"},
+            history=["subflow_start"],
+            subflow_stack=[
+                SubflowContext(
+                    parent_stage="configure",
+                    parent_data={},
+                    parent_history=["welcome", "configure"],
+                    return_stage="complete",
+                    result_mapping={},
+                    subflow_network="feature_setup",
+                )
+            ],
+        )
+
+    def test_state_and_turn_agree_on_the_active_fsm(self, wizard: "WizardReasoning") -> None:
+        """The substitution is only safe if these are the same FSM."""
+        state = self._in_subflow()
+        wizard._restore_fsm_state(state)
+
+        assert wizard._fsm_for_state(state) is wizard._subflows.get_active_fsm()
+
+    def test_agrees_in_the_main_flow_too(self, wizard: "WizardReasoning") -> None:
+        """An empty subflow stack resolves to the main FSM, as the turn does."""
+        state = WizardState(current_stage="configure", history=["welcome", "configure"])
+        wizard._restore_fsm_state(state)
+
+        assert wizard._fsm_for_state(state) is wizard._subflows.get_active_fsm()
+        assert wizard._fsm_for_state(state) is wizard._fsm
+
+    def test_metadata_reads_stage_flags_off_the_subflow(self, wizard: "WizardReasoning") -> None:
+        """``can_skip`` comes from the subflow's stage, not the main flow's.
+
+        Every main-flow stage here is ``can_skip: False`` and the subflow's
+        start stage is ``True``, so a reading taken off the wrong FSM — or
+        off the right FSM at the wrong stage — fails rather than coinciding.
+        """
+        state = self._in_subflow()
+        wizard._restore_fsm_state(state)
+
+        metadata = wizard._build_wizard_metadata(state)
+
+        assert metadata["can_skip"] is True
+        assert metadata["current_stage"] == "subflow_start"
+        assert metadata["subflow_stage"] == {
+            "name": "subflow_start",
+            "label": "subflow_start",
+        }
+
+    def test_progress_stays_on_the_main_flow_during_a_subflow(
+        self, wizard: "WizardReasoning"
+    ) -> None:
+        """Position reports the parent stage, so the breadcrumb does not jump."""
+        state = self._in_subflow()
+        wizard._restore_fsm_state(state)
+
+        metadata = wizard._build_wizard_metadata(state)
+
+        # "configure" is index 1 of the three main-flow stages; the subflow's
+        # own stages are not part of that count.
+        assert metadata["stage_index"] == 1
+        assert metadata["total_stages"] == 3
+        assert metadata["progress"] == pytest.approx(0.5)

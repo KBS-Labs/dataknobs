@@ -89,6 +89,7 @@ from .wizard_types import (  # noqa: F401 — re-exports for backward compat
     FinalizePreambleResult,
     NavigationCommandConfig,
     NavigationConfig,
+    StagePosition,
     StageSchema,
     SubflowContext,
     ToolResultMappingEntry,
@@ -104,6 +105,7 @@ from .wizard_types import (  # noqa: F401 — re-exports for backward compat
     is_json_safe,
     load_merge_filter,
     normalize_enum_value,
+    stage_position,
     validate_strategy_names,
 )
 
@@ -1458,11 +1460,16 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
 
         Reads ``wizard_fsm_state`` from ``node_metadata`` and writes it
         to ``manager.metadata['wizard']`` so the next ``generate()`` call
-        picks it up via ``_get_wizard_state``. Sets the flat top-level
-        keys (``current_stage`` / ``data`` / ``completed`` / ``history``)
-        that ``normalize_wizard_state`` reads with higher priority than
-        nested ``fsm_state``, so stale pre-undo values don't shadow the
-        restored snapshot.
+        picks it up via ``_get_wizard_state``. Also refreshes the flat
+        top-level keys that ``normalize_wizard_state`` reads with higher
+        priority than nested ``fsm_state``, so stale pre-undo values don't
+        shadow the restored snapshot.
+
+        Which keys those are is not decided here: it is whatever
+        :meth:`_stage_derived_metadata` produces, the same method the
+        metadata builder uses. Naming them in a list here is what let the
+        derived ones — the stage position, the roadmap, the navigation
+        flags — go on describing the stage that was just undone.
 
         Silent no-op when the node has no ``wizard_fsm_state`` (e.g.
         checkpoints predating wizard activation).
@@ -1480,12 +1487,16 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
         if not fsm_state:
             return
 
+        # Everything the stage decides moves with the stage. Writing the
+        # stored keys and stopping there left `stage_index`, the roadmap and
+        # the rest describing the stage just undone, and since the flat keys
+        # are read ahead of nested `fsm_state` those stale values won
+        # uncontested. `_stage_derived_metadata` is the same method the
+        # metadata builder uses, so the two writers cannot drift apart on
+        # which fields those are.
         wizard_meta = manager.metadata.get("wizard", {})
         wizard_meta["fsm_state"] = fsm_state
-        wizard_meta["current_stage"] = fsm_state.get("current_stage")
-        wizard_meta["data"] = fsm_state.get("data", {})
-        wizard_meta["completed"] = fsm_state.get("completed", False)
-        wizard_meta["history"] = fsm_state.get("history", [])
+        wizard_meta.update(self._stage_derived_metadata(self._state_for_snapshot(fsm_state)))
         manager.metadata["wizard"] = wizard_meta
 
     def undo_to_checkpoint(
@@ -3598,6 +3609,112 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
         self._last_wizard_state = state
         return state
 
+    @staticmethod
+    def _state_for_snapshot(fsm_state: Mapping[str, Any]) -> WizardState:
+        """Rebuild just enough ``WizardState`` to describe a stored snapshot.
+
+        Only the fields :meth:`_stage_derived_metadata` reads are restored.
+        ``transitions`` and ``tasks`` are deliberately left empty: they cost
+        a nested parse and nothing derived from the stage consults them.
+
+        ``subflow_stack`` is parsed exactly as ``_get_wizard_state`` parses
+        it, from the same stored dict -- a snapshot this could not read is
+        one the next turn could not read either, so this adds no failure
+        mode that is not already a turn away.
+
+        Args:
+            fsm_state: A stored ``WizardState.to_dict()`` payload.
+
+        Returns:
+            A state carrying the snapshot's stage, history, data and
+            subflow stack.
+        """
+        return WizardState(
+            # An empty stage is not invented: it is what a snapshot missing
+            # the key already produced here, and every derived field
+            # degrades gracefully on an unknown stage rather than raising
+            # during an undo.
+            current_stage=fsm_state.get("current_stage") or "",
+            data=dict(fsm_state.get("data", {})),
+            history=list(fsm_state.get("history", [])),
+            completed=bool(fsm_state.get("completed", False)),
+            subflow_stack=[SubflowContext.from_dict(s) for s in fsm_state.get("subflow_stack", [])],
+        )
+
+    def _fsm_for_state(self, state: WizardState) -> WizardFSM:
+        """The FSM ``state`` says is active, asked of the state rather than the turn.
+
+        ``_subflows.get_active_fsm()`` answers the same question from a
+        strategy attribute that a turn maintains, which is correct *during*
+        a turn and stale outside one — after an undo it still names the FSM
+        of the turn being undone.  The rule here is the one every writer of
+        that attribute already applies (``_restore_fsm_state`` and the
+        subflow push/pop both set it from ``subflow_stack``), so this agrees
+        with it whenever the attribute is fresh and beats it when it is not.
+
+        Args:
+            state: Wizard state naming the subflow stack, if any.
+
+        Returns:
+            The subflow's FSM when a subflow is on the stack and resolvable,
+            otherwise the main FSM.
+        """
+        if state.subflow_stack:
+            subflow = self._fsm.get_subflow(state.subflow_stack[-1].subflow_network)
+            if subflow is not None:
+                return subflow
+        return self._fsm
+
+    def _stage_derived_metadata(self, state: WizardState) -> dict[str, Any]:
+        """The wizard metadata that is a function of ``state`` and nothing else.
+
+        Shared by :meth:`_build_wizard_metadata` and
+        :meth:`restore_from_checkpoint` so the two cannot disagree.  They
+        did: restore wrote the stored keys and left every derived one
+        describing the stage just undone, because "which fields follow the
+        stage" was knowledge each writer held separately.  It is held once,
+        here, and a field added below reaches both writers.
+
+        Every lookup passes its stage explicitly.  The FSM's live position
+        is *not* consulted -- it contributes only a stage name, which the
+        state already carries, and outside a turn it is the wrong one.
+
+        When inside a subflow, ``stage_index``, ``total_stages``, and
+        ``progress`` report **main-flow** progress so the UI can render an
+        accurate overall indicator; the subflow's own stage is exposed by
+        the caller via ``subflow_stage``.
+
+        Args:
+            state: Wizard state to describe.
+
+        Returns:
+            The stage-derived subset of the canonical wizard metadata.
+        """
+        active_fsm = self._fsm_for_state(state)
+        stage = state.current_stage
+
+        # Always report main-flow progress for the roadmap / breadcrumb.
+        # During a subflow the "effective" main-flow stage is the parent
+        # stage that pushed it.
+        effective_main_stage = (
+            state.subflow_stack[-1].parent_stage if state.subflow_stack else stage
+        )
+        position = stage_position(self._fsm.stage_names, effective_main_stage)
+
+        return {
+            "current_stage": stage,
+            "stage_index": position.index,
+            "total_stages": position.total,
+            "progress": position.progress,
+            "progress_percent": position.progress * 100,
+            "completed": state.completed,
+            "data": sanitize_for_json({**state.data, **state.transient}),
+            "history": state.history,
+            "can_skip": active_fsm.can_skip(stage),
+            "can_go_back": active_fsm.can_go_back(stage) and len(state.history) > 1,
+            "stages": self._response.build_stages_roadmap(state),
+        }
+
     def _build_wizard_metadata(self, state: WizardState) -> dict[str, Any]:
         """Build canonical wizard metadata from current state.
 
@@ -3605,11 +3722,9 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
         ``_save_wizard_state`` (persistence) and ``_add_wizard_metadata``
         (response decoration) to ensure consistency.
 
-        When inside a subflow, ``stage_index``, ``total_stages``, and
-        ``progress_percent`` always report **main-flow** progress so
-        the UI can render an accurate overall progress indicator.  The
-        active subflow's stage is exposed separately via
-        ``subflow_stage``.
+        The stage-derived fields come from :meth:`_stage_derived_metadata`,
+        which ``restore_from_checkpoint`` also uses; what is added here is
+        the rendered material, which a restore has no need of.
 
         Args:
             state: Current wizard state
@@ -3617,60 +3732,33 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
         Returns:
             Canonical wizard metadata dict.
         """
-        active_fsm = self._subflows.get_active_fsm()
+        active_fsm = self._fsm_for_state(state)
+        stage = state.current_stage
+        stage_meta = active_fsm.stages.get(stage, {})
 
-        # Always report main-flow progress for the roadmap / breadcrumb
-        main_stage_names = self._fsm.stage_names
+        metadata: dict[str, Any] = self._stage_derived_metadata(state)
 
-        if state.subflow_stack:
-            # During a subflow, the "effective" main-flow stage is the
-            # parent stage that pushed the subflow.
-            effective_main_stage = state.subflow_stack[-1].parent_stage
-        else:
-            effective_main_stage = state.current_stage
-
-        try:
-            stage_index = main_stage_names.index(effective_main_stage)
-        except ValueError:
-            stage_index = 0
-
-        total_stages = len(main_stage_names)
-        progress = stage_index / max(total_stages - 1, 1)
-
-        metadata: dict[str, Any] = {
-            "current_stage": state.current_stage,
-            "stage_index": stage_index,
-            "total_stages": total_stages,
-            "progress": progress,
-            "progress_percent": progress * 100,
-            "completed": state.completed,
-            "data": sanitize_for_json({**state.data, **state.transient}),
-            "history": state.history,
-            "can_skip": active_fsm.can_skip(),
-            "can_go_back": active_fsm.can_go_back() and len(state.history) > 1,
-            "stage_prompt": self._renderer.render(
-                active_fsm.get_stage_prompt(),
-                active_fsm.current_metadata,
-                state,
-                extra_context={
-                    "can_skip": active_fsm.can_skip(),
-                    "can_go_back": (active_fsm.can_go_back() and len(state.history) > 1),
-                },
-                fallback=active_fsm.get_stage_prompt(),
-            ),
-            "suggestions": self._response.render_suggestions(
-                active_fsm.get_stage_suggestions(), state
-            ),
-            "stages": self._response.build_stages_roadmap(state),
-            "stage_mode": active_fsm.current_metadata.get("mode") or "structured",
-        }
+        stage_prompt = active_fsm.get_stage_prompt(stage)
+        metadata["stage_prompt"] = self._renderer.render(
+            stage_prompt,
+            stage_meta,
+            state,
+            extra_context={
+                "can_skip": metadata["can_skip"],
+                "can_go_back": metadata["can_go_back"],
+            },
+            fallback=stage_prompt,
+        )
+        metadata["suggestions"] = self._response.render_suggestions(
+            active_fsm.get_stage_suggestions(stage), state
+        )
+        metadata["stage_mode"] = stage_meta.get("mode") or "structured"
 
         # Expose subflow context when active
         if state.subflow_stack:
-            subflow_stage_meta = active_fsm.current_metadata
             metadata["subflow_stage"] = {
-                "name": state.current_stage,
-                "label": subflow_stage_meta.get("label", state.current_stage),
+                "name": stage,
+                "label": stage_meta.get("label", stage),
             }
 
         return metadata
@@ -4636,12 +4724,7 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
         wizard_state = self._get_wizard_state(manager)
         stage = self._fsm.current_metadata
 
-        # Calculate stage index
-        stage_names = self._fsm.stage_names
-        try:
-            stage_index = stage_names.index(wizard_state.current_stage)
-        except ValueError:
-            stage_index = 0
+        position = stage_position(self._fsm.stage_names, wizard_state.current_stage)
 
         # Get task info
         task_list = wizard_state.tasks
@@ -4663,7 +4746,7 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
             available_task_ids=[t.id for t in available_tasks],
             task_progress_percent=task_list.calculate_progress(),
             # Stage info
-            stage_index=stage_index,
+            stage_index=position.index,
             total_stages=self._fsm.stage_count,
             can_skip=self._fsm.can_skip(),
             can_go_back=self._fsm.can_go_back() and len(wizard_state.history) > 1,
@@ -4715,23 +4798,14 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
         available_tasks = task_list.get_available_tasks()
 
         # Calculate stage index if definitions provided
-        stage_index = 0
-        total_stages = 0
         current_stage = fsm_state.get("current_stage", "unknown")
-
+        stage_names: list[str] = []
         if stage_definitions:
             if isinstance(stage_definitions, dict):
                 stage_names = list(stage_definitions.keys())
             elif isinstance(stage_definitions, list):
                 stage_names = [s.get("name", "") for s in stage_definitions]
-            else:
-                stage_names = []
-
-            total_stages = len(stage_names)
-            try:
-                stage_index = stage_names.index(current_stage)
-            except ValueError:
-                stage_index = 0
+        position = stage_position(stage_names, current_stage)
 
         # Build stages roadmap from definitions if available
         stages: list[dict[str, str]] = []
@@ -4773,7 +4847,7 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
             total_tasks=len(task_list),
             available_task_ids=[t.id for t in available_tasks],
             task_progress_percent=task_list.calculate_progress(),
-            stage_index=stage_index,
-            total_stages=total_stages,
+            stage_index=position.index,
+            total_stages=position.total,
             stages=stages,
         )

@@ -16,10 +16,12 @@ from typing import Any
 
 import pytest
 
+from dataknobs_bots.bot.base import normalize_wizard_state
 from dataknobs_bots.memory.bank import MemoryBank
 from dataknobs_bots.reasoning.base import ReasoningStrategy
 from dataknobs_bots.reasoning.wizard import WizardReasoning
 from dataknobs_bots.reasoning.wizard_loader import WizardConfigLoader
+from dataknobs_bots.reasoning.wizard_types import WizardState
 
 # =====================================================================
 # Helpers
@@ -149,6 +151,102 @@ class TestWizardRestoreFromCheckpoint:
         assert wizard_meta["data"] == {"name": "Alice"}
         assert wizard_meta["completed"] is False
         assert wizard_meta["history"] == ["start"]
+
+    def test_restore_moves_every_field_that_depends_on_the_stage(self) -> None:
+        """Undo moves the stage, so it must move what the stage decides.
+
+        ``restore_from_checkpoint`` used to hand-copy four keys out of the
+        snapshot, and ``normalize_wizard_state`` reads the flat keys ahead
+        of nested ``fsm_state``.  ``stage_index`` / ``total_stages`` /
+        ``progress`` are derived from the stage and were in neither list, so
+        they survived the undo describing the stage the wizard had just left.
+
+        The reader looked like it covered this — it fell back to
+        ``fsm_state.get("stage_index", 0)`` — but no writer anywhere puts
+        ``stage_index`` inside ``fsm_state``, so the fallback could not fire
+        and the stale flat value won uncontested.
+
+        This is the narrow case that surfaced it; the guard below is the
+        one that generalizes.
+        """
+        strategy = _build_wizard()
+        manager = _StubManager()
+        # Metadata as ``_build_wizard_metadata`` leaves it on the last stage.
+        manager.metadata["wizard"] = {
+            "current_stage": "done",
+            "stage_index": 1,
+            "total_stages": 2,
+            "progress": 1.0,
+            "completed": True,
+            "data": {"name": "Alice"},
+            "history": ["collect", "done"],
+        }
+
+        strategy.restore_from_checkpoint(
+            manager,
+            {
+                "wizard_fsm_state": {
+                    "current_stage": "collect",
+                    "data": {"name": "Alice"},
+                    "completed": False,
+                    "history": ["collect"],
+                },
+            },
+        )
+
+        state = normalize_wizard_state(manager.metadata["wizard"])
+
+        assert state["current_stage"] == "collect"
+        assert state["stage_index"] == 0, (
+            "undo restored the stage but left the index on the stage it "
+            f"undid: {state['stage_index']}"
+        )
+        assert state["progress"] == 0.0, (
+            f"progress still reports the undone stage: {state['progress']}"
+        )
+
+    def test_restore_agrees_with_the_metadata_builder_at_the_same_stage(self) -> None:
+        """Guard on the class, by comparing the two writers instead of listing keys.
+
+        ``_build_wizard_metadata`` and ``restore_from_checkpoint`` both write
+        ``manager.metadata["wizard"]``; they now derive the stage-dependent
+        fields from one shared method, and this is what holds them to it.
+
+        A hand-written list of "fields the restore must also refresh" would
+        be a third place to forget one — the same shape as the defect — so
+        this compares everything the normalized view exposes instead.  That
+        generality is not theoretical: written against the first, narrower
+        fix, it caught two further stale fields (``can_go_back``, ``stages``)
+        that the hand-written list had missed.
+        """
+        strategy = _build_wizard()
+
+        # What the builder produces for the checkpoint's stage.
+        state = WizardState(
+            current_stage="collect",
+            data={"name": "Alice"},
+            history=["collect"],
+        )
+        strategy._restore_fsm_state(state)
+        built = normalize_wizard_state(strategy._build_wizard_metadata(state))
+
+        # What the restore path produces for the same stage, starting from
+        # metadata left on a later one.
+        manager = _StubManager()
+        manager.metadata["wizard"] = strategy._build_wizard_metadata(
+            WizardState(
+                current_stage="done",
+                data={"name": "Alice"},
+                history=["collect", "done"],
+            )
+        )
+        strategy.restore_from_checkpoint(
+            manager,
+            {"wizard_fsm_state": state.to_dict()},
+        )
+        restored = normalize_wizard_state(manager.metadata["wizard"])
+
+        assert restored == built
 
     def test_preserves_other_wizard_meta_keys(self) -> None:
         """Restore writes its keys without wiping out pre-existing ones."""

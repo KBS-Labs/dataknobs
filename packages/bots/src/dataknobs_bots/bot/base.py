@@ -118,7 +118,12 @@ def normalize_wizard_state(wizard_meta: dict[str, Any]) -> dict[str, Any]:
 
     result: dict[str, Any] = {
         "current_stage": current_stage,
-        "stage_index": (wizard_meta.get("stage_index") or fsm_state.get("stage_index", 0)),
+        # No fallback into ``fsm_state``: that dict is ``WizardState.to_dict()``
+        # and the position is derived from the stage rather than stored beside
+        # it, so nothing has ever written ``stage_index`` there. Reading it
+        # anyway made the flat key look guarded when it was not — the writer is
+        # what has to keep this fresh, and the undo path once didn't.
+        "stage_index": wizard_meta.get("stage_index", 0),
         "total_stages": wizard_meta.get("total_stages", 0),
         "progress": wizard_meta.get("progress", 0.0),
         "completed": wizard_meta.get("completed", False),

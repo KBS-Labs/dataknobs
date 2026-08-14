@@ -65,11 +65,17 @@ class TestNormalizeWizardState:
         assert result["history"] == ["welcome", "configure"]
 
     def test_normalize_nested_fsm_state_format(self) -> None:
-        """Verify normalization of nested (legacy) fsm_state format."""
+        """Verify normalization of nested (legacy) fsm_state format.
+
+        The nested dict is ``WizardState.to_dict()``, so the three keys
+        below are what a reader can actually find there.  ``stage_index``
+        is not among them — it is derived from the stage by whichever
+        writer builds the flat metadata — and asserting it was readable
+        here pinned a fallback that no writer could ever satisfy.
+        """
         wizard_meta = {
             "fsm_state": {
                 "current_stage": "step_2",
-                "stage_index": 2,
                 "data": {"field": "value"},
                 "history": ["step_1", "step_2"],
             }
@@ -78,9 +84,9 @@ class TestNormalizeWizardState:
         result = normalize_wizard_state(wizard_meta)
 
         assert result["current_stage"] == "step_2"
-        assert result["stage_index"] == 2
         assert result["data"] == {"field": "value"}
         assert result["history"] == ["step_1", "step_2"]
+        assert result["stage_index"] == 0
 
     def test_normalize_prefers_direct_over_nested(self) -> None:
         """Verify direct fields take precedence over fsm_state."""
@@ -274,13 +280,19 @@ class TestGetWizardState:
             assert "progress" in state
 
     async def test_returns_normalized_state_from_nested_format(self, bot: DynaBot) -> None:
-        """Verify legacy nested format is normalized correctly."""
+        """Verify legacy nested format is normalized correctly.
+
+        ``fsm_state`` is ``WizardState.to_dict()``, so the fixture carries
+        the keys that serializer emits and no others.  It deliberately has
+        no ``stage_index``: the position is derived from the stage rather
+        than stored beside it, and reading it out of ``fsm_state`` — which
+        this test used to assert — described a payload no writer produces.
+        """
         manager = SimpleNamespace(
             metadata={
                 "wizard": {
                     "fsm_state": {
                         "current_stage": "configure",
-                        "stage_index": 1,
                         "data": {"config": "value"},
                         "history": ["welcome", "configure"],
                     }
@@ -293,9 +305,11 @@ class TestGetWizardState:
 
         assert result is not None
         assert result["current_stage"] == "configure"
-        assert result["stage_index"] == 1
         assert result["data"] == {"config": "value"}
         assert result["history"] == ["welcome", "configure"]
+        # The flat key is absent here, so the caller gets the documented
+        # default rather than a position invented from the nested dict.
+        assert result["stage_index"] == 0
 
     async def test_fallback_to_storage_when_not_cached(
         self,
