@@ -188,27 +188,27 @@ class TestAdvancedFSMOperations:
         # Inspect start state
         start_info = fsm.inspect_state("start")
         assert start_info["name"] == "start"
-        assert start_info["is_start"] == True
-        assert start_info["is_end"] == False
-        assert start_info["has_transform"] == False
+        assert start_info["is_start"] is True
+        assert start_info["is_end"] is False
+        assert start_info["has_transform"] is False
         assert len(start_info["arcs"]) == 1
 
         # Inspect validate state
         validate_info = fsm.inspect_state("validate")
         assert validate_info["name"] == "validate"
-        assert validate_info["is_start"] == False
-        assert validate_info["is_end"] == False
-        assert validate_info["has_transform"] == True
+        assert validate_info["is_start"] is False
+        assert validate_info["is_end"] is False
+        assert validate_info["has_transform"] is True
         assert len(validate_info["arcs"]) == 2
 
         # Inspect process state
         process_info = fsm.inspect_state("process")
         assert process_info["name"] == "process"
-        assert process_info["has_transform"] == True
+        assert process_info["has_transform"] is True
 
         # Inspect success state
         success_info = fsm.inspect_state("success")
-        assert success_info["is_end"] == True
+        assert success_info["is_end"] is True
         assert len(success_info["arcs"]) == 0
 
     def test_get_available_transitions(self, workflow_config, custom_functions):
@@ -219,7 +219,7 @@ class TestAdvancedFSMOperations:
         start_transitions = fsm.get_available_transitions("start")
         assert len(start_transitions) == 1
         assert start_transitions[0]["target"] == "initialize"
-        assert start_transitions[0]["has_pre_test"] == False
+        assert start_transitions[0]["has_pre_test"] is False
 
         # Get transitions from validate
         validate_transitions = fsm.get_available_transitions("validate")
@@ -227,13 +227,13 @@ class TestAdvancedFSMOperations:
 
         # Find the transition to process
         process_transition = next(t for t in validate_transitions if t["target"] == "process")
-        assert process_transition["has_pre_test"] == True
+        assert process_transition["has_pre_test"] is True
 
         # Find the transition to validation_failed
         failed_transition = next(
             t for t in validate_transitions if t["target"] == "validation_failed"
         )
-        assert failed_transition["has_pre_test"] == True
+        assert failed_transition["has_pre_test"] is True
 
         # Get transitions from success (should be empty)
         success_transitions = fsm.get_available_transitions("success")
@@ -291,7 +291,7 @@ class TestAdvancedFSMOperations:
         # Enable history with max depth
         fsm.enable_history(max_depth=50)
 
-        assert fsm.history_enabled == True
+        assert fsm.history_enabled is True
         assert fsm.max_history_depth == 50
         assert fsm.execution_history is not None
         assert len(fsm.execution_history) == 0
@@ -299,7 +299,7 @@ class TestAdvancedFSMOperations:
         # Disable history
         fsm.disable_history()
 
-        assert fsm.history_enabled == False
+        assert fsm.history_enabled is False
 
     @pytest.mark.asyncio
     async def test_trace_execution(self, workflow_config, custom_functions):

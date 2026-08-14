@@ -44,7 +44,7 @@ class TestStreamingConfiguration:
         assert len(initial_states) == 1
         assert initial_states[0]["name"] == "input"
         assert len(final_states) == 2
-        assert set(s["name"] for s in final_states) == {"output", "error"}
+        assert {s["name"] for s in final_states} == {"output", "error"}
 
         # Verify arcs
         assert len(network["arcs"]) >= 5
