@@ -238,7 +238,7 @@ class TestSyntaxValidation:
         # Filters inside (( )) - should error
         template = "((Hello {{name|upper}}))"
 
-        with pytest.raises(ValueError, match="filters.*not allowed inside"):
+        with pytest.raises(ValueError, match=r"filters.*not allowed inside"):
             renderer.render(template, {"name": "alice"}, mode=TemplateMode.MIXED)
 
     def test_jinja_block_inside_conditional_raises_error(self):
@@ -248,7 +248,7 @@ class TestSyntaxValidation:
         # {% %} inside (( )) - should error
         template = "(({% if age %}age {{age}}{% endif %}))"
 
-        with pytest.raises(ValueError, match="block syntax.*not allowed inside"):
+        with pytest.raises(ValueError, match=r"block syntax.*not allowed inside"):
             renderer.render(template, {"age": 30}, mode=TemplateMode.MIXED)
 
     def test_filters_allowed_in_jinja2_mode(self):

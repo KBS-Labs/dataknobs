@@ -77,7 +77,7 @@ def test_pkgutil_resolve_name_is_flagged_when_qualified(tmp_path: Path) -> None:
         "import pkgutil\n\n\ndef f(p):\n    return pkgutil.resolve_name(p)\n",
     )
 
-    with pytest.raises(AssertionError, match="pkgutil.resolve_name"):
+    with pytest.raises(AssertionError, match=r"pkgutil\.resolve_name"):
         assert_no_ad_hoc_dotted_import(tmp_path)
 
 

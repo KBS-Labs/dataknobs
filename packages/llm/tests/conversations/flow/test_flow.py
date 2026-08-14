@@ -61,7 +61,7 @@ def test_conversation_flow_creation():
 def test_conversation_flow_validation():
     """Test ConversationFlow validation."""
     # Missing initial state
-    with pytest.raises(ValueError, match="initial_state.*not found"):
+    with pytest.raises(ValueError, match=r"initial_state.*not found"):
         ConversationFlow(
             name="test",
             initial_state="nonexistent",

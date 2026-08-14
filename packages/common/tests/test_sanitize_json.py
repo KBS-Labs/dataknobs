@@ -84,7 +84,7 @@ class TestSanitizeForJsonError:
 
     def test_raises_with_paths(self) -> None:
         data = {"a": lambda: None, "b": {"c": object()}}
-        with pytest.raises(SerializationError, match="a.*type=function"):
+        with pytest.raises(SerializationError, match=r"a.*type=function"):
             sanitize_for_json(data, on_drop="error")
 
     def test_collects_all_paths(self) -> None:

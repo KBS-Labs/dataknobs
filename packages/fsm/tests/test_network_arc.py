@@ -120,10 +120,10 @@ class TestStateNetwork:
         assert arc2.metadata["priority"] == 1
 
         # Try adding arc with non-existent states
-        with pytest.raises(ValueError, match="Source state .* not found"):
+        with pytest.raises(ValueError, match=r"Source state .* not found"):
             network.add_arc("nonexistent", "s2")
 
-        with pytest.raises(ValueError, match="Target state .* not found"):
+        with pytest.raises(ValueError, match=r"Target state .* not found"):
             network.add_arc("s1", "nonexistent")
 
     def test_remove_arc(self):

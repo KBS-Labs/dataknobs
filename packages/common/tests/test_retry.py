@@ -865,7 +865,7 @@ class TestExecuteSync:
         executor = RetryExecutor(config)
         obj = _AsyncCallableObject()
 
-        with pytest.raises(TypeError, match="awaitable|synchronous callable"):
+        with pytest.raises(TypeError, match=r"awaitable|synchronous callable"):
             executor.execute_sync(obj)
 
     def test_sync_callable_returning_coroutine_raises_type_error(self):
@@ -882,7 +882,7 @@ class TestExecuteSync:
         def returns_coroutine() -> object:
             return _inner()  # a coroutine object, not awaited
 
-        with pytest.raises(TypeError, match="awaitable|synchronous callable"):
+        with pytest.raises(TypeError, match=r"awaitable|synchronous callable"):
             executor.execute_sync(returns_coroutine)
 
     def test_sleeps_between_attempts(self, monkeypatch):

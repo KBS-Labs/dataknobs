@@ -110,7 +110,7 @@ class TestConfigSchema:
 
     def test_fsm_validation_invalid_main_network(self):
         """Test that FSM validation fails with invalid main network."""
-        with pytest.raises(ValidationError, match="Main network.*not found"):
+        with pytest.raises(ValidationError, match=r"Main network.*not found"):
             FSMConfig(
                 name="test_fsm",
                 networks=[

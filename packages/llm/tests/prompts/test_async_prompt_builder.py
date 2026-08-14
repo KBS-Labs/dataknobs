@@ -39,7 +39,7 @@ class TestAsyncPromptBuilderInitialization:
         library = ConfigPromptLibrary()
         sync_adapter = DictResourceAdapter({"key": "value"})
 
-        with pytest.raises(TypeError, match="synchronous.*PromptBuilder"):
+        with pytest.raises(TypeError, match=r"synchronous.*PromptBuilder"):
             AsyncPromptBuilder(library=library, adapters={"data": sync_adapter})
 
     def test_initialization_with_validation_level(self):
@@ -355,7 +355,7 @@ class TestAsyncPromptBuilderRAG:
         # Set raise_on_rag_error=True to get exception instead of warning
         builder = AsyncPromptBuilder(library=library, raise_on_rag_error=True)
 
-        with pytest.raises((KeyError, RuntimeError), match="Adapter.*not found|RAG search failed"):
+        with pytest.raises((KeyError, RuntimeError), match=r"Adapter.*not found|RAG search failed"):
             await builder.render_system_prompt("analyze")
 
     async def test_render_rag_error_handling(self):
