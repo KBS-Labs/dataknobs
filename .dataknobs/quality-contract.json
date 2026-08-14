@@ -112,8 +112,8 @@
         {
           "path": "packages/bots/tests",
           "tier": "deferred",
-          "ceiling": 295,
-          "reason": "265 autofixable; the 30 by hand lead with 17 N806, then 4 each of PTH118 and E402. One is an undefined name in a module skipped in its entirety, left standing deliberately: the module under test does not run against the current registry API at all, so renaming the symbol would quiet the linter and change nothing"
+          "ceiling": 288,
+          "reason": "262 autofixable (203 safe, 59 unsafe); the 26 by hand lead with 17 N806, then 4 PTH118"
         },
         {
           "path": "packages/data/tests",
@@ -183,7 +183,7 @@
         {
           "path": "packages/bots/src",
           "tier": "transitional",
-          "ceiling": 182,
+          "ceiling": 168,
           "reason": "ratchet group"
         },
         {

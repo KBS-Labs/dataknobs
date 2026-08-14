@@ -228,6 +228,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   rewritten, for the same reason it always was on the file backend:
   normalising it would move every state document that tenant has written.
 
+### Removed
+
+- **Three review tools that could not be called successfully.**
+  `ReviewArtifactTool`, `RunAllReviewsTool` and `GetReviewResultsTool` were
+  exported from `dataknobs_bots.review` and broken against the
+  `ArtifactRegistry` they address: `registry.get()` had become `async` and was
+  still called without `await`, while `add_review()` and `get_definition()` do
+  not exist on it at all. The un-awaited `get` was the quietest of the three —
+  a coroutine is truthy, so the `if not artifact` guard passed and a coroutine
+  travelled onward in place of an `Artifact`.
+
+  Nothing reported it. The module's entire test suite was skipped under a note
+  saying the tools still used the old synchronous registry API — accurate, and
+  never acted on. A skipped suite reports green, so three broken public classes
+  sat behind a passing build.
+
+  No working caller can exist, because every entry point raises or misbehaves
+  on first use. This therefore removes a latent `AttributeError` rather than a
+  capability, and converts it into an `ImportError` at the point where it is
+  actionable. The capability itself was superseded by
+  `ArtifactRegistry.submit_for_review()` and `get_evaluations()` when the
+  rubric system replaced persona-based reviews.
+
+  The rest of the package is unaffected: `ReviewExecutor`,
+  `ReviewProtocolDefinition` and the personas remain exported and remain
+  reachable through a wizard's `review_protocols` configuration.
+
 ### Fixed
 
 - **A wizard skipped extraction after an auto-advance under `advance()` and
