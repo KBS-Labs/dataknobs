@@ -226,9 +226,9 @@ async def example_file_to_file_streaming():
         )
 
         print(f"\nStreaming complete!")
-        print(f"  Total records: {results.get('total_processed', 0)}")
-        print(f"  Successful: {results.get('successful', 0)}")
-        print(f"  Failed: {results.get('failed', 0)}")
+        print(f"  Total records: {results['total_processed']}")
+        print(f"  Successful: {results['successful']}")
+        print(f"  Failed: {results['failed']}")
 
         # Read and display a few output records
         print("\nSample output records:")
@@ -282,8 +282,8 @@ async def example_generator_to_file_streaming():
         )
 
         print(f"\nReal-time processing complete!")
-        print(f"  Total records: {results.get('total_processed', 0)}")
-        print(f"  Processing time: {results.get('duration', 0):.2f}s")
+        print(f"  Total records: {results['total_processed']}")
+        print(f"  Processing time: {results['duration']:.2f}s")
 
         # Verify output
         lines = await asyncio.to_thread(_read_lines, output_path)
@@ -352,7 +352,7 @@ async def example_pipeline_streaming():
             sink=str(stage1_path),
             chunk_size=5,
         )
-        print(f"  Cleaned {stage1_results.get('total_processed', 0)} records")
+        print(f"  Cleaned {stage1_results['total_processed']} records")
 
         print("\nStage 2: Data Processing")
         stage2_fsm = AsyncSimpleFSM(stage2_config)
@@ -361,7 +361,7 @@ async def example_pipeline_streaming():
         stage2_results = await stage2_fsm.process_stream(
             source=str(stage1_path), sink=str(final_path), chunk_size=5, use_streaming=True
         )
-        print(f"  Processed {stage2_results.get('total_processed', 0)} records")
+        print(f"  Processed {stage2_results['total_processed']} records")
 
         print("\nPipeline complete!")
         print(f"  Final output: {final_path}")

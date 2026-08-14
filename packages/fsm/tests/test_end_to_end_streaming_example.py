@@ -6,12 +6,19 @@ multi-stage pipeline processing.
 """
 
 import json
+import re
 import tempfile
 from pathlib import Path
 import pytest
 
 from dataknobs_fsm import AsyncSimpleFSM
-from end_to_end_streaming import generate_streaming_data, create_streaming_fsm_config
+from end_to_end_streaming import (
+    create_streaming_fsm_config,
+    example_file_to_file_streaming,
+    example_generator_to_file_streaming,
+    example_pipeline_streaming,
+    generate_streaming_data,
+)
 
 
 class TestStreamingConfiguration:
@@ -140,9 +147,15 @@ class TestFileToFileStreaming:
                 source=str(input_path), sink=str(output_path), chunk_size=5, use_streaming=True
             )
 
-            # Verify processing results
-            assert results.get("successful", 0) > 0
-            assert results.get("failed", 0) == 0
+            # Verify processing results. Subscripted, not `.get(key, 0)`: the
+            # default form makes an absent key indistinguishable from a zero, so
+            # `results.get("failed", 0) == 0` passes just as readily when the API
+            # has stopped returning "failed" at all. That is the same swallowing
+            # that let the example print `Total records: 0` for a year — an
+            # assertion that cannot fail on an absence is not guarding one.
+            assert results["successful"] > 0
+            assert results["failed"] == 0
+            assert results["total_processed"] == len(input_data)
 
             # Verify output file contents
             with open(output_path) as f:
@@ -568,6 +581,68 @@ class TestErrorHandling:
         finally:
             input_path.unlink(missing_ok=True)
             output_path.unlink(missing_ok=True)
+
+
+class TestExamplesReportWhatTheyProcessed:
+    """The numbers the examples print, which is all a reader of them sees.
+
+    Every other test in this file rebuilds the pipeline and drives the API
+    directly. That covers the FSM and covers nothing about the example: its own
+    reporting code had never been executed by anything, and it was reading three
+    keys the API does not return. Because those reads were ``results.get(key, 0)``
+    the miss could not surface as an error — it printed ``Total records: 0``
+    directly beneath ``Successful: 100``, in a file whose entire purpose is to be
+    read and copied.
+
+    So these call the example's functions rather than reimplementing them, and
+    assert on what they emit. A test that rebuilds the work it is checking cannot
+    see a defect that lives in the part it rebuilt.
+    """
+
+    @staticmethod
+    def _reported_counts(output: str, label: str) -> list[int]:
+        """Every number the example printed against a given label."""
+        return [
+            int(match)
+            for line in output.splitlines()
+            if label in line
+            for match in re.findall(r"\d+", line.split(label, 1)[1])[:1]
+        ]
+
+    @pytest.mark.asyncio
+    async def test_file_to_file_example_reports_its_record_count(self, capsys) -> None:
+        """It generates 100 records, so it has to say so."""
+        await example_file_to_file_streaming()
+        output = capsys.readouterr().out
+
+        assert self._reported_counts(output, "Total records:") == [100], (
+            "the file-to-file example did not report the 100 records it "
+            f"generated. It printed:\n{output}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_generator_example_reports_its_record_count(self, capsys) -> None:
+        """It streams 50 records from the generator."""
+        await example_generator_to_file_streaming()
+        output = capsys.readouterr().out
+
+        assert self._reported_counts(output, "Total records:") == [50], (
+            "the generator example did not report the 50 records it streamed. "
+            f"It printed:\n{output}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_pipeline_example_reports_both_stage_counts(self, capsys) -> None:
+        """Both stages carry the same 30 records, and both report them."""
+        await example_pipeline_streaming()
+        output = capsys.readouterr().out
+
+        assert self._reported_counts(output, "Cleaned") == [30], (
+            f"stage 1 did not report its 30 records. It printed:\n{output}"
+        )
+        assert self._reported_counts(output, "Processed") == [30], (
+            f"stage 2 did not report its 30 records. It printed:\n{output}"
+        )
 
 
 if __name__ == "__main__":
