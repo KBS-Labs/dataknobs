@@ -219,7 +219,8 @@ fi
 # The formatter's population, resolved the same way and kept separate.
 #
 # It is not VALIDATE_TARGETS. That set is the *linter's*, and it deliberately
-# omits every cell whose ruff tier is deferred — packages/*/tests among them.
+# omits every cell whose ruff tier is deferred — the ten packages/<pkg>/tests
+# cells among them.
 # The quality contract enforces `format` at ceiling 0 on all ten of its cells,
 # so borrowing the linter's list here checked 597 of 1,471 files and printed a
 # clean verdict over the other 874.
