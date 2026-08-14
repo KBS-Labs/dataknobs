@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import FrozenInstanceError
 from enum import Enum
 
 import pytest
@@ -40,7 +41,7 @@ def test_callable_discriminator_conforms_to_protocol() -> None:
 
 def test_callable_discriminator_is_frozen() -> None:
     d = CallableDiscriminator(lambda v: _Kind.A)
-    with pytest.raises(Exception):
+    with pytest.raises(FrozenInstanceError):
         d.fn = lambda v: _Kind.B  # type: ignore[misc]
 
 

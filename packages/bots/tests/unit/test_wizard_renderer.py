@@ -12,6 +12,7 @@ from typing import Any
 
 import pytest
 from jinja2 import TemplateSyntaxError, UndefinedError
+from jinja2.exceptions import SecurityError
 
 from dataknobs_bots.reasoning.wizard_renderer import WizardRenderer
 
@@ -174,7 +175,12 @@ class TestSandboxing:
     ) -> None:
         """SSTI payload attempting RCE via attribute traversal is blocked."""
         payload = "{{ ''.__class__.__mro__[1].__subclasses__() }}"
-        with pytest.raises(Exception):  # SecurityError from sandbox
+        # Named, because this test's claim is that the SANDBOX refused it. A bare
+        # `Exception` passes just as well when the payload merely fails to
+        # evaluate — an AttributeError or UndefinedError on a renamed dunder — and
+        # that outcome says nothing about whether traversal is blocked. The
+        # `match` pins the refusal to the first hop, `__class__`.
+        with pytest.raises(SecurityError, match="access to attribute '__class__'"):
             renderer.render(payload, stage, state)
 
 

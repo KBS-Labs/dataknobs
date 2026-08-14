@@ -7,6 +7,12 @@ import pytest
 import yaml
 
 from dataknobs_config import Config, ConfigNotFoundError, ValidationError
+
+# Aliased deliberately. `dataknobs_config.exceptions` defines its own
+# `FileNotFoundError`, which shadows the builtin of that name and does not
+# inherit from it, so importing it unaliased into a test module would silently
+# rebind the builtin for the rest of the file.
+from dataknobs_config.exceptions import FileNotFoundError as ConfigFileNotFoundError
 from dataknobs_config.examples import DatabaseFactory
 
 
@@ -158,7 +164,9 @@ class TestFileLoading:
 
     def test_nonexistent_file(self):
         """Test loading nonexistent file."""
-        with pytest.raises(Exception):  # FileNotFoundError or ConfigFileNotFoundError
+        # It is the package's own error, not the builtin — which the loose form
+        # could not distinguish, and the two are unrelated types.
+        with pytest.raises(ConfigFileNotFoundError):
             Config.from_file("/nonexistent/file.yaml")
 
 

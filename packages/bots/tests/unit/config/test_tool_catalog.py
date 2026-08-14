@@ -539,8 +539,11 @@ class TestToolInstantiation:
             name="bad_tool",
             class_path="nonexistent.module.Tool",
         )
-        with pytest.raises(Exception):
+        with pytest.raises(DottedPathError) as exc_info:
             catalog.create_tool_registry(strict=True)
+        # strict=True re-raises the resolution failure unchanged, so the reason
+        # survives — an absent module, not a module that imported and blew up.
+        assert exc_info.value.reason is DottedPathReason.MODULE_NOT_FOUND
 
 
 # -- Default Catalog Tests --
