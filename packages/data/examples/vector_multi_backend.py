@@ -28,6 +28,18 @@ from dataknobs_data.fields import Field, VectorField
 from dataknobs_data.query import Query, Operator
 
 
+def _remove_if_present(filepath: str) -> None:
+    """Delete a file if it is there. Blocking — call it via `asyncio.to_thread`.
+
+    Kept as a plain sync function with one sync and one async caller. The sync
+    caller runs it directly; the async one offloads it, because a blocking
+    syscall inside an `async def` stalls the entire event loop rather than just
+    the coroutine that made it.
+    """
+    if os.path.exists(filepath):
+        os.unlink(filepath)
+
+
 class MultiBackendVectorExample:
     """Demonstrates vector search across multiple backend types."""
 
@@ -184,8 +196,8 @@ class MultiBackendVectorExample:
 
         finally:
             # Clean up file if temporary
-            if cleanup_file and os.path.exists(filepath):
-                os.unlink(filepath)
+            if cleanup_file:
+                _remove_if_present(filepath)
 
     async def run_async_memory_example(self) -> List[Any]:
         """Demonstrate vector search with async Memory backend."""
@@ -268,9 +280,11 @@ class MultiBackendVectorExample:
             return results
 
         finally:
-            # Clean up file if temporary
-            if cleanup_file and os.path.exists(filepath):
-                os.unlink(filepath)
+            # Clean up file if temporary. Offloaded because this method is
+            # async: the sync sibling above runs the same helper directly, and
+            # the only difference is whose loop the syscall would block.
+            if cleanup_file:
+                await asyncio.to_thread(_remove_if_present, filepath)
 
     def run_s3_example_info(self):
         """Provide information about S3 backend vector support."""

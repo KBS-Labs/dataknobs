@@ -124,7 +124,7 @@
         {
           "path": "packages/*/examples",
           "tier": "deferred",
-          "ceiling": 208,
+          "ceiling": 195,
           "reason": "~90% under data/ and fsm/, and 88% of it autofixable tidy-up; needs a policy call on whether an example may carry an unused import for illustration, since this is the code consumers copy"
         },
         {
@@ -138,12 +138,6 @@
           "tier": "deferred",
           "ceiling": 2,
           "reason": "one sitting, alongside scripts and docs"
-        },
-        {
-          "path": "packages/*/docs",
-          "tier": "deferred",
-          "ceiling": 5,
-          "reason": "all in a single fsm/ module"
         }
       ]
     },
@@ -263,12 +257,6 @@
           "tier": "unchecked",
           "ceiling": 0,
           "reason": "outside the target set; developer utilities that ship to nobody"
-        },
-        {
-          "path": "packages/*/docs",
-          "tier": "unchecked",
-          "ceiling": 0,
-          "reason": "outside the target set; one illustrative module under fsm/"
         }
       ]
     },
@@ -317,12 +305,6 @@
         },
         {
           "path": "packages/*/benchmarks",
-          "tier": "enforced",
-          "ceiling": 0,
-          "reason": "formatted by the workspace-wide adoption; a regression fails"
-        },
-        {
-          "path": "packages/*/docs",
           "tier": "enforced",
           "ceiling": 0,
           "reason": "formatted by the workspace-wide adoption; a regression fails"

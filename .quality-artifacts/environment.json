@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-08-14T19:22:46Z",
+  "timestamp": "2026-08-14T19:47:05Z",
   "python_version": "Python 3.12.12",
   "uv_version": "uv 0.12.4 (Homebrew 2026-08-13 aarch64-apple-darwin)",
   "os": "Darwin",
   "os_version": "24.6.0",
-  "git_branch": "sbk/wizard-skip-extraction-persistence",
-  "git_commit": "55dff41ea05cece41afd8feb4a41bf1677c676e1",
+  "git_branch": "sbk/async-in-examples",
+  "git_commit": "94dd139d92ab1c2c320bfc21967bb2450aa30f6d",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }
