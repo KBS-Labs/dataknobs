@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-08-14T21:37:18Z",
+  "timestamp": "2026-08-14T22:31:49Z",
   "python_version": "Python 3.12.12",
   "uv_version": "uv 0.12.4 (Homebrew 2026-08-13 aarch64-apple-darwin)",
   "os": "Darwin",
   "os_version": "24.6.0",
   "git_branch": "sbk/wizard-stage-derived-fields",
-  "git_commit": "23a67380989cb37e7239b6e2a5e40fac2f2c3d90",
+  "git_commit": "066e65a157a7fe6f4beb60a4f8d4306853d2d6aa",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }
