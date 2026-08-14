@@ -83,7 +83,7 @@
           "path": "packages/utils/tests",
           "tier": "deferred",
           "ceiling": 30,
-          "reason": "20 autofixable; the hand half is 9 os.path call sites the Path migration wants converted"
+          "reason": "20 autofixable, but only 4 of them safely — a plain --fix barely moves this cell and --unsafe-fixes clears two thirds of it; the 10 by hand are 9 os.path call sites the Path migration wants converted (5 PTH118, 4 PTH119) and one N806"
         },
         {
           "path": "packages/xization/tests",
@@ -125,19 +125,19 @@
           "path": "packages/*/examples",
           "tier": "deferred",
           "ceiling": 195,
-          "reason": "~90% under data/ and fsm/, and 88% of it autofixable tidy-up; needs a policy call on whether an example may carry an unused import for illustration, since this is the code consumers copy"
+          "reason": "92% under data/ and fsm/, and 99% of it autofixable tidy-up — 176 safe, 18 unsafe, and a single finding left to read; needs a policy call on whether an example may carry an unused import for illustration, since this is the code consumers copy"
         },
         {
           "path": "packages/*/scripts",
           "tier": "deferred",
           "ceiling": 6,
-          "reason": "one sitting, alongside benchmarks and docs"
+          "reason": "one sitting, alongside benchmarks; all 6 carry a safe fix"
         },
         {
           "path": "packages/*/benchmarks",
           "tier": "deferred",
           "ceiling": 2,
-          "reason": "one sitting, alongside scripts and docs"
+          "reason": "one sitting, alongside scripts; of the 2, one carries an unsafe fix and the other is a PYI056 to read"
         }
       ]
     },
