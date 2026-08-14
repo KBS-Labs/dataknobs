@@ -535,6 +535,89 @@ format/tests exceeds its ceiling: 21 findings against 20 allowed
     ... and 11 more
 ```
 
+### Reading a backlog: `census`
+
+A ceiling is denominated in findings, so `check` answers *whether* a cell is
+over budget and — since the file names are carried out of the measurement —
+*where*. It has never answered *what*. A cell at 657 might be one mechanical
+omission repeated six hundred times or six hundred separate judgements, and
+those have entirely different plans.
+
+`census` answers that from the same run:
+
+```bash
+# Every finding in every measured cell, broken down by the rule it names
+uv run python bin/quality-contract.py census --tool mypy
+uv run python bin/quality-contract.py census --tool ruff
+
+# One cell at a time, and machine-readable
+uv run python bin/quality-contract.py census --tool ruff --cell packages/data/tests
+uv run python bin/quality-contract.py census --tool mypy --json
+```
+
+The output lists every cell the run covered — including the ones that measured
+nothing, because "this cell is clean" and "the run never reached this cell" are
+different facts and a table showing only what was found renders them
+identically:
+
+```
+mypy census — N finding(s) under pyproject.toml
+
+per cell
+  packages/<name>/src: N  (transitional, ceiling N)
+      assignment: ...
+      arg-type: ...
+
+per rule, across every cell read
+  assignment: ...
+```
+
+Two flags widen the question, and both are type-checker-only — `census` refuses
+them for `ruff`, which has neither an unmeasured tier nor per-module
+configuration sections, rather than accepting them and quietly doing nothing:
+
+| Flag | What it changes |
+|---|---|
+| `--include-unmeasured` | reads the `unchecked` cells too. Their ceiling of zero is not a measurement of zero — nothing points the type checker at them, and `verify` insists the ceiling stays zero precisely so that nothing reads their silence as a count |
+| `--without-overrides` | measures with the `[[tool.mypy.overrides]]` sections that relax strictness over **first-party** code removed. The sections waiving missing stubs for third-party libraries are left in place: their findings are the absence of type annotations in somebody else's library, which is neither our backlog nor ours to fix |
+
+Which modules count as first-party is read from `mypy_path` rather than listed,
+so a package added to the workspace is covered on the day it appears. The
+stripped configuration is generated per run as `.mypy-census.toml` at the
+repository root — it has to be at the root, because `mypy_path` is a list of
+*relative* paths and the same file elsewhere resolves a different tree — and
+deleted afterwards. It is also gitignored, so an interrupted run leaves a stray
+file rather than a second type-checker configuration for a later commit to pick
+up. That run gets its own cache under `.mypy_cache/census`, so a measurement
+taken under a configuration nobody has adopted cannot be served from a cache
+populated under the declared one.
+
+Three things a census is not:
+
+- **Not a verdict.** A census that ran exits 0 however large the backlog it
+  found. The one command whose purpose is to read a backlog would otherwise look
+  like a failing check, and a caller would learn to ignore its status. A census
+  that *refused* — an unusable contract, a flag the tool has no use for — exits
+  non-zero, because that one is a report about the request rather than the tree.
+- **Not a ratchet move.** It never touches `.dataknobs/quality-contract.json`.
+  A cell measuring under its ceiling is a `update-baseline` decision, made
+  deliberately in a pull request; a measurement that also moved the thing it
+  measured would leave nobody able to say what the tree looked like beforehand.
+- **Not available for `format`.** That tool's unit is files it would rewrite,
+  not rules broken, so a per-rule census of it is a category error rather than a
+  smaller version of this one. It is refused with that sentence rather than
+  returning an empty table, since an empty table is also what a clean tree looks
+  like.
+
+Run `uv sync --all-packages` first. A bare `uv sync` under-installs the
+workspace and inflates the type checker's findings across several cells, which
+reads as a clean tree failing its own gate — and in a census it reads as a
+backlog that is not there.
+
+No counts are recorded on this page. A number in prose is a number nobody
+compares, which is the failure the contract's ceilings exist to have ended; a
+census is re-run at the commit it is quoted against.
+
 ## Configuration
 
 ### Linting and Code Style
