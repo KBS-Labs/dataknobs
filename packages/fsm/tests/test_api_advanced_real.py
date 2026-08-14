@@ -272,7 +272,7 @@ class TestAdvancedFSMExecutionContext:
         hooks = ExecutionHook(on_state_enter=on_enter, on_state_exit=on_exit)
         advanced_fsm.set_hooks(hooks)
 
-        async with advanced_fsm.execution_context({"test": "data"}) as context:
+        async with advanced_fsm.execution_context({"test": "data"}):
             pass  # Just test context creation and cleanup
 
         # Hooks should have been called

@@ -231,7 +231,7 @@ class TestStreamExecutor:
 
         # Mock engine execution
         with patch.object(executor.engine, "execute", return_value=(True, "result")):
-            result = executor.execute_stream(pipeline)
+            executor.execute_stream(pipeline)
 
         # Verify transformations were applied
         assert len(transform_calls) == 4  # 2 transforms x 2 records

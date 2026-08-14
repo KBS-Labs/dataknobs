@@ -347,7 +347,7 @@ class TestCustomFunctionErrors:
 
         # Should raise error when building FSM without the required function
         with pytest.raises(ValueError, match="Registered function not found: missing_func"):
-            fsm = SimpleFSM(config)
+            SimpleFSM(config)
 
     def test_state_transform_exception_handling(self):
         """Test handling of exceptions in state transform functions.

@@ -196,7 +196,7 @@ class TestDatabaseStorageFactory:
 
             # Try to load them back
             for history in histories:
-                loaded = await storage.load_history(history.execution_id)
+                await storage.load_history(history.execution_id)
                 # Loaded might be None if backend doesn't persist or might be actual data
                 # This depends on the backend implementation
         finally:

@@ -367,7 +367,7 @@ class TestAsyncStreamContext:
             return True
 
         # Process should handle error
-        metrics = await context.stream_async(failing_source(), sink_func)
+        await context.stream_async(failing_source(), sink_func)
 
         assert context.status == StreamStatus.ERROR
 
@@ -439,7 +439,7 @@ class TestAsyncStreamContext:
             return True
 
         # Process should stop after collecting 3 chunks
-        metrics = await context.stream_async(infinite_source(), sink_func)
+        await context.stream_async(infinite_source(), sink_func)
 
         # May collect a few more due to buffering
         assert len(collected) >= 3

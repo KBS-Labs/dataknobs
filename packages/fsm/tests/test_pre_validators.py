@@ -133,7 +133,7 @@ def transform(data, context):
 
         context = ExecutionContext(data_mode=ProcessingMode.SINGLE)
         engine = fsm.get_async_engine()
-        success, result = await engine.execute(context, {"test": "data"})
+        success, _result = await engine.execute(context, {"test": "data"})
 
         # If assertions in the functions pass, execution succeeds
         assert success
@@ -185,7 +185,7 @@ def transform(data, context):
         context.variables = {"shared_data": "initial"}
 
         engine = fsm.get_async_engine()
-        success, result = await engine.execute(context, {"test": "data"})
+        success, _result = await engine.execute(context, {"test": "data"})
 
         # Verify execution completed
         assert success
@@ -194,8 +194,6 @@ def transform(data, context):
 
     async def test_arc_definition_order_preserved(self):
         """Test that arcs with equal priority are selected in definition order."""
-        arc_execution_order = []
-
         # Create FSM configuration with multiple arcs of same priority
         config = FSMConfig(
             name="test_fsm",
@@ -252,7 +250,7 @@ def transform(data, context):
         # First arc should be selected due to definition order
         context = ExecutionContext(data_mode=ProcessingMode.SINGLE)
         engine = fsm.get_async_engine()
-        success, result = await engine.execute(context, {"test": "data"})
+        success, _result = await engine.execute(context, {"test": "data"})
 
         assert success
         # Should have transitioned to path1 (first defined arc)

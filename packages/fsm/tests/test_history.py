@@ -47,7 +47,7 @@ class TestExecutionHistory:
         assert history.total_steps == 1
 
         # Add second step
-        step2 = history.add_step(state_name="process", network_name="main", data={"value": 2})
+        history.add_step(state_name="process", network_name="main", data={"value": 2})
 
         assert history.total_steps == 2
         assert len(history.get_path_to_current()) == 2
@@ -95,10 +95,10 @@ class TestExecutionHistory:
 
         # Main path
         step1 = history.add_step("start", "main")
-        step2 = history.add_step("process", "main")
+        history.add_step("process", "main")
 
         # Branch from step1
-        step3 = history.add_step("alternate", "main", parent_step_id=step1.step_id)
+        history.add_step("alternate", "main", parent_step_id=step1.step_id)
 
         paths = history.get_all_paths()
         assert len(paths) == 2  # Two paths: start->process and start->alternate

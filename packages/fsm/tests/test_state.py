@@ -177,10 +177,14 @@ class TestStateDefinition:
         # Valid data
         is_valid, errors = state.validate_data({"value": 42})
         assert is_valid is True
+        assert errors == []
 
-        # Invalid data
+        # Invalid data. The messages are asserted too: the flag alone is
+        # satisfied by a validator that reports the failure and says nothing
+        # about it, which is what the discarded binding here used to hide.
         is_valid, errors = state.validate_data({"wrong": "field"})
         assert is_valid is False
+        assert errors
 
     def test_validate_data_without_schema(self):
         """Test data validation without schema."""
@@ -402,7 +406,7 @@ class TestStateIntegration:
         instance = StateInstance(definition=definition)
 
         # Valid data
-        is_valid, errors = definition.validate_data({"value": 42})
+        is_valid, _errors = definition.validate_data({"value": 42})
         assert is_valid is True
 
         instance.enter({"value": 42})

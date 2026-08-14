@@ -109,7 +109,7 @@ class TestExecutionEngineReal:
             context.current_state = "start"
 
             # Execute
-            success, result = await engine.execute(context)
+            success, _result = await engine.execute(context)
 
             # Verify execution
             assert success

@@ -201,7 +201,7 @@ class TestFileToFileStreaming:
             config = create_streaming_fsm_config()
             fsm = AsyncSimpleFSM(config)
 
-            results = await fsm.process_stream(
+            await fsm.process_stream(
                 source=str(input_path), sink=str(output_path), chunk_size=2, use_streaming=True
             )
 
@@ -236,7 +236,7 @@ class TestGeneratorStreaming:
             fsm = AsyncSimpleFSM(config)
 
             # Use the generator as source
-            results = await fsm.process_stream(
+            await fsm.process_stream(
                 source=generate_streaming_data(count=20, chunk_size=5),
                 sink=str(output_path),
                 chunk_size=5,
@@ -275,7 +275,7 @@ class TestGeneratorStreaming:
             config = create_streaming_fsm_config()
             fsm = AsyncSimpleFSM(config)
 
-            results = await fsm.process_stream(
+            await fsm.process_stream(
                 source=generate_streaming_data(count=15, chunk_size=5),
                 sink=str(output_path),
                 chunk_size=3,
@@ -349,7 +349,7 @@ class TestMultiStagePipeline:
         try:
             # Stage 1: Clean data
             stage1_fsm = AsyncSimpleFSM(stage1_config)
-            stage1_results = await stage1_fsm.process_stream(
+            await stage1_fsm.process_stream(
                 source=str(input_path), sink=str(stage1_path), chunk_size=5
             )
 
@@ -365,7 +365,7 @@ class TestMultiStagePipeline:
             stage2_config = create_streaming_fsm_config()
             stage2_fsm = AsyncSimpleFSM(stage2_config)
 
-            stage2_results = await stage2_fsm.process_stream(
+            await stage2_fsm.process_stream(
                 source=str(stage1_path), sink=str(final_path), chunk_size=5, use_streaming=True
             )
 
@@ -405,7 +405,7 @@ class TestMultiStagePipeline:
             config1 = create_streaming_fsm_config()
             fsm1 = AsyncSimpleFSM(config1)
 
-            results1 = await fsm1.process_stream(
+            await fsm1.process_stream(
                 source=generate_streaming_data(count=test_records, chunk_size=5),
                 sink=str(stage1_path),
                 chunk_size=3,  # Small chunks
@@ -415,7 +415,7 @@ class TestMultiStagePipeline:
             config2 = create_streaming_fsm_config()
             fsm2 = AsyncSimpleFSM(config2)
 
-            results2 = await fsm2.process_stream(
+            await fsm2.process_stream(
                 source=str(stage1_path),
                 sink=str(final_path),
                 chunk_size=10,  # Larger chunks
@@ -466,7 +466,7 @@ class TestStreamingPerformance:
             fsm = AsyncSimpleFSM(config)
 
             # Process with streaming enabled
-            results = await fsm.process_stream(
+            await fsm.process_stream(
                 source=str(input_path),
                 sink=str(output_path),
                 chunk_size=50,  # Process in reasonable chunks
@@ -528,7 +528,7 @@ class TestErrorHandling:
             fsm = AsyncSimpleFSM(config)
 
             # Should handle malformed JSON gracefully
-            results = await fsm.process_stream(
+            await fsm.process_stream(
                 source=str(input_path), sink=str(output_path), chunk_size=5, use_streaming=True
             )
 
@@ -558,7 +558,7 @@ class TestErrorHandling:
             fsm = AsyncSimpleFSM(config)
 
             # Should handle empty file gracefully
-            results = await fsm.process_stream(
+            await fsm.process_stream(
                 source=str(input_path), sink=str(output_path), chunk_size=5, use_streaming=True
             )
 
