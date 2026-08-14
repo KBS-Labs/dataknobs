@@ -54,7 +54,7 @@ class TestTimestampFormat:
         assert store.timestamps_format == "iso"
 
     def test_invalid_format_raises_at_config_parse(self):
-        with pytest.raises(ValueError, match="timestamps.format"):
+        with pytest.raises(ValueError, match=r"timestamps\.format"):
             _ConcreteStore({"dimensions": 4, "timestamps": {"format": "bogus"}})
 
 

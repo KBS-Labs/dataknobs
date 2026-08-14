@@ -262,8 +262,6 @@ class TestStepSyncMultiTransform:
 
     def test_step_sync_stringified_list_compat(self) -> None:
         """Backward compat: stringified list transforms are parsed correctly."""
-        from dataknobs_fsm.api.advanced import AdvancedFSM
-
         parsed = AdvancedFSM._normalize_transform_names("['add_ten', 'double']")
         assert parsed == ["add_ten", "double"]
 

@@ -149,12 +149,12 @@ class TestWizardConfigBuilder:
 
     def test_field_before_stage_raises(self) -> None:
         """field() before stage() raises ValueError."""
-        with pytest.raises(ValueError, match="field.*after stage"):
+        with pytest.raises(ValueError, match=r"field.*after stage"):
             WizardConfigBuilder("test").field("x", field_type="string")
 
     def test_transition_before_stage_raises(self) -> None:
         """transition() before stage() raises ValueError."""
-        with pytest.raises(ValueError, match="transition.*after stage"):
+        with pytest.raises(ValueError, match=r"transition.*after stage"):
             WizardConfigBuilder("test").transition("x")
 
     def test_custom_version(self) -> None:

@@ -349,16 +349,16 @@ class TestWizardHooksFromConfig:
 
     def test_from_config_invalid_function_format(self) -> None:
         """Was "handled gracefully" — the hook simply never fired."""
-        with pytest.raises(ConfigurationError, match="invalid.format"):
+        with pytest.raises(ConfigurationError, match=r"invalid\.format"):
             WizardHooks.from_config({"on_enter": [{"function": "invalid.format"}]})
 
     def test_from_config_missing_module(self) -> None:
-        with pytest.raises(ConfigurationError, match="nonexistent.module"):
+        with pytest.raises(ConfigurationError, match=r"nonexistent\.module"):
             WizardHooks.from_config({"on_enter": [{"function": "nonexistent.module:func"}]})
 
     def test_from_config_string_format(self) -> None:
         """The bare-string entry shape fails the same way as the dict shape."""
-        with pytest.raises(ConfigurationError, match="nonexistent.module"):
+        with pytest.raises(ConfigurationError, match=r"nonexistent\.module"):
             WizardHooks.from_config({"on_complete": ["nonexistent.module:func"]})
 
     def test_load_callback_invalid_type(self) -> None:

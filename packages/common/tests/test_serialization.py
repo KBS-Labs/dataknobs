@@ -423,7 +423,10 @@ class TestEdgeCases:
         """Test deserialization with missing required field."""
         data = {"name": "Alice"}  # Missing email
 
-        with pytest.raises(Exception):  # KeyError or similar
+        # Not "KeyError or similar", as this read before: the KeyError is wrapped,
+        # and the wrapping is the behaviour worth pinning — a caller catches one
+        # error type from `deserialize` regardless of how the failure arose.
+        with pytest.raises(SerializationError, match="Failed to deserialize User"):
             deserialize(User, data)
 
     def test_serialize_with_empty_strings(self):

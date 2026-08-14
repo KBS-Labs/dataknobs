@@ -178,7 +178,7 @@ class TestMarkdownTreeChunker:
 
     def test_from_config_heading_inclusion_invalid(self):
         """Invalid heading_inclusion value produces a clear error."""
-        with pytest.raises(ValueError, match="Invalid 'heading_inclusion'.*include_metadata"):
+        with pytest.raises(ValueError, match=r"Invalid 'heading_inclusion'.*include_metadata"):
             MarkdownTreeChunker.from_config({"heading_inclusion": "include_metadata"})
 
     def test_document_info_passed_through(self):

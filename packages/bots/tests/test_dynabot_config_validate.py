@@ -200,7 +200,7 @@ def test_bad_nested_vector_store_via_kb_recursion_raises() -> None:
             }
         }
     )
-    with pytest.raises(ValueError, match="timestamps.format"):
+    with pytest.raises(ValueError, match=r"timestamps\.format"):
         cfg.validate()
 
 

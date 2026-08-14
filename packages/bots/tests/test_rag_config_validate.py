@@ -57,7 +57,7 @@ def test_bad_nested_field_raises() -> None:
     cfg = RAGKnowledgeBaseConfig.from_dict(
         {"vector_store": {"backend": "memory", "timestamps": {"format": "bogus"}}}
     )
-    with pytest.raises(ValueError, match="timestamps.format"):
+    with pytest.raises(ValueError, match=r"timestamps\.format"):
         cfg.validate()
 
 

@@ -452,8 +452,10 @@ class TestResourcePoolIntegration:
         # Acquire the only resource
         manager.acquire("database", "owner1", timeout=0.1)
 
-        # Try to acquire another (should timeout)
-        with pytest.raises(Exception):  # Pool should raise timeout error
+        # Try to acquire another (should timeout). Named, so that "the pool was
+        # exhausted" is distinguished from "the provider or the registration
+        # blew up", which the loose form accepted equally.
+        with pytest.raises(ResourceError, match="Failed to acquire resource within"):
             manager.acquire("database", "owner2", timeout=0.1)
 
     def test_release_to_pool(self):

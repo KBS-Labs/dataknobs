@@ -2,6 +2,7 @@
 
 import asyncio
 import dataclasses
+from typing import TYPE_CHECKING
 
 import pytest
 
@@ -21,6 +22,12 @@ from dataknobs_common.testing import (
     assert_structured_config_roundtrip,
     requires_package,
 )
+
+if TYPE_CHECKING:
+    # Annotation-only. The runtime import stays inside the helper below, so a
+    # module without pyrate-limiter installed still imports and its tests skip
+    # on `requires_package` rather than failing collection.
+    from dataknobs_common.ratelimit.pyrate import PyrateRateLimiter
 
 
 class TestRateLimitTypes:

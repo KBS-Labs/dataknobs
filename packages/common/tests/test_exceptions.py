@@ -51,8 +51,13 @@ class TestDataknobsError:
 
     def test_exception_inheritance(self):
         """Test that exception can be caught as Exception."""
-        with pytest.raises(Exception):
+        # The claim here really is "any Exception", so `pytest.raises(Exception)`
+        # was not too broad by accident — it was the assertion. But written that
+        # way it also passes if the raise is replaced by any unrelated failure,
+        # so the catchability is asserted on the caught instance instead.
+        with pytest.raises(DataknobsError) as exc_info:
             raise DataknobsError("Test error")
+        assert isinstance(exc_info.value, Exception)
 
     def test_exception_catchable_as_base(self):
         """Test that specific exceptions can be caught as base."""

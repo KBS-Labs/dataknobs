@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from dataclasses import FrozenInstanceError
+
 import pytest
 
 from dataknobs_common.resolver import (
@@ -31,7 +33,7 @@ def test_mapping_resolver_returns_none_for_absent_key() -> None:
 
 def test_mapping_resolver_is_frozen() -> None:
     r = MappingResolver({"a": 1})
-    with pytest.raises(Exception):
+    with pytest.raises(FrozenInstanceError):
         r.mapping = {"b": 2}  # type: ignore[misc]
 
 

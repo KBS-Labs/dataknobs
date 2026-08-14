@@ -133,7 +133,7 @@ class TestBankRecord:
         of actual creation time.
         """
         d = {"record_id": "abc123", "data": {"name": "flour"}}
-        with pytest.raises(ValueError, match="missing required.*created_at"):
+        with pytest.raises(ValueError, match=r"missing required.*created_at"):
             BankRecord.from_dict(d)
 
     def test_from_dict_missing_updated_at_raises(self) -> None:
@@ -143,7 +143,7 @@ class TestBankRecord:
             "data": {"name": "flour"},
             "created_at": 1000.0,
         }
-        with pytest.raises(ValueError, match="missing required.*updated_at"):
+        with pytest.raises(ValueError, match=r"missing required.*updated_at"):
             BankRecord.from_dict(d)
 
     def test_from_dict_legacy_mode_uses_defaults(self) -> None:

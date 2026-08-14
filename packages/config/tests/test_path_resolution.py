@@ -218,7 +218,7 @@ class TestPathResolution:
         """Test that relative paths raise an error when no global_root is set."""
         from dataknobs_config.exceptions import ConfigError
 
-        with pytest.raises(ConfigError, match="Cannot resolve relative path.*no global_root"):
+        with pytest.raises(ConfigError, match=r"Cannot resolve relative path.*no global_root"):
             config = Config(
                 {
                     "database": [{"name": "db1", "data_dir": "./data"}],

@@ -394,7 +394,7 @@ class TestErrorHandlingIntegration:
         }
 
         # Should raise an error during bot creation
-        with pytest.raises(Exception):
+        with pytest.raises(ValueError, match="Unknown provider: invalid_provider"):
             await DynaBot.from_config(config)
 
     @pytest.mark.asyncio

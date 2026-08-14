@@ -502,10 +502,10 @@ class TestSyncDuckDBDatabase:
         assert retrieved is not None
         assert retrieved["name"] == "Test"
 
-        # Writing should fail
-        with pytest.raises(
-            Exception
-        ):  # DuckDB will raise an exception for writes in read-only mode
+        # Writing should fail *because the database is read-only* — the loose
+        # form also passed on a connection error or a serialization failure,
+        # neither of which would demonstrate the read_only option working.
+        with pytest.raises(duckdb.InvalidInputException, match="read-only mode"):
             db_read.create(Record(data={"name": "New"}))
 
         db_read.close()
