@@ -349,12 +349,19 @@ ignore = [
               # through a classmethod rather than a function, method or
               # staticmethod.
     "ARG004", # Unused static method argument
-    "ARG005", # Unused lambda argument — declined for the reason the siblings are,
-              # and it had already been declined by hand four times in src/ before
-              # this line existed: a lambda whose signature is the caller's API and
-              # whose body is deliberately match-everything (`find_nodes(lambda n:
-              # True)`) or a no-op passthrough. Those four `# noqa` directives are
-              # gone; this line is the decision they were each making locally.
+    "ARG005", # Unused lambda argument — admitted by analogy rather than by family,
+              # and the only decline here that is. ARG003, ANN002, ANN206 and PTH108
+              # each close a gap between numbered siblings spelling one case two ways,
+              # where enforcing the rare spelling of a declined rule decides nothing.
+              # This is a separate rule let in under the same "the signature belongs
+              # to the interface" reason, and it is the one with something to lose: an
+              # unused lambda argument can also be a miswritten key/sort/filter
+              # callback, which a spelling variant cannot be. Declined anyway because
+              # it had already been declined by hand four times in src/ before this
+              # line existed: a lambda whose signature is the caller's API and whose
+              # body is deliberately match-everything (`find_nodes(lambda n: True)`)
+              # or a no-op passthrough. Those four `# noqa` directives are gone; this
+              # line is the decision they were each making locally.
     
     # Type checking upgrades
     "UP006", # Use `dict` instead of `Dict` for type annotations
