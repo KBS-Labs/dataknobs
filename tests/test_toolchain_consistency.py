@@ -1325,9 +1325,12 @@ def test_the_formatter_population_is_not_the_linters() -> None:
     do with the formatter. Stating the difference keeps the guard anchored to
     why the two lists exist separately.
 
-    This fails, correctly, on the day ``packages/*/tests`` graduates out of the
-    linter's deferred tier and the two populations legitimately converge. At
-    that point delete it; the check above is what carries the property.
+    This expires when the two populations legitimately converge, and that is
+    later than it reads. Promoting every ``packages/<pkg>/tests`` cell does not
+    do it: the difference asserted here survives as ``examples``, ``scripts``,
+    ``benchmarks`` and ``docs``, which only the formatter reaches. It expires
+    with the last of *those*, and at that point delete it — the check above is
+    what carries the property.
     """
     linted = set(_validate_targets_for())
     formatted = set(_format_targets_for("validate.sh"))
@@ -1781,7 +1784,7 @@ def test_mypy_path_entries_resolve():
 
 
 #: A cell naming one package's source root, as opposed to a glob over several
-#: (``packages/*/tests``) or a directory that is not an importable root
+#: (``packages/*/examples``) or a directory that is not an importable root
 #: (``bin``, ``tests``). Only these carry the property below: they are the
 #: directories whose modules another package imports *by name*.
 PACKAGE_SOURCE_CELL = "packages/*/src"

@@ -62,21 +62,75 @@
           "reason": "root collection hook"
         },
         {
-          "path": "packages/*/tests",
+          "path": "packages/legacy/tests",
           "tier": "deferred",
-          "ceiling": 1685,
-          "reason": "wants each package's src cleared first; 101 of these are ASYNC230/ASYNC240, which is blocking I/O on the event loop and a defect rather than a tidy-up"
+          "ceiling": 0,
+          "reason": "three tracked files and nothing to fix; the zero is genuine rather than an artifact of the packages/legacy/* waiver, measured with that entry removed and still clean"
+        },
+        {
+          "path": "packages/config/tests",
+          "tier": "deferred",
+          "ceiling": 9,
+          "reason": "7 carry an autofix; the 2 left are one B017 and one RUF043, both of which are read rather than swept"
+        },
+        {
+          "path": "packages/structures/tests",
+          "tier": "deferred",
+          "ceiling": 14,
+          "reason": "7 autofixable; the hand half is 5 PTH118 and 2 N806"
+        },
+        {
+          "path": "packages/utils/tests",
+          "tier": "deferred",
+          "ceiling": 30,
+          "reason": "20 autofixable; the hand half is 9 os.path call sites the Path migration wants converted"
+        },
+        {
+          "path": "packages/xization/tests",
+          "tier": "deferred",
+          "ceiling": 33,
+          "reason": "26 autofixable; 7 by hand, no rule above 3"
+        },
+        {
+          "path": "packages/llm/tests",
+          "tier": "deferred",
+          "ceiling": 85,
+          "reason": "72 autofixable; 7 of the remaining 13 are RUF043, where the assertion is looser than it reads"
+        },
+        {
+          "path": "packages/common/tests",
+          "tier": "deferred",
+          "ceiling": 99,
+          "reason": "79 autofixable; the hand half spreads over N817, B017 and RUF043 with none above 5"
+        },
+        {
+          "path": "packages/fsm/tests",
+          "tier": "deferred",
+          "ceiling": 313,
+          "reason": "233 autofixable; 68 of the 80 by hand are ASYNC230/ASYNC240 fixture I/O, and 61 of those sit in three files, so this cell waits on the rule amendment that separates a shared production loop from a single test's"
+        },
+        {
+          "path": "packages/bots/tests",
+          "tier": "deferred",
+          "ceiling": 316,
+          "reason": "265 autofixable; the hand half leads with 17 N806 and 9 RUF043"
+        },
+        {
+          "path": "packages/data/tests",
+          "tier": "deferred",
+          "ceiling": 544,
+          "reason": "the largest cell and the only one with a single dominating block: 130 NPY002, the legacy np.random global RNG, which is mechanical but has no autofix"
         },
         {
           "path": "packages/*/examples",
           "tier": "deferred",
-          "ceiling": 219,
-          "reason": "~90% under data/ and fsm/; needs a policy call on T201 and the annotation family before sweeping, since this is the code consumers copy"
+          "ceiling": 208,
+          "reason": "~90% under data/ and fsm/, and 88% of it autofixable tidy-up; needs a policy call on whether an example may carry an unused import for illustration, since this is the code consumers copy"
         },
         {
           "path": "packages/*/scripts",
           "tier": "deferred",
-          "ceiling": 8,
+          "ceiling": 6,
           "reason": "one sitting, alongside benchmarks and docs"
         },
         {

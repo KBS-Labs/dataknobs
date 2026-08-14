@@ -5,10 +5,12 @@ The root ``pyproject.toml`` is authoritative — every script lints with
 sections for IDE and hierarchical invocations, and those sections disagreed
 with root in both directions at once: they enforced ``E501``, ``I001``,
 ``SIM117`` and the ``UP0xx`` modernization families the gate had deliberately
-declined, while missing ``ANN002``, ``ARG005``, ``D209``, ``PLW0108`` and
-``PTH118`` that the gate enforces. Which configuration applied was decided by
-*the command*, not the repo, so an editor showed a developer findings no check
-would ever fail on and hid findings that would.
+declined, while missing ``D209``, ``PLW0108`` and ``PTH118`` that the gate
+enforces. Which configuration applied was decided by *the command*, not the
+repo, so an editor showed a developer findings no check would ever fail on and
+hid findings that would. (``ANN002`` and ``ARG005`` were on that second list
+too, until root declined both — a rule family may not sit half-enforced, and
+the four hand-written ``# noqa: ARG005`` in ``src`` were the evidence.)
 
 The sections are gone. What replaces them is not a mirror to keep in step —
 that was the previous shape, and a mirror is only ever as good as the test that
@@ -22,9 +24,12 @@ Three properties, in descending order of how much they would cost to lose:
    it cannot silently narrow the way a mirror comparison can, *provided* it is
    asserted to have looked at something, which is the failure mode the previous
    version of this file guarded against in every one of its checks.
-3. **Every decline in root carries its reason on its own line.** Seventy-eight
-   of them now, not the curated five: a bare identifier is a decision with the
-   reason lost, and the reason is the only thing that makes it re-litigable.
+3. **Every decline in root carries its reason on its own line.** All of them,
+   not the curated five: a bare identifier is a decision with the reason lost,
+   and the reason is the only thing that makes it re-litigable. Counted here in
+   an earlier draft, which is a figure that goes stale the next time a rule is
+   declined and is checked by nothing — the assertion below compares against
+   the set it reads rather than against a number written down.
 """
 
 from __future__ import annotations
@@ -212,10 +217,10 @@ def test_root_declines_exactly_the_recorded_set():
 
 
 def test_every_declined_rule_carries_a_reason_in_root():
-    """All 78, not the curated 5 — the reason is what makes a decline re-litigable.
+    """Every one of them, not the curated 5 — the reason makes a decline re-litigable.
 
     Previously this ran over ``DECLINED`` alone, which is five entries chosen
-    because they were the ones being argued about. The other seventy-three were
+    because they were the ones being argued about. All the rest were
     unwatched, and they are the ones a future reader is most likely to meet
     without context: a bare ``"SIM108",`` says a rule is off and nothing about
     whether that was a judgement or an accident, so the safe move is to leave it

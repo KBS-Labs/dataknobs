@@ -47,6 +47,35 @@ def _cells(tool: str) -> list[dict[str, Any]]:
     return cells
 
 
+def _biggest_backlogs(contract: dict[str, Any], count: int) -> list[str]:
+    """The ``count`` ruff cells carrying the largest ceilings, largest first.
+
+    Two tests below need a cell that measures well above zero — one to inflate
+    and one to push under — and both used to name ``packages/*/tests`` outright.
+    That cell no longer exists: the tests backlog was one glob until it was split
+    into a cell per package so each could be promoted on its own, and it collapses
+    back to a glob when the last of them clears. A literal name fails with a
+    ``KeyError`` on the day of either move, which is a guard going red over a
+    change it holds no opinion about — and a ``KeyError`` says nothing about the
+    property the test is for.
+
+    Asking the declaration which cell is biggest survives both moves and still
+    picks a cell whose measurement makes the fault visible.
+    """
+    ranked = sorted(
+        contract["tools"]["ruff"]["cells"], key=lambda cell: cell["ceiling"], reverse=True
+    )
+    assert len(ranked) >= count, f"the ruff declaration holds only {len(ranked)} cells"
+    chosen = [cell["path"] for cell in ranked[:count]]
+    assert ranked[count - 1]["ceiling"] > 5, (
+        f"the {count} largest ruff ceilings are {chosen}, and the smallest of them "
+        "is at or below 5 — too small for the faults below to be distinguishable "
+        "from a clean cell. The backlog has been cleared past what these tests "
+        "assume; drive them over a purpose-built cell instead."
+    )
+    return chosen
+
+
 def _validate_targets() -> set[str]:
     """What ``bin/validate.sh`` reaches with no arguments.
 
@@ -259,8 +288,7 @@ def test_a_baseline_update_lowers_a_ceiling_and_never_raises_one(tmp_path: Path)
     contract = _contract()
     ruff_cells = {cell["path"]: cell for cell in contract["tools"]["ruff"]["cells"]}
 
-    inflated = "packages/*/tests"
-    deflated = "packages/*/examples"
+    inflated, deflated = _biggest_backlogs(contract, 2)
     true_ceilings = {
         inflated: ruff_cells[inflated]["ceiling"],
         deflated: ruff_cells[deflated]["ceiling"],
@@ -392,7 +420,7 @@ def test_a_breached_ceiling_names_the_files_that_breached_it() -> None:
     """
     contract = _contract()
     cells = {cell["path"]: cell for cell in contract["tools"]["ruff"]["cells"]}
-    breached = "packages/*/tests"
+    (breached,) = _biggest_backlogs(contract, 1)
     cells[breached]["ceiling"] = 0
 
     report = contract_module.check(contract, ["ruff"])
@@ -406,7 +434,11 @@ def test_a_breached_ceiling_names_the_files_that_breached_it() -> None:
         "to find the offenders with a second tool"
     )
     for offender in entry["files"]:
-        assert offender["file"].startswith("packages/"), (
+        # Asked of the same matcher the measurement used, rather than checked
+        # against a path prefix. A prefix test passes for any file under
+        # packages/ at all, so it would have accepted a breach reporting
+        # another cell's offenders — which is the failure this test is for.
+        assert contract_module.cell_matches(PurePosixPath(offender["file"]), breached), (
             f"{offender['file']} was named against {breached}, which it is not in"
         )
     assert entry["further_files"] >= 0
