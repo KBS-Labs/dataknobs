@@ -1,5 +1,6 @@
 """Tests for Elasticsearch backend implementation."""
 
+import asyncio
 import os
 import time
 import uuid
@@ -392,8 +393,10 @@ class TestAsyncElasticsearchDatabase:
         await async_db.create(Record({"type": "async", "value": 2}))
         await async_db.create(Record({"type": "sync", "value": 3}))
 
-        # Small delay for indexing
-        time.sleep(0.5)
+        # Small delay for indexing. `await`, not `time.sleep`: the eight sync
+        # tests in this file sleep on their own thread, but this one is the only
+        # `async def` among them, so a synchronous sleep here stalls the loop.
+        await asyncio.sleep(0.5)
 
         # Search
         query = Query().filter("type", Operator.EQ, "async")
