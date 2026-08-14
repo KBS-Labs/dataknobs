@@ -774,6 +774,131 @@ def excused_config_sections(config: Path) -> set[str]:
     return excused
 
 
+#: The four categories a decline may carry. Four rather than three because
+#: "declined with an argument" and "declined without one" are the distinction
+#: worth having, and with three categories they are indistinguishable without
+#: reading prose — which is the state the linting page had drifted into.
+DECLINE_CATEGORIES = frozenset(
+    {"presentational", "covered-elsewhere", "behavioural", "provisional"}
+)
+
+#: The covers a ``covered-elsewhere`` reason may name. A rule code counts too,
+#: which the caller checks separately: naming ``D211`` as the cover for ``D203``
+#: is a real answer, and enumerating every code here would be a second copy of
+#: the rule list.
+DECLINE_COVERS = ("mypy", "ruff format")
+
+#: ``"CODE", # [category] reason`` — the entry line. The marker is required by
+#: the guard rather than by this parser, so an unmarked entry parses with
+#: ``category=None`` and is *reported* instead of being silently skipped.
+_DECLINE_RE = re.compile(r'^\s*"([A-Z]+[0-9]+)"\s*,\s*#\s*(?:\[([a-z-]+)\]\s*)?(.*)$')
+
+#: A comment-only line, which under an entry is that entry's argument.
+_CONTINUATION_RE = re.compile(r"^\s+#\s?(.*)$")
+
+#: ``"pattern" = ["CODE", ...]  # reason`` — a per-file waiver.
+_PER_FILE_RE = re.compile(r'^\s*"([^"]+)"\s*=\s*\[([^\]]*)\]\s*(?:#\s*(.*))?$')
+
+
+class Decline(NamedTuple):
+    """One entry in ``[tool.ruff.lint] ignore``, with its category and argument."""
+
+    code: str
+    category: str | None
+    reason: str
+    argument: tuple[str, ...]
+
+    @property
+    def prose(self) -> str:
+        """Everything the entry says, first line and argument together."""
+        return " ".join([self.reason, *self.argument]).strip()
+
+
+class PerFileWaiver(NamedTuple):
+    """One entry in ``[tool.ruff.lint.per-file-ignores]``."""
+
+    pattern: str
+    codes: tuple[str, ...]
+    reason: str
+
+
+def _block(text: str, opening: str) -> list[str]:
+    """The lines between ``opening`` and the first line that is a bare ``]``."""
+    lines = text.splitlines()
+    try:
+        start = next(i for i, line in enumerate(lines) if line.startswith(opening))
+    except StopIteration:
+        return []
+    for offset, line in enumerate(lines[start + 1 :], start=start + 1):
+        if line.rstrip() == "]":
+            return lines[start + 1 : offset]
+    return []
+
+
+def parse_declines(text: str) -> list[Decline]:
+    """Every globally declined rule, with the category and argument beside it.
+
+    A line parse of a block this repository owns, rather than ``tomllib``, for
+    the one reason ``tomllib`` cannot serve: TOML discards comments, and the
+    category and the argument *are* comments. Keeping them in the config is what
+    stops the classification drifting from the rules it classifies, which is the
+    failure the prose page it replaces had already reached — 48 of the 83
+    declines unmentioned there, and one rule documented as declined that is
+    enforced.
+
+    Being a re-implementation of a parse the toolchain also does, it is a
+    liability rather than a convenience, and it is pinned: the guard asserts
+    this function and ``tomllib`` return the same code set in both directions.
+    Without that, an entry this regex failed to match would be an uncategorized
+    rule slipping past the check written to catch uncategorized rules.
+    """
+    declines: list[Decline] = []
+    lines = _block(text, "ignore = [")
+    index = 0
+    while index < len(lines):
+        match = _DECLINE_RE.match(lines[index])
+        if match is None:
+            index += 1
+            continue
+        argument: list[str] = []
+        index += 1
+        while index < len(lines):
+            continuation = _CONTINUATION_RE.match(lines[index])
+            if continuation is None or _DECLINE_RE.match(lines[index]):
+                break
+            argument.append(continuation.group(1).strip())
+            index += 1
+        declines.append(
+            Decline(match.group(1), match.group(2), match.group(3).strip(), tuple(argument))
+        )
+    return declines
+
+
+def parse_per_file_waivers(text: str) -> list[PerFileWaiver]:
+    """Every per-file waiver, with the reason its line carries.
+
+    Separate from ``parse_declines`` because the two answer different questions
+    about the same finding — whether a rule is declined everywhere, or waived
+    here — and ``explain`` has to distinguish them to be worth asking.
+    """
+    waivers: list[PerFileWaiver] = []
+    started = False
+    for raw in text.splitlines():
+        if raw.startswith("[tool.ruff.lint.per-file-ignores]"):
+            started = True
+            continue
+        if not started:
+            continue
+        if raw.startswith("["):
+            break
+        match = _PER_FILE_RE.match(raw)
+        if match is None:
+            continue
+        codes = tuple(code for code in _QUOTED_RE.findall(match.group(2)))
+        waivers.append(PerFileWaiver(match.group(1), codes, (match.group(3) or "").strip()))
+    return waivers
+
+
 def _expand(pattern: str) -> list[PurePosixPath]:
     """The directories or files one cell pattern names on disk."""
     if "*" in pattern:
