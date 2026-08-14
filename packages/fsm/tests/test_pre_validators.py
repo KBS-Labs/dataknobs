@@ -1,6 +1,5 @@
 """Tests for pre-validator functionality."""
 
-
 from dataknobs_fsm.config.builder import FSMBuilder
 from dataknobs_fsm.config.schema import (
     FSMConfig,

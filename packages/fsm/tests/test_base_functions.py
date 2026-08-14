@@ -91,9 +91,7 @@ class MockStateTestFunction(IStateTestFunction):
     def __init__(self, test_result: bool = True):
         self.test_result = test_result
 
-    def test(
-        self, data: Any, context: Dict[str, Any] | None = None
-    ) -> Tuple[bool, str | None]:
+    def test(self, data: Any, context: Dict[str, Any] | None = None) -> Tuple[bool, str | None]:
         if self.test_result:
             return True, "Test passed"
         else:

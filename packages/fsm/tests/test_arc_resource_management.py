@@ -379,7 +379,7 @@ class TestResourceContention:
 
         # Create threads all using same owner
         threads = []
-        for i in range(5):
+        for _i in range(5):
             t = threading.Thread(target=acquire_resource)
             threads.append(t)
             t.start()

@@ -1,6 +1,5 @@
 """Tests for network and arc components."""
 
-
 import pytest
 
 from dataknobs_fsm.core import (

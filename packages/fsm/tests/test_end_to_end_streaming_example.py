@@ -249,7 +249,7 @@ class TestGeneratorStreaming:
             assert len(output_records) == 20
 
             # Verify all records were processed correctly
-            for i, record in enumerate(output_records):
+            for _i, record in enumerate(output_records):
                 assert record["status"] == "processed"
                 assert "original_value" in record
                 assert "doubled_value" in record

@@ -501,7 +501,7 @@ class TestTransitionSelector:
 
             # Multiple calls should cycle through tied arcs via round-robin
             results = []
-            for i in range(4):
+            for _i in range(4):
                 result = selector.select_transition([arc1, arc2], context)
                 results.append(result)
 
