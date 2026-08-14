@@ -431,7 +431,7 @@ class ConversationState:
             All ``ConversationNode`` objects in chronological order.
         """
         all_tree_nodes = self.message_tree.find_nodes(
-            lambda n: True,  # noqa: ARG005 - match-everything predicate; the arg is the API's
+            lambda n: True,
             traversal="bfs",
         )
         nodes = [tn.data for tn in all_tree_nodes if isinstance(tn.data, ConversationNode)]
@@ -469,7 +469,7 @@ class ConversationState:
         nodes = []
         edges = []
 
-        all_nodes = self.message_tree.find_nodes(lambda n: True, traversal="bfs")  # noqa: ARG005
+        all_nodes = self.message_tree.find_nodes(lambda n: True, traversal="bfs")
         for tree_node in all_nodes:
             if isinstance(tree_node.data, ConversationNode):
                 nodes.append(tree_node.data.to_dict())
@@ -1297,7 +1297,7 @@ class DataknobsConversationStorage(ConversationStorage):
             True if any message content contains the needle.
         """
         all_nodes = state.message_tree.find_nodes(
-            lambda n: True,  # noqa: ARG005 - match-everything predicate; the arg is the API's
+            lambda n: True,
             traversal="bfs",
         )
         for tree_node in all_nodes:

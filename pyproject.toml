@@ -287,11 +287,18 @@ ignore = [
     
     # Type annotations - contextual
     "ANN001", # Missing type annotation for function argument
+    "ANN002", # Missing type annotation for *args — the same signature as ANN003
+              # below, in its other spelling. Declining one and enforcing the
+              # other asks a `def f(*args, **kwargs)` to annotate half of itself.
     "ANN003", # Missing type annotation for **kwargs
     "ANN201", # Missing return type annotation for public function
     "ANN202", # Missing return type annotation for private function
     "ANN204", # Missing return type annotation for special method __init__
     "ANN205", # Missing return type annotation for staticmethod
+    "ANN206", # Missing return type annotation for classmethod — ANN205's direct
+              # sibling, added because seven of this family's nine members were
+              # already declined here and the two left standing were the odd
+              # spellings rather than a policy about classmethods and *args.
     "ANN401", # Dynamically typed expressions (Any) are disallowed
     
     # Import location - often necessary for circular deps
@@ -337,7 +344,17 @@ ignore = [
     # Unused arguments - often required by interfaces
     "ARG001", # Unused function argument
     "ARG002", # Unused method argument
+    "ARG003", # Unused classmethod argument — the same "the signature belongs to
+              # the interface" case as the other three in this block, reached
+              # through a classmethod rather than a function, method or
+              # staticmethod.
     "ARG004", # Unused static method argument
+    "ARG005", # Unused lambda argument — declined for the reason the siblings are,
+              # and it had already been declined by hand four times in src/ before
+              # this line existed: a lambda whose signature is the caller's API and
+              # whose body is deliberately match-everything (`find_nodes(lambda n:
+              # True)`) or a no-op passthrough. Those four `# noqa` directives are
+              # gone; this line is the decision they were each making locally.
     
     # Type checking upgrades
     "UP006", # Use `dict` instead of `Dict` for type annotations
@@ -352,6 +369,9 @@ ignore = [
     "PTH103", # Use Path.is_dir()
     "PTH105", # Use Path.replace()
     "PTH107", # Use Path.unlink()
+    "PTH108", # Use Path.unlink() — os.unlink is an alias of os.remove in CPython,
+              # one syscall under two names. PTH107 above declines the one; the two
+              # cannot coherently sit on opposite sides of this list.
     "PTH110", # Use Path.exists()
     "PTH120", # Use Path.parent
     "PTH123", # open() should be replaced by Path.open()
@@ -400,9 +420,15 @@ dummy-variable-rgx = "^(_+|(_+[a-zA-Z0-9_]*[a-zA-Z0-9]+?))$"
 # Ignore certain errors in specific files
 [tool.ruff.lint.per-file-ignores]
 "__init__.py" = ["D104", "F401"]  # Module docstring and unused imports in __init__ files
-"tests/*" = ["D100", "D101", "D102", "D103", "S101"]  # Docstrings not required in tests, assert allowed
 "packages/legacy/*" = ["D", "N", "UP"]  # Relax rules for legacy code
-"*.ipynb" = ["E402", "F811", "F401"]  # Allow imports not at top, redefinition, unused imports in notebooks
+# Two entries were deleted here because each waived nothing, and one of them read
+# as though it did. `"tests/*" = ["D100", "D101", "D102", "D103", "S101"]` looked
+# like the docstring waiver for the test suites; it was not, for three compounding
+# reasons — these patterns are anchored at the project root, so it never reached
+# `packages/*/tests` at all; `D100`-`D103` are declined globally above; and `S`
+# (flake8-bandit) is not in `select`, so `S101` cannot fire. Measured: the tree
+# reports the same count with the line and without it. `"*.ipynb" = [...]` waived
+# rules in notebooks, and the repository tracks no notebook.
 # ASYNC false positives — verified cheap one-shot stats / poll loops, not hot-loop
 # blocking I/O. These paths are repo-relative because this is now the only ruff
 # config: the per-package sections these used to be mirrored into are gone, so

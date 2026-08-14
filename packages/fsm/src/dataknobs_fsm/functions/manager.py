@@ -575,7 +575,7 @@ class FunctionManager:
             logger.error(f"Failed to create inline function: {e}")
             # Return a no-op wrapper
             return FunctionWrapper(
-                lambda data, context=None: data,  # noqa: ARG005
+                lambda data, context=None: data,
                 f"inline_error_{id(code)}",
                 FunctionSource.INLINE,
             )
