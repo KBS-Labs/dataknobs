@@ -230,6 +230,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A wizard skipped extraction after an auto-advance under `advance()` and
+  never under a conversation.** `skip_extraction` is set while the landing
+  stage's response is generated and read at the start of the *next* turn, so
+  it crosses the boundary only by being persisted. `advance()` hands the
+  `WizardState` back for the caller to serialize with `to_dict()`, which
+  carries the flag. The conversational path persists through
+  `_save_wizard_state`, which built its dict from a second field list — and
+  that list omitted the flag. One field, two serializers, two behaviours.
+
+  Nothing reported it, because the restore supplies a default for every key
+  it reads: a dropped field arrives as `False` rather than as an error. So
+  the user's first message to an auto-advanced stage was extracted in every
+  case the flag existed to suppress, and both clears guarding it — the one in
+  `process_input` and the one after re-extraction — were unreachable in that
+  path. The round-trip test that existed exercised `to_dict`/`from_dict`,
+  which the conversational path does not call.
+
+  The second list is gone: persistence now derives its fields from
+  `to_dict()` and re-encodes only the two entries needing JSON sanitization.
+  A test compares the persisted key set against `to_dict()`, so a field added
+  to `WizardState` and forgotten here fails rather than silently reverting to
+  its default.
+
 - **An inadmissible `domain_id` was reported as a missing domain.**
   `KnowledgeIngestionManager.ingest_if_changed` wraps its change-detection
   call in `except ValueError` to turn "this domain does not exist" into a

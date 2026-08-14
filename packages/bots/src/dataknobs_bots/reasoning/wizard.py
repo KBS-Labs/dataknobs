@@ -3699,17 +3699,24 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
         # Partition: separate ephemeral/non-serializable keys from persistent
         state.data, state.transient = self._partition_data(state.data)
 
-        wizard_meta["fsm_state"] = {
-            "current_stage": state.current_stage,
-            "history": state.history,
-            "data": sanitize_for_json(state.data, on_drop="warn"),
-            "completed": state.completed,
-            "clarification_attempts": state.clarification_attempts,
-            "transitions": [sanitize_for_json(t, on_drop="warn") for t in state.transitions],
-            "stage_entry_time": state.stage_entry_time,
-            "tasks": state.tasks.to_dict(),
-            "subflow_stack": [s.to_dict() for s in state.subflow_stack],
-        }
+        # Which fields get persisted comes from WizardState.to_dict(), not
+        # from a second list maintained here. The two had drifted:
+        # `skip_extraction` was declared there and absent here. Callers of
+        # `advance()` serialize with `to_dict()` and so kept the flag, while
+        # a conversation persisting through this method lost it every turn —
+        # one field with two behaviours, decided by which serializer the
+        # caller reached. Nothing reported it, because `_get_wizard_state`
+        # defaults every key it reads, so a dropped field arrives as False
+        # rather than as an error.
+        #
+        # Two entries are then re-encoded for JSON safety. `data` and
+        # `transitions` can hold live objects; `sanitize_for_json` drops what
+        # cannot be represented, where to_dict()'s plain `asdict` would keep
+        # it and fail at serialization time.
+        fsm_state = state.to_dict()
+        fsm_state["data"] = sanitize_for_json(state.data, on_drop="warn")
+        fsm_state["transitions"] = [sanitize_for_json(t, on_drop="warn") for t in state.transitions]
+        wizard_meta["fsm_state"] = fsm_state
         # Persist MemoryBank data alongside FSM state
         if self._banks:
             wizard_meta["banks"] = {name: bank.to_dict() for name, bank in self._banks.items()}
