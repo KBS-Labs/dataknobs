@@ -286,6 +286,48 @@ class TestRenderSuggestions:
         state = WizardState(current_stage="welcome", data={})
         assert wizard_reasoning._render_suggestions([], state) == []
 
+    def test_renders_against_the_given_stage_not_the_live_position(self) -> None:
+        """Stage metadata comes from the state's stage, not where the FSM sits.
+
+        The author-controlled half of the render context is built from a
+        stage metadata dict (``stage_label`` and friends).  Taking that dict
+        off the FSM's live position renders the wrong stage's metadata
+        whenever the two disagree — which is every call made outside a turn,
+        the restore path being exactly that.  Plain-string suggestions hide
+        it, because the renderer passes those through untouched.
+        """
+        loader = WizardConfigLoader()
+        fsm = loader.load_from_dict(
+            {
+                "name": "suggestion-stage-wizard",
+                "version": "1.0",
+                "stages": [
+                    {
+                        "name": "first",
+                        "is_start": True,
+                        "prompt": "First",
+                        "label": "First Stage",
+                        "transitions": [{"target": "second"}],
+                    },
+                    {
+                        "name": "second",
+                        "is_end": True,
+                        "prompt": "Second",
+                        "label": "Second Stage",
+                    },
+                ],
+            }
+        )
+        reasoning = WizardReasoning(wizard_fsm=fsm, strict_validation=False)
+
+        # The FSM sits on "first" while the state describes "second".
+        assert fsm.current_stage == "first"
+        state = WizardState(current_stage="second", history=["first", "second"])
+
+        rendered = reasoning._render_suggestions(["Go to {{ stage_label }}"], state)
+
+        assert rendered == ["Go to Second Stage"]
+
     def test_undefined_variable_renders_empty(self, wizard_reasoning: WizardReasoning) -> None:
         """Undefined variables in suggestions render as empty string."""
         state = WizardState(current_stage="welcome", data={})

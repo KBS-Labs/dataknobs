@@ -608,14 +608,22 @@ class WizardFSM:
     def _get_history(self) -> list[str]:
         """Get stage history from context.
 
+        The execution context records visited states on its
+        ``state_history`` attribute, appending as it advances. This read
+        used to look for the same name in the context's ``metadata`` dict
+        instead — a channel nothing writes it to — so it missed on every
+        call and the fallback below reported a single-stage history for
+        every wizard, however far it had run.
+
         Returns:
-            List of visited stage names
+            List of visited stage names, ending at the current stage.
         """
         if self._context:
-            # Try to get from context metadata
-            history = self._context.metadata.get("state_history", [])
+            history = list(getattr(self._context, "state_history", None) or [])
             if history:
-                return list(history)
+                if history[-1] != self.current_stage:
+                    history.append(self.current_stage)
+                return history
         return [self.current_stage]
 
     def _get_data(self) -> dict[str, Any]:

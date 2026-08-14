@@ -1062,24 +1062,30 @@ class WizardResponder:
         self,
         suggestions: list[str],
         state: WizardState,
+        stage_meta: dict[str, Any],
     ) -> list[str]:
         """Render suggestion strings through Jinja2 with wizard state data.
 
         Delegates to :meth:`WizardRenderer.render_list`.
 
+        ``stage_meta`` is passed in rather than read off the active FSM's
+        live position.  That position is maintained by a *turn*, so it names
+        the right stage only while one is running; every caller outside a
+        turn -- the checkpoint restore path above all -- would otherwise
+        render one stage's suggestions against another stage's metadata.
+        Requiring the argument makes the stage the caller's to state, which
+        is the same rule every stage-dependent accessor on the FSM follows.
+
         Args:
             suggestions: List of suggestion template strings
             state: Current wizard state
+            stage_meta: Metadata of the stage the suggestions belong to,
+                supplying the author-controlled half of the render context.
 
         Returns:
             List of rendered suggestion strings
         """
-        active_fsm = self._subflows.get_active_fsm()
-        return self._renderer.render_list(
-            suggestions,
-            active_fsm.current_metadata,
-            state,
-        )
+        return self._renderer.render_list(suggestions, stage_meta, state)
 
     @staticmethod
     def prepend_messages_to_response(response: Any, messages: list[str]) -> None:

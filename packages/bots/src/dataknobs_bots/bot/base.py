@@ -118,7 +118,12 @@ def normalize_wizard_state(wizard_meta: dict[str, Any]) -> dict[str, Any]:
 
     result: dict[str, Any] = {
         "current_stage": current_stage,
-        "stage_index": (wizard_meta.get("stage_index") or fsm_state.get("stage_index", 0)),
+        # No fallback into ``fsm_state``: that dict is ``WizardState.to_dict()``
+        # and the position is derived from the stage rather than stored beside
+        # it, so nothing has ever written ``stage_index`` there. Reading it
+        # anyway made the flat key look guarded when it was not — the writer is
+        # what has to keep this fresh, and the undo path once didn't.
+        "stage_index": wizard_meta.get("stage_index", 0),
         "total_stages": wizard_meta.get("total_stages", 0),
         "progress": wizard_meta.get("progress", 0.0),
         "completed": wizard_meta.get("completed", False),
@@ -130,11 +135,15 @@ def normalize_wizard_state(wizard_meta: dict[str, Any]) -> dict[str, Any]:
         "stages": wizard_meta.get("stages", []),
     }
 
-    # Subflow context: present when wizard is executing a subflow
+    # Subflow context: present when wizard is executing a subflow.
+    # Truthiness rather than presence, so this reads the same whether the
+    # writer omitted the key or wrote ``None`` for "no subflow"; the wizard
+    # writes ``None`` (see ``_stage_derived_metadata``) so that an undo can
+    # clear a stale value, and older stored metadata omits it entirely.
     subflow_stage = wizard_meta.get("subflow_stage")
     if subflow_stage:
         result["subflow_stage"] = subflow_stage
-        result["subflow_depth"] = 1  # _build_wizard_metadata exposes top subflow
+        result["subflow_depth"] = 1  # the wizard exposes the top subflow only
     else:
         result["subflow_depth"] = 0
 

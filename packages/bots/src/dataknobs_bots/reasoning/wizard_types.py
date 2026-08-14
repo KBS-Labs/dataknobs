@@ -15,6 +15,7 @@ Types defined here:
 - :class:`ToolResultMappingEntry` — single tool-to-state mapping from stage config
 - :class:`WizardTurnHandle` — wizard-specific turn handle for phased protocol
 - :class:`RecoveryResult` — typed result from recovery strategies
+- :class:`StagePosition` — a stage's index/total/progress in the flow
 - :class:`StageSchema` — JSON Schema wrapper for stage fields
 - :class:`NavigationCommandConfig` — single navigation command config
 - :class:`NavigationConfig` — full navigation configuration
@@ -25,6 +26,7 @@ from __future__ import annotations
 
 import logging
 import time
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
@@ -674,6 +676,54 @@ class RecoveryResult:
 
     new_data_keys: set[str]
     extraction: Any | None = None
+
+
+@dataclass(frozen=True)
+class StagePosition:
+    """Where a stage sits in the main flow, and how far along that is.
+
+    Every one of these is a function of the stage name and the flow's
+    stage list — none is independent state.  They were nevertheless
+    derived inline at each site that needed them, which is how a site
+    that needed them and *didn't* derive them went unnoticed:
+    ``restore_from_checkpoint`` moved the stage on undo and left the
+    index, total and progress describing the stage just undone.
+
+    Attributes:
+        index: Position of the stage in the flow, ``0`` when the stage
+            is not one of the flow's stages (a subflow stage reported
+            against the main flow, or a stage from a config since
+            edited).
+        total: Number of stages in the flow.
+        progress: ``index`` as a fraction of the distance to the last
+            stage, so the first stage reports ``0.0`` and the last
+            ``1.0``.  A single-stage flow reports ``0.0`` rather than
+            dividing by zero.
+    """
+
+    index: int
+    total: int
+    progress: float
+
+
+def stage_position(stage_names: Sequence[str], current_stage: str | None) -> StagePosition:
+    """Derive :class:`StagePosition` for ``current_stage`` within ``stage_names``.
+
+    Args:
+        stage_names: The flow's stage names, in order.
+        current_stage: Stage to locate.  A stage absent from the list —
+            or ``None`` — reports index ``0``, matching what every call
+            site did before this was one function.
+
+    Returns:
+        The stage's position and the progress derived from it.
+    """
+    try:
+        index = stage_names.index(current_stage) if current_stage is not None else 0
+    except ValueError:
+        index = 0
+    total = len(stage_names)
+    return StagePosition(index=index, total=total, progress=index / max(total - 1, 1))
 
 
 # ---------------------------------------------------------------------------

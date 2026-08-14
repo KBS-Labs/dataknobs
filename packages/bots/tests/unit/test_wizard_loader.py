@@ -344,6 +344,31 @@ class TestWizardFSMOperations:
 
         assert wizard_fsm2.current_stage == wizard_fsm.current_stage
 
+    def test_serialize_carries_the_stages_actually_visited(
+        self, simple_wizard_config: dict, wizard_loader: WizardConfigLoader
+    ) -> None:
+        """``serialize()`` reports the stages stepped through, not just the last.
+
+        The history lives on the execution context as an attribute the FSM
+        appends to.  ``_get_history`` looked for it under the same name in
+        the context's ``metadata`` dict, where nothing writes it, so the
+        lookup missed every time and the fallback made every wizard look as
+        though it had visited exactly one stage.
+
+        The neighbouring round-trip test does not catch this: it asserts on
+        ``current_stage`` only, and ``restore`` ignores ``history`` — so the
+        one field that was wrong is the one field neither half reads.
+        """
+        wizard_fsm = wizard_loader.load_from_dict(simple_wizard_config)
+        wizard_fsm.step({"intent": "test"})
+
+        history = wizard_fsm.serialize()["history"]
+
+        assert "welcome" in history, (
+            f"the visited start stage is missing from serialized history: {history}"
+        )
+        assert history[-1] == wizard_fsm.current_stage
+
     def test_restart(self, simple_wizard_config: dict, wizard_loader: WizardConfigLoader) -> None:
         """Test wizard restart."""
         wizard_fsm = wizard_loader.load_from_dict(simple_wizard_config)
