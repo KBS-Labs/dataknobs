@@ -17,6 +17,7 @@ async def process_stream_enhanced(
     text_field_name: str = "text",  # Field name for text lines
     csv_delimiter: str = ",",
     csv_has_header: bool = True,
+    skip_empty_lines: bool = True,
 ) -> Dict[str, Any]:
     """Process a stream of data through the FSM with multiple format support.
 
@@ -29,6 +30,7 @@ async def process_stream_enhanced(
         text_field_name: Field name to use when converting text lines to dicts
         csv_delimiter: CSV delimiter character
         csv_has_header: Whether CSV file has header row
+        skip_empty_lines: Skip empty lines in text files
 
     Returns:
         Dict containing stream processing statistics

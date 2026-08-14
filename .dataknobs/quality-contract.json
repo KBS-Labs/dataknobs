@@ -35,7 +35,7 @@
           "path": "packages/*/src",
           "tier": "checked",
           "ceiling": 0,
-          "reason": "shipped code \u2014 the one cell whose findings reach a consumer"
+          "reason": "shipped code — the one cell whose findings reach a consumer"
         },
         {
           "path": "tests",
@@ -142,7 +142,7 @@
         {
           "path": "packages/*/docs",
           "tier": "deferred",
-          "ceiling": 6,
+          "ceiling": 5,
           "reason": "all in a single fsm/ module"
         }
       ]

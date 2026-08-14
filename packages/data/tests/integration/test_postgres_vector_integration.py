@@ -2,6 +2,7 @@
 
 import os
 import uuid
+from typing import TYPE_CHECKING
 
 import pytest
 
@@ -15,8 +16,17 @@ pytestmark = pytest.mark.skipif(
     reason="PostgreSQL tests require TEST_POSTGRES=true and a running PostgreSQL instance with pgvector",
 )
 
-# Also skip if numpy is not available
-np = pytest.importorskip("numpy")
+# Also skip if numpy is not available.
+#
+# The runtime binding has to stay `importorskip`, which is what makes the module
+# skip rather than error when numpy is absent. But that makes `np` a value of
+# unknown type, so an annotation naming `np.ndarray` resolves to nothing. Under
+# TYPE_CHECKING the real module is imported instead, purely so those annotations
+# have a type to refer to; numpy ships `py.typed`, so this costs no stub waiver.
+if TYPE_CHECKING:
+    import numpy as np
+else:
+    np = pytest.importorskip("numpy")
 
 
 class TestPostgresVectorIntegration:
