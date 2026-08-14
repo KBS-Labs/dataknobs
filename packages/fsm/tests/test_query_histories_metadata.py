@@ -515,7 +515,7 @@ class TestSQLiteMetadataFilterIntegration:
 
 
 _skip_no_postgres = pytest.mark.skipif(
-    not os.environ.get("TEST_POSTGRES", "").lower() == "true",
+    os.environ.get("TEST_POSTGRES", "").lower() != "true",
     reason="PostgreSQL tests require TEST_POSTGRES=true and a running PostgreSQL instance",
 )
 

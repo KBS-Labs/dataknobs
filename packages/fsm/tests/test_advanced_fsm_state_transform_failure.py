@@ -32,7 +32,7 @@ def _boom_state(*_args, **_kwargs):
 
 
 def _state_fail_config() -> dict:
-    """start -> middle (state transform raises) -> done."""
+    """Flow: start -> middle (state transform raises) -> done."""
     return {
         "name": "StateFailFSM",
         "main_network": "main",

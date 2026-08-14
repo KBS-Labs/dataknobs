@@ -1,6 +1,5 @@
 """Comprehensive tests for stream mode execution."""
 
-import asyncio
 import pytest
 from dataknobs_fsm.config.builder import FSMBuilder
 from dataknobs_fsm.config.schema import (

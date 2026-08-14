@@ -1,8 +1,5 @@
 """Tests for pre-validator functionality."""
 
-import pytest
-from typing import Any, Dict
-
 from dataknobs_fsm.config.builder import FSMBuilder
 from dataknobs_fsm.config.schema import (
     FSMConfig,
@@ -12,7 +9,6 @@ from dataknobs_fsm.config.schema import (
     FunctionReference,
 )
 from dataknobs_fsm.execution.context import ExecutionContext
-from dataknobs_fsm.functions.base import FunctionContext
 from dataknobs_fsm.core.modes import ProcessingMode
 
 
@@ -84,7 +80,6 @@ class TestPreValidators:
 
     async def test_pre_validators_receive_state_resources(self):
         """Test that pre-validators and other state functions receive state resources."""
-
         # Create FSM configuration without actual resources
         # This test verifies the infrastructure is in place
         config = FSMConfig(
@@ -138,14 +133,13 @@ def transform(data, context):
 
         context = ExecutionContext(data_mode=ProcessingMode.SINGLE)
         engine = fsm.get_async_engine()
-        success, result = await engine.execute(context, {"test": "data"})
+        success, _result = await engine.execute(context, {"test": "data"})
 
         # If assertions in the functions pass, execution succeeds
         assert success
 
     async def test_shared_variables_across_states(self):
         """Test that shared variables work across states."""
-
         # Create FSM configuration
         config = FSMConfig(
             name="test_fsm",
@@ -191,7 +185,7 @@ def transform(data, context):
         context.variables = {"shared_data": "initial"}
 
         engine = fsm.get_async_engine()
-        success, result = await engine.execute(context, {"test": "data"})
+        success, _result = await engine.execute(context, {"test": "data"})
 
         # Verify execution completed
         assert success
@@ -200,9 +194,6 @@ def transform(data, context):
 
     async def test_arc_definition_order_preserved(self):
         """Test that arcs with equal priority are selected in definition order."""
-
-        arc_execution_order = []
-
         # Create FSM configuration with multiple arcs of same priority
         config = FSMConfig(
             name="test_fsm",
@@ -259,7 +250,7 @@ def transform(data, context):
         # First arc should be selected due to definition order
         context = ExecutionContext(data_mode=ProcessingMode.SINGLE)
         engine = fsm.get_async_engine()
-        success, result = await engine.execute(context, {"test": "data"})
+        success, _result = await engine.execute(context, {"test": "data"})
 
         assert success
         # Should have transitioned to path1 (first defined arc)

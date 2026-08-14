@@ -5,7 +5,6 @@ which was the bug we discovered and fixed where transforms were being called bot
 in _execute_state_functions and _execute_state_transforms.
 """
 
-import pytest
 from dataknobs_fsm.api.simple import SimpleFSM
 
 
@@ -13,8 +12,7 @@ class TestDuplicateStateTransformFix:
     """Test for the specific duplicate StateTransform execution bug fix."""
 
     def test_state_transform_not_executed_twice(self):
-        """
-        Test that StateTransforms are executed exactly once, not twice.
+        """Test that StateTransforms are executed exactly once, not twice.
 
         This test reproduces the original bug where StateTransforms were called
         both by _execute_state_functions (before transition evaluation) and
@@ -24,7 +22,6 @@ class TestDuplicateStateTransformFix:
         1. First call: {'value': 5} -> {'result': 10}
         2. Second call: {'result': 10} -> {'result': 2} (using default value 1)
         """
-
         # Track every call to the transform function
         transform_calls = []
 
@@ -85,13 +82,11 @@ class TestDuplicateStateTransformFix:
             assert result["path"] == ["input", "multiply", "output"]
 
     def test_state_transform_with_various_input_values(self):
-        """
-        Test that StateTransforms work correctly with different input values.
+        """Test that StateTransforms work correctly with different input values.
 
         This ensures our fix works for various inputs, not just the specific
         test case that revealed the bug.
         """
-
         transform_calls = []
 
         def value_doubler(state):
@@ -150,13 +145,11 @@ class TestDuplicateStateTransformFix:
                 )
 
     def test_multiple_states_with_transforms(self):
-        """
-        Test that multiple states each execute their transforms exactly once.
+        """Test that multiple states each execute their transforms exactly once.
 
         This ensures the fix works correctly in a more complex FSM with
         multiple transform states.
         """
-
         all_transform_calls = []
 
         def first_transform(state):

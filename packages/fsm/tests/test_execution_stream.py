@@ -7,8 +7,6 @@ import pytest
 from dataknobs_fsm.execution.stream import StreamExecutor, StreamPipeline, StreamProgress
 from dataknobs_fsm.core.fsm import FSM
 from dataknobs_fsm.core.network import StateNetwork
-from dataknobs_fsm.core.modes import ProcessingMode, TransactionMode
-from dataknobs_fsm.execution.context import ExecutionContext
 from dataknobs_fsm.streaming.core import StreamChunk, StreamConfig
 
 
@@ -104,8 +102,12 @@ class TestStreamPipeline:
     def test_pipeline_with_transformations(self):
         """Test pipeline with transformations."""
         mock_source = Mock()
-        transform1 = lambda x: x * 2
-        transform2 = lambda x: x + 1
+
+        def transform1(x):
+            return x * 2
+
+        def transform2(x):
+            return x + 1
 
         pipeline = StreamPipeline(source=mock_source, transformations=[transform1, transform2])
 
@@ -229,7 +231,7 @@ class TestStreamExecutor:
 
         # Mock engine execution
         with patch.object(executor.engine, "execute", return_value=(True, "result")):
-            result = executor.execute_stream(pipeline)
+            executor.execute_stream(pipeline)
 
         # Verify transformations were applied
         assert len(transform_calls) == 4  # 2 transforms x 2 records

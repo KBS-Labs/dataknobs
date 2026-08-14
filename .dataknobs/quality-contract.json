@@ -105,9 +105,9 @@
         },
         {
           "path": "packages/fsm/tests",
-          "tier": "deferred",
-          "ceiling": 237,
-          "reason": "229 autofixable; the 8 by hand are led by 3 PTH118 with nothing else above 2. The 68 ASYNC230/ASYNC240 fixture-I/O findings that used to be this cell's whole hand-fixed half are gone — waived per file under the test-loop conditions rather than fixed, since a loop built for one test has no co-tenant to starve; the three files holding 61 of them have *_offload.py siblings that prove the production readers non-blocking"
+          "tier": "checked",
+          "ceiling": 0,
+          "reason": "the first test cell promoted; the linter reaches it because bin/package-discovery.sh names fsm in lint_promoted_test_packages, which is the other half of this declaration"
         },
         {
           "path": "packages/bots/tests",

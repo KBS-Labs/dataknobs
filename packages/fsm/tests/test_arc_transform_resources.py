@@ -933,7 +933,7 @@ async def test_batch_mode_isolates_a_raising_condition_per_record() -> None:
         )
         ctx.batch_data = [{"id": "1"}, {"id": "2", "boom": True}, {"id": "3"}]
         ctx.set_state("start")
-        success, result = await engine.execute(ctx)
+        _success, result = await engine.execute(ctx)
     finally:
         await helper.close()
 

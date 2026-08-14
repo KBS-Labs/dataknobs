@@ -1,7 +1,7 @@
 """Tests for execution/common.py module."""
 
 import pytest
-from unittest.mock import Mock, MagicMock, patch
+from unittest.mock import Mock, patch
 from dataknobs_fsm.execution.common import (
     NetworkSelector,
     ArcScorer,
@@ -9,9 +9,7 @@ from dataknobs_fsm.execution.common import (
     TransitionSelectionMode,
     extract_metrics_from_context,
 )
-from dataknobs_fsm.core.arc import ArcDefinition
 from dataknobs_fsm.core.modes import ProcessingMode
-from dataknobs_fsm.execution.context import ExecutionContext
 from dataknobs_fsm.execution.common import TraversalStrategy
 
 
@@ -503,7 +501,7 @@ class TestTransitionSelector:
 
             # Multiple calls should cycle through tied arcs via round-robin
             results = []
-            for i in range(4):
+            for _i in range(4):
                 result = selector.select_transition([arc1, arc2], context)
                 results.append(result)
 

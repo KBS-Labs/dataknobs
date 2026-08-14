@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
-"""
-Unit tests for the advanced_debugging.py example.
+"""Unit tests for the advanced_debugging.py example.
 
 These tests verify that all the synchronous debugging features work correctly,
 including step-by-step execution, breakpoints, tracing, profiling, hooks, and
@@ -8,19 +7,15 @@ the FSMDebugger class.
 """
 
 import pytest
-import time
-from typing import Dict, Any, List
 
 
 from dataknobs_fsm.api.advanced import (
-    AdvancedFSM,
     ExecutionMode,
     ExecutionHook,
     FSMDebugger,
     create_advanced_fsm,
     StepResult,
 )
-from dataknobs_fsm.core.data_modes import DataHandlingMode
 
 
 # Import the functions and config from the example

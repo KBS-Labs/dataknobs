@@ -1,16 +1,14 @@
 """Tests for base function interfaces and classes."""
 
 import pytest
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Tuple
 
 from dataknobs_fsm.functions.base import (
-    FunctionType,
     ExecutionResult,
     IValidationFunction,
     ITransformFunction,
     IStateTestFunction,
     IEndStateTestFunction,
-    ResourceStatus,
     ResourceConfig,
     ValidationError,
     TransformError,
@@ -60,7 +58,7 @@ class MockValidationFunction(IValidationFunction):
     def __init__(self, should_pass: bool = True):
         self.should_pass = should_pass
 
-    def validate(self, data: Any, context: Optional[Dict[str, Any]] = None) -> ExecutionResult:
+    def validate(self, data: Any, context: Dict[str, Any] | None = None) -> ExecutionResult:
         if self.should_pass:
             return ExecutionResult.success_result(data)
         else:
@@ -76,7 +74,7 @@ class MockTransformFunction(ITransformFunction):
     def __init__(self, transform_fn=None):
         self.transform_fn = transform_fn or (lambda x: x)
 
-    def transform(self, data: Any, context: Optional[Dict[str, Any]] = None) -> ExecutionResult:
+    def transform(self, data: Any, context: Dict[str, Any] | None = None) -> ExecutionResult:
         try:
             result = self.transform_fn(data)
             return ExecutionResult.success_result(result)
@@ -93,9 +91,7 @@ class MockStateTestFunction(IStateTestFunction):
     def __init__(self, test_result: bool = True):
         self.test_result = test_result
 
-    def test(
-        self, data: Any, context: Optional[Dict[str, Any]] = None
-    ) -> Tuple[bool, Optional[str]]:
+    def test(self, data: Any, context: Dict[str, Any] | None = None) -> Tuple[bool, str | None]:
         if self.test_result:
             return True, "Test passed"
         else:
@@ -112,8 +108,8 @@ class MockEndStateTestFunction(IEndStateTestFunction):
         self.should_end_value = should_end
 
     def should_end(
-        self, data: Any, context: Optional[Dict[str, Any]] = None
-    ) -> Tuple[bool, Optional[str]]:
+        self, data: Any, context: Dict[str, Any] | None = None
+    ) -> Tuple[bool, str | None]:
         if self.should_end_value:
             return True, "End condition met"
         else:

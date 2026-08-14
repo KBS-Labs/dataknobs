@@ -1,8 +1,7 @@
 """Tests for state definitions and instances."""
 
 import pytest
-from datetime import datetime
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 from time import sleep
 
 from dataknobs_data.fields import Field, FieldType
@@ -13,7 +12,7 @@ from dataknobs_fsm.core.state import (
     StateDefinition,
     StateInstance,
 )
-from dataknobs_fsm.core.data_modes import DataHandlingMode, DataModeManager
+from dataknobs_fsm.core.data_modes import DataHandlingMode
 from dataknobs_fsm.functions.base import (
     IValidationFunction,
     ITransformFunction,
@@ -27,7 +26,7 @@ class MockValidationFunction(IValidationFunction):
     def __init__(self, should_pass: bool = True):
         self.should_pass = should_pass
 
-    def validate(self, data: Any, context: Optional[Dict[str, Any]] = None) -> ExecutionResult:
+    def validate(self, data: Any, context: Dict[str, Any] | None = None) -> ExecutionResult:
         if self.should_pass:
             return ExecutionResult.success_result(data)
         return ExecutionResult.failure_result("Validation failed")
@@ -39,7 +38,7 @@ class MockValidationFunction(IValidationFunction):
 class MockTransformFunction(ITransformFunction):
     """Mock transform function for testing."""
 
-    def transform(self, data: Any, context: Optional[Dict[str, Any]] = None) -> ExecutionResult:
+    def transform(self, data: Any, context: Dict[str, Any] | None = None) -> ExecutionResult:
         if isinstance(data, dict):
             data["transformed"] = True
         return ExecutionResult.success_result(data)
@@ -178,10 +177,14 @@ class TestStateDefinition:
         # Valid data
         is_valid, errors = state.validate_data({"value": 42})
         assert is_valid is True
+        assert errors == []
 
-        # Invalid data
+        # Invalid data. The messages are asserted too: the flag alone is
+        # satisfied by a validator that reports the failure and says nothing
+        # about it, which is what the discarded binding here used to hide.
         is_valid, errors = state.validate_data({"wrong": "field"})
         assert is_valid is False
+        assert errors
 
     def test_validate_data_without_schema(self):
         """Test data validation without schema."""
@@ -403,7 +406,7 @@ class TestStateIntegration:
         instance = StateInstance(definition=definition)
 
         # Valid data
-        is_valid, errors = definition.validate_data({"value": 42})
+        is_valid, _errors = definition.validate_data({"value": 42})
         assert is_valid is True
 
         instance.enter({"value": 42})

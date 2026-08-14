@@ -1,9 +1,7 @@
 """Tests for FSM patterns - Using real implementations."""
 
-import pytest
 from pathlib import Path
 import tempfile
-from typing import Dict, Any, List
 
 from dataknobs_fsm.patterns.etl import ETLConfig, ETLMode, DatabaseETL
 from dataknobs_fsm.patterns.file_processing import (

@@ -7,7 +7,6 @@ import pytest
 import yaml
 
 from dataknobs_fsm.config.validator import ConfigValidator
-from dataknobs_fsm.config.schema import FSMConfig
 
 
 class TestConfigValidator:

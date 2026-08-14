@@ -210,8 +210,8 @@ class TestPropertiesResource:
         resource = PropertiesResource(name="test_resource", max_instances=2)
 
         # Acquire max instances
-        handle1 = resource.acquire(owner_id="owner1")
-        handle2 = resource.acquire(owner_id="owner2")
+        resource.acquire(owner_id="owner1")
+        resource.acquire(owner_id="owner2")
 
         assert len(resource._instances) == 2
 
@@ -260,7 +260,7 @@ class TestPropertiesResource:
         resource = PropertiesResource(name="test_resource")
 
         handle1 = resource.acquire(owner_id="owner1")
-        handle2 = resource.acquire(owner_id="owner2")
+        resource.acquire(owner_id="owner2")
 
         retrieved = resource.get_instance(handle1.instance_id)
         assert retrieved is handle1
@@ -336,7 +336,7 @@ class TestPropertiesResource:
         resource = PropertiesResource(name="test_resource", max_instances=10)
 
         handle1 = resource.acquire(owner_id="owner1")
-        handle2 = resource.acquire(owner_id="owner2")
+        resource.acquire(owner_id="owner2")
         handle1.set("key", "value")
 
         stats = resource.get_stats()
@@ -355,7 +355,7 @@ class TestPropertiesResource:
 
         # Create some state
         handle1 = resource.acquire(owner_id="owner1")
-        handle2 = resource.acquire(owner_id="owner2")
+        resource.acquire(owner_id="owner2")
         resource.release(handle1)
 
         assert len(resource._instances) == 1

@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-08-14T03:35:52Z",
+  "timestamp": "2026-08-14T04:02:36Z",
   "python_version": "Python 3.12.12",
   "uv_version": "uv 0.12.3 (Homebrew 2026-08-07 aarch64-apple-darwin)",
   "os": "Darwin",
   "os_version": "24.6.0",
-  "git_branch": "sbk/ruff-test-async-triage",
-  "git_commit": "ed42193d46fc2ec301f18dedbe86af1d5bf24b62",
+  "git_branch": "sbk/ruff-promote-fsm-tests",
+  "git_commit": "e700fe5d42db45cd562193238c8d54a15e0489f3",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }

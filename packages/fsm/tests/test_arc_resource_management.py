@@ -11,13 +11,11 @@ import pytest
 import threading
 import time
 from contextlib import contextmanager
-from unittest.mock import Mock, MagicMock, patch
-from typing import Any, Set
+from unittest.mock import Mock
+from typing import Any
 
 from dataknobs_fsm.resources.manager import ResourceManager
 from dataknobs_fsm.resources.base import (
-    IResourceProvider,
-    IResourcePool,
     ResourceStatus,
     ResourceHealth,
     ResourceMetrics,
@@ -175,7 +173,7 @@ class TestResourceManager:
         provider = MockResourceProvider("test")
         manager.register_provider("database", provider)
 
-        resource = manager.acquire("database", "owner1")
+        manager.acquire("database", "owner1")
         manager.release("database", "owner1")
 
         assert provider.released_count == 1
@@ -381,7 +379,7 @@ class TestResourceContention:
 
         # Create threads all using same owner
         threads = []
-        for i in range(5):
+        for _i in range(5):
             t = threading.Thread(target=acquire_resource)
             threads.append(t)
             t.start()
@@ -466,7 +464,7 @@ class TestResourcePoolIntegration:
 
         manager.register_provider("database", provider, pool_config)
 
-        resource1 = manager.acquire("database", "owner1", timeout=1.0)
+        manager.acquire("database", "owner1", timeout=1.0)
         manager.release("database", "owner1")
 
         # Same resource should be reused from pool
@@ -499,10 +497,9 @@ class TestResourceFailureHandling:
         provider = MockResourceProvider("test")
         manager.register_provider("database", provider)
 
-        resource = manager.acquire("database", "owner1")
+        manager.acquire("database", "owner1")
 
         # Mock release to fail
-        original_release = provider.release
         provider.release = Mock(side_effect=Exception("Release error"))
 
         # The release method doesn't catch provider exceptions, it will propagate
@@ -548,7 +545,7 @@ class TestResourceFailureHandling:
         manager.acquire("database", "owner2")
 
         # Check for leaks
-        status = manager.get_resource_status("database")
+        manager.get_resource_status("database")
 
         # The MockResourceProvider's get_metrics calculates active_count as acquired - released
         assert provider.acquired_count == 2

@@ -115,8 +115,12 @@ if [[ ${#TARGETS[@]} -eq 0 ]]; then
     # The code belonging to no package. validate.sh reports findings here now,
     # so this is where they get fixed — without it, the one entry point named
     # "fix" would be the one that cannot fix them. The two default sets are
-    # still not identical: this one also covers packages/*/tests, which
-    # validate.sh does not yet lint.
+    # still not identical: this one covers every packages/*/tests, while
+    # validate.sh lints only the promoted ones (see lint_promoted_test_packages
+    # in package-discovery.sh). Deliberately the wider of the two, and in this
+    # direction only — reaching a cell the linter has not been promoted onto
+    # costs nothing, whereas the reverse is a ceiling with no local remedy,
+    # which tests/test_toolchain_consistency.py fails on.
     for workspace_target in $(workspace_targets); do
         FIX_TARGETS+=("$workspace_target")
     done

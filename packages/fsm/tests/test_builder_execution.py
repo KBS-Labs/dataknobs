@@ -1,8 +1,7 @@
 """Tests for FSM execute() implementation in config/builder.py."""
 
-import asyncio
 import pytest
-from unittest.mock import Mock, patch, MagicMock
+from unittest.mock import patch
 
 from dataknobs_fsm.config.builder import FSMBuilder
 from dataknobs_fsm.config.schema import (
@@ -10,13 +9,9 @@ from dataknobs_fsm.config.schema import (
     StateConfig,
     ArcConfig,
     NetworkConfig,
-    DataModeConfig,
     FunctionReference,
 )
-from dataknobs_fsm.core.data_modes import DataHandlingMode
-from dataknobs_fsm.core.modes import TransactionMode, ProcessingMode
-from dataknobs_fsm.core.fsm import FSM as CoreFSM
-from dataknobs_fsm.resources.manager import ResourceManager
+from dataknobs_fsm.core.modes import ProcessingMode
 from dataknobs_fsm.execution.context import ExecutionContext
 
 
@@ -210,8 +205,8 @@ class TestFSMExecute:
     @pytest.mark.asyncio
     async def test_execute_context_creation_error(self, fsm_instance):
         """Test handling when context creation fails."""
-        with patch("dataknobs_fsm.execution.context.ExecutionContext") as MockContext:
-            MockContext.side_effect = RuntimeError("Context error")
+        with patch("dataknobs_fsm.execution.context.ExecutionContext") as mock_context:
+            mock_context.side_effect = RuntimeError("Context error")
 
             result = await fsm_instance.execute_async({"test": "data"})
 

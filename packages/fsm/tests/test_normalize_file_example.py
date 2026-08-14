@@ -1,11 +1,8 @@
 #!/usr/bin/env python3
 """Unit tests for normalize_file_example.py"""
 
-import asyncio
 import json
-from pathlib import Path
 
-import pytest
 import yaml
 
 from dataknobs_fsm.api.simple import SimpleFSM

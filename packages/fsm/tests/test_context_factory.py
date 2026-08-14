@@ -5,7 +5,7 @@ from dataknobs_data import Record
 
 from dataknobs_fsm.core.context_factory import ContextFactory
 from dataknobs_fsm.core.fsm import FSM
-from dataknobs_fsm.core.state import StateDefinition, StateType, StateInstance
+from dataknobs_fsm.core.state import StateDefinition, StateType
 from dataknobs_fsm.core.network import StateNetwork
 from dataknobs_fsm.core.modes import ProcessingMode, TransactionMode
 from dataknobs_fsm.resources.manager import ResourceManager

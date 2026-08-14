@@ -1,16 +1,13 @@
-"""
-Unit tests for end-to-end streaming example.
+"""Unit tests for end-to-end streaming example.
 
 These tests verify that the streaming example functions correctly,
 including file-to-file streaming, generator-based streaming, and
 multi-stage pipeline processing.
 """
 
-import asyncio
 import json
 import tempfile
 from pathlib import Path
-from typing import Dict, Any, List, AsyncIterator
 import pytest
 
 from dataknobs_fsm import AsyncSimpleFSM
@@ -47,7 +44,7 @@ class TestStreamingConfiguration:
         assert len(initial_states) == 1
         assert initial_states[0]["name"] == "input"
         assert len(final_states) == 2
-        assert set(s["name"] for s in final_states) == {"output", "error"}
+        assert {s["name"] for s in final_states} == {"output", "error"}
 
         # Verify arcs
         assert len(network["arcs"]) >= 5
@@ -148,7 +145,7 @@ class TestFileToFileStreaming:
             assert results.get("failed", 0) == 0
 
             # Verify output file contents
-            with open(output_path, "r") as f:
+            with open(output_path) as f:
                 output_records = [json.loads(line) for line in f]
 
             assert len(output_records) == len(input_data)
@@ -204,12 +201,12 @@ class TestFileToFileStreaming:
             config = create_streaming_fsm_config()
             fsm = AsyncSimpleFSM(config)
 
-            results = await fsm.process_stream(
+            await fsm.process_stream(
                 source=str(input_path), sink=str(output_path), chunk_size=2, use_streaming=True
             )
 
             # Read output to see what was processed
-            with open(output_path, "r") as f:
+            with open(output_path) as f:
                 output_records = [json.loads(line) for line in f]
 
             # Should have processed valid records
@@ -239,20 +236,20 @@ class TestGeneratorStreaming:
             fsm = AsyncSimpleFSM(config)
 
             # Use the generator as source
-            results = await fsm.process_stream(
+            await fsm.process_stream(
                 source=generate_streaming_data(count=20, chunk_size=5),
                 sink=str(output_path),
                 chunk_size=5,
             )
 
             # Verify output
-            with open(output_path, "r") as f:
+            with open(output_path) as f:
                 output_records = [json.loads(line) for line in f]
 
             assert len(output_records) == 20
 
             # Verify all records were processed correctly
-            for i, record in enumerate(output_records):
+            for _i, record in enumerate(output_records):
                 assert record["status"] == "processed"
                 assert "original_value" in record
                 assert "doubled_value" in record
@@ -278,7 +275,7 @@ class TestGeneratorStreaming:
             config = create_streaming_fsm_config()
             fsm = AsyncSimpleFSM(config)
 
-            results = await fsm.process_stream(
+            await fsm.process_stream(
                 source=generate_streaming_data(count=15, chunk_size=5),
                 sink=str(output_path),
                 chunk_size=3,
@@ -352,12 +349,12 @@ class TestMultiStagePipeline:
         try:
             # Stage 1: Clean data
             stage1_fsm = AsyncSimpleFSM(stage1_config)
-            stage1_results = await stage1_fsm.process_stream(
+            await stage1_fsm.process_stream(
                 source=str(input_path), sink=str(stage1_path), chunk_size=5
             )
 
             # Verify stage 1 output
-            with open(stage1_path, "r") as f:
+            with open(stage1_path) as f:
                 cleaned_records = [json.loads(line) for line in f]
 
             assert len(cleaned_records) == 3
@@ -368,12 +365,12 @@ class TestMultiStagePipeline:
             stage2_config = create_streaming_fsm_config()
             stage2_fsm = AsyncSimpleFSM(stage2_config)
 
-            stage2_results = await stage2_fsm.process_stream(
+            await stage2_fsm.process_stream(
                 source=str(stage1_path), sink=str(final_path), chunk_size=5, use_streaming=True
             )
 
             # Verify final output
-            with open(final_path, "r") as f:
+            with open(final_path) as f:
                 final_records = [json.loads(line) for line in f]
 
             assert len(final_records) == 3
@@ -408,7 +405,7 @@ class TestMultiStagePipeline:
             config1 = create_streaming_fsm_config()
             fsm1 = AsyncSimpleFSM(config1)
 
-            results1 = await fsm1.process_stream(
+            await fsm1.process_stream(
                 source=generate_streaming_data(count=test_records, chunk_size=5),
                 sink=str(stage1_path),
                 chunk_size=3,  # Small chunks
@@ -418,7 +415,7 @@ class TestMultiStagePipeline:
             config2 = create_streaming_fsm_config()
             fsm2 = AsyncSimpleFSM(config2)
 
-            results2 = await fsm2.process_stream(
+            await fsm2.process_stream(
                 source=str(stage1_path),
                 sink=str(final_path),
                 chunk_size=10,  # Larger chunks
@@ -426,7 +423,7 @@ class TestMultiStagePipeline:
             )
 
             # Verify all records made it through
-            with open(final_path, "r") as f:
+            with open(final_path) as f:
                 final_records = [json.loads(line) for line in f]
 
             assert len(final_records) == test_records
@@ -469,7 +466,7 @@ class TestStreamingPerformance:
             fsm = AsyncSimpleFSM(config)
 
             # Process with streaming enabled
-            results = await fsm.process_stream(
+            await fsm.process_stream(
                 source=str(input_path),
                 sink=str(output_path),
                 chunk_size=50,  # Process in reasonable chunks
@@ -477,13 +474,13 @@ class TestStreamingPerformance:
             )
 
             # Verify all records were processed
-            with open(output_path, "r") as f:
+            with open(output_path) as f:
                 line_count = sum(1 for _ in f)
 
             assert line_count == record_count
 
             # Spot check some records
-            with open(output_path, "r") as f:
+            with open(output_path) as f:
                 # Check first record (id=0, value=0)
                 first = json.loads(f.readline())
                 assert first["original_value"] == 0
@@ -531,12 +528,12 @@ class TestErrorHandling:
             fsm = AsyncSimpleFSM(config)
 
             # Should handle malformed JSON gracefully
-            results = await fsm.process_stream(
+            await fsm.process_stream(
                 source=str(input_path), sink=str(output_path), chunk_size=5, use_streaming=True
             )
 
             # Check that valid records were still processed
-            with open(output_path, "r") as f:
+            with open(output_path) as f:
                 output_records = [json.loads(line) for line in f if line.strip()]
 
             # Should have processed at least the valid records
@@ -561,7 +558,7 @@ class TestErrorHandling:
             fsm = AsyncSimpleFSM(config)
 
             # Should handle empty file gracefully
-            results = await fsm.process_stream(
+            await fsm.process_stream(
                 source=str(input_path), sink=str(output_path), chunk_size=5, use_streaming=True
             )
 

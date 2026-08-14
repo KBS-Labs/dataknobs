@@ -6,11 +6,9 @@ from dataknobs_fsm.api.advanced import (
     AdvancedFSM,
     ExecutionMode,
     StepResult,
-    create_advanced_fsm,
 )
 from dataknobs_fsm.config.builder import FSMBuilder
 from dataknobs_fsm.config.loader import ConfigLoader
-from dataknobs_fsm.core.data_modes import DataHandlingMode
 
 
 def _build_simple_fsm():

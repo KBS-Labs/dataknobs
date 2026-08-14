@@ -7,7 +7,6 @@ and properly awaits async pre-tests, transforms, and hooks.
 import pytest
 
 from dataknobs_fsm.api.advanced import (
-    AdvancedFSM,
     ExecutionHook,
     StepResult,
     create_advanced_fsm,

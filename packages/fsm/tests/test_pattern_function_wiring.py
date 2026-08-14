@@ -23,7 +23,11 @@ from __future__ import annotations
 
 from typing import Any
 
-from dataknobs_fsm.core.fsm import FSM as CoreFSM
+# Waived per line: `FSM` is a class whose name is an acronym, which N811 cannot
+# distinguish from a module-level constant. `CoreFSM` is the correct PascalCase
+# alias for it, and config/builder.py declines the rule at its own `FSM as
+# CoreFSMClass` for the same reason.
+from dataknobs_fsm.core.fsm import FSM as CoreFSM  # noqa: N811
 from dataknobs_fsm.core.state import StateDefinition
 from dataknobs_fsm.patterns.etl import DatabaseETL, ETLConfig, ETLMode
 from dataknobs_fsm.patterns.file_processing import (

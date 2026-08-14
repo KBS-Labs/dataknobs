@@ -1,11 +1,8 @@
 """Tests for streaming file utilities."""
 
-import asyncio
 import csv
 import json
-import tempfile
-from pathlib import Path
-from typing import Dict, List
+from typing import Dict
 
 import pytest
 

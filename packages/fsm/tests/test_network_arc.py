@@ -1,7 +1,5 @@
 """Tests for network and arc components."""
 
-from typing import Any, Dict
-
 import pytest
 
 from dataknobs_fsm.core import (
@@ -12,12 +10,10 @@ from dataknobs_fsm.core import (
     NetworkResourceRequirements,
     PushArc,
     State,
-    StateMode,
     StateNetwork,
 )
 from dataknobs_fsm.core.exceptions import FunctionError
 from dataknobs_fsm.execution.context import ExecutionContext
-from dataknobs_fsm.functions.base import FunctionContext
 
 
 class TestStateNetwork:

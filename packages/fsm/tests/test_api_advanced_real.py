@@ -1,12 +1,9 @@
 """Tests for AdvancedFSM API - Using real implementations."""
 
 import pytest
-import asyncio
-from typing import Dict, Any
 from unittest.mock import AsyncMock
 
 from dataknobs_fsm.api.advanced import AdvancedFSM, ExecutionMode, ExecutionHook, StepResult
-from dataknobs_fsm.core.fsm import FSM
 from dataknobs_fsm.core.data_modes import DataHandlingMode
 from dataknobs_fsm.execution.common import TraversalStrategy
 from dataknobs_fsm.config.builder import FSMBuilder
@@ -275,7 +272,7 @@ class TestAdvancedFSMExecutionContext:
         hooks = ExecutionHook(on_state_enter=on_enter, on_state_exit=on_exit)
         advanced_fsm.set_hooks(hooks)
 
-        async with advanced_fsm.execution_context({"test": "data"}) as context:
+        async with advanced_fsm.execution_context({"test": "data"}):
             pass  # Just test context creation and cleanup
 
         # Hooks should have been called

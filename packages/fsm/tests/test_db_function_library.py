@@ -874,7 +874,8 @@ async def test_database_transaction_commit_without_handle_warns_and_commits_noth
 ) -> None:
     """A commit reaching a state with no active handle (a missing or failed
     prior ``begin``) is logged at WARNING and commits nothing — not a phantom
-    success."""
+    success.
+    """
     adapter = _file_adapter(tmp_path, "dtnh")
     commit = DatabaseTransaction("target_db", "commit")
     ctx = _ctx("target_db", adapter)
@@ -894,7 +895,8 @@ async def test_database_transaction_rollback_without_handle_is_noop(
     tmp_path: Path,
 ) -> None:
     """A rollback with no active handle is a benign no-op (e.g. an error-routing
-    state reached before ``begin``) — it must not raise."""
+    state reached before ``begin``) — it must not raise.
+    """
     adapter = _file_adapter(tmp_path, "dtrn")
     rollback = DatabaseTransaction("target_db", "rollback")
     try:
@@ -909,7 +911,8 @@ def test_database_transaction_savepoint_warns_on_use(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     """The reserved ``savepoint=`` argument is not yet honored; using it warns
-    rather than silently no-op'ing."""
+    rather than silently no-op'ing.
+    """
     with caplog.at_level(logging.WARNING):
         DatabaseTransaction("r", "begin", savepoint="sp1")
     assert any("savepoint" in r.getMessage().lower() for r in caplog.records)

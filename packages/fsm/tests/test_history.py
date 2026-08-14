@@ -3,7 +3,6 @@
 import asyncio
 import tempfile
 import time
-from typing import Any, Dict, List
 
 import pytest
 
@@ -48,7 +47,7 @@ class TestExecutionHistory:
         assert history.total_steps == 1
 
         # Add second step
-        step2 = history.add_step(state_name="process", network_name="main", data={"value": 2})
+        history.add_step(state_name="process", network_name="main", data={"value": 2})
 
         assert history.total_steps == 2
         assert len(history.get_path_to_current()) == 2
@@ -96,10 +95,10 @@ class TestExecutionHistory:
 
         # Main path
         step1 = history.add_step("start", "main")
-        step2 = history.add_step("process", "main")
+        history.add_step("process", "main")
 
         # Branch from step1
-        step3 = history.add_step("alternate", "main", parent_step_id=step1.step_id)
+        history.add_step("alternate", "main", parent_step_id=step1.step_id)
 
         paths = history.get_all_paths()
         assert len(paths) == 2  # Two paths: start->process and start->alternate
@@ -256,11 +255,13 @@ class TestStorageBackends:
     async def test_file_storage(self):
         """Test file storage operations."""
         import tempfile
-        import os
+        from pathlib import Path
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            # Create a file path within the directory, not the directory itself
-            file_path = os.path.join(tmpdir, "fsm_history.json")
+            # Create a file path within the directory, not the directory itself.
+            # Kept a str: it goes into connection_params, which the storage
+            # config carries as configuration data rather than as a path object.
+            file_path = str(Path(tmpdir) / "fsm_history.json")
             config = StorageConfig(
                 backend=StorageBackend.FILE, connection_params={"path": file_path, "format": "json"}
             )

@@ -19,12 +19,12 @@ import pytest
 import tempfile
 import os
 import uuid
-from typing import Dict, Any
+from pathlib import Path
 
 from dataknobs_fsm.storage.database import UnifiedDatabaseStorage
 from dataknobs_fsm.storage.memory import InMemoryStorage
 from dataknobs_fsm.storage.base import StorageConfig, StorageBackend
-from dataknobs_fsm.execution.history import ExecutionHistory, ExecutionStep, ExecutionStatus
+from dataknobs_fsm.execution.history import ExecutionHistory
 from dataknobs_fsm.core.data_modes import DataHandlingMode
 
 
@@ -197,7 +197,7 @@ class TestDatabaseStorageFactory:
 
             # Try to load them back
             for history in histories:
-                loaded = await storage.load_history(history.execution_id)
+                await storage.load_history(history.execution_id)
                 # Loaded might be None if backend doesn't persist or might be actual data
                 # This depends on the backend implementation
         finally:
@@ -471,7 +471,7 @@ class TestDatabaseStorageFactory:
             # to internal framework code.  ``__file__`` may be a
             # bytecode path on some loaders; compare basenames.
             assert len(records) == 1
-            assert os.path.basename(records[0].filename) == os.path.basename(__file__), (
+            assert Path(records[0].filename).name == Path(__file__).name, (
                 f"Warning origin {records[0].filename!r} should be the "
                 f"test file ({__file__!r}); a wrong stacklevel "
                 "attributes the warning to internal dataknobs_fsm code "

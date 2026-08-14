@@ -2,7 +2,6 @@
 
 import time
 from typing import Any, List
-import pytest
 
 from dataknobs_fsm.execution.stream import StreamExecutor, StreamPipeline, StreamProgress
 from dataknobs_fsm.core.fsm import FSM

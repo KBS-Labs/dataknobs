@@ -21,8 +21,8 @@ from __future__ import annotations
 
 import dataclasses
 import json
-import os
 import tempfile
+from pathlib import Path
 
 import pytest
 from dataknobs_common.retry import RetryConfig
@@ -359,7 +359,7 @@ class TestFileProcessingConfigStructured:
         # write back to the now-frozen config (which would raise
         # FrozenInstanceError pre-fix).
         with tempfile.TemporaryDirectory() as tmp:
-            path = os.path.join(tmp, "data.json")
+            path = str(Path(tmp) / "data.json")
             with open(path, "w", encoding="utf-8") as handle:
                 handle.write('{"a": 1}')
 
@@ -375,7 +375,7 @@ class TestFileProcessingConfigStructured:
 
     def test_processor_respects_explicit_format(self):
         with tempfile.TemporaryDirectory() as tmp:
-            path = os.path.join(tmp, "data.bin")
+            path = str(Path(tmp) / "data.bin")
             with open(path, "w", encoding="utf-8") as handle:
                 handle.write("name,value\na,1\n")
 
