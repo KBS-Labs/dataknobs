@@ -484,7 +484,10 @@ def mypy_findings(output: str) -> list[Finding]:
 
 
 def mypy_targets(
-    cells: list[dict[str, Any]], only: set[str] | None, include_unmeasured: bool
+    cells: list[dict[str, Any]],
+    only: set[str] | None,
+    include_unmeasured: bool,
+    files: list[PurePosixPath],
 ) -> list[str]:
     """The directories one mypy pass is pointed at.
 
@@ -493,6 +496,24 @@ def mypy_targets(
     not measured, and the ceiling ``verify`` insists they carry is zero
     precisely so that nothing reads their silence as a count. Widening the
     target set here is how the census asks what is actually in them.
+
+    A directory holding no tracked ``*.py`` is dropped, because mypy exits 2 on
+    one — reporting nothing, over every other target in the same pass. The other
+    two measurers cannot reach that: both are handed the population directly, and
+    a file list cannot hold a path that is not a Python file. Only this tool is
+    pointed at directories, so only this tool can be pointed at an empty one.
+
+    The drop is of directories, never of cells. ``packages/*/docs`` matches seven
+    of them and one holds a single ``.py`` file; the cell exists so that file is
+    in some cell rather than silently in none, and it is still measured, over the
+    one directory that has it. So the zero such a cell reports is a count of what
+    is there and not a run that failed to happen — which is the distinction the
+    exit-status guard below exists to keep, and this keeps it without the pass
+    having to die to do so.
+
+    Filtered against the population git tracks rather than a walk of the tree,
+    for the reason ``tracked_python`` gives: a directory holding one untracked
+    ``.py`` would otherwise be measured, and the file in it belongs to no cell.
     """
     skipped = frozenset() if include_unmeasured else _UNMEASURED_TIERS
     return sorted(
@@ -501,12 +522,14 @@ def mypy_targets(
             for cell in _restrict(cells, only)
             if cell["tier"] not in skipped
             for path in _expand(cell["path"])
+            if any(cell_matches(tracked, str(path)) for tracked in files)
         }
     )
 
 
 def _mypy_report(
     contract: dict[str, Any],
+    files: list[PurePosixPath],
     only: set[str] | None = None,
     *,
     include_unmeasured: bool = False,
@@ -541,7 +564,7 @@ def _mypy_report(
     make.
     """
     cells = contract["tools"]["mypy"]["cells"]
-    targets = mypy_targets(cells, only, include_unmeasured)
+    targets = mypy_targets(cells, only, include_unmeasured, files)
     if not targets:
         return [], ""
 
@@ -562,12 +585,16 @@ def _mypy_report(
 
 
 def measure_mypy(
-    contract: dict[str, Any], _files: list[PurePosixPath], only: set[str] | None = None
+    contract: dict[str, Any], files: list[PurePosixPath], only: set[str] | None = None
 ) -> Measurement:
     """Findings per cell, from one mypy pass over the cells it actually covers.
 
-    Takes the population and ignores it, so the three measurers share one
-    signature and ``MEASURERS`` can name them rather than wrap them.
+    Uses the population the other two measurers are given, though it passes
+    directories to the tool rather than files: it is what decides whether a
+    directory holds any Python to open. Taking it from the shared signature
+    rather than asking git again keeps one answer to what this repository tracks
+    — the ratchet and the census would otherwise each have their own, and a
+    population that can differ is a cell that can measure two ways.
 
     Scoping to ``only`` measures fewer cells, not fewer files within one: a
     ceiling is a whole-cell property, so a partial count compared against it is
@@ -576,7 +603,7 @@ def measure_mypy(
     from a run over all fourteen.
     """
     cells = contract["tools"]["mypy"]["cells"]
-    findings, output = _mypy_report(contract, only)
+    findings, output = _mypy_report(contract, files, only)
     return _tally(cells, [finding.path for finding in findings])._replace(output=output)
 
 
@@ -1100,24 +1127,30 @@ def take_census(
     config: str = contract["tools"][tool]["config"]
     removed: list[str] = []
     findings: list[Finding]
+    # Read once and handed to whichever branch runs, so that a census and the
+    # ratchet it decomposes cannot be looking at different populations.
+    files = tracked_python()
 
     # Two branches for mypy rather than one, and no branch for anything else:
     # the guard above is what makes the final `else` the type checker rather
     # than whatever tool is not ruff.
     if tool == "ruff":
-        findings = ruff_findings(_ruff_report(contract, tracked_python(), only))
+        findings = ruff_findings(_ruff_report(contract, files, only))
     elif without_overrides:
         with census_config(contract) as (generated, removed):
             config = generated
             findings, _output = _mypy_report(
                 contract,
+                files,
                 only,
                 include_unmeasured=include_unmeasured,
                 config=config,
                 cache_dir=CENSUS_CACHE,
             )
     else:
-        findings, _output = _mypy_report(contract, only, include_unmeasured=include_unmeasured)
+        findings, _output = _mypy_report(
+            contract, files, only, include_unmeasured=include_unmeasured
+        )
 
     return CensusRun(
         _tally(cells, [finding.path for finding in findings]),
