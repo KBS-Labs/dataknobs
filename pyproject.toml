@@ -254,71 +254,128 @@ select = [
 ]
 
 ignore = [
-    # Documentation - keep minimal
-    "D100", # Missing docstring in public module
-    "D101", # Missing docstring in public class
-    "D102", # Missing docstring in public method
-    "D103", # Missing docstring in public function
-    "D104", # Missing docstring in public package
-    "D105", # Missing docstring in magic method
-    "D107", # Missing docstring in __init__
-    "D200", # One-line docstring should fit on one line
-    "D203", # 1 blank line required before class docstring (conflicts with D211)
-    "D205", # 1 blank line required between summary line and description
-    "D210", # No whitespace allowed surrounding docstring text
-    "D213", # Multi-line docstring summary should start at the second line (conflicts with D212)
-    "D401", # First line should be in imperative mood
-    "D415", # First line should end with period
-    "D417", # Missing argument description in docstring
+    # -------------------------------------------------------------------------
+    # Every entry carries a [category] marker, checked by tests/test_lint_policy.py
+    # and readable with `bin/quality-contract.py explain <CODE> [<path>]`.
+    #
+    #   [presentational]     no finding of this rule can be a behaviour difference
+    #   [covered-elsewhere]  another tool enforces the property; the reason names it
+    #   [behavioural]        findings can be real; declined with an argument, which
+    #                        is the continuation line(s) under the entry
+    #   [provisional]        findings can be real and the decline is NOT yet argued;
+    #                        the reason carries the measured count, and the target
+    #                        for the total of those counts is zero
+    #
+    # The category is a property of what a *fix* would do, not of what the rule is
+    # named. W291 reads as whitespace hygiene and is not; SIM113 reads as a loop
+    # idiom and its advice is invalid at one of its two sites. Read the findings
+    # before assigning a category to a rule.
+    # -------------------------------------------------------------------------
+
+    # Documentation — a docstring's presence, mood or blank-line placement is not
+    # a runtime property.
+    "D100", # [presentational] Missing docstring in public module
+    "D101", # [presentational] Missing docstring in public class
+    "D102", # [presentational] Missing docstring in public method
+    "D103", # [presentational] Missing docstring in public function
+    "D104", # [presentational] Missing docstring in public package
+    "D105", # [presentational] Missing docstring in magic method
+    "D107", # [presentational] Missing docstring in __init__
+    "D200", # [presentational] One-line docstring should fit on one line
+    "D203", # [presentational] 1 blank line before class docstring (conflicts with D211)
+    "D205", # [presentational] 1 blank line between summary line and description
+    "D210", # [presentational] No whitespace allowed surrounding docstring text
+    "D213", # [presentational] Multi-line summary starts on second line (conflicts with D212)
+    "D401", # [presentational] First line should be in imperative mood
+    "D415", # [presentational] First line should end with period
+    "D417", # [presentational] Missing argument description in docstring
 
     # flake8-bugbear
-    "B905", # zip() without an explicit strict parameter
+    "B905", # [provisional] zip() without an explicit strict parameter — 36 findings,
+            # 17 of them in src/, and not one has been read. Silent truncation to the
+            # shorter iterable is a real defect shape, so this decline is unargued
+            # rather than argued, and naming that is what this category is for.
 
     # flake8-eradicate - allow commented code with TODOs
-    "ERA001", # Found commented-out code
+    "ERA001", # [presentational] Found commented-out code — a comment does not run
 
     # Pylint warnings - loop variables
-    "PLW2901", # Loop variable overwritten by assignment target
+    "PLW2901", # [provisional] Loop variable overwritten by assignment target — 19
+               # findings, 15 in src/, none read. Rebinding the loop name is as often
+               # a silent bug as a deliberate narrowing, and only the site says which.
 
-    # Whitespace and formatting - auto-fixable
-    "W291", # Trailing whitespace
-    "W293", # Blank line contains whitespace
-    "E501", # Line too long (already configured at 100)
-    
-    # Type annotations - contextual
-    "ANN001", # Missing type annotation for function argument
-    "ANN002", # Missing type annotation for *args — the same signature as ANN003
-              # below, in its other spelling. Declining one and enforcing the
-              # other asks a `def f(*args, **kwargs)` to annotate half of itself.
-    "ANN003", # Missing type annotation for **kwargs
-    "ANN201", # Missing return type annotation for public function
-    "ANN202", # Missing return type annotation for private function
-    "ANN204", # Missing return type annotation for special method __init__
-    "ANN205", # Missing return type annotation for staticmethod
-    "ANN206", # Missing return type annotation for classmethod — ANN205's direct
-              # sibling, added because seven of this family's nine members were
+    # Whitespace — NOT presentational, and the difference is measured rather than
+    # assumed. These rules fire on physical lines *inside* string literals: all three
+    # W291 findings today sit in multi-line f-string SQL, which is also why
+    # `ruff format` — enforced at 0 across all nine cells — has never touched them.
+    "W291", # [behavioural] Trailing whitespace
+            # Harmless in the SQL literals it fires on today. A future finding inside
+            # a meaningful literal takes a per-line `# noqa`, not a re-decline.
+    "W293", # [behavioural] Blank line contains whitespace
+            # The same mechanism as W291 above: a whitespace-only line inside a
+            # triple-quoted string is content, not layout. Zero findings today.
+    "E501", # [presentational] Line too long (already configured at 100)
+
+    # Type annotations — covered by mypy, which measures the same property with teeth.
+    # `disallow_untyped_defs` is what the strict tier turns on, and `no-untyped-def`
+    # is the largest single family in the type backlog. The cover is conditional in
+    # exactly the way RUF013's is: it has a hole where mypy is `unchecked`, and that
+    # hole closes by promoting those cells, not by re-selecting this family.
+    "ANN001", # [covered-elsewhere] mypy `no-untyped-def` — function argument
+    "ANN002", # [covered-elsewhere] mypy `no-untyped-def` — *args. The same signature
+              # as ANN003 below, in its other spelling. Declining one and enforcing
+              # the other asks a `def f(*args, **kwargs)` to annotate half of itself.
+    "ANN003", # [covered-elsewhere] mypy `no-untyped-def` — **kwargs
+    "ANN201", # [covered-elsewhere] mypy `no-untyped-def` — public function return
+    "ANN202", # [covered-elsewhere] mypy `no-untyped-def` — private function return
+    "ANN204", # [covered-elsewhere] mypy `no-untyped-def` — special method return
+    "ANN205", # [covered-elsewhere] mypy `no-untyped-def` — staticmethod return
+    "ANN206", # [covered-elsewhere] mypy `no-untyped-def` — classmethod return. ANN205's
+              # direct sibling, added because seven of this family's nine members were
               # already declined here and the two left standing were the odd
               # spellings rather than a policy about classmethods and *args.
-    "ANN401", # Dynamically typed expressions (Any) are disallowed
-    
-    # Import location - often necessary for circular deps
-    "PLC0415", # Import should be at the top-level of a file
+    "ANN401", # [covered-elsewhere] mypy — whether a signature may widen to `Any` is
+              # the per-cell tier question mypy already answers; this rule would
+              # answer it repo-wide and in one direction.
 
-    # Type-checking imports - not always practical
-    "TC001", # Move application import into type-checking block
-    "TC002", # Move third-party import into type-checking block
-    "TC003", # Move standard library import into type-checking block
-    
+    # Import location - often necessary for circular deps
+    "PLC0415", # [presentational] Import should be at the top-level of a file
+
+    # Type-checking imports — NOT presentational. Moving an import into a
+    # `TYPE_CHECKING` block removes it at runtime, and anything that evaluates
+    # annotations at runtime then fails: Pydantic models, dataclasses read through
+    # `get_type_hints`, and every `TypeAdapter` in the tree.
+    "TC001", # [behavioural] Move application import into type-checking block
+             # The same runtime-evaluation hazard as TC002, reached through a
+             # first-party import.
+    "TC002", # [behavioural] Move third-party import into type-checking block
+             # The hazard is a property of the *library*, not of the count: the three
+             # findings today are `import pytest`, but the next one could be pydantic,
+             # which resolves annotations at runtime. A low count does not bound it.
+    "TC003", # [behavioural] Move standard library import into type-checking block
+             # Same mechanism again; `datetime` and `decimal` are both resolved at
+             # runtime by the validation layers above them.
+
     # Code simplification - sometimes less readable
-    "SIM102", # Use a single if statement instead of nested if
-    "SIM103", # Return negated condition directly - sometimes clearer with if/else
-    "SIM110", # Use return any() instead of for loop - sometimes clearer with explicit loop
-    "SIM118", # Use key in dict instead of key in dict.keys() - explicit is clearer
-    "PLW3301", # Nested max calls - more readable when nested for complex cases
-    "RUF006", # Store asyncio.create_task reference - only needed if canceling task
-    "SIM105", # Use contextlib.suppress - not always clearer
-    "SIM108", # Use ternary operator instead of if-else-block
-    "SIM113", # Use enumerate for index variable
+    "SIM102", # [presentational] Use a single if statement instead of nested if
+    "SIM103", # [presentational] Return negated condition directly
+    "SIM110", # [presentational] Use return any() instead of for loop
+    "SIM118", # [presentational] Use `key in dict` instead of `key in dict.keys()`
+    "PLW3301", # [behavioural] Nested min/max calls can be flattened
+               # Flattening `max(a, max(gen))` to `max(a, *gen)` changes the failure
+               # mode on an empty iterable from ValueError to TypeError. Safe at the
+               # single site it fires on, and only because of a guard three lines up.
+    "RUF006", # [behavioural] Store a reference to the return value of asyncio.create_task
+              # The reason this entry used to carry — "only needed if canceling task"
+              # — was factually wrong, and is why its findings were never read. The
+              # loop keeps only a *weak* reference to a bare create_task, so the task
+              # may be collected mid-flight and silently never run to completion.
+    "SIM105", # [presentational] Use contextlib.suppress
+    "SIM108", # [presentational] Use ternary operator instead of if-else-block
+    "SIM113", # [behavioural] Use enumerate() for index variable
+              # The advice does not check for async context: at one of its two sites
+              # the loop is an `async for`, where enumerate() raises TypeError. A fix
+              # taken from the rule name rather than the site would break that loop.
     # SIM115 was declined here with the reason "not practical for locks", and
     # that reason is true -- of one file: data's file backend holds a lock handle
     # open across the critical section it protects, which is exactly the shape
@@ -328,28 +385,37 @@ ignore = [
     # then had to be found by reading the file. Moved to per-file-ignores below,
     # one entry per file with its own reason, so a fourteenth has to argue for
     # itself instead of arriving under a waiver written for something else.
-    "SIM117", # Use single with statement with multiple contexts
-    
+    "SIM117", # [presentational] Use single with statement with multiple contexts
+
     # Complexity metrics - already configured
-    "PLR0206", # Cannot have defined parameters for properties
-    "PLR0911", # Too many return statements (configured at 6)
-    "PLR0912", # Too many branches (configured at 12)
-    "PLR0913", # Too many arguments to function call
-    "PLR0917", # Too many positional arguments (same family as PLR0913; project accepts many-parameter constructors/builders)
-    "PLR0915", # Too many statements (configured at 50)
-    "PLR2004", # Magic value used in comparison
-    "PLR5501", # Use elif instead of else-if - style preference
-    "PLR1714", # Consider merging multiple comparisons - sometimes clearer separate
-    
-    # Unused arguments - often required by interfaces
-    "ARG001", # Unused function argument
-    "ARG002", # Unused method argument
-    "ARG003", # Unused classmethod argument — the same "the signature belongs to
-              # the interface" case as the other three in this block, reached
-              # through a classmethod rather than a function, method or
+    "PLR0206", # [behavioural] Cannot have defined parameters for properties
+               # Not a metric despite its number. Its one finding is a property
+               # declared with a required parameter, which cannot be invoked at all:
+               # attribute access calls the getter with no argument and raises.
+    "PLR0911", # [presentational] Too many return statements (configured at 6)
+    "PLR0912", # [presentational] Too many branches (configured at 12)
+    "PLR0913", # [presentational] Too many arguments to function call
+    "PLR0917", # [presentational] Too many positional arguments (same family as PLR0913;
+               # project accepts many-parameter constructors/builders)
+    "PLR0915", # [presentational] Too many statements (configured at 50)
+    "PLR2004", # [presentational] Magic value used in comparison
+    "PLR5501", # [presentational] Use elif instead of else-if - style preference
+    "PLR1714", # [presentational] Consider merging multiple comparisons
+
+    # Unused arguments — "the signature belongs to the interface" is an argument
+    # rather than the absence of one, and every member here can equally be a
+    # parameter someone forgot to use. So each carries its own line.
+    "ARG001", # [behavioural] Unused function argument
+              # Callback and handler signatures are fixed by whoever calls them.
+    "ARG002", # [behavioural] Unused method argument
+              # An override must match its base signature whether or not it uses it.
+    "ARG003", # [behavioural] Unused classmethod argument — the same "the signature
+              # belongs to the interface" case as the other three in this block,
+              # reached through a classmethod rather than a function, method or
               # staticmethod.
-    "ARG004", # Unused static method argument
-    "ARG005", # Unused lambda argument — admitted by analogy rather than by family,
+    "ARG004", # [behavioural] Unused static method argument
+              # The same case again, reached through a staticmethod.
+    "ARG005", # [behavioural] Unused lambda argument — admitted by analogy rather than by family,
               # and the only decline here that is. ARG003, ANN002, ANN206 and PTH108
               # each close a gap between numbered siblings spelling one case two ways,
               # where enforcing the rare spelling of a declined rule decides nothing.
@@ -362,53 +428,67 @@ ignore = [
               # body is deliberately match-everything (`find_nodes(lambda n: True)`)
               # or a no-op passthrough. Those four `# noqa` directives are gone; this
               # line is the decision they were each making locally.
-    
+
     # Type checking upgrades
-    "UP006", # Use `dict` instead of `Dict` for type annotations
-    "UP007", # Use `X | Y` for union types
-    "UP028", # Replace yield over for loop with yield from
-    "UP035", # Deprecated typing imports
-    
-    # Import formatting
-    "I001", # Import block is un-sorted or un-formatted - cosmetic
-    
-    # Path migration - gradual transition
-    "PTH103", # Use Path.is_dir()
-    "PTH105", # Use Path.replace()
-    "PTH107", # Use Path.unlink()
-    "PTH108", # Use Path.unlink() — os.unlink is an alias of os.remove in CPython,
-              # one syscall under two names. PTH107 above declines the one; the two
-              # cannot coherently sit on opposite sides of this list.
-    "PTH110", # Use Path.exists()
-    "PTH120", # Use Path.parent
-    "PTH123", # open() should be replaced by Path.open()
-    "PTH202", # Use Path.stat().st_size
-    
+    "UP006", # [presentational] Use `dict` instead of `Dict` for type annotations
+    "UP007", # [presentational] Use `X | Y` for union types
+    "UP028", # [behavioural] Replace yield over for loop with yield from
+             # `yield from` forwards send() and throw() to the inner generator. These
+             # generators expose neither, so the rewrite widens their contract.
+    "UP035", # [presentational] Deprecated typing imports
+
+    # Import formatting — NOT cosmetic in this tree. Reordering top-level imports
+    # changes import-time evaluation order, and this repository carries enough
+    # circular-dependency pressure to decline PLC0415 over it, across 1,949 sites.
+    "I001", # [behavioural] Import block is un-sorted or un-formatted
+            # `ruff format` does not sort imports, so nothing else covers this either.
+
+    # Path migration — gradual transition; os.* and Path.* are equivalent at these
+    # call sites, and the family moves together or not at all.
+    "PTH103", # [presentational] Use Path.mkdir()
+    "PTH105", # [presentational] Use Path.replace()
+    "PTH107", # [presentational] Use Path.unlink()
+    "PTH108", # [presentational] Use Path.unlink() — os.unlink is an alias of os.remove
+              # in CPython, one syscall under two names. PTH107 above declines the one;
+              # the two cannot coherently sit on opposite sides of this list.
+    "PTH110", # [presentational] Use Path.exists()
+    "PTH120", # [presentational] Use Path.parent
+    "PTH123", # [presentational] open() should be replaced by Path.open()
+    "PTH202", # [presentational] Use Path.stat().st_size
+
     # Other style preferences
-    "C414", # Unnecessary list() call within sorted()
-    "E721", # Use isinstance() instead of type comparison
-    "RUF005", # Consider unpacking instead of concatenation
-    "RUF012", # Mutable class attributes should use ClassVar
-    "RUF013", # PEP 484 prohibits implicit Optional
-    "RUF022", # __all__ is not sorted
-    "N802", # Function name should be lowercase
+    "C414", # [presentational] Unnecessary list() call within sorted()
+    "E721", # [behavioural] Use isinstance() instead of type comparison
+            # ruff's own documentation is explicit that the rewrite changes behaviour
+            # under NumPy, Pandas and SQLAlchemy, where `__eq__` on a type is
+            # overloaded and `type(x) == T` is not `isinstance(x, T)`.
+    "RUF005", # [presentational] Consider unpacking instead of concatenation
+    "RUF012", # [provisional] Mutable class attributes should use ClassVar — 25 findings,
+              # 12 in src/, none read. Each is either a missing ClassVar annotation or a
+              # genuine shared-mutable-default bug, and only the site says which.
+    "RUF013", # [covered-elsewhere] mypy's implicit-Optional check, which is on by
+              # default. 39 of the 42 findings are in src/; the 3 outside sit in cells
+              # mypy leaves unchecked, so this cover has the same hole the ANN block
+              # has, and it closes the same way.
+    "RUF022", # [presentational] __all__ is not sorted
+    "N802", # [presentational] Function name should be lowercase
 
     # Modernizations deliberately declined — each would change a public API,
     # not just syntax. Revisit individually, not as a sweep.
-    "ASYNC109",  # `timeout` parameter on an async def. For a Protocol defining
+    "ASYNC109",  # [behavioural] `timeout` parameter on an async def. For a Protocol defining
                  # a cross-backend contract the parameter *is* the interface,
                  # and a DB-backed implementation forwards it rather than
                  # timing out client-side. The blocking-I/O members of this
                  # family (ASYNC210 / 230 / 240 / 251) remain enforced.
-    "UP040",     # `type` statement over `TypeAlias`: creates a lazy
+    "UP040",     # [behavioural] `type` statement over `TypeAlias`: creates a lazy
                  # TypeAliasType, changing introspection of published aliases.
-    "UP042",     # StrEnum over (str, Enum): changes str()/f-string rendering
-                 # of published enum members from `Class.MEMBER` to the value.
-    "UP046",     # PEP 695 *class* type parameters: infers variance on the seven
+    "UP042",     # [behavioural] StrEnum over (str, Enum): changes str()/f-string
+                 # rendering of published members from `Class.MEMBER` to the value.
+    "UP046",     # [behavioural] PEP 695 *class* type parameters: infers variance on the seven
                  # Protocol TypeVars that declare it (InboxT_co, OutboxT_contra,
                  # KeyT_contra, ValueT_co, InputT_contra, KindT_co, T_co), and
                  # would scope ConfigT to its class though __all__ exports it.
-    "UP047",     # PEP 695 *function* type parameters — a different rule with a
+    "UP047",     # [behavioural] PEP 695 *function* type parameters — a different rule with a
                  # different reason: none of its candidates is a Protocol, but
                  # several share a TypeVar with a class in the same module
                  # (SpecT, by PackRegistry and compose_packs), and a
