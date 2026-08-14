@@ -3681,8 +3681,20 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
 
         When inside a subflow, ``stage_index``, ``total_stages``, and
         ``progress`` report **main-flow** progress so the UI can render an
-        accurate overall indicator; the subflow's own stage is exposed by
-        the caller via ``subflow_stage``.
+        accurate overall indicator; the subflow's own stage is reported
+        separately as ``subflow_stage``.
+
+        Every key below is written on every call, ``subflow_stage`` as
+        ``None`` when there is no subflow.  That totality is what makes
+        the restore path's ``update()`` sound: a key this method omits is
+        a key ``update()`` cannot clear, so it would keep whatever the
+        undone turn left there.  ``subflow_stage`` was conditional and
+        built by the caller, and so was stale in both directions across an
+        undo that crossed a subflow boundary — naming a subflow already
+        left, or absent while inside one, which reads as the main flow.
+        A conditional key also makes absence ambiguous between "not in a
+        subflow" and "nobody wrote this", which is the distinction the
+        reader cannot make and so gets wrong.
 
         Args:
             state: Wizard state to describe.
@@ -3701,6 +3713,13 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
         )
         position = stage_position(self._fsm.stage_names, effective_main_stage)
 
+        stage_meta = active_fsm.stages.get(stage, {})
+        subflow_stage = (
+            {"name": stage, "label": stage_meta.get("label", stage)}
+            if state.subflow_stack
+            else None
+        )
+
         return {
             "current_stage": stage,
             "stage_index": position.index,
@@ -3713,6 +3732,7 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
             "can_skip": active_fsm.can_skip(stage),
             "can_go_back": active_fsm.can_go_back(stage) and len(state.history) > 1,
             "stages": self._response.build_stages_roadmap(state),
+            "subflow_stage": subflow_stage,
         }
 
     def _build_wizard_metadata(self, state: WizardState) -> dict[str, Any]:
@@ -3753,13 +3773,6 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
             active_fsm.get_stage_suggestions(stage), state
         )
         metadata["stage_mode"] = stage_meta.get("mode") or "structured"
-
-        # Expose subflow context when active
-        if state.subflow_stack:
-            metadata["subflow_stage"] = {
-                "name": stage,
-                "label": stage_meta.get("label", stage),
-            }
 
         return metadata
 

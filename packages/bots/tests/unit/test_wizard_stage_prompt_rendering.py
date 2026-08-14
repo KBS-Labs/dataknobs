@@ -13,6 +13,7 @@ from typing import Any
 
 import pytest
 
+from dataknobs_bots.bot.base import normalize_wizard_state
 from dataknobs_bots.reasoning.wizard import (
     WizardAdvanceResult,
     WizardReasoning,
@@ -392,13 +393,26 @@ class TestBuildWizardMetadata:
         assert metadata2["progress"] == 0.5
         assert metadata2["progress_percent"] == 50.0
 
-    def test_metadata_no_subflow_key_when_not_in_subflow(self) -> None:
-        """Test 11: subflow_stage absent when not in subflow."""
+    def test_metadata_reports_no_subflow_explicitly(self) -> None:
+        """Test 11: ``subflow_stage`` is written as ``None`` outside a subflow.
+
+        It used to be omitted.  The key is now always written, because a key
+        the deriving method can omit is a key the restore path's ``update()``
+        cannot clear — which left it naming a subflow already exited after an
+        undo.  Writing ``None`` also separates "not in a subflow" from "nobody
+        wrote this", which an absent key cannot express.
+
+        ``normalize_wizard_state`` is unaffected either way: it tests the
+        value for truthiness, so its own output still carries ``subflow_stage``
+        only inside a subflow.
+        """
         reasoning = _make_reasoning(METADATA_CONFIG)
         state = _make_state(reasoning)
 
         metadata = reasoning._build_wizard_metadata(state)
-        assert "subflow_stage" not in metadata
+        assert metadata["subflow_stage"] is None
+        assert normalize_wizard_state(metadata)["subflow_depth"] == 0
+        assert "subflow_stage" not in normalize_wizard_state(metadata)
 
 
 # ---------------------------------------------------------------------------

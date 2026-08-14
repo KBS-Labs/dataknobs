@@ -21,7 +21,7 @@ from dataknobs_bots.memory.bank import MemoryBank
 from dataknobs_bots.reasoning.base import ReasoningStrategy
 from dataknobs_bots.reasoning.wizard import WizardReasoning
 from dataknobs_bots.reasoning.wizard_loader import WizardConfigLoader
-from dataknobs_bots.reasoning.wizard_types import WizardState
+from dataknobs_bots.reasoning.wizard_types import SubflowContext, WizardState
 
 # =====================================================================
 # Helpers
@@ -92,6 +92,79 @@ def _build_wizard(*, bank_names: tuple[str, ...] = ()) -> WizardReasoning:
     loader = WizardConfigLoader()
     fsm = loader.load_from_dict(_wizard_config(bank_names=bank_names))
     return WizardReasoning(wizard_fsm=fsm, strict_validation=False)
+
+
+def _subflow_wizard_config() -> dict[str, Any]:
+    """A wizard whose main flow can push into a subflow.
+
+    Kept separate from :func:`_wizard_config` so the main-flow cases above
+    keep exercising a wizard with no subflow registry at all.
+    """
+    return {
+        "name": "checkpoint-subflow-wizard",
+        "version": "1.0",
+        "stages": [
+            {
+                "name": "collect",
+                "is_start": True,
+                "prompt": "Hello",
+                "transitions": [{"target": "done"}],
+            },
+            {"name": "done", "is_end": True, "prompt": "Finished"},
+        ],
+        "subflows": {
+            "detail": {
+                "stages": [
+                    {
+                        "name": "detail_start",
+                        "is_start": True,
+                        "prompt": "Details",
+                        # Differs from every main-flow stage, so a reading
+                        # taken off the wrong FSM is visible rather than
+                        # coinciding.
+                        "can_skip": True,
+                        "transitions": [{"target": "detail_done"}],
+                    },
+                    {"name": "detail_done", "is_end": True, "prompt": "Done"},
+                ]
+            }
+        },
+    }
+
+
+def _build_subflow_wizard() -> WizardReasoning:
+    """Build a real ``WizardReasoning`` whose main flow has a subflow."""
+    loader = WizardConfigLoader()
+    fsm = loader.load_from_dict(_subflow_wizard_config())
+    return WizardReasoning(wizard_fsm=fsm, strict_validation=False)
+
+
+def _main_flow_state() -> WizardState:
+    """A state on the main flow, outside any subflow."""
+    return WizardState(
+        current_stage="collect",
+        data={"name": "Alice"},
+        history=["collect"],
+    )
+
+
+def _in_subflow_state() -> WizardState:
+    """A state inside the ``detail`` subflow, pushed from ``collect``."""
+    return WizardState(
+        current_stage="detail_start",
+        data={"name": "Alice"},
+        history=["detail_start"],
+        subflow_stack=[
+            SubflowContext(
+                parent_stage="collect",
+                parent_data={},
+                parent_history=["collect"],
+                return_stage="done",
+                result_mapping={},
+                subflow_network="detail",
+            )
+        ],
+    )
 
 
 # =====================================================================
@@ -247,6 +320,52 @@ class TestWizardRestoreFromCheckpoint:
         restored = normalize_wizard_state(manager.metadata["wizard"])
 
         assert restored == built
+
+    @pytest.mark.parametrize(
+        ("undone_from", "restored_to", "case"),
+        [
+            (_in_subflow_state, _main_flow_state, "undo out of a subflow"),
+            (_main_flow_state, _in_subflow_state, "undo into a subflow"),
+        ],
+        ids=["out_of_subflow", "into_subflow"],
+    )
+    def test_restore_agrees_with_the_builder_across_a_subflow_boundary(
+        self,
+        undone_from: Any,
+        restored_to: Any,
+        case: str,
+    ) -> None:
+        """The same guard, at the one boundary its fixtures did not cross.
+
+        ``subflow_stage`` follows the stage like every other derived field,
+        but it was built by the metadata builder alone and so was not in
+        what restore refreshes.  Restore ``update()``s onto the *existing*
+        dict, so the pre-undo value survives in both directions: undoing
+        out of a subflow leaves a ``subflow_stage`` naming the subflow just
+        left, and undoing into one leaves the key absent — which
+        ``normalize_wizard_state`` reads as main flow at depth 0.
+
+        Parametrized over both directions because a fix that only stops
+        writing the stale key closes one of them and leaves the other.
+        """
+        strategy = _build_subflow_wizard()
+
+        target = restored_to()
+        strategy._restore_fsm_state(target)
+        built = normalize_wizard_state(strategy._build_wizard_metadata(target))
+
+        # Metadata left behind by the turn being undone, on the other side
+        # of the boundary.
+        manager = _StubManager()
+        manager.metadata["wizard"] = strategy._build_wizard_metadata(undone_from())
+
+        strategy.restore_from_checkpoint(
+            manager,
+            {"wizard_fsm_state": target.to_dict()},
+        )
+        restored = normalize_wizard_state(manager.metadata["wizard"])
+
+        assert restored == built, case
 
     def test_preserves_other_wizard_meta_keys(self) -> None:
         """Restore writes its keys without wiping out pre-existing ones."""
