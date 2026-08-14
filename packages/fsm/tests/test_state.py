@@ -1,7 +1,7 @@
 """Tests for state definitions and instances."""
 
 import pytest
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 from time import sleep
 
 from dataknobs_data.fields import Field, FieldType
@@ -26,7 +26,7 @@ class MockValidationFunction(IValidationFunction):
     def __init__(self, should_pass: bool = True):
         self.should_pass = should_pass
 
-    def validate(self, data: Any, context: Optional[Dict[str, Any]] = None) -> ExecutionResult:
+    def validate(self, data: Any, context: Dict[str, Any] | None = None) -> ExecutionResult:
         if self.should_pass:
             return ExecutionResult.success_result(data)
         return ExecutionResult.failure_result("Validation failed")
@@ -38,7 +38,7 @@ class MockValidationFunction(IValidationFunction):
 class MockTransformFunction(ITransformFunction):
     """Mock transform function for testing."""
 
-    def transform(self, data: Any, context: Optional[Dict[str, Any]] = None) -> ExecutionResult:
+    def transform(self, data: Any, context: Dict[str, Any] | None = None) -> ExecutionResult:
         if isinstance(data, dict):
             data["transformed"] = True
         return ExecutionResult.success_result(data)

@@ -145,7 +145,7 @@ class TestFileToFileStreaming:
             assert results.get("failed", 0) == 0
 
             # Verify output file contents
-            with open(output_path, "r") as f:
+            with open(output_path) as f:
                 output_records = [json.loads(line) for line in f]
 
             assert len(output_records) == len(input_data)
@@ -206,7 +206,7 @@ class TestFileToFileStreaming:
             )
 
             # Read output to see what was processed
-            with open(output_path, "r") as f:
+            with open(output_path) as f:
                 output_records = [json.loads(line) for line in f]
 
             # Should have processed valid records
@@ -243,7 +243,7 @@ class TestGeneratorStreaming:
             )
 
             # Verify output
-            with open(output_path, "r") as f:
+            with open(output_path) as f:
                 output_records = [json.loads(line) for line in f]
 
             assert len(output_records) == 20
@@ -354,7 +354,7 @@ class TestMultiStagePipeline:
             )
 
             # Verify stage 1 output
-            with open(stage1_path, "r") as f:
+            with open(stage1_path) as f:
                 cleaned_records = [json.loads(line) for line in f]
 
             assert len(cleaned_records) == 3
@@ -370,7 +370,7 @@ class TestMultiStagePipeline:
             )
 
             # Verify final output
-            with open(final_path, "r") as f:
+            with open(final_path) as f:
                 final_records = [json.loads(line) for line in f]
 
             assert len(final_records) == 3
@@ -423,7 +423,7 @@ class TestMultiStagePipeline:
             )
 
             # Verify all records made it through
-            with open(final_path, "r") as f:
+            with open(final_path) as f:
                 final_records = [json.loads(line) for line in f]
 
             assert len(final_records) == test_records
@@ -474,13 +474,13 @@ class TestStreamingPerformance:
             )
 
             # Verify all records were processed
-            with open(output_path, "r") as f:
+            with open(output_path) as f:
                 line_count = sum(1 for _ in f)
 
             assert line_count == record_count
 
             # Spot check some records
-            with open(output_path, "r") as f:
+            with open(output_path) as f:
                 # Check first record (id=0, value=0)
                 first = json.loads(f.readline())
                 assert first["original_value"] == 0
@@ -533,7 +533,7 @@ class TestErrorHandling:
             )
 
             # Check that valid records were still processed
-            with open(output_path, "r") as f:
+            with open(output_path) as f:
                 output_records = [json.loads(line) for line in f if line.strip()]
 
             # Should have processed at least the valid records
