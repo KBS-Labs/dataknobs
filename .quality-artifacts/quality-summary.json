@@ -1,21 +1,10 @@
 {
-  "timestamp": "2026-08-14T17:39:27Z",
+  "timestamp": "2026-08-14T17:58:42Z",
   "overall_status": "PASS",
   "run_mode": "pr",
   "environment": "host",
-  "packages": "bots common config data fsm legacy llm structures utils xization",
-  "tested_packages": [
-    "bots",
-    "common",
-    "config",
-    "data",
-    "fsm",
-    "legacy",
-    "llm",
-    "structures",
-    "utils",
-    "xization"
-  ],
+  "packages": "all",
+  "tested_packages": [],
   "coverage_percent": null,
   "package_hashes": {
     "bots": "5dc7a7bfdd642f961e71011b93459ac63339e0e3bb9c4c92c6a46276e36a426f",
@@ -32,22 +21,22 @@
   },
   "workspace_hashes": {
     "toolchain": "e38e3d96101dcbe22cc3bfab033d54893daf4854d57926f3f2e6e00f3a588292",
-    "workspace_tests": "571af52e9c0c6ff5ae835550e7f9363a0c3d4a7215ff0745c3912b76b6f4eadf",
+    "workspace_tests": "684024805c53118c2f842b9b83250545c9b345bf23f81e79abc0e734aa950637",
     "docs": "9dafd93146bd7f332325e5db39b6c87e2eee0bd26eeca4cc8859cdbb6b506294"
   },
-  "total_seconds": 217,
+  "total_seconds": 47,
   "checks": {
     "workflow_lint": {
       "status": "pass",
       "exit_code": 0,
       "tool": "lint-workflows.sh",
-      "duration_seconds": 1
+      "duration_seconds": 0
     },
     "shell_lint": {
       "status": "pass",
       "exit_code": 0,
       "tool": "lint-shell.sh",
-      "duration_seconds": 4
+      "duration_seconds": 5
     },
     "contract": {
       "status": "pass",
@@ -60,41 +49,41 @@
       "exit_code": 0,
       "skipped": false,
       "tool": "validate.sh",
-      "duration_seconds": 41
+      "duration_seconds": 5
     },
     "documentation": {
       "status": "pass",
       "exit_code": 0,
-      "skipped": false,
+      "skipped": true,
       "tool": "mkdocs",
-      "duration_seconds": 23
+      "duration_seconds": null
     },
     "documentation_versions": {
       "status": "pass",
       "exit_code": 0,
-      "skipped": false,
+      "skipped": true,
       "tool": "docs-update-versions.sh",
-      "duration_seconds": 0
+      "duration_seconds": null
     },
     "documentation_mirrors": {
       "status": "pass",
       "exit_code": 0,
-      "skipped": false,
+      "skipped": true,
       "tool": "docs-mirror-check.py",
-      "duration_seconds": 0
+      "duration_seconds": null
     },
     "unit_tests": {
       "status": "pass",
       "exit_code": 0,
       "skipped": false,
-      "duration_seconds": 85,
+      "duration_seconds": 35,
       "workspace_guards_seconds": 35
     },
     "integration_tests": {
       "status": "pass",
       "exit_code": 0,
-      "skipped": false,
-      "duration_seconds": 56
+      "skipped": true,
+      "duration_seconds": null
     }
   }
 }

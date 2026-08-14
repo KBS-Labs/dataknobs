@@ -48,6 +48,22 @@ def _contract() -> dict[str, Any]:
     return loaded
 
 
+def _tracked() -> list[PurePosixPath]:
+    """The population the measurers are handed.
+
+    Passed explicitly by every caller below, including the ones that inject the
+    run and never look at a file. It used to be sound to hand ``measure_mypy`` an
+    empty list, because it took the population and ignored it; it now decides
+    which directories hold Python worth opening, so an empty one is a run with no
+    targets — which returns without calling the tool at all and quietly measures
+    nothing. That is the shape every guard in this module is against, and it
+    would have arrived here as three tests passing for the wrong reason.
+    """
+    tracked: list[PurePosixPath] = contract_module.tracked_python()
+    assert tracked, "git tracks no *.py here, so nothing below measures anything"
+    return tracked
+
+
 def _unmeasured_mypy_cell() -> str:
     """One mypy cell the contract puts in a tier no tool reads.
 
@@ -159,7 +175,7 @@ def test_the_census_and_the_measurement_bucket_one_run_identically(
     monkeypatch.setattr(contract_module, "_run", lambda _command: completed)
     contract = _contract()
 
-    measurement = contract_module.measure_mypy(contract, [])
+    measurement = contract_module.measure_mypy(contract, _tracked())
     run = contract_module.take_census(contract, "mypy")
 
     per_cell = {
@@ -268,8 +284,9 @@ def test_an_unmeasured_cell_is_read_only_when_the_census_asks() -> None:
     unmeasured = {cell["path"] for cell in cells if cell["tier"] == "unchecked"}
     assert unmeasured, "the contract declares no unmeasured mypy cell, so this asserts nothing"
 
-    narrow = contract_module.mypy_targets(cells, None, False)
-    wide = contract_module.mypy_targets(cells, None, True)
+    tracked = contract_module.tracked_python()
+    narrow = contract_module.mypy_targets(cells, None, False, tracked)
+    wide = contract_module.mypy_targets(cells, None, True, tracked)
 
     assert set(narrow) < set(wide), (
         "asking for the unmeasured cells did not widen the target set, so the "
@@ -283,6 +300,38 @@ def test_an_unmeasured_cell_is_read_only_when_the_census_asks() -> None:
         f"the widened run reaches {sorted(added)}, which includes a target "
         "outside every unmeasured cell — the flag is widening more than it says"
     )
+
+
+def test_every_target_is_a_directory_the_checker_can_be_pointed_at() -> None:
+    """A cell can name a directory holding no Python at all.
+
+    The other two measurers cannot reach this: both are handed the tracked
+    ``*.py`` population, and a file list cannot contain a path that is not a
+    Python file. Only mypy is pointed at directories, and mypy exits 2 on a
+    directory with no ``.py[i]`` in it — reporting nothing, over every other
+    target in the same pass.
+
+    Which is not a small thing to leave to the exit-status guard. Before that
+    guard existed the empty stdout would have parsed to an empty finding list and
+    the widened census would have reported that the unmeasured cells hold
+    nothing, which is both the strongest claim this flag can make and the exact
+    inversion of the truth. The guard turns it into a refusal, so what is left is
+    a flag that cannot run rather than a number that is wrong — better, and still
+    not the feature.
+
+    ``packages/*/docs`` is why: seven directories match it, one holds a single
+    ``.py`` file, and the cell exists so that file is in some cell rather than
+    silently in none. Totality is a claim about files, and this asserts that the
+    targets derived from it are a claim about directories worth opening.
+    """
+    cells = _contract()["tools"]["mypy"]["cells"]
+    tracked = contract_module.tracked_python()
+
+    for target in contract_module.mypy_targets(cells, None, True, tracked):
+        assert any(contract_module.cell_matches(path, target) for path in tracked), (
+            f"{target} is handed to the type checker and holds no tracked *.py "
+            "file, so the pass exits 2 and measures nothing anywhere"
+        )
 
 
 def test_the_census_reports_a_cell_that_measured_nothing(
@@ -690,7 +739,7 @@ def test_the_type_checker_measurer_refuses_a_status_that_is_not_a_verdict(
     monkeypatch.setattr(contract_module, "_run", lambda _command: completed)
 
     with pytest.raises(SystemExit) as refusal:
-        contract_module.measure_mypy(_contract(), [])
+        contract_module.measure_mypy(_contract(), _tracked())
 
     assert "exited 2" in str(refusal.value), (
         f"the measurer refused, but not for the reason it should have: {refusal.value}"
@@ -719,7 +768,7 @@ def test_the_type_checker_measurer_refuses_a_status_its_output_contradicts(
     monkeypatch.setattr(contract_module, "_run", lambda _command: completed)
 
     with pytest.raises(SystemExit) as refusal:
-        contract_module.measure_mypy(_contract(), [])
+        contract_module.measure_mypy(_contract(), _tracked())
 
     assert "disagree" in str(refusal.value), (
         f"refused without saying the status and the output disagree: {refusal.value}"
