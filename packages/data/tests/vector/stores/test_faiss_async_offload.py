@@ -107,7 +107,9 @@ async def test_save_before_initialize_is_a_noop(tmp_path) -> None:
 
     await store.save()  # pre-fix: faiss.write_index(None) crashes
 
-    assert not os.path.exists(path)
+    # Per line, not per file — this suite's subject is whether save() blocks, so
+    # a per-file waiver would cover the code under test as well as this assertion.
+    assert not os.path.exists(path)  # noqa: ASYNC240
 
 
 async def test_save_is_race_free_under_concurrent_mutation(tmp_path) -> None:

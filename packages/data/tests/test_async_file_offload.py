@@ -108,13 +108,18 @@ async def test_close_temp_file_cleanup_does_not_block() -> None:
     database = AsyncFileDatabase({})  # no path → temp-file backed
     await database.create(_record("alice", 1))  # materialise the data file
     filepath = database.filepath
-    assert os.path.exists(filepath)
+    # Per line, not per file: this file's subject IS whether the backend blocks,
+    # so a per-file ASYNC240 waiver would switch the check off over exactly the
+    # code that needs it. These three stats are the test's own assertions and sit
+    # deliberately OUTSIDE the assert_no_blocking() block — what is being measured
+    # is close(), not them.
+    assert os.path.exists(filepath)  # noqa: ASYNC240
 
     with assert_no_blocking():
         await database.close()
 
-    assert not os.path.exists(filepath)
-    assert not os.path.exists(filepath + ".lock")
+    assert not os.path.exists(filepath)  # noqa: ASYNC240
+    assert not os.path.exists(filepath + ".lock")  # noqa: ASYNC240
 
 
 async def test_concurrent_creates_do_not_lose_writes(db: AsyncFileDatabase) -> None:

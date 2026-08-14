@@ -30,8 +30,10 @@ async def test_put_file_with_file_handle_does_not_block(tmp_path: Path) -> None:
     await backend.initialize()
     await backend.create_kb("domain")
 
-    # Open a real OS file handle: its blocking read must be offloaded.
-    with open(source, "rb") as handle:
+    # Open a real OS file handle: its blocking read must be offloaded. Per line,
+    # not per file — the handle is the input to put_file(), whose offload is the
+    # subject, so a per-file waiver would also cover the call under measurement.
+    with open(source, "rb") as handle:  # noqa: ASYNC230
         with assert_no_blocking():
             file_info = await backend.put_file("domain", "doc.bin", handle)
 
