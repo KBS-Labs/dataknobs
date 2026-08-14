@@ -336,6 +336,59 @@ def test_update_baseline_rewrites_only_the_cells_it_was_named(tmp_path: Path) ->
     )
 
 
+def test_a_baseline_update_leaves_the_prose_of_cells_it_did_not_touch(
+    tmp_path: Path,
+) -> None:
+    r"""The test above asserts values; this asserts the bytes they are written as.
+
+    ``update_baseline`` serialised with ``json.dumps``' default of
+    ``ensure_ascii=True`` onto a file written without it. Every reason here is
+    prose and several hold em-dashes, so lowering one ceiling re-encoded them as
+    ``\u2014`` and arrived as a diff touching rows whose ceiling had not moved —
+    with the single line that changed meaning buried among them. The declaration
+    is meant to make moving a number a deliberate visible diff, and a diff nobody
+    can read is the reviewable half of that property spent.
+
+    It is asserted on the written text rather than on the reloaded object because
+    ``json`` cannot see it: ``"\u2014"`` and ``"—"`` parse to the same string, so
+    the round-trip this would seem to be tested by succeeds in both directions.
+    The damage is only ever visible to a reader of the file.
+
+    Not hypothetical — ``main`` carried one such row at the time this was
+    written, from an earlier run of the same command.
+    """
+    contract = _contract()
+    ruff_cells = {cell["path"]: cell for cell in contract["tools"]["ruff"]["cells"]}
+
+    named, _ = biggest_ruff_cells(contract, 2)
+    ruff_cells[named]["ceiling"] += 500
+
+    unicode_reasons = [
+        cell["reason"]
+        for cells in (tool["cells"] for tool in contract["tools"].values())
+        for cell in cells
+        if not cell["reason"].isascii()
+    ]
+    assert unicode_reasons, (
+        "no cell reason holds a non-ASCII character, so this test would pass "
+        "against an encoder that mangles every one of them"
+    )
+
+    destination = tmp_path / "quality-contract.json"
+    lowered, _exceeded = contract_module.update_baseline(contract, ["ruff"], destination, {named})
+
+    assert lowered, (
+        f"{named} was inflated by 500 and update-baseline lowered nothing, so "
+        "no file was written and the assertion below reads a run that did not happen"
+    )
+    written = destination.read_text(encoding="utf-8")
+    for reason in unicode_reasons:
+        assert reason in written, (
+            "a baseline update re-encoded the prose of a cell whose ceiling it "
+            f"did not move. Expected to find {reason!r} written as it was declared"
+        )
+
+
 def _with_cell(tool: str, **overrides: Any) -> dict[str, Any]:
     """The real contract with one extra cell, for exercising a single fault.
 
