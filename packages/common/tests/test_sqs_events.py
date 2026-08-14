@@ -201,9 +201,7 @@ class TestSqsEventBus:
         # queue — no mock). Wrapping its receive_message is the single
         # narrowest seam to inject ONE transient failure into the real
         # poll path: it exercises run_supervised_loop's actual back-off
-        # + recovery against a real broker rather than a fake. The
-        # type: ignore is the expected cost of patching a bound method
-        # on a third-party client instance.
+        # + recovery against a real broker rather than a fake.
         real_receive = bus._client.receive_message
         state = {"failed": False}
 
@@ -214,7 +212,10 @@ class TestSqsEventBus:
                 raise RuntimeError("injected transient receive failure")
             return await real_receive(**kwargs)
 
-        bus._client.receive_message = flaky_receive  # type: ignore[method-assign]
+        # Deliberately unsuppressed: SqsEventBus declares `_client: Any`, so
+        # assigning over one of its attributes is not a type error and a
+        # `method-assign` waiver here would be dead the day it was written.
+        bus._client.receive_message = flaky_receive
 
         try:
             await bus.subscribe("flaky", handler)

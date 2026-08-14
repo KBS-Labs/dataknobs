@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-08-14T17:58:42Z",
+  "timestamp": "2026-08-14T18:27:06Z",
   "python_version": "Python 3.12.12",
   "uv_version": "uv 0.12.4 (Homebrew 2026-08-13 aarch64-apple-darwin)",
   "os": "Darwin",
   "os_version": "24.6.0",
-  "git_branch": "sbk/mypy-empty-target",
-  "git_commit": "77fa9eaae7804feb71989db27a42b3b2ed3f231f",
+  "git_branch": "sbk/undefined-names",
+  "git_commit": "8b80ec4b362b6977462c0e26d0c2effb7d11c392",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }

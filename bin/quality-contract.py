@@ -1416,7 +1416,12 @@ def update_baseline(
                 )
 
     if lowered:
-        path.write_text(json.dumps(contract, indent=2) + "\n", encoding="utf-8")
+        # ensure_ascii=False, because the file it is rewriting was not written
+        # with the default. Reasons are prose and contain em-dashes; escaping
+        # them on the way out edits rows whose ceiling did not move, so a
+        # ratchet of one cell arrives as a diff touching several and the one
+        # line that changed meaning is the hardest one to find.
+        path.write_text(json.dumps(contract, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     return lowered, exceeded
 
 
