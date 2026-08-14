@@ -4,15 +4,12 @@ import json
 import tempfile
 import time
 from pathlib import Path
-from typing import Any, List, Optional
 
-import pytest
 
 from dataknobs_data.factory import DatabaseFactory
 from dataknobs_data.records import Record
 
 from dataknobs_fsm.streaming import (
-    AsyncStreamContext,
     CompressionFormat,
     DatabaseBulkLoader,
     DatabaseStreamSink,
@@ -21,8 +18,6 @@ from dataknobs_fsm.streaming import (
     FileFormat,
     FileStreamSink,
     FileStreamSource,
-    IStreamSink,
-    IStreamSource,
     StreamChunk,
     StreamConfig,
     StreamContext,

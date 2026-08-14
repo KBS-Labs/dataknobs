@@ -1,7 +1,7 @@
 """Test synchronous debugging functionality for FSMs."""
 
 import pytest
-from dataknobs_fsm import AdvancedFSM, FSMDebugger, StepResult, create_advanced_fsm
+from dataknobs_fsm import FSMDebugger, StepResult, create_advanced_fsm
 
 
 def test_synchronous_context_creation():

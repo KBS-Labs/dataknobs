@@ -2,13 +2,11 @@
 
 import time
 import uuid
-from typing import Any, Dict
 
 import pytest
 
 from dataknobs_fsm.core.data_modes import DataHandlingMode
 from dataknobs_fsm.execution.history import ExecutionHistory, ExecutionStep, ExecutionStatus
-from dataknobs_structures import Tree
 
 
 class TestExecutionStepDeserialization:

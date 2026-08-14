@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import pytest
 
-from dataknobs_fsm.api.advanced import AdvancedFSM, create_advanced_fsm
+from dataknobs_fsm.api.advanced import create_advanced_fsm
 from dataknobs_fsm.functions.base import FunctionContext
 
 

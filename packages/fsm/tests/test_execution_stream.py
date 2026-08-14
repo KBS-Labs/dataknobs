@@ -7,8 +7,6 @@ import pytest
 from dataknobs_fsm.execution.stream import StreamExecutor, StreamPipeline, StreamProgress
 from dataknobs_fsm.core.fsm import FSM
 from dataknobs_fsm.core.network import StateNetwork
-from dataknobs_fsm.core.modes import ProcessingMode, TransactionMode
-from dataknobs_fsm.execution.context import ExecutionContext
 from dataknobs_fsm.streaming.core import StreamChunk, StreamConfig
 
 

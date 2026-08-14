@@ -1,8 +1,6 @@
 """Tests for SimpleFSM API - Using real implementations."""
 
 import pytest
-import asyncio
-from typing import Dict, Any
 from pathlib import Path
 import tempfile
 import json
@@ -10,7 +8,6 @@ import json
 from dataknobs_fsm.api.simple import (
     SimpleFSM,
     create_fsm,
-    process_file,
     validate_data,
     batch_process,
 )

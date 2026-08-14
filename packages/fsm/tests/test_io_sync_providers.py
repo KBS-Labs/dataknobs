@@ -8,8 +8,7 @@ This module tests the completed loose end implementations for sync I/O providers
 import pytest
 import json
 import sqlite3
-from unittest.mock import Mock, MagicMock, patch, mock_open
-from typing import Dict, List, Any
+from unittest.mock import Mock, patch
 import tempfile
 import os
 

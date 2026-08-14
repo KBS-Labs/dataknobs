@@ -1,7 +1,6 @@
 """Tests for custom functions registration and usage in FSM."""
 
 import pytest
-from typing import Dict, Any
 
 from dataknobs_fsm.api.simple import SimpleFSM, create_fsm
 from dataknobs_fsm.config.builder import FSMBuilder

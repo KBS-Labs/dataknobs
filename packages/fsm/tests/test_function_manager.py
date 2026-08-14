@@ -2,7 +2,7 @@
 
 import asyncio
 import pytest
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 
 from dataknobs_fsm.functions.manager import (
     FunctionManager,
@@ -15,7 +15,6 @@ from dataknobs_fsm.functions.manager import (
 )
 from dataknobs_fsm.functions.base import (
     ITransformFunction,
-    IValidationFunction,
     IStateTestFunction,
     ExecutionResult,
 )

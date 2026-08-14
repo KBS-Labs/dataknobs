@@ -1,11 +1,7 @@
 """Comprehensive unit tests for file_utils module."""
 
-import asyncio
 import csv
 import json
-import tempfile
-from pathlib import Path
-from typing import Any, Dict, List
 
 import pytest
 

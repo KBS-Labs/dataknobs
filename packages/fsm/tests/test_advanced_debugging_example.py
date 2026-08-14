@@ -8,19 +8,15 @@ the FSMDebugger class.
 """
 
 import pytest
-import time
-from typing import Dict, Any, List
 
 
 from dataknobs_fsm.api.advanced import (
-    AdvancedFSM,
     ExecutionMode,
     ExecutionHook,
     FSMDebugger,
     create_advanced_fsm,
     StepResult,
 )
-from dataknobs_fsm.core.data_modes import DataHandlingMode
 
 
 # Import the functions and config from the example

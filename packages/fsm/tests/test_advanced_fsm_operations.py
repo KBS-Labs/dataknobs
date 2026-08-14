@@ -1,7 +1,6 @@
 """Unit tests for AdvancedFSM operations demonstrated in advanced_debugging_simple.py."""
 
 import pytest
-import asyncio
 from dataknobs_fsm.api.advanced import (
     AdvancedFSM,
     ExecutionMode,

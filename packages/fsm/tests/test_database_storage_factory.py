@@ -19,12 +19,11 @@ import pytest
 import tempfile
 import os
 import uuid
-from typing import Dict, Any
 
 from dataknobs_fsm.storage.database import UnifiedDatabaseStorage
 from dataknobs_fsm.storage.memory import InMemoryStorage
 from dataknobs_fsm.storage.base import StorageConfig, StorageBackend
-from dataknobs_fsm.execution.history import ExecutionHistory, ExecutionStep, ExecutionStatus
+from dataknobs_fsm.execution.history import ExecutionHistory
 from dataknobs_fsm.core.data_modes import DataHandlingMode
 
 

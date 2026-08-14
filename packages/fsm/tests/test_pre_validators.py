@@ -1,7 +1,5 @@
 """Tests for pre-validator functionality."""
 
-import pytest
-from typing import Any, Dict
 
 from dataknobs_fsm.config.builder import FSMBuilder
 from dataknobs_fsm.config.schema import (
@@ -12,7 +10,6 @@ from dataknobs_fsm.config.schema import (
     FunctionReference,
 )
 from dataknobs_fsm.execution.context import ExecutionContext
-from dataknobs_fsm.functions.base import FunctionContext
 from dataknobs_fsm.core.modes import ProcessingMode
 
 

@@ -10,8 +10,7 @@ This module tests the completed loose end implementations for streaming:
 import pytest
 import asyncio
 import time
-from unittest.mock import Mock, AsyncMock, patch
-from typing import List, Any, Dict
+from unittest.mock import Mock
 
 from dataknobs_fsm.streaming.core import (
     BasicStreamProcessor,
@@ -21,9 +20,6 @@ from dataknobs_fsm.streaming.core import (
     StreamConfig,
     StreamChunk,
     StreamStatus,
-    StreamMetrics,
-    IStreamSource,
-    IStreamSink,
 )
 
 

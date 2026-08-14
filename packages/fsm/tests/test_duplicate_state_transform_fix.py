@@ -5,7 +5,6 @@ which was the bug we discovered and fixed where transforms were being called bot
 in _execute_state_functions and _execute_state_transforms.
 """
 
-import pytest
 from dataknobs_fsm.api.simple import SimpleFSM
 
 

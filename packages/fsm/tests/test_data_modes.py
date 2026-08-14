@@ -6,7 +6,6 @@ from typing import Dict, Any
 
 from dataknobs_fsm.core.data_modes import (
     DataHandlingMode,
-    DataHandler,
     CopyModeHandler,
     ReferenceModeHandler,
     DirectModeHandler,

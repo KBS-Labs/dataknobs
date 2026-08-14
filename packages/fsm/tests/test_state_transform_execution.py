@@ -5,7 +5,6 @@ when entering a state, and verifies the proper separation of concerns
 between ArcTransforms and StateTransforms.
 """
 
-import pytest
 from dataknobs_fsm.api.simple import SimpleFSM
 
 

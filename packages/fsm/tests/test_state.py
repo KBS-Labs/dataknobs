@@ -1,7 +1,6 @@
 """Tests for state definitions and instances."""
 
 import pytest
-from datetime import datetime
 from typing import Any, Dict, Optional
 from time import sleep
 
@@ -13,7 +12,7 @@ from dataknobs_fsm.core.state import (
     StateDefinition,
     StateInstance,
 )
-from dataknobs_fsm.core.data_modes import DataHandlingMode, DataModeManager
+from dataknobs_fsm.core.data_modes import DataHandlingMode
 from dataknobs_fsm.functions.base import (
     IValidationFunction,
     ITransformFunction,

@@ -4,13 +4,11 @@ import pytest
 from typing import Any, Dict, Optional, Tuple
 
 from dataknobs_fsm.functions.base import (
-    FunctionType,
     ExecutionResult,
     IValidationFunction,
     ITransformFunction,
     IStateTestFunction,
     IEndStateTestFunction,
-    ResourceStatus,
     ResourceConfig,
     ValidationError,
     TransformError,

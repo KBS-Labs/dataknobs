@@ -11,13 +11,11 @@ import pytest
 import threading
 import time
 from contextlib import contextmanager
-from unittest.mock import Mock, MagicMock, patch
-from typing import Any, Set
+from unittest.mock import Mock
+from typing import Any
 
 from dataknobs_fsm.resources.manager import ResourceManager
 from dataknobs_fsm.resources.base import (
-    IResourceProvider,
-    IResourcePool,
     ResourceStatus,
     ResourceHealth,
     ResourceMetrics,
