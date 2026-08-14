@@ -23,6 +23,15 @@ nobody compares is a number that stops being true without anyone finding out.
 The measurement is one invocation per tool over the whole population, bucketed
 afterwards, rather than one invocation per cell: thirty subprocesses would make
 the check cost more than the tools it runs.
+
+**A ceiling says how much, never what.** It is denominated in findings, so the
+comparison above can report that a cell holds 657 of them and nothing about
+whether that is one mechanical omission repeated or six hundred separate
+judgements — a distinction that decides whether the backlog has a plan. The
+tools name a rule on every finding and the tally reads past it. ``census``
+reads it, from the same run and through the same guards, so its per-rule
+breakdown decomposes the number the ceiling is compared against rather than
+standing beside it as a second opinion.
 """
 
 from __future__ import annotations
@@ -34,8 +43,10 @@ import logging
 import re
 import subprocess
 import sys
+import tomllib
 from collections import Counter, defaultdict
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from pathlib import Path, PurePosixPath
 from typing import Any, NamedTuple
 
@@ -204,6 +215,37 @@ class Finding(NamedTuple):
 UNCODED = "<uncoded>"
 
 
+class Census(NamedTuple):
+    """What one tool found, per cell and per rule.
+
+    The counterpart to ``Measurement`` over the same findings: that one is keyed
+    by file and answers *where*, this one is keyed by rule and answers *what*.
+    Both are projections of a single run, which is what lets the two be compared
+    — a census taken from a second invocation would be a second answer to what
+    the tool found, and the interesting case is precisely the one where it
+    disagrees.
+
+    ``unattributed`` is keyed by rule rather than by file, for the same reason
+    the rest of it is. The count still has to match ``Measurement``'s.
+    """
+
+    by_cell: dict[str, Counter[str]]
+    unattributed: Counter[str]
+
+
+def _tally_codes(cells: list[dict[str, Any]], findings: list[Finding]) -> Census:
+    """Bucket findings by the cell they are in and the rule they broke."""
+    by_cell: dict[str, Counter[str]] = defaultdict(Counter)
+    unattributed: Counter[str] = Counter()
+    for finding in findings:
+        cell = _cell_for(cells, finding.path) if finding.path else None
+        if cell:
+            by_cell[cell][finding.code] += 1
+        else:
+            unattributed[finding.code] += 1
+    return Census(dict(by_cell), unattributed)
+
+
 def _restrict(cells: list[dict[str, Any]], only: set[str] | None) -> list[dict[str, Any]]:
     """The subset of cells a scoped call named, or all of them.
 
@@ -244,13 +286,12 @@ def _ruff_report(
 ) -> list[dict[str, Any]]:
     """One guarded ruff pass, as the entries ruff reported.
 
-    Split out of ``measure_ruff`` so that a second reader of this run — one
-    interested in which rules were broken rather than how many findings there
-    were — reads it through the same guards rather than through an invocation
-    and a parse of its own. Two readings of one tool are two answers waiting to
-    disagree, and every guard below exists because a parse of this output can
-    fail toward a tidier tree than the one on disk, which is exactly the
-    disagreement nobody would notice.
+    Split out of ``measure_ruff`` so that the census reads its rules from the
+    same run, through the same guards, as the ratchet reads its counts from. A
+    census with its own invocation and its own parse would be a second answer to
+    what ruff found — and every guard below exists because a parse of this
+    output can fail toward a tidier tree than the one on disk, which is exactly
+    the disagreement that would go unnoticed.
 
     Guarded the way ``measure_format`` is, and against three further faults the
     decode check alone renders as a clean tree. That measurer earned its checks
@@ -368,7 +409,7 @@ def measure_ruff(
 #: altogether on a few errors. So *whether* a line is a finding and *which rule*
 #: it names are two separate questions, and only the first may decide whether
 #: the line is counted: a finding with no bracketed code is still a finding, and
-#: dropping it would make a per-rule reading short of the tally.
+#: dropping it would make the census total short of the measurement's.
 _MYPY_FINDING_RE = re.compile(r"([^:]+):\d+:(?:\d+:)?\s*error:(.*)$")
 
 #: The rule name mypy writes at the end of a finding, in brackets.
@@ -378,12 +419,11 @@ _MYPY_CODE_RE = re.compile(r"\[([a-zA-Z0-9_-]+)\]\s*$")
 def mypy_findings(output: str) -> list[Finding]:
     """Every finding in a mypy run's output, as a path and the rule it names.
 
-    The single parse of that output, so that a reading of which rules were
-    broken and a tally of how many findings there were cannot come from two
-    readings of the same text that disagree about which lines are findings. mypy
-    also emits ``note:`` continuations, and a parse that treated one as a
-    finding — or that dropped an ``error:`` line for carrying no bracketed rule
-    — would move the two apart silently.
+    The single parse of that output, so the ratchet's counts and the census's
+    rules cannot come from two readings of the same text that disagree about
+    which lines are findings. mypy also emits ``note:`` continuations, and a
+    parse that treated one as a finding — or that dropped an ``error:`` line for
+    carrying no bracketed rule — would move the two apart silently.
     """
     findings: list[Finding] = []
     for line in output.splitlines():
@@ -403,7 +443,8 @@ def mypy_targets(
     ``include_unmeasured`` is the whole of what stands between the contract's
     bottom tier and a number. Those cells are not measured as zero — they are
     not measured, and the ceiling ``verify`` insists they carry is zero
-    precisely so that nothing reads their silence as a count.
+    precisely so that nothing reads their silence as a count. Widening the
+    target set here is how the census asks what is actually in them.
     """
     skipped = frozenset() if include_unmeasured else _UNMEASURED_TIERS
     return sorted(
@@ -436,12 +477,10 @@ def _mypy_report(
     reaches its mypy verdict by calling this. Deriving it the other way round
     would make the ratchet move whenever that script's default changed.
 
-    ``config`` and ``cache_dir`` default to the contract's, so the ratchet
-    cannot be measured under anything but the declared configuration. They are
-    parameters because asking what the tree measures under a configuration
-    nobody has adopted yet is a question worth being able to put, and putting it
-    by editing the real configuration in place is how an interrupted run leaves
-    the repository holding a different one.
+    ``config`` and ``cache_dir`` are overridden only by the census, which asks
+    what the tree measures under a configuration nobody has adopted yet. Both
+    default to the contract's, so the ratchet cannot be measured under anything
+    but the declared one.
     """
     cells = contract["tools"]["mypy"]["cells"]
     targets = mypy_targets(cells, only, include_unmeasured)
@@ -675,6 +714,287 @@ def _measure(
 def _measured(measurement: Measurement, cell: dict[str, Any]) -> int:
     """A cell's total, derived from its per-file counts rather than kept beside them."""
     return sum(measurement.by_cell.get(cell["path"], Counter()).values())
+
+
+#: Where a census configuration is written while it is being measured under.
+#:
+#: At the repository root, and not in a temporary directory, because
+#: ``mypy_path`` is a colon-joined list of *relative* paths and the contract's
+#: cells are relative too. The same file elsewhere resolves a different tree and
+#: answers a different question — plausibly, and without saying so.
+CENSUS_CONFIG = ".mypy-census.toml"
+
+#: A cache of its own for a run under a configuration the tree is not otherwise
+#: measured under. mypy is supposed to invalidate on a configuration change; a
+#: measurement taken once, to decide the shape of everything after it, is not
+#: the place to find out whether it always does.
+CENSUS_CACHE = ".mypy_cache/census"
+
+
+def first_party_modules(config: Path) -> set[str]:
+    """Top-level module names this workspace's own sources provide.
+
+    Read out of the type checker's ``mypy_path`` rather than listed here,
+    because this set is what decides which override sections a census removes.
+    A written-down list goes stale on the day a package is added — and it goes
+    stale *quietly*, leaving that package's strictness relaxation in force
+    through a run whose whole purpose was to measure without them.
+    """
+    parsed = tomllib.loads(config.read_text(encoding="utf-8"))
+    declared = parsed.get("tool", {}).get("mypy", {}).get("mypy_path", "")
+    roots = declared if isinstance(declared, list) else str(declared).split(":")
+
+    names = {
+        entry.name
+        for root in roots
+        if (source := _ROOT / str(root).strip()).is_dir()
+        for entry in source.iterdir()
+        if entry.is_dir() and entry.name.isidentifier()
+    }
+    if not names:
+        raise SystemExit(
+            f"{_relative(str(config))} declares no mypy_path this workspace's own "
+            "modules resolve from, so nothing can be identified as first-party "
+            "and a census without relaxations would silently remove none of them"
+        )
+    return names
+
+
+def _module_patterns(section: dict[str, Any]) -> list[str]:
+    """The modules one override section names, in either of TOML's two spellings."""
+    module = section.get("module", [])
+    return [module] if isinstance(module, str) else [str(name) for name in module]
+
+
+def _relaxes_first_party(section: dict[str, Any], first_party: set[str]) -> bool:
+    """Whether an override section relaxes checking over code this repository ships.
+
+    The distinction a census turns on. A section naming ``nltk.*`` waives the
+    absence of type stubs in somebody else's library, which is not our backlog
+    and not ours to fix. A section naming ``dataknobs_xization.*`` turns seven
+    checks off over code we ship, and every finding it suppresses is one the
+    declared configuration would otherwise report.
+    """
+    return any(pattern.split(".")[0] in first_party for pattern in _module_patterns(section))
+
+
+def config_without_relaxations(text: str, first_party: set[str]) -> tuple[str, list[str]]:
+    """The configuration with every first-party override section removed.
+
+    Text surgery rather than a re-serialisation, because the standard library
+    reads TOML and does not write it, and adding a writer as a dependency to
+    generate a file that is deleted seconds later fails the dependency bar. The
+    sections are located by their headers and correlated with the parsed
+    document by position, which array-of-tables order guarantees.
+
+    Checked afterwards rather than trusted: the result is re-parsed, and both
+    the number of surviving sections and their first-party-ness are compared
+    against what the removal was supposed to do. A surgery that took out one
+    section too many would otherwise produce a plausible number measured under a
+    configuration nobody described.
+    """
+    parsed = tomllib.loads(text)
+    sections = parsed.get("tool", {}).get("mypy", {}).get("overrides", [])
+    doomed = {
+        index
+        for index, section in enumerate(sections)
+        if _relaxes_first_party(section, first_party)
+    }
+    if not doomed:
+        raise SystemExit(
+            "no override section relaxes checking over first-party code, so a "
+            "census without them would measure exactly what the ratchet already "
+            "measures — run it without --without-overrides instead"
+        )
+
+    kept: list[str] = []
+    index = -1
+    dropping = False
+    for line in text.splitlines(keepends=True):
+        if line.startswith("["):
+            if line.strip() == "[[tool.mypy.overrides]]":
+                index += 1
+                dropping = index in doomed
+            else:
+                dropping = False
+        if not dropping:
+            kept.append(line)
+
+    stripped = "".join(kept)
+    surviving = tomllib.loads(stripped).get("tool", {}).get("mypy", {}).get("overrides", [])
+    still_relaxed = [
+        pattern
+        for section in surviving
+        if _relaxes_first_party(section, first_party)
+        for pattern in _module_patterns(section)
+    ]
+    if len(surviving) != len(sections) - len(doomed) or still_relaxed:
+        raise SystemExit(
+            f"removing {len(doomed)} override section(s) left {len(surviving)} of "
+            f"{len(sections)} behind, {len(still_relaxed)} of them still relaxing "
+            "first-party code — the generated configuration does not describe "
+            "what was asked for, so nothing was measured"
+        )
+
+    removed = [
+        pattern
+        for index, section in enumerate(sections)
+        if index in doomed
+        for pattern in _module_patterns(section)
+    ]
+    return stripped, removed
+
+
+@contextmanager
+def census_config(contract: dict[str, Any]) -> Iterator[tuple[str, list[str]]]:
+    """A configuration with the first-party relaxations taken out, while it exists.
+
+    Generated from the declared configuration on every run and deleted in a
+    ``finally``, never hand-maintained. A second configuration that has to be
+    kept in step with the first is the drift this whole mechanism exists to
+    close, and one left behind by an interrupted run is a file a later commit
+    could pick up.
+    """
+    declared = _ROOT / contract["tools"]["mypy"]["config"]
+    stripped, removed = config_without_relaxations(
+        declared.read_text(encoding="utf-8"), first_party_modules(declared)
+    )
+    scratch = _ROOT / CENSUS_CONFIG
+    scratch.write_text(stripped, encoding="utf-8")
+    try:
+        yield CENSUS_CONFIG, removed
+    finally:
+        scratch.unlink(missing_ok=True)
+
+
+class CensusRun(NamedTuple):
+    """One run, read twice: as counts per file, and as counts per rule.
+
+    Both halves come from the same list of findings, so a disagreement between
+    them is a defect in the bucketing rather than a difference between two runs.
+    That is what makes them comparable at all, and comparing them is what
+    ``tests/test_quality_census.py`` does.
+    """
+
+    measurement: Measurement
+    census: Census
+    config: str
+    removed: list[str]
+
+
+def take_census(
+    contract: dict[str, Any],
+    tool: str,
+    only: set[str] | None = None,
+    *,
+    include_unmeasured: bool = False,
+    without_overrides: bool = False,
+) -> CensusRun:
+    """Measure one tool once, and bucket the findings by file and by rule.
+
+    The options are refused rather than ignored where they do not apply. A flag
+    a tool silently disregards reports a run that answers a narrower question
+    than the one asked for, under a heading that says otherwise — which is this
+    repository's own defect class, an absence rendered as a result.
+    """
+    cells = contract["tools"][tool]["cells"]
+
+    if without_overrides and tool != "mypy":
+        raise SystemExit(
+            f"--without-overrides removes per-module sections from the type "
+            f"checker's configuration, which {tool} has none of"
+        )
+    if include_unmeasured and not any(cell.get("tier") in _UNMEASURED_TIERS for cell in cells):
+        raise SystemExit(
+            f"{tool} declares no cell in an unmeasured tier, so "
+            "--include-unmeasured would widen the run by nothing"
+        )
+
+    config: str = contract["tools"][tool]["config"]
+    removed: list[str] = []
+    findings: list[Finding]
+
+    if tool == "ruff":
+        findings = ruff_findings(_ruff_report(contract, tracked_python(), only))
+    elif without_overrides:
+        with census_config(contract) as (generated, removed):
+            config = generated
+            findings, _output = _mypy_report(
+                contract,
+                only,
+                include_unmeasured=include_unmeasured,
+                config=config,
+                cache_dir=CENSUS_CACHE,
+            )
+    else:
+        findings, _output = _mypy_report(contract, only, include_unmeasured=include_unmeasured)
+
+    return CensusRun(
+        _tally(cells, [finding.path for finding in findings]),
+        _tally_codes(cells, findings),
+        config,
+        removed,
+    )
+
+
+def _ranked(counts: Counter[str]) -> dict[str, int]:
+    """Counts largest first, ties broken by name so a re-run reads identically."""
+    return dict(sorted(counts.items(), key=lambda item: (-item[1], item[0])))
+
+
+def census_report(
+    contract: dict[str, Any],
+    tool: str,
+    only: set[str] | None = None,
+    *,
+    include_unmeasured: bool = False,
+    without_overrides: bool = False,
+) -> dict[str, Any]:
+    """What one tool found, per cell and per rule, as a reportable document.
+
+    Every cell the run covered is listed, including the ones that measured
+    nothing: a census whose table holds only the cells with findings cannot be
+    told apart from one whose run never reached the rest.
+    """
+    run = take_census(
+        contract,
+        tool,
+        only,
+        include_unmeasured=include_unmeasured,
+        without_overrides=without_overrides,
+    )
+    covered = [
+        cell
+        for cell in _restrict(contract["tools"][tool]["cells"], only)
+        if include_unmeasured or cell.get("tier") not in _UNMEASURED_TIERS
+    ]
+
+    cells = []
+    everywhere: Counter[str] = Counter()
+    for cell in covered:
+        counts = run.census.by_cell.get(cell["path"], Counter())
+        everywhere += counts
+        cells.append(
+            {
+                "cell": cell["path"],
+                "tier": cell.get("tier"),
+                "ceiling": cell.get("ceiling"),
+                "total": sum(counts.values()),
+                "codes": _ranked(counts),
+            }
+        )
+
+    return {
+        "tool": tool,
+        "config": run.config,
+        "include_unmeasured": include_unmeasured,
+        "without_overrides": without_overrides,
+        "removed_sections": run.removed,
+        "total": sum(everywhere.values()),
+        "codes": _ranked(everywhere),
+        "cells": sorted(cells, key=lambda entry: (-entry["total"], entry["cell"])),
+        "unattributed": _ranked(run.census.unattributed),
+    }
 
 
 def verify(contract: dict[str, Any]) -> list[str]:
@@ -913,10 +1233,47 @@ def _selected(requested: str | None) -> list[str]:
     return [requested] if requested else sorted(MEASURERS)
 
 
+def _write_census(report: dict[str, Any]) -> None:
+    """The census as a table, headed by the conditions it was taken under.
+
+    The heading is not decoration. A census is taken once and then quoted for
+    months, and every number in it depends on which configuration produced it
+    and which cells the run reached. A table carrying its totals without those
+    is a figure that goes stale without ever saying so — which this repository
+    has already done once, in a documentation page that recorded counts nobody
+    could date.
+    """
+    out = sys.stdout
+    out.write(f"{report['tool']} census — {report['total']} finding(s) under {report['config']}\n")
+    if report["include_unmeasured"]:
+        out.write("  including the cells the contract declares no tool reads\n")
+    if report["removed_sections"]:
+        out.write("  with strictness relaxed for nothing first-party; removed:\n")
+        for pattern in report["removed_sections"]:
+            out.write(f"      {pattern}\n")
+
+    out.write("\nper cell\n")
+    for cell in report["cells"]:
+        out.write(
+            f"  {cell['cell']}: {cell['total']}  ({cell['tier']}, ceiling {cell['ceiling']})\n"
+        )
+        for code, count in cell["codes"].items():
+            out.write(f"      {code}: {count}\n")
+
+    out.write("\nper rule, across every cell read\n")
+    for code, count in report["codes"].items():
+        out.write(f"  {code}: {count}\n")
+
+    if report["unattributed"]:
+        out.write("\nreported against no cell, so counted toward no ceiling\n")
+        for code, count in report["unattributed"].items():
+            out.write(f"  {code}: {count}\n")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument(
-        "command", choices=("check", "verify", "update-baseline", "partition", "scope")
+        "command", choices=("check", "verify", "update-baseline", "partition", "scope", "census")
     )
     parser.add_argument("paths", nargs="*", help="scope: the paths to classify")
     parser.add_argument("--tool", choices=sorted(MEASURERS), help="restrict to one tool")
@@ -931,6 +1288,20 @@ def main() -> None:
         "--show-findings",
         action="store_true",
         help="check: echo what the tool reported, not only the comparison",
+    )
+    parser.add_argument(
+        "--include-unmeasured",
+        action="store_true",
+        help="census: also read the cells whose tier the contract says no tool reads",
+    )
+    parser.add_argument(
+        "--without-overrides",
+        action="store_true",
+        help=(
+            "census: measure with the type checker's first-party strictness "
+            "relaxations removed, which is the configuration a zeroed backlog "
+            "would have to hold under"
+        ),
     )
     parser.add_argument("--json", action="store_true", dest="use_json")
     args = parser.parse_args()
@@ -991,7 +1362,7 @@ def main() -> None:
         sys.stdout.write("\n")
         sys.exit(0)
 
-    # Both remaining commands measure, and measuring a malformed contract
+    # Every remaining command measures, and measuring a malformed contract
     # reports cells that do not describe the tree. Fail on the cheap check first.
     faults = verify(contract)
     if faults:
@@ -999,6 +1370,33 @@ def main() -> None:
             logger.error("%s", fault)
         logger.error("The contract is not usable, so nothing was measured.")
         sys.exit(2)
+
+    if args.command == "census":
+        if not args.tool:
+            parser.error("a census reads one tool at a time, so --tool is required")
+        if args.tool == "format":
+            parser.error(
+                "the formatter's unit is files it would rewrite rather than rules "
+                "broken, so a per-rule census of it is a category error rather "
+                "than a smaller version of this one"
+            )
+        counted = census_report(
+            contract,
+            args.tool,
+            only,
+            include_unmeasured=args.include_unmeasured,
+            without_overrides=args.without_overrides,
+        )
+        if args.use_json:
+            json.dump(counted, sys.stdout, indent=2)
+            sys.stdout.write("\n")
+        else:
+            _write_census(counted)
+        # A census reports; it does not judge. Exiting non-zero on a tree with
+        # findings would make the one command whose whole purpose is to read a
+        # backlog look like a failing check, and a caller would learn to ignore
+        # its status.
+        sys.exit(0)
 
     if args.command == "update-baseline":
         lowered, exceeded = update_baseline(contract, _selected(args.tool), _CONTRACT)

@@ -20,6 +20,14 @@ dist
 .coverage*
 _version.py.bld
 .mypy_cache
+
+# The type-checker configuration bin/quality-contract.py generates for a census
+# taken without the first-party strictness relaxations. Written at the root
+# because mypy_path is relative, deleted in a finally, and ignored here so that
+# an interrupted run cannot leave a second configuration behind for a later
+# commit to pick up — two configurations meaning two answers to "is this clean"
+# is the state the single [tool.mypy] section exists to have ended.
+.mypy-census.toml
 **/build.log
 .eggs
 ignored
