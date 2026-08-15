@@ -22,13 +22,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `PostgresDB` now reuses one connection, so a read and a write share a
   backend instead of each opening their own.
 
-- **`SyncPostgresDatabase.db` was annotated as `None`,** because it is assigned
-  `None` in `__init__` and set in `connect()`. mypy therefore read every
-  `self.db.query(...)` as an error against `None` and treated the surrounding
-  bodies as unreachable — so it never checked them. Declaring the attribute as
-  the type it holds removed a `type: ignore[unreachable]`, surfaced five real
-  `arg-type` errors in `_row_to_record` call sites that had never been
-  reported, and lowered the package's mypy count by 17.
+- **Attributes assigned `None` in `__init__` were typed as `None`.**
+  `SyncPostgresDatabase.db` and `.query_builder` are both set in `connect()`,
+  so mypy read each as `None`-typed and every use of them — `self.db.query(...)`,
+  `self.query_builder.build_search_query(...)` — as an error against `None`,
+  with the surrounding bodies written off as unreachable and therefore never
+  checked at all. Both now declare the type they hold.
+
+- **`vector_search` passed a pandas `Series` where a row `dict` was declared.**
+  Its three sibling loops convert with `.to_dict()` first; this one did not.
+  It survived because a `Series` answers `.get`/`in`/`[]` the way a mapping
+  does, and would have stopped surviving the moment the shared serializer used
+  anything a `Series` implements differently. All four sites now go through one
+  conversion helper.
+
+- **Connection parameters lost their types at a dict boundary.** The five
+  values passed to `PostgresDB` are individually typed on the config class, but
+  collecting them into an unannotated dict joined them to `object` — which
+  neither `PostgresDB` nor `validate_database_name` accepts. The dict is now
+  declared per key.
 
 ## v0.8.0 - 2026-08-11
 
