@@ -9,6 +9,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`PostgresDB` never closed a connection, and opened a new one per call.**
+  psycopg2's `with conn` is a *transaction* scope, not a close, so every
+  `query` / `execute` / `upload` left its connection open — and the class had
+  no `close()` at all. Nothing accumulated, because CPython reclaims the
+  connection when the frame exits, which is an interpreter detail rather than
+  anything the code arranged, and it does not cover a caller of the public
+  `get_conn()`. What the mask did not hide was the cost: a full TCP+auth
+  handshake in front of every call, measured at 79% of wall time for a trivial
+  `SELECT 1`.
+
+  `DotenvPostgresConnector` now holds one connection **per thread** and reuses
+  it, reopening if it is found closed. Per thread because reuse must not become
+  sharing: psycopg2's `with conn` transaction block is not re-entrant, so two
+  threads on one connection raise `the connection cannot be re-entered
+  recursively` — and beneath that error they would share a transaction, where
+  either thread's commit commits the other's uncommitted work. `close()` reaches
+  every connection the connector opened on any thread. `PostgresDB` gains
+  `close()` and context-manager support; a connector passed in explicitly
+  belongs to its caller and is left open.
+
 - **`PostgresDB` generated a `CREATE TABLE` that crashed on boolean and
   timestamp columns, and typed duration columns as `integer`.**
   `_psql_schema_line` named only integer and float, and fell through to

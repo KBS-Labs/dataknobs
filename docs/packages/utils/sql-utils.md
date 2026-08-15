@@ -58,3 +58,27 @@ The table is what `CREATE TABLE` emits. Four things to know before relying on it
 - **Null handling is the caller's.** `upload()` renders every cell with `str()`, which turns `NaN`/`None`/`pd.NA` into the text `'nan'`/`'<NA>'`. A typed column rejects those at any width, so drop or fill nulls before uploading. A nullable extension column is affected even in its non-null cells: `to_records()` upcasts `Int64` to float when a null is present, so `1` is sent as `'1.0'` into the `integer` column the ladder chose for it.
 
 The generated schema is a convenience for scratch and analysis tables. Create the table yourself when you need precise types, constraints, or indexes.
+
+### Connections
+
+A `PostgresDB` holds **one connection per thread**, opened on first use and reused across `query()`, `execute()` and `upload()`. Close it when you are done — the class is also a context manager:
+
+```python
+from dataknobs_utils.sql_utils import PostgresDB
+
+with PostgresDB(host="localhost", db="analytics") as db:
+    df = db.query("SELECT * FROM events LIMIT 10")
+```
+
+`get_conn()` returns the calling thread's connection; do not close it yourself — call `PostgresDB.close()`, which is idempotent and closes every connection the object opened, on any thread. A connection closed underneath the object (a dropped server-side connection, say) is replaced on the next call rather than handed back closed.
+
+Reuse is per thread rather than per object because psycopg2's `with connection:` transaction block is not re-entrant: two threads entering it on one connection raise `ProgrammingError: the connection cannot be re-entered recursively`, and beneath that they would share a single transaction, where either thread's commit commits the other's uncommitted work. psycopg2's threadsafety level 2 permits passing a connection between threads; it does not make a transaction block shareable. Sharing one `PostgresDB` across a thread pool is therefore safe, and costs one connection per worker.
+
+A connector passed in explicitly belongs to its caller and is left open by `PostgresDB.close()`, so two objects can share one connector without either closing it out from under the other:
+
+```python
+connector = DotenvPostgresConnector(host="localhost", db="analytics")
+db = PostgresDB(connector)   # db.close() will NOT close `connector`
+```
+
+Note that psycopg2's `with connection:` block commits or rolls back a **transaction** — it does not close the connection. That is why closing is explicit here.

@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Fixed
+
+- **`SyncPostgresDatabase.close()` closed nothing.** The body set
+  `_connected = False` and carried a comment giving the reason — "PostgresDB
+  manages its own connections via context managers". That is false: psycopg2's
+  `with conn` is a transaction scope, not a close, and the `PostgresDB` it
+  wraps had no `close()` to delegate to. Nothing surfaced as exhausted
+  connections because CPython reclaimed each connection when the frame exited,
+  which left the method's own contract unmet rather than satisfied. It now
+  closes the `PostgresDB` it owns, through `close_if_owned_sync`.
+
+  The same change removes a full TCP+auth handshake from every CRUD operation:
+  `PostgresDB` now reuses one connection, so a read and a write share a
+  backend instead of each opening their own.
+
+- **`SyncPostgresDatabase.db` was annotated as `None`,** because it is assigned
+  `None` in `__init__` and set in `connect()`. mypy therefore read every
+  `self.db.query(...)` as an error against `None` and treated the surrounding
+  bodies as unreachable — so it never checked them. Declaring the attribute as
+  the type it holds removed a `type: ignore[unreachable]`, surfaced five real
+  `arg-type` errors in `_row_to_record` call sites that had never been
+  reported, and lowered the package's mypy count by 17.
+
 ## v0.8.0 - 2026-08-11
 
 ### Added

@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Any, cast
 import asyncpg
 import psycopg2
 from dataknobs_common.exceptions import ConfigurationError
+from dataknobs_common.lifecycle import close_if_owned_sync
 from dataknobs_common.structured_config import StructuredConfigConsumer
 
 from dataknobs_utils.sql_utils import PostgresDB, quote_ident
@@ -141,7 +142,18 @@ class SyncPostgresDatabase(
         # an unsupported value such as an SSLContext).
         self._sslmode = _ssl_to_sslmode(cfg.ssl)
 
-        self.db = None  # Will be initialized in connect()
+        # Annotated rather than inferred. A bare ``= None`` makes mypy read the
+        # attribute's type as ``None``, so every ``self.db.query(...)`` below
+        # was an error against ``None`` and the bodies around them were
+        # written off as unreachable — which is what forced the
+        # ``type: ignore[unreachable]`` that used to sit on ``close``, and what
+        # kept mypy from ever type-checking the code it had declared dead.
+        #
+        # Declared as the type it holds in every method that uses it: those
+        # methods have always assumed ``connect()`` ran first, and none of them
+        # guards. The ``None`` is the pre-connect window, narrowed at the one
+        # place that can be reached before ``connect()``.
+        self.db: PostgresDB = None  # type: ignore[assignment]  # set in connect()
         self.query_builder = None  # Will be initialized in connect()
 
     def connect(self) -> None:
@@ -257,11 +269,25 @@ class SyncPostgresDatabase(
             conn.close()
 
     def close(self) -> None:
-        """Close the database connection."""
-        if self.db:
-            # PostgresDB manages its own connections via context managers
-            # but we can mark as disconnected
-            self._connected = False  # type: ignore[unreachable]
+        """Close the database connection.
+
+        This used to close nothing, on the stated grounds that "PostgresDB
+        manages its own connections via context managers". It does not:
+        psycopg2's ``with conn`` is a transaction scope, not a close. What kept
+        that from showing up as exhausted connections was CPython refcounting
+        reclaiming each connection when the frame exited — an interpreter
+        detail, and one that left this method's own contract unmet.
+
+        ``PostgresDB`` is built in :meth:`_open_connection` and is therefore
+        always owned here; the guard covers the not-yet-connected case, where
+        the attribute is still the ``None`` its declaration papers over.
+
+        ``self.db`` is left in place rather than cleared: :meth:`connect`
+        rebuilds it through :meth:`_open_connection`, so clearing it would buy
+        nothing and would contradict the attribute's declared type.
+        """
+        close_if_owned_sync(self.db, self.db is not None)
+        self._connected = False
 
     def _initialize(self) -> None:
         """Initialize method - connection setup moved to connect()."""

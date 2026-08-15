@@ -7,8 +7,10 @@ with support for connection management, query execution, and data loading.
 from __future__ import annotations
 
 import os
+import threading
 from abc import ABC, abstractmethod
-from typing import IO, Any, Dict, List
+from types import TracebackType
+from typing import IO, Any, Dict, List, Self
 
 import pandas as pd
 import psycopg2
@@ -30,6 +32,8 @@ except ImportError:  # pragma: no cover - exercised only without python-dotenv
     ) -> bool:
         return False
 
+
+from dataknobs_common.lifecycle import close_if_owned_sync
 
 from dataknobs_utils.sys_utils import load_project_vars
 
@@ -192,13 +196,47 @@ class DotenvPostgresConnector:
             if port is None
             else port
         )
+        # Per thread, not per connector — see get_conn. The registry beside it
+        # is what lets close() reach a connection another thread opened.
+        self._local = threading.local()
+        self._open_conns: set[Any] = set()
+        self._conns_lock = threading.Lock()
 
     def get_conn(self) -> Any:
-        """Create and return a PostgreSQL database connection.
+        """Return this thread's PostgreSQL connection, opening it if needed.
+
+        The connection is **reused within a thread**. It used to be built fresh
+        on every call, which put a full TCP+auth handshake in front of every
+        ``query`` / ``execute`` / ``upload`` — measured at 79% of wall time for
+        a trivial ``SELECT 1``, and one handshake per CRUD operation for the
+        backends built on top of this class.
+
+        Nothing accumulated, which is why the cost went unnoticed: psycopg2's
+        ``with conn`` is a *transaction* scope and does not close, so every
+        connection was left open and then reclaimed by CPython refcounting when
+        the caller's frame exited. Reuse replaces that accident with a
+        lifecycle — one connection per thread, closed by :meth:`close`.
+
+        **Per thread rather than per connector**, because reuse must not become
+        sharing. psycopg2 is threadsafety level 2, so a connection *may* be
+        passed between threads; that is not the same as a shareable transaction
+        block. Two threads entering ``with conn`` on one connection raise
+        ``ProgrammingError: the connection cannot be re-entered recursively``,
+        and beneath that error they would be inside one transaction, where
+        either thread's commit commits the other's uncommitted work. The error
+        is the louder half and the transaction is the worse one.
+
+        A connection closed underneath us (a dropped server-side connection, or
+        a caller that closed what it was handed) is replaced rather than
+        returned, so a stale cache cannot surface as ``InterfaceError:
+        connection already closed`` on a call that did nothing wrong.
 
         Returns:
             psycopg2.connection: Active database connection using configured parameters.
         """
+        conn = getattr(self._local, "conn", None)
+        if conn is not None and not conn.closed:
+            return conn
         kwargs: dict[str, Any] = {
             "host": self.host,
             "database": self.database,
@@ -210,7 +248,31 @@ class DotenvPostgresConnector:
         # default applies otherwise (preserving prior behavior).
         if self.sslmode is not None:
             kwargs["sslmode"] = self.sslmode
-        return psycopg2.connect(**kwargs)
+        new_conn = psycopg2.connect(**kwargs)
+        self._local.conn = new_conn
+        with self._conns_lock:
+            self._open_conns.discard(conn)
+            self._open_conns.add(new_conn)
+        return new_conn
+
+    def close(self) -> None:
+        """Close every connection this connector opened, on any thread.
+
+        Reaching other threads' connections is the point: a connector used from
+        a thread pool holds one per worker, and a ``close`` that reached only
+        the caller's would leave the rest open with no handle to them.
+
+        The calling thread's slot is cleared, and the others are left pointing
+        at a closed connection — :meth:`get_conn` tests for that and reopens, so
+        a thread that closes while another is idle does not break the other.
+        Idempotent, and safe on a connector that never connected.
+        """
+        with self._conns_lock:
+            conns, self._open_conns = list(self._open_conns), set()
+        for conn in conns:
+            if not conn.closed:
+                conn.close()
+        self._local.conn = None
 
 
 class PostgresDB:
@@ -246,13 +308,18 @@ class PostgresDB:
                 ``"require"``). Ignored when ``host`` is an already-built
                 ``DotenvPostgresConnector`` (it carries its own ``sslmode``).
         """
-        # Allow passing a connector directly (for backward compatibility)
+        # Allow passing a connector directly (for backward compatibility).
+        # A connector handed in belongs to the caller: it may be shared with
+        # another PostgresDB, and closing it here would close a connection this
+        # instance did not open. Only a connector built here is ours to close.
         if isinstance(host, DotenvPostgresConnector):
             self._connector = host
+            self._owns_connector = False
         else:
             self._connector = DotenvPostgresConnector(
                 host=host, db=db, user=user, pwd=pwd, port=port, sslmode=sslmode
             )
+            self._owns_connector = True
         self._tables_df: pd.DataFrame | None = None
         self._table_names: List[str] | None = None
 
@@ -303,10 +370,37 @@ class PostgresDB:
     def get_conn(self) -> Any:
         """Get a connection to the PostgreSQL database.
 
+        The connection is owned by the connector and reused across calls. Do
+        **not** close it — call :meth:`close` on this object instead, or use it
+        as a context manager. Closing the returned connection directly is
+        tolerated (the connector reopens on the next call) but discards the
+        reuse this method exists to provide.
+
         Returns:
             psycopg2.connection: Active database connection.
         """
         return self._connector.get_conn()
+
+    def close(self) -> None:
+        """Close the connection, if this instance owns the connector.
+
+        A connector passed to ``__init__`` belongs to its caller and is left
+        alone; one built here is closed. Idempotent.
+        """
+        close_if_owned_sync(self._connector, self._owns_connector)
+
+    def __enter__(self) -> Self:
+        """Enter a context that closes the connection on exit."""
+        return self
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: TracebackType | None,
+    ) -> None:
+        """Close the connection, whether or not the block raised."""
+        self.close()
 
     def _do_get_tables_df(self) -> pd.DataFrame:
         """Do the work of getting the tables dataframe."""
