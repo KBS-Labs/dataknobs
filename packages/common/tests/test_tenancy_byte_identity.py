@@ -55,7 +55,8 @@ def test_single_tenant_lock_key_canonical_format(
 ) -> None:
     """SingleTenantContext.lock_key MUST equal the canonical
     ``"{operation}:{domain_id}"`` for every operation name. Pinned so the
-    format cannot drift once backends route single-tenant locks through it."""
+    format cannot drift once backends route single-tenant locks through it.
+    """
     ctx = SingleTenantContext("my_kb")
     expected = f"{operation}:my_kb"
     assert ctx.lock_key(operation) == expected, (
@@ -66,7 +67,8 @@ def test_single_tenant_lock_key_canonical_format(
 
 def test_single_tenant_state_key_prefix_is_empty() -> None:
     """SingleTenantContext.state_key_prefix() MUST return '' exactly.
-    Anything else makes pre-context state files unreadable."""
+    Anything else makes pre-context state files unreadable.
+    """
     prefix = SingleTenantContext("any_domain").state_key_prefix()
     assert prefix == "", (
         f"Byte-drift: SingleTenantContext.state_key_prefix() returned "
@@ -79,7 +81,8 @@ def test_single_tenant_state_key_prefix_is_empty() -> None:
 def test_bound_tenant_lock_key_format(operation: str) -> None:
     """BoundTenantContext.lock_key MUST equal
     ``"{operation}:{tenant_id}:{domain_id}"`` exactly. Drift here causes
-    cross-tenant lock collisions."""
+    cross-tenant lock collisions.
+    """
     ctx = BoundTenantContext("acme", "kb")
     expected = f"{operation}:acme:kb"
     assert ctx.lock_key(operation) == expected
@@ -88,14 +91,16 @@ def test_bound_tenant_lock_key_format(operation: str) -> None:
 def test_bound_tenant_state_key_prefix() -> None:
     """BoundTenantContext.state_key_prefix() MUST equal
     ``"tenants/{tenant_id}/_state/"`` exactly, including trailing slash.
-    The trailing slash is part of the concatenation convention."""
+    The trailing slash is part of the concatenation convention.
+    """
     assert BoundTenantContext("acme", "kb").state_key_prefix() == "tenants/acme/_state/"
 
 
 def test_shared_corpus_lock_key_uses_corpus_not_domain() -> None:
     """SharedCorpusTenantContext locks on (tenant, shared_corpus), not
     (tenant, domain). Two per-tenant views over the same shared corpus
-    must share lock space within the same tenant."""
+    must share lock space within the same tenant.
+    """
     ctx_view_a = SharedCorpusTenantContext(
         tenant_id="acme",
         domain_id="legal_view",
@@ -114,7 +119,8 @@ def test_shared_corpus_lock_key_uses_corpus_not_domain() -> None:
 def test_shared_corpus_matches_across_views() -> None:
     """matches() is equivalence on (tenant_id, shared_corpus_id), not on
     domain_id. Different per-tenant views of the same shared corpus match —
-    content-keyed caches share entries."""
+    content-keyed caches share entries.
+    """
     a = SharedCorpusTenantContext("acme", "view_a", "corpus")
     b = SharedCorpusTenantContext("acme", "view_b", "corpus")
     assert a.matches(b)
@@ -122,7 +128,8 @@ def test_shared_corpus_matches_across_views() -> None:
 
 def test_single_tenant_eq_str_only_when_tenant_id_none() -> None:
     """SingleTenantContext.__eq__ accepts str equality for the single-tenant
-    migration case. Multi-tenant impls do NOT support str equality."""
+    migration case. Multi-tenant impls do NOT support str equality.
+    """
     ctx = SingleTenantContext("my_kb")
     assert ctx == "my_kb"
     assert ctx != "other"
@@ -130,7 +137,8 @@ def test_single_tenant_eq_str_only_when_tenant_id_none() -> None:
 
 def test_bound_tenant_does_not_support_str_eq() -> None:
     """No str-equality shim for multi-tenant impls — consumers MUST migrate
-    to .matches()."""
+    to .matches().
+    """
     ctx = BoundTenantContext("acme", "my_kb")
     assert ctx != "my_kb"
     assert ctx != "acme"

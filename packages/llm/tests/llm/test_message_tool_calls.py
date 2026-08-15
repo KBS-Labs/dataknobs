@@ -12,7 +12,6 @@ from __future__ import annotations
 import copy
 from typing import Any
 
-import pytest
 
 from dataknobs_llm.llm.base import LLMMessage, ToolCall
 

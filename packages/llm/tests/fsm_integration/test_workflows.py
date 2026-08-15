@@ -4,7 +4,6 @@ These tests verify the LLM workflow patterns that integrate with FSM.
 Migrated from dataknobs-fsm package.
 """
 
-import pytest
 from dataknobs_llm.fsm_integration import (
     WorkflowType,
     LLMStep,
@@ -35,5 +34,8 @@ def test_workflow_factory_functions():
     assert create_chain_workflow is not None
 
 
-# TODO: Add more comprehensive tests for workflows
-# The original tests from FSM package should be migrated here
+# Coverage gap, tracked: `workflows.py` is 760 lines and the assertions above
+# are the whole of its test suite — they check that names import. The tests that
+# covered this module were deleted by the FSM -> LLM migration (`eb1b4c2c`) and
+# are recoverable from `eb1b4c2c^`. Left as a pointer rather than as a bare TODO
+# so the record survives; `test_resources.py` is the worked example to follow.

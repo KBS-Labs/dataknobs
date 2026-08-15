@@ -10,7 +10,6 @@ Validates:
 
 from __future__ import annotations
 
-from typing import Any
 
 import pytest
 
@@ -166,6 +165,6 @@ class TestCallTracker:
 
     def test_import_from_top_level(self) -> None:
         """CallTracker is importable from dataknobs_llm."""
-        from dataknobs_llm import CallTracker as CT
+        from dataknobs_llm import CallTracker as ExportedCallTracker
 
-        assert CT is CallTracker
+        assert ExportedCallTracker is CallTracker

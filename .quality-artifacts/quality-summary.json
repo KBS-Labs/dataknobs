@@ -1,38 +1,41 @@
 {
-  "timestamp": "2026-08-15T14:19:08Z",
+  "timestamp": "2026-08-15T17:14:19Z",
   "overall_status": "PASS",
   "run_mode": "pr",
   "environment": "host",
-  "packages": "bots data fsm legacy llm utils xization",
+  "packages": "bots common config data fsm legacy llm structures utils xization",
   "tested_packages": [
     "bots",
+    "common",
+    "config",
     "data",
     "fsm",
     "legacy",
     "llm",
+    "structures",
     "utils",
     "xization"
   ],
   "coverage_percent": null,
   "package_hashes": {
     "bots": "924ed1bef10b2f21eaec74256247207fe6ca20874ee51dc741b116397dfe1811",
-    "common": "98d5ffa42e25766b8e2e59e5fcc124462e1d75391ecca69e262224b6c6e814a1",
-    "config": "ff5d307be3c0d7a9cef12b0a625d641c6a906fac133ccf04e4b147b71278dc3f",
+    "common": "4ef68b2ad22595dd4804f402c843143246b0f718c32a439be21982223a0c6b9b",
+    "config": "64593625c5ebfe7f5a542538d813aca9f8db2ecfb3d5ed3172649b0ae07a224b",
     "data": "a183ad0096015fb0e2747dc6fecffaabb1938e8a3558367add103d6745094f78",
     "fsm": "afefb3f5a8706866e81f7ce4cbc9e07658b056c598c95a628d76f8122cc394ce",
     "legacy": "f77592a12b3780ae22e0ac113ff15dc537020de05664eea34c0a2734bb91e5a8",
-    "llm": "d10c43cd6537255e28212ac36c28389e904af7b51420eeb75c276f98f34c0069",
-    "structures": "8c4a5934ee70717bfee003f0800b0dee7d5f106d85713217db7e44a8649bc5d5",
-    "utils": "137401db1190a60e19c637e3588de157072f210478fbd65dc6da5aa1e027e60d",
-    "xization": "b80369b85cee25c7f0c7ff7b25d3f73a32f6968050c592ed52ddd417869c8cdd",
+    "llm": "4aed6d157a00d4a69e67c705f60c978dd2ad995c7f0adac8aee53ea9e5103a26",
+    "structures": "0923498f874803229868ebc79c98da9fe7a20cfa9dbc0532d7a56c33e49f4e08",
+    "utils": "c700d0993b264ed7fec108c8f7bdb9d9e52672a81c262eafa47e5e9d3c3fcdfd",
+    "xization": "3964c225f184880a3f2e23df6008011f28c8311c669f86007eff18fe7a2b502c",
     "_algorithm_version": 3
   },
   "workspace_hashes": {
-    "toolchain": "95e5a3a9d3859f369493f14de544f9673de86da38ed188ea56e7553d88d8ca49",
-    "workspace_tests": "41ff5d592167e35e0b2db2afa1ccb2e66df1cb19ecc3da939d06444e59c44cd9",
+    "toolchain": "f847e951b8476659f12ec9c3b0827b9179a966b3d02bae21c7417d38f1cc56b6",
+    "workspace_tests": "a021e57acb58a7571f3092a4b9f0088f5f98991cf384418d27bedd031a0da4d6",
     "docs": "2d7c1e5b3bdd5d1132ca4da739aa8f4fb246b6ac4c2e93e05c27e2ad5ecd8734"
   },
-  "total_seconds": 201,
+  "total_seconds": 209,
   "checks": {
     "workflow_lint": {
       "status": "pass",
@@ -44,54 +47,54 @@
       "status": "pass",
       "exit_code": 0,
       "tool": "lint-shell.sh",
-      "duration_seconds": 5
+      "duration_seconds": 4
     },
     "contract": {
       "status": "pass",
       "exit_code": 0,
       "tool": "quality-contract.py",
-      "duration_seconds": 1
+      "duration_seconds": 2
     },
     "validation": {
       "status": "pass",
       "exit_code": 0,
       "skipped": false,
       "tool": "validate.sh",
-      "duration_seconds": 38
+      "duration_seconds": 53
     },
     "documentation": {
       "status": "pass",
       "exit_code": 0,
-      "skipped": false,
+      "skipped": true,
       "tool": "mkdocs",
-      "duration_seconds": 24
+      "duration_seconds": null
     },
     "documentation_versions": {
       "status": "pass",
       "exit_code": 0,
-      "skipped": false,
+      "skipped": true,
       "tool": "docs-update-versions.sh",
-      "duration_seconds": 0
+      "duration_seconds": null
     },
     "documentation_mirrors": {
       "status": "pass",
       "exit_code": 0,
-      "skipped": false,
+      "skipped": true,
       "tool": "docs-mirror-check.py",
-      "duration_seconds": 0
+      "duration_seconds": null
     },
     "unit_tests": {
       "status": "pass",
       "exit_code": 0,
       "skipped": false,
-      "duration_seconds": 71,
-      "workspace_guards_seconds": 41
+      "duration_seconds": 90,
+      "workspace_guards_seconds": 40
     },
     "integration_tests": {
       "status": "pass",
       "exit_code": 0,
       "skipped": false,
-      "duration_seconds": 57
+      "duration_seconds": 54
     }
   }
 }

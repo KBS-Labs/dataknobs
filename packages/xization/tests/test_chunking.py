@@ -190,7 +190,8 @@ class TestMarkdownTreeChunker:
 
     def test_same_output_as_direct_chunk_markdown_tree(self):
         """MarkdownTreeChunker must produce identical output to the
-        legacy inline chunk_markdown_tree() call."""
+        legacy inline chunk_markdown_tree() call.
+        """
         from dataknobs_xization.markdown import (
             HeadingInclusion,
             chunk_markdown_tree,
@@ -354,7 +355,8 @@ class TestDirectoryProcessorCustomChunker:
 
     def test_custom_chunker_in_default_chunking(self, tmp_path: Path):
         """DirectoryProcessor with a custom chunker key in default_chunking
-        dispatches to the registered chunker for markdown files."""
+        dispatches to the registered chunker for markdown files.
+        """
         from dataknobs_xization.ingestion import (
             DirectoryProcessor,
             KnowledgeBaseConfig,
@@ -385,7 +387,8 @@ class TestDirectoryProcessorCustomChunker:
 
     def test_default_chunker_reused_across_files(self, tmp_path: Path):
         """When all files share the same config, the default chunker
-        instance is reused (not re-created per file)."""
+        instance is reused (not re-created per file).
+        """
         from dataknobs_xization.ingestion import (
             DirectoryProcessor,
             KnowledgeBaseConfig,
@@ -412,7 +415,8 @@ class TestDirectoryProcessorCustomChunker:
     def test_quality_filter_forwarded_to_custom_chunker(self, tmp_path: Path):
         """default_quality_filter is forwarded in the config dict to
         from_config(). Custom chunkers should silently ignore unknown
-        keys."""
+        keys.
+        """
         from dataknobs_xization.ingestion import (
             DirectoryProcessor,
             KnowledgeBaseConfig,
@@ -525,7 +529,7 @@ class TestParserCharPositions:
         assert source[second.char_start : second.char_end] == "Second."
 
     def test_crlf_line_endings(self):
-        """Character positions must be correct for \\r\\n line endings."""
+        r"""Character positions must be correct for \r\n line endings."""
         source = "# Title\r\n\r\nBody text."
         parser = MarkdownParser()
         tree = parser.parse(source)
@@ -542,7 +546,7 @@ class TestParserCharPositions:
         assert source[body.char_start : body.char_end] == "Body text."
 
     def test_mixed_line_endings(self):
-        """Handles mixed \\n and \\r\\n in same document."""
+        r"""Handles mixed \n and \r\n in same document."""
         source = "Line one.\r\nLine two.\nLine three."
         parser = MarkdownParser()
         tree = parser.parse(source)

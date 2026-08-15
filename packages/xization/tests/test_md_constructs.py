@@ -1,7 +1,5 @@
 """Tests for markdown construct parsing (code, lists, tables, etc.)."""
 
-import pytest
-
 from dataknobs_xization.markdown.md_chunker import chunk_markdown_tree, HeadingInclusion
 from dataknobs_xization.markdown.md_parser import parse_markdown
 

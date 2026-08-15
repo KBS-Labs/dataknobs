@@ -3,7 +3,7 @@
 import pytest
 
 from dataknobs_llm.exceptions import ResponseQueueExhaustedError
-from dataknobs_llm.llm import LLMConfig, LLMResponse
+from dataknobs_llm.llm import LLMResponse
 from dataknobs_llm.llm.providers.echo import EchoProvider
 
 
@@ -540,8 +540,8 @@ class TestInstanceTracking:
                 p2 = EchoProvider({"provider": "echo", "model": "inner1"})
             p3 = EchoProvider({"provider": "echo", "model": "outer2"})
 
-        # Outer sees all three (p1, p2, p3)
-        assert len(outer) == 3
+        # Outer sees all three, in creation order
+        assert list(outer) == [p1, p2, p3]
         # Inner sees only p2
         assert len(inner) == 1
         assert inner[0] is p2

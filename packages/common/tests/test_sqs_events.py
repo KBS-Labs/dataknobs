@@ -75,15 +75,15 @@ async def make_queue():
 
 
 def _make_bus(queue_url: str, **overrides) -> SqsEventBus:
-    kwargs = dict(
-        queue_url=queue_url,
-        region=REGION,
-        endpoint_url=ENDPOINT,
-        wait_time_seconds=1,
-        visibility_timeout=2,
-        aws_access_key_id="test",
-        aws_secret_access_key="test",
-    )
+    kwargs = {
+        "queue_url": queue_url,
+        "region": REGION,
+        "endpoint_url": ENDPOINT,
+        "wait_time_seconds": 1,
+        "visibility_timeout": 2,
+        "aws_access_key_id": "test",
+        "aws_secret_access_key": "test",
+    }
     kwargs.update(overrides)
     return SqsEventBus(**kwargs)
 

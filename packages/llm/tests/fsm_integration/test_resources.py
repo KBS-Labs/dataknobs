@@ -11,7 +11,7 @@ from dataknobs_llm.fsm_integration import (
     LLMResource,
     AsyncLLMResource,
 )
-from dataknobs_llm.llm import LLMConfig, EchoProvider, LLMMessage, LLMResponse
+from dataknobs_llm.llm import LLMConfig, EchoProvider, LLMResponse
 from dataknobs_llm.llm.providers.echo import ErrorResponse
 from dataknobs_llm.testing import text_response
 from dataknobs_common.ratelimit import InMemoryRateLimiter

@@ -72,45 +72,45 @@
         },
         {
           "path": "packages/legacy/tests",
-          "tier": "deferred",
+          "tier": "checked",
           "ceiling": 0,
-          "reason": "the zero is genuine rather than an artifact of the packages/legacy/* waiver — measured with that entry removed and still clean, which is the check a zero here needs"
+          "reason": "promoted into the linted set; the zero was already genuine — measured with the packages/legacy/* waiver removed — and the linter reads it now, so nobody has to take that measurement by hand again"
         },
         {
           "path": "packages/config/tests",
-          "tier": "deferred",
-          "ceiling": 7,
-          "reason": "outside the default lint target set; a fixer run clears what is here, and the findings that had to be read — a blind pytest.raises(Exception) and an unescaped match= — are already resolved"
+          "tier": "checked",
+          "ceiling": 0,
+          "reason": "promoted into the linted set; its findings were unused imports, a docstring closing quote, and two constructions inside pytest.raises whose bindings nothing read"
         },
         {
           "path": "packages/structures/tests",
-          "tier": "deferred",
-          "ceiling": 14,
-          "reason": "outside the default lint target set; what a fixer leaves behind is os.path call sites and test-local naming"
+          "tier": "checked",
+          "ceiling": 0,
+          "reason": "promoted into the linted set; its findings were os.path call sites, tree-fixture bindings nothing read, and two == True/== False assertions narrowed to is rather than widened to a truth check"
         },
         {
           "path": "packages/utils/tests",
-          "tier": "deferred",
-          "ceiling": 27,
-          "reason": "outside the default lint target set, and unusual in that most of its fixes are the unsafe kind — a plain --fix barely moves this cell; the hand remainder is the os.path call sites the Path migration wants converted"
+          "tier": "checked",
+          "ceiling": 0,
+          "reason": "promoted into the linted set; its findings were os.path call sites, kept as str wherever the value is stored or handed on as configuration data, plus a smoke-call cluster that keeps its calls and loses its names"
         },
         {
           "path": "packages/xization/tests",
-          "tier": "deferred",
-          "ceiling": 31,
-          "reason": "outside the default lint target set; what a fixer leaves behind is os.path call sites and import placement"
+          "tier": "checked",
+          "ceiling": 0,
+          "reason": "promoted into the linted set; its findings were unused imports, docstring formatting, two == None comparisons, and two docstrings whose backslashes needed an r-prefix"
         },
         {
           "path": "packages/llm/tests",
-          "tier": "deferred",
-          "ceiling": 78,
-          "reason": "outside the default lint target set; what a fixer leaves behind is import placement and naming — the unescaped-regex block that used to dominate that half is gone"
+          "tier": "checked",
+          "ceiling": 0,
+          "reason": "promoted into the linted set; its findings were dominated by unused imports and docstring formatting, and four discarded values became the assertions their sibling tests were already making"
         },
         {
           "path": "packages/common/tests",
-          "tier": "deferred",
-          "ceiling": 88,
-          "reason": "outside the default lint target set; what a fixer leaves behind is import aliasing and module-level global statements"
+          "tier": "checked",
+          "ceiling": 0,
+          "reason": "promoted into the linted set; its findings were dominated by unused imports and capture-callback lambdas forwarding to list.append, and its module-level global statements became a list nothing rebinds"
         },
         {
           "path": "packages/fsm/tests",

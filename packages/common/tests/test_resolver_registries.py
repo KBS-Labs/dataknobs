@@ -101,7 +101,8 @@ class TestResolverBackends:
         """``config_key_default="mapping"`` dispatches to the mapping
         factory when the ``backend`` key is unset — the default-path
         semantic that lets a ``{"mapping": {...}}`` config skip the
-        discriminator entirely."""
+        discriminator entirely.
+        """
         resolver = resolver_backends.create(config={"mapping": {"a": 1}})
         assert isinstance(resolver, MappingResolver)
         assert resolver.resolve("a") == 1
@@ -127,7 +128,8 @@ class TestResolverBackends:
         """An out-of-tree consumer registers a custom ``ResourceResolver``
         backend through the registry surface and dispatches it via
         ``create(config={"backend": "..."})`` — the consumer-extensibility
-        capability the consolidation surfaces."""
+        capability the consolidation surfaces.
+        """
 
         class _LengthResolver:
             def resolve(self, key: str) -> int | None:
@@ -148,7 +150,8 @@ class TestResolverBackends:
     async def test_resolver_backends_async_path(self) -> None:
         """``create_async`` resolves a sync factory transparently — the
         await is a no-op on the non-awaitable result. Symmetry guard for
-        consumers that use the async surface uniformly."""
+        consumers that use the async surface uniformly.
+        """
         resolver = await resolver_backends.create_async(
             config={"backend": "mapping", "mapping": {"a": 1}}
         )
@@ -166,7 +169,8 @@ class TestResolverBackends:
         Selecting the ``"mapping"`` backend without supplying the
         ``"mapping"`` key triggers a ``KeyError`` inside the factory
         closure; ``PluginRegistry.create`` MUST wrap it so consumers
-        catch a single error type across the consolidation."""
+        catch a single error type across the consolidation.
+        """
         with pytest.raises(OperationError) as excinfo:
             resolver_backends.create(config={"backend": "mapping"})
         assert isinstance(excinfo.value.__cause__, KeyError)
@@ -268,7 +272,8 @@ class TestPartitionResolverBackends:
         ``test_resolver_backends_consumer_register``. The partition
         registry has no ``validate_type=`` (record→str shape has no
         declared Protocol), so the conformance check is structural at
-        use-time only."""
+        use-time only.
+        """
 
         class _TenantPartition:
             def resolve(self, record: object) -> str | None:
@@ -288,7 +293,8 @@ class TestPartitionResolverBackends:
         """``create_async`` resolves a sync factory transparently — the
         await is a no-op on the non-awaitable result. Sibling symmetry
         guard to ``test_resolver_backends_async_path``; the async shim
-        is a distinct code path through ``PluginRegistry.create_async``."""
+        is a distinct code path through ``PluginRegistry.create_async``.
+        """
         resolver = await partition_resolver_backends.create_async(
             config={"backend": "null", "default": "global"}
         )
@@ -302,7 +308,8 @@ class TestPartitionResolverBackends:
         shape as the sync path. Sibling pin to
         ``test_partition_resolver_backends_unknown_backend_message`` —
         the async dispatch is a separate code path that must surface
-        the registry's not-found message identically."""
+        the registry's not-found message identically.
+        """
         with pytest.raises(ValueError) as excinfo:
             await partition_resolver_backends.create_async(
                 config={"backend": "still-never-registered"}

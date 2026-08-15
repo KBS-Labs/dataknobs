@@ -532,7 +532,8 @@ class TestSensitiveFieldRedaction:
     def test_repr_auto_installed_from_base(self) -> None:
         """``__init_subclass__`` writes the redacting repr into each subclass
         dict (before ``@dataclass`` runs), so no per-leaf boilerplate is
-        needed — even on a no-secret config and a multi-level leaf."""
+        needed — even on a no-secret config and a multi-level leaf.
+        """
         assert _WithSecret.__dict__["__repr__"] is StructuredConfig._redacted_repr
         assert _SecretLeaf.__dict__["__repr__"] is StructuredConfig._redacted_repr
         # Inert (empty _SENSITIVE_FIELDS) but still installed.
@@ -551,7 +552,8 @@ class TestSensitiveFieldRedaction:
 
     def test_repr_shows_empty_secret_verbatim(self) -> None:
         """An empty-string credential renders verbatim — masking ``""`` would
-        falsely imply a secret is configured."""
+        falsely imply a secret is configured.
+        """
         assert "password=''" in repr(_WithEmptyDefaultSecret())
         # A real value is still masked.
         rendered = repr(_WithEmptyDefaultSecret(password="hunter2"))
@@ -587,7 +589,8 @@ class TestSensitiveFieldRedaction:
     def test_multilevel_leaf_redacts_and_shows_inherited_fields(self) -> None:
         """A leaf under an intermediate dataclass base masks its secret and
         still renders the inherited field (the generated base repr would
-        have dropped the leaf's own fields)."""
+        have dropped the leaf's own fields).
+        """
         rendered = repr(_SecretLeaf(shared="abc", token="t-secret"))
         assert "t-secret" not in rendered
         assert "token='***'" in rendered
@@ -607,7 +610,8 @@ class TestNestedMappingRedaction:
 
     def test_repr_masks_connection_string_in_raw_mapping(self) -> None:
         """The default set covers ``connection_string`` with zero per-class
-        config (the pgvector ``vector_store`` leak)."""
+        config (the pgvector ``vector_store`` leak).
+        """
         cfg = _WithRawMapping(
             section={
                 "backend": "pgvector",
@@ -637,7 +641,8 @@ class TestNestedMappingRedaction:
 
     def test_repr_masks_secret_in_mapping_inside_list(self) -> None:
         """A mapping inside a ``list`` field is reached (e.g. a strategies
-        list of raw dicts)."""
+        list of raw dicts).
+        """
         cfg = _WithRawMapping(items=[{"connection_string": "postgresql://u:pw@h/db"}])
         rendered = repr(cfg)
         assert "pw" not in rendered
@@ -647,7 +652,8 @@ class TestNestedMappingRedaction:
         """A benign key that merely *contains* a sensitive key as a substring
         (``access_token_expiry`` contains ``access_token``; ``token_count``
         contains the historical ``token``) is NOT masked — match is exact,
-        not substring."""
+        not substring.
+        """
         cfg = _WithRawMapping(
             section={
                 "access_token_expiry": 3600,
@@ -670,7 +676,8 @@ class TestNestedMappingRedaction:
 
     def test_falsy_secret_value_not_masked(self) -> None:
         """An empty/absent nested credential renders verbatim — masking it
-        would falsely imply one is configured (mirrors the scalar rule)."""
+        would falsely imply one is configured (mirrors the scalar rule).
+        """
         cfg = _WithRawMapping(section={"api_key": "", "connection_string": None})
         rendered = repr(cfg)
         assert "'api_key': ''" in rendered
@@ -679,7 +686,8 @@ class TestNestedMappingRedaction:
 
     def test_class_sensitive_fields_extend_interior_keys(self) -> None:
         """A class's ``_SENSITIVE_FIELDS`` names also mask matching interior
-        keys, beyond the module default set."""
+        keys, beyond the module default set.
+        """
 
         @dataclass(frozen=True)
         class _CustomInterior(StructuredConfig):
@@ -697,7 +705,8 @@ class TestNestedMappingRedaction:
         The ``section`` field value is inspected at depth 0; each ``level``
         wrapper adds one. Five wrappers place the credential mapping at depth
         5 — the last level ``_MAX_REDACT_DEPTH`` (6) reaches, since recursion
-        stops only once ``depth >= 6``."""
+        stops only once ``depth >= 6``.
+        """
         nested: dict[str, Any] = {"password": "deep-secret"}
         for _ in range(5):
             nested = {"level": nested}
@@ -713,7 +722,8 @@ class TestNestedMappingRedaction:
         ``_redact_value`` returns the value untouched *before* inspecting its
         keys. This is the deliberate safety-stop trade-off (bounding
         pathological / cyclic structures), not a reachable config shape — real
-        sections nest ~2-3 levels."""
+        sections nest ~2-3 levels.
+        """
         nested: dict[str, Any] = {"password": "too-deep"}
         for _ in range(6):
             nested = {"level": nested}
@@ -723,7 +733,8 @@ class TestNestedMappingRedaction:
 
     def test_depth_bound_terminates_without_error(self) -> None:
         """A structure nested far deeper than the bound does not raise and
-        terminates (the bound is a hard safety stop, not an expected path)."""
+        terminates (the bound is a hard safety stop, not an expected path).
+        """
         nested: dict[str, Any] = {"password": "deep-secret"}
         for _ in range(12):
             nested = {"level": nested}
@@ -735,7 +746,8 @@ class TestNestedMappingRedaction:
         """A subclass with an unusually deep raw section raises its own
         ``_MAX_REDACT_DEPTH``. A secret at depth 6 — verbatim under the
         default-6 floor (see ``test_depth_bound_skips_secret_beyond_bound``) —
-        is masked once the bound is raised to 8."""
+        is masked once the bound is raised to 8.
+        """
 
         @dataclass(frozen=True)
         class _DeepConfig(StructuredConfig):
@@ -752,7 +764,8 @@ class TestNestedMappingRedaction:
 
     def test_subclass_cannot_lower_depth_bound_below_floor(self) -> None:
         """Lowering the bound below the fail-closed floor is rejected at class
-        definition — it would shrink the masked region (reduce protection)."""
+        definition — it would shrink the masked region (reduce protection).
+        """
         with pytest.raises(ValueError, match="_MAX_REDACT_DEPTH"):
 
             @dataclass(frozen=True)
@@ -762,7 +775,8 @@ class TestNestedMappingRedaction:
 
     def test_subclass_depth_bound_rejects_bool(self) -> None:
         """``bool`` is an ``int`` subclass but a nonsensical depth; it is
-        rejected explicitly rather than silently treated as ``0``/``1``."""
+        rejected explicitly rather than silently treated as ``0``/``1``.
+        """
         with pytest.raises(ValueError, match="_MAX_REDACT_DEPTH"):
 
             @dataclass(frozen=True)
@@ -776,7 +790,8 @@ class TestNestedMappingRedaction:
 
     def test_roundtrip_preserved_with_nested_secret(self) -> None:
         """The nested-mapping round-trip still holds — repr descent is not
-        serialization."""
+        serialization.
+        """
         cfg = _WithRawMapping(
             section={"connection_string": "postgresql://u:pw@h/db"},
             items=[{"api_key": "sk-secret"}],
@@ -785,7 +800,8 @@ class TestNestedMappingRedaction:
 
     def test_no_secret_mapping_renders_verbatim(self) -> None:
         """A config whose mappings hold no sensitive keys renders byte-for-byte
-        as the plain-dataclass repr would (descent is safe, not lossy)."""
+        as the plain-dataclass repr would (descent is safe, not lossy).
+        """
         cfg = _WithRawMapping(
             label="y",
             section={"backend": "memory", "dimension": 384},
@@ -799,7 +815,8 @@ class TestNestedMappingRedaction:
 
     def test_repr_masks_compound_token_key_in_raw_mapping(self) -> None:
         """A tightened compound credential name (``access_token``) is masked
-        by the default set with zero per-class config."""
+        by the default set with zero per-class config.
+        """
         cfg = _WithRawMapping(section={"access_token": "tok-secret"})
         rendered = repr(cfg)
         assert "tok-secret" not in rendered
@@ -807,7 +824,8 @@ class TestNestedMappingRedaction:
 
     def test_repr_masks_compound_secret_key_in_raw_mapping(self) -> None:
         """A tightened compound credential name (``client_secret``) is masked
-        by the default set with zero per-class config."""
+        by the default set with zero per-class config.
+        """
         cfg = _WithRawMapping(section={"client_secret": "cs-secret"})
         rendered = repr(cfg)
         assert "cs-secret" not in rendered
@@ -820,7 +838,8 @@ class TestNestedMappingRedaction:
         consumer can neither rename nor remove from the frozen default set, so
         the default set carries only the unambiguous compound ``*_token``
         names. A consumer that means a credential uses a compound name or
-        registers it explicitly."""
+        registers it explicitly.
+        """
         cfg = _WithRawMapping(section={"token": "next-page-cursor"})
         rendered = repr(cfg)
         assert "'token': 'next-page-cursor'" in rendered
@@ -831,7 +850,8 @@ class TestNestedMappingRedaction:
         key — it collides with a benign ``secret`` flag or a ``secret`` name
         reference to a vault. The compound names (``client_secret`` /
         ``secret_key`` / ``secret_access_key``) cover the real credential
-        shapes without the false positive."""
+        shapes without the false positive.
+        """
         cfg = _WithRawMapping(section={"secret": True})
         rendered = repr(cfg)
         assert "'secret': True" in rendered
@@ -841,7 +861,8 @@ class TestNestedMappingRedaction:
         """``register_sensitive_interior_key`` extends the interior set
         process-wide (and case-insensitively) so a consumer's custom
         opaque-section credential is masked everywhere — the per-class cache is
-        invalidated on registration."""
+        invalidated on registration.
+        """
         register_sensitive_interior_key("Vault_Ref")  # mixed case on purpose
         cfg = _WithRawMapping(section={"vault_ref": "v-secret"})
         rendered = repr(cfg)
@@ -853,7 +874,8 @@ class TestNestedMappingRedaction:
     ) -> None:
         """A runtime-registered key follows the same display-only rule as the
         defaults: ``to_dict`` returns the real value, so round-trip is
-        unaffected."""
+        unaffected.
+        """
         register_sensitive_interior_key("vault_ref")
         cfg = _WithRawMapping(section={"vault_ref": "v-secret"})
         assert cfg.to_dict()["section"]["vault_ref"] == "v-secret"

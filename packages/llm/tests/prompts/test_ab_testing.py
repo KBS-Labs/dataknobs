@@ -1,7 +1,6 @@
 """Tests for A/B testing functionality."""
 
 import pytest
-from collections import Counter
 
 from dataknobs_llm.prompts.versioning import (
     ABTestManager,

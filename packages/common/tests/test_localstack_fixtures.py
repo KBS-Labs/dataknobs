@@ -68,7 +68,7 @@ class _FakeSession:
         self.client_kwargs: dict[str, Any] = {}
         self.client_service: str | None = None
 
-    def client(self, service: str, **kwargs: Any) -> "_FakeSessionCM":
+    def client(self, service: str, **kwargs: Any) -> _FakeSessionCM:
         self.client_service = service
         self.client_kwargs = kwargs
         return _FakeSessionCM(self._client)
@@ -81,7 +81,7 @@ class _FakeSessionCM:
     async def __aenter__(self) -> _FakeS3Client:
         return self._client
 
-    async def __aexit__(self, *_args: Any) -> None:
+    async def __aexit__(self, *_args: object) -> None:
         return None
 
 
@@ -94,7 +94,8 @@ def _client_error(code: str, op: str = "HeadBucket") -> ClientError:
 
 def _patch_session(monkeypatch: Any, fake: _FakeSession) -> None:
     """Patch ``aioboto3.Session`` (which the helper instantiates) to
-    return our fake session."""
+    return our fake session.
+    """
     import aioboto3
 
     monkeypatch.setattr(aioboto3, "Session", lambda: fake)
@@ -251,10 +252,12 @@ async def test_default_endpoint_uses_get_localstack_endpoint(
         "AWS_ENDPOINT_URL",
     ):
         monkeypatch.delenv(name, raising=False)
-    # Force the "not in Docker" arm so the default is localhost.
+    # Force the "not in Docker" arm so the default is localhost. A blanket
+    # False is the whole intent and not an over-reach: _core asks
+    # os.path.exists about "/.dockerenv" and nothing else.
     monkeypatch.setattr(
         "dataknobs_common.testing._core.os.path.exists",
-        lambda p: False if p == "/.dockerenv" else False,
+        lambda _p: False,
     )
 
     client = _FakeS3Client()

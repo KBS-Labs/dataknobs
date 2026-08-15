@@ -69,7 +69,7 @@ def test_returns_fresh_dict_not_aliased_to_components() -> None:
 
 def test_default_internal_components_is_empty_frozenset() -> None:
     """The mixin default must be empty so existing adopters are no-ops."""
-    assert _PlainConsumer.INTERNAL_COMPONENTS == frozenset()
+    assert frozenset() == _PlainConsumer.INTERNAL_COMPONENTS
     assert isinstance(_PlainConsumer.INTERNAL_COMPONENTS, frozenset)
 
 

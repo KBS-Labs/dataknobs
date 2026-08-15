@@ -29,7 +29,7 @@ def _raiser(message: str):
 def test_register_then_fire_runs_callback() -> None:
     registry: CallbackRegistry = CallbackRegistry()
     seen: list[dict] = []
-    registry.register("t", lambda payload: seen.append(payload))
+    registry.register("t", seen.append)
     registry.fire("t", {"k": 1})
     assert seen == [{"k": 1}]
 
@@ -273,7 +273,7 @@ def test_clear_unknown_topic_is_noop() -> None:
 def test_capturing_registry_records_dispatched_payloads() -> None:
     registry: CapturingCallbackRegistry = CapturingCallbackRegistry()
     seen: list[dict] = []
-    registry.register("t", lambda p: seen.append(p))
+    registry.register("t", seen.append)
     registry.fire("t", {"k": 1})
     assert registry.captured == [("t", {"k": 1})]
     assert seen == [{"k": 1}]  # underlying dispatch still ran
@@ -294,7 +294,7 @@ async def test_capturing_registry_records_async_dispatched_payloads() -> None:
 def test_recording_registry_does_not_dispatch_to_callbacks() -> None:
     registry = RecordingCallbackRegistry()
     seen: list[dict] = []
-    registry.register("t", lambda p: seen.append(p))
+    registry.register("t", seen.append)
     registry.fire("t", {"k": 1})
     assert registry.captured == [("t", {"k": 1})]
     assert seen == []  # registered callback did NOT run

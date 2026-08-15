@@ -11,7 +11,6 @@ from dataknobs_common.structured_config import (
 )
 from dataknobs_config.binding_resolver import (
     AsyncCallableFactory,
-    BindingResolverError,
     CallableFactory,
     ConfigBindingResolver,
     FactoryNotFoundError,

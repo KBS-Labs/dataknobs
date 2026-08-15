@@ -1,6 +1,5 @@
 """Unit tests for core types and validation."""
 
-import pytest
 from dataknobs_llm.prompts import (
     ValidationLevel,
     ValidationConfig,

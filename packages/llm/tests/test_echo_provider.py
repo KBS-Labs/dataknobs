@@ -1,7 +1,6 @@
 """Tests for EchoProvider."""
 
 import pytest
-import asyncio
 from dataknobs_llm.llm.base import LLMConfig, LLMMessage, ModelCapability
 from dataknobs_llm.llm.providers import EchoProvider
 

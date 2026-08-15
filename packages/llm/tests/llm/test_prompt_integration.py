@@ -214,7 +214,7 @@ class TestAsyncRenderAndStream:
             chunks.append(chunk.delta)
 
         full_content = "".join(chunks)
-        assert "[ECHO] Hello! My name is Eve." == full_content
+        assert full_content == "[ECHO] Hello! My name is Eve."
 
     @pytest.mark.asyncio
     async def test_render_and_stream_no_builder(self, echo_config):
@@ -315,7 +315,7 @@ class TestSyncRenderAndComplete:
         from dataknobs_llm.llm.providers import SyncProviderAdapter
 
         async_provider = EchoProvider(echo_config, prompt_builder=sync_prompt_builder)
-        llm = SyncProviderAdapter(async_provider)
+        SyncProviderAdapter(async_provider)
 
         # Note: SyncProviderAdapter doesn't have render_and_complete
         # This is expected - sync providers should use PromptBuilder directly

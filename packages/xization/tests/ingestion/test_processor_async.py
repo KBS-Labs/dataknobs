@@ -7,6 +7,8 @@ add coverage for the new async API and the widened constructor.
 
 from __future__ import annotations
 
+import asyncio
+from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any
 
@@ -19,6 +21,7 @@ from dataknobs_xization.ingestion import (
     LocalDocumentSource,
     ProcessedDocument,
 )
+from dataknobs_xization.ingestion.source import DocumentFileRef, DocumentSource
 
 
 @pytest.fixture
@@ -33,8 +36,6 @@ def test_process_async_yields_same_documents_as_process(
     corpus: Path,
 ) -> None:
     """Collected list equality between async and sync entrypoints."""
-    import asyncio
-
     config = KnowledgeBaseConfig(name="t")
 
     async def _run_async() -> list[ProcessedDocument]:
@@ -110,7 +111,8 @@ async def test_process_async_dispatches_txt_as_markdown(
     tmp_path: Path,
 ) -> None:
     """``.txt`` is chunked as single-section markdown — matches the
-    pre-unification ``KnowledgeIngestionManager._load_text`` path."""
+    pre-unification ``KnowledgeIngestionManager._load_text`` path.
+    """
     (tmp_path / "notes.txt").write_text("Some plain notes content.\n")
     processor = DirectoryProcessor(KnowledgeBaseConfig(name="t"), tmp_path)
     docs = [d async for d in processor.process_async()]
@@ -171,7 +173,8 @@ async def test_process_async_skips_unsupported_extensions(
 ) -> None:
     """Unsupported extensions are skipped and counted in
     ``files_skipped`` — the default-pattern list doesn't match them, so
-    they don't even enter the dispatch path."""
+    they don't even enter the dispatch path.
+    """
     (tmp_path / "keep.md").write_text("# Keep\n")
     # ``.xyz`` is not in the default patterns → never reaches dispatch.
     (tmp_path / "ignore.xyz").write_text("not handled")
@@ -193,7 +196,8 @@ async def test_process_async_explicit_pattern_routes_unsupported_ext(
     """When an explicit pattern enumerates a file with an extension the
     dispatcher doesn't know, the file is enumerated and then skipped
     via the unsupported-extension branch, incrementing
-    ``files_skipped``."""
+    ``files_skipped``.
+    """
     (tmp_path / "keep.md").write_text("# Keep\n")
     (tmp_path / "stray.xyz").write_text("not handled")
     config = KnowledgeBaseConfig(
@@ -213,7 +217,8 @@ async def test_process_async_explicit_pattern_routes_unsupported_ext(
 @pytest.mark.asyncio
 async def test_process_async_markdown_like_mix(tmp_path: Path) -> None:
     """Mixed markdown-like files (``.md`` / ``.markdown`` / ``.txt``)
-    are all emitted as ``document_type='markdown'``."""
+    are all emitted as ``document_type='markdown'``.
+    """
     (tmp_path / "a.md").write_text("# A\n")
     (tmp_path / "b.markdown").write_text("# B\n")
     (tmp_path / "c.txt").write_text("Plain C\n")
@@ -233,14 +238,6 @@ async def test_process_async_markdown_like_mix(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-import asyncio as _asyncio
-from collections.abc import AsyncIterator as _AsyncIterator
-from dataknobs_xization.ingestion.source import (  # noqa: E402
-    DocumentFileRef,
-    DocumentSource,
-)
-
-
 class _RemoteJSONLSource:
     """In-memory :class:`DocumentSource` whose ``read_streaming`` yields
     bytes in small configurable pieces.
@@ -255,7 +252,7 @@ class _RemoteJSONLSource:
         self._files = files
         self._piece_size = piece_size
 
-    async def iter_files(self, patterns: Any) -> _AsyncIterator[DocumentFileRef]:
+    async def iter_files(self, patterns: Any) -> AsyncIterator[DocumentFileRef]:
         for path, data in self._files.items():
             yield DocumentFileRef(
                 path=path,
@@ -268,13 +265,13 @@ class _RemoteJSONLSource:
 
     async def read_streaming(
         self, ref: DocumentFileRef, chunk_size: int = 8192
-    ) -> _AsyncIterator[bytes]:
+    ) -> AsyncIterator[bytes]:
         data = self._files[ref.path]
         # Ignore chunk_size — slice at piece_size to stress the
         # line-reassembly logic in ``_stream_jsonl_from_remote``.
         for i in range(0, len(data), self._piece_size):
             # Await between pieces to simulate network backpressure.
-            await _asyncio.sleep(0)
+            await asyncio.sleep(0)
             yield data[i : i + self._piece_size]
 
 

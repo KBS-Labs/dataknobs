@@ -138,7 +138,7 @@ def test_simple1():
         time.sleep(0.001)
 
     # window stats should now be empty
-    emptyStats = rolling_stats.window_stats
+    empty_stats = rolling_stats.window_stats
 
     # do checks
     assert rolling_stats.num_segments == 2
@@ -156,8 +156,8 @@ def test_simple1():
         assert window1_stats.n == 1
         assert math.isclose(seg2value, window1_stats.mean, rel_tol=0.005)
 
-    # emptyStats should be empty
-    assert emptyStats.n == 0
+    # empty_stats should be empty
+    assert empty_stats.n == 0
 
     # cumulativeStats should match stats1
     cumulative_stats = rolling_stats.cumulative_stats
@@ -165,14 +165,14 @@ def test_simple1():
     assert math.isclose(stats1.mean, cumulative_stats.mean, rel_tol=0.005)
 
     # exercise building summary info dictionary, value doesn't matter
-    as_dict = rolling_stats.as_dict()
+    rolling_stats.as_dict()
 
 
 def test_monitor_basics_with_processing():
     monitor = dk_stats.Monitor("testBasics", default_window_width=100, default_segment_width=50)
-    for i in range(5):
+    for _ in range(5):
         starttime = datetime.now()
-        waittime = dk_stats.wait_for_random_millis(55)
+        dk_stats.wait_for_random_millis(55)
         endtime = datetime.now()
         monitor.mark(starttime, endtime)
 
@@ -190,14 +190,14 @@ def test_monitor_basics_with_processing():
 
     # exercise building summary info dictionary, value doesn't matter
     time.sleep(0.051)  # ensure window stats is different from cumulative
-    as_dict = monitor.as_dict()
+    monitor.as_dict()
 
 
 def test_monitor_basics_with_access_only():
     monitor = dk_stats.Monitor("test_access")
-    for i in range(5):
+    for _ in range(5):
         starttime = datetime.now()
-        waittime = dk_stats.wait_for_random_millis(55)
+        dk_stats.wait_for_random_millis(55)
         monitor.mark(starttime)
 
     assert monitor.processing_cumulative_stats is None
@@ -210,13 +210,13 @@ def test_monitor_basics_with_access_only():
 
     # exercise building summary info dictionary, value doesn't matter
     time.sleep(0.051)  # ensure window stats is different from cumulative
-    as_dict = monitor.as_dict()
+    monitor.as_dict()
 
 
 def simulate_monitor_process(monitor_manager, monitor_label):
     monitor = monitor_manager.get_monitor(monitor_label, create_if_missing=True, description=None)
     starttime = datetime.now()
-    waittime = dk_stats.wait_for_random_millis(55)
+    dk_stats.wait_for_random_millis(55)
     endtime = datetime.now()
     monitor.mark(starttime, endtime)
 
@@ -249,7 +249,7 @@ def test_monitor_manager_basics():
 
     # exercise building summary info dictionary, value doesn't matter
     time.sleep(0.051)  # ensure window stats is different from cumulative
-    as_dict = monitor_manager.as_dict()
+    monitor_manager.as_dict()
 
 
 def test_key_manager():

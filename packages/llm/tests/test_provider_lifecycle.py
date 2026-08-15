@@ -18,7 +18,6 @@ import pytest
 from dataknobs_common.exceptions import ResourceError
 
 from dataknobs_llm import EchoProvider, LLMMessage
-from dataknobs_llm.llm.base import AsyncLLMProvider
 from dataknobs_llm.testing import text_response
 
 
@@ -132,7 +131,7 @@ class TestAsyncContextManager:
 
     @pytest.mark.asyncio
     async def test_async_with_initializes_and_closes(self) -> None:
-        """async with initializes on entry and closes on exit."""
+        """An ``async with`` block initializes on entry and closes on exit."""
         provider = EchoProvider({"provider": "echo", "model": "test"})
         provider.set_responses([text_response("ok")])
 

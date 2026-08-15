@@ -68,7 +68,7 @@ async def test_local_iter_files_skips_directories(corpus: Path) -> None:
     source = LocalDocumentSource(corpus)
     refs = await _collect_refs(source, ["**/*"])
     # "docs/nested" would match **/* but is a directory
-    assert all("nested" != Path(r.path).name for r in refs)
+    assert all(Path(r.path).name != "nested" for r in refs)
     # And the directory entry itself shouldn't appear
     assert not any(r.path == "docs/nested" for r in refs)
 
@@ -170,7 +170,8 @@ async def test_local_read_streaming_concurrent_iterations(
     """Two simultaneous streams from the same source interleave
     cleanly via ``asyncio.gather`` — regression guard for the
     thread/queue deadlock pattern that would serialize or hang when
-    multiple consumers ran on the same loop."""
+    multiple consumers ran on the same loop.
+    """
     payload_a = b"A" * 50_000
     payload_b = b"B" * 50_000
     (corpus / "a.bin").write_bytes(payload_a)

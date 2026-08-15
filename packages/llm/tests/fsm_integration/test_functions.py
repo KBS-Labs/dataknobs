@@ -86,5 +86,9 @@ class TestSchemaValidationErrorShape:
         assert "input_value" in str(excinfo.value.__cause__)
 
 
-# TODO: Add more comprehensive tests for functions
-# The original tests from FSM package should be migrated here
+# Coverage gap, tracked: `functions.py` is 570 lines, and of the twelve names
+# imported above only `ResponseValidator` is exercised — by the one class here,
+# over one error-message shape. The rest are asserted to be importable. The tests
+# that covered this module were deleted by the FSM -> LLM migration (`eb1b4c2c`)
+# and are recoverable from `eb1b4c2c^`. Left as a pointer rather than as a bare
+# TODO so the record survives; `test_resources.py` is the worked example.

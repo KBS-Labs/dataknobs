@@ -37,7 +37,8 @@ class _TestCfg(StructuredConfig):
 class _OtherCfg(StructuredConfig):
     """A different ``StructuredConfig`` subclass — not ``_Consumer``'s
     ``CONFIG_CLS``. Used to assert that passing the wrong typed config
-    raises a clear ``TypeError`` rather than an opaque crash."""
+    raises a clear ``TypeError`` rather than an opaque crash.
+    """
 
     z: int = 0
 

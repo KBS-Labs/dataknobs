@@ -12,7 +12,7 @@ from pathlib import Path
 examples_dir = Path(__file__).parent.parent.parent.parent / "examples"
 sys.path.insert(0, str(examples_dir))
 
-from conversation_flow_example import create_support_flow, create_sales_flow
+from conversation_flow_example import create_support_flow, create_sales_flow  # noqa: E402 - must follow the sys.path.insert above
 
 
 def test_create_support_flow():
@@ -112,7 +112,7 @@ def test_support_flow_reachability():
     flow = create_support_flow()
 
     # Get reachable states
-    reachable = set([flow.initial_state])
+    reachable = {flow.initial_state}
     to_visit = [flow.initial_state]
 
     while to_visit:

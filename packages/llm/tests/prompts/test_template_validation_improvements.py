@@ -1,6 +1,5 @@
 """Tests for improved template validation error messages."""
 
-import pytest
 from dataknobs_llm.prompts import TemplateRenderer, TemplateSyntaxError
 
 

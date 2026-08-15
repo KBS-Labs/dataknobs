@@ -26,7 +26,7 @@ from dataknobs_common.testing import blocking as blocking_module
 
 
 def test_blockbuster_is_available_in_dev_env() -> None:
-    """blockbuster is a declared dev dependency, so the detector is usable."""
+    """A declared dev dependency, so the ``blockbuster`` detector is usable."""
     assert is_blockbuster_available() is True
 
 
@@ -58,7 +58,8 @@ async def test_allows_async_sleep() -> None:
 @requires_blockbuster
 async def test_detects_blocking_file_read_on_loop(tmp_path: Path) -> None:
     """Synchronous ``open()``/read on the loop is caught — models the file
-    backend defect (sync disk I/O inside an ``async def``)."""
+    backend defect (sync disk I/O inside an ``async def``).
+    """
     target = tmp_path / "doc.txt"
     target.write_text("payload")
 
@@ -73,7 +74,8 @@ async def test_detects_blocking_file_read_on_loop(tmp_path: Path) -> None:
 @requires_blockbuster
 async def test_allows_offloaded_file_read(tmp_path: Path) -> None:
     """The same blocking read offloaded via ``asyncio.to_thread`` is allowed —
-    models the Shape-B fix the file backends adopt."""
+    models the Shape-B fix the file backends adopt.
+    """
     target = tmp_path / "doc.txt"
     target.write_text("payload")
 
@@ -87,7 +89,8 @@ async def test_raises_runtime_error_when_detector_missing(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Without blockbuster the context manager fails loudly rather than
-    silently passing without detection."""
+    silently passing without detection.
+    """
     monkeypatch.setattr(blocking_module, "is_blockbuster_available", lambda: False)
     with pytest.raises(RuntimeError, match="blockbuster"):
         with assert_no_blocking():
@@ -99,6 +102,7 @@ async def test_no_blocking_fixture_allows_clean_async_work(
     no_blocking: None,
 ) -> None:
     """The ``no_blocking`` fixture wraps the whole test; non-blocking work
-    passes under it."""
+    passes under it.
+    """
     await asyncio.sleep(0)
     await asyncio.to_thread(lambda: time.sleep(0.001))

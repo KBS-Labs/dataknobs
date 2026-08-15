@@ -3,7 +3,6 @@
 import json
 import pytest
 import yaml
-from pathlib import Path
 
 from dataknobs_llm.prompts import (
     FileSystemPromptLibrary,

@@ -4,7 +4,6 @@ import pytest
 from dataknobs_llm.conversations.flow import (
     ConversationFlow,
     FlowState,
-    keyword_condition,
     always,
 )
 

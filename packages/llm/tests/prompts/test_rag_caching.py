@@ -1,7 +1,5 @@
 """Tests for RAG caching functionality in prompt builders."""
 
-import pytest
-
 from dataknobs_llm.prompts.builders import AsyncPromptBuilder, PromptBuilder
 from dataknobs_llm.prompts.implementations import ConfigPromptLibrary
 from dataknobs_llm.prompts.adapters import (

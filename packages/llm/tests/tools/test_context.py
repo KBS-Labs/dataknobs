@@ -1,9 +1,7 @@
 """Tests for ToolExecutionContext and WizardStateSnapshot."""
 
-from typing import Any
 from unittest.mock import MagicMock
 
-import pytest
 
 from dataknobs_llm.tools.context import ToolExecutionContext, WizardStateSnapshot
 

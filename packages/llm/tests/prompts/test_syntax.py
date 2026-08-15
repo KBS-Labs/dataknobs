@@ -253,7 +253,7 @@ class TestNormalizeToJinja2:
 
 class TestRoundTrip:
     def test_simple_variables_round_trip(self) -> None:
-        """format → jinja2 → format should produce original for simple templates."""
+        """Round-tripping format → jinja2 → format preserves a simple template."""
         original = "Hello {name}, you are {age} years old."
         jinja2 = format_to_jinja2(original)
         back = jinja2_to_format(jinja2)

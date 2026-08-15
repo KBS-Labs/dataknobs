@@ -88,7 +88,7 @@ def test_prompt_tree_serialization_roundtrip():
     pt1 = root_pt.add_message(role="2", content="2", metadata={"id": 2})
     pt2 = root_pt.add_message(role="3", content="3", metadata={"id": 3})
     pt1_1 = pt1.add_message(role="4", content="4", metadata={"id": 4})
-    pt1_2 = pt1.add_message(role="5", content="5", metadata={"id": 5})
+    pt1.add_message(role="5", content="5", metadata={"id": 5})
     pt2_1 = pt2.add_message(role="6", content="6", metadata={"id": 6})
     pt2_1_1 = pt2_1.add_message(role="7", content="7", metadata=None)
     data = pt2_1_1.serialize_tree(full=True)  # serialize
@@ -183,7 +183,7 @@ def test_get_duration_and_apply():
             },
         },
     )
-    pt1_1 = pt1.add_message(role="4", content="4", metadata={"id": 4})
+    pt1.add_message(role="4", content="4", metadata={"id": 4})
     pt1_2 = pt1.add_message(role="5", content="5", metadata={"id": 5})
     pt2_1 = pt2.add_message(
         role="6",

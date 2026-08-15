@@ -87,7 +87,7 @@ class _Node(StructuredConfig):
     """Self-referential statically-typed node for the cycle-guard test."""
 
     label: str = "n"
-    next: "_Node | None" = None
+    next: _Node | None = None
 
 
 def _resolve_leaf(raw: Mapping[str, Any]) -> type[StructuredConfig] | None:

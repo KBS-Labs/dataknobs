@@ -160,7 +160,10 @@ def test_always_factory():
 
 def test_context_condition_factory():
     """Test context_condition factory function."""
-    func = lambda ctx: True
+
+    def func(ctx):
+        return True
+
     cond = context_condition(func)
 
     assert isinstance(cond, ContextCondition)

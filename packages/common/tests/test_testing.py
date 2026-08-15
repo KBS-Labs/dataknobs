@@ -131,7 +131,8 @@ class TestServiceProbeHostResolution:
 
     def test_probe_resolves_docker_host_inside_container(self, monkeypatch):
         """With DOCKER_CONTAINER set and no host env, the probe targets the
-        compose service hostname, not localhost."""
+        compose service hostname, not localhost.
+        """
         captured = self._install_addr_capture(monkeypatch)
         monkeypatch.setenv("DOCKER_CONTAINER", "1")
         for var in ("POSTGRES_HOST", "ELASTICSEARCH_HOST", "REDIS_HOST"):
@@ -149,7 +150,8 @@ class TestServiceProbeHostResolution:
 
     def test_probe_resolves_localhost_on_host(self, monkeypatch):
         """Outside Docker (no /.dockerenv, no DOCKER_CONTAINER), host is
-        localhost."""
+        localhost.
+        """
         captured = self._install_addr_capture(monkeypatch)
         monkeypatch.delenv("DOCKER_CONTAINER", raising=False)
         for var in ("POSTGRES_HOST", "ELASTICSEARCH_HOST"):
@@ -167,7 +169,8 @@ class TestServiceProbeHostResolution:
 
     def test_explicit_host_and_env_win_over_docker_default(self, monkeypatch):
         """An explicit host arg and ``$<SVC>_HOST`` both beat the Docker
-        default."""
+        default.
+        """
         captured = self._install_addr_capture(monkeypatch)
         monkeypatch.setenv("DOCKER_CONTAINER", "1")
 

@@ -7,12 +7,12 @@ def test_basics():
     tree.data = "z"
     assert tree.data == "z"
 
-    assert tree.has_children() == True
+    assert tree.has_children() is True
     assert tree.num_children == 2
     assert [node.data for node in tree.children] == ["b", "c"]
     assert ["z"] * tree.num_children == [node.parent.data for node in tree.children]
 
-    assert tree.has_parent() == False
+    assert tree.has_parent() is False
     assert tree.depth == 0
     assert tree.__repr__() is not None
 
@@ -152,12 +152,12 @@ def make_simple_tree():
     a = dk_tree.Tree("a")
     b = a.add_child("b")
     c = a.add_child("c")
-    d = b.add_child("d")
+    b.add_child("d")
     e = b.add_child("e")
-    f = c.add_child("f")
+    c.add_child("f")
     g = c.add_child("g")
-    h = e.add_child("h")
-    i = g.add_child("i")
+    e.add_child("h")
+    g.add_child("i")
     return a
 
 

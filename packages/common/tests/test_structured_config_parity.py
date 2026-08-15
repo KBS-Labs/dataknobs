@@ -300,7 +300,8 @@ class TestFromConfigOverrideSymmetry:
         self,
     ) -> None:
         """The blessed shim builds via ``await X.from_config`` and runs
-        ``_ainit`` exactly once, yielding a fully-initialized instance."""
+        ``_ainit`` exactly once, yielding a fully-initialized instance.
+        """
         obj = await _GoodAsyncFromConfig.from_config({"name": "alice"})
         assert obj.ready is True
         assert obj.ainit_calls == 1

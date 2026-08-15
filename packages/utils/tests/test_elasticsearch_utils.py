@@ -1,6 +1,6 @@
 import json
-import os
 import tempfile
+from pathlib import Path
 
 import pandas as pd
 
@@ -62,7 +62,7 @@ def test_encode_doc_id_escapes_path_reserved_chars():
 
 def test_batchfile_functions():
     batchdir = tempfile.TemporaryDirectory(suffix=".batchfiles", prefix="test-es.")
-    batchfile = os.path.join(batchdir.name, "bf-001.jsonl")
+    batchfile = str(Path(batchdir.name) / "bf-001.jsonl")
 
     def batchgen(start_idx, end_idx):
         for n in range(start_idx, end_idx):

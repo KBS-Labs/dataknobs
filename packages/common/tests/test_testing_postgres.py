@@ -211,7 +211,7 @@ def test_make_pgvector_test_table_pre_drops_leaked_table(
 
     monkeypatch.setattr(
         "dataknobs_common.testing.postgres_fixtures.uuid.uuid4",
-        lambda: _FixedUUID(),
+        _FixedUUID,
     )
     prefix = "test_pgv_predrop_"
     table = f"{prefix}{_FixedUUID.hex[:8]}"

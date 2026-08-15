@@ -338,7 +338,8 @@ class TestPromoteToPersistMiddleware:
     @pytest.mark.asyncio
     async def test_promote_middleware_moves_flat_keys_to_persist(self, manager_factory):
         """Promoter at position [0] captures flat keys written by later
-        middleware (earlier on response due to onion reversal)."""
+        middleware (earlier on response due to onion reversal).
+        """
         promoter = PromoteToPersistMiddleware(keys=["telemetry_count"])
         ephemeral = EphemeralMiddleware({"telemetry_count": 42})
         # Position [0] = outer = last on response.
@@ -387,7 +388,8 @@ class TestPromoteToPersistMiddleware:
         self, manager_factory
     ):
         """Provider writes pre-date middleware, so promoter position is
-        irrelevant for provider-sourced keys."""
+        irrelevant for provider-sourced keys.
+        """
         # Promoter intentionally a sole middleware — its position is
         # irrelevant for provider-sourced keys because those are already
         # in response.metadata before any middleware runs.
@@ -436,7 +438,8 @@ class TestPromoteToPersistMiddleware:
     async def test_promote_middleware_on_stream_complete(self, manager_factory):
         """Promoter operates on ``stream_complete()`` too: flat keys written
         by another middleware during response processing are promoted into
-        the persisted assistant-node metadata."""
+        the persisted assistant-node metadata.
+        """
         promoter = PromoteToPersistMiddleware(keys=["telemetry_count"])
         ephemeral = EphemeralMiddleware({"telemetry_count": 42})
         # Position [0] = outer = last on response.

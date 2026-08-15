@@ -372,7 +372,7 @@ class TestConversationManager:
         assert node.metadata["confidence"] == 0.95
 
         # Complete with metadata
-        response = await manager.complete(metadata={"temperature": 0.7})
+        await manager.complete(metadata={"temperature": 0.7})
 
         # Verify assistant message has metadata (including usage)
         current_node = manager.state.get_current_node()

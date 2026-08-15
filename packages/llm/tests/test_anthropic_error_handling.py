@@ -25,7 +25,7 @@ minimal raising client stub (a sanctioned SDK stand-in). They FAIL against HEAD
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import Any, Self
 
 import anthropic
 import httpx
@@ -99,7 +99,7 @@ class _StreamCtx:
     def __init__(self, error: Exception | None) -> None:
         self._error = error
 
-    async def __aenter__(self) -> "_StreamCtx":
+    async def __aenter__(self) -> Self:
         if self._error is not None:
             raise self._error
         return self
@@ -107,7 +107,7 @@ class _StreamCtx:
     async def __aexit__(self, *exc: object) -> None:
         return None
 
-    def __aiter__(self) -> "_StreamCtx":
+    def __aiter__(self) -> _StreamCtx:
         return self
 
     async def __anext__(self) -> object:

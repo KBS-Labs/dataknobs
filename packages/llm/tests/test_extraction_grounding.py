@@ -260,7 +260,7 @@ class TestIsFieldGrounded:
         assert result.strategy == "type_mismatch"
 
     def test_type_mismatch_bool_for_integer(self) -> None:
-        """bool is a subclass of int but should be rejected for integer fields."""
+        """The ``bool`` type is a subclass of int, but is rejected for integer fields."""
         prop = _number_prop(num_type="integer")
         result = is_field_grounded("count", True, "I want 1 item", prop)
         assert result.grounded is False

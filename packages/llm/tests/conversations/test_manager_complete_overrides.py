@@ -16,7 +16,7 @@ import yaml
 
 from dataknobs_data.backends.memory import AsyncMemoryDatabase
 from dataknobs_llm.conversations import ConversationManager, DataknobsConversationStorage
-from dataknobs_llm.llm import LLMConfig, LLMMessage, LLMResponse
+from dataknobs_llm.llm import LLMConfig
 from dataknobs_llm.llm.providers.echo import EchoProvider
 from dataknobs_llm.prompts import AsyncPromptBuilder, FileSystemPromptLibrary
 
@@ -162,7 +162,7 @@ class TestToolsParameter:
 
     @pytest.mark.asyncio
     async def test_tools_forwarded_to_provider(self, manager_with_provider: dict[str, Any]) -> None:
-        """tools parameter is forwarded to the LLM provider."""
+        """The ``tools`` parameter is forwarded to the LLM provider."""
         manager = manager_with_provider["manager"]
         provider: EchoProvider = manager_with_provider["provider"]
 

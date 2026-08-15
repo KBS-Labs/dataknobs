@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-import os
+from pathlib import Path
 from types import TracebackType
 from typing import Any, Callable, Dict, List, Self
 
@@ -17,7 +17,7 @@ def resources_path(package: str) -> str:
     :return: The file path to the package's resources.
     """
     # For the monorepo structure, resources are directly in the tests folder
-    return os.path.join(os.path.dirname(__file__), "resources")
+    return str(Path(__file__).parent / "resources")
 
 
 def resource(package: str, filename: str) -> str:
@@ -26,7 +26,7 @@ def resource(package: str, filename: str) -> str:
     :param filename: The name of the file under the package.
     :return: The file path to the resource.
     """
-    return os.path.join(resources_path(package), filename)
+    return str(Path(resources_path(package)) / filename)
 
 
 def resource_as_text(package: str, filename: str) -> str:
@@ -49,7 +49,7 @@ def resource_as_list(
     :param ignore_comments: If non-null, skip lines beginning with this value
     :param ignore_empties: True to skip empty lines
     """
-    result = list()
+    result = []
     path = resource(package, filename)
     with open(path, encoding="utf-8") as infile:
         for line in infile:

@@ -99,7 +99,7 @@ async def test_fanout_runs_local_callbacks_too() -> None:
     bus = InMemoryEventBus()
     await bus.connect()
     seen_locally: list[dict] = []
-    registry.register("t", lambda payload: seen_locally.append(payload))
+    registry.register("t", seen_locally.append)
     registry.also_publish_to(bus, topic_prefix="prefix:")
     await registry.fire_async("t", {"k": 1})
 
@@ -186,7 +186,7 @@ async def test_fanout_publish_error_isolated_by_default() -> None:
     registry.also_publish_to(failing, topic_prefix="bad:")
     registry.also_publish_to(healthy, topic_prefix="ok:")
     seen_locally: list[dict] = []
-    registry.register("t", lambda payload: seen_locally.append(payload))
+    registry.register("t", seen_locally.append)
 
     # Must NOT raise despite the failing bus.
     await registry.fire_async("t", {"k": 1})
@@ -269,7 +269,7 @@ def test_sync_fire_with_bus_no_running_loop_drives_publish_to_completion() -> No
     bus = _CapturingBus()
     registry.also_publish_to(bus, topic_prefix="x:")
     local_seen: list[dict[str, Any]] = []
-    registry.register("t", lambda payload: local_seen.append(payload))
+    registry.register("t", local_seen.append)
 
     registry.fire("t", {"k": 1})
 
@@ -307,7 +307,7 @@ def test_sync_fire_without_bus_no_running_loop_does_not_invoke_run() -> None:
     """
     registry: CallbackRegistry = CallbackRegistry()
     seen: list[dict[str, Any]] = []
-    registry.register("t", lambda payload: seen.append(payload))
+    registry.register("t", seen.append)
 
     registry.fire("t", {"k": 1})
 
@@ -340,7 +340,7 @@ async def test_sync_fire_inside_running_loop_without_bus_does_not_raise() -> Non
     """
     registry: CallbackRegistry = CallbackRegistry()
     seen: list[dict[str, Any]] = []
-    registry.register("t", lambda payload: seen.append(payload))
+    registry.register("t", seen.append)
 
     registry.fire("t", {"k": 1})
 

@@ -99,7 +99,7 @@ class TestGenerationParams:
         assert params["stop_sequences"] == ["STOP"]
 
     def test_seed_included(self):
-        """seed should appear when set."""
+        """The ``seed`` parameter appears when set."""
         config = LLMConfig(provider="anthropic", model="claude-3-haiku", seed=42)
         params = config.generation_params()
         assert params["seed"] == 42
@@ -188,7 +188,7 @@ class TestAnthropicBuildApiParams:
         assert params["stop_sequences"] == ["STOP", "END"]
 
     def test_model_always_included(self):
-        """model should always be in API params."""
+        """The ``model`` parameter is always in API params."""
         provider = self._make_provider(model="claude-3-haiku-20240307")
         params = provider.adapter.adapt_config(provider.config)
         assert params["model"] == "claude-3-haiku-20240307"
@@ -229,6 +229,8 @@ class TestAnthropicAdaptMessages:
         system, msgs = adapter.adapt_messages(messages, system_prompt="Base prompt.")
         assert "Base prompt." in system
         assert "Extra instructions." in system
+        # The system message merged into `system` rather than staying in msgs
+        assert [m["role"] for m in msgs] == ["user"]
 
     def test_user_and_assistant_passthrough(self):
         """Plain user/assistant messages pass through unchanged."""

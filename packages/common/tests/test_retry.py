@@ -1,10 +1,8 @@
 """Tests for dataknobs_common.retry module."""
 
-import asyncio
 import dataclasses
 import inspect
 import random
-from unittest.mock import AsyncMock
 
 import pytest
 
@@ -888,7 +886,7 @@ class TestExecuteSync:
     def test_sleeps_between_attempts(self, monkeypatch):
         """A positive initial_delay sleeps once per retry, via time.sleep."""
         sleeps: list[float] = []
-        monkeypatch.setattr("dataknobs_common.retry.time.sleep", lambda d: sleeps.append(d))
+        monkeypatch.setattr("dataknobs_common.retry.time.sleep", sleeps.append)
         config = RetryConfig(
             max_attempts=3,
             initial_delay=0.5,
@@ -1042,13 +1040,13 @@ class TestPackageImport:
     """Test that retry classes are importable from the package root."""
 
     def test_import_from_dataknobs_common(self):
-        from dataknobs_common import BackoffStrategy as BS
-        from dataknobs_common import RetryConfig as RC
-        from dataknobs_common import RetryExecutor as RE
+        from dataknobs_common import BackoffStrategy as ExportedBackoffStrategy
+        from dataknobs_common import RetryConfig as ExportedRetryConfig
+        from dataknobs_common import RetryExecutor as ExportedRetryExecutor
 
-        assert BS is BackoffStrategy
-        assert RC is RetryConfig
-        assert RE is RetryExecutor
+        assert ExportedBackoffStrategy is BackoffStrategy
+        assert ExportedRetryConfig is RetryConfig
+        assert ExportedRetryExecutor is RetryExecutor
 
 
 # ---------------------------------------------------------------------------

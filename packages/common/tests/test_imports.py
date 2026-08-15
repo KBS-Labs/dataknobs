@@ -32,7 +32,7 @@ HERE = __name__
 
 # ── Targets ───────────────────────────────────────────────────────────
 
-constructions = 0
+constructions: list[str] = []
 
 
 def a_function(*args: Any, **kwargs: Any) -> str:
@@ -49,16 +49,14 @@ class Shaped(Protocol):
 
 class Conforming:
     def __init__(self) -> None:
-        global constructions
-        constructions += 1
+        constructions.append("Conforming")
 
     def shaped_method(self) -> None: ...
 
 
 class NotConforming:
     def __init__(self) -> None:
-        global constructions
-        constructions += 1
+        constructions.append("NotConforming")
 
 
 class ExplodesOnConstruction:
@@ -70,8 +68,7 @@ class ExplodesOnConstruction:
 
 @pytest.fixture(autouse=True)
 def _reset_counter():
-    global constructions
-    constructions = 0
+    constructions.clear()
     yield
 
 
@@ -185,7 +182,7 @@ def test_a_class_is_callable_so_resolve_callable_accepts_it() -> None:
     what that check can promise, not a bug in this function.
     """
     assert resolve_callable(f"{HERE}:Conforming") is Conforming
-    assert constructions == 0
+    assert not constructions, constructions
 
 
 # ── resolve_class ─────────────────────────────────────────────────────
@@ -201,7 +198,7 @@ def test_resolve_class_returns_the_class_and_constructs_nothing() -> None:
     resolved = resolve_class(f"{HERE}:Conforming", Shaped)
 
     assert resolved is Conforming
-    assert constructions == 0, "resolve_class constructed the target"
+    assert not constructions, "resolve_class constructed the target"
 
 
 def test_a_wrong_shape_class_is_rejected_without_being_constructed() -> None:
@@ -209,7 +206,7 @@ def test_a_wrong_shape_class_is_rejected_without_being_constructed() -> None:
         resolve_class(f"{HERE}:NotConforming", Shaped)
 
     assert excinfo.value.expected is Shaped
-    assert constructions == 0, "the wrong-shape class ran its __init__"
+    assert not constructions, "the wrong-shape class ran its __init__"
 
 
 def test_the_constructor_of_a_conforming_class_is_still_not_run() -> None:

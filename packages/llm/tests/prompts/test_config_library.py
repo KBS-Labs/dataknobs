@@ -1,6 +1,5 @@
 """Unit tests for ConfigPromptLibrary."""
 
-import pytest
 from dataknobs_llm.prompts import (
     ConfigPromptLibrary,
     ValidationLevel,

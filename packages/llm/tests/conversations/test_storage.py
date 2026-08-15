@@ -136,8 +136,8 @@ class TestNodeIdentification:
         """Test getting nested children by ID."""
         root = Tree("root")
         child0 = root.add_child("child0")
-        child1 = root.add_child("child1")
-        grandchild0_0 = child0.add_child("grandchild0_0")  # First grandchild
+        root.add_child("child1")
+        child0.add_child("grandchild0_0")  # First grandchild
         grandchild0_1 = child0.add_child("grandchild0_1")  # Second grandchild
 
         node = get_node_by_id(root, "0.1")
@@ -777,7 +777,7 @@ class TestDataknobsConversationStorage:
         storage = DataknobsConversationStorage(backend)
 
         # Create conversations with different users
-        for idx, user in enumerate(["alice", "bob", "alice"]):
+        for user in ["alice", "bob", "alice"]:
             root_node = ConversationNode(
                 message=LLMMessage(role="system", content="System"), node_id=""
             )

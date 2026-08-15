@@ -603,7 +603,7 @@ class TestAsyncPromptBuilderInlinePrompts:
         result = await builder.render_inline_system_prompt(content="Test prompt")
 
         # The template metadata should indicate inline source
-        # Note: This depends on how metadata is propagated through rendering
+        assert result.metadata.get("source") == "inline"
 
 
 @pytest.mark.asyncio
