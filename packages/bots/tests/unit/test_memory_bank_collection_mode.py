@@ -134,52 +134,28 @@ class TestCollectionModeIntegration:
         reasoning = _make_collection_wizard()
         assert "ingredients" in reasoning._banks
 
-    def test_handle_collection_adds_to_bank(self) -> None:
-        """Verify the low-level _handle_collection_mode adds records."""
-        reasoning = _make_collection_wizard()
-
-        # The method is async, but for the core bank-addition logic
-        # we can verify by directly calling the bank
-        reasoning._banks["ingredients"].add(
-            {"name": "flour", "amount": "2 cups"}, source_stage="collect"
-        )
-        assert reasoning._banks["ingredients"].count() == 1
-
-    def test_done_signal_sets_collection_done(self) -> None:
-        """When done keyword is detected, _collection_done flag is set."""
-        reasoning = _make_collection_wizard()
-        state = WizardState(current_stage="collect", data={})
-
-        # Add a record first
-        reasoning._banks["ingredients"].add({"name": "flour"})
-
-        # Set _collection_done manually (simulating what
-        # _handle_collection_mode does on done signal)
-        state.data["_collection_done"] = True
-
-        # Now the condition should evaluate True
-        result = reasoning._evaluate_condition(
-            "data.get('_collection_done') and bank('ingredients').count() >= 1",
-            state.data,
-        )
-        assert result is True
-
-    def test_field_clearing_between_records(self) -> None:
-        """Schema fields should be cleared between collection records."""
-        state = WizardState(
-            current_stage="collect",
-            data={
-                "name": "flour",
-                "amount": "2 cups",
-            },
-        )
-        # Simulate what _handle_collection_mode does: clear schema fields
-        schema_props = {"name", "amount"}
-        for field_name in schema_props:
-            state.data.pop(field_name, None)
-
-        assert "name" not in state.data
-        assert "amount" not in state.data
+    # Three tests were removed from here, and the reason matters more than the
+    # deletion: each named ``_handle_collection_mode`` and none of them called
+    # it. One added a record to the bank by hand and asserted the bank held it;
+    # one set ``_collection_done`` by hand under a comment reading "simulating
+    # what _handle_collection_mode does"; one popped two keys from a dict and
+    # asserted they were gone. Their subjects were MemoryBank.add, dict
+    # assignment and dict.pop.
+    #
+    # Measured rather than asserted: with the body of _handle_collection_mode
+    # replaced by ``return None``, all three still passed. The six tests that
+    # do call it — in TestCollectionModeThroughLoadedMetadata,
+    # TestCollectionModeGenerateFlow and TestCollectionModeBranching — all
+    # failed, which is what the coverage they replace looks like.
+    #
+    # They are deleted rather than rewritten because that class already asserts
+    # exactly what they claimed, through the real call:
+    # test_handle_collection_mode_with_loaded_metadata covers the bank addition
+    # AND the schema-field clearing, and test_done_signal_through_loaded_metadata
+    # covers the flag. Rewriting these would have produced a second copy.
+    #
+    # If a gap ever needs covering here, drive _handle_collection_mode; do not
+    # reintroduce a simulation of it.
 
     def test_min_records_condition(self) -> None:
         """Collection with min_records requires sufficient records."""
@@ -201,30 +177,54 @@ class TestCollectionModeIntegration:
         )
         assert result is True
 
-    def test_back_preserves_bank_records(self) -> None:
-        """Going back from a collection stage preserves collected records."""
+    @pytest.mark.asyncio
+    async def test_back_preserves_bank_records(self) -> None:
+        """Records collected in a stage survive navigating back into it.
+
+        Bank records are stage output that outlives the stage: leaving and
+        returning must not discard them, or a user correcting one answer would
+        silently lose every record already collected.
+
+        This drives the real ``_navigate_back``. Its predecessor asserted that
+        two calls to ``bank.add`` left two records in the bank, under a comment
+        reading "Simulate going back" — no navigation occurred, so nothing
+        about back could have failed it.
+        """
         reasoning = _make_collection_wizard()
-        reasoning._banks["ingredients"].add({"name": "flour"})
-        reasoning._banks["ingredients"].add({"name": "sugar"})
+        bank = reasoning._banks["ingredients"]
+        bank.add({"name": "flour"}, source_stage="collect")
+        bank.add({"name": "sugar"}, source_stage="collect")
 
-        # Simulate going back — data changes but bank stays
-        assert reasoning._banks["ingredients"].count() == 2
-
-    def test_skip_sets_done_flag(self) -> None:
-        """Skipping a collection stage should allow done condition."""
-        reasoning = _make_collection_wizard()
-        state = WizardState(current_stage="collect", data={})
-
-        # Simulate skip — sets _collection_done
-        state.data["_collection_done"] = True
-
-        # With no records but done signal, transition condition with
-        # min_records=0 should pass
-        result = reasoning._evaluate_condition(
-            "data.get('_collection_done')",
-            state.data,
+        # Positioned at the stage after collect, with collect behind us.
+        state = WizardState(
+            current_stage="review",
+            data={"_collection_done": True},
+            history=["collect", "review"],
         )
-        assert result is True
+        reasoning._fsm.restore({"current_stage": "review", "data": state.data})
+
+        moved = await reasoning._navigate_back(state)
+
+        assert moved is True
+        assert state.current_stage == "collect"
+        # The records, and their contents, are still there.
+        assert bank.count() == 2
+        assert [record.data["name"] for record in bank.all()] == ["flour", "sugar"]
+
+    # ``test_skip_sets_done_flag`` was removed rather than repaired. It set
+    # ``_collection_done`` itself, under a comment reading "Simulate skip", and
+    # then asserted a condition reading that flag — so it tested the condition
+    # evaluator, which test_min_records_condition and
+    # test_bank_count_in_condition_via_loader below already cover in both
+    # polarities.
+    #
+    # Written for real it would have failed, and not because of a defect: the
+    # flag is set in exactly two places, both done-signal paths
+    # (_handle_collection_mode, and the pre-extraction check in generate()).
+    # Skip reaches neither. It steps the FSM directly through navigate_skip, so
+    # it never consults a transition condition and has no reason to satisfy one.
+    # The premise that skipping "should allow the done condition" was never true
+    # of this wizard, which is why only a simulation could pass.
 
     def test_bank_count_in_condition_via_loader(self) -> None:
         """bank() is available in FSM-level conditions via wizard_loader."""
