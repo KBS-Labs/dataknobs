@@ -1,6 +1,4 @@
-"""
-Comprehensive tests for migration_v2 module using real components.
-"""
+"""Comprehensive tests for migration_v2 module using real components."""
 
 import pytest
 import time

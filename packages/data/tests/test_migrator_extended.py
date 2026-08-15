@@ -1,6 +1,4 @@
-"""
-Extended tests for migrator module to improve coverage.
-"""
+"""Extended tests for migrator module to improve coverage."""
 
 import pytest
 import asyncio

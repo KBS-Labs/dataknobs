@@ -262,7 +262,7 @@ class CSVFormat(FileFormat):
                     all_fields.add(field_name)
                 flattened_data[record_id] = flat_fields
 
-        fieldnames = ["__id__"] + sorted(list(all_fields))
+        fieldnames = ["__id__"] + sorted(all_fields)
 
         if filepath.endswith(".gz"):
             with gzip.open(filepath, "wt", encoding="utf-8", newline="") as f:

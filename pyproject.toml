@@ -280,16 +280,6 @@ ignore = [
     "D103", # [presentational] Missing docstring in public function
     "D105", # [presentational] Missing docstring in magic method
     "D107", # [presentational] Missing docstring in __init__
-    "D200", # [presentational] One-line docstring should fit on one line
-            # ruff marks the fix unsafe because it "could affect tools that parse
-            # docstrings, documentation generators, or custom introspection
-            # utilities". That mechanism is real in this tree rather than absent:
-            # three bin/ scripts pass __doc__ to argparse, and one takes
-            # __doc__.splitlines()[0], which a reflow onto one line would change.
-            # The decline rests on where the findings are, not on nothing reading
-            # __doc__ -- all three sit on test-module docstrings, and those three
-            # scripts have no D200 finding. A finding on one of them is a different
-            # question and should be read rather than inherited from this line.
     "D203", # [covered-elsewhere] 1 blank line before class docstring -- D211 enforces
             # the opposite and is enabled, so the property is decided, not unmeasured.
             # Filed presentational until it was read: that category claims a finding
@@ -421,10 +411,6 @@ ignore = [
               # here are the unsafe kind. On anything that is not a dict, `in` asks
               # __contains__ and `.keys()` asks whatever that method returns, which
               # are not required to agree.
-    "PLW3301", # [behavioural] Nested min/max calls can be flattened
-               # Flattening `max(a, max(gen))` to `max(a, *gen)` changes the failure
-               # mode on an empty iterable from ValueError to TypeError. Safe at the
-               # single site it fires on, and only because of a guard three lines up.
     "RUF006", # [behavioural] Store a reference to the return value of asyncio.create_task
               # The reason this entry used to carry — "only needed if canceling task"
               # — was factually wrong, and is why its findings were never read. The
@@ -531,11 +517,6 @@ ignore = [
     "PTH202", # [presentational] Use Path.stat().st_size
 
     # Other style preferences
-    "C414", # [presentational] Unnecessary list() call within sorted()
-            # ruff: "marked as unsafe, as it may occasionally drop comments when
-            # rewriting the call. In most cases, though, comments will be
-            # preserved." sorted() materialises its argument either way, so the
-            # inner list() decides nothing the program can see. One finding.
     "E721", # [behavioural] Use isinstance() instead of type comparison
             # ruff's own documentation is explicit that the rewrite changes behaviour
             # under NumPy, Pandas and SQLAlchemy, where `__eq__` on a type is

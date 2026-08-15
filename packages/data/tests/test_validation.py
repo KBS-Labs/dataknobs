@@ -1,6 +1,4 @@
-"""
-Comprehensive tests for validation_v2 module using real components.
-"""
+"""Comprehensive tests for validation_v2 module using real components."""
 
 import pytest
 from datetime import datetime
