@@ -194,3 +194,43 @@ class TestContainerCellsRoundTrip:
         rows = _round_trip(db, render_db["table"], df)
 
         assert sorted(rows["c"]) == ["['a']", "[1, 2]"]
+
+
+class TestAFrameWithNoRowsIsUploadable:
+    """Pre-existing on ``main``: an empty frame built an INSERT with no VALUES.
+
+    ``",".join(...)`` over an empty row iterator yields the empty string, so the
+    statement ended at ``VALUES `` and the server rejected it with a syntax
+    error. Nothing in the module noticed, because every existing test uploaded
+    at least one row.
+
+    A frame with no rows is an ordinary result — a filter that matched nothing,
+    a batch that came up empty — and the caller has no way to distinguish it
+    from the frames that work without checking ``len`` before every call. The
+    table is still created, because a caller uploading an empty frame is asking
+    for a place to put the rows they did not happen to have this time.
+    """
+
+    def test_a_frame_with_no_rows_creates_the_table_and_inserts_nothing(
+        self, db: PostgresDB, render_db: dict[str, Any]
+    ) -> None:
+        table = render_db["table"]
+        df = pd.DataFrame({"n": pd.Series([], dtype="int64"), "s": pd.Series([], dtype="object")})
+
+        db.upload(table, df)
+
+        got = db.query(f'SELECT * FROM "{table}"')
+        assert len(got) == 0
+        assert set(got.columns) == {"n", "s"}
+
+    def test_a_second_upload_into_the_created_table_still_works(
+        self, db: PostgresDB, render_db: dict[str, Any]
+    ) -> None:
+        """The empty upload must leave a table the next one can use."""
+        table = render_db["table"]
+        db.upload(table, pd.DataFrame({"n": pd.Series([], dtype="int64")}))
+
+        db.upload(table, pd.DataFrame({"n": [7]}))
+
+        got = db.query(f'SELECT * FROM "{table}"')
+        assert got["n"].tolist() == [7]

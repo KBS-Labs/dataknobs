@@ -21,6 +21,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   INSERT, so the frame could never have uploaded; it now fails up front with a
   message that says which label, rather than deeper in with one that does not.
 
+- **`upload` built a syntactically invalid INSERT for a DataFrame with no
+  rows.** The VALUES list is joined from the frame's rows, so an empty frame
+  produced `INSERT INTO "t" ("a") VALUES ` and the server answered with a
+  syntax error. A frame with no rows is an ordinary result — a filter that
+  matched nothing, a batch that came up empty — and nothing distinguished it
+  from the frames that worked, so callers had to test `len(df)` before every
+  call. It now creates the table and inserts nothing, since a caller uploading
+  an empty frame is asking for somewhere to put the rows they did not have
+  this time. A frame with no columns is empty on the same terms.
+
 - **An `object` column holding lists or arrays uploads as text.** The declared
   `varchar` width and the written value are both produced by `str`, so a
   container round-trips as its Python repr instead of having to be flattened
@@ -87,9 +97,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   readable means EOF, an error *or* data, and a terminated backend sends an
   error message before closing. Only a round trip distinguishes them. It costs
   0.29 ms against the 4.1 ms handshake reuse saves; `validate_on_reuse=False`
-  trades it back. The probe runs under `autocommit` when the connection is
-  idle, so it never returns one idle-in-transaction, and it joins rather than
-  disturbs a transaction the caller already has open.
+  trades it back, though the free local checks still run so a connection libpq
+  has already given up on is never returned. The probe runs under `autocommit`
+  when the connection is idle, so it never returns one idle-in-transaction, and
+  it joins rather than disturbs a transaction the caller already has open.
+
+  What the probe asks is whether the **server answered**, not whether the
+  statement succeeded. A live server refuses every statement inside an aborted
+  transaction and cancels one that trips `statement_timeout`, and in both cases
+  the reply is itself the proof of life; conversely, a local status of "in a
+  failed transaction" says nothing about the backend, which
+  `idle_in_transaction_session_timeout` reaps exactly as it reaps an open one.
+  `connection.closed` separates the two, because psycopg2 sets it when the
+  transport failed and leaves it alone when the server merely refused — so an
+  aborted transaction is handed back for its caller to unwind, and a killed one
+  is replaced.
 
   `query` / `execute` / `upload` use a **different connection** from the one
   `get_conn()` hands out. A transaction belongs to a connection and those

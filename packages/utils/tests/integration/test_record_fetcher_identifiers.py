@@ -9,10 +9,14 @@ argument** rather than constructor configuration. Verified against a live
 server before the fix: a fetcher configured for one table returned a value from
 another one, plus ``current_user``, through nothing but that parameter.
 
-The ``ids`` argument is *not* a vector and the fix does not treat it as one:
-values go through ``str(value + offset)``, which raises ``TypeError`` on
-anything non-numeric. That is asserted below so the reasoning stays checkable
-rather than remembered.
+The ``ids`` argument is *not* a vector, and was not one before the fix either
+— but for a reason that only held by accident. Values went through
+``str(value + offset)``, and the arithmetic happened to raise on anything
+non-numeric. A side effect only covers what it happens to cover, and this one
+had gaps: an empty list built ``IN ()``, a syntax error, and ``nan`` survived
+the arithmetic to arrive as a bare literal. The values are bound now, and
+``operator.index`` states the integer requirement outright. Both the property
+and its new mechanism are asserted below.
 
 What the family says the parameter is settles the contract question. The
 sibling fetchers do ``df[fields_to_retrieve]`` — pandas column selection by
@@ -269,11 +273,13 @@ class TestUnchangedBehaviour:
 
         The mechanism changed and the property did not. It used to rest on
         ``str(value + offset)`` raising ``TypeError`` on a non-number; the
-        values are bound now, and ``int()`` refuses the same input a step
-        earlier — as ``ValueError``, since that is what ``int`` raises on a
-        string it cannot parse. Asserting the refusal rather than its type is
-        the point: the guarantee is that caller text cannot reach the SQL, not
-        that a particular exception carries the news.
+        values are bound now, and ``operator.index`` refuses the same input a
+        step earlier. Asserting the refusal rather than its type is the point:
+        the guarantee is that caller text cannot reach the SQL, not that a
+        particular exception carries the news — and the two mechanisms do not
+        even agree on which one to raise, ``index`` rejecting a ``str`` as
+        ``TypeError`` where ``int`` would have parsed it or raised
+        ``ValueError``.
         """
         fetcher = PostgresRecordFetcher(db, tables["main"])
 

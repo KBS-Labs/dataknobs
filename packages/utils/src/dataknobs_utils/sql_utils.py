@@ -276,17 +276,38 @@ class DotenvPostgresConnector:
         caller already has a transaction open the probe joins it and no
         autocommit change is made, because switching mid-transaction is both an
         error and none of this method's business.
+
+        **What the probe asks is whether the server answered**, not whether the
+        statement succeeded. The two come apart in both directions, and reading
+        one for the other was wrong twice over:
+
+        * A statement can be *refused* by a live server. Inside an aborted
+          transaction every statement raises ``InFailedSqlTransaction`` until
+          the transaction ends; a role-level ``statement_timeout`` or a stray
+          ``pg_cancel_backend`` raises ``QueryCanceled``. In each case the
+          connection is open, reusable, and answering.
+        * A statement can be *skipped* over a dead one. ``INERROR`` is a local
+          flag, and ``idle_in_transaction_session_timeout`` reaps an aborted
+          transaction exactly as it reaps an open one — so treating that status
+          as proof of life meant never checking the state most likely to have
+          been killed.
+
+        ``conn.closed`` separates them, because psycopg2 sets it when the
+        transport failed and leaves it alone when the server merely refused the
+        statement. That is the connection's own verdict rather than an
+        inference about the exception, and it is why the aborted transaction a
+        caller left behind survives validation: the probe raises, the
+        connection is still open, and it goes back untouched for the caller to
+        unwind. Replacing it would discard their work without telling them.
         """
         if conn is None or conn.closed:
             return False
-        if not self.validate_on_reuse:
-            return True
         status = conn.get_transaction_status()  # local; no round trip
         if status == psycopg2.extensions.TRANSACTION_STATUS_UNKNOWN:
             return False
-        if status == psycopg2.extensions.TRANSACTION_STATUS_INERROR:
-            # Live, and inside a transaction the caller has to unwind itself.
-            # Replacing it here would discard their work without telling them.
+        # After the free checks, not before: opting out buys off the round trip
+        # below, and nothing above it costs anything to run.
+        if not self.validate_on_reuse:
             return True
         was_autocommit = conn.autocommit
         idle = status == psycopg2.extensions.TRANSACTION_STATUS_IDLE
@@ -297,7 +318,7 @@ class DotenvPostgresConnector:
                 curs.execute("SELECT 1")
             return True
         except psycopg2.Error:
-            return False
+            return not conn.closed
         finally:
             if idle:
                 with contextlib.suppress(psycopg2.Error):
@@ -377,8 +398,16 @@ class DotenvPostgresConnector:
         # entered yet, and the caller would keep using a connection the closed
         # connector no longer knows about.
         with self._conns_lock:
-            if conn is not None:
-                # WeakSet.discard(None) raises rather than no-opping.
+            # Only a closed connection leaves the registry. Unusable is not the
+            # same as closed — a connection whose libpq status has gone UNKNOWN
+            # is still holding a socket — and dropping one that is merely
+            # unusable would leave close() unable to reach it, with nothing but
+            # refcounting to release the backend. That is the accident this
+            # class replaced with a lifecycle, so it does not get reintroduced
+            # at the one place that removes things from the set. The set is
+            # weak, so a connection nobody holds still leaves on its own.
+            # (WeakSet.discard(None) raises rather than no-opping.)
+            if conn is not None and conn.closed:
                 self._open_conns.discard(conn)
             self._open_conns.add(new_conn)
             conns[lane] = new_conn
@@ -413,7 +442,13 @@ class DotenvPostgresConnector:
             conns, self._open_conns = list(self._open_conns), weakref.WeakSet()
         for conn in conns:
             if not conn.closed:
-                conn.close()
+                # One connection that refuses to close must not stop the
+                # sweep: the registry has already been emptied, so anything
+                # skipped here has nothing left able to reach it. psycopg2
+                # rarely raises from close(), which is exactly why a failure
+                # would otherwise strand every connection after it.
+                with contextlib.suppress(psycopg2.Error):
+                    conn.close()
         self._lane_conns().clear()
 
 
@@ -511,11 +546,11 @@ class PostgresDB:
     def table_head(self, table_name: str, n: int = 10) -> pd.DataFrame:
         """Get the first N rows from a table.
 
-        The table name is quoted and the row count is bound. ``n`` is the last
-        caller value in this module still reaching SQL by interpolation, which
-        it did for no reason other than being a number rather than a name —
-        the same "it cannot be text, so it needs no binding" reasoning that
-        turned out to have gaps in the fetcher's ``ids``.
+        The table name is quoted and the row count is bound. ``n`` was the last
+        caller value in this module reaching SQL by interpolation, which it did
+        for no reason other than being a number rather than a name — the same
+        "it cannot be text, so it needs no binding" reasoning that turned out
+        to have gaps in the fetcher's ``ids``.
 
         Args:
             table_name: Name of the table to sample.
@@ -911,6 +946,15 @@ class PostgresDB:
         template = ", ".join(["%s"] * len(df.columns))
         if table_name not in self.table_names:
             self._create_table(table_name, df)
+        if df.empty:
+            # No rows means no VALUES list, and ``INSERT INTO t (a) VALUES``
+            # with nothing after it is a syntax error rather than a no-op. An
+            # empty frame is an ordinary result — a filter that matched
+            # nothing — so it creates the table above and returns, rather than
+            # making every caller test ``len(df)`` first. A frame with no
+            # *columns* is empty too, which is the only sensible reading of a
+            # request to insert nothing anywhere.
+            return
         # Built per column and then transposed, so every value keeps its own
         # column's dtype. Going row-first through ``to_records()`` upcast a
         # nullable Int64 to float64 and sent '1.0' into an integer column.
@@ -995,8 +1039,8 @@ class PostgresRecordFetcher(RecordFetcher):
         an empty list built ``IN ()``, which is a syntax error, and a ``nan``
         or ``inf`` survived the arithmetic to arrive as a bare literal the
         server then rejected. Binding removes the question instead of answering
-        it, and ``int()`` states the numeric requirement the arithmetic used to
-        imply.
+        it, and ``operator.index`` states the integer requirement the
+        arithmetic used to imply.
 
         An empty ``ids`` returns an empty frame **with the columns a populated
         one would have**, matching both sibling fetchers. Returning a

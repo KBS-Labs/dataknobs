@@ -40,7 +40,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   values passed to `PostgresDB` are individually typed on the config class, but
   collecting them into an unannotated dict joined them to `object` — which
   neither `PostgresDB` nor `validate_database_name` accepts. The dict is now
-  declared per key.
+  declared per key, and read by key rather than through `.get(key, default)`:
+  the declaration is total and every key is populated, so each default was
+  unreachable while reading as though it still applied.
+
+- **`connect()` replaced its `PostgresDB` without closing the first one.** When
+  the initial connection fails because the target database does not exist and
+  `ensure_database` is enabled, the database is created and the connection
+  reopened — which rebound the attribute and left the previous object to the
+  garbage collector. It holds no live connection on that path, so nothing
+  leaked in practice, but it was the one construction path not applying the
+  ownership rule the rest of the class follows.
 
 ## v0.8.0 - 2026-08-11
 

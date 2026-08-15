@@ -204,6 +204,13 @@ class SyncPostgresDatabase(
         except Exception as e:
             if self._ensure_database_enabled and self._is_invalid_catalog_error(e):
                 self._create_database()
+                # The first PostgresDB is about to be replaced, so it is closed
+                # rather than dropped. It holds no live connection in the case
+                # that gets here — connecting is what failed — but "the object
+                # that is going away is closed by whoever owns it" is the rule
+                # the rest of this class follows, and an ownership discipline
+                # with one path exempted is one nobody can rely on.
+                close_if_owned_sync(self.db, self._owns_db)
                 self._open_connection()
                 self._ensure_table()
             else:
@@ -227,12 +234,16 @@ class SyncPostgresDatabase(
         lookup is needed here — the normalizer is the single env-var
         contract.
         """
+        # Indexed, not ``.get(key, default)``: ``_ConnConfig`` is total and is
+        # built with all five keys, so every default was unreachable while
+        # reading as though it still applied. The normalizer above is where a
+        # missing value acquires one.
         self.db = PostgresDB(
-            host=self._conn_config.get("host", "localhost"),
-            db=self._conn_config.get("database", "postgres"),
-            user=self._conn_config.get("user", "postgres"),
-            pwd=self._conn_config.get("password"),
-            port=self._conn_config.get("port", 5432),
+            host=self._conn_config["host"],
+            db=self._conn_config["database"],
+            user=self._conn_config["user"],
+            pwd=self._conn_config["password"],
+            port=self._conn_config["port"],
             sslmode=self._sslmode,
         )
         # Constructed here, so closed by close(). Recorded at the point of the
@@ -271,14 +282,14 @@ class SyncPostgresDatabase(
 
         from .postgres_mixins import validate_database_name
 
-        target_db = self._conn_config.get("database", "postgres")
+        target_db = self._conn_config["database"]
         validate_database_name(target_db)
 
         conn_kwargs: dict[str, Any] = {
-            "host": self._conn_config.get("host", "localhost"),
-            "port": self._conn_config.get("port", 5432),
-            "user": self._conn_config.get("user", "postgres"),
-            "password": self._conn_config.get("password"),
+            "host": self._conn_config["host"],
+            "port": self._conn_config["port"],
+            "user": self._conn_config["user"],
+            "password": self._conn_config["password"],
             "database": "postgres",
             "connect_timeout": 10,
         }

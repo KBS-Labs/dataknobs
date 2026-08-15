@@ -107,7 +107,9 @@ This needs a round trip, and there is no way around it. psycopg2's `connection.c
 | reuse + validation (now) | 0.29 ms |
 | reuse without validation | ~0 |
 
-Validation is on by default and costs about 7% of what reuse saves. Pass `validate_on_reuse=False` to `PostgresDB` or `DotenvPostgresConnector` to trade it back where connections are known not to sit idle long enough to be dropped. The probe runs under `autocommit` when the connection is idle, so it never hands one back idle-in-transaction, and it joins rather than disturbs a transaction you already have open.
+What the probe asks is whether the **server answered**, not whether the statement succeeded — the two come apart in both directions. A live server refuses every statement inside an aborted transaction (`InFailedSqlTransaction`) and cancels one that trips `statement_timeout` (`QueryCanceled`); in both cases the connection is open and reusable, and the reply itself is the proof of life. Conversely a local status of "in a failed transaction" says nothing about the backend, which `idle_in_transaction_session_timeout` reaps exactly as it reaps an open one. `connection.closed` separates the two, because psycopg2 sets it when the transport failed and leaves it alone when the server merely refused — so an aborted transaction you left behind is handed back for you to unwind, and a killed one is replaced.
+
+Validation is on by default and costs about 7% of what reuse saves. Pass `validate_on_reuse=False` to `PostgresDB` or `DotenvPostgresConnector` to trade it back where connections are known not to sit idle long enough to be dropped; the free local checks still run, so a connection libpq has already given up on is never handed back. The probe runs under `autocommit` when the connection is idle, so it never hands one back idle-in-transaction, and it joins rather than disturbs a transaction you already have open.
 
 A thread that exits releases its connections without waiting for `close()`, so a pool that cycles workers does not accumulate backends.
 
@@ -115,7 +117,7 @@ Reuse is per thread rather than per object because psycopg2's `with connection:`
 
 Two things to know:
 
-- **Do not hold a `get_conn()` connection in a `with` block across a `query()`, `execute()` or `upload()` call on the same thread.** psycopg2's transaction block is not re-entrant — but since the wrappers now use a different connection, this only bites if you nest `with` on the *same* connection you were handed. Use `get_conn()` on its own, or the wrapper methods on their own.
+- **Do not nest `with` blocks on the connection you were handed.** psycopg2's transaction block is not re-entrant, so entering `with conn:` twice on the same connection raises `ProgrammingError: the connection cannot be re-entered recursively`. Interleaving is fine — a `query()`, `execute()` or `upload()` inside your own `with get_conn()` block runs on the wrappers' connection and cannot touch your transaction. That is what the separate lane buys.
 - **`close()` is a shutdown operation, not a barrier.** It does not wait for other threads to become idle; a thread closed out from under mid-statement sees `InterfaceError: connection already closed`. Join your workers before closing.
 
 A connector passed in explicitly belongs to its caller and is left open by `PostgresDB.close()`, so two objects can share one connector without either closing it out from under the other:
@@ -133,4 +135,6 @@ Note that psycopg2's `with connection:` block commits or rolls back a **transact
 
 Fetches rows by ID, with `fields_to_retrieve` naming the **columns** to return — the same meaning the parameter has on the other `RecordFetcher` implementations, which use it for pandas column selection. Every identifier is quoted, so mixed-case and reserved-word column names work, and a value that is not a column name is rejected rather than becoming part of the statement.
 
-`ids` entries must be finite numbers, and are sent as bound parameters. An empty `ids` returns an empty frame without a round trip.
+`ids` entries must be **integers**, and are sent as bound parameters. The check is `operator.index`, not `int()`: `int()` accepts `"5"` and silently truncates `1.9` to `1`, which returns a different, wrong row rather than the empty result such a value used to produce. Numpy integers — what a DataFrame column yields — are still accepted.
+
+An empty `ids` returns an empty frame **with the columns a populated one would have**, matching the sibling fetchers. That costs a round trip, and deliberately: the columns come from the server, and deriving them locally would mean reimplementing `SELECT *`. A zero-column frame would make `got["id"]` raise `KeyError` on a result that merely has no rows.

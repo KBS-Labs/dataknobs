@@ -650,6 +650,59 @@ class TestAStaleConnectionIsNotHandedBack:
         finally:
             connector.close()
 
+    def test_an_aborted_transaction_on_a_dead_backend_is_still_replaced(
+        self, lifecycle_db: dict[str, Any], observer: Any
+    ) -> None:
+        """Bug: ``INERROR`` was read as proof of life, so it was never checked.
+
+        The policy above is right — a caller's failed transaction is theirs to
+        unwind — but it was implemented by returning early, which made the one
+        state a server is *most* likely to have reaped the one state never
+        verified. ``idle_in_transaction_session_timeout`` reaps an aborted
+        transaction exactly as it reaps an open one, and several managed
+        offerings set it by default.
+
+        This also pins the premise the in-process ladder tests are built on
+        (``stand_in`` in ``tests/conftest.py``): a probe refused by a live
+        server leaves ``closed`` at 0, while one that loses the transport sets
+        it. Measured against the unfixed code, ``get_conn()`` returned the same
+        dead object and the caller's next statement raised ``OperationalError``.
+
+        The sibling case — a probe cancelled by ``statement_timeout`` on a
+        healthy connection — lives in-process instead, because cancelling a
+        ``SELECT 1`` against a real server is a race rather than a scenario.
+        """
+        connector = DotenvPostgresConnector(
+            host=lifecycle_db["host"],
+            db=lifecycle_db["database"],
+            user=lifecycle_db["user"],
+            pwd=lifecycle_db["password"],
+            port=lifecycle_db["port"],
+        )
+        try:
+            first = connector.get_conn()
+            pid = first.get_backend_pid()
+            with pytest.raises(psycopg2.Error), first.cursor() as curs:
+                curs.execute("SELECT * FROM a_table_that_does_not_exist")
+            assert first.get_transaction_status() == extensions.TRANSACTION_STATUS_INERROR
+
+            with observer.cursor() as curs:
+                curs.execute("SELECT pg_terminate_backend(%s)", (pid,))
+            assert not _await_reclaimed(observer, [pid]), "precondition: the backend is gone"
+            assert first.closed == 0, (
+                "precondition: the status is still INERROR and psycopg2 still "
+                "believes the connection is open — believing both is the defect"
+            )
+
+            second = connector.get_conn()
+
+            assert second is not first, "a dead backend was kept because it was INERROR"
+            with second.cursor() as curs:
+                curs.execute("SELECT 1")
+                assert curs.fetchone()[0] == 1
+        finally:
+            connector.close()
+
     def test_validating_does_not_disturb_an_open_transaction(
         self, lifecycle_db: dict[str, Any]
     ) -> None:

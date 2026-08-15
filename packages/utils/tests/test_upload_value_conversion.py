@@ -39,7 +39,10 @@ class TestScalarConversion:
 
     def test_nulls_become_none_in_both_kinds(self) -> None:
         text = PostgresDB._column_values_for_insert(pd.Series(["a", None], dtype=object))
-        typed = PostgresDB._column_values_for_insert(pd.array([1, None], dtype="Int64"))
+        # A Series, matching what ``upload`` passes and what the signature
+        # declares — an ``IntegerArray`` happened to work but exercised a type
+        # the method is never handed.
+        typed = PostgresDB._column_values_for_insert(pd.Series([1, None], dtype="Int64"))
 
         assert text == ["a", None]
         assert list(typed) == [1, None]

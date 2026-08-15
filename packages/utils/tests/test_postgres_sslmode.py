@@ -18,42 +18,34 @@ import psycopg2
 from dataknobs_utils.sql_utils import DotenvPostgresConnector, PostgresDB
 
 
-class _StandInConnection:
-    """What ``psycopg2.connect`` returns, for the little of it used here.
+def _capture_connect(monkeypatch: Any, stand_in: Any) -> dict[str, Any]:
+    """Patch ``psycopg2.connect`` to capture its kwargs instead of connecting.
 
-    A bare ``object()`` was the previous stand-in and is the one thing a real
-    connection is not: ``object`` is the sole built-in with no ``__weakref__``
-    slot, so it cannot be weak-referenced, while ``psycopg2.extensions.connection``
-    can. That difference stopped being invisible once the connector began
-    holding its open connections in a ``weakref.WeakSet`` — the stand-in failed
-    where every real connection succeeds.
+    The connection stand-in is the shared one from ``conftest``: this module
+    used to carry a two-line copy of its own, which is how it came to model a
+    connection that could not be weak-referenced and broke when the connector
+    started holding its connections weakly.
     """
-
-    closed = 0
-
-
-def _capture_connect(monkeypatch: Any) -> dict[str, Any]:
-    """Patch ``psycopg2.connect`` to capture its kwargs instead of connecting."""
     captured: dict[str, Any] = {}
 
-    def fake_connect(**kwargs: Any) -> _StandInConnection:
+    def fake_connect(**kwargs: Any) -> Any:
         captured.update(kwargs)
-        return _StandInConnection()
+        return stand_in()
 
     monkeypatch.setattr(psycopg2, "connect", fake_connect)
     return captured
 
 
 class TestConnectorSslmode:
-    def test_sslmode_omitted_by_default(self, monkeypatch: Any) -> None:
-        captured = _capture_connect(monkeypatch)
+    def test_sslmode_omitted_by_default(self, monkeypatch: Any, stand_in: Any) -> None:
+        captured = _capture_connect(monkeypatch, stand_in)
         conn = DotenvPostgresConnector(host="h", db="d", user="u", pwd="p", port=5432)
         assert conn.sslmode is None
         conn.get_conn()
         assert "sslmode" not in captured
 
-    def test_explicit_sslmode_forwarded(self, monkeypatch: Any) -> None:
-        captured = _capture_connect(monkeypatch)
+    def test_explicit_sslmode_forwarded(self, monkeypatch: Any, stand_in: Any) -> None:
+        captured = _capture_connect(monkeypatch, stand_in)
         conn = DotenvPostgresConnector(
             host="h", db="d", user="u", pwd="p", port=5432, sslmode="require"
         )
