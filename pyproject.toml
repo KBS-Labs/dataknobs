@@ -278,7 +278,6 @@ ignore = [
     "D101", # [presentational] Missing docstring in public class
     "D102", # [presentational] Missing docstring in public method
     "D103", # [presentational] Missing docstring in public function
-    "D104", # [presentational] Missing docstring in public package
     "D105", # [presentational] Missing docstring in magic method
     "D107", # [presentational] Missing docstring in __init__
     "D200", # [presentational] One-line docstring should fit on one line
@@ -600,7 +599,7 @@ dummy-variable-rgx = "^(_+|(_+[a-zA-Z0-9_]*[a-zA-Z0-9]+?))$"
 
 # Ignore certain errors in specific files
 [tool.ruff.lint.per-file-ignores]
-"__init__.py" = ["D104", "F401"]  # Module docstring and unused imports in __init__ files
+"__init__.py" = ["D104", "F401"]  # D104 (missing package docstring) can only fire on an __init__.py, so this line is now the whole of that rule's suppression rather than a duplicate of a repo-wide decline; F401 covers the re-export imports
 "packages/legacy/*" = ["D", "N", "UP"]  # Relax rules for legacy code
 # Two entries were deleted here because each waived nothing, and one of them read
 # as though it did. `"tests/*" = ["D100", "D101", "D102", "D103", "S101"]` looked
