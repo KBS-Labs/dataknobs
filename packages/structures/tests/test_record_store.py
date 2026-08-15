@@ -8,7 +8,7 @@ from dataknobs_structures import record_store
 
 
 def test_basics():
-    RECS = [
+    recs = [
         {"a": 1, "b": 2, "c": 3},
         {"a": 4, "b": 5, "c": 6},
         {"a": 7, "b": 8, "c": 9},
@@ -17,15 +17,15 @@ def test_basics():
     with tempfile.TemporaryDirectory(suffix=".record_store", prefix="test-") as recdir:
         tsv_fpath = str(Path(recdir) / "basics_test.tsv")
         rs1 = record_store.RecordStore(tsv_fpath)
-        rs1.add_rec(RECS[0])
+        rs1.add_rec(recs[0])
         assert len(rs1.records) == 1
         assert len(rs1.df) == 1
-        rs1.add_rec(RECS[1])
+        rs1.add_rec(recs[1])
         assert len(rs1.records) == 2
         assert len(rs1.df) == 2
         rs1.save()
 
-        rs1.add_rec(RECS[2])
+        rs1.add_rec(recs[2])
         assert len(rs1.records) == 3
         assert len(rs1.df) == 3
 
@@ -38,7 +38,7 @@ def test_basics():
         assert len(rs1.df) == 0
         rs1.restore()
 
-        rs1.add_rec(RECS[2])
+        rs1.add_rec(recs[2])
         assert len(rs1.records) == 3
         assert len(rs1.df) == 3
         rs1.save()
@@ -56,16 +56,16 @@ def test_basics():
 
 
 def test_no_backing_file():
-    RECS = [
+    recs = [
         {"a": 1, "b": 2, "c": 3},
         {"a": 4, "b": 5, "c": 6},
         {"a": 7, "b": 8, "c": 9},
     ]
     rs1 = record_store.RecordStore(None)
-    rs1.add_rec(RECS[0])
+    rs1.add_rec(recs[0])
     assert len(rs1.records) == 1
     assert len(rs1.df) == 1
-    rs1.add_rec(RECS[1])
+    rs1.add_rec(recs[1])
     assert len(rs1.records) == 2
     assert len(rs1.df) == 2
     rs1.save()

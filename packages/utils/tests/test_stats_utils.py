@@ -138,7 +138,7 @@ def test_simple1():
         time.sleep(0.001)
 
     # window stats should now be empty
-    emptyStats = rolling_stats.window_stats
+    empty_stats = rolling_stats.window_stats
 
     # do checks
     assert rolling_stats.num_segments == 2
@@ -156,8 +156,8 @@ def test_simple1():
         assert window1_stats.n == 1
         assert math.isclose(seg2value, window1_stats.mean, rel_tol=0.005)
 
-    # emptyStats should be empty
-    assert emptyStats.n == 0
+    # empty_stats should be empty
+    assert empty_stats.n == 0
 
     # cumulativeStats should match stats1
     cumulative_stats = rolling_stats.cumulative_stats

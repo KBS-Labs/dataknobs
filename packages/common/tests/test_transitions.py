@@ -227,8 +227,8 @@ class TestGetReachable:
 
 class TestPackageImport:
     def test_import_from_dataknobs_common(self):
-        from dataknobs_common import InvalidTransitionError as ITE
-        from dataknobs_common import TransitionValidator as TV
+        from dataknobs_common import InvalidTransitionError as ExportedInvalidTransitionError
+        from dataknobs_common import TransitionValidator as ExportedTransitionValidator
 
-        assert ITE is InvalidTransitionError
-        assert TV is TransitionValidator
+        assert ExportedInvalidTransitionError is InvalidTransitionError
+        assert ExportedTransitionValidator is TransitionValidator

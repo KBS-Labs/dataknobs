@@ -1040,13 +1040,13 @@ class TestPackageImport:
     """Test that retry classes are importable from the package root."""
 
     def test_import_from_dataknobs_common(self):
-        from dataknobs_common import BackoffStrategy as BS
-        from dataknobs_common import RetryConfig as RC
-        from dataknobs_common import RetryExecutor as RE
+        from dataknobs_common import BackoffStrategy as ExportedBackoffStrategy
+        from dataknobs_common import RetryConfig as ExportedRetryConfig
+        from dataknobs_common import RetryExecutor as ExportedRetryExecutor
 
-        assert BS is BackoffStrategy
-        assert RC is RetryConfig
-        assert RE is RetryExecutor
+        assert ExportedBackoffStrategy is BackoffStrategy
+        assert ExportedRetryConfig is RetryConfig
+        assert ExportedRetryExecutor is RetryExecutor
 
 
 # ---------------------------------------------------------------------------

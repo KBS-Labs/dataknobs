@@ -75,7 +75,7 @@ class TestConversationNodeToolCallSerialization:
         assert restored.message.tool_calls is not None
 
 
-class TestSchemaMigration1_0To1_1:
+class TestSchemaMigrationV10ToV11:
     """Tests for schema 1.0.0 → 1.1.0 migration."""
 
     def _make_v1_0_data(
