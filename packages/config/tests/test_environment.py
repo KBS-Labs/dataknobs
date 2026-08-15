@@ -154,14 +154,27 @@ class TestEnvironmentOverrides:
 
         assert "nonexistent" not in config.get_types()
 
-    def test_nested_attribute_override(self, env_vars):
-        """Test overriding nested attributes."""
+    def test_nested_style_name_is_one_flat_attribute(self, env_vars):
+        """Test that a `__` inside the attribute field is part of its name."""
         env_vars(DATAKNOBS_DATABASE__0__CONNECTION__TIMEOUT="60")
 
-        Config({"database": [{"name": "db", "connection": {"timeout": 30, "retry": 3}}]})
+        declared = {"name": "db", "connection": {"timeout": 30, "retry": 3}}
+        config = Config({"database": [dict(declared)]})
 
-        # Note: Simple implementation might not handle nested attrs
-        # This test documents expected behavior — construction must not raise
+        db = config.get("database", 0)
+        # The grammar is three fields — TYPE__NAME_OR_INDEX__ATTRIBUTE — and
+        # `_env_var_to_reference` rejoins everything past the second separator
+        # (environment.py:79), so this names one attribute called
+        # `connection__timeout`. There is no descent to fail: `connection` is
+        # not addressed at all, and is untouched.
+        assert db["connection"] == declared["connection"]
+        # Created, not rejected: `_apply_environment_overrides` assigns
+        # `config[attr] = value` without checking the attribute exists. That is
+        # where an unknown *attribute* differs from an unknown *type* — see
+        # test_override_nonexistent_config, where `get` raises and the override
+        # is logged and skipped instead.
+        assert "connection__timeout" not in declared
+        assert db["connection__timeout"] == 60
 
 
 class TestEnvironmentIntegration:
