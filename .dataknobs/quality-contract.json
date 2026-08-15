@@ -133,7 +133,7 @@
         {
           "path": "packages/*/examples",
           "tier": "deferred",
-          "ceiling": 195,
+          "ceiling": 194,
           "reason": "the code consumers copy, which is why clearing it needs a policy call first — may an example carry an unused import for illustration? — the rest being tidy-up a fixer clears"
         },
         {

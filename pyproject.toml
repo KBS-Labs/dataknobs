@@ -411,11 +411,6 @@ ignore = [
               # here are the unsafe kind. On anything that is not a dict, `in` asks
               # __contains__ and `.keys()` asks whatever that method returns, which
               # are not required to agree.
-    "RUF006", # [behavioural] Store a reference to the return value of asyncio.create_task
-              # The reason this entry used to carry — "only needed if canceling task"
-              # — was factually wrong, and is why its findings were never read. The
-              # loop keeps only a *weak* reference to a bare create_task, so the task
-              # may be collected mid-flight and silently never run to completion.
     "SIM105", # [presentational] Use contextlib.suppress
               # 38 findings carry an unsafe fix. Driven on a real site to see what
               # the fix does rather than inferred: it rewrites try/except/pass into
