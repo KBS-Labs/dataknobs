@@ -1,7 +1,5 @@
 """Tests for markdown heading enrichment utilities."""
 
-import pytest
-
 from dataknobs_xization.markdown.enrichment import (
     build_enriched_text,
     format_heading_display,

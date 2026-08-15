@@ -4,7 +4,6 @@ from io import StringIO
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 
-import pytest
 
 from dataknobs_xization.markdown.md_chunker import ChunkFormat, HeadingInclusion
 from dataknobs_xization.markdown.md_streaming import (

@@ -1,6 +1,5 @@
 """Tests for JSON chunker module."""
 
-import json
 import tempfile
 from pathlib import Path
 

@@ -1,7 +1,7 @@
 """Tests for per-request LLM config overrides functionality."""
 
 import pytest
-from dataknobs_llm.llm.base import LLMConfig, LLMMessage
+from dataknobs_llm.llm.base import LLMConfig
 from dataknobs_llm.llm.providers.echo import EchoProvider
 
 

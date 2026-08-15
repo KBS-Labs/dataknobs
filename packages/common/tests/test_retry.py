@@ -1,10 +1,8 @@
 """Tests for dataknobs_common.retry module."""
 
-import asyncio
 import dataclasses
 import inspect
 import random
-from unittest.mock import AsyncMock
 
 import pytest
 

@@ -4,7 +4,6 @@ import pytest
 from dataknobs_llm.prompts import (
     ResourceAdapter,
     AsyncResourceAdapter,
-    ResourceAdapterBase,
     BaseSearchLogic,
     InMemoryAdapter,
     InMemoryAsyncAdapter,

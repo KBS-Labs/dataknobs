@@ -16,7 +16,6 @@ import pytest
 from dataknobs_llm.prompts import (
     TemplateRenderer,
     ConfigPromptLibrary,
-    CompositePromptLibrary,
     PromptBuilder,
 )
 from dataknobs_llm.prompts.base.types import TemplateMode

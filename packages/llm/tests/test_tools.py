@@ -1,10 +1,8 @@
 """Tests for the tool system (Tool and ToolRegistry)."""
 
-import time
-
 import pytest
 
-from dataknobs_llm.tools import Tool, ToolExecutionRecord, ToolRegistry
+from dataknobs_llm.tools import Tool, ToolRegistry
 
 
 class CalculatorTool(Tool):

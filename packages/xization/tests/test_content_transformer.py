@@ -1,8 +1,5 @@
 """Tests for the ContentTransformer class."""
 
-import tempfile
-from pathlib import Path
-
 import pytest
 
 from dataknobs_xization import (

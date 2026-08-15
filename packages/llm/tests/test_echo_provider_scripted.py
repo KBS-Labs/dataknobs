@@ -3,7 +3,7 @@
 import pytest
 
 from dataknobs_llm.exceptions import ResponseQueueExhaustedError
-from dataknobs_llm.llm import LLMConfig, LLMResponse
+from dataknobs_llm.llm import LLMResponse
 from dataknobs_llm.llm.providers.echo import EchoProvider
 
 

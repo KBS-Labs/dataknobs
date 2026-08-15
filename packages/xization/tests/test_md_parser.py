@@ -1,7 +1,5 @@
 """Tests for markdown parser module."""
 
-import pytest
-
 from dataknobs_xization.markdown.md_parser import MarkdownNode, MarkdownParser, parse_markdown
 
 

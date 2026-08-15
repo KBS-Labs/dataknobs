@@ -18,7 +18,6 @@ import pytest
 from dataknobs_common.exceptions import ResourceError
 
 from dataknobs_llm import EchoProvider, LLMMessage
-from dataknobs_llm.llm.base import AsyncLLMProvider
 from dataknobs_llm.testing import text_response
 
 

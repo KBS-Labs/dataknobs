@@ -14,7 +14,7 @@ This module tests:
 import pytest
 from dataknobs_llm.prompts.rendering.template_renderer import TemplateRenderer
 from dataknobs_llm.prompts.implementations.config_library import ConfigPromptLibrary
-from dataknobs_llm.prompts.base.types import TemplateMode, ValidationLevel
+from dataknobs_llm.prompts.base.types import TemplateMode
 
 
 class TestJinja2Filters:

@@ -1,7 +1,5 @@
 """Tests for markdown chunker module."""
 
-import pytest
-
 from dataknobs_xization.markdown.md_chunker import (
     Chunk,
     ChunkFormat,

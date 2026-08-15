@@ -4,8 +4,6 @@ Verifies that the tools parameter is consistently handled across all
 LLM providers as part of the interface disconnect fix.
 """
 
-from typing import Any
-
 import pytest
 
 from dataknobs_llm.llm import LLMConfig, LLMMessage

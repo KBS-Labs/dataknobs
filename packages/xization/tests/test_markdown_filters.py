@@ -1,7 +1,5 @@
 """Tests for markdown chunk quality filtering."""
 
-import pytest
-
 from dataknobs_xization.markdown.filters import (
     ChunkQualityConfig,
     ChunkQualityFilter,

@@ -4,7 +4,6 @@ These tests verify the LLM workflow patterns that integrate with FSM.
 Migrated from dataknobs-fsm package.
 """
 
-import pytest
 from dataknobs_llm.fsm_integration import (
     WorkflowType,
     LLMStep,

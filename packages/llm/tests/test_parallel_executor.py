@@ -12,7 +12,6 @@ from dataknobs_llm import (
     LLMTask,
     DeterministicTask,
     ParallelLLMExecutor,
-    TaskResult,
 )
 from dataknobs_llm.testing import ErrorResponse, text_response
 

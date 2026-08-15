@@ -1,7 +1,6 @@
 """Tests for prompt versioning functionality."""
 
 import pytest
-from datetime import datetime
 
 from dataknobs_llm.prompts.versioning import (
     VersionManager,

@@ -4,8 +4,6 @@ Tests the substitute_template_vars function for recursively substituting
 {{var}} placeholders in nested configuration structures.
 """
 
-import pytest
-
 from dataknobs_config.template_vars import substitute_template_vars
 
 

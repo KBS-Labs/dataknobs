@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import logging
 
-import pytest
 
 from dataknobs_xization.markdown.md_chunker import MarkdownChunker
 
