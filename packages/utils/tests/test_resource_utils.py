@@ -6,7 +6,7 @@ from dataknobs_utils import resource_utils
 
 
 def test_get_nltk_wordnet():
-    resources = dict()
+    resources = {}
 
     def downloader(resource, download_dir=None):
         resources[resource] = download_dir

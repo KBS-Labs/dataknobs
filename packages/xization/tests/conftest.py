@@ -49,7 +49,7 @@ def resource_as_list(
     :param ignore_comments: If non-null, skip lines beginning with this value
     :param ignore_empties: True to skip empty lines
     """
-    result = list()
+    result = []
     path = resource(package, filename)
     with open(path, encoding="utf-8") as infile:
         for line in infile:

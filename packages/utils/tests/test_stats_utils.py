@@ -170,7 +170,7 @@ def test_simple1():
 
 def test_monitor_basics_with_processing():
     monitor = dk_stats.Monitor("testBasics", default_window_width=100, default_segment_width=50)
-    for i in range(5):
+    for _ in range(5):
         starttime = datetime.now()
         dk_stats.wait_for_random_millis(55)
         endtime = datetime.now()
@@ -195,7 +195,7 @@ def test_monitor_basics_with_processing():
 
 def test_monitor_basics_with_access_only():
     monitor = dk_stats.Monitor("test_access")
-    for i in range(5):
+    for _ in range(5):
         starttime = datetime.now()
         dk_stats.wait_for_random_millis(55)
         monitor.mark(starttime)

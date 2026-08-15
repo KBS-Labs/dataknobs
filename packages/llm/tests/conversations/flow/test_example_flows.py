@@ -112,7 +112,7 @@ def test_support_flow_reachability():
     flow = create_support_flow()
 
     # Get reachable states
-    reachable = set([flow.initial_state])
+    reachable = {flow.initial_state}
     to_visit = [flow.initial_state]
 
     while to_visit:

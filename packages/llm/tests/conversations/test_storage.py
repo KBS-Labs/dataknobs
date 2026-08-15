@@ -777,7 +777,7 @@ class TestDataknobsConversationStorage:
         storage = DataknobsConversationStorage(backend)
 
         # Create conversations with different users
-        for idx, user in enumerate(["alice", "bob", "alice"]):
+        for user in ["alice", "bob", "alice"]:
             root_node = ConversationNode(
                 message=LLMMessage(role="system", content="System"), node_id=""
             )

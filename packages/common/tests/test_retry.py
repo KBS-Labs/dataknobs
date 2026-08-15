@@ -886,7 +886,7 @@ class TestExecuteSync:
     def test_sleeps_between_attempts(self, monkeypatch):
         """A positive initial_delay sleeps once per retry, via time.sleep."""
         sleeps: list[float] = []
-        monkeypatch.setattr("dataknobs_common.retry.time.sleep", lambda d: sleeps.append(d))
+        monkeypatch.setattr("dataknobs_common.retry.time.sleep", sleeps.append)
         config = RetryConfig(
             max_attempts=3,
             initial_delay=0.5,

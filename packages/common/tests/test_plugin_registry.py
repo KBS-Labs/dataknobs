@@ -90,7 +90,10 @@ class TestPluginRegistration:
     def test_register_lambda(self):
         """Test registering a lambda factory."""
         registry = PluginRegistry[BaseHandler]("handlers")
-        registry.register("lambda", lambda name, config: BaseHandler(name, config))
+        # The lambda is the subject here, not an accidental wrapper: unwrapping
+        # it to a bare BaseHandler makes this test_register_factory_function
+        # above, and deletes the only coverage of a lambda factory.
+        registry.register("lambda", lambda name, config: BaseHandler(name, config))  # noqa: PLW0108
 
         assert registry.is_registered("lambda")
 

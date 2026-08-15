@@ -158,7 +158,7 @@ class TestMetricsCollector:
     async def test_get_events_with_limit(self, collector):
         """Test limiting number of events returned."""
         # Record 10 events
-        for i in range(10):
+        for _ in range(10):
             await collector.record_event(version_id="v1", success=True)
 
         events = await collector.get_events("v1", limit=5)

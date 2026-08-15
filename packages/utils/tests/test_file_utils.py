@@ -23,7 +23,7 @@ def test_basics():
     dk_futils.write_lines("file4.txt", ["j", "k", "l"], rootdir=dir1)
 
     # Test filepath_generator and fileline_generator, files_only
-    filenames = list()
+    filenames = []
     for fpath in dk_futils.filepath_generator(root_dir.name):
         fnum_match = re.match(r"^.*file(\d).*$", fpath)
         fnum = int(fnum_match.group(1))
