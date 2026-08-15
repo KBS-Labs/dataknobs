@@ -1,17 +1,20 @@
 # Linting Configuration Guidelines
 
 ## Overview
-This document explains the rationale behind the linting and type checking configuration for the Dataknobs project. It serves as a reference for understanding which error types are considered important versus cosmetic, and why certain rules are ignored.
 
-The actual configuration is in `pyproject.toml`. For specific errors that need to be fixed in each package, see the package-specific checklists (e.g., `packages/data/docs/linting-errors-checklist.md`).
+This page explains **how** the linting and type-checking configuration is
+organized and how to interrogate it. It deliberately does not restate **what**
+the configuration says: `pyproject.toml` is the authority on which rules are
+enforced and why, and `bin/quality-contract.py explain` is how you ask.
 
-## Recent Cleanup (August 2025)
-A comprehensive linting cleanup was performed, reducing Ruff errors in the data package from ~40 to 10. Key achievements:
-- Fixed all functional issues (undefined names, import shadowing, unused variables)
-- Modernized NumPy random generation (NPY002)
-- Fixed loop variable overwrites that revealed a bug in vector search
-- Moved type-checking imports appropriately (TC001/003/004)
-- Established clear guidelines for stylistic vs functional errors
+That split is the lesson of this page's own history, recorded below rather than
+quietly corrected. For what a given package owes today, ask
+`bin/quality-contract.py check` — the ceilings in
+`.dataknobs/quality-contract.json` are the live work list, and the one
+per-package checklist that used to be linked here is now filed under
+`packages/data/docs/history/` as the record of a finished cleanup.
+
+Policy for changing any of it: `.claude/rules/lint-policy-authority.md`.
 
 ## Error Categories and Decisions
 
@@ -59,11 +62,14 @@ bin/quality-contract.py explain --audit --measure
 
 ## Remaining Important Errors
 
-After configuration, focus on these error types that indicate real issues:
+Enforced rules whose findings are worth reading first when a package has a
+backlog. Every code below was checked against the configuration with
+`explain`; ask it again rather than trusting this list, which is the same kind
+of hand-maintained copy the section above describes going wrong.
 
 ### Critical Bugs (Must Fix)
 - **F811**: Redefinition of unused variable - Can mask real bugs
-- **F821**: Undefined name - Will cause runtime errors  
+- **F821**: Undefined name - Will cause runtime errors
 - **PLE0704**: Bare raise not in exception handler - Invalid Python
 - **B904**: Raise without `from` in except - Loses exception context
 
@@ -74,7 +80,18 @@ After configuration, focus on these error types that indicate real issues:
 - **PLW0127**: Self-assignment - Use # noqa: PLW0127 when intentional for documentation
 
 ### Security
-- **S3**: Various security issues - Always important to address
+
+**ruff does not check security in this repository.** A "Security" heading here
+used to say `S3` — "various security issues" — was always important to address.
+`flake8-bandit` (`S`) is in no `select` family, so not one `S` rule can fire,
+and the entry named a prefix rather than a rule in any case. It is the same
+defect as the `UP038` claim above, in the section that pass did not reach: a
+hand-written statement about the configuration that nothing compared against
+the configuration.
+
+Security is enforced by review against `.claude/rules/security.md`, and by
+`bin/lint-shell.sh` for the shell scripts. Selecting `S` is a config change
+with its own argument, not something this page can assert.
 
 ## MyPy Type Checking Configuration
 
