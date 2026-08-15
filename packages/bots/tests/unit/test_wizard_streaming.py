@@ -511,7 +511,7 @@ class TestCompletionSummary:
             extraction_results=[[{"name": "Fiona"}]],
             tools=[CompleteWizardTool()],
         ) as harness:
-            result = await harness.stream_chat("My name is Fiona")
+            await harness.stream_chat("My name is Fiona")
 
             # Completion summary should be in wizard data
             assert harness.wizard_data.get("_completion_summary") == "All data collected"

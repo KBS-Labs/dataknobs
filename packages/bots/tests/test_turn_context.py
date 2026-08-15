@@ -93,8 +93,6 @@ class TestPerTurnKeysConfig:
 
     def test_per_turn_keys_merged_into_ephemeral(self) -> None:
         """per_turn_keys are included in _ephemeral_keys."""
-        reasoning = WizardReasoning.__new__(WizardReasoning)
-
         # Simulate __init__ logic for ephemeral keys
         per_turn_keys = frozenset(["action", "intent_raw"])
         config_ephemeral: list[str] = []

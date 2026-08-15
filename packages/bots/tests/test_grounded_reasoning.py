@@ -2574,7 +2574,7 @@ class TestIntentGrounding:
             )
             strategy.set_extractor(extractor)
 
-            result = await harness.chat("Tell me about auth patterns")
+            await harness.chat("Tell me about auth patterns")
             # Queries should still reach the KB despite not being
             # literally in the user message — they're required fields
             assert len(kb.queries) >= 1
@@ -3277,7 +3277,7 @@ class TestPublicCompositionAPI:
 
         pre_intent = RetrievalIntent(text_queries=["pre-resolved query"])
 
-        context, provenance = await strategy.retrieve_context(
+        _, provenance = await strategy.retrieve_context(
             manager,
             None,
             intent=pre_intent,

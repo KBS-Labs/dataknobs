@@ -135,7 +135,7 @@ class TestCreateBankDb:
     def test_sqlite_backend_table_defaults_to_bank_name(self, tmp_path: Path) -> None:
         wizard = _make_wizard()
         db_path = str(tmp_path / "test.db")
-        db, mode = wizard._create_bank_db(
+        db, _ = wizard._create_bank_db(
             "ingredients",
             {
                 "backend": "sqlite",
@@ -148,7 +148,7 @@ class TestCreateBankDb:
     def test_sqlite_backend_respects_table_config(self, tmp_path: Path) -> None:
         wizard = _make_wizard()
         db_path = str(tmp_path / "test.db")
-        db, mode = wizard._create_bank_db(
+        db, _ = wizard._create_bank_db(
             "ingredients",
             {
                 "backend": "sqlite",

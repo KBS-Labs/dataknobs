@@ -284,7 +284,6 @@ class TestAsyncMemoryBankSerialization:
         await bank.add({"name": "sugar"}, source_stage="collect")
 
         original_records = await bank.all()
-        original_timestamps = [(r.created_at, r.updated_at) for r in original_records]
 
         d = await bank.to_dict()
         restored = await AsyncMemoryBank.from_dict(d)

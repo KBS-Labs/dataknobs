@@ -35,7 +35,7 @@ class TestSimpleReasoningGreeting:
         conversation_manager_pair: tuple[ConversationManager, EchoProvider],
     ) -> None:
         """greeting_template renders and returns LLMResponse."""
-        manager, provider = conversation_manager_pair
+        manager, _ = conversation_manager_pair
         strategy = SimpleReasoning(greeting_template="Welcome to the bot!")
 
         response = await strategy.greet(manager, llm=None)
@@ -51,7 +51,7 @@ class TestSimpleReasoningGreeting:
         conversation_manager_pair: tuple[ConversationManager, EchoProvider],
     ) -> None:
         """initial_context variables are available in the template."""
-        manager, provider = conversation_manager_pair
+        manager, _ = conversation_manager_pair
         strategy = SimpleReasoning(greeting_template="Hello {{ user_name }}! Welcome to {{ app }}.")
 
         response = await strategy.greet(
@@ -69,7 +69,7 @@ class TestSimpleReasoningGreeting:
         conversation_manager_pair: tuple[ConversationManager, EchoProvider],
     ) -> None:
         """No greeting_template means greet() returns None."""
-        manager, provider = conversation_manager_pair
+        manager, _ = conversation_manager_pair
         strategy = SimpleReasoning()
 
         response = await strategy.greet(manager, llm=None)
@@ -82,7 +82,7 @@ class TestSimpleReasoningGreeting:
         conversation_manager_pair: tuple[ConversationManager, EchoProvider],
     ) -> None:
         """Template renders with empty context (undefined vars left empty)."""
-        manager, provider = conversation_manager_pair
+        manager, _ = conversation_manager_pair
         strategy = SimpleReasoning(greeting_template="Hello {{ name }}!")
 
         response = await strategy.greet(manager, llm=None, initial_context={})
@@ -101,7 +101,7 @@ class TestReActReasoningGreeting:
         conversation_manager_pair: tuple[ConversationManager, EchoProvider],
     ) -> None:
         """ReActReasoning also supports greeting_template."""
-        manager, provider = conversation_manager_pair
+        manager, _ = conversation_manager_pair
         strategy = ReActReasoning(greeting_template="Hello {{ user }}! I can help with tools.")
 
         response = await strategy.greet(

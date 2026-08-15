@@ -170,7 +170,7 @@ class TestConversationContextAssumptions:
     def test_get_unconfirmed_assumptions(self) -> None:
         """Test getting unconfirmed assumptions."""
         context = ConversationContext()
-        assumption1 = context.add_assumption(content="Unconfirmed 1")
+        context.add_assumption(content="Unconfirmed 1")
         assumption2 = context.add_assumption(content="Confirmed")
         context.add_assumption(content="Unconfirmed 2")
 
