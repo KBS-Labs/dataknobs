@@ -9,6 +9,7 @@ Postgres infrastructure fixtures (``postgres_connection_params``,
 
 import os
 import time
+import warnings
 from typing import Any, Generator
 
 import pytest
@@ -178,9 +179,16 @@ def ollama_model(ollama_connection_params: dict[str, Any]) -> str:
         # qwen3-coder) is cut off at the timeout instead of stalling the run.
         if is_ollama_model_usable(model, host=host, port=port, num_predict=16, timeout=12.0):
             if tried:
-                print(
-                    f"\nOllama: preferred model unusable; recovered with "
-                    f"'{model}' (tried: {', '.join(tried)})."
+                # A warning rather than a print, and not only because the print
+                # check reaches this directory now: stdout written during
+                # fixture setup is captured and replayed only for a test that
+                # FAILS, so the message announcing a recovery — the case where
+                # everything then passes — was the one nobody saw. The warnings
+                # summary is printed at the end of every run.
+                warnings.warn(
+                    f"Ollama: preferred model unusable; recovered with "
+                    f"'{model}' (tried: {', '.join(tried)}).",
+                    stacklevel=2,
                 )
             return model
         tried.append(model)
