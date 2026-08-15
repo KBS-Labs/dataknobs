@@ -25,9 +25,13 @@ from typing import Any
 import pytest
 import pytest_asyncio
 
-from dataknobs_common import build_postgres_dsn
 from dataknobs_common.exceptions import ConfigurationError
-from dataknobs_common.testing import requires_postgres, safe_sql_ident
+from dataknobs_common.testing import (
+    postgres_dsn,
+    postgres_env_params,
+    requires_postgres,
+    safe_sql_ident,
+)
 
 try:
     import asyncpg
@@ -49,13 +53,7 @@ _pgvector_marks = [
 
 
 def _get_test_connection_string() -> str:
-    return build_postgres_dsn(
-        host=os.environ.get("POSTGRES_HOST", "localhost"),
-        port=os.environ.get("POSTGRES_PORT", "5432"),
-        user=os.environ.get("POSTGRES_USER", "postgres"),
-        password=os.environ.get("POSTGRES_PASSWORD", "postgres"),
-        database=os.environ.get("POSTGRES_DB", "test_dataknobs"),
-    )
+    return postgres_dsn(postgres_env_params())
 
 
 @pytest.fixture(scope="session")

@@ -4,7 +4,8 @@ Covers:
 
 * ``wait_for_postgres`` retry + timeout paths (psycopg2 stubbed to control
   failure / success ordering, ``time.sleep`` neutralized).
-* ``postgres_connection_params`` Docker-detection branch (env-var driven).
+* ``postgres_env_params`` Docker-detection branch (env-var driven), and
+  that the ``postgres_connection_params`` fixture delegates to it.
 * Factory-fixture cleanup runs even when the test body raises
   (gated by ``@requires_postgres`` — needs a real cluster).
 """
@@ -18,6 +19,7 @@ import pytest
 
 from dataknobs_common.testing import (
     postgres_dsn,
+    postgres_env_params,
     postgres_fixtures,
     requires_postgres,
     safe_sql_ident,
@@ -84,13 +86,13 @@ def test_wait_for_postgres_raises_after_max_retries(monkeypatch):
     assert fake.connect_calls == 3
 
 
-# -- postgres_connection_params Docker detection ---------------------------
-
-
-def _call_params_fixture(env_overrides: dict[str, str | None]) -> dict[str, object]:
-    """Invoke the underlying fixture function with a controlled environment."""
-    fixture_fn = postgres_fixtures.postgres_connection_params.__wrapped__  # type: ignore[attr-defined]
-    return fixture_fn()
+# -- postgres_env_params Docker detection ----------------------------------
+#
+# These call the resolver directly. They used to reach it through
+# ``postgres_connection_params.__wrapped__``, unwrapping the fixture to
+# get at the logic inside it — which was the same inaccessibility that
+# led four call sites to reimplement the resolution rather than import
+# it. The function is public now, so the unwrapping is gone.
 
 
 def _clear_postgres_env(monkeypatch) -> None:
@@ -116,7 +118,7 @@ def test_postgres_connection_params_localhost_default(monkeypatch):
         lambda p: False if p == "/.dockerenv" else real_exists(p),
     )
 
-    params = _call_params_fixture({})
+    params = postgres_env_params()
     assert params["host"] == "localhost"
     assert params["port"] == 5432
     assert params["database"] == "dataknobs_test"
@@ -131,7 +133,7 @@ def test_postgres_connection_params_docker_default(monkeypatch):
         lambda _p: False,
     )
 
-    params = _call_params_fixture({})
+    params = postgres_env_params()
     assert params["host"] == "postgres"
 
 
@@ -145,7 +147,7 @@ def test_postgres_connection_params_explicit_env_overrides(monkeypatch):
     monkeypatch.setenv("POSTGRES_PASSWORD", "secret")
     monkeypatch.setenv("POSTGRES_DB", "mydb")
 
-    params = _call_params_fixture({})
+    params = postgres_env_params()
     assert params == {
         "host": "custom-host",
         "port": 6543,
@@ -153,6 +155,39 @@ def test_postgres_connection_params_explicit_env_overrides(monkeypatch):
         "password": "secret",
         "database": "mydb",
     }
+
+
+def test_params_fixture_delegates_to_the_resolver(monkeypatch):
+    """The fixture must not carry a second copy of the resolution rules.
+
+    It is the fixture form of ``postgres_env_params``, and the two
+    resolving differently is the failure this whole helper exists to
+    prevent — a test taking the fixture and a module-level constant
+    calling the function would then reach different servers.
+    """
+    _clear_postgres_env(monkeypatch)
+    monkeypatch.setenv("POSTGRES_HOST", "custom-host")
+    monkeypatch.setenv("POSTGRES_DB", "mydb")
+
+    fixture_fn = postgres_fixtures.postgres_connection_params.__wrapped__  # type: ignore[attr-defined]
+
+    assert fixture_fn() == postgres_env_params()
+
+
+def test_resolver_output_feeds_the_dsn_builder(monkeypatch):
+    """The two published helpers compose without adaptation.
+
+    This is the idiom every non-fixture call site now uses, and the
+    reason none of them needs its own defaults.
+    """
+    _clear_postgres_env(monkeypatch)
+    monkeypatch.setenv("POSTGRES_HOST", "db.internal")
+    monkeypatch.setenv("POSTGRES_PORT", "6543")
+    monkeypatch.setenv("POSTGRES_USER", "alice")
+    monkeypatch.setenv("POSTGRES_PASSWORD", "secret")
+    monkeypatch.setenv("POSTGRES_DB", "mydb")
+
+    assert postgres_dsn(postgres_env_params()) == "postgresql://alice:secret@db.internal:6543/mydb"
 
 
 # -- postgres_dsn ----------------------------------------------------------

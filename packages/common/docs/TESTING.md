@@ -835,10 +835,30 @@ controls its table/index naming.
 
 The non-fixture helpers `wait_for_postgres()` and `wait_for_elasticsearch()`
 are also importable from `dataknobs_common.testing`, along with
-`postgres_dsn()` (see below),
+`postgres_env_params()` and `postgres_dsn()` (see below),
 `sweep_stale_test_indices()` (see [Session-Start Index Sweep](#session-start-index-sweep))
 and the availability probes / skip markers `is_postgres_available()` /
 `requires_postgres`, `is_elasticsearch_available()` / `requires_elasticsearch`.
+
+#### Outside a fixture: `postgres_env_params`
+
+`postgres_connection_params` is the fixture form of
+`postgres_env_params()`, which holds the resolution rules — including
+the Docker-container host detection and the defaults in the table
+below. Code that cannot take a fixture (a module-level constant, a
+plain helper function) calls the function:
+
+```python
+from dataknobs_common.testing import postgres_dsn, postgres_env_params
+
+PG_DSN = postgres_dsn(postgres_env_params())
+```
+
+Call it rather than re-reading `POSTGRES_*` with your own defaults.
+Those defaults are operational facts — which database the runners
+create, which host the compose service uses — and a second copy of them
+in a test file drifts from the first without anything failing until
+someone runs in the environment where they disagree.
 
 #### Building a connection string: `postgres_dsn`
 

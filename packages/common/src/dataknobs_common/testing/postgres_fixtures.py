@@ -16,7 +16,9 @@ The factory pattern keeps the table prefix consumer-controlled without
 forcing each consumer to re-declare ``@pytest.fixture(params=[...])`` indirect
 parameterization.
 
-Environment variables (read at fixture-creation time):
+Environment variables, resolved by :func:`postgres_env_params` (which
+the ``postgres_connection_params`` fixture wraps, and which non-fixture
+callers should use directly rather than re-reading these by hand):
 
 - ``POSTGRES_HOST`` (default: ``postgres`` in Docker, ``localhost`` otherwise)
 - ``POSTGRES_PORT`` (default: ``5432``)
@@ -39,6 +41,48 @@ from dataknobs_common.postgres_config import build_postgres_dsn
 from dataknobs_common.testing._core import safe_sql_ident
 
 logger = logging.getLogger(__name__)
+
+
+def postgres_env_params() -> dict[str, Any]:
+    """Resolve Postgres connection parameters from the environment.
+
+    The single definition of what "the test Postgres" means: which
+    host, port, user, password and database an integration test reaches
+    when the environment does not say otherwise. The
+    :func:`postgres_connection_params` fixture is a thin wrapper over
+    this, so a caller that cannot take a fixture — a module-level
+    constant, a plain helper function — resolves identically instead of
+    restating the defaults.
+
+    Restating them is not hypothetical. Four sites that read these env
+    vars by hand had drifted on three of the five fields: they defaulted
+    ``POSTGRES_DB`` to a name no runner creates, left ``port`` a string,
+    and omitted the container check below entirely — so under Docker
+    they resolved to ``localhost`` while every fixture-based test
+    resolved to the compose service.
+
+    Detects whether the test process is running inside a Docker
+    container (presence of ``/.dockerenv`` or the ``DOCKER_CONTAINER``
+    env var) and defaults the host to ``postgres`` (the typical compose
+    service name) in that case, ``localhost`` otherwise.
+
+    Returns:
+        A fresh dict with ``host``, ``port`` (``int``), ``user``,
+        ``password`` and ``database``. Suitable for
+        :func:`postgres_dsn`, or for splatting into a connect call.
+    """
+    if os.path.exists("/.dockerenv") or os.environ.get("DOCKER_CONTAINER"):
+        default_host = "postgres"
+    else:
+        default_host = "localhost"
+
+    return {
+        "host": os.environ.get("POSTGRES_HOST", default_host),
+        "port": int(os.environ.get("POSTGRES_PORT", "5432")),
+        "user": os.environ.get("POSTGRES_USER", "postgres"),
+        "password": os.environ.get("POSTGRES_PASSWORD", "postgres"),
+        "database": os.environ.get("POSTGRES_DB", "dataknobs_test"),
+    }
 
 
 def postgres_dsn(params: Mapping[str, Any]) -> str:
@@ -131,23 +175,10 @@ try:
     def postgres_connection_params() -> dict[str, Any]:
         """PostgreSQL connection parameters for integration tests.
 
-        Detects whether the test process is running inside a Docker container
-        (presence of ``/.dockerenv`` or ``DOCKER_CONTAINER`` env var) and
-        defaults the host to ``postgres`` (the typical compose service name)
-        in that case, ``localhost`` otherwise.
+        The fixture form of :func:`postgres_env_params`, which holds the
+        resolution rules and their defaults.
         """
-        if os.path.exists("/.dockerenv") or os.environ.get("DOCKER_CONTAINER"):
-            default_host = "postgres"
-        else:
-            default_host = "localhost"
-
-        return {
-            "host": os.environ.get("POSTGRES_HOST", default_host),
-            "port": int(os.environ.get("POSTGRES_PORT", "5432")),
-            "user": os.environ.get("POSTGRES_USER", "postgres"),
-            "password": os.environ.get("POSTGRES_PASSWORD", "postgres"),
-            "database": os.environ.get("POSTGRES_DB", "dataknobs_test"),
-        }
+        return postgres_env_params()
 
     @pytest.fixture(scope="session")
     def ensure_postgres_ready(

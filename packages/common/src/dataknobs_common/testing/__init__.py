@@ -118,6 +118,7 @@ from dataknobs_common.testing.postgres_fixtures import (
     make_postgres_test_db,
     postgres_connection_params,
     postgres_dsn,
+    postgres_env_params,
     wait_for_postgres,
 )
 from dataknobs_common.testing.threads import (
@@ -178,6 +179,7 @@ __all__ = [
     "no_blocking",
     "postgres_connection_params",
     "postgres_dsn",
+    "postgres_env_params",
     "requires_bedrock",
     "requires_blockbuster",
     "requires_chromadb",
