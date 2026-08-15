@@ -476,7 +476,7 @@ class TestMemoryVectorStoreTimestamps:
         # include_timestamps=True surfaces keys-present-with-None values
         # (analogous to pgvector pre-migration NULL rows).
         results = await store.get_vectors(["legacy-id"], include_timestamps=True)
-        _vector, meta = results[0]
+        _, meta = results[0]
         assert meta is not None
         assert meta["k"] == "v"
         assert "_created_at" in meta
