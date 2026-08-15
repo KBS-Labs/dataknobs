@@ -2,6 +2,7 @@
 
 import os
 import time
+import warnings
 
 import pytest
 import requests
@@ -127,7 +128,13 @@ def verify_ollama_model(model: str, host: str = "localhost", port: int = 11434) 
                 model_name.startswith(model.split(":", maxsplit=1)[0]) for model_name in model_names
             )
     except Exception as e:
-        print(f"Error verifying Ollama model: {e}")
+        # A warning rather than a print. The probe returns False either way, so
+        # what is at stake is only whether the reason survives: stdout written
+        # during fixture setup is captured and replayed for a test that FAILS,
+        # and the interesting case here is the other one — the probe reports the
+        # model missing, the suite adapts, and everything passes with nobody
+        # told why. The warnings summary is printed at the end of every run.
+        warnings.warn(f"Error verifying Ollama model: {e}", stacklevel=2)
         return False
 
 
@@ -162,9 +169,11 @@ def ensure_ollama_ready(ollama_connection_params):
             break
 
     if not model_available:
-        print("\nWARNING: gemma3:1b model not found in Ollama")
-        print("Run: ollama pull gemma3:1b")
-        print("Tests will attempt to run but may fail if model is not available")
+        warnings.warn(
+            "gemma3:1b model not found in Ollama. Run: ollama pull gemma3:1b — "
+            "tests will attempt to run but may fail if the model is unavailable.",
+            stacklevel=2,
+        )
 
 
 @pytest.fixture
