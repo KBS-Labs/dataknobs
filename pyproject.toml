@@ -541,14 +541,6 @@ ignore = [
               # is what the 43 unsafe findings here are. Reordering the names
               # themselves changes nothing: __all__ decides which names `import *`
               # binds, not the order anything is defined or evaluated in.
-    "N802", # [behavioural] Function name should be lowercase
-            # Two findings, and both are a rename of exported public API:
-            # ComplexQuery.AND and ComplexQuery.OR, where ComplexQuery is in
-            # dataknobs_data's __all__. That is the criterion UP040/UP042/UP046/
-            # UP047 are already declined under here -- "each would change a public
-            # API, not just syntax" -- so the two entries disagreed about the same
-            # test. A name is only presentational until something calls it.
-
     # Modernizations deliberately declined — each would change a public API,
     # not just syntax. Revisit individually, not as a sweep.
     "ASYNC109",  # [behavioural] `timeout` parameter on an async def. For a Protocol defining
