@@ -24,6 +24,19 @@ from dataknobs_data.vector.sync import (
 )
 
 
+def _text_embedding(text: str) -> np.ndarray:
+    """Draw a 384-dim vector deterministically derived from ``text``.
+
+    The generator is built per call and seeded from the text, so
+    ``same text -> same vector`` still holds while nothing outside this call
+    is affected. Seeding the process-global RNG instead — as this did — made
+    every later unseeded draw in the session depend on which tests had
+    already run.
+    """
+    rng = np.random.default_rng(sum(ord(c) for c in text[:10]))
+    return rng.random(384)
+
+
 @pytest.fixture
 async def memory_database():
     """Create an in-memory database for testing."""
@@ -64,8 +77,7 @@ def simple_embedding_fn():
         if not text:
             return None
         # Use text length and char codes for deterministic output
-        np.random.seed(sum(ord(c) for c in text[:10]))
-        return np.random.rand(384)
+        return _text_embedding(text)
 
     return embedding_fn
 
@@ -79,8 +91,7 @@ def async_embedding_fn():
         await asyncio.sleep(0.001)
         if not text:
             return None
-        np.random.seed(sum(ord(c) for c in text[:10]))
-        return np.random.rand(384)
+        return _text_embedding(text)
 
     return embedding_fn
 
@@ -271,7 +282,7 @@ class TestVectorTextSynchronizer:
             fail_count += 1
             if fail_count < 2:
                 raise Exception("Temporary failure")
-            return np.random.rand(384)
+            return _text_embedding(text)
 
         sync.embedding_fn = failing_fn
         sync.config.max_retries = 3
@@ -528,8 +539,7 @@ class TestVectorTextSynchronizer:
             call_count += 1
             if call_count in [2, 4]:  # Fail on 2nd and 4th calls
                 return None
-            np.random.seed(sum(ord(c) for c in text[:10]))
-            return np.random.rand(384)
+            return _text_embedding(text)
 
         sync = VectorTextSynchronizer(
             database=memory_database,

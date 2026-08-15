@@ -25,6 +25,19 @@ from dataknobs_data.vector.migration import (
 )
 
 
+def _text_embedding(text: str) -> np.ndarray:
+    """Draw a 384-dim vector deterministically derived from ``text``.
+
+    The generator is built per call and seeded from the text, so
+    ``same text -> same vector`` still holds while nothing outside this call
+    is affected. Seeding the process-global RNG instead — as this did — made
+    every later unseeded draw in the session depend on which tests had
+    already run.
+    """
+    rng = np.random.default_rng(sum(ord(c) for c in text[:10]))
+    return rng.random(384)
+
+
 @pytest.fixture
 async def source_database():
     """Create source database with existing data."""
@@ -96,8 +109,7 @@ def simple_embedding_fn():
         if not text:
             return None
         # Create deterministic embeddings based on text
-        np.random.seed(sum(ord(c) for c in text[:10]))
-        return np.random.rand(384)
+        return _text_embedding(text)
 
     return embedding_fn
 
@@ -110,8 +122,7 @@ def async_embedding_fn():
         await asyncio.sleep(0.001)  # Simulate async work
         if not text:
             return None
-        np.random.seed(sum(ord(c) for c in text[:10]))
-        return np.random.rand(384)
+        return _text_embedding(text)
 
     return embedding_fn
 
@@ -311,8 +322,7 @@ class TestVectorMigration:
             call_count += 1
             if call_count > 3:
                 raise Exception("Embedding service failed")
-            np.random.seed(sum(ord(c) for c in text[:10]))
-            return np.random.rand(384)
+            return _text_embedding(text)
 
         source_database.schema.add_vector_field(
             "content_embedding", dimensions=384, source_field="content"
@@ -338,7 +348,7 @@ class TestVectorMigration:
         """Test migrating data between different backends."""
         # Add some vectors to source
         for record in await source_database.all():
-            embedding = np.random.rand(384)
+            embedding = _text_embedding(record.get_value("content"))
             record.set_value("content_embedding", embedding.tolist())
             record.set_value("title_embedding", embedding.tolist())
             await source_database.update(record.id, record)
@@ -563,7 +573,7 @@ class TestIncrementalVectorizer:
         # Add vector to first record
         records = await source_database.all()
         first_record = records[0]
-        existing_vector = np.random.rand(384).tolist()
+        existing_vector = np.random.default_rng(0).random(384).tolist()
         first_record.set_value("content_embedding", existing_vector)
         await source_database.update(first_record.id, first_record)
 

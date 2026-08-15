@@ -370,10 +370,10 @@ class TestPgVectorStoreSearch:
 
         try:
             # Add random vectors with different similarities to query
-            np.random.seed(42)  # For reproducibility
-            base_vector = np.random.rand(128).astype(np.float32)
-            similar_vector = base_vector + np.random.rand(128).astype(np.float32) * 0.1
-            different_vector = np.random.rand(128).astype(np.float32)
+            rng = np.random.default_rng(42)  # For reproducibility
+            base_vector = rng.random(128, dtype=np.float32)
+            similar_vector = base_vector + rng.random(128, dtype=np.float32) * 0.1
+            different_vector = rng.random(128, dtype=np.float32)
 
             vectors = np.array(
                 [
