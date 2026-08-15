@@ -201,12 +201,13 @@ class TestPostgresVectorIntegration:
 
         try:
             # Create batch of records with vectors
+            rng = np.random.default_rng(0)
             records = []
             for i in range(10):
                 record = Record({"index": i, "description": f"Item number {i}"})
                 # Generate a random vector
                 record.fields["features"] = VectorField(
-                    np.random.rand(8).astype(np.float32),
+                    rng.random(8, dtype=np.float32),
                     name="features",
                     source_field="description",
                 )
@@ -229,7 +230,7 @@ class TestPostgresVectorIntegration:
             # Update batch with new vectors
             for record in retrieved:
                 record.fields["features"] = VectorField(
-                    np.random.rand(8).astype(np.float32),
+                    rng.random(8, dtype=np.float32),
                     name="features",
                     source_field="description",
                 )
@@ -353,9 +354,11 @@ class TestAsyncPostgresVectorIntegration:
                 records.append(record)
 
             # Mock embedding function
+            rng = np.random.default_rng(0)
+
             async def mock_embed(texts: list[str]) -> np.ndarray:
                 # Return random embeddings for testing
-                return np.random.rand(len(texts), 4).astype(np.float32)
+                return rng.random((len(texts), 4), dtype=np.float32)
 
             # This should use the bulk_embed_and_store method
             ids = await db.bulk_embed_and_store(
@@ -396,10 +399,11 @@ class TestAsyncPostgresVectorIntegration:
 
         try:
             # Create some records with vectors first
+            rng = np.random.default_rng(0)
             for i in range(100):
                 record = Record({"index": i})
                 record.fields["embedding"] = VectorField(
-                    np.random.rand(16).astype(np.float32), name="embedding"
+                    rng.random(16, dtype=np.float32), name="embedding"
                 )
                 await db.create(record)
 

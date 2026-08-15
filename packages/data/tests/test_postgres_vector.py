@@ -135,11 +135,12 @@ class TestVectorFieldIntegration:
 
     async def test_batch_operations_with_vectors(self, db):
         """Test batch operations with vector fields."""
+        rng = np.random.default_rng(0)
         records = []
         for i in range(5):
             record = Record(data={"index": i})
             record.fields["vector"] = VectorField(
-                np.random.rand(3),  # Random 3D vector
+                rng.random(3),  # Random 3D vector
                 name="vector",
             )
             records.append(record)
