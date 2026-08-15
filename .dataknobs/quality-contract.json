@@ -127,13 +127,13 @@
         {
           "path": "packages/data/tests",
           "tier": "deferred",
-          "ceiling": 501,
+          "ceiling": 498,
           "reason": "outside the default lint target set; its bulk is one block — the legacy np.random global RNG — which is mechanical but has no autofix, making it the part a fixer run cannot touch"
         },
         {
           "path": "packages/*/examples",
           "tier": "deferred",
-          "ceiling": 195,
+          "ceiling": 194,
           "reason": "the code consumers copy, which is why clearing it needs a policy call first — may an example carry an unused import for illustration? — the rest being tidy-up a fixer clears"
         },
         {
@@ -198,7 +198,7 @@
         {
           "path": "packages/xization/src",
           "tier": "transitional",
-          "ceiling": 214,
+          "ceiling": 211,
           "reason": "ratchet group"
         },
         {

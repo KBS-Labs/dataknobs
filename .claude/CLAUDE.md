@@ -14,6 +14,7 @@ These apply to all work in this project. See the global `~/.claude/CLAUDE.md` fo
 6. **Security constraints are non-negotiable** - input validation, HTTP safety, path traversal prevention, sensitive data protection (see `rules/security.md`)
 7. **Dependency management** - permissive licenses only for libraries we *import*; tools we merely *execute* are a separate category with its own four conditions. Selection criteria enforced, no duplication (see `rules/dependency-management.md`)
 8. **Consumer extensibility** - bias toward extension points (registries, hooks, injectable parameters) over special-case knobs; capture deferred opportunities with rationale rather than dismissing them; we're building a production-ready toolkit consumers grab off the shelf and run to production, NOT a set of seams they must finish themselves — ship reference impls of standard production behaviors alongside their Protocols, and defer only against a named category in the deferral bar (see `rules/consumer-extensibility.md`)
+9. **The config decides what is an error** - ruff and mypy configuration is the sole authority on what is a lint or type error. Ask `bin/quality-contract.py explain <CODE> [<path>]` before reporting or "fixing" a finding; never report one from a declined rule, and never narrow `--select` while fixing (see `rules/lint-policy-authority.md`)
 
 ### This Project's Special Role
 

@@ -726,7 +726,7 @@ class SQLQueryBuilder:
         # Add ELSE to preserve original value when no CASE matches
         query = f"""
         UPDATE {self.qualified_table}
-        SET 
+        SET
             data = CASE {" ".join(data_cases)} ELSE data END,
             metadata = CASE {" ".join(metadata_cases)} ELSE metadata END,
             updated_at = CURRENT_TIMESTAMP

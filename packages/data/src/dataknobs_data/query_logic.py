@@ -332,8 +332,14 @@ class ComplexQuery:
     fields: list[str] | None = None
     vector_query: VectorQuery | None = None  # Vector similarity search
 
+    # `AND` and `OR` are spelled as the boolean operators they stand for, which is
+    # the DSL this class publishes: ComplexQuery is in dataknobs_data.__all__ and
+    # these names are called from outside the module, so lowercasing them is an API
+    # break rather than a style fix. Per-line rather than a per-file waiver, because
+    # that argument is about these two names and not about the next function added
+    # to this file.
     @classmethod
-    def AND(cls, queries: list[Query]) -> ComplexQuery:
+    def AND(cls, queries: list[Query]) -> ComplexQuery:  # noqa: N802 — published DSL name
         """Create a complex query with AND logic."""
         from .query import Query
 
@@ -347,7 +353,7 @@ class ComplexQuery:
         return cls(condition=LogicCondition(operator=LogicOperator.AND, conditions=conditions))
 
     @classmethod
-    def OR(cls, queries: list[Query]) -> ComplexQuery:
+    def OR(cls, queries: list[Query]) -> ComplexQuery:  # noqa: N802 — published DSL name
         """Create a complex query with OR logic."""
         from .query import Query
 

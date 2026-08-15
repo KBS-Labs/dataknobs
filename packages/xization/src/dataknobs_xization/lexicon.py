@@ -502,10 +502,18 @@ class MultiAuthorityData(CorrelatedAuthorityData):
         """
         raise NotImplementedError
 
-    @property
-    def authority_data(self, name: str) -> dk_auth.AuthorityData:
-        """Retrieve without building the named authority data, or None"""
-        return self._authority_data.get(name, None)
+    def peek_authority_data(self, name: str) -> dk_auth.AuthorityData | None:
+        """Retrieve the named "sub" authority data if already built, without building it.
+
+        The non-building counterpart to :meth:`get_authority_data`.
+
+        Args:
+            name: The "sub" authority name.
+
+        Returns:
+            The "sub" authority data, or None if it has not been built.
+        """
+        return self._authority_data.get(name)
 
     def get_authority_data(self, name: str) -> dk_auth.AuthorityData:
         """Get AuthorityData for the named "sub" authority, building if needed.
@@ -540,8 +548,14 @@ class MultiAuthorityData(CorrelatedAuthorityData):
             col_df = pd.DataFrame({name: data})
         return col_df
 
-    def lookup_subauth_values(self, name: str, value: int, is_id: bool = False) -> pd.DataFrame:
+    def lookup_subauth_values(
+        self, name: str, value: int, is_id: bool = False
+    ) -> pd.DataFrame | None:
         """Lookup "sub" authority data for the named "sub" authority value.
+
+        Peeks rather than builds, so None is an ordinary answer rather than an
+        edge case: until something has built the named "sub" authority, there
+        is nothing to look the value up in.
 
         Args:
             name: The sub-authority name.
@@ -549,10 +563,11 @@ class MultiAuthorityData(CorrelatedAuthorityData):
             is_id: True if value is an ID.
 
         Returns:
-            The applicable authority dataframe rows.
+            The applicable authority dataframe rows, or None if the "sub"
+            authority has not been built.
         """
         values_df = None
-        authdata = self._authority_data.get(name, None)
+        authdata = self.peek_authority_data(name)
         if authdata is not None:
             values_df = authdata.lookup_values(value, is_id=is_id)
         return values_df
@@ -581,9 +596,13 @@ class MultiAuthorityData(CorrelatedAuthorityData):
             value_id: The sub-authority value_id.
 
         Returns:
-            A boolean series where the field exists.
+            A boolean series where the field exists. All False if the "sub"
+            authority has not been built, since no record can carry a value
+            that does not exist yet.
         """
         field_values = self.lookup_subauth_values(name, value_id, is_id=True)
+        if field_values is None:
+            return pd.Series(False, index=self.df.index)
         return self.df[name].isin(field_values[name].tolist())
 
     def auth_records_mask(

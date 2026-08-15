@@ -395,10 +395,11 @@ class LLMConversationFSM:
         def wrapper(data, context=None):
             loop = asyncio.get_event_loop()
             if loop.is_running():
-                # We're already in an async context, create a task
-                task = asyncio.create_task(async_func(data))
-                # For now, we'll need to block - this is not ideal
-                # In production, the FSM should support async handlers natively
+                # Already inside a running loop, so asyncio.run() cannot be
+                # called on this thread. Hand the coroutine to a worker thread,
+                # which gets a loop of its own, and block on the result.
+                # Blocking is not ideal -- in production the FSM should support
+                # async handlers natively.
                 import concurrent.futures
 
                 with concurrent.futures.ThreadPoolExecutor() as executor:

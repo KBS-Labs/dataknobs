@@ -481,8 +481,7 @@ class ComparativeBenchmark:
             if table_data:
                 headers = ["Store", "Throughput", "Duration", "P50 Latency"]
                 col_widths = [
-                    max(len(h), max(len(row[i]) for row in table_data))
-                    for i, h in enumerate(headers)
+                    max(len(h), *(len(row[i]) for row in table_data)) for i, h in enumerate(headers)
                 ]
 
                 # Header

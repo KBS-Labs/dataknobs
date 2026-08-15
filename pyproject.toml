@@ -278,19 +278,8 @@ ignore = [
     "D101", # [presentational] Missing docstring in public class
     "D102", # [presentational] Missing docstring in public method
     "D103", # [presentational] Missing docstring in public function
-    "D104", # [presentational] Missing docstring in public package
     "D105", # [presentational] Missing docstring in magic method
     "D107", # [presentational] Missing docstring in __init__
-    "D200", # [presentational] One-line docstring should fit on one line
-            # ruff marks the fix unsafe because it "could affect tools that parse
-            # docstrings, documentation generators, or custom introspection
-            # utilities". That mechanism is real in this tree rather than absent:
-            # three bin/ scripts pass __doc__ to argparse, and one takes
-            # __doc__.splitlines()[0], which a reflow onto one line would change.
-            # The decline rests on where the findings are, not on nothing reading
-            # __doc__ -- all three sit on test-module docstrings, and those three
-            # scripts have no D200 finding. A finding on one of them is a different
-            # question and should be read rather than inherited from this line.
     "D203", # [covered-elsewhere] 1 blank line before class docstring -- D211 enforces
             # the opposite and is enabled, so the property is decided, not unmeasured.
             # Filed presentational until it was read: that category claims a finding
@@ -330,23 +319,37 @@ ignore = [
                # findings, 15 in src/, none read. Rebinding the loop name is as often
                # a silent bug as a deliberate narrowing, and only the site says which.
 
-    # Whitespace — NOT presentational, and the difference is measured rather than
-    # assumed. These rules fire on physical lines *inside* string literals: all three
-    # W291 findings today sit in multi-line f-string SQL, which is also why
-    # `ruff format` — enforced at 0 across all nine cells — has never touched them.
-    "W291", # [behavioural] Trailing whitespace
-            # Harmless in the SQL literals it fires on today. A future finding inside
-            # a meaningful literal takes a per-line `# noqa`, not a re-decline.
-    "W293", # [behavioural] Blank line contains whitespace
-            # The same mechanism as W291 above: a whitespace-only line inside a
-            # triple-quoted string is content, not layout. Zero findings today.
+    # Physical-line rules — these measure a line of the file, so a finding inside a
+    # triple-quoted string is a statement about that string's *content*, not about
+    # layout. `ruff format` is enforced at 0 across all nine cells and has never
+    # touched any of them, which is the same fact from the other side: the formatter
+    # does not reach inside string tokens either.
+    #
+    # W291 and W293 used to be declined here on that argument. It was the right
+    # reading of the mechanism and the wrong conclusion: W291's three findings were
+    # all trailing spaces in f-string SQL, where whitespace is insignificant, and
+    # W293 had none at all. Two rules were off across the tree to hold three
+    # harmless spaces. They are enforced now, the three are fixed, and a future
+    # finding inside a literal where the whitespace *is* significant takes a
+    # per-line `# noqa` naming that literal -- which is a claim about one string,
+    # where a decline was a claim about every line in the repository.
     "E501", # [behavioural] Line too long (configured at 100)
-            # The third rule on this mechanism, and it sat directly under the two
-            # above filed as though it were a different kind of thing. E501 measures
-            # the same physical line, so a finding inside a triple-quoted string is
-            # a statement about content: 13 files hold a >100-character line inside
-            # a multi-line string token today. It has no autofix either, so acting
-            # on one of those is a hand-rewrite of literal text, not a reflow.
+            # What is left of that argument, and it does not reduce the same way.
+            # Unlike the two above there is no autofix, so acting on a finding is a
+            # hand-rewrite rather than deleting a space nothing can observe.
+            #
+            # Where the 200 findings actually are, classified with a 3.12-aware
+            # tokenizer (f-strings tokenize as FSTRING_START..FSTRING_END, not
+            # STRING; reading STRING alone finds only 130 of them and understates
+            # the case by 60): 190 sit inside a string token, 27 of them spanning
+            # multiple lines, and only 10 in 9 files are outside a string token
+            # entirely. So the decline is argued on where its findings are,
+            # not on the limit: the multi-line 27 are literal text whose width is
+            # content, while the single-line 163 are the weaker half of the case --
+            # shortening one of those is an ordinary refactor. That is the part to
+            # re-read if this entry is ever revisited, and re-measure rather than
+            # trusting these numbers, which are true of one tree on one day.
+            #
             # Its old reason -- "already configured at 100" -- described the limit
             # rather than the decline, which is the shape a category marker with no
             # required argument leaves undisturbed.
@@ -420,15 +423,6 @@ ignore = [
               # here are the unsafe kind. On anything that is not a dict, `in` asks
               # __contains__ and `.keys()` asks whatever that method returns, which
               # are not required to agree.
-    "PLW3301", # [behavioural] Nested min/max calls can be flattened
-               # Flattening `max(a, max(gen))` to `max(a, *gen)` changes the failure
-               # mode on an empty iterable from ValueError to TypeError. Safe at the
-               # single site it fires on, and only because of a guard three lines up.
-    "RUF006", # [behavioural] Store a reference to the return value of asyncio.create_task
-              # The reason this entry used to carry — "only needed if canceling task"
-              # — was factually wrong, and is why its findings were never read. The
-              # loop keeps only a *weak* reference to a bare create_task, so the task
-              # may be collected mid-flight and silently never run to completion.
     "SIM105", # [presentational] Use contextlib.suppress
               # 38 findings carry an unsafe fix. Driven on a real site to see what
               # the fix does rather than inferred: it rewrites try/except/pass into
@@ -441,10 +435,6 @@ ignore = [
               # is `x = a if cond else b` from the four-line form -- one expression,
               # same branch taken, same object bound. The unsafety is comment
               # placement, which the site it was checked against kept intact.
-    "SIM113", # [behavioural] Use enumerate() for index variable
-              # The advice does not check for async context: at one of its two sites
-              # the loop is an `async for`, where enumerate() raises TypeError. A fix
-              # taken from the rule name rather than the site would break that loop.
     # SIM115 was declined here with the reason "not practical for locks", and
     # that reason is true -- of one file: data's file backend holds a lock handle
     # open across the critical section it protects, which is exactly the shape
@@ -457,10 +447,6 @@ ignore = [
     "SIM117", # [presentational] Use single with statement with multiple contexts
 
     # Complexity metrics - already configured
-    "PLR0206", # [behavioural] Cannot have defined parameters for properties
-               # Not a metric despite its number. Its one finding is a property
-               # declared with a required parameter, which cannot be invoked at all:
-               # attribute access calls the getter with no argument and raises.
     "PLR0911", # [presentational] Too many return statements (configured at 6)
     "PLR0912", # [presentational] Too many branches (configured at 12)
     "PLR0913", # [presentational] Too many arguments to function call
@@ -530,11 +516,6 @@ ignore = [
     "PTH202", # [presentational] Use Path.stat().st_size
 
     # Other style preferences
-    "C414", # [presentational] Unnecessary list() call within sorted()
-            # ruff: "marked as unsafe, as it may occasionally drop comments when
-            # rewriting the call. In most cases, though, comments will be
-            # preserved." sorted() materialises its argument either way, so the
-            # inner list() decides nothing the program can see. One finding.
     "E721", # [behavioural] Use isinstance() instead of type comparison
             # ruff's own documentation is explicit that the rewrite changes behaviour
             # under NumPy, Pandas and SQLAlchemy, where `__eq__` on a type is
@@ -559,14 +540,6 @@ ignore = [
               # is what the 43 unsafe findings here are. Reordering the names
               # themselves changes nothing: __all__ decides which names `import *`
               # binds, not the order anything is defined or evaluated in.
-    "N802", # [behavioural] Function name should be lowercase
-            # Two findings, and both are a rename of exported public API:
-            # ComplexQuery.AND and ComplexQuery.OR, where ComplexQuery is in
-            # dataknobs_data's __all__. That is the criterion UP040/UP042/UP046/
-            # UP047 are already declined under here -- "each would change a public
-            # API, not just syntax" -- so the two entries disagreed about the same
-            # test. A name is only presentational until something calls it.
-
     # Modernizations deliberately declined — each would change a public API,
     # not just syntax. Revisit individually, not as a sweep.
     "ASYNC109",  # [behavioural] `timeout` parameter on an async def. For a Protocol defining
@@ -600,7 +573,7 @@ dummy-variable-rgx = "^(_+|(_+[a-zA-Z0-9_]*[a-zA-Z0-9]+?))$"
 
 # Ignore certain errors in specific files
 [tool.ruff.lint.per-file-ignores]
-"__init__.py" = ["D104", "F401"]  # Module docstring and unused imports in __init__ files
+"__init__.py" = ["D104", "F401"]  # D104 (missing package docstring) can only fire on an __init__.py, so this line is now the whole of that rule's suppression rather than a duplicate of a repo-wide decline; F401 covers the re-export imports
 "packages/legacy/*" = ["D", "N", "UP"]  # Relax rules for legacy code
 # Two entries were deleted here because each waived nothing, and one of them read
 # as though it did. `"tests/*" = ["D100", "D101", "D102", "D103", "S101"]` looked

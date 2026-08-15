@@ -7,6 +7,7 @@ module is uncovered; extending this file is welcome.
 import pandas as pd
 import pytest
 
+import dataknobs_xization.authorities as dk_auth
 import dataknobs_xization.lexicon as dk_lex
 
 
@@ -99,3 +100,95 @@ def test_column_name_is_applied():
     )
 
     assert list(df.columns) == ["authority_id"]
+
+
+# --- peeking at built sub-authority data -----------------------------------
+
+
+class _StubAuthority(dk_auth.AuthorityData):
+    """Minimal real AuthorityData, so the container is exercised with the type it holds."""
+
+    def __init__(self, name):
+        super().__init__(pd.DataFrame({"value": [1]}), name)
+
+
+class _CountingMultiAuthority(dk_lex.MultiAuthorityData):
+    """MultiAuthorityData with the one abstract method filled in, counting builds."""
+
+    def __init__(self, df, name):
+        super().__init__(df, name)
+        self.builds = []
+
+    def build_authority_data(self, name):
+        self.builds.append(name)
+        return _StubAuthority(name)
+
+
+def _multi():
+    return _CountingMultiAuthority(pd.DataFrame({"a": [1, 2]}), "top")
+
+
+def test_peek_returns_none_before_the_sub_authority_is_built():
+    """Bug: this accessor was a @property with a required parameter.
+
+    A property getter is invoked by attribute access with no arguments, so
+    ``authority_data`` raised TypeError on every access and the "retrieve
+    without building" capability did not exist at all -- while its docstring
+    said it returned None when absent and its annotation said it could not.
+    """
+    multi = _multi()
+
+    assert multi.peek_authority_data("missing") is None
+    assert multi.builds == [], "peeking must not build"
+
+
+def test_peek_returns_the_built_object_without_rebuilding():
+    multi = _multi()
+    built = multi.get_authority_data("colour")
+
+    assert multi.peek_authority_data("colour") is built
+    assert multi.builds == ["colour"], "peeking after a build must not build again"
+
+
+# --- masking against a sub-authority that has not been built ---------------
+
+
+def test_lookup_subauth_values_is_none_when_the_sub_authority_is_unbuilt():
+    """``lookup_subauth_values`` peeks rather than builds, so None is its normal answer.
+
+    Its annotation said ``-> pd.DataFrame`` while its body initialized the
+    result to None and returned it untouched whenever the peek missed --
+    which, because the peek deliberately does not build, is the default state
+    rather than an edge case.
+    """
+    multi = _multi()
+
+    assert multi.lookup_subauth_values("a", 1, is_id=True) is None
+    assert multi.builds == [], "looking up sub-values must not build"
+
+
+def test_auth_values_mask_is_all_false_when_the_sub_authority_is_unbuilt():
+    """Bug: this raised TypeError on the default path.
+
+    ``auth_values_mask`` subscripted ``lookup_subauth_values``'s result
+    without checking it, so an unbuilt sub-authority produced
+    ``TypeError: 'NoneType' object is not subscriptable``. No sub-authority
+    values means no record carries one, which is an all-False mask -- and
+    ``auth_records_mask`` conjoins these, where all-False correctly excludes
+    every record rather than exploding.
+    """
+    multi = _multi()
+
+    mask = multi.auth_values_mask("a", 1)
+
+    assert not mask.any(), "no sub-authority values means no record can match"
+    assert mask.index.equals(multi.df.index), "the mask must align with the authority rows"
+
+
+def test_auth_records_mask_conjoins_an_unbuilt_field_without_raising():
+    """The consumer-visible half: the only caller of auth_values_mask."""
+    multi = _multi()
+
+    mask = multi.auth_records_mask({"a": 1})
+
+    assert not mask.any()
