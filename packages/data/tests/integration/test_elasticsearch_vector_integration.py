@@ -18,6 +18,21 @@ pytestmark = pytest.mark.skipif(
 )
 
 
+def _vectors(count: int, dim: int, seed: int = 0) -> np.ndarray:
+    """Draw ``count`` deterministic ``dim``-dimensional float32 vectors.
+
+    One generator per call, seeded explicitly, so a draw here cannot shift
+    what any other test draws. Pass a distinct ``seed`` where a single test
+    needs two sets that differ.
+    """
+    return np.random.default_rng(seed).random((count, dim), dtype=np.float32)
+
+
+def _vector(dim: int, seed: int = 0) -> np.ndarray:
+    """Draw one deterministic ``dim``-dimensional float32 vector."""
+    return _vectors(1, dim, seed)[0]
+
+
 class TestElasticsearchVectorIntegration:
     """Test Elasticsearch vector functionality with real backend."""
 
@@ -36,7 +51,7 @@ class TestElasticsearchVectorIntegration:
 
         try:
             # Create a record with a vector field
-            vector = np.random.rand(128).astype(np.float32)
+            vector = _vector(128)
             record = Record(
                 {
                     "title": "Test Document",
@@ -93,9 +108,9 @@ class TestElasticsearchVectorIntegration:
             )
 
             # Create test vectors
-            base_vector = np.random.rand(128).astype(np.float32)
+            base_vector = _vector(128)
             similar_vector = base_vector + np.random.randn(128) * 0.1
-            different_vector = np.random.rand(128).astype(np.float32)
+            different_vector = _vector(128, seed=1)
 
             # Create records with vectors
             records = [
@@ -162,7 +177,7 @@ class TestElasticsearchVectorIntegration:
             )
 
             # Create test data
-            vectors = [np.random.rand(64).astype(np.float32) for _ in range(5)]
+            vectors = _vectors(5, 64)
             categories = ["A", "B", "A", "B", "C"]
 
             # Create and store records
@@ -257,7 +272,7 @@ class TestElasticsearchVectorIntegration:
             records = []
 
             for i in range(batch_size):
-                vec = np.random.rand(32).astype(np.float32)
+                vec = _vector(32)
                 record = Record(
                     {
                         "batch_id": i,
@@ -292,7 +307,7 @@ class TestElasticsearchVectorIntegration:
 
         try:
             # Create record with detailed vector metadata
-            vec = np.random.rand(64).astype(np.float32)
+            vec = _vector(64)
             record = Record({"document": "Test content"})
 
             record.fields["embedding"] = VectorField(
@@ -341,7 +356,7 @@ class TestElasticsearchVectorIntegration:
                 dimensions=8,
                 metric=DistanceMetric.COSINE,
             )
-            vectors = [np.random.rand(8).astype(np.float32) for _ in range(4)]
+            vectors = _vectors(4, 8)
             keys = ["artifacts/a", "artifacts/b", "orders/1", "orders/2"]
             for key, vec in zip(keys, vectors):
                 await db.create(
@@ -374,7 +389,7 @@ class TestElasticsearchVectorIntegration:
                 dimensions=8,
                 metric=DistanceMetric.COSINE,
             )
-            vectors = [np.random.rand(8).astype(np.float32) for _ in range(2)]
+            vectors = _vectors(2, 8)
             await db.create(
                 Record(
                     {"tag": "red apple", "embedding": VectorField(vectors[0], name="embedding")},

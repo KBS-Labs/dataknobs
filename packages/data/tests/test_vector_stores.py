@@ -29,6 +29,11 @@ def _vectors(count: int, dim: int, seed: int = 0) -> np.ndarray:
     return np.random.default_rng(seed).random((count, dim), dtype=np.float32)
 
 
+def _vector(dim: int, seed: int = 0) -> np.ndarray:
+    """Draw one deterministic ``dim``-dimensional float32 vector."""
+    return _vectors(1, dim, seed)[0]
+
+
 class TestMemoryVectorStore:
     """Test the in-memory vector store."""
 
@@ -72,7 +77,7 @@ class TestMemoryVectorStore:
         await store.initialize()
 
         # Add vectors
-        vector = np.random.rand(128).astype(np.float32)
+        vector = _vector(128)
         vector_id = str(uuid4())
         metadata = {"test": "value"}
 
@@ -295,7 +300,7 @@ class TestMemoryVectorStoreTimestamps:
     async def test_add_vectors_tracks_timestamps(self, store):
         """Fresh add populates self.timestamps; created == updated."""
         await store.initialize()
-        vec = np.random.rand(4).astype(np.float32)
+        vec = _vector(4)
         await store.add_vectors([vec], ids=["t1"], metadata=[{"k": "v"}])
 
         assert "t1" in store.timestamps
@@ -310,8 +315,8 @@ class TestMemoryVectorStoreTimestamps:
     async def test_upsert_refreshes_updated_only(self, store):
         """Re-add same ID: created preserved, updated advances."""
         await store.initialize()
-        vec1 = np.random.rand(4).astype(np.float32)
-        vec2 = np.random.rand(4).astype(np.float32)
+        vec1 = _vector(4)
+        vec2 = _vector(4, seed=1)
 
         await store.add_vectors([vec1], ids=["t1"])
         created_1, updated_1 = store.timestamps["t1"]
@@ -328,7 +333,7 @@ class TestMemoryVectorStoreTimestamps:
     async def test_update_metadata_refreshes_updated(self, store):
         """update_metadata advances updated, preserves created."""
         await store.initialize()
-        vec = np.random.rand(4).astype(np.float32)
+        vec = _vector(4)
         await store.add_vectors([vec], ids=["t1"], metadata=[{"k": "v"}])
         created_1, updated_1 = store.timestamps["t1"]
 
@@ -344,7 +349,7 @@ class TestMemoryVectorStoreTimestamps:
     async def test_delete_vectors_removes_timestamp(self, store):
         """delete_vectors removes the timestamp entry."""
         await store.initialize()
-        vec = np.random.rand(4).astype(np.float32)
+        vec = _vector(4)
         await store.add_vectors([vec], ids=["t1"])
         assert "t1" in store.timestamps
 
@@ -375,7 +380,7 @@ class TestMemoryVectorStoreTimestamps:
         )
         await store.initialize()
 
-        vec = np.random.rand(4).astype(np.float32)
+        vec = _vector(4)
         await store.add_vectors([vec], ids=["t1"], metadata=[{"k": "v"}])
         original_created, original_updated = store.timestamps["t1"]
 
@@ -400,11 +405,11 @@ class TestMemoryVectorStoreTimestamps:
     async def test_get_vectors_include_timestamps(self, store):
         """include_timestamps=True injects _created_at / _updated_at."""
         await store.initialize()
-        vec = np.random.rand(4).astype(np.float32)
+        vec = _vector(4)
         await store.add_vectors([vec], ids=["t1"], metadata=[{"k": "v"}])
 
         results = await store.get_vectors(["t1"], include_timestamps=True)
-        _vector, meta = results[0]
+        _, meta = results[0]
 
         assert meta is not None
         assert meta["k"] == "v"

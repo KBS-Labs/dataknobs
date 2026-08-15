@@ -45,6 +45,11 @@ def _vectors(count: int, dim: int, seed: int = 0) -> np.ndarray:
     return np.random.default_rng(seed).random((count, dim), dtype=np.float32)
 
 
+def _vector(dim: int, seed: int = 0) -> np.ndarray:
+    """Draw one deterministic ``dim``-dimensional float32 vector."""
+    return _vectors(1, dim, seed)[0]
+
+
 def get_test_connection_string() -> str:
     """Build connection string from environment variables."""
     host = os.environ.get("POSTGRES_HOST", "localhost")
@@ -435,7 +440,7 @@ class TestPgVectorStoreSearch:
         vectors = _vectors(20, 128)
         await pgvector_store.add_vectors(vectors)
 
-        query = np.random.rand(128).astype(np.float32)
+        query = _vector(128, seed=1)
 
         results = await pgvector_store.search(query, k=5)
         assert len(results) == 5
@@ -584,7 +589,7 @@ class TestPgVectorStoreDomainIsolation:
             assert await store2.count() == 3
 
             # Search should only return domain-specific results
-            query = np.random.rand(128).astype(np.float32)
+            query = _vector(128, seed=1)
             results1 = await store1.search(query, k=10)
             results2 = await store2.search(query, k=10)
 
@@ -1026,13 +1031,13 @@ class TestPgVectorStoreEdgeCases:
 
     async def test_empty_search(self, pgvector_store):
         """Test searching an empty store."""
-        query = np.random.rand(128).astype(np.float32)
+        query = _vector(128, seed=1)
         results = await pgvector_store.search(query, k=5)
         assert len(results) == 0
 
     async def test_single_vector(self, pgvector_store):
         """Test operations with single vector."""
-        vector = np.random.rand(128).astype(np.float32)
+        vector = _vector(128)
         ids = await pgvector_store.add_vectors(vector)
 
         assert len(ids) == 1
@@ -1042,8 +1047,8 @@ class TestPgVectorStoreEdgeCases:
 
     async def test_upsert_behavior(self, pgvector_store):
         """Test that adding vectors with same ID updates them."""
-        vector1 = np.random.rand(128).astype(np.float32)
-        vector2 = np.random.rand(128).astype(np.float32)
+        vector1 = _vector(128)
+        vector2 = _vector(128, seed=1)
         id_ = str(uuid.uuid4())
 
         # Add first vector
@@ -1064,7 +1069,7 @@ class TestPgVectorStoreEdgeCases:
         Previously the ON CONFLICT clause only updated embedding and metadata,
         leaving the content column stale on re-ingestion.
         """
-        vector = np.random.rand(128).astype(np.float32)
+        vector = _vector(128)
         id_ = str(uuid.uuid4())
 
         # Initial insert with original content
@@ -1286,7 +1291,7 @@ class TestPgVectorStoreIndexOperations:
             await store.add_vectors(vectors)
 
             # Search should trigger _maybe_create_index but not create index
-            query = np.random.rand(128).astype(np.float32)
+            query = _vector(128, seed=1)
             await store.search(query, k=5)
 
             # Index should NOT exist (below threshold)
@@ -1323,7 +1328,7 @@ class TestPgVectorStoreIndexOperations:
             assert await store._check_index_exists() is False
 
             # Search should trigger auto-creation
-            query = np.random.rand(128).astype(np.float32)
+            query = _vector(128, seed=1)
             await store.search(query, k=5)
 
             # Index should now exist
@@ -1356,7 +1361,7 @@ class TestPgVectorStoreIndexOperations:
             await store.add_vectors(vectors)
 
             # Search
-            query = np.random.rand(128).astype(np.float32)
+            query = _vector(128, seed=1)
             await store.search(query, k=5)
 
             # Index should NOT exist (auto_create_index=False)
@@ -1859,11 +1864,7 @@ class TestPgVectorStoreIncludeTimestamps:
                     created_at TIMESTAMP DEFAULT NOW()
                 )
             """)
-            vec_literal = (
-                "["
-                + ",".join(str(x) for x in np.random.rand(128).astype(np.float32).tolist())
-                + "]"
-            )
+            vec_literal = "[" + ",".join(str(x) for x in _vector(128).tolist()) + "]"
             await conn.execute(
                 f"INSERT INTO {safe_sql_ident(schema)}.{safe_sql_ident(old_schema_table)} "
                 f"(id, content, embedding, metadata) "

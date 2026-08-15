@@ -44,6 +44,21 @@ except ImportError:
 # TCP port is open; ``TEST_POSTGRES=true`` is the canonical "postgres
 # is fully provisioned (db + extension)" signal and is what
 # ``bin/test.sh`` sets when it brings services up.
+def _vectors(count: int, dim: int, seed: int = 0) -> np.ndarray:
+    """Draw ``count`` deterministic ``dim``-dimensional float32 vectors.
+
+    One generator per call, seeded explicitly, so a draw here cannot shift
+    what any other test draws. Pass a distinct ``seed`` where a single test
+    needs two sets that differ.
+    """
+    return np.random.default_rng(seed).random((count, dim), dtype=np.float32)
+
+
+def _vector(dim: int, seed: int = 0) -> np.ndarray:
+    """Draw one deterministic ``dim``-dimensional float32 vector."""
+    return _vectors(1, dim, seed)[0]
+
+
 _pgvector_marks = [
     requires_postgres,
     pytest.mark.skipif(
@@ -109,7 +124,7 @@ async def any_vector_store(
 @pytest.mark.asyncio
 async def test_timestamps_present_and_ordered(any_vector_store: Any) -> None:
     """include_timestamps=True exposes _created_at / _updated_at on every backend."""
-    vec = np.random.rand(4).astype(np.float32)
+    vec = _vector(4)
     await any_vector_store.add_vectors([vec], ids=["t1"], metadata=[{"k": "v"}])
 
     results = await any_vector_store.get_vectors(["t1"], include_timestamps=True)
@@ -126,7 +141,7 @@ async def test_timestamps_present_and_ordered(any_vector_store: Any) -> None:
 @pytest.mark.asyncio
 async def test_timestamps_absent_by_default(any_vector_store: Any) -> None:
     """Default get_vectors() omits timestamp keys on every backend."""
-    vec = np.random.rand(4).astype(np.float32)
+    vec = _vector(4)
     await any_vector_store.add_vectors([vec], ids=["t1"], metadata=[{"k": "v"}])
 
     results = await any_vector_store.get_vectors(["t1"])
@@ -143,8 +158,8 @@ async def test_upsert_refreshes_updated_consistently(
     any_vector_store: Any,
 ) -> None:
     """Second add_vectors with same id: created preserved, updated advances."""
-    vec1 = np.random.rand(4).astype(np.float32)
-    vec2 = np.random.rand(4).astype(np.float32)
+    vec1 = _vector(4)
+    vec2 = _vector(4, seed=1)
 
     await any_vector_store.add_vectors([vec1], ids=["t1"])
     first_results = await any_vector_store.get_vectors(["t1"], include_timestamps=True)
