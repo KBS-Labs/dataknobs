@@ -99,7 +99,7 @@ workspace_targets() {
 # bin/fix.sh needs no equivalent: it already reaches every packages/*/tests,
 # which is why a promoted cell arrives with its remedy already in place.
 lint_promoted_test_packages() {
-    echo "fsm"
+    echo "fsm legacy config structures utils xization llm common"
 }
 
 # Function to list the per-package directories the formatter covers
