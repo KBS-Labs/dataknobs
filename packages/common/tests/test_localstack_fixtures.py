@@ -94,7 +94,8 @@ def _client_error(code: str, op: str = "HeadBucket") -> ClientError:
 
 def _patch_session(monkeypatch: Any, fake: _FakeSession) -> None:
     """Patch ``aioboto3.Session`` (which the helper instantiates) to
-    return our fake session."""
+    return our fake session.
+    """
     import aioboto3
 
     monkeypatch.setattr(aioboto3, "Session", lambda: fake)

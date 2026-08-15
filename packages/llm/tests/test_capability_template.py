@@ -217,7 +217,8 @@ class TestAnthropicCapabilityDetection:
 
     def test_claude5_fable_has_modern_capabilities(self):
         """Fable 5 carries no opus/sonnet/haiku marker → was mis-detected as
-        lacking vision/tools/JSON until the family name was listed."""
+        lacking vision/tools/JSON until the family name was listed.
+        """
         caps = self._caps("claude-fable-5")
         assert ModelCapability.JSON_MODE in caps
         assert ModelCapability.FUNCTION_CALLING in caps

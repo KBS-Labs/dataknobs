@@ -47,7 +47,8 @@ def test_conditional_write_member_and_family() -> None:
 
 def test_transactional_metadata_not_a_member() -> None:
     """The conditional-write contract has one name; the metadata-flavored
-    synonym is not part of the enum."""
+    synonym is not part of the enum.
+    """
     with pytest.raises(AttributeError):
         _ = Capability.TRANSACTIONAL_METADATA  # type: ignore[attr-defined]
     assert not any(

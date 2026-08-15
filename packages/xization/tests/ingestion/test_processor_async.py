@@ -110,7 +110,8 @@ async def test_process_async_dispatches_txt_as_markdown(
     tmp_path: Path,
 ) -> None:
     """``.txt`` is chunked as single-section markdown — matches the
-    pre-unification ``KnowledgeIngestionManager._load_text`` path."""
+    pre-unification ``KnowledgeIngestionManager._load_text`` path.
+    """
     (tmp_path / "notes.txt").write_text("Some plain notes content.\n")
     processor = DirectoryProcessor(KnowledgeBaseConfig(name="t"), tmp_path)
     docs = [d async for d in processor.process_async()]
@@ -171,7 +172,8 @@ async def test_process_async_skips_unsupported_extensions(
 ) -> None:
     """Unsupported extensions are skipped and counted in
     ``files_skipped`` — the default-pattern list doesn't match them, so
-    they don't even enter the dispatch path."""
+    they don't even enter the dispatch path.
+    """
     (tmp_path / "keep.md").write_text("# Keep\n")
     # ``.xyz`` is not in the default patterns → never reaches dispatch.
     (tmp_path / "ignore.xyz").write_text("not handled")
@@ -193,7 +195,8 @@ async def test_process_async_explicit_pattern_routes_unsupported_ext(
     """When an explicit pattern enumerates a file with an extension the
     dispatcher doesn't know, the file is enumerated and then skipped
     via the unsupported-extension branch, incrementing
-    ``files_skipped``."""
+    ``files_skipped``.
+    """
     (tmp_path / "keep.md").write_text("# Keep\n")
     (tmp_path / "stray.xyz").write_text("not handled")
     config = KnowledgeBaseConfig(
@@ -213,7 +216,8 @@ async def test_process_async_explicit_pattern_routes_unsupported_ext(
 @pytest.mark.asyncio
 async def test_process_async_markdown_like_mix(tmp_path: Path) -> None:
     """Mixed markdown-like files (``.md`` / ``.markdown`` / ``.txt``)
-    are all emitted as ``document_type='markdown'``."""
+    are all emitted as ``document_type='markdown'``.
+    """
     (tmp_path / "a.md").write_text("# A\n")
     (tmp_path / "b.markdown").write_text("# B\n")
     (tmp_path / "c.txt").write_text("Plain C\n")

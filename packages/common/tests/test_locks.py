@@ -328,7 +328,8 @@ class TestLockBackendsPluginRegistry:
 
     def test_create_lock_shim_preserves_error_text(self) -> None:
         """The not-found message is byte-identical to the pre-migration
-        hand-rolled text (sorted backends, no extra punctuation)."""
+        hand-rolled text (sorted backends, no extra punctuation).
+        """
         with pytest.raises(ValueError) as excinfo:
             create_lock({"backend": "still-nope"})
         msg = str(excinfo.value)
@@ -339,7 +340,8 @@ class TestLockBackendsPluginRegistry:
         """The not-found raise is a plain ``ValueError`` (the historical
         contract), not the ``NotFoundError`` ``PluginRegistry`` defaults
         to. The ``not_found_exception=ValueError`` ctor knob is the seam
-        keeping the pre-migration call-site catches valid."""
+        keeping the pre-migration call-site catches valid.
+        """
         with pytest.raises(ValueError):
             create_lock({"backend": "still-nope"})
 
@@ -347,7 +349,8 @@ class TestLockBackendsPluginRegistry:
         """Every built-in lock backend constructs synchronously; the async
         shim is shipped for API symmetry and consumer-extensibility, and
         must return the same instance type as the sync shim for an
-        identical config dict."""
+        identical config dict.
+        """
         from dataknobs_common.locks import create_lock_async
 
         sync_lock = create_lock({"backend": "memory"})
@@ -360,7 +363,8 @@ class TestLockBackendsPluginRegistry:
     async def test_create_lock_async_preserves_error_shape(self) -> None:
         """The async shim's not-found raise is the same shape as sync —
         same exception class, same message wording (the symmetry guard
-        for the ``create_async`` path through ``_resolve_factory``)."""
+        for the ``create_async`` path through ``_resolve_factory``).
+        """
         from dataknobs_common.locks import create_lock_async
 
         with pytest.raises(ValueError) as excinfo:

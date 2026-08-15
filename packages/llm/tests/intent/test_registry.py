@@ -56,7 +56,8 @@ class TestIntentClassifierBackendsPluginRegistry:
         """``create_intent_classifier(name, config)`` passes ``key=name``
         through to :meth:`PluginRegistry.create` — the explicit-key
         mode (no ``config_key`` configured). Validates the
-        pre-consolidation public signature is preserved."""
+        pre-consolidation public signature is preserved.
+        """
         clf = create_intent_classifier("keyword", {})
         assert isinstance(clf, KeywordIntentClassifier)
 
@@ -65,7 +66,8 @@ class TestIntentClassifierBackendsPluginRegistry:
         ``"Unknown intent_classifier: <name>. Available backends:
         <sorted-keys>"`` — produced by the parametrized
         ``not_found_kind="intent_classifier"`` /
-        ``not_found_exception=ValueError`` registry knobs."""
+        ``not_found_exception=ValueError`` registry knobs.
+        """
         with pytest.raises(ValueError) as excinfo:
             create_intent_classifier("does_not_exist", {})
         msg = str(excinfo.value)
@@ -80,14 +82,16 @@ class TestIntentClassifierBackendsPluginRegistry:
         historical contract), not the :class:`NotFoundError`
         :class:`PluginRegistry` defaults to. The
         ``not_found_exception=ValueError`` ctor knob is the seam keeping
-        the pre-consolidation call-site catches valid."""
+        the pre-consolidation call-site catches valid.
+        """
         with pytest.raises(ValueError):
             create_intent_classifier("does_not_exist", {})
 
     def test_create_intent_classifier_composite_recursion(self) -> None:
         """Composite recursion routes child specs through the
         consolidated :func:`create_intent_classifier` shim. The
-        end-to-end composite-of-keyword path is preserved unchanged."""
+        end-to-end composite-of-keyword path is preserved unchanged.
+        """
         composite = create_intent_classifier(
             "composite",
             {"classifiers": [{"classifier": "keyword"}]},
@@ -97,7 +101,8 @@ class TestIntentClassifierBackendsPluginRegistry:
     def test_create_intent_classifier_none_config(self) -> None:
         """``config=None`` is normalized to ``{}`` for both key
         resolution and factory invocation — same as the
-        pre-consolidation shim."""
+        pre-consolidation shim.
+        """
         clf = create_intent_classifier("keyword", None)
         assert isinstance(clf, KeywordIntentClassifier)
 
@@ -212,7 +217,8 @@ class TestIntentClassifierAsyncShim:
         """The async shim's not-found raise is the same shape as the
         sync shim — same exception class, same message wording (the
         symmetry guard for the ``create_async`` path through
-        ``_resolve_factory``)."""
+        ``_resolve_factory``).
+        """
         with pytest.raises(ValueError) as excinfo:
             await create_intent_classifier_async("does_not_exist", {})
         msg = str(excinfo.value)
@@ -227,7 +233,8 @@ class TestIntentClassifierAsyncShim:
         :func:`_composite_factory`. An async outer call → sync inner
         recursion works because the sync factory's non-awaitable
         result passes through ``create_async`` unchanged (the
-        ``inspect.isawaitable`` branch is skipped)."""
+        ``inspect.isawaitable`` branch is skipped).
+        """
         composite = await create_intent_classifier_async(
             "composite",
             {"classifiers": [{"classifier": "keyword"}]},
@@ -240,7 +247,8 @@ class TestIntentClassifierAsyncShim:
         """Async-side parity of the unwrap behaviour:
         :func:`create_intent_classifier_async` re-raises a
         ``ValueError`` from inside the factory rather than surfacing
-        the :class:`PluginRegistry`-wrapped ``OperationError``."""
+        the :class:`PluginRegistry`-wrapped ``OperationError``.
+        """
         with pytest.raises(ValueError) as excinfo:
             await create_intent_classifier_async(
                 "composite",
