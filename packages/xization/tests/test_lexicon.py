@@ -7,6 +7,7 @@ module is uncovered; extending this file is welcome.
 import pandas as pd
 import pytest
 
+import dataknobs_xization.authorities as dk_auth
 import dataknobs_xization.lexicon as dk_lex
 
 
@@ -99,3 +100,52 @@ def test_column_name_is_applied():
     )
 
     assert list(df.columns) == ["authority_id"]
+
+
+# --- peeking at built sub-authority data -----------------------------------
+
+
+class _StubAuthority(dk_auth.AuthorityData):
+    """Minimal real AuthorityData, so the container is exercised with the type it holds."""
+
+    def __init__(self, name):
+        super().__init__(pd.DataFrame({"value": [1]}), name)
+        self.build_count = 0
+
+
+class _CountingMultiAuthority(dk_lex.MultiAuthorityData):
+    """MultiAuthorityData with the one abstract method filled in, counting builds."""
+
+    def __init__(self, df, name):
+        super().__init__(df, name)
+        self.builds = []
+
+    def build_authority_data(self, name):
+        self.builds.append(name)
+        return _StubAuthority(name)
+
+
+def _multi():
+    return _CountingMultiAuthority(pd.DataFrame({"a": [1, 2]}), "top")
+
+
+def test_peek_returns_none_before_the_sub_authority_is_built():
+    """Bug: this accessor was a @property with a required parameter.
+
+    A property getter is invoked by attribute access with no arguments, so
+    ``authority_data`` raised TypeError on every access and the "retrieve
+    without building" capability did not exist at all -- while its docstring
+    said it returned None when absent and its annotation said it could not.
+    """
+    multi = _multi()
+
+    assert multi.peek_authority_data("missing") is None
+    assert multi.builds == [], "peeking must not build"
+
+
+def test_peek_returns_the_built_object_without_rebuilding():
+    multi = _multi()
+    built = multi.get_authority_data("colour")
+
+    assert multi.peek_authority_data("colour") is built
+    assert multi.builds == ["colour"], "peeking after a build must not build again"

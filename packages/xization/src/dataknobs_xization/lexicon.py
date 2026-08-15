@@ -502,10 +502,18 @@ class MultiAuthorityData(CorrelatedAuthorityData):
         """
         raise NotImplementedError
 
-    @property
-    def authority_data(self, name: str) -> dk_auth.AuthorityData:
-        """Retrieve without building the named authority data, or None"""
-        return self._authority_data.get(name, None)
+    def peek_authority_data(self, name: str) -> dk_auth.AuthorityData | None:
+        """Retrieve the named "sub" authority data if already built, without building it.
+
+        The non-building counterpart to :meth:`get_authority_data`.
+
+        Args:
+            name: The "sub" authority name.
+
+        Returns:
+            The "sub" authority data, or None if it has not been built.
+        """
+        return self._authority_data.get(name)
 
     def get_authority_data(self, name: str) -> dk_auth.AuthorityData:
         """Get AuthorityData for the named "sub" authority, building if needed.
@@ -552,7 +560,7 @@ class MultiAuthorityData(CorrelatedAuthorityData):
             The applicable authority dataframe rows.
         """
         values_df = None
-        authdata = self._authority_data.get(name, None)
+        authdata = self.peek_authority_data(name)
         if authdata is not None:
             values_df = authdata.lookup_values(value, is_id=is_id)
         return values_df

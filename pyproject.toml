@@ -435,10 +435,6 @@ ignore = [
     "SIM117", # [presentational] Use single with statement with multiple contexts
 
     # Complexity metrics - already configured
-    "PLR0206", # [behavioural] Cannot have defined parameters for properties
-               # Not a metric despite its number. Its one finding is a property
-               # declared with a required parameter, which cannot be invoked at all:
-               # attribute access calls the getter with no argument and raises.
     "PLR0911", # [presentational] Too many return statements (configured at 6)
     "PLR0912", # [presentational] Too many branches (configured at 12)
     "PLR0913", # [presentational] Too many arguments to function call
