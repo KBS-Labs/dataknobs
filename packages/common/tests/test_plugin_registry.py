@@ -822,7 +822,7 @@ class TestPluginRegistryCanonicalizeKeys:
         assert registry.get_factory("HANDLER") is CustomHandler
 
     def test_unregister_case_insensitive(self) -> None:
-        """unregister ignores case."""
+        """The ``unregister`` method ignores case."""
         registry = PluginRegistry[BaseHandler]("test", canonicalize_keys=True)
         registry.register("Plugin", CustomHandler)
 

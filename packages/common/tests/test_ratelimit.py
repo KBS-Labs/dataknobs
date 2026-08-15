@@ -773,7 +773,7 @@ class TestPyrateRateLimiterBehavior:
 
     @pytest.mark.asyncio
     async def test_acquire_timeout_raises(self):
-        """acquire with timeout raises TimeoutError when exhausted."""
+        """An ``acquire`` with a timeout raises TimeoutError when exhausted."""
         limiter = self._make_limiter(limit=1, interval=10.0)
         await limiter.try_acquire("test")  # exhaust the limit
         with pytest.raises(TimeoutError, match="timed out"):

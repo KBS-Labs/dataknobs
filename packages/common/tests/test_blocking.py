@@ -26,7 +26,7 @@ from dataknobs_common.testing import blocking as blocking_module
 
 
 def test_blockbuster_is_available_in_dev_env() -> None:
-    """blockbuster is a declared dev dependency, so the detector is usable."""
+    """A declared dev dependency, so the ``blockbuster`` detector is usable."""
     assert is_blockbuster_available() is True
 
 

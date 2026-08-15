@@ -427,7 +427,7 @@ def pg_dsn(
     ensure_postgres_ready: None,
     postgres_connection_params: dict[str, Any],
 ) -> str:
-    """libpq URI for the shared test database (real Postgres).
+    """A libpq URI for the shared test database (real Postgres).
 
     Depends on ``ensure_postgres_ready`` so the server is reachable and
     the test DB exists; advisory locks are cluster-global (no table

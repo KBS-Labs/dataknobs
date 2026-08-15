@@ -131,7 +131,7 @@ class TestAsyncContextManager:
 
     @pytest.mark.asyncio
     async def test_async_with_initializes_and_closes(self) -> None:
-        """async with initializes on entry and closes on exit."""
+        """An ``async with`` block initializes on entry and closes on exit."""
         provider = EchoProvider({"provider": "echo", "model": "test"})
         provider.set_responses([text_response("ok")])
 

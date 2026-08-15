@@ -162,7 +162,7 @@ class TestToolsParameter:
 
     @pytest.mark.asyncio
     async def test_tools_forwarded_to_provider(self, manager_with_provider: dict[str, Any]) -> None:
-        """tools parameter is forwarded to the LLM provider."""
+        """The ``tools`` parameter is forwarded to the LLM provider."""
         manager = manager_with_provider["manager"]
         provider: EchoProvider = manager_with_provider["provider"]
 
