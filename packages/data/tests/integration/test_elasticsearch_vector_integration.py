@@ -271,8 +271,14 @@ class TestElasticsearchVectorIntegration:
             batch_size = 10
             records = []
 
+            # One draw, `batch_size` rows: the records have to differ from each
+            # other for the search below to mean anything. Calling the
+            # single-vector helper per iteration would pass it the same default
+            # seed every time and store one vector ten times.
+            batch_vecs = _vectors(batch_size, 32)
+
             for i in range(batch_size):
-                vec = _vector(32)
+                vec = batch_vecs[i]
                 record = Record(
                     {
                         "batch_id": i,
