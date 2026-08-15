@@ -8,7 +8,7 @@ import pytest
 benchmarks_dir = Path(__file__).parent.parent.parent / "benchmarks"
 sys.path.insert(0, str(benchmarks_dir))
 
-from prompt_benchmark import PromptBenchmark
+from prompt_benchmark import PromptBenchmark  # noqa: E402 - must follow the sys.path.insert above
 
 
 class TestPromptBenchmark:

@@ -8,7 +8,7 @@ import pytest
 benchmarks_dir = Path(__file__).parent.parent.parent / "benchmarks"
 sys.path.insert(0, str(benchmarks_dir))
 
-from benchmark_result import BenchmarkResult
+from benchmark_result import BenchmarkResult  # noqa: E402 - must follow the sys.path.insert above
 
 
 class TestBenchmarkResult:

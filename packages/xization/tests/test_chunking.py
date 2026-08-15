@@ -529,7 +529,7 @@ class TestParserCharPositions:
         assert source[second.char_start : second.char_end] == "Second."
 
     def test_crlf_line_endings(self):
-        """Character positions must be correct for \\r\\n line endings."""
+        r"""Character positions must be correct for \r\n line endings."""
         source = "# Title\r\n\r\nBody text."
         parser = MarkdownParser()
         tree = parser.parse(source)
@@ -546,7 +546,7 @@ class TestParserCharPositions:
         assert source[body.char_start : body.char_end] == "Body text."
 
     def test_mixed_line_endings(self):
-        """Handles mixed \\n and \\r\\n in same document."""
+        r"""Handles mixed \n and \r\n in same document."""
         source = "Line one.\r\nLine two.\nLine three."
         parser = MarkdownParser()
         tree = parser.parse(source)

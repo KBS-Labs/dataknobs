@@ -237,8 +237,8 @@ async def test_process_async_markdown_like_mix(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-import asyncio as _asyncio
-from collections.abc import AsyncIterator as _AsyncIterator
+import asyncio as _asyncio  # noqa: E402 - deferred to keep this block with its comment
+from collections.abc import AsyncIterator as _AsyncIterator  # noqa: E402
 from dataknobs_xization.ingestion.source import (  # noqa: E402
     DocumentFileRef,
     DocumentSource,

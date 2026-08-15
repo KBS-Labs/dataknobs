@@ -537,11 +537,15 @@ class TestEventBusRegistry:
             "leaked = sorted(m for m in sys.modules if 'boto' in m)\n"
             "assert not leaked, leaked\n"
         )
+        # check=False deliberately: the assertion below reports the child's
+        # stdout and stderr, which a CalledProcessError would replace with a
+        # traceback naming only the exit status.
         result = subprocess.run(
             [sys.executable, "-c", script],
             capture_output=True,
             text=True,
             timeout=60,
+            check=False,
         )
         assert result.returncode == 0, (
             f"aioboto3 leaked into the base import path:\n"

@@ -7,12 +7,12 @@ def test_basics():
     tree.data = "z"
     assert tree.data == "z"
 
-    assert tree.has_children() == True
+    assert tree.has_children() is True
     assert tree.num_children == 2
     assert [node.data for node in tree.children] == ["b", "c"]
     assert ["z"] * tree.num_children == [node.parent.data for node in tree.children]
 
-    assert tree.has_parent() == False
+    assert tree.has_parent() is False
     assert tree.depth == 0
     assert tree.__repr__() is not None
 

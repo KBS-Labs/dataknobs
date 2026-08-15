@@ -45,7 +45,7 @@ def test_dual_tokenization():
     assert tok.pre_delims == ""
     assert tok.post_delims == ""
     assert tok.next_token == next_tok
-    assert tok.prev_token == None
+    assert tok.prev_token is None
 
     # Check second token
     assert next_tok.token_text == "Bill"
@@ -115,7 +115,7 @@ def test_simple_tokenization():
     assert tok.pre_delims == ""
     assert tok.post_delims == ", "
     assert tok.next_token == next_tok
-    assert tok.prev_token == None
+    assert tok.prev_token is None
 
     # Check second token
     assert next_tok.token_text == "esq"

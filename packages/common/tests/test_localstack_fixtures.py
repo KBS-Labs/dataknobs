@@ -252,10 +252,12 @@ async def test_default_endpoint_uses_get_localstack_endpoint(
         "AWS_ENDPOINT_URL",
     ):
         monkeypatch.delenv(name, raising=False)
-    # Force the "not in Docker" arm so the default is localhost.
+    # Force the "not in Docker" arm so the default is localhost. A blanket
+    # False is the whole intent and not an over-reach: _core asks
+    # os.path.exists about "/.dockerenv" and nothing else.
     monkeypatch.setattr(
         "dataknobs_common.testing._core.os.path.exists",
-        lambda p: False if p == "/.dockerenv" else False,
+        lambda _p: False,
     )
 
     client = _FakeS3Client()
