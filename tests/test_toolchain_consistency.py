@@ -1556,6 +1556,54 @@ def test_the_print_check_examines_shipped_modules_under_a_testing_package(tmp_pa
     )
 
 
+def test_the_print_check_counts_files_rather_than_words(tmp_path: Path) -> None:
+    """One offending file must not be reported as a dozen.
+
+    The findings are ``path:line:col:content`` and content is a line of source,
+    so the tally that joined the array with ``echo "${PRINT_RESULTS[@]}"`` and
+    split it on spaces was counting the *vocabulary* of the offending lines:
+    ``cut -d: -f1`` turned ``print(f"Error`` into a token and ``sort -u`` called
+    it a filename. A promotion that surfaced four prints in ONE file printed
+    "... and 12 more files", and the reader went looking for twelve files that
+    do not exist.
+
+    It only ever over-counted, never under-counted, which is why a wrong number
+    stayed plausible for as long as it did. The single file below carries more
+    distinct words than the ten-file display threshold, so the old tally reaches
+    that threshold on its own and the "more files" line appears; the fixed one
+    counts one.
+    """
+    package = tmp_path / "wordy"
+    package.mkdir()
+    (package / "chatty.py").write_text(
+        "def emit() -> None:\n"
+        '    print("the quick brown fox jumps over the lazy dog again")\n'
+        '    print(f"another line with plenty of separate words in it {1}")\n',
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(
+        [str(ROOT / "bin" / "validate.sh"), str(package)],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    combined = result.stdout + result.stderr
+
+    # The finding itself must still be reported — a tally that counts nothing
+    # would also pass the assertion below.
+    assert "chatty.py" in combined, (
+        "bin/validate.sh's print check did not report the offending file at "
+        "all, so the count below is being asserted over an empty result.\n\n" + combined
+    )
+    assert "more files" not in combined, (
+        "bin/validate.sh reported additional offending files for a run with "
+        "exactly one. The tally is splitting finding text on spaces and "
+        "counting words as filenames.\n\n" + combined
+    )
+
+
 # ``test_the_lint_deferrals_still_describe_the_repository`` was here: a deferral
 # entry matching nothing is stale, and one matching something already linted is
 # the cheapest way to silence a coverage check. Both directions survive, over
