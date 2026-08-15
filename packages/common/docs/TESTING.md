@@ -893,13 +893,15 @@ Postgres fixtures read (defaults shown):
 - `POSTGRES_USER` — `postgres`
 - `POSTGRES_PASSWORD` — `postgres`
 - `POSTGRES_DB` — `dataknobs_test`
-- `DOCKER_CONTAINER` — any truthy value forces the `postgres` host default
+- `DOCKER_CONTAINER` — `true`/`1`/`yes`/`on` (case-insensitive) forces the
+  `postgres` host default; anything else, including `false`, does not
 
 Elasticsearch fixtures read:
 
 - `ELASTICSEARCH_HOST` — `elasticsearch` in Docker, `localhost` otherwise
 - `ELASTICSEARCH_PORT` — `9200`
-- `DOCKER_CONTAINER` — any truthy value forces the `elasticsearch` host default
+- `DOCKER_CONTAINER` — `true`/`1`/`yes`/`on` (case-insensitive) forces the
+  `elasticsearch` host default; anything else, including `false`, does not
 - `DK_ES_TEST_INDEX_MAX_AGE_SECONDS` — staleness threshold (seconds) for the
   session-start index sweep; default `300`
 
@@ -909,7 +911,8 @@ Elasticsearch fixtures read:
 - `AWS_ENDPOINT_URL` — full URL fallback when `LOCALSTACK_ENDPOINT` is unset
 - `LOCALSTACK_HOST` — `localstack` in Docker, `localhost` otherwise
 - `LOCALSTACK_PORT` — `4566`
-- `DOCKER_CONTAINER` — any truthy value forces the `localstack` host default
+- `DOCKER_CONTAINER` — `true`/`1`/`yes`/`on` (case-insensitive) forces the
+  `localstack` host default; anything else, including `false`, does not
 
 Docker detection also checks for `/.dockerenv`.
 

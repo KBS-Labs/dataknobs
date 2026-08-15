@@ -21,7 +21,8 @@ Environment variables (read at fixture-creation time):
 - ``ELASTICSEARCH_HOST`` (default: ``elasticsearch`` in Docker,
   ``localhost`` otherwise)
 - ``ELASTICSEARCH_PORT`` (default: ``9200``)
-- ``DOCKER_CONTAINER`` (any truthy value forces ``elasticsearch`` host default)
+- ``DOCKER_CONTAINER`` (``true``/``1``/``yes``/``on`` forces the
+  ``elasticsearch`` host default; anything else, including ``false``, does not)
 """
 
 from __future__ import annotations
@@ -33,6 +34,8 @@ import time
 import uuid
 from collections.abc import Callable, Iterator
 from typing import Any
+
+from dataknobs_common.testing._core import _docker_aware_default_host
 
 logger = logging.getLogger(__name__)
 
@@ -292,14 +295,11 @@ try:
         """Elasticsearch connection parameters for integration tests.
 
         Detects whether the test process is running inside a Docker
-        container (presence of ``/.dockerenv`` or ``DOCKER_CONTAINER`` env
-        var) and defaults the host to ``elasticsearch`` (the typical compose
-        service name) in that case, ``localhost`` otherwise.
+        container (see :func:`_in_docker_container`) and defaults the host
+        to ``elasticsearch`` (the typical compose service name) in that
+        case, ``localhost`` otherwise.
         """
-        if os.path.exists("/.dockerenv") or os.environ.get("DOCKER_CONTAINER"):
-            default_host = "elasticsearch"
-        else:
-            default_host = "localhost"
+        default_host = _docker_aware_default_host("elasticsearch")
 
         return {
             "host": os.environ.get("ELASTICSEARCH_HOST", default_host),

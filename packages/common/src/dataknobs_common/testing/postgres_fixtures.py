@@ -25,7 +25,8 @@ callers should use directly rather than re-reading these by hand):
 - ``POSTGRES_USER`` (default: ``postgres``)
 - ``POSTGRES_PASSWORD`` (default: ``postgres``)
 - ``POSTGRES_DB`` (default: ``dataknobs_test``)
-- ``DOCKER_CONTAINER`` (any truthy value forces ``postgres`` host default)
+- ``DOCKER_CONTAINER`` (``true``/``1``/``yes``/``on`` forces the
+  ``postgres`` host default; anything else, including ``false``, does not)
 """
 
 from __future__ import annotations
@@ -38,7 +39,7 @@ from collections.abc import Callable, Iterator, Mapping
 from typing import Any
 
 from dataknobs_common.postgres_config import build_postgres_dsn
-from dataknobs_common.testing._core import safe_sql_ident
+from dataknobs_common.testing._core import _docker_aware_default_host, safe_sql_ident
 
 logger = logging.getLogger(__name__)
 
@@ -62,19 +63,16 @@ def postgres_env_params() -> dict[str, Any]:
     resolved to the compose service.
 
     Detects whether the test process is running inside a Docker
-    container (presence of ``/.dockerenv`` or the ``DOCKER_CONTAINER``
-    env var) and defaults the host to ``postgres`` (the typical compose
-    service name) in that case, ``localhost`` otherwise.
+    container (see :func:`_in_docker_container`) and defaults the host to
+    ``postgres`` (the typical compose service name) in that case,
+    ``localhost`` otherwise.
 
     Returns:
         A fresh dict with ``host``, ``port`` (``int``), ``user``,
         ``password`` and ``database``. Suitable for
         :func:`postgres_dsn`, or for splatting into a connect call.
     """
-    if os.path.exists("/.dockerenv") or os.environ.get("DOCKER_CONTAINER"):
-        default_host = "postgres"
-    else:
-        default_host = "localhost"
+    default_host = _docker_aware_default_host("postgres")
 
     return {
         "host": os.environ.get("POSTGRES_HOST", default_host),

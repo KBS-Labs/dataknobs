@@ -66,6 +66,14 @@ def test_default_endpoint_in_docker_env_var(monkeypatch: Any) -> None:
     assert get_localstack_endpoint() == "http://localstack:4566"
 
 
+def test_default_endpoint_ignores_a_negative_docker_container(monkeypatch: Any) -> None:
+    """``DOCKER_CONTAINER=false`` → ``http://localhost:4566``, not the service."""
+    _clear_localstack_env(monkeypatch)
+    _fence_dockerenv(monkeypatch, present=False)
+    monkeypatch.setenv("DOCKER_CONTAINER", "false")
+    assert get_localstack_endpoint() == "http://localhost:4566"
+
+
 def test_localstack_endpoint_env_wins(monkeypatch: Any) -> None:
     """``LOCALSTACK_ENDPOINT`` wins, even inside Docker."""
     _clear_localstack_env(monkeypatch)

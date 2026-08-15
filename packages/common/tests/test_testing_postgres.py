@@ -114,7 +114,7 @@ def test_postgres_connection_params_localhost_default(monkeypatch):
     # patch os.path.exists for that specific path.
     real_exists = os.path.exists
     monkeypatch.setattr(
-        "dataknobs_common.testing.postgres_fixtures.os.path.exists",
+        "dataknobs_common.testing._core.os.path.exists",
         lambda p: False if p == "/.dockerenv" else real_exists(p),
     )
 
@@ -129,12 +129,30 @@ def test_postgres_connection_params_docker_default(monkeypatch):
     _clear_postgres_env(monkeypatch)
     monkeypatch.setenv("DOCKER_CONTAINER", "1")
     monkeypatch.setattr(
-        "dataknobs_common.testing.postgres_fixtures.os.path.exists",
+        "dataknobs_common.testing._core.os.path.exists",
         lambda _p: False,
     )
 
     params = postgres_env_params()
     assert params["host"] == "postgres"
+
+
+def test_postgres_connection_params_ignores_a_negative_docker_container(monkeypatch):
+    """``DOCKER_CONTAINER=false`` must not resolve to the compose host.
+
+    Bare truthiness read every non-empty string as Docker, so the value a
+    developer writes to mean "not in a container" selected the container
+    default and every integration test pointed at a hostname that does
+    not resolve outside compose.
+    """
+    _clear_postgres_env(monkeypatch)
+    monkeypatch.setenv("DOCKER_CONTAINER", "false")
+    monkeypatch.setattr(
+        "dataknobs_common.testing._core.os.path.exists",
+        lambda _p: False,
+    )
+
+    assert postgres_env_params()["host"] == "localhost"
 
 
 def test_postgres_connection_params_explicit_env_overrides(monkeypatch):

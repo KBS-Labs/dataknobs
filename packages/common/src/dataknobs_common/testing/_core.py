@@ -191,16 +191,44 @@ def is_chromadb_available() -> bool:
     return importlib.util.find_spec("chromadb") is not None
 
 
+#: Spellings of ``DOCKER_CONTAINER`` that mean "yes". Anything else —
+#: including ``false``, ``0``, ``no`` and ``off`` — means no.
+#:
+#: An explicit affirmative list rather than a truthiness test, because
+#: ``bool(os.environ.get(...))`` reads *every* non-empty string as yes,
+#: and ``false`` is precisely the value someone writes to mean the
+#: opposite. An unrecognized value resolves to ``localhost``, which is
+#: the recoverable direction: a wrong ``localhost`` fails to connect
+#: where a wrong compose hostname fails to *resolve*, and a probe that
+#: cannot resolve turns into a silent ``requires_*`` skip.
+_DOCKER_AFFIRMATIVE = frozenset({"true", "1", "yes", "on"})
+
+
+def _in_docker_container() -> bool:
+    """Whether this process appears to be running inside a container.
+
+    Two independent signals: ``/.dockerenv``, which the runtime creates
+    and nobody sets by hand, and an affirmative ``DOCKER_CONTAINER``,
+    which is how a compose file or a runner declares it.
+
+    The single definition for the package — the four callers below each
+    used to inline it, which is why a defect in the env check was a
+    defect in four places at once.
+    """
+    if os.path.exists("/.dockerenv"):
+        return True
+    return os.environ.get("DOCKER_CONTAINER", "").strip().lower() in _DOCKER_AFFIRMATIVE
+
+
 def _docker_aware_default_host(docker_host: str) -> str:
     """Return the compose service hostname inside Docker, else ``localhost``.
 
     Mirrors the Docker detection the ``*_connection_params`` fixtures use
-    (``/.dockerenv`` presence or a truthy ``DOCKER_CONTAINER``) so an
-    availability probe and its paired fixture resolve the same host. Without
-    this, a probe run inside a container — where a service lives at its
-    compose hostname, not ``localhost`` — would report the service
-    unavailable and its ``requires_*`` marker would false-skip tests that
-    would actually run.
+    (see :func:`_in_docker_container`) so an availability probe and its
+    paired fixture resolve the same host. Without this, a probe run
+    inside a container — where a service lives at its compose hostname,
+    not ``localhost`` — would report the service unavailable and its
+    ``requires_*`` marker would false-skip tests that would actually run.
 
     Args:
         docker_host: The compose service hostname to use inside Docker.
@@ -208,9 +236,7 @@ def _docker_aware_default_host(docker_host: str) -> str:
     Returns:
         ``docker_host`` inside Docker, otherwise ``"localhost"``.
     """
-    if os.path.exists("/.dockerenv") or os.environ.get("DOCKER_CONTAINER"):
-        return docker_host
-    return "localhost"
+    return docker_host if _in_docker_container() else "localhost"
 
 
 def _is_tcp_service_available(
@@ -393,12 +419,7 @@ def get_localstack_endpoint(host: str | None = None, port: int | None = None) ->
 
         if host is None:
             env_host = os.environ.get("LOCALSTACK_HOST")
-            if env_host:
-                host = env_host
-            elif os.path.exists("/.dockerenv") or os.environ.get("DOCKER_CONTAINER"):
-                host = "localstack"
-            else:
-                host = "localhost"
+            host = env_host if env_host else _docker_aware_default_host("localstack")
 
         if port is None:
             port = int(os.environ.get("LOCALSTACK_PORT", "4566"))
