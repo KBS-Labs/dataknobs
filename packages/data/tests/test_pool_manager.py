@@ -115,6 +115,27 @@ class TestPostgresPoolConfig:
         assert parsed.path == "/prod"
         assert unquote(parsed.password or "") == "p@ss/w0rd"
 
+    def test_to_connection_string_round_trips_a_dsn_supplied_password(self):
+        """A DSN in must give the same DSN out, escaping and all.
+
+        ``from_dict`` routes a ``connection_string`` through the
+        normalizer and keeps the individual fields it yields; this method
+        builds a URI back out of them. Both halves are exercised in
+        production — the pool is configured from a DSN and asyncpg is
+        handed one — so a mismatch between the decoding on the way in and
+        the encoding on the way out changes the credential.
+
+        ``p%40ss`` is the only correct URI spelling of ``p@ss``, so this
+        is the shape every working deployment already uses.
+        """
+        dsn = "postgresql://svc:p%40ss@db.internal:5432/prod"
+
+        config = PostgresPoolConfig.from_dict({"connection_string": dsn})
+
+        assert config.password == "p@ss"
+        # What asyncpg.create_pool receives, unquoted as it will unquote it.
+        assert unquote(urlparse(config.to_connection_string()).password or "") == "p@ss"
+
     def test_to_hash_key(self):
         """Test hash key generation."""
         config = PostgresPoolConfig(host="localhost", port=5432, database="testdb", user="testuser")
