@@ -597,19 +597,34 @@ class PostgresRecordFetcher(RecordFetcher):
     ) -> pd.DataFrame:
         """Fetch records from PostgreSQL table by IDs.
 
+        Every identifier inlined below is quoted. ``fields_to_retrieve`` is a
+        list of **column names**, matching what the sibling fetchers do with the
+        same parameter (``df[fields_to_retrieve]`` — selection by bare label);
+        a name is not a SQL expression, and passing one that reaches outside the
+        configured table used to work.
+
+        ``ids`` needs no quoting and gets none: values go through
+        ``str(value + offset)``, which raises ``TypeError`` on anything that is
+        not a number, so the clause cannot carry caller text.
+
         Args:
             ids: Collection of record IDs to retrieve.
             one_based: True if provided IDs are 1-based. Defaults to False.
-            fields_to_retrieve: Subset of fields for this call, overriding
-                instance default. Defaults to None.
+            fields_to_retrieve: Subset of *column names* for this call,
+                overriding instance default. Defaults to None.
 
         Returns:
             pd.DataFrame: DataFrame containing the retrieved records.
+
+        Raises:
+            ValueError: If a field name, the table name or the ID field name is
+                not a usable SQL identifier.
+            TypeError: If an entry in ``ids`` is not a number.
         """
         if fields_to_retrieve is None:
             fields_to_retrieve = self.fields_to_retrieve
         if fields_to_retrieve is not None:
-            fields = ", ".join(fields_to_retrieve)
+            fields = ", ".join(quote_ident(field) for field in fields_to_retrieve)
         else:
             fields = "*"
         offset = 0
@@ -618,8 +633,8 @@ class PostgresRecordFetcher(RecordFetcher):
         values = ", ".join([str(value + offset) for value in ids])
         return self.db.query(f"""
            SELECT {fields}
-           FROM {self.table_name}
-           WHERE {self.id_field_name} IN ({values})
+           FROM {quote_ident(self.table_name)}
+           WHERE {quote_ident(self.id_field_name)} IN ({values})
         """)
 
 

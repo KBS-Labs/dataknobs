@@ -9,6 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`PostgresRecordFetcher.get_records` inlined three identifiers unquoted, and
+  one of them is caller-supplied per call.** The field list, the table name and
+  the ID field name all went into the SQL through bare f-string slots, while
+  every other SQL site in the module already used `quote_ident`. Because
+  `fields_to_retrieve` is a per-call argument, it was a reachable injection
+  vector rather than a hardening gap: a fetcher configured for one table
+  returned a column from another one, plus `current_user`, through nothing but
+  that parameter. The same gap broke ordinary input — a legitimate `Mixed Case`
+  column name failed with `column "mixed" does not exist`.
+
+  All three positions are now quoted. `fields_to_retrieve` is a list of column
+  names, which is what the parameter already means on the other `RecordFetcher`
+  implementations, so this matches the family rather than narrowing it. `ids` is
+  unchanged and needs no quoting: entries pass through `str(value + offset)`,
+  which rejects anything non-numeric.
+
 - **`PostgresDB` never closed a connection, and opened a new one per call.**
   psycopg2's `with conn` is a *transaction* scope, not a close, so every
   `query` / `execute` / `upload` left its connection open — and the class had

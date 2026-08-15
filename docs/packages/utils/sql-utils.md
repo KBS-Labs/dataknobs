@@ -82,3 +82,7 @@ db = PostgresDB(connector)   # db.close() will NOT close `connector`
 ```
 
 Note that psycopg2's `with connection:` block commits or rolls back a **transaction** — it does not close the connection. That is why closing is explicit here.
+
+### `PostgresRecordFetcher`
+
+Fetches rows by ID, with `fields_to_retrieve` naming the **columns** to return — the same meaning the parameter has on the other `RecordFetcher` implementations, which use it for pandas column selection. Every identifier is quoted, so mixed-case and reserved-word column names work, and a value that is not a column name is rejected rather than becoming part of the statement. `ids` entries must be numbers.
