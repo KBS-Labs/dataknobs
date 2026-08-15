@@ -57,6 +57,14 @@ The table is what `CREATE TABLE` emits. Four things to know before relying on it
 - **A `timedelta64[ns]` column does not upload.** `upload()` renders it with `str()`, which follows the column's own resolution and produces `'86400000000000 nanoseconds'`; PostgreSQL's `interval` has no unit finer than a microsecond and rejects that literal. Every coarser resolution loads — `'86400 seconds'`, `'86400000 milliseconds'` and `'86400000000 microseconds'` are all accepted, and microsecond is what `pd.to_timedelta` produces on pandas 3.x. Cast with `.astype("timedelta64[us]")` if your data is nanosecond-resolution.
 - **Null handling is the caller's.** `upload()` renders every cell with `str()`, which turns `NaN`/`None`/`pd.NA` into the text `'nan'`/`'<NA>'`. A typed column rejects those at any width, so drop or fill nulls before uploading. A nullable extension column is affected even in its non-null cells: `to_records()` upcasts `Int64` to float when a null is present, so `1` is sent as `'1.0'` into the `integer` column the ladder chose for it.
 
+### Column labels
+
+Every column label must be a non-empty string, since it becomes a SQL identifier. A DataFrame built without column names carries pandas' default *integer* labels (`pd.DataFrame([[1, 2]])` has labels `0` and `1`), and `upload()` refuses it with a message naming each offending position and its type. Set them first:
+
+```python
+df.columns = ["first", "second"]
+```
+
 The generated schema is a convenience for scratch and analysis tables. Create the table yourself when you need precise types, constraints, or indexes.
 
 ### Connections

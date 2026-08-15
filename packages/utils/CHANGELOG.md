@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`upload` rejected a DataFrame with default column labels, and said only
+  `Invalid SQL identifier: 0`.** Rejecting is right — an unnamed SQL column is
+  not something `upload` should invent a name for — but the message named
+  neither the subject, nor that pandas supplies integer labels by default, nor
+  that `df.columns = [...]` is the fix. Labels are now checked up front, and
+  the error names every offending position with its type.
+
 - **`PostgresRecordFetcher.get_records` inlined three identifiers unquoted, and
   one of them is caller-supplied per call.** The field list, the table name and
   the ID field name all went into the SQL through bare f-string slots, while

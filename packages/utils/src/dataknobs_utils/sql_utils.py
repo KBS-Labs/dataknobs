@@ -514,6 +514,46 @@ class PostgresDB:
         raw = values.dropna().map(str).str.len().max()
         return max(1, int(raw)) if pd.notna(raw) else 1
 
+    @staticmethod
+    def _require_usable_column_labels(df: pd.DataFrame) -> None:
+        """Reject column labels that cannot become SQL identifiers, and say why.
+
+        Rejecting is the right answer — an unnamed SQL column is not something
+        ``upload`` should invent a name for, and coercing with ``str`` would
+        create columns called ``0`` and ``1`` that nobody asked for. It is also
+        what the rest of this module does with identifiers.
+
+        What was not right was the diagnostic. ``pd.DataFrame([[1, 2]])`` gets
+        pandas' default integer labels, and the caller saw
+        ``Invalid SQL identifier: 0`` from deep inside the schema builder, with
+        nothing to say the subject was a column label, that pandas supplied it,
+        or that ``df.columns = [...]`` is the one-line fix.
+
+        Checked here rather than in ``quote_ident``, which quotes identifiers
+        for the whole module and cannot know that this one came from a
+        DataFrame; and up-front rather than per column, so the message names
+        every offending label instead of stopping at the first.
+
+        Raises:
+            ValueError: If any column label is not a non-empty string.
+        """
+        bad = [
+            (position, label)
+            for position, label in enumerate(df.columns)
+            if not isinstance(label, str) or not label
+        ]
+        if not bad:
+            return
+        described = ", ".join(
+            f"position {position}: {label!r} ({type(label).__name__})" for position, label in bad
+        )
+        raise ValueError(
+            f"DataFrame column labels must be non-empty strings to be used as SQL "
+            f"identifiers; {len(bad)} of {len(df.columns)} are not — {described}. "
+            f"A DataFrame built without column names gets pandas' default integer "
+            f"labels; set them with df.columns = [...] before uploading."
+        )
+
     def upload(self, table_name: str, df: pd.DataFrame) -> None:
         """Upload DataFrame data to a database table.
 
@@ -523,6 +563,7 @@ class PostgresDB:
             table_name: Name of the table to insert data into.
             df: DataFrame with columns matching table fields and data to upload.
         """
+        self._require_usable_column_labels(df)
         fields = self._build_insert_columns(list(df.columns))
         template = ", ".join(["%s"] * len(df.columns))
         if table_name not in self.table_names:
