@@ -12,14 +12,22 @@ So the classification moved to where the rules live, and this file is what
 compares them. Each entry carries a ``[category]`` marker on its own comment:
 
 * ``presentational`` — no finding of this rule can be a behaviour difference.
-  Nothing further is required, because there is nothing to argue.
-* ``covered-elsewhere`` — another tool enforces the property. The reason has to
-  name which, so "covered" is checkable rather than asserted.
+  Where ruff marks any of its fixes *unsafe* it is contradicting that claim, so
+  the entry has to say why the unsafety is not a behaviour difference here.
+* ``covered-elsewhere`` — another tool enforces the property. The reason names
+  which, and a named rule has to be one ruff actually enforces: a cover this
+  config also declines leaves the property enforced by nobody.
 * ``behavioural`` — findings can be real, and the decline is argued. The
   argument is the continuation comment under the entry, and at least one line
   of it is required.
 * ``provisional`` — findings can be real and the decline is **not** argued. The
-  reason carries the measured count.
+  reason carries the count, compared against what ruff reports today.
+
+``presentational`` had no check at all when this file was written, which is the
+inverted gradient worth naming: it is the largest category and the one making
+the strongest claim, so the cheapest way to satisfy every guard here was to
+assert the most. Twelve of its 48 entries turned out to have fixes ruff will not
+apply unasked; four were genuinely behavioural and were re-filed.
 
 The fourth category is the one that earns its place. Three would force an
 unargued decline to be written as though an argument existed, leaving it
@@ -47,6 +55,7 @@ from __future__ import annotations
 import json
 import re
 import tomllib
+from collections import Counter
 from collections.abc import Callable
 from typing import Any
 
@@ -91,8 +100,15 @@ _COUNT_RE = re.compile(r"\b\d+\b")
 #: below both so ordinary movement does not touch them, and far enough above
 #: zero that a parse resolving to nothing fails instead of passing — an empty
 #: scan and a fully categorized config otherwise produce the same report.
+#:
+#: The waiver floor was 15 against a real 31, which is not a floor: it is room
+#: for sixteen waivers to stop parsing unnoticed. It is a backstop now rather
+#: than the guard, because both blocks are pinned against ``tomllib`` below and
+#: the pin catches a partial parse the floor was never going to see. What the
+#: floor still covers is the case the pin cannot: both readers resolving to
+#: nothing and agreeing about it.
 MINIMUM_DECLINES = 40
-MINIMUM_WAIVERS = 15
+MINIMUM_WAIVERS = 25
 
 #: Floors under the inline scan, whose real counts when written were 77 and 458.
 #: Same purpose as the two above: a scan that resolved to nothing would satisfy
@@ -122,34 +138,92 @@ def unargued_behavioural(declines: list[Any]) -> list[str]:
     return [
         f"{d.code}: declared [behavioural] with no argument on the lines below it"
         for d in declines
-        if d.category == "behavioural" and not d.argument
+        if d.category == "behavioural" and not any(line.strip() for line in d.argument)
     ]
 
 
-def uncovered_cover(declines: list[Any]) -> list[str]:
-    """``covered-elsewhere`` entries naming no cover."""
+def uncovered_cover(declines: list[Any], enabled: frozenset[str]) -> list[str]:
+    """``covered-elsewhere`` entries naming no cover that could be covering.
+
+    Naming a rule was accepted on the spelling alone, and a rule this config
+    *also* declines covers nothing — the property is then enforced by neither,
+    which is the one arrangement this category exists to rule out. So a named
+    code has to be one ruff actually enforces, asked of the same authority
+    ``explain`` uses.
+    """
     faults = []
     for d in declines:
         if d.category != "covered-elsewhere":
             continue
-        if not any(cover in d.prose for cover in DECLINE_COVERS) and not _CODE_RE.search(d.prose):
+        if any(cover in d.prose for cover in DECLINE_COVERS):
+            continue
+        named = _CODE_RE.findall(d.prose)
+        if any(code in enabled for code in named):
+            continue
+        detail = (
+            f"names {named}, none of which ruff enforces here" if named else "names no cover at all"
+        )
+        faults.append(
+            f"{d.code}: declared [covered-elsewhere] but {detail} — "
+            f"say which tool, or which enforced rule, decides the property"
+        )
+    return faults
+
+
+def uncounted_provisional(declines: list[Any], measured: dict[str, int]) -> list[str]:
+    """``provisional`` entries whose stated count is not the one ruff reports.
+
+    The count is the whole point of the category: it makes an unargued decline
+    something a report can add up and a reader can watch fall. A figure nothing
+    compares against the tree is a figure that goes stale silently, which is the
+    same defect as the prose page this file replaced — and the reason it went
+    unnoticed is that "carries a count" was checked by pattern rather than by
+    measurement, so any numeral satisfied it. "PEP 484" would have passed.
+
+    Compared as membership rather than equality because the reasons say more
+    than one number — "36 findings, 17 of them in src/" — and which is the total
+    is not something a regex should be deciding.
+    """
+    faults = []
+    for d in declines:
+        if d.category != "provisional":
+            continue
+        stated = {int(n) for n in _COUNT_RE.findall(d.prose)}
+        if not stated:
             faults.append(
-                f"{d.code}: declared [covered-elsewhere] but the reason names no cover — "
-                f"say which tool or rule enforces the property"
+                f"{d.code}: declared [provisional] with no measured finding count in its reason"
+            )
+        elif measured[d.code] not in stated:
+            faults.append(
+                f"{d.code}: reason states {sorted(stated)} but ruff now reports "
+                f"{measured[d.code]} findings — re-measure and rewrite the reason"
             )
     return faults
 
 
-def uncounted_provisional(declines: list[Any]) -> list[str]:
-    """``provisional`` entries carrying no measured count.
+def unargued_presentational(declines: list[Any], unsafe: dict[str, int]) -> list[str]:
+    """``presentational`` entries ruff contradicts, carrying no argument.
 
-    The count is the whole point of the category: it makes an unargued decline
-    something a report can add up and a reader can watch fall.
+    The category with the strongest claim and, until this, the only one with no
+    check behind it — so of the four the cheapest to satisfy was the one
+    asserting the most, and 48 of the 83 entries sat under it.
+
+    ruff already holds an opinion. A fix it marks ``unsafe`` is ruff declining to
+    apply it unasked because doing so may change what the code does, which is the
+    negation of this category's claim, made by the tool.
+
+    Evidence rather than verdict: an unsafe marking is often about comment
+    preservation or a preview flag, not semantics. So the requirement is an
+    *argument*, exactly what ``behavioural`` is held to — say why ruff's
+    unsafety is not a behaviour difference here, or file it as behavioural.
     """
     return [
-        f"{d.code}: declared [provisional] with no measured finding count in its reason"
+        f"{d.code}: declared [presentational], but ruff marks {unsafe[d.code]} of its "
+        f"fixes unsafe and the entry carries no argument"
         for d in declines
-        if d.category == "provisional" and not _COUNT_RE.search(d.prose)
+        if d.category == "presentational"
+        and unsafe.get(d.code)
+        and not any(line.strip() for line in d.argument)
     ]
 
 
@@ -167,7 +241,19 @@ def reasonless_waivers(waivers: list[Any]) -> list[str]:
     ]
 
 
-CHECKS = (uncategorized, unargued_behavioural, uncovered_cover, uncounted_provisional)
+#: The checks that decide from the config text alone. The other three consult a
+#: tool — ruff's enforced set, its fix applicability, its finding counts — and
+#: are driven by their own tests, because a check that shells out cannot be
+#: called with a synthetic record list and still be asking the same question.
+CHECKS = (uncategorized, unargued_behavioural)
+
+#: How many entries each category holds, as a floor. Without this, driving a
+#: category to zero silently retires its check: ``uncounted_provisional`` over
+#: no provisional entries returns ``[]`` and passes, and emptying that category
+#: is this file's own stated goal, so the guard would go quiet at exactly the
+#: moment it was supposed to be confirming success. Real counts when written:
+#: 39 presentational, 29 behavioural, 12 covered-elsewhere, 3 provisional.
+MINIMUM_PER_CATEGORY = {"presentational": 20, "behavioural": 15, "covered-elsewhere": 6}
 
 
 def test_the_parse_agrees_with_the_toml_reader() -> None:
@@ -188,6 +274,72 @@ def test_the_parse_agrees_with_the_toml_reader() -> None:
         "The second list is the dangerous one: those entries are invisible to "
         "every check in this file."
     )
+
+
+def test_a_waiver_the_line_regex_cannot_read_is_still_a_waiver() -> None:
+    """The sibling parse that shipped with no pin, fixed rather than pinned.
+
+    ``parse_per_file_waivers`` was a second line regex over a block ``tomllib``
+    also reads, with the same failure mode as the decline parse and none of its
+    comparison behind it. Its only guard was a floor of 15 against a real
+    population of 31 — room for sixteen waivers to stop parsing with every
+    assertion in this file still green.
+
+    Both consequences point the unsafe way. A waiver nobody parses is never
+    checked for a reason, and ``explain`` answers ``reported`` for a file ruff
+    genuinely waives, which tells a worker a suppressed finding is live.
+
+    The remedy is not a third comparison. The pattern and the codes are TOML
+    *data* and are now read by the reader that cannot miss them; only the reason
+    is a comment, which is the one thing ``tomllib`` cannot return. So this
+    drives the shape that used to disappear — a waiver reformatted across lines,
+    which the regex cannot match by construction — and asserts it survives.
+
+    Written against a mutated copy of the real config rather than a minimal one,
+    so what is exercised is this block with one entry rewrapped, not a synthetic
+    file that shares nothing with it.
+    """
+    text = _config_text()
+    single_line = '"packages/legacy/*" = ["D", "N", "UP"]'
+    assert single_line in text, (
+        "the waiver this rewraps is no longer in the config; pick another "
+        "single-line entry, or this test mutates nothing and proves nothing"
+    )
+    rewrapped = text.replace(single_line, '"packages/legacy/*" = [\n    "D", "N", "UP",\n]', 1)
+
+    parsed = {w.pattern: w for w in parse_per_file_waivers(rewrapped)}
+    declared = tomllib.loads(rewrapped)["tool"]["ruff"]["lint"]["per-file-ignores"]
+
+    assert set(parsed) == set(declared), (
+        "a waiver written across lines was dropped by the parse.\n"
+        f"  declared but not parsed: {sorted(set(declared) - set(parsed))}\n"
+        "Those waivers are checked for no reason, and explain calls their files "
+        "enforced — a worker is told a suppressed finding is live."
+    )
+    assert sorted(parsed["packages/legacy/*"].codes) == ["D", "N", "UP"], (
+        "the rewrapped waiver parsed, but not with the codes it declares"
+    )
+
+
+def test_every_declared_waiver_is_one_this_file_checks() -> None:
+    """Non-vacuity for the reason check, which is only as total as its population.
+
+    ``reasonless_waivers`` reports entries carrying no reason. It says nothing
+    about entries it never received, so the guard is worth exactly what the
+    parse's coverage is worth — and that coverage was the thing that had no
+    floor worth the name. Asserted here rather than assumed, and cheap now that
+    the population comes from ``tomllib``.
+    """
+    text = _config_text()
+    parsed = parse_per_file_waivers(text)
+    declared = tomllib.loads(text)["tool"]["ruff"]["lint"]["per-file-ignores"]
+
+    assert len(parsed) >= MINIMUM_WAIVERS, (
+        f"found only {len(parsed)} per-file waivers, below the floor of "
+        f"{MINIMUM_WAIVERS} — the block has moved and this no longer reads it"
+    )
+    assert {w.pattern for w in parsed} == set(declared)
+    assert all(sorted(w.codes) == sorted(declared[w.pattern]) for w in parsed)
 
 
 def test_every_decline_carries_a_category() -> None:
@@ -213,22 +365,76 @@ def test_every_behavioural_decline_carries_its_argument() -> None:
 
 
 def test_every_covered_decline_names_its_cover() -> None:
-    faults = uncovered_cover(parse_declines(_config_text()))
+    """And the cover has to be something that could be covering.
+
+    A named rule was accepted on its spelling. ``D213``'s reason names ``D203``
+    as well as ``D212``, and ``D203`` is declined right beside it — so a reason
+    that named only the declined one would have passed while describing a
+    property nothing enforces. The enforced set comes from ruff.
+    """
+    faults = uncovered_cover(parse_declines(_config_text()), _contract.enabled_rules())
     assert not faults, "\n".join(
         [
             f"[covered-elsewhere] has to say what the cover is — {' or '.join(DECLINE_COVERS)}, "
-            "or the rule code that enforces the same property:",
+            "or a rule code that ruff actually enforces here:",
             *faults,
         ]
     )
 
 
 def test_every_provisional_decline_carries_its_count() -> None:
-    faults = uncounted_provisional(parse_declines(_config_text()))
+    """The count, compared against the tree rather than matched as a numeral.
+
+    This is the category whose target is zero, so its figures are the only ones
+    in the file that are supposed to move — which makes them the ones most able
+    to go stale unnoticed. Measured, they cannot.
+    """
+    declines = parse_declines(_config_text())
+    provisional = [d.code for d in declines if d.category == "provisional"]
+    assert provisional, (
+        "no provisional declines remain. That is this category's stated target, "
+        "so it is good news — but delete this assertion deliberately rather than "
+        "letting the check below pass over an empty list."
+    )
+
+    faults = uncounted_provisional(declines, _contract.measure_declines(provisional))
     assert not faults, "\n".join(
         [
             "[provisional] is the unargued category, and its count is what makes "
             "the backlog of unargued declines a number rather than a feeling:",
+            *faults,
+        ]
+    )
+
+
+def test_every_presentational_decline_ruff_contradicts_is_argued() -> None:
+    """The check the largest category shipped without.
+
+    Not hypothetical, and not a small correction. Run against the classification
+    as first written, twelve of the 48 ``presentational`` entries had findings
+    whose fixes ruff marks unsafe, and none of the twelve said a word about it.
+    Four of those turned out to be genuinely behavioural on ruff's own stated
+    reasoning — RUF005, SIM103, SIM118 and PLR1714, where the wording is "change
+    program behaviour", "change the program's behavior", "not... known to be a
+    dictionary" and "change behavior in the presence of side-effects" — and were
+    re-filed. The other eight are unsafe over comments, a preview flag or
+    docstring-parsing tools, and now say so.
+
+    The measurement is one ruff invocation over the audit's roots and takes well
+    under a second, which is the whole cost of the category having a check.
+    """
+    declines = parse_declines(_config_text())
+    presentational = [d.code for d in declines if d.category == "presentational"]
+    assert presentational, "no presentational declines, so this asserts nothing"
+
+    unsafe = _contract.unsafely_fixable(presentational)
+    faults = unargued_presentational(declines, unsafe)
+    assert not faults, "\n".join(
+        [
+            "[presentational] claims no finding of the rule can be a behaviour "
+            "difference. ruff disagrees about these, by declining to apply their "
+            "fixes unasked. Write the argument for why its unsafety is not a "
+            "behaviour difference here, or file the entry as [behavioural]:",
             *faults,
         ]
     )
@@ -269,11 +475,12 @@ def test_the_checks_detect_the_shapes_they_exist_for() -> None:
     a real config. That makes them indistinguishable from checks that cannot
     fail — the failure mode the parse pin exists for, one level up.
     """
+    enabled = frozenset({"D211", "D212"})
     good = Decline("X100", "presentational", "a rendering property", ())
     assert not uncategorized([good])
     assert not unargued_behavioural([good])
-    assert not uncovered_cover([good])
-    assert not uncounted_provisional([good])
+    assert not uncovered_cover([good], enabled)
+    assert not uncounted_provisional([good], {})
 
     assert uncategorized([Decline("X101", None, "no marker at all", ())])
     assert uncategorized([Decline("X102", "invented", "not in the vocabulary", ())])
@@ -281,14 +488,45 @@ def test_the_checks_detect_the_shapes_they_exist_for() -> None:
     assert not unargued_behavioural(
         [Decline("X104", "behavioural", "argued", ("because of this",))]
     )
-    assert uncovered_cover([Decline("X105", "covered-elsewhere", "something else does it", ())])
-    assert not uncovered_cover([Decline("X106", "covered-elsewhere", "mypy does it", ())])
-    assert not uncovered_cover([Decline("X107", "covered-elsewhere", "D211 does it", ())])
-    assert uncounted_provisional([Decline("X108", "provisional", "not yet read", ())])
+    assert unargued_behavioural([Decline("X111", "behavioural", "blank lines below", ("", " "))]), (
+        "an argument of empty comment lines is not an argument, and `not d.argument` "
+        "is False for a tuple holding them"
+    )
+    assert uncovered_cover(
+        [Decline("X105", "covered-elsewhere", "something else does it", ())], enabled
+    )
+    assert not uncovered_cover([Decline("X106", "covered-elsewhere", "mypy does it", ())], enabled)
+    assert not uncovered_cover([Decline("X107", "covered-elsewhere", "D211 does it", ())], enabled)
+    assert uncovered_cover([Decline("X112", "covered-elsewhere", "D203 does it", ())], enabled), (
+        "a cover this config also declines enforces nothing, so naming it must not "
+        "satisfy the check"
+    )
+
+    assert uncounted_provisional([Decline("X108", "provisional", "not yet read", ())], {"X108": 3})
     assert uncounted_provisional(
-        [Decline("X110", "provisional", "the same shape as RUF012, unread", ())]
+        [Decline("X110", "provisional", "the same shape as RUF012, unread", ())], {"X110": 3}
     ), "a digit inside a rule code is not a measured count"
-    assert not uncounted_provisional([Decline("X109", "provisional", "12 findings, unread", ())])
+    assert not uncounted_provisional(
+        [Decline("X109", "provisional", "12 findings, 4 in src/, unread", ())], {"X109": 12}
+    )
+    assert uncounted_provisional(
+        [Decline("X113", "provisional", "12 findings, unread", ())], {"X113": 400}
+    ), "a count the tree no longer reports is a stale count, not a measured one"
+    assert uncounted_provisional(
+        [Decline("X114", "provisional", "PEP 484 prohibits implicit Optional", ())], {"X114": 7}
+    ), "a numeral in unrelated prose is not a measurement"
+
+    assert unargued_presentational(
+        [Decline("X115", "presentational", "asserted", ())], {"X115": 4}
+    ), "ruff calling the fix unsafe contradicts the category, so it needs an argument"
+    assert not unargued_presentational(
+        [Decline("X116", "presentational", "asserted", ("unsafe only over comments",))],
+        {"X116": 4},
+    )
+    assert not unargued_presentational([Decline("X117", "presentational", "asserted", ())], {}), (
+        "a rule with no unsafe fix is not contradicted, and must not be made to argue"
+    )
+
     assert reasonless_waivers([PerFileWaiver("a/b.py", ("F401",), "")])
     assert not reasonless_waivers([PerFileWaiver("a/b.py", ("F401",), "the import is the test")])
 
@@ -301,9 +539,22 @@ def test_each_check_reads_something(check: Check) -> None:
     file. The floor in the pin covers that for the real config; this covers the
     checks themselves, by proving each one is reached by real records rather than
     short-circuiting on an empty population.
+
+    Non-emptiness of the *whole* list is not enough, which is why the floors
+    below are per category. A check reads one category, so it goes vacuous when
+    that category empties while the list stays long — and for ``provisional``
+    emptying it is the declared goal, so the guard would fall silent at the
+    moment it was meant to confirm the win.
     """
     declines = parse_declines(_config_text())
     assert declines, "the decline parse returned nothing"
+    held = Counter(d.category for d in declines)
+    for category, floor in MINIMUM_PER_CATEGORY.items():
+        assert held[category] >= floor, (
+            f"[{category}] holds {held[category]} entries, below the floor of {floor}. "
+            "Either the parse has stopped reading them, or the category emptied — "
+            "and a check over an empty category passes without reading anything."
+        )
     assert check(declines) == [], check.__name__
 
 

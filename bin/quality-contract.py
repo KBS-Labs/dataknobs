@@ -49,6 +49,7 @@ import tomllib
 from collections import Counter, defaultdict
 from collections.abc import Callable, Iterable, Iterator
 from contextlib import contextmanager
+from functools import cache
 from pathlib import Path, PurePosixPath
 from typing import Any, NamedTuple
 
@@ -862,11 +863,21 @@ def parse_declines(text: str) -> list[Decline]:
         if match is None:
             index += 1
             continue
+        # An argument is aligned *under* its entry's comment. A section header
+        # sits at the block's own indentation, to the left of every entry's `#`,
+        # and without this column test the run swallows it and everything after
+        # it: SIM113 was reported as arguing twelve lines about SIM115, because
+        # the two blocks have no blank line between them. Worse than the wrong
+        # display, an entry written directly above a header would inherit it and
+        # satisfy the check that requires [behavioural] to be argued.
+        comment_column = lines[index].index("#")
         argument: list[str] = []
         index += 1
         while index < len(lines):
             continuation = _CONTINUATION_RE.match(lines[index])
             if continuation is None or _DECLINE_RE.match(lines[index]):
+                break
+            if lines[index].index("#") < comment_column:
                 break
             argument.append(continuation.group(1).strip())
             index += 1
@@ -876,14 +887,9 @@ def parse_declines(text: str) -> list[Decline]:
     return declines
 
 
-def parse_per_file_waivers(text: str) -> list[PerFileWaiver]:
-    """Every per-file waiver, with the reason its line carries.
-
-    Separate from ``parse_declines`` because the two answer different questions
-    about the same finding — whether a rule is declined everywhere, or waived
-    here — and ``explain`` has to distinguish them to be worth asking.
-    """
-    waivers: list[PerFileWaiver] = []
+def _waiver_reasons(text: str) -> dict[str, str]:
+    """The trailing comment on each per-file waiver line, which TOML discards."""
+    reasons: dict[str, str] = {}
     started = False
     for raw in text.splitlines():
         if raw.startswith("[tool.ruff.lint.per-file-ignores]"):
@@ -894,11 +900,47 @@ def parse_per_file_waivers(text: str) -> list[PerFileWaiver]:
         if raw.startswith("["):
             break
         match = _PER_FILE_RE.match(raw)
-        if match is None:
-            continue
-        codes = tuple(code for code in _QUOTED_RE.findall(match.group(2)))
-        waivers.append(PerFileWaiver(match.group(1), codes, (match.group(3) or "").strip()))
-    return waivers
+        if match is not None:
+            reasons[match.group(1)] = (match.group(3) or "").strip()
+    return reasons
+
+
+def parse_per_file_waivers(text: str) -> list[PerFileWaiver]:
+    """Every per-file waiver, with the reason its line carries.
+
+    Separate from ``parse_declines`` because the two answer different questions
+    about the same finding — whether a rule is declined everywhere, or waived
+    here — and ``explain`` has to distinguish them to be worth asking.
+
+    Split by what each reader can actually see, the way ``enabled_rules`` splits
+    the question one scope up. The pattern and the code list are TOML *data*, so
+    ``tomllib`` reads them and this module does not get a second opinion; only
+    the reason is a comment, which is the one thing ``tomllib`` cannot return.
+
+    It was a line regex over both until the second reading. That regex is
+    anchored to a single line by construction, so a waiver reformatted across
+    lines — ordinary, and what a formatter does to a long one — simply stopped
+    being a waiver. Nothing compared the two readings, and the population had no
+    floor worth the name: 15 declared against 31 real, room for sixteen to
+    vanish. Both consequences point the unsafe way. A waiver nobody parses is
+    never checked for a reason, and ``explain`` calls its file enforced — which
+    tells a worker a suppressed finding is live.
+
+    Reading the data from the reader that cannot miss it retires that whole
+    class rather than guarding it. What is left is a reason that failed to
+    parse, which arrives as an empty string and fails the guard that requires
+    one, by name, loudly.
+    """
+    declared = (
+        tomllib.loads(text).get("tool", {}).get("ruff", {}).get("lint", {}).get("per-file-ignores")
+    )
+    if not declared:
+        return []
+    reasons = _waiver_reasons(text)
+    return [
+        PerFileWaiver(pattern, tuple(codes), reasons.get(pattern, ""))
+        for pattern, codes in declared.items()
+    ]
 
 
 #: The inline suppression channel, which no artifact reported until this leg.
@@ -1106,6 +1148,18 @@ EXPLAIN_UNSELECTED = "not selected"
 _ENABLED_BLOCK_RE = re.compile(r"^linter\.rules\.enabled = \[(.*?)^\]", re.DOTALL | re.MULTILINE)
 _RULE_CODE_RE = re.compile(r"\(([A-Z]+\d+)\)")
 
+#: What the audit measures over. Named once because two functions ask the same
+#: question and a second copy is how they come to disagree about the population
+#: while both report a number.
+#:
+#: These are *audit* reads — "how much does this decline stand in front of" —
+#: not the ratchet, which derives its population from ``tracked_python()``
+#: filtered through the contract's cells and is the authority on what is
+#: measured. A cell added to the contract outside these roots is counted by the
+#: ratchet and not by the audit, which is a gap in the audit's reach and not in
+#: the ceilings.
+_MEASURED_TARGETS = ("packages", "bin", "src", "tests", "conftest.py")
+
 
 class Explanation(NamedTuple):
     """Whether a code is reported at a path, and if not, why not."""
@@ -1154,24 +1208,79 @@ def enabled_rules(config: Path = _ROOT / "pyproject.toml") -> frozenset[str]:
     return frozenset(_RULE_CODE_RE.findall(block.group(1)))
 
 
+@cache
+def selector_rules(
+    selectors: tuple[str, ...], config: Path = _ROOT / "pyproject.toml"
+) -> frozenset[str]:
+    """Every rule code a set of selectors names, asked of ruff.
+
+    ``enabled_rules`` above declines to re-implement ruff's selector resolution,
+    for a reason it measured. This is the same question one scope down — what
+    ``["D", "N", "UP"]`` on a per-file waiver reaches — and it was answered here
+    by ``code.startswith(named)`` until the second reading of that argument.
+
+    A prefix test is not ruff's rule, and it is wrong in *both* directions.
+    ``"NPY002".startswith("N")`` is true and ``N`` is pep8-naming, a different
+    linter from numpy — so a waiver written to relax naming reported itself as
+    covering a rule it does not reach. In the other direction ``PL`` names
+    ``PLC0415`` to ruff and no letter-prefix rule can see it, because the
+    pylint selector spans ``PLC``/``PLE``/``PLR``/``PLW``.
+
+    The repository's own settings are kept rather than resolved under
+    ``--isolated``: ``pydocstyle.convention`` and ``target-version`` genuinely
+    change which codes a family names here — 95 rules against 105 for these
+    three — and the wider answer is the one that claims a waiver covers what it
+    does not. Only ``ignore`` is neutralised, so the question stays "does this
+    selector name this code" rather than "and is it declined elsewhere", which
+    is the caller's own next question and already answered before this is asked.
+
+    Cached because the ten distinct code sets in this config are asked about
+    once per waiver per lookup, and each answer costs a ruff invocation.
+    """
+    result = _run(
+        [
+            "uv",
+            "run",
+            "ruff",
+            "check",
+            "--config",
+            str(config),
+            "--config",
+            "lint.ignore = []",
+            "--select",
+            ",".join(selectors),
+            "--show-settings",
+            str(_ROOT / "pyproject.toml"),
+        ]
+    )
+    block = _ENABLED_BLOCK_RE.search(result.stdout)
+    if block is None:
+        raise SystemExit(
+            f"ruff --show-settings reported no rule set for {','.join(selectors)}; "
+            f"explain cannot say what that waiver covers:\n{result.stdout}\n{result.stderr}"
+        )
+    return frozenset(_RULE_CODE_RE.findall(block.group(1)))
+
+
 def waiver_covers(waiver: PerFileWaiver, code: str, path: str) -> bool:
     """Whether a per-file waiver reaches this code at this path.
 
-    Two approximations of ruff, both deliberate and both narrower than the
-    verdict they feed. A waiver may name a family (``["D", "N", "UP"]`` for the
-    legacy package) rather than a code, so codes are matched by prefix. And a
-    pattern with no separator matches a basename, which is how ``__init__.py``
-    reaches every package — with a separator it matches the repo-relative path.
+    One approximation of ruff remains, and it is the deliberate one: a pattern
+    with no separator matches a basename, which is how ``__init__.py`` reaches
+    every package — with a separator it matches the repo-relative path. A path
+    this gets wrong is reported as enforced, which is the direction that sends
+    someone to look rather than the direction that tells them not to.
 
-    This decides only the *waived* branch, never *reported*: a path this gets
-    wrong is reported as enforced, which is the direction that sends someone to
-    look rather than the direction that tells them not to.
+    The code half used to be an approximation too, and it failed in the opposite
+    direction — see ``selector_rules``, which now answers it. The path is tested
+    first because that half is local and this one costs a subprocess.
     """
-    if not any(code.startswith(named) for named in waiver.codes):
-        return False
     if "/" in waiver.pattern:
-        return fnmatch.fnmatchcase(path, waiver.pattern)
-    return fnmatch.fnmatchcase(PurePosixPath(path).name, waiver.pattern)
+        if not fnmatch.fnmatchcase(path, waiver.pattern):
+            return False
+    elif not fnmatch.fnmatchcase(PurePosixPath(path).name, waiver.pattern):
+        return False
+    return code in selector_rules(waiver.codes)
 
 
 def explain_code(
@@ -1261,6 +1370,62 @@ def decline_audit(config: Path = _ROOT / "pyproject.toml") -> dict[str, Any]:
     }
 
 
+def unsafely_fixable(codes: list[str], config: Path = _ROOT / "pyproject.toml") -> dict[str, int]:
+    """Which of these codes have findings ruff will not fix without ``--unsafe-fixes``.
+
+    The authority behind the ``presentational`` category, which otherwise has
+    none. That category claims no finding of a rule can be a behaviour
+    difference, and it is the largest of the four and the only one nothing
+    checked — so the cheapest way to satisfy every guard was to assert the most.
+
+    ruff already publishes an opinion on this per finding. An ``unsafe``
+    applicability is ruff saying it will not apply the fix unasked because doing
+    so may change what the code does — which is the negation of the claim, made
+    by the tool rather than by a reader of the rule's name.
+
+    It is *evidence*, not a verdict, and the guard treats it that way: several of
+    these are unsafe over comment preservation or a preview flag rather than
+    semantics. What it establishes is that the entry needs an argument, which is
+    the same standard ``behavioural`` is already held to.
+
+    One invocation for the whole category, and the count per code so the argument
+    can name it.
+    """
+    if not codes:
+        return {}
+    result = _run(
+        [
+            "uv",
+            "run",
+            "ruff",
+            "check",
+            *_MEASURED_TARGETS,
+            "--config",
+            str(config),
+            "--select",
+            ",".join(sorted(codes)),
+            "--no-cache",
+            "--quiet",
+            "--output-format",
+            "json",
+        ]
+    )
+    _refuse_non_verdict("ruff", result)
+    try:
+        findings: list[dict[str, Any]] = json.loads(result.stdout or "[]")
+    except json.JSONDecodeError as exc:
+        raise SystemExit(
+            f"ruff did not return JSON, so nothing was measured: {exc}\n{result.stdout[:400]}"
+        ) from exc
+
+    unsafe: Counter[str] = Counter()
+    for finding in findings:
+        fix = finding.get("fix") or {}
+        if fix.get("applicability") == "unsafe":
+            unsafe[finding["code"]] += 1
+    return dict(unsafe)
+
+
 def measure_declines(codes: list[str], config: Path = _ROOT / "pyproject.toml") -> dict[str, int]:
     """How many findings each declined code stands in front of.
 
@@ -1276,11 +1441,7 @@ def measure_declines(codes: list[str], config: Path = _ROOT / "pyproject.toml") 
             "run",
             "ruff",
             "check",
-            "packages",
-            "bin",
-            "src",
-            "tests",
-            "conftest.py",
+            *_MEASURED_TARGETS,
             "--config",
             str(config),
             "--select",
@@ -1290,6 +1451,14 @@ def measure_declines(codes: list[str], config: Path = _ROOT / "pyproject.toml") 
             "--statistics",
         ]
     )
+
+    # Before the parse, for the reason the canonical measurer states above: the
+    # failure this catches produces *empty* stdout, and the parse below turns
+    # that into a measured zero for every code asked about. Those zeroes are not
+    # inert here — `provisional` entries carry a measured count, and a count of
+    # zero is what an entry looks like when its findings have been cleared.
+    _refuse_non_verdict("ruff", result)
+
     counts: dict[str, int] = {}
     for line in result.stdout.splitlines():
         fields = line.split(maxsplit=2)

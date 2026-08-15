@@ -282,12 +282,38 @@ ignore = [
     "D105", # [presentational] Missing docstring in magic method
     "D107", # [presentational] Missing docstring in __init__
     "D200", # [presentational] One-line docstring should fit on one line
-    "D203", # [presentational] 1 blank line before class docstring (conflicts with D211)
+            # ruff marks the fix unsafe because it "could affect tools that parse
+            # docstrings, documentation generators, or custom introspection
+            # utilities". That mechanism is real in this tree rather than absent:
+            # three bin/ scripts pass __doc__ to argparse, and one takes
+            # __doc__.splitlines()[0], which a reflow onto one line would change.
+            # The decline rests on where the findings are, not on nothing reading
+            # __doc__ -- all three sit on test-module docstrings, and those three
+            # scripts have no D200 finding. A finding on one of them is a different
+            # question and should be read rather than inherited from this line.
+    "D203", # [covered-elsewhere] 1 blank line before class docstring -- D211 enforces
+            # the opposite and is enabled, so the property is decided, not unmeasured.
+            # Filed presentational until it was read: that category claims a finding
+            # could never matter, where the truth is that it always would -- this pair
+            # is mutually exclusive by construction and 3,883 findings is simply the
+            # count of classes D211 already governs.
     "D205", # [presentational] 1 blank line between summary line and description
     "D210", # [presentational] No whitespace allowed surrounding docstring text
-    "D213", # [presentational] Multi-line summary starts on second line (conflicts with D212)
+    "D213", # [covered-elsewhere] Multi-line summary starts on second line -- D212
+            # enforces the opposite and is enabled. D203's case exactly, and the
+            # larger of the two at 9,625 findings, which is the single biggest number
+            # behind any entry in this list and was standing under the category that
+            # requires nothing be said about it.
     "D401", # [presentational] First line should be in imperative mood
     "D415", # [presentational] First line should end with period
+            # The fix appends one character to a docstring's first line, and 101 of
+            # the 105 findings carry it as unsafe. Where that reaches rendered
+            # output it is named rather than waved past: 18 sit on click commands
+            # in the fsm CLI, whose docstrings click renders as `--help` text, so a
+            # fix moves a period in help output. That is a change to presentation,
+            # which is what this category is for -- the test is whether program
+            # behaviour can differ, and a period in help text is not that. None are
+            # in bin/, so the argparse __doc__ readers noted under D200 are untouched.
     "D417", # [presentational] Missing argument description in docstring
 
     # flake8-bugbear
@@ -314,7 +340,16 @@ ignore = [
     "W293", # [behavioural] Blank line contains whitespace
             # The same mechanism as W291 above: a whitespace-only line inside a
             # triple-quoted string is content, not layout. Zero findings today.
-    "E501", # [presentational] Line too long (already configured at 100)
+    "E501", # [behavioural] Line too long (configured at 100)
+            # The third rule on this mechanism, and it sat directly under the two
+            # above filed as though it were a different kind of thing. E501 measures
+            # the same physical line, so a finding inside a triple-quoted string is
+            # a statement about content: 13 files hold a >100-character line inside
+            # a multi-line string token today. It has no autofix either, so acting
+            # on one of those is a hand-rewrite of literal text, not a reflow.
+            # Its old reason -- "already configured at 100" -- described the limit
+            # rather than the decline, which is the shape a category marker with no
+            # required argument leaves undisturbed.
 
     # Type annotations — covered by mypy, which measures the same property with teeth.
     # `disallow_untyped_defs` is what the strict tier turns on, and `no-untyped-def`
@@ -339,7 +374,14 @@ ignore = [
               # answer it repo-wide and in one direction.
 
     # Import location - often necessary for circular deps
-    "PLC0415", # [presentational] Import should be at the top-level of a file
+    "PLC0415", # [behavioural] Import should be at the top-level of a file
+               # Moving a function-level import to module scope changes when the
+               # module is evaluated, and can close an import cycle that the local
+               # placement was there to keep open. The argument is already in this
+               # file: I001 is declined [behavioural] on the grounds that "this
+               # repository carries enough circular-dependency pressure to decline
+               # PLC0415 over it, across 1,949 sites". Both cannot be true. That
+               # entry has it right, and this one was reading its own rule name.
 
     # Type-checking imports — NOT presentational. Moving an import into a
     # `TYPE_CHECKING` block removes it at runtime, and anything that evaluates
@@ -358,9 +400,26 @@ ignore = [
 
     # Code simplification - sometimes less readable
     "SIM102", # [presentational] Use a single if statement instead of nested if
-    "SIM103", # [presentational] Return negated condition directly
+              # Unsafe for a reason that is not about this code at all: ruff marks
+              # the fix safe under preview and unsafe otherwise, and preview is off
+              # here. `if a: if b:` and `if a and b:` short-circuit identically.
+              # 23 findings.
+    "SIM103", # [behavioural] Return negated condition directly
+              # ruff marks this fix unsafe in its own words: it "may change the
+              # program's behavior if the condition does not return a proper
+              # Boolean", and a custom __eq__ can dodge even the bool() wrapper the
+              # fix inserts. Nine findings, seven of them carrying an unsafe fix.
     "SIM110", # [presentational] Use return any() instead of for loop
-    "SIM118", # [presentational] Use `key in dict` instead of `key in dict.keys()`
+              # ruff: "always marked as unsafe because it might remove comments".
+              # Losing a comment is a loss to the reader, not a difference the
+              # program can observe -- `any()` short-circuits exactly as the loop
+              # it replaces does. 4 findings.
+    "SIM118", # [behavioural] Use `key in dict` instead of `key in dict.keys()`
+              # ruff marks the fix safe only "when the type of obj is known to be a
+              # dictionary; otherwise, it is marked as unsafe" -- and all 13 findings
+              # here are the unsafe kind. On anything that is not a dict, `in` asks
+              # __contains__ and `.keys()` asks whatever that method returns, which
+              # are not required to agree.
     "PLW3301", # [behavioural] Nested min/max calls can be flattened
                # Flattening `max(a, max(gen))` to `max(a, *gen)` changes the failure
                # mode on an empty iterable from ValueError to TypeError. Safe at the
@@ -371,7 +430,17 @@ ignore = [
               # loop keeps only a *weak* reference to a bare create_task, so the task
               # may be collected mid-flight and silently never run to completion.
     "SIM105", # [presentational] Use contextlib.suppress
+              # 38 findings carry an unsafe fix. Driven on a real site to see what
+              # the fix does rather than inferred: it rewrites try/except/pass into
+              # `with contextlib.suppress(...)` and inserts the import -- same
+              # exception caught, same statements skipped. What it disturbs is the
+              # comment in the except body and the import block's order, and I001
+              # is declined separately.
     "SIM108", # [presentational] Use ternary operator instead of if-else-block
+              # 33 findings carry an unsafe fix. Driven on a real site, the rewrite
+              # is `x = a if cond else b` from the four-line form -- one expression,
+              # same branch taken, same object bound. The unsafety is comment
+              # placement, which the site it was checked against kept intact.
     "SIM113", # [behavioural] Use enumerate() for index variable
               # The advice does not check for async context: at one of its two sites
               # the loop is an `async for`, where enumerate() raises TypeError. A fix
@@ -400,7 +469,11 @@ ignore = [
     "PLR0915", # [presentational] Too many statements (configured at 50)
     "PLR2004", # [presentational] Magic value used in comparison
     "PLR5501", # [presentational] Use elif instead of else-if - style preference
-    "PLR1714", # [presentational] Consider merging multiple comparisons
+    "PLR1714", # [behavioural] Consider merging multiple comparisons
+               # ruff: "always unsafe since literal sets and tuples evaluate their
+               # members eagerly whereas `or` comparisons are short-circuited",
+               # so a fix changes behaviour wherever a member has side effects or
+               # is expensive. Eleven findings, all of them the unsafe kind.
 
     # Unused arguments — "the signature belongs to the interface" is an argument
     # rather than the absence of one, and every member here can equally be a
@@ -458,11 +531,21 @@ ignore = [
 
     # Other style preferences
     "C414", # [presentational] Unnecessary list() call within sorted()
+            # ruff: "marked as unsafe, as it may occasionally drop comments when
+            # rewriting the call. In most cases, though, comments will be
+            # preserved." sorted() materialises its argument either way, so the
+            # inner list() decides nothing the program can see. One finding.
     "E721", # [behavioural] Use isinstance() instead of type comparison
             # ruff's own documentation is explicit that the rewrite changes behaviour
             # under NumPy, Pandas and SQLAlchemy, where `__eq__` on a type is
             # overloaded and `type(x) == T` is not `isinstance(x, T)`.
-    "RUF005", # [presentational] Consider unpacking instead of concatenation
+    "RUF005", # [behavioural] Consider unpacking instead of concatenation
+              # ruff: the fix is "always marked as unsafe because the `+` operator
+              # uses the __add__ magic method and `*`-unpacking uses __iter__. Both
+              # of these could have custom implementations, causing the fix to change
+              # program behaviour." Not abstract here -- NPY is in select, and for an
+              # array `a + [b]` is elementwise addition while `[*a, b]` builds a list.
+              # 22 findings, 21 carrying an unsafe fix.
     "RUF012", # [provisional] Mutable class attributes should use ClassVar — 25 findings,
               # 12 in src/, none read. Each is either a missing ClassVar annotation or a
               # genuine shared-mutable-default bug, and only the site says which.
@@ -471,7 +554,18 @@ ignore = [
               # mypy leaves unchecked, so this cover has the same hole the ANN block
               # has, and it closes the same way.
     "RUF022", # [presentational] __all__ is not sorted
-    "N802", # [presentational] Function name should be lowercase
+              # ruff marks the fix unsafe only "if there are any comments that take
+              # up a whole line by themselves inside the __all__ definition", which
+              # is what the 43 unsafe findings here are. Reordering the names
+              # themselves changes nothing: __all__ decides which names `import *`
+              # binds, not the order anything is defined or evaluated in.
+    "N802", # [behavioural] Function name should be lowercase
+            # Two findings, and both are a rename of exported public API:
+            # ComplexQuery.AND and ComplexQuery.OR, where ComplexQuery is in
+            # dataknobs_data's __all__. That is the criterion UP040/UP042/UP046/
+            # UP047 are already declined under here -- "each would change a public
+            # API, not just syntax" -- so the two entries disagreed about the same
+            # test. A name is only presentational until something calls it.
 
     # Modernizations deliberately declined — each would change a public API,
     # not just syntax. Revisit individually, not as a sweep.

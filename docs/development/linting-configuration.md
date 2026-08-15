@@ -15,74 +15,47 @@ A comprehensive linting cleanup was performed, reducing Ruff errors in the data 
 
 ## Error Categories and Decisions
 
-### 1. Important Errors to Keep (NOT ignored)
+**The classification lives in `pyproject.toml`, beside the rules it classifies.**
+Every entry in the `[tool.ruff.lint] ignore` list carries a `[category]` marker
+on its own comment, and `tests/test_lint_policy.py` compares the two on every
+run. This page used to carry that classification by hand, and the two drifted in
+the way only a duplicated declaration can — the section that stood here listed
+six rules under "Important Errors to Keep (NOT ignored)" that the configuration
+declines (`PLR1714`, `PLR5501`, `PLW2901`, `RUF005`, `TC001`, `TC003`), told you
+`UP038` was ignored when ruff has removed that rule outright, and omitted 54 of
+the 83 declines entirely. A hand-maintained copy is what the markers replaced,
+so it is not restated here.
 
-#### Critical Bugs
-- **F811**: Redefinition of unused variable - Can mask real bugs
-- **F821**: Undefined name - Runtime errors
-- **B904**: Raise without `from` inside except - Loses exception context
-- **PLE0704**: Bare raise not in exception handler - Invalid Python
+The four categories:
 
-#### Code Quality
-- **F401**: Unused imports (except in __init__.py)
-- **F402**: Import shadowing
-- **B007**: Unused loop variable not prefixed with underscore
-- **B027**: Empty method without abstract decorator (use # noqa: B027 for intentional empty implementations)
-- **PLR1714**: Consider merging multiple comparisons
-- **PLR5501**: Consider using elif
-- **RUF005**: Consider iterable unpacking
-- **NPY002**: Replace legacy np.random.rand - use modern np.random.default_rng()
-- **SIM101**: Multiple isinstance calls - merge for clarity
-- **PYI056**: Use += for __all__ modifications - better type checker support
-- **PLW2901**: Loop variable overwritten - can indicate logic errors
-- **TC001/TC003/TC004**: Type checking imports - proper placement for performance
+| Category | Claim | What the guard requires |
+|---|---|---|
+| `presentational` | no finding can be a behaviour difference | an argument wherever ruff marks one of its fixes *unsafe*, since that is ruff contradicting the claim |
+| `covered-elsewhere` | another tool or rule enforces the property | the cover named, and a named rule must be one ruff actually enforces |
+| `behavioural` | findings can be real; declined deliberately | the argument, as comment lines under the entry |
+| `provisional` | findings can be real and the decline is **not** argued | the count, compared against what ruff reports today |
 
-#### Security
-- **S3**: Various security issues
+`provisional` is the category whose total has a target of zero.
 
-### 2. Ignored Error Categories
+### Asking about one finding
 
-#### Whitespace/Formatting (Auto-fixable)
-- **W291, W293**: Whitespace issues - Cosmetic, can be auto-fixed
-- **E501**: Line too long - Already configured at 100 chars
+Do not infer a rule's disposition from this page or from reading the TOML. Ask:
 
-#### Documentation
-- **D105, D107**: Missing docstrings in special methods - Often self-explanatory
-- **D200, D415, D417**: Docstring formatting - Minor style issues
+```bash
+bin/quality-contract.py explain RUF012
+bin/quality-contract.py explain SIM115 packages/utils/src/dataknobs_utils/xml_utils.py
+```
 
-#### Type Annotations
-- **ANN204**: Missing return type for `__init__` - Always returns None
-- **ANN001, ANN003**: Missing type annotations - Often obvious from context
-- **ANN201, ANN202, ANN205**: Missing return types - Can be inferred
+It answers one of four verdicts — reported, declined globally, waived for this
+file, or not selected — with the reason attached, and always exits 0. The
+enabled set comes from ruff itself rather than from a second reading of the
+config, so it cannot disagree with what the linter does.
 
-#### Import Location
-- **PLC0415**: Import at top-level - Sometimes needed for:
-  - Lazy loading for performance
-  - Avoiding circular dependencies
-  - Conditional imports
+To see the whole list by category, with what each decline stands in front of:
 
-#### Code Simplification (Stylistic Preference)
-- **SIM102**: Combine nested if - Sometimes clearer as nested
-- **SIM103**: Return negated condition directly - Sometimes clearer with explicit if/else
-- **SIM108**: Use ternary operator - Can reduce readability
-- **SIM118**: Use `key in dict` instead of `key in dict.keys()` - Explicit .keys() can be clearer
-- **PLW3301**: Nested max calls - More readable when nested for complex expressions
-- **RUF006**: Store asyncio.create_task reference - Only needed if task cancellation is required
-
-#### Complexity Metrics
-- **PLR0911**: Too many returns - Already limited to 6
-- **PLR0912**: Too many branches - Already limited to 12
-- **PLR0915**: Too many statements - Already limited to 50
-
-#### Unused Arguments
-- **ARG001, ARG002, ARG004**: Unused arguments - Often required by:
-  - Interface contracts
-  - Callback signatures
-  - Override methods
-
-#### Type System Updates
-- **UP035, UP038**: Modern type syntax - Gradual migration
-- **UP028**: Yield from - Not always clearer
+```bash
+bin/quality-contract.py explain --audit --measure
+```
 
 ## Remaining Important Errors
 

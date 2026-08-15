@@ -909,6 +909,120 @@ def test_explain_never_fails_the_caller() -> None:
         assert result.stdout.strip(), f"explain {code} printed nothing"
 
 
+def test_the_decline_measurer_refuses_a_config_ruff_would_not_load(tmp_path: Path) -> None:
+    """The fourth site of a guard this file's own docstring says was forgotten once.
+
+    ``_refuse_non_verdict`` exists because a ruff that exits 2 has opened no file
+    and written nothing to stdout, and every parse downstream turns that
+    emptiness into a measured zero. It was written for the formatter, copied to
+    the linter, missing from the type checker — and missing again here, in a
+    measurer added after the guard and beside three that call it.
+
+    The zeroes are not inert. This measurer is what supplies the figure a
+    ``provisional`` entry carries, and ``0 findings`` is indistinguishable from
+    the entry whose backlog has actually been cleared — the one state the whole
+    category exists to make visible. A broken invocation would read as the goal.
+
+    Driven through the real ruff, like its sibling: the claim is that ruff does
+    this, and an injected result would pin the claim to itself.
+    """
+    rejected = tmp_path / "rejected.toml"
+    rejected.write_text('[tool.ruff.lint]\nselect = ["NOSUCHRULE999"]\n', encoding="utf-8")
+
+    with pytest.raises(SystemExit) as refusal:
+        contract_module.measure_declines(["RUF012"], config=rejected)
+
+    assert "exited 2" in str(refusal.value), (
+        f"the measurer refused, but not for the reason it should have: {refusal.value}"
+    )
+
+
+def test_a_waiver_naming_a_family_does_not_reach_another_linter() -> None:
+    """The selector resolution ``explain`` deliberately does not re-implement.
+
+    ``enabled_rules`` refuses to derive ruff's selector resolution, having
+    measured what that costs. ``waiver_covers`` derived it anyway one scope down,
+    as ``code.startswith(named)``, and was wrong in both directions.
+
+    ``packages/legacy/*`` waives ``["D", "N", "UP"]``. ``N`` is pep8-naming;
+    ``NPY`` is numpy, a different linter, and ``NPY`` is in ``select``. So a
+    worker who hit ``NPY002`` in that package and asked was told the finding was
+    waived — the one direction the function's own docstring argued it could not
+    fail in, since it claimed to err toward *reported*.
+
+    The other direction is ``PL``, which names ``PLC0415`` to ruff and to no
+    letter-prefix rule, because the pylint selector spans four sub-families. No
+    waiver here uses it today, which is why it is asserted on a synthetic one:
+    the next waiver written with a compound family would silently under-report.
+    """
+    legacy = contract_module.PerFileWaiver(
+        "packages/legacy/*", ("D", "N", "UP"), "Relax rules for legacy code"
+    )
+    target = "packages/legacy/src/dataknobs/__init__.py"
+
+    assert not contract_module.waiver_covers(legacy, "NPY002", target), (
+        "a waiver of N (pep8-naming) reported itself as covering NPY002 (numpy). "
+        "NPY is selected, so this tells a worker to leave a reported finding alone."
+    )
+    assert contract_module.waiver_covers(legacy, "N802", target), (
+        "the waiver stopped covering N802, which it does name — the fix has "
+        "narrowed past the thing it was fixing"
+    )
+
+    compound = contract_module.PerFileWaiver(
+        "packages/legacy/*", ("PL",), "synthetic: a compound family"
+    )
+    assert contract_module.waiver_covers(compound, "PLC0415", target), (
+        "PL names PLC0415 to ruff. A letter-prefix rule cannot see that, so this "
+        "is the direction a re-implementation under-reports in."
+    )
+
+    assert not contract_module.waiver_covers(legacy, "N802", "packages/data/src/x.py"), (
+        "the pattern half stopped being consulted, so a waiver reaches files "
+        "outside the directory it was written for"
+    )
+
+
+def test_the_waiver_lookup_asks_ruff_under_this_repository_s_settings() -> None:
+    """Why the resolution keeps the config instead of running ``--isolated``.
+
+    ``--isolated`` is the tempting way to ask "what does this family name",
+    since the question looks like a property of ruff's registry. It is not:
+    ``pydocstyle.convention`` and ``target-version`` both remove codes a family
+    would otherwise name, and the two answers differ by ten rules for the one
+    family-shaped waiver this config holds.
+
+    The difference is not neutral. The isolated set is the *wider* one, and a
+    waiver claiming to cover a code it does not is the direction that tells a
+    worker not to look — so the config-free answer is wrong in exactly the way
+    the fix above was written to stop.
+    """
+    codes = ("D", "N", "UP")
+    with_settings = contract_module.selector_rules(codes)
+    isolated = contract_module._run(
+        [
+            "uv",
+            "run",
+            "ruff",
+            "check",
+            "--isolated",
+            "--select",
+            ",".join(codes),
+            "--show-settings",
+            str(ROOT / "pyproject.toml"),
+        ]
+    )
+    block = contract_module._ENABLED_BLOCK_RE.search(isolated.stdout)
+    assert block is not None, "the isolated probe resolved no rule set, so it compares nothing"
+    without_settings = frozenset(contract_module._RULE_CODE_RE.findall(block.group(1)))
+
+    assert with_settings < without_settings, (
+        "resolving under this repository's settings no longer narrows the family, "
+        "so this test no longer demonstrates why the config is kept. Check "
+        "whether pydocstyle.convention or target-version has been dropped."
+    )
+
+
 def test_the_audit_accounts_for_every_decline() -> None:
     """The table has to cover the list, or it is a curated subset like its predecessor.
 
