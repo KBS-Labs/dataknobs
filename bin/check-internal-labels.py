@@ -168,11 +168,22 @@ LABEL_PATTERN = re.compile(
     r"|\b0[0-9][a-z] (?:§|P[0-9])"
     # Plan sub-item ids: 2-3 digits + a single ``a``-``g`` suffix
     # (``77a``, ``92b``, ``146b``, ``18a``).  The ``[a-g]`` ceiling plus
-    # the ``(?<![:>])`` lookbehind keep this off unit-bearing tokens
-    # (``200k``, ``30s``, ``100x``) and printf/format specs (``{i:03d}``,
-    # ``{i:>08b}``); UUID/hex segments (``e29b``, ``cafef00d``) have no
-    # leading word boundary so never match.
-    r"|(?<![:>])\b[0-9]{2,3}[a-g]\b"
+    # the ``(?<![:>%])`` lookbehind keep this off unit-bearing tokens
+    # (``200k``, ``30s``, ``100x``), printf/format specs (``{i:03d}``,
+    # ``{i:>08b}``) and percent-escapes (``sv%40c`` is a URL-encoded
+    # ``sv@c``, not sub-item ``40c``); UUID/hex segments (``e29b``,
+    # ``cafef00d``) have no leading word boundary so never match.
+    #
+    # ``%`` earns its place in that set the same way ``:`` and ``>`` did:
+    # immediately before digits it means they belong to an encoding
+    # rather than to an identifier.  ``%40`` is the escape for ``@``, the
+    # one character a userinfo field nearly always has to encode, so the
+    # collision fires on any encoded username whose next character is
+    # ``a``-``g`` -- a standing class wherever DSNs are written encoded,
+    # not one unlucky fixture.  Narrowing here rather than allowlisting
+    # each hit: an allowlist entry is keyed to one (path, substring) pair
+    # and would be spent again on the next one.
+    r"|(?<![:>%])\b[0-9]{2,3}[a-g]\b"
     # Plan ``decision N`` references.
     r"|\bdecision [0-9]{1,3}\b"
     # Bare-number tracker references that slipped past the ``Item NN``

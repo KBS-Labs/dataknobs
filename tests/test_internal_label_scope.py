@@ -147,6 +147,36 @@ def test_both_separators_are_one_class():
         assert GUARD.LABEL_PATTERN.search(spelling), f"not matched: {spelling}"
 
 
+def test_a_percent_escape_is_not_a_sub_item_id() -> None:
+    r"""``sv%40c`` is a URL-encoded ``sv@c``, not the sub-item id it resembles.
+
+    ``%`` is not a word character, so ``\b`` opens right after it and the
+    sub-item branch reads the two hex digits plus the next letter as an
+    id. ``%40`` is the encoding of ``@`` — the one character a userinfo
+    field almost always has to escape — so this fires on any encoded
+    username whose next character is ``a``-``g``, which is a standing
+    collision in a repo whose Postgres DSNs are percent-encoded rather
+    than a single unlucky fixture.
+
+    The lookbehind already carries ``:`` and ``>`` for the same reason:
+    a character that, immediately before digits, means the digits belong
+    to an encoding rather than to an identifier.
+    """
+    for encoded in ("sv%40c", "u%40b", "x%40a", "p%40ss%2Fw0rd"):
+        assert not GUARD.LABEL_PATTERN.search(encoded), f"false positive: {encoded}"
+
+
+def test_narrowing_for_percent_escapes_still_catches_the_sub_item_ids() -> None:
+    """The exclusion must be the escape, not the shape it collides with.
+
+    Guarded in both directions on purpose: a lookbehind wide enough to
+    silence ``%40c`` could also silence the ids the branch exists for,
+    and a guard that stops catching its own subject still reports green.
+    """
+    for label in ("77a", "92b", "146b", "18a", "item 77a", "the 141 drift"):
+        assert GUARD.LABEL_PATTERN.search(label), f"no longer matched: {label}"
+
+
 def test_a_label_is_reported_and_sets_a_failing_status(tmp_path):
     """End to end through the real script: the finding, and the exit code.
 
