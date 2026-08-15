@@ -103,9 +103,10 @@ class TestNumericLadderWidth:
     every integer dtype produced ``integer`` and every float ``real`` — a guard
     that the dtype work preceding it had not disturbed the two families it did
     not set out to change. Holding those mappings fixed is what this change
-    stops doing, deliberately: ``integer`` is int4,
-    while pandas defaults to int64, so the guard was pinning a column that an
-    ordinary int64 overflows. The round-trip proof is in
+    stops doing, deliberately: ``integer`` is int4 and ``real`` is float4,
+    while pandas defaults to 64 bits for both, so the guard was pinning a
+    column that an ordinary int64 overflows and an ordinary float64 is rounded
+    into. The round-trip proof is in
     ``tests/integration/test_psql_schema_round_trip.py::TestNumericWidth``.
 
     What the guard was protecting is kept: the narrow dtypes still map to the
@@ -129,6 +130,14 @@ class TestNumericLadderWidth:
     def test_int16_stays_integer(self):
         df = pd.DataFrame({"count": pd.array([1, 2], dtype="int16")})
         assert PostgresDB._psql_schema_line(df, "count") == '"count" integer'
+
+    def test_float64_is_double_precision(self):
+        df = pd.DataFrame({"score": np.array([1.0, 2.0], dtype=np.float64)})
+        assert PostgresDB._psql_schema_line(df, "score") == '"score" double precision'
+
+    def test_nullable_float64_is_double_precision(self):
+        df = pd.DataFrame({"score": pd.array([1.0, None], dtype="Float64")})
+        assert PostgresDB._psql_schema_line(df, "score") == '"score" double precision'
 
     def test_float32_stays_real(self):
         df = pd.DataFrame({"score": np.array([1.0, 2.0], dtype=np.float32)})

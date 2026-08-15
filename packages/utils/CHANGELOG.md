@@ -72,6 +72,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Float columns are typed by width too.** `real` is 4-byte `float4`,
+  carrying about 7 significant digits, and `float64` is pandas' default: a
+  value with more precision was accepted and silently rounded, so
+  `1.2345678901234567` read back as `1.2345679`. Unlike its integer sibling
+  this never failed, which is what made it the worse of the two -- the round
+  trip looked successful. 64-bit floats now map to `double precision`, by the
+  same itemsize rule, so a `float32` column keeps `real`.
+
 - **Integer columns are typed by width rather than by family.** `integer` is
   PostgreSQL's 4-byte type while pandas defaults to `int64`, so a column
   holding a value past 2<sup>31</sup> created a column its own data could not

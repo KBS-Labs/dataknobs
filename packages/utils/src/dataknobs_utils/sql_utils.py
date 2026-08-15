@@ -491,12 +491,16 @@ class PostgresDB:
         if pd.api.types.is_bool_dtype(dtype):
             return f"{q_col} boolean"
         # Width comes from the dtype rather than from the family. `integer` is
-        # int4 while pandas defaults to int64, so a value past 2^31 produced a
-        # column its own data could not enter.
+        # int4 and `real` is float4, while pandas defaults to 64 bits for both:
+        # an int64 past 2^31 produced a column its own data could not enter,
+        # and a float64 was accepted into float4's ~7 significant digits and
+        # silently rounded. The two fail differently and the silent one is
+        # worse, since the round trip looks successful.
         if pd.api.types.is_integer_dtype(dtype):
             return f"{q_col} {'bigint' if PostgresDB._dtype_itemsize(dtype) > 4 else 'integer'}"
         if pd.api.types.is_float_dtype(dtype):
-            return f"{q_col} real"
+            precision = "double precision" if PostgresDB._dtype_itemsize(dtype) > 4 else "real"
+            return f"{q_col} {precision}"
         # Tz-aware first: is_datetime64_any_dtype is True for both, and emitting
         # a bare ``timestamp`` for a tz-aware column silently drops the offset.
         if isinstance(dtype, pd.DatetimeTZDtype):

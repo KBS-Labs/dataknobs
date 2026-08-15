@@ -41,19 +41,19 @@ Use `dataknobs_common.testing.safe_sql_ident` in test fixtures (regex allowlist)
 | `bool`, `BooleanDtype` | `boolean` |
 | integer narrower than 64-bit (`int8`…`int32`, `Int8`…`Int32`) | `integer` |
 | 64-bit integer (`int64`, nullable `Int64`) | `bigint` |
-| any float, including nullable `Float32`/`Float64` | `real` |
+| 32-bit float (`float32`, nullable `Float32`) | `real` |
+| 64-bit float (`float64`, nullable `Float64`) | `double precision` |
 | any `datetime64`, any resolution | `timestamp` |
 | any `datetime64` with a timezone | `timestamptz` |
 | any `timedelta64` | `interval` |
 | anything else (`object`, `string`, `category`, …) | `varchar(n)` |
 
-The mapping is decided by `pandas.api.types` predicates, so nullable extension dtypes land on the same type as their numpy counterparts. **Integer width comes from the dtype, not from the family**: `integer` is 4-byte while pandas defaults to `int64`, so an ordinary `int64` column would overflow it. A column that genuinely fits the narrow type keeps it.
+The mapping is decided by `pandas.api.types` predicates, so nullable extension dtypes land on the same type as their numpy counterparts. **Numeric width comes from the dtype, not from the family**: `integer` is 4-byte and `real` carries about 7 significant digits, while pandas defaults to 64 bits for both — so an ordinary `int64` column would overflow an `integer`, and an ordinary `float64` would be silently rounded into a `real`. A column that genuinely fits the narrow type keeps it.
 
 `n` for a `varchar` column is the width of the widest **rendered** value — `upload()` sends `str(value)` for each cell, so the width that has to fit is the string form, measured with that same `str`. A column with no values, or one whose values are all the empty string, yields `varchar(1)`: PostgreSQL will not accept a `varchar(0)` declaration. Nulls are excluded from the measurement — see below for why widening for them would not help.
 
-The table is what `CREATE TABLE` emits. Three things to know before relying on it, because in each the value `upload()` then sends does not arrive intact in the column it just made — three are rejected outright, one is accepted and rounded:
+The table is what `CREATE TABLE` emits. Two things to know before relying on it, because in each the value `upload()` then sends does not arrive intact in the column it just made — three are rejected outright, one is accepted and rounded:
 
-- **`real` is 4-byte `float4`, about 7 significant digits.** `float64` is pandas' default float dtype, and a value carrying more precision than that is silently rounded on the way in — `1.2345678901234567` reads back as `1.2345679`. This one does not fail; it loses data quietly.
 - **A `timedelta64[ns]` column does not upload.** `upload()` renders it with `str()`, which follows the column's own resolution and produces `'86400000000000 nanoseconds'`; PostgreSQL's `interval` has no unit finer than a microsecond and rejects that literal. Every coarser resolution loads — `'86400 seconds'`, `'86400000 milliseconds'` and `'86400000000 microseconds'` are all accepted, and microsecond is what `pd.to_timedelta` produces on pandas 3.x. Cast with `.astype("timedelta64[us]")` if your data is nanosecond-resolution.
 - **Null handling is the caller's.** `upload()` renders every cell with `str()`, which turns `NaN`/`None`/`pd.NA` into the text `'nan'`/`'<NA>'`. A typed column rejects those at any width, so drop or fill nulls before uploading. A nullable extension column is affected even in its non-null cells: `to_records()` upcasts `Int64` to float when a null is present, so `1` is sent as `'1.0'` into the `integer` column the ladder chose for it.
 

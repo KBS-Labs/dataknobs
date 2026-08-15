@@ -46,7 +46,7 @@ class TestPsqlSchemaLineColumnQuoting:
     def test_float_dtype(self):
         df = pd.DataFrame({"score": [1.0, 2.0]})
         line = PostgresDB._psql_schema_line(df, "score")
-        assert line == '"score" real'
+        assert line == '"score" double precision'
 
     def test_float32_dtype(self):
         df = pd.DataFrame({"score": np.array([1.0, 2.0], dtype=np.float32)})
@@ -56,7 +56,7 @@ class TestPsqlSchemaLineColumnQuoting:
     def test_nullable_float_dtype(self):
         df = pd.DataFrame({"score": pd.array([1.0, None], dtype="Float64")})
         line = PostgresDB._psql_schema_line(df, "score")
-        assert line == '"score" real'
+        assert line == '"score" double precision'
 
     def test_nullable_integer_dtype(self):
         df = pd.DataFrame({"count": pd.array([1, None], dtype="Int64")})

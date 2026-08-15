@@ -106,7 +106,7 @@ class TestDtypeRoundTrip:
         # columns are int64 and float64, and the widths are now taken from the
         # dtype. See TestNumericWidth for what the narrower mapping cost.
         assert types["count"] == "bigint"
-        assert types["score"] == "real"
+        assert types["score"] == "double precision"
         assert types["ts"] == "timestamp without time zone"
         assert types["dur"] == "interval"
         assert types["label"] == "character varying"
@@ -184,6 +184,21 @@ class TestNumericWidth:
         assert _column_types(db, table)["big"] == "bigint"
         assert db.query(f'SELECT * FROM "{table}"')["big"].iloc[0] == 3000000000
 
+    def test_float64_column_keeps_its_precision(
+        self, db: PostgresDB, schema_test_db: dict[str, Any]
+    ) -> None:
+        """Bug: float4 carries ~7 significant digits, so the value was accepted
+        and silently rounded — the round trip looked successful and was not.
+        """
+        precise = 1.2345678901234567
+        df = pd.DataFrame({"exact": [precise]})
+
+        table = schema_test_db["table"]
+        db.upload(table, df)
+
+        assert _column_types(db, table)["exact"] == "double precision"
+        assert db.query(f'SELECT * FROM "{table}"')["exact"].iloc[0] == precise
+
     def test_narrow_dtypes_keep_the_narrow_column(
         self, db: PostgresDB, schema_test_db: dict[str, Any]
     ) -> None:
@@ -193,6 +208,7 @@ class TestNumericWidth:
         df = pd.DataFrame(
             {
                 "small": pd.array([7], dtype="int16"),
+                "rough": pd.array([1.5], dtype="float32"),
             }
         )
 
@@ -201,6 +217,7 @@ class TestNumericWidth:
 
         types = _column_types(db, table)
         assert types["small"] == "integer"
+        assert types["rough"] == "real"
 
     def test_nullable_extension_dtype_is_measured_by_its_backing_width(
         self, db: PostgresDB, schema_test_db: dict[str, Any]
