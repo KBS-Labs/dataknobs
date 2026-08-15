@@ -440,7 +440,7 @@ _STRUCTURAL_URI_CHARS = ("@", "/", "?", "#", "[", "]", "%")
 
 
 def _validate_url_component(field: str, value: str) -> None:
-    """Reject characters that would re-delimit a URI host or database name.
+    r"""Reject characters that would re-delimit a URI host or database name.
 
     URL-encoding ``host``/``database`` would mangle legitimate values;
     asyncpg/psycopg2 expect them in bare form. So we instead reject the
@@ -449,9 +449,9 @@ def _validate_url_component(field: str, value: str) -> None:
 
     The check is a positive one — every character must be printable and
     non-space — because a denylist of the whitespace that matters is not
-    writable: ``\\v``, ``\\f``, ``\\x00`` and non-ASCII spaces such as
-    ``\\xa0`` are all as capable of corrupting an authority as the four
-    ASCII ones, and ``\\x00`` additionally truncates a C string on its
+    writable: ``\v``, ``\f``, ``\x00`` and non-ASCII spaces such as
+    ``\xa0`` are all as capable of corrupting an authority as the four
+    ASCII ones, and ``\x00`` additionally truncates a C string on its
     way into libpq.
     """
     if not value:

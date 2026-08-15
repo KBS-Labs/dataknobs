@@ -533,10 +533,14 @@ def test_build_dsn_empty_password_emits_an_empty_userinfo_field() -> None:
         # which is ambiguous in a component this builder does not encode.
         ("database", "db%2Fetc"),
         ("host", "h%2Fx"),
-        # Whitespace beyond the four originally listed.
+        # Whitespace beyond the four ASCII ones originally listed. Written
+        # as escapes, not literals: a raw NO-BREAK SPACE in the source is
+        # invisible to a reader and indistinguishable from the ordinary
+        # space one line up, which is the same ambiguity ``RUF001`` exists
+        # to catch.
         ("database", "db\vetc"),
         ("host", "h\x00x"),
-        ("database", "db etc"),
+        ("database", "db\xa0etc"),
     ],
 )
 def test_build_dsn_rejects_unencodable_components(field: str, value: str) -> None:

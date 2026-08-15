@@ -188,9 +188,7 @@ class TestServiceProbeHostResolution:
         assert "elasticsearch" not in hosts
 
     @pytest.mark.parametrize("value", ["false", "0", "no", "off", ""])
-    def test_a_negative_docker_container_value_does_not_mean_docker(
-        self, monkeypatch, value
-    ):
+    def test_a_negative_docker_container_value_does_not_mean_docker(self, monkeypatch, value):
         """``DOCKER_CONTAINER=false`` must read as "not in Docker".
 
         The check was a bare truthiness test, so every string but ``""``
@@ -217,9 +215,7 @@ class TestServiceProbeHostResolution:
         assert {addr[0] for addr in captured} == {"localhost"}
 
     @pytest.mark.parametrize("value", ["1", "true", "TRUE", "yes", "on"])
-    def test_an_affirmative_docker_container_value_still_means_docker(
-        self, monkeypatch, value
-    ):
+    def test_an_affirmative_docker_container_value_still_means_docker(self, monkeypatch, value):
         """The affirmative spellings must keep working, case-insensitively."""
         captured = self._install_addr_capture(monkeypatch)
         monkeypatch.setenv("DOCKER_CONTAINER", value)
