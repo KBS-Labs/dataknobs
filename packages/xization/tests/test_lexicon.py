@@ -110,7 +110,6 @@ class _StubAuthority(dk_auth.AuthorityData):
 
     def __init__(self, name):
         super().__init__(pd.DataFrame({"value": [1]}), name)
-        self.build_count = 0
 
 
 class _CountingMultiAuthority(dk_lex.MultiAuthorityData):
@@ -149,3 +148,47 @@ def test_peek_returns_the_built_object_without_rebuilding():
 
     assert multi.peek_authority_data("colour") is built
     assert multi.builds == ["colour"], "peeking after a build must not build again"
+
+
+# --- masking against a sub-authority that has not been built ---------------
+
+
+def test_lookup_subauth_values_is_none_when_the_sub_authority_is_unbuilt():
+    """``lookup_subauth_values`` peeks rather than builds, so None is its normal answer.
+
+    Its annotation said ``-> pd.DataFrame`` while its body initialized the
+    result to None and returned it untouched whenever the peek missed --
+    which, because the peek deliberately does not build, is the default state
+    rather than an edge case.
+    """
+    multi = _multi()
+
+    assert multi.lookup_subauth_values("a", 1, is_id=True) is None
+    assert multi.builds == [], "looking up sub-values must not build"
+
+
+def test_auth_values_mask_is_all_false_when_the_sub_authority_is_unbuilt():
+    """Bug: this raised TypeError on the default path.
+
+    ``auth_values_mask`` subscripted ``lookup_subauth_values``'s result
+    without checking it, so an unbuilt sub-authority produced
+    ``TypeError: 'NoneType' object is not subscriptable``. No sub-authority
+    values means no record carries one, which is an all-False mask -- and
+    ``auth_records_mask`` conjoins these, where all-False correctly excludes
+    every record rather than exploding.
+    """
+    multi = _multi()
+
+    mask = multi.auth_values_mask("a", 1)
+
+    assert not mask.any(), "no sub-authority values means no record can match"
+    assert mask.index.equals(multi.df.index), "the mask must align with the authority rows"
+
+
+def test_auth_records_mask_conjoins_an_unbuilt_field_without_raising():
+    """The consumer-visible half: the only caller of auth_values_mask."""
+    multi = _multi()
+
+    mask = multi.auth_records_mask({"a": 1})
+
+    assert not mask.any()
