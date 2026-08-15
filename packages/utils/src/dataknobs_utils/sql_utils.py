@@ -461,6 +461,23 @@ class PostgresDB:
         return ", ".join(quote_ident(col) for col in columns)
 
     @staticmethod
+    def _dtype_itemsize(dtype: Any) -> int:
+        """Width in bytes of the values behind ``dtype``.
+
+        A pandas ExtensionDtype — ``Int64``, ``Float64`` — carries no
+        ``itemsize`` of its own but exposes the numpy dtype it is backed by, so
+        a nullable 64-bit column is measured as 64-bit rather than falling
+        through to the default.
+
+        The default is 8, the widest this method distinguishes: a dtype we
+        cannot measure gets the SQL type that fits the most, because guessing
+        narrow costs the value while guessing wide costs storage.
+        """
+        base = getattr(dtype, "numpy_dtype", dtype)
+        itemsize = getattr(base, "itemsize", None)
+        return int(itemsize) if itemsize else 8
+
+    @staticmethod
     def _psql_schema_line(df: pd.DataFrame, col: str) -> str:
         """Build a single quoted column definition line for CREATE TABLE."""
         q_col = quote_ident(col)
@@ -473,8 +490,11 @@ class PostgresDB:
         # answers correctly for numpy dtypes and ExtensionDtypes alike.
         if pd.api.types.is_bool_dtype(dtype):
             return f"{q_col} boolean"
+        # Width comes from the dtype rather than from the family. `integer` is
+        # int4 while pandas defaults to int64, so a value past 2^31 produced a
+        # column its own data could not enter.
         if pd.api.types.is_integer_dtype(dtype):
-            return f"{q_col} integer"
+            return f"{q_col} {'bigint' if PostgresDB._dtype_itemsize(dtype) > 4 else 'integer'}"
         if pd.api.types.is_float_dtype(dtype):
             return f"{q_col} real"
         # Tz-aware first: is_datetime64_any_dtype is True for both, and emitting

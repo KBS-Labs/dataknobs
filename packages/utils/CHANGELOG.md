@@ -72,6 +72,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Integer columns are typed by width rather than by family.** `integer` is
+  PostgreSQL's 4-byte type while pandas defaults to `int64`, so a column
+  holding a value past 2<sup>31</sup> created a column its own data could not
+  enter: the `CREATE TABLE` succeeded and the `INSERT` then failed. 64-bit
+  integers now map to `bigint`, taken from the dtype's itemsize so a genuinely
+  narrow column keeps `integer`. Nullable extension dtypes are measured by the
+  numpy dtype behind them, which they do not expose an itemsize for.
+
+  Note the interaction with `CREATE TABLE IF NOT EXISTS`: a table already
+  created with the narrower column keeps it, so an existing estate has column
+  widths that depend on when each table was made.
+
 - **`_psql_schema_line` is one ladder rather than two.** It previously branched
   on `isinstance(dtype, np.dtype)` and repeated the whole ladder in each half,
   because `np.issubdtype` raises `TypeError` on every pandas `ExtensionDtype`.

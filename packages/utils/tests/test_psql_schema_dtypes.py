@@ -96,24 +96,56 @@ class TestVarcharFallback:
         assert PostgresDB._psql_schema_line(df, "c") == '"c" varchar(2)'
 
 
-class TestNumericLadderUnchanged:
-    """The two families the ladder already named must keep their mapping."""
+class TestNumericLadderWidth:
+    """The numeric families are mapped by width, not by family.
 
-    def test_int64_is_integer(self):
+    This class used to be ``TestNumericLadderUnchanged`` and asserted that
+    every integer dtype produced ``integer`` and every float ``real`` — a guard
+    that the dtype work preceding it had not disturbed the two families it did
+    not set out to change. Holding those mappings fixed is what this change
+    stops doing, deliberately: ``integer`` is int4,
+    while pandas defaults to int64, so the guard was pinning a column that an
+    ordinary int64 overflows. The round-trip proof is in
+    ``tests/integration/test_psql_schema_round_trip.py::TestNumericWidth``.
+
+    What the guard was protecting is kept: the narrow dtypes still map to the
+    narrow SQL types, so this is a widening where the width calls for it rather
+    than a blanket one.
+    """
+
+    def test_int64_is_bigint(self):
         df = pd.DataFrame({"count": pd.array([1, 2], dtype="int64")})
-        assert PostgresDB._psql_schema_line(df, "count") == '"count" integer'
+        assert PostgresDB._psql_schema_line(df, "count") == '"count" bigint'
 
-    def test_nullable_int_is_integer(self):
+    def test_nullable_int64_is_bigint(self):
+        """The ExtensionDtype path: ``Int64`` has no itemsize of its own."""
         df = pd.DataFrame({"count": pd.array([1, None], dtype="Int64")})
+        assert PostgresDB._psql_schema_line(df, "count") == '"count" bigint'
+
+    def test_int32_stays_integer(self):
+        df = pd.DataFrame({"count": pd.array([1, 2], dtype="int32")})
         assert PostgresDB._psql_schema_line(df, "count") == '"count" integer'
 
-    def test_float32_is_real(self):
+    def test_int16_stays_integer(self):
+        df = pd.DataFrame({"count": pd.array([1, 2], dtype="int16")})
+        assert PostgresDB._psql_schema_line(df, "count") == '"count" integer'
+
+    def test_float32_stays_real(self):
         df = pd.DataFrame({"score": np.array([1.0, 2.0], dtype=np.float32)})
         assert PostgresDB._psql_schema_line(df, "score") == '"score" real'
 
-    def test_nullable_float_is_real(self):
-        df = pd.DataFrame({"score": pd.array([1.0, None], dtype="Float64")})
-        assert PostgresDB._psql_schema_line(df, "score") == '"score" real'
+    def test_unmeasurable_dtype_gets_the_widest(self):
+        """A dtype exposing no itemsize must not silently get the narrow type.
+
+        Guessing narrow costs the value; guessing wide costs storage, so the
+        fallback is the wide one. Asserted through the helper because no real
+        pandas dtype reaches it today — which is exactly why it would rot.
+        """
+
+        class _NoItemsize:
+            pass
+
+        assert PostgresDB._dtype_itemsize(_NoItemsize()) == 8
 
 
 class TestEmptyFrames:
