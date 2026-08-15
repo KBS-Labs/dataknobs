@@ -1,11 +1,13 @@
 """Test backend fixes for storage_id population, update persistence, and connection strings.
 
-These tests verify the fixes for issues documented in:
-sandbox/packages/sandbox-focus/docs/active/dataknobs-data-backend-issues.md
+Each test names the behaviour it pins; the three were reported together
+by a downstream user of the Postgres backend.
 """
 
 import os
+
 import pytest
+from dataknobs_common.testing import postgres_dsn
 
 # Check if PostgreSQL tests should run
 TEST_POSTGRES = os.getenv("TEST_POSTGRES", "false").lower() == "true"
@@ -16,21 +18,18 @@ skip_postgres = pytest.mark.skipif(
 
 @skip_postgres
 @pytest.mark.asyncio
-async def test_postgres_search_populates_storage_id():
+async def test_postgres_search_populates_storage_id(postgres_connection_params):
     """Test that PostgreSQL search() populates storage_id from database ID.
 
-    Issue #1: Search Returns Records with storage_id=None
-    Fix: Populate record.storage_id from row['id'] in search()
+    Search must populate ``record.storage_id`` from the row's ``id``.
     """
     from dataknobs_data.backends.postgres import AsyncPostgresDatabase
     from dataknobs_data.query import Query
     from dataknobs_data.records import Record
 
-    # Create backend with connection string (also tests Issue #3)
-    db_name = os.environ.get("POSTGRES_DB", "dataknobs_test")
-    backend = AsyncPostgresDatabase(
-        {"connection_string": f"postgresql://postgres:postgres@localhost:5432/{db_name}"}
-    )
+    # Create backend with connection string (also covers the
+    # connection-string acceptance path below).
+    backend = AsyncPostgresDatabase({"connection_string": postgres_dsn(postgres_connection_params)})
 
     try:
         await backend.connect()
@@ -59,27 +58,18 @@ async def test_postgres_search_populates_storage_id():
 
 @skip_postgres
 @pytest.mark.asyncio
-async def test_postgres_update_persists_changes():
+async def test_postgres_update_persists_changes(postgres_connection_params):
     """Test that PostgreSQL update() persists changes to the database.
 
-    Issue #2: Update Method Fails to Persist Changes
-    Root cause: Wrong ID being used (sync_id instead of PostgreSQL UUID)
-    Fix: Issue #1 fix provides correct storage_id to use for updates
+    ``update()`` must write through using the storage_id, not the
+    caller-side sync_id. This is the individual-keys config path; the
+    two tests either side of it use ``connection_string``.
     """
     from dataknobs_data.backends.postgres import AsyncPostgresDatabase
     from dataknobs_data.query import Query
     from dataknobs_data.records import Record
 
-    db_name = os.environ.get("POSTGRES_DB", "dataknobs_test")
-    backend = AsyncPostgresDatabase(
-        {
-            "host": "localhost",
-            "port": 5432,
-            "database": db_name,
-            "user": "postgres",
-            "password": "postgres",
-        }
-    )
+    backend = AsyncPostgresDatabase(dict(postgres_connection_params))
 
     try:
         await backend.connect()
@@ -120,18 +110,17 @@ async def test_postgres_update_persists_changes():
 
 @skip_postgres
 @pytest.mark.asyncio
-async def test_postgres_connection_string():
+async def test_postgres_connection_string(postgres_connection_params):
     """Test that PostgreSQL backend accepts connection strings.
 
-    Issue #3: PostgreSQL Backend Does Not Accept Connection Strings
-    Fix: Added connection_string parameter to PostgresPoolConfig.from_dict()
+    ``PostgresPoolConfig.from_dict()`` must accept a ``connection_string``
+    rather than requiring individual keys.
     """
     from dataknobs_data.backends.postgres import AsyncPostgresDatabase
     from dataknobs_data.records import Record
 
     # Test with connection string
-    db_name = os.environ.get("POSTGRES_DB", "dataknobs_test")
-    connection_string = f"postgresql://postgres:postgres@localhost:5432/{db_name}"
+    connection_string = postgres_dsn(postgres_connection_params)
     backend = AsyncPostgresDatabase({"connection_string": connection_string})
 
     try:

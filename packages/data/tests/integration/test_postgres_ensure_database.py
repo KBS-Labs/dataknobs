@@ -11,6 +11,7 @@ import psycopg2
 import pytest
 from psycopg2.extensions import ISOLATION_LEVEL_AUTOCOMMIT
 
+from dataknobs_common.testing import postgres_dsn
 from dataknobs_data import Record
 from dataknobs_data.backends.postgres import AsyncPostgresDatabase, SyncPostgresDatabase
 
@@ -190,11 +191,7 @@ class TestAsyncEnsureDatabase:
         postgres_connection_params: dict,
     ) -> None:
         """Async backend auto-creates DB when using connection_string config."""
-        params = postgres_connection_params
-        conn_str = (
-            f"postgresql://{params['user']}:{params['password']}"
-            f"@{params['host']}:{params['port']}/{unique_db_name}"
-        )
+        conn_str = postgres_dsn({**postgres_connection_params, "database": unique_db_name})
         db = AsyncPostgresDatabase(
             config={
                 "connection_string": conn_str,
@@ -204,7 +201,7 @@ class TestAsyncEnsureDatabase:
 
         await db.connect()
         try:
-            assert _database_exists(params, unique_db_name)
+            assert _database_exists(postgres_connection_params, unique_db_name)
         finally:
             await db.close()
 
@@ -297,11 +294,7 @@ class TestSyncEnsureDatabase:
         postgres_connection_params: dict,
     ) -> None:
         """Sync backend auto-creates DB when using connection_string config."""
-        params = postgres_connection_params
-        conn_str = (
-            f"postgresql://{params['user']}:{params['password']}"
-            f"@{params['host']}:{params['port']}/{unique_db_name}"
-        )
+        conn_str = postgres_dsn({**postgres_connection_params, "database": unique_db_name})
         db = SyncPostgresDatabase(
             config={
                 "connection_string": conn_str,
@@ -311,6 +304,6 @@ class TestSyncEnsureDatabase:
 
         db.connect()
         try:
-            assert _database_exists(params, unique_db_name)
+            assert _database_exists(postgres_connection_params, unique_db_name)
         finally:
             db.close()

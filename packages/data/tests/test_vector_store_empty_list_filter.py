@@ -29,6 +29,7 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 import pytest
+from dataknobs_common import build_postgres_dsn
 from dataknobs_common.testing import requires_chromadb, requires_faiss
 
 from dataknobs_data.vector.stores.memory import MemoryVectorStore
@@ -44,12 +45,13 @@ _RUN_PG = os.environ.get("TEST_POSTGRES", "").lower() == "true"
 
 
 def _pg_connection_string() -> str:
-    host = os.environ.get("POSTGRES_HOST", "localhost")
-    port = os.environ.get("POSTGRES_PORT", "5432")
-    user = os.environ.get("POSTGRES_USER", "postgres")
-    password = os.environ.get("POSTGRES_PASSWORD", "postgres")
-    database = os.environ.get("POSTGRES_DB", "test_dataknobs")
-    return f"postgresql://{user}:{password}@{host}:{port}/{database}"
+    return build_postgres_dsn(
+        host=os.environ.get("POSTGRES_HOST", "localhost"),
+        port=os.environ.get("POSTGRES_PORT", "5432"),
+        user=os.environ.get("POSTGRES_USER", "postgres"),
+        password=os.environ.get("POSTGRES_PASSWORD", "postgres"),
+        database=os.environ.get("POSTGRES_DB", "test_dataknobs"),
+    )
 
 
 def _seed_vectors() -> tuple[np.ndarray, list[str], list[dict]]:

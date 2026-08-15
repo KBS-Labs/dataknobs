@@ -28,6 +28,7 @@ from typing import Any
 
 import pytest
 import pytest_asyncio
+from dataknobs_common import build_postgres_dsn
 from dataknobs_common.exceptions import ResourceError
 from dataknobs_common.testing import (
     requires_real_postgres,
@@ -42,12 +43,13 @@ from dataknobs_data.vector.stores.pgvector import PgVectorStore
 
 
 def _get_test_connection_string() -> str:
-    host = os.environ.get("POSTGRES_HOST", "localhost")
-    port = os.environ.get("POSTGRES_PORT", "5432")
-    user = os.environ.get("POSTGRES_USER", "postgres")
-    password = os.environ.get("POSTGRES_PASSWORD", "postgres")
-    database = os.environ.get("POSTGRES_DB", "test_dataknobs")
-    return f"postgresql://{user}:{password}@{host}:{port}/{database}"
+    return build_postgres_dsn(
+        host=os.environ.get("POSTGRES_HOST", "localhost"),
+        port=os.environ.get("POSTGRES_PORT", "5432"),
+        user=os.environ.get("POSTGRES_USER", "postgres"),
+        password=os.environ.get("POSTGRES_PASSWORD", "postgres"),
+        database=os.environ.get("POSTGRES_DB", "test_dataknobs"),
+    )
 
 
 @pytest.fixture(scope="session")

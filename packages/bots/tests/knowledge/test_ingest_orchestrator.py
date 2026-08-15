@@ -29,7 +29,7 @@ from dataknobs_bots.knowledge.orchestration import (
 )
 from dataknobs_bots.knowledge.storage import InMemoryKnowledgeBackend
 from dataknobs_common.events import Event, EventType, InMemoryEventBus
-from dataknobs_common.testing import requires_real_postgres
+from dataknobs_common.testing import postgres_dsn, requires_real_postgres
 
 TRIGGER_TOPIC = "knowledge:trigger"
 
@@ -511,8 +511,7 @@ def pg_dsn(
     postgres_connection_params: dict[str, Any],
 ) -> str:
     """A ``libpq`` URI for the shared test DB (advisory locks are global)."""
-    p = postgres_connection_params
-    return f"postgresql://{p['user']}:{p['password']}@{p['host']}:{p['port']}/{p['database']}"
+    return postgres_dsn(postgres_connection_params)
 
 
 @pytest.mark.asyncio

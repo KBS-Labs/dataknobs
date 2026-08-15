@@ -3,11 +3,19 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from dataknobs_common import build_postgres_dsn, normalize_postgres_connection_config
 
 from .base import BasePoolConfig
+
+if TYPE_CHECKING:
+    # asyncpg is an optional extra (``dataknobs-data[postgres]`` /
+    # ``[pgvector]``), so it must not be imported at module scope — the
+    # two helpers below defer it to call time. Annotations are strings
+    # under ``from __future__ import annotations``, so naming the types
+    # here costs nothing at runtime.
+    import asyncpg
 
 
 @dataclass
@@ -96,7 +104,7 @@ class PostgresPoolConfig(BasePoolConfig):
         )
 
 
-async def create_asyncpg_pool(config: PostgresPoolConfig):
+async def create_asyncpg_pool(config: PostgresPoolConfig) -> asyncpg.Pool:
     """Create an asyncpg connection pool."""
     import asyncpg
 
@@ -109,7 +117,7 @@ async def create_asyncpg_pool(config: PostgresPoolConfig):
     )
 
 
-async def validate_asyncpg_pool(pool) -> None:
+async def validate_asyncpg_pool(pool: asyncpg.Pool) -> None:
     """Validate an asyncpg pool by running a simple query."""
     async with pool.acquire() as conn:
         await conn.fetchval("SELECT 1")

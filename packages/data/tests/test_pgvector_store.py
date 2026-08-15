@@ -13,6 +13,7 @@ from typing import Any
 import numpy as np
 import pytest
 
+from dataknobs_common import build_postgres_dsn
 from dataknobs_common.testing import safe_sql_ident
 from dataknobs_data.testing import vector as _vector, vectors as _vectors
 
@@ -37,13 +38,20 @@ if ASYNCPG_AVAILABLE:
 
 
 def get_test_connection_string() -> str:
-    """Build connection string from environment variables."""
-    host = os.environ.get("POSTGRES_HOST", "localhost")
-    port = os.environ.get("POSTGRES_PORT", "5432")
-    user = os.environ.get("POSTGRES_USER", "postgres")
-    password = os.environ.get("POSTGRES_PASSWORD", "postgres")
-    database = os.environ.get("POSTGRES_DB", "test_dataknobs")
-    return f"postgresql://{user}:{password}@{host}:{port}/{database}"
+    """Build connection string from environment variables.
+
+    Reads env directly rather than taking ``postgres_connection_params``
+    because this is a plain function, not a fixture. The defaults below
+    are deliberately left as they were — this one defaults ``POSTGRES_DB``
+    to ``test_dataknobs``, which is not the fixture's default.
+    """
+    return build_postgres_dsn(
+        host=os.environ.get("POSTGRES_HOST", "localhost"),
+        port=os.environ.get("POSTGRES_PORT", "5432"),
+        user=os.environ.get("POSTGRES_USER", "postgres"),
+        password=os.environ.get("POSTGRES_PASSWORD", "postgres"),
+        database=os.environ.get("POSTGRES_DB", "test_dataknobs"),
+    )
 
 
 @pytest.fixture(scope="session")
