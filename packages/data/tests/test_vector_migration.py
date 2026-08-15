@@ -7,6 +7,8 @@ from datetime import datetime
 import numpy as np
 import pytest
 
+from dataknobs_data.testing import text_embedding as _text_embedding
+
 # Skip all tests if PostgreSQL is not available
 pytestmark = pytest.mark.skipif(
     not os.environ.get("TEST_POSTGRES", "").lower() == "true",
@@ -17,7 +19,6 @@ from dataknobs_data.backends.memory import AsyncMemoryDatabase
 from dataknobs_data.fields import FieldType
 from dataknobs_data.records import Record
 from dataknobs_data.schema import DatabaseSchema, FieldSchema
-from dataknobs_data.testing import text_embedding as _text_embedding
 from dataknobs_data.vector.migration import (
     IncrementalVectorizer,
     MigrationConfig,

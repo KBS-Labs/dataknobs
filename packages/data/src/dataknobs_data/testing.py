@@ -43,7 +43,12 @@ def vectors(count: int, dim: int, seed: int = 0) -> np.ndarray:
 
 def vector(dim: int, seed: int = 0) -> np.ndarray:
     """Draw one deterministic ``dim``-dimensional float32 vector."""
-    return vectors(1, dim, seed)[0]
+    # Bound to a name rather than returned directly: numpy types `ndarray`
+    # indexing as `Any`, so returning the subscript straight out of a function
+    # declared to return `ndarray` is a `no-any-return`. The draw stays defined
+    # in terms of `vectors` so there is only one of them.
+    row: np.ndarray = vectors(1, dim, seed)[0]
+    return row
 
 
 def text_embedding(text: str, dim: int = 384) -> np.ndarray:
