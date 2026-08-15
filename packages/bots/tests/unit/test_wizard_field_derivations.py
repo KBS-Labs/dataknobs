@@ -1050,7 +1050,7 @@ class TestNewTransformIntegration:
         assert data["style"] == "socratic"
 
     def test_map_no_default_unmatched_key_skips(self) -> None:
-        """map with no transform_default skips when key not found."""
+        """A ``map`` with no transform_default skips when key not found."""
         rules = parse_derivation_rules(
             [
                 {
@@ -1068,7 +1068,7 @@ class TestNewTransformIntegration:
         assert "style" not in data
 
     def test_map_explicit_null_default_stores_none(self) -> None:
-        """map with transform_default: null stores None explicitly."""
+        """A ``map`` with transform_default: null stores None explicitly."""
         rules = parse_derivation_rules(
             [
                 {
@@ -1086,7 +1086,7 @@ class TestNewTransformIntegration:
         assert data["style"] is None
 
     def test_first_empty_list_skips(self) -> None:
-        """first on empty list skips instead of storing None."""
+        """A ``first`` on empty list skips instead of storing None."""
         rules = parse_derivation_rules(
             [
                 {"source": "topics", "target": "primary", "transform": "first"},
@@ -1160,7 +1160,7 @@ class TestNewTransformIntegration:
         assert isinstance(data["configured"], bool)
 
     def test_constant_none_sets_field(self) -> None:
-        """constant with transform_value: null sets the field to None."""
+        """A ``constant`` with transform_value: null sets the field to None."""
         rules = parse_derivation_rules(
             [
                 {
@@ -1177,7 +1177,7 @@ class TestNewTransformIntegration:
         assert data["cleared"] is None
 
     def test_expression_none_sets_field(self) -> None:
-        """expression evaluating to None sets the field to None."""
+        """An ``expression`` evaluating to None sets the field to None."""
         rules = parse_derivation_rules(
             [
                 {
@@ -1614,7 +1614,7 @@ class TestPostExtractionDerivation:
 
     @pytest.mark.asyncio
     async def test_optional_derivation_false_when_no_match(self) -> None:
-        """equals returns False when source doesn't match."""
+        """An ``equals`` derivation returns False when source doesn't match."""
         config = _wizard_config_optional_derivation(
             derivations=[
                 {

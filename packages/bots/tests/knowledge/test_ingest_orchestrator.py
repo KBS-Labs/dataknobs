@@ -510,7 +510,7 @@ def pg_dsn(
     ensure_postgres_ready: None,
     postgres_connection_params: dict[str, Any],
 ) -> str:
-    """libpq URI for the shared test DB (advisory locks are global)."""
+    """A ``libpq`` URI for the shared test DB (advisory locks are global)."""
     p = postgres_connection_params
     return f"postgresql://{p['user']}:{p['password']}@{p['host']}:{p['port']}/{p['database']}"
 

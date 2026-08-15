@@ -268,7 +268,7 @@ class TestStreamingToolResultMapping:
 
     @pytest.mark.asyncio
     async def test_tool_result_mapping_via_stream_chat(self) -> None:
-        """extraction → tool execution → result mapping works in streaming."""
+        """The ``extraction`` → tool execution → result mapping works in streaming."""
         config = (
             WizardConfigBuilder("tool-stream-test")
             .stage(

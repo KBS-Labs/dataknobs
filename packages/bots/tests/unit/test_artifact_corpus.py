@@ -110,7 +110,7 @@ async def test_get_items_isolation(registry: ArtifactRegistry) -> None:
 
 @pytest.mark.asyncio
 async def test_count(registry: ArtifactRegistry, config: CorpusConfig) -> None:
-    """count returns correct item count with optional status filter."""
+    """The ``count`` method returns correct item count with optional status filter."""
     corpus = await ArtifactCorpus.create(registry, config)
 
     await corpus.add_item(content={"stem": "Q1"})

@@ -360,7 +360,7 @@ class TestInjectProvidersExtractor:
 
     @pytest.mark.asyncio
     async def test_extractor_kwarg_replaces_strategy_extractor(self) -> None:
-        """extractor kwarg replaces strategy._extractor."""
+        """The ``extractor`` kwarg replaces strategy._extractor."""
         from dataknobs_bots.bot.base import DynaBot
 
         config = _two_field_config()

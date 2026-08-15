@@ -1303,7 +1303,7 @@ class TestSourceFactory:
 
     @pytest.mark.asyncio
     async def test_database_source_from_config(self) -> None:
-        """database type creates DatabaseSource from config options."""
+        """The ``database`` type creates DatabaseSource from config options."""
         from dataknobs_bots.knowledge.sources.factory import create_source_from_config
 
         config = GroundedSourceConfig(
@@ -1334,7 +1334,7 @@ class TestSourceFactory:
 
     @pytest.mark.asyncio
     async def test_database_source_minimal_config(self) -> None:
-        """database type works with minimal config (defaults)."""
+        """The ``database`` type works with minimal config (defaults)."""
         from dataknobs_bots.knowledge.sources.factory import create_source_from_config
 
         config = GroundedSourceConfig(
@@ -2584,7 +2584,7 @@ class TestIntentGrounding:
 
     @pytest.mark.asyncio
     async def test_scope_ungrounded_dropped(self) -> None:
-        """scope is optional enum — dropped if not in user message."""
+        """The ``scope`` field is an optional enum — dropped if not in user message."""
         from dataknobs_llm.testing import scripted_schema_extractor
 
         kb = InMemoryKnowledgeBase(results=SAMPLE_KB_RESULTS)
