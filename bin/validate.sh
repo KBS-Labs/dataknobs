@@ -245,11 +245,15 @@ fi
 # The formatter's population, resolved the same way and kept separate.
 #
 # It is not VALIDATE_TARGETS. That set is the *linter's*, and it deliberately
-# omits every packages/<pkg>/tests cell still in the ruff deferred tier — nine
-# of the ten, now that fsm's is promoted and rides in the linter's set too.
-# The quality contract enforces `format` at ceiling 0 on all ten of its cells,
-# so borrowing the linter's list here checked 597 of 1,471 files and printed a
-# clean verdict over the other 874.
+# omits every packages/<pkg>/tests cell still in the ruff deferred tier — two
+# of the ten, now that the other eight are promoted and ride in the linter's
+# set too. The quality contract enforces `format` at ceiling 0 on all ten of
+# its cells, so borrowing the linter's list here checked 597 of 1,471 files and
+# printed a clean verdict over the other 874.
+#
+# That count moves with every promotion, which is the argument for composing
+# this set rather than borrowing one: the sentence above has to be rewritten
+# when a cell is promoted, and the code below does not.
 #
 # Composed from format_subdirs rather than restated, so a directory added to
 # the formatter's coverage arrives here, in fix.sh and in `dk format` at once.

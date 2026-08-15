@@ -57,6 +57,29 @@ read-only. A `--fix-only` inside a measurement loop once silently mutated
 numbers. If a count moves between two runs, check `git status` first and
 conclude second.
 
+### `RUF100` cannot be counted by a narrowed run at all
+
+The opening sentence of this section has one exception, and it is the rule
+most likely to be measured alone.
+
+`RUF100` reports a `# noqa` that suppresses nothing. What a directive
+suppresses depends on which rules are *enabled*, so narrowing the rule set
+does not narrow `RUF100`'s output — it manufactures findings, by disabling
+the rules the directives were live against. The narrowed number is not a
+subset of the real one and is not an under-count of it; it is an answer to a
+different question.
+
+Measured over the seven test cells promoted in the pass that found this: the
+full config reports **one** dead directive, and `--select RUF100` reports
+**twenty-one**. The twenty extras name `ASYNC251`, `N815`, `F821`, `E731`,
+`N803`, `UP031`, `F401` and `E402`, and every one of them is live.
+
+So a narrowed `RUF100` run is wrong in both modes. With `--fix` it deletes
+live suppressions, which the paragraph above already prohibits. Read-only it
+still reports directives that are doing their job, and acting on that report
+by hand deletes exactly the same directives one at a time. Count this rule
+under the full config or not at all.
+
 ## Changing a decline
 
 Declines carry a `[category]` marker, checked by `tests/test_lint_policy.py`:
