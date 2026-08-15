@@ -52,6 +52,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `close()` and context-manager support; a connector passed in explicitly
   belongs to its caller and is left open.
 
+- **`upload` sent every value as text, so nothing reached psycopg2 typed.**
+  Cells were rendered with `str()` over `df.to_records()`, which produced four
+  distinct failures: a null arrived as the text `'nan'`/`'<NA>'`, which no
+  typed column accepts at any width; `to_records()` upcast a nullable `Int64`
+  to float, sending `'1.0'` into the integer column just created for it; `str`
+  on a timedelta follows the column's resolution, so a `timedelta64[ns]` column
+  produced `'86400000000000 nanoseconds'` and `interval` rejected it outright;
+  and on a `varchar` column the null rendering failed as a *width* error, since
+  the declared width measured the non-null values.
+
+  Values are now gathered per column, so each keeps its own dtype, and passed
+  as typed parameters. Nulls become SQL `NULL`. Columns the ladder types as
+  `varchar` still go through `str` — that branch is the catch-all for dtypes
+  with no SQL type, and it is measured with the same `str` that writes it.
+
 - **`PostgresDB` generated a `CREATE TABLE` that crashed on boolean and
   timestamp columns, and typed duration columns as `integer`.**
   `_psql_schema_line` named only integer and float, and fell through to

@@ -12,6 +12,7 @@ from abc import ABC, abstractmethod
 from types import TracebackType
 from typing import IO, Any, Dict, List, Self
 
+import numpy as np
 import pandas as pd
 import psycopg2
 
@@ -529,14 +530,84 @@ class PostgresDB:
         at declaration, so a width of 0 costs the whole table rather than a
         value.
 
-        Nulls are excluded, which is narrower than what ``upload`` currently
-        sends — it renders them as the text ``'nan'``/``'<NA>'`` rather than as
-        SQL ``NULL``. Widening for them is not the fix: a typed column rejects
-        those strings at any width, so the rendering is what has to change.
-        This measures the values, and null handling stays the caller's.
+        Nulls are excluded, and that is now correct rather than merely narrow.
+        It used to disagree with ``upload``, which rendered a null as the text
+        ``'nan'``/``'<NA>'`` — so ``['a', None]`` declared ``varchar(1)`` and
+        then sent three characters into it. The rendering is what changed:
+        ``upload`` sends SQL ``NULL``, which occupies no width, so measuring
+        the non-null values is measuring what arrives.
         """
         raw = values.dropna().map(str).str.len().max()
         return max(1, int(raw)) if pd.notna(raw) else 1
+
+    @staticmethod
+    def _column_is_text(dtype: Any) -> bool:
+        """Whether ``_psql_schema_line`` types this dtype as ``varchar``.
+
+        The two methods have to agree: a column declared ``varchar`` is written
+        as text and measured as text, and a column with a real SQL type is
+        written as a typed value. Reading the same predicate ladder from one
+        place is what keeps the write side from drifting from the declaration
+        side, which is how the previous rendering came to send ``'nan'`` into a
+        typed column.
+        """
+        return not (
+            pd.api.types.is_bool_dtype(dtype)
+            or pd.api.types.is_integer_dtype(dtype)
+            or pd.api.types.is_float_dtype(dtype)
+            or pd.api.types.is_datetime64_any_dtype(dtype)
+            or pd.api.types.is_timedelta64_dtype(dtype)
+        )
+
+    @staticmethod
+    def _column_values_for_insert(values: pd.Series) -> list[Any]:
+        """One column's values in the form the INSERT should carry.
+
+        ``upload`` used to render *every* cell with ``str`` over
+        ``df.to_records()``, so nothing reached psycopg2 as a typed parameter.
+        Four things followed, and none of them announced itself:
+
+        * a null became the text ``'nan'`` / ``'<NA>'``, which no typed column
+          accepts at any width;
+        * ``to_records()`` upcasts a nullable extension dtype to ``float64``,
+          so an ``Int64`` column sent ``'1.0'`` into the integer column the
+          schema ladder had just created for it;
+        * ``str`` on a timedelta follows the *column's resolution*, so a
+          ``timedelta64[ns]`` column produced ``'86400000000000 nanoseconds'``
+          and PostgreSQL rejected it outright — ``interval`` has no unit finer
+          than a microsecond;
+        * psycopg2's own adaptation was bypassed for every dtype, leaving
+          PostgreSQL's unknown-literal coercion to do the typing.
+
+        Iterating the Series rather than a records array is what fixes the
+        second: each column keeps its own dtype instead of being upcast to a
+        common one across the row.
+
+        Text columns keep going through ``str``, deliberately. The ``varchar``
+        branch is the ladder's fallback for everything without a SQL type of
+        its own, and handing psycopg2 an arbitrary object raises
+        ``ProgrammingError: can't adapt type``. Rendering them here with the
+        same ``str`` that :meth:`_psql_varchar_width` measures keeps the
+        declared width and the written value in agreement.
+        """
+        as_text = PostgresDB._column_is_text(values.dtype)
+        out: list[Any] = []
+        for value in values:
+            if value is None or (value is not pd.NaT and pd.isna(value)) or value is pd.NaT:
+                out.append(None)
+            elif as_text:
+                out.append(str(value))
+            elif isinstance(value, pd.Timestamp):
+                out.append(value.to_pydatetime())
+            elif isinstance(value, pd.Timedelta):
+                out.append(value.to_pytimedelta())
+            elif isinstance(value, np.generic):
+                # psycopg2 has no adapter for numpy scalars; .item() hands over
+                # the Python built-in it wraps.
+                out.append(value.item())
+            else:
+                out.append(value)
+        return out
 
     @staticmethod
     def _require_usable_column_labels(df: pd.DataFrame) -> None:
@@ -592,14 +663,15 @@ class PostgresDB:
         template = ", ".join(["%s"] * len(df.columns))
         if table_name not in self.table_names:
             self._create_table(table_name, df)
+        # Built per column and then transposed, so every value keeps its own
+        # column's dtype. Going row-first through ``to_records()`` upcast a
+        # nullable Int64 to float64 and sent '1.0' into an integer column.
+        by_column = [self._column_values_for_insert(df[col]) for col in df.columns]
         with self.get_conn() as conn:
             with conn.cursor() as curs:
                 sql = f"INSERT INTO {quote_ident(table_name)} ({fields}) VALUES " + ",".join(
-                    curs.mogrify(
-                        f"({template})",
-                        [str(row[col]) for col in df.columns],
-                    ).decode("utf-8")
-                    for row in df.to_records()
+                    curs.mogrify(f"({template})", list(row)).decode("utf-8")
+                    for row in zip(*by_column, strict=True)
                 )
                 curs.execute(sql)
 
