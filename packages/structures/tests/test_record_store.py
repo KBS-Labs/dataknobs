@@ -1,5 +1,5 @@
-import os
 import tempfile
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -15,7 +15,7 @@ def test_basics():
     ]
 
     with tempfile.TemporaryDirectory(suffix=".record_store", prefix="test-") as recdir:
-        tsv_fpath = os.path.join(recdir, "basics_test.tsv")
+        tsv_fpath = str(Path(recdir) / "basics_test.tsv")
         rs1 = record_store.RecordStore(tsv_fpath)
         rs1.add_rec(RECS[0])
         assert len(rs1.records) == 1
@@ -47,7 +47,7 @@ def test_basics():
         assert np.all(rs2.df == rs1.df)
         assert rs2.records == rs1.records
 
-        tsv_fpath2 = os.path.join(recdir, "basics_test2.tsv")
+        tsv_fpath2 = str(Path(recdir) / "basics_test2.tsv")
         rs3 = record_store.RecordStore(
             tsv_fpath2, df=pd.DataFrame([(1, 2, 3), (4, 5, 6), (7, 8, 9)], columns=["a", "b", "c"])
         )

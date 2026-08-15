@@ -8,10 +8,10 @@ Migrated from dataknobs-fsm package test_llm_conversation_example.py.
 def test_example_exists():
     """Test that the conversation example can be imported."""
     # The example is a script, not a module, but we can verify it exists
-    import os
+    from pathlib import Path
 
-    example_path = os.path.join(os.path.dirname(__file__), "../../examples/fsm_conversation.py")
-    assert os.path.exists(example_path), f"Example not found at {example_path}"
+    example_path = Path(__file__).parent / "../../examples/fsm_conversation.py"
+    assert example_path.exists(), f"Example not found at {example_path}"
 
 
 # TODO: Add more comprehensive tests for the conversation example

@@ -1,5 +1,5 @@
 import json
-import os
+from pathlib import Path
 from typing import Dict, List
 
 import pytest
@@ -11,8 +11,7 @@ def resources_path(package: str) -> str:
     :param filename: The name of the file under the package.
     :return: The file path to the package's resources.
     """
-    dir_path = os.path.join(os.path.dirname(__file__), package)
-    return os.path.join(dir_path, "resources")
+    return str(Path(__file__).parent / package / "resources")
 
 
 def resource(package: str, filename: str) -> str:
@@ -21,7 +20,7 @@ def resource(package: str, filename: str) -> str:
     :param filename: The name of the file under the package.
     :return: The file path to the resource.
     """
-    return os.path.join(resources_path(package), filename)
+    return str(Path(resources_path(package)) / filename)
 
 
 def resource_as_text(package: str, filename: str) -> str:

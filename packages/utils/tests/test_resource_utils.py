@@ -1,5 +1,6 @@
 import os
 import tempfile
+from pathlib import Path
 
 from dataknobs_utils import resource_utils
 
@@ -15,7 +16,7 @@ def test_get_nltk_wordnet():
 
     with tempfile.TemporaryDirectory() as tempdir:
         # override environ
-        cur_datadir = os.path.join(tempdir, "data")
+        cur_datadir = str(Path(tempdir) / "data")
         os.environ["DATADIR"] = cur_datadir
         os.makedirs(cur_datadir, exist_ok=True)
 
@@ -26,8 +27,8 @@ def test_get_nltk_wordnet():
         resource_utils.get_nltk_wordnet(downloader=downloader)
 
         # Check "downloaded"
-        assert os.path.basename(resources["wordnet"]) == "nltk_resources"
-        assert os.path.basename(resources["omw-1.4"]) == "nltk_resources"
+        assert Path(resources["wordnet"]).name == "nltk_resources"
+        assert Path(resources["omw-1.4"]).name == "nltk_resources"
 
     # restore environ
     if datadir:
