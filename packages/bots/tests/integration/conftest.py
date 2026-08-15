@@ -93,12 +93,12 @@ def wait_for_ollama(host: str = "localhost", port: int = 11434, max_retries: int
             response = requests.get(f"http://{host}:{port}/api/tags", timeout=2)
             if response.status_code == 200:
                 return True
-        except (requests.exceptions.ConnectionError, requests.exceptions.Timeout):
+        except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as exc:
             if i == max_retries - 1:
                 raise ConnectionError(
                     f"Could not connect to Ollama at {host}:{port} after {max_retries} attempts. "
                     f"Please ensure Ollama is running and accessible."
-                )
+                ) from exc
             time.sleep(1)
 
     return False

@@ -7,6 +7,8 @@ Verifies that:
 - Backward-compat infer_main_capability_requirements works
 """
 
+from typing import Any
+
 from dataknobs_bots.bot.validation import (
     infer_capability_requirements,
     infer_main_capability_requirements,
@@ -101,9 +103,6 @@ class TestInferMainCapabilityRequirements:
 # ---------------------------------------------------------------------------
 # validate_bot_capabilities — per-role resource resolution
 # ---------------------------------------------------------------------------
-
-
-from typing import Any
 
 
 class _FakeEnvironment:

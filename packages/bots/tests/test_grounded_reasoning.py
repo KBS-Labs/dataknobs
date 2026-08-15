@@ -565,7 +565,7 @@ class TestGroundedReasoningIntegration:
 
             manager = harness.bot.get_conversation_manager(harness.context.conversation_id)
             prov = manager.metadata["retrieval_provenance"]
-            # Source deduplicates internally: 3 queries × 3 results → 3 unique
+            # Source deduplicates internally: 3 queries x 3 results → 3 unique
             assert prov["deduplicated_to"] == 3
 
     @pytest.mark.asyncio

@@ -6,6 +6,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+import pytest
 import yaml
 
 from dataknobs_bots.config.drafts import ConfigDraftManager, DraftMetadata
@@ -117,11 +118,8 @@ class TestConfigDraftManager:
 
     def test_update_draft_not_found(self, tmp_path: Path) -> None:
         manager = ConfigDraftManager(output_dir=tmp_path)
-        try:
+        with pytest.raises(FileNotFoundError):
             manager.update_draft("nonexistent", {})
-            assert False, "Should have raised"
-        except FileNotFoundError:
-            pass
 
     def test_finalize(self, tmp_path: Path) -> None:
         manager = ConfigDraftManager(output_dir=tmp_path)
@@ -155,20 +153,14 @@ class TestConfigDraftManager:
 
     def test_finalize_not_found(self, tmp_path: Path) -> None:
         manager = ConfigDraftManager(output_dir=tmp_path)
-        try:
+        with pytest.raises(FileNotFoundError):
             manager.finalize("nonexistent", final_name="test")
-            assert False, "Should have raised"
-        except FileNotFoundError:
-            pass
 
     def test_finalize_no_name(self, tmp_path: Path) -> None:
         manager = ConfigDraftManager(output_dir=tmp_path)
         draft_id = manager.create_draft(self._sample_config())
-        try:
+        with pytest.raises(ValueError):
             manager.finalize(draft_id)
-            assert False, "Should have raised"
-        except ValueError:
-            pass
 
     def test_discard(self, tmp_path: Path) -> None:
         manager = ConfigDraftManager(output_dir=tmp_path)

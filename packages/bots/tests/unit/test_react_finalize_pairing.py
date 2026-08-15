@@ -469,7 +469,7 @@ class TestPairOrphanToolCallsCore:
     """Direct unit tests for the pure ``list[LLMMessage]`` pairing core.
 
     These exercise the core without a bot, pinning behaviours the
-    integration tests (T1–T6) reach only indirectly: route-aware guidance
+    integration tests (T1-T6) reach only indirectly: route-aware guidance
     selection, the id-less duplicate-name collapse, purity, and idempotency.
     """
 

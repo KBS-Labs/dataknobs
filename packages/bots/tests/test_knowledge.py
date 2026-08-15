@@ -207,7 +207,7 @@ class TestRAGKnowledgeBase:
     async def test_save_with_persistence(self):
         """Test saving knowledge base to disk."""
         with tempfile.TemporaryDirectory() as tmpdir:
-            persist_path = os.path.join(tmpdir, "test_index")
+            persist_path = str(Path(tmpdir) / "test_index")
 
             config = {
                 "vector_store": {
@@ -235,7 +235,7 @@ class TestRAGKnowledgeBase:
     async def test_close_saves_and_releases_resources(self):
         """Test that close() saves to disk and releases resources."""
         with tempfile.TemporaryDirectory() as tmpdir:
-            persist_path = os.path.join(tmpdir, "test_index")
+            persist_path = str(Path(tmpdir) / "test_index")
 
             config = {
                 "vector_store": {
@@ -282,7 +282,7 @@ class TestRAGKnowledgeBase:
     async def test_async_context_manager(self):
         """Test async context manager saves and closes automatically."""
         with tempfile.TemporaryDirectory() as tmpdir:
-            persist_path = os.path.join(tmpdir, "test_index")
+            persist_path = str(Path(tmpdir) / "test_index")
 
             config = {
                 "vector_store": {
@@ -312,7 +312,7 @@ class TestRAGKnowledgeBase:
     async def test_persistence_round_trip(self):
         """Test that saved data can be loaded back correctly."""
         with tempfile.TemporaryDirectory() as tmpdir:
-            persist_path = os.path.join(tmpdir, "test_index")
+            persist_path = str(Path(tmpdir) / "test_index")
 
             config = {
                 "vector_store": {
