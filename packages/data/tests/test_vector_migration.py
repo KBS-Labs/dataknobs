@@ -1,7 +1,6 @@
 """Tests for vector migration functionality."""
 
 import asyncio
-import os
 from datetime import datetime
 
 import numpy as np
@@ -17,15 +16,6 @@ from dataknobs_data.vector.migration import (
     MigrationConfig,
     MigrationStatus,
     VectorMigration,
-)
-
-# Skip all tests if PostgreSQL is not available. Below the imports, not above
-# them: a module-level mark does not stop the imports beneath it from running,
-# so the earlier position bought nothing and made every import under it an
-# E402.
-pytestmark = pytest.mark.skipif(
-    not os.environ.get("TEST_POSTGRES", "").lower() == "true",
-    reason="Vector migration tests require TEST_POSTGRES=true and a running PostgreSQL instance with pgvector",
 )
 
 
