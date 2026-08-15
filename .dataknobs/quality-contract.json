@@ -127,7 +127,7 @@
         {
           "path": "packages/data/tests",
           "tier": "deferred",
-          "ceiling": 501,
+          "ceiling": 498,
           "reason": "outside the default lint target set; its bulk is one block — the legacy np.random global RNG — which is mechanical but has no autofix, making it the part a fixer run cannot touch"
         },
         {
