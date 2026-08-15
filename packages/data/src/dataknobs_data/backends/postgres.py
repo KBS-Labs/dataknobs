@@ -932,8 +932,8 @@ class SyncPostgresDatabase(
 
         # Build the base SQL with pyformat placeholders
         sql = f"""
-        SELECT 
-            id, 
+        SELECT
+            id,
             data,
             metadata,
             {vector_expr} {operator} %(p0)s::vector AS distance

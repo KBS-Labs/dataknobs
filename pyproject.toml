@@ -329,26 +329,28 @@ ignore = [
                # findings, 15 in src/, none read. Rebinding the loop name is as often
                # a silent bug as a deliberate narrowing, and only the site says which.
 
-    # Whitespace — NOT presentational, and the difference is measured rather than
-    # assumed. These rules fire on physical lines *inside* string literals: all three
-    # W291 findings today sit in multi-line f-string SQL, which is also why
-    # `ruff format` — enforced at 0 across all nine cells — has never touched them.
-    "W291", # [behavioural] Trailing whitespace
-            # Harmless in the SQL literals it fires on today. A future finding inside
-            # a meaningful literal takes a per-line `# noqa`, not a re-decline.
-    "W293", # [behavioural] Blank line contains whitespace
-            # The same mechanism as W291 above: a whitespace-only line inside a
-            # triple-quoted string is content, not layout. Zero findings today.
+    # Physical-line rules — these measure a line of the file, so a finding inside a
+    # triple-quoted string is a statement about that string's *content*, not about
+    # layout. `ruff format` is enforced at 0 across all nine cells and has never
+    # touched any of them, which is the same fact from the other side: the formatter
+    # does not reach inside string tokens either.
+    #
+    # W291 and W293 used to be declined here on that argument. It was the right
+    # reading of the mechanism and the wrong conclusion: W291's three findings were
+    # all trailing spaces in f-string SQL, where whitespace is insignificant, and
+    # W293 had none at all. Two rules were off across the tree to hold three
+    # harmless spaces. They are enforced now, the three are fixed, and a future
+    # finding inside a literal where the whitespace *is* significant takes a
+    # per-line `# noqa` naming that literal -- which is a claim about one string,
+    # where a decline was a claim about every line in the repository.
     "E501", # [behavioural] Line too long (configured at 100)
-            # The third rule on this mechanism, and it sat directly under the two
-            # above filed as though it were a different kind of thing. E501 measures
-            # the same physical line, so a finding inside a triple-quoted string is
-            # a statement about content: 13 files hold a >100-character line inside
-            # a multi-line string token today. It has no autofix either, so acting
-            # on one of those is a hand-rewrite of literal text, not a reflow.
-            # Its old reason -- "already configured at 100" -- described the limit
-            # rather than the decline, which is the shape a category marker with no
-            # required argument leaves undisturbed.
+            # What is left of that argument, and it does not reduce the same way.
+            # 13 files hold a >100-character line inside a multi-line string token
+            # today, and unlike the two above there is no autofix, so acting on one
+            # is a hand-rewrite of literal text rather than deleting a space that
+            # nothing can observe. Its old reason -- "already configured at 100" --
+            # described the limit rather than the decline, which is the shape a
+            # category marker with no required argument leaves undisturbed.
 
     # Type annotations — covered by mypy, which measures the same property with teeth.
     # `disallow_untyped_defs` is what the strict tier turns on, and `no-untyped-def`
