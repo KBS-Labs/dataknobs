@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from dataknobs_common import normalize_postgres_connection_config
+from dataknobs_common import build_postgres_dsn, normalize_postgres_connection_config
 
 from .base import BasePoolConfig
 
@@ -25,8 +25,21 @@ class PostgresPoolConfig(BasePoolConfig):
     ssl: Any | None = None
 
     def to_connection_string(self) -> str:
-        """Convert to PostgreSQL connection string."""
-        return f"postgresql://{self.user}:{self.password}@{self.host}:{self.port}/{self.database}"
+        """Convert to PostgreSQL connection string.
+
+        Delegates to the shared builder so a password containing URI
+        delimiters is encoded rather than interpolated raw — the result
+        of this call goes straight to ``asyncpg.create_pool``, and a raw
+        ``@`` there yields a valid URI aimed at the wrong host rather
+        than an error.
+        """
+        return build_postgres_dsn(
+            host=self.host,
+            port=self.port,
+            database=self.database,
+            user=self.user,
+            password=self.password,
+        )
 
     def to_hash_key(self) -> tuple:
         """Create a hashable key for this configuration."""

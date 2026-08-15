@@ -172,6 +172,7 @@ from dataknobs_common.paths import (
     safe_segment,
 )
 from dataknobs_common.postgres_config import (
+    build_postgres_dsn,
     normalize_postgres_connection_config,
 )
 from dataknobs_common.ratelimit import (
@@ -418,6 +419,7 @@ __all__ = [
     "merge_bindings",
     "PackRegistry",
     # Postgres config
+    "build_postgres_dsn",
     "normalize_postgres_connection_config",
     # Rate Limiting
     "RateLimiter",

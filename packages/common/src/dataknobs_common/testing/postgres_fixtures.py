@@ -32,12 +32,53 @@ import logging
 import os
 import time
 import uuid
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Mapping
 from typing import Any
 
+from dataknobs_common.postgres_config import build_postgres_dsn
 from dataknobs_common.testing._core import safe_sql_ident
 
 logger = logging.getLogger(__name__)
+
+
+def postgres_dsn(params: Mapping[str, Any]) -> str:
+    """Build a libpq URI from a ``postgres_connection_params`` mapping.
+
+    The counterpart to the :func:`postgres_connection_params` fixture:
+    tests that need a connection *string* rather than keyword arguments
+    pass the fixture's dict straight through.
+
+    Only the five connection keys are read, so a mapping that has been
+    copied and extended — as the table fixtures do, adding ``table`` and
+    ``schema`` — can be passed without stripping it first.
+
+    Encoding and validation come from
+    :func:`~dataknobs_common.postgres_config.build_postgres_dsn`, which
+    is also what the production normalizer uses. That shared definition
+    is the point: a hand-rolled f-string in a test silently accepts a
+    password containing ``@`` and produces a URI aimed at another host,
+    so a test written that way passes or fails for reasons unrelated to
+    its subject.
+
+    Args:
+        params: Mapping carrying ``host``, ``port``, ``database``,
+            ``user`` and ``password``. Extra keys are ignored.
+
+    Returns:
+        A ``postgresql://`` URI.
+
+    Raises:
+        KeyError: If any of the five connection keys is absent.
+        ValueError: If ``host`` or ``database`` would produce a
+            malformed or misrouted URI.
+    """
+    return build_postgres_dsn(
+        host=params["host"],
+        port=params["port"],
+        database=params["database"],
+        user=params["user"],
+        password=params["password"],
+    )
 
 
 def wait_for_postgres(
@@ -215,13 +256,6 @@ try:
 
         return factory
 
-    def _pg_conn_str(params: dict[str, Any]) -> str:
-        """Build a libpq URI from the shared connection-params shape."""
-        return (
-            f"postgresql://{params['user']}:{params['password']}"
-            f"@{params['host']}:{params['port']}/{params['database']}"
-        )
-
     @pytest.fixture
     def make_pgvector_test_table(
         ensure_postgres_ready: None,
@@ -305,7 +339,7 @@ try:
             _drop()  # pre-drop: defeat the IF-NOT-EXISTS dimension shadow
             config = {
                 "backend": "pgvector",
-                "connection_string": _pg_conn_str(params),
+                "connection_string": postgres_dsn(params),
                 "dimensions": dimensions,
                 "schema": schema,
                 "table_name": table,

@@ -169,6 +169,54 @@ no connection is resolvable.
   characters (`@`, `/`, whitespace) that would produce a malformed or
   misrouted URI.
 
+### `build_postgres_dsn`
+
+The synthesis step above, reachable on its own — for callers that
+already hold resolved fields and want only the URI.
+
+```python
+from dataknobs_common import build_postgres_dsn
+
+dsn = build_postgres_dsn(
+    host="db.internal",
+    port=5432,
+    database="prod",
+    user="svc",
+    password="p@ss/w0rd",
+)
+# 'postgresql://svc:p%40ss%2Fw0rd@db.internal:5432/prod'
+```
+
+All five parameters are keyword-only. It **resolves nothing** — no
+env vars, no `.env` files, no defaults. That is the whole difference
+between it and `normalize_postgres_connection_config`, which calls
+this function for its own synthesis. Reach for the normalizer when
+input may be partial; reach for this when it is not.
+
+Use it rather than an f-string. `user` and `password` are URL-encoded,
+and that is not cosmetic: a password containing `@` is ordinary
+secrets-manager output, and interpolated raw it does not produce a
+*rejected* URI but a well-formed one pointing elsewhere, because the
+last `@` delimits userinfo.
+
+```python
+# postgresql://svc:p@ss/w0rd@db.internal:5432/prod
+#                  ^ the parser stops here
+#   -> host 'ss', database '/w0rd@db.internal:5432/prod'
+```
+
+Handed to `asyncpg.create_pool`, that connects to a server the caller
+never configured.
+
+`host` and `database` are validated rather than encoded, since
+percent-encoding them would mangle values that must parse cleanly as
+URI components; a stray `@`, `/`, or whitespace raises `ValueError`.
+
+**Raises:**
+
+- `ValueError`: When `host` or `database` is empty or contains a
+  character that would produce a malformed or misrouted URI.
+
 ## Examples
 
 ### Migrating from `connection_string`-only callers

@@ -337,9 +337,69 @@ def normalize_postgres_connection_config(
             )
         out["connection_string"] = preserved
     else:
-        userinfo = f"{quote(str(user), safe='')}:{quote(str(password), safe='')}@"
-        out["connection_string"] = f"postgresql://{userinfo}{host}:{port}/{database}"
+        out["connection_string"] = build_postgres_dsn(
+            host=host,
+            port=port,
+            database=database,
+            user=user,
+            password=password,
+        )
     return out
+
+
+def build_postgres_dsn(
+    *,
+    host: str,
+    port: int | str,
+    database: str,
+    user: str,
+    password: str,
+) -> str:
+    """Build a libpq URI from already-resolved connection fields.
+
+    This is the single definition of how the five canonical fields
+    become a ``postgresql://`` URL. It resolves nothing — no env, no
+    ``.env``, no defaults. Callers that need resolution want
+    :func:`normalize_postgres_connection_config`, which delegates here
+    for its synthesis step.
+
+    Two things separate this from an f-string, and both are the
+    difference between a working connection and a silently wrong one:
+
+    ``user`` and ``password`` are URL-encoded. A password containing
+    ``@`` is ordinary secrets-manager output, and interpolated raw it
+    does not produce a *rejected* URI — it produces a well-formed URI
+    pointing somewhere else, because the last ``@`` delimits userinfo.
+    ``postgresql://svc:p@ss/w0rd@db.internal:5432/prod`` parses with
+    host ``ss`` and database ``/w0rd@db.internal:5432/prod``.
+
+    ``host`` and ``database`` are validated rather than encoded, since
+    percent-encoding them would mangle values that must parse cleanly
+    as URI components; a stray ``@`` or ``/`` there raises instead.
+
+    Args:
+        host: Server hostname. Rejected if it contains ``@``, ``/`` or
+            whitespace.
+        port: Server port; interpolated as given.
+        database: Database name, validated as ``host`` is.
+        user: Role name; URL-encoded.
+        password: Password; URL-encoded. May be empty.
+
+    Returns:
+        A ``postgresql://user:password@host:port/database`` URI whose
+        every component round-trips through ``urllib.parse.urlparse``.
+
+    Raises:
+        ValueError: If ``host`` or ``database`` is empty or contains a
+            character that would produce a malformed or misrouted URI.
+    """
+    # Validated here as well as in the caller above: this is a public
+    # entry point reached directly by callers that never run the
+    # normalizer, and the check is idempotent.
+    _validate_url_component("host", str(host))
+    _validate_url_component("database", str(database))
+    userinfo = f"{quote(str(user), safe='')}:{quote(str(password), safe='')}@"
+    return f"postgresql://{userinfo}{host}:{port}/{database}"
 
 
 def _validate_url_component(field: str, value: str) -> None:

@@ -12,10 +12,12 @@ Covers:
 from __future__ import annotations
 
 import os
+from urllib.parse import unquote, urlparse
 
 import pytest
 
 from dataknobs_common.testing import (
+    postgres_dsn,
     postgres_fixtures,
     requires_postgres,
     safe_sql_ident,
@@ -151,6 +153,76 @@ def test_postgres_connection_params_explicit_env_overrides(monkeypatch):
         "password": "secret",
         "database": "mydb",
     }
+
+
+# -- postgres_dsn ----------------------------------------------------------
+
+
+def test_postgres_dsn_consumes_the_params_fixture_shape():
+    """The fixture's output must be accepted verbatim.
+
+    These two are a matched pair — the helper exists so a test holding
+    ``postgres_connection_params`` can reach a connection string without
+    restating the URI format. If the fixture grows or renames a key,
+    this is what notices.
+    """
+    params = {
+        "host": "db.internal",
+        "port": 6543,
+        "user": "alice",
+        "password": "secret",
+        "database": "mydb",
+    }
+
+    assert postgres_dsn(params) == "postgresql://alice:secret@db.internal:6543/mydb"
+
+
+def test_postgres_dsn_ignores_extra_keys():
+    """Callers copy the params dict and add to it before building a DSN.
+
+    ``make_pgvector_test_table`` does exactly this, adding ``table`` and
+    ``schema``. A helper that splatted the mapping would fail there, so
+    the extra keys have to be ignored rather than tolerated by accident.
+    """
+    params = {
+        "host": "h",
+        "port": 5432,
+        "user": "u",
+        "password": "p",
+        "database": "db",
+        "table": "test_vectors_abc",
+        "schema": "public",
+    }
+
+    assert postgres_dsn(params) == "postgresql://u:p@h:5432/db"
+
+
+def test_postgres_dsn_encodes_a_password_with_uri_delimiters():
+    """Encoding must come from the shared builder, not be reimplemented.
+
+    A test that builds its DSN by hand and happens to run against a
+    password containing ``@`` connects to the wrong host and then fails
+    for a reason having nothing to do with its subject.
+    """
+    params = {
+        "host": "db.internal",
+        "port": 5432,
+        "user": "svc",
+        "password": "p@ss/w0rd",
+        "database": "prod",
+    }
+
+    parsed = urlparse(postgres_dsn(params))
+
+    assert parsed.hostname == "db.internal"
+    assert parsed.path == "/prod"
+    assert unquote(parsed.password or "") == "p@ss/w0rd"
+
+
+def test_postgres_dsn_reports_a_missing_connection_key():
+    """An incomplete mapping must name the key, not build a broken URI."""
+    with pytest.raises(KeyError, match="password"):
+        postgres_dsn({"host": "h", "port": 5432, "user": "u", "database": "db"})
 
 
 # -- safe_sql_ident is the same module's identifier guard ------------------

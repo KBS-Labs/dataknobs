@@ -835,9 +835,34 @@ controls its table/index naming.
 
 The non-fixture helpers `wait_for_postgres()` and `wait_for_elasticsearch()`
 are also importable from `dataknobs_common.testing`, along with
+`postgres_dsn()` (see below),
 `sweep_stale_test_indices()` (see [Session-Start Index Sweep](#session-start-index-sweep))
 and the availability probes / skip markers `is_postgres_available()` /
 `requires_postgres`, `is_elasticsearch_available()` / `requires_elasticsearch`.
+
+#### Building a connection string: `postgres_dsn`
+
+`postgres_connection_params` yields keyword arguments. A test needing a
+connection *string* passes that dict straight to `postgres_dsn`:
+
+```python
+from dataknobs_common.testing import postgres_dsn
+
+def test_something(postgres_connection_params):
+    store = PgVectorStore(connection_string=postgres_dsn(postgres_connection_params))
+```
+
+Only the five connection keys are read, so a mapping that has been
+copied and extended — as the table fixtures do, adding `table` and
+`schema` — can be passed without stripping it first.
+
+Prefer it to a hand-written f-string. Encoding and validation come from
+`build_postgres_dsn` (see the Postgres Connection Configuration guide),
+the same builder the production normalizer uses, so a password
+containing `@` percent-encodes instead of silently redirecting the
+connection to another host — which a hand-rolled URI does without
+erroring, leaving the test to fail for reasons unrelated to its
+subject.
 
 ### Environment Variables
 

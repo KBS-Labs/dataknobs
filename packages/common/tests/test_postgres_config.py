@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+from urllib.parse import unquote, urlparse
+
 import pytest
 
 from dataknobs_common.exceptions import ConfigurationError
 from dataknobs_common.postgres_config import (
+    build_postgres_dsn,
     normalize_postgres_connection_config,
 )
 
@@ -355,3 +358,119 @@ def test_database_with_slash_rejected() -> None:
                 "password": "p",
             }
         )
+
+
+# -- build_postgres_dsn -----------------------------------------------------
+#
+# The synthesis step above, reachable on its own. The tests above assert
+# encoding by substring; these assert it by parsing the result back,
+# which is the property that actually matters — a DSN can contain the
+# expected substring and still resolve to the wrong server.
+
+
+def test_build_dsn_round_trips_every_component() -> None:
+    """Each field must survive a parse back out of the built URI."""
+    dsn = build_postgres_dsn(
+        host="db.internal",
+        port=5432,
+        database="prod",
+        user="svc",
+        password="p@ss/w0rd",
+    )
+
+    parsed = urlparse(dsn)
+
+    assert parsed.scheme == "postgresql"
+    assert parsed.hostname == "db.internal"
+    assert parsed.port == 5432
+    assert parsed.path == "/prod"
+    assert unquote(parsed.username or "") == "svc"
+    assert unquote(parsed.password or "") == "p@ss/w0rd"
+
+
+def test_build_dsn_would_misroute_if_interpolated_raw() -> None:
+    """Pin why the encoding exists, not merely that it happens.
+
+    The naive f-string this function replaces does not yield a URI that
+    fails to parse — it yields one that parses cleanly against the wrong
+    authority, because the last ``@`` delimits userinfo. A caller gets a
+    working connection to a host it never configured.
+    """
+    fields = {
+        "host": "db.internal",
+        "port": 5432,
+        "database": "prod",
+        "user": "svc",
+        "password": "p@ss/w0rd",
+    }
+    naive = (
+        f"postgresql://{fields['user']}:{fields['password']}"
+        f"@{fields['host']}:{fields['port']}/{fields['database']}"
+    )
+
+    assert urlparse(naive).hostname == "ss"
+    assert urlparse(build_postgres_dsn(**fields)).hostname == "db.internal"  # type: ignore[arg-type]
+
+
+def test_build_dsn_resolves_nothing_from_the_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The builder takes what it is given; only the normalizer resolves.
+
+    This is the whole distinction between the two entry points, and a
+    caller picking the wrong one would otherwise find out through a
+    connection aimed at whatever ``POSTGRES_*`` happened to be exported.
+    """
+    monkeypatch.setenv("POSTGRES_HOST", "env-host")
+    monkeypatch.setenv("POSTGRES_DB", "env-db")
+    monkeypatch.setenv("DATABASE_URL", "postgresql://env:env@env-host:5432/env-db")
+
+    dsn = build_postgres_dsn(
+        host="explicit-host",
+        port=5432,
+        database="explicit-db",
+        user="u",
+        password="p",
+    )
+
+    assert dsn == "postgresql://u:p@explicit-host:5432/explicit-db"
+
+
+def test_build_dsn_empty_password_stays_empty() -> None:
+    """An empty password is a valid explicit choice, not a missing one."""
+    dsn = build_postgres_dsn(host="h", port=5432, database="db", user="u", password="")
+
+    assert dsn == "postgresql://u:@h:5432/db"
+    assert urlparse(dsn).hostname == "h"
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("host", "bad@host"),
+        ("host", "bad/host"),
+        ("host", ""),
+        ("database", "bad/db"),
+        ("database", "bad@db"),
+        ("database", ""),
+    ],
+)
+def test_build_dsn_rejects_unencodable_components(field: str, value: str) -> None:
+    """Validation must reach the direct entry point, not only the normalizer.
+
+    ``host`` and ``database`` are validated rather than encoded, so the
+    check is the only thing standing between a bad value and a malformed
+    URI — and callers reaching this function skip the normalizer that
+    would otherwise have run it.
+    """
+    fields: dict[str, object] = {
+        "host": "h",
+        "port": 5432,
+        "database": "db",
+        "user": "u",
+        "password": "p",
+    }
+    fields[field] = value
+
+    with pytest.raises(ValueError, match=field):
+        build_postgres_dsn(**fields)  # type: ignore[arg-type]

@@ -3,6 +3,7 @@
 import asyncio
 from dataclasses import dataclass
 from unittest.mock import AsyncMock, MagicMock, patch
+from urllib.parse import unquote, urlparse
 
 import pytest
 
@@ -88,6 +89,31 @@ class TestPostgresPoolConfig:
         )
         expected = "postgresql://testuser:testpass@localhost:5432/testdb"
         assert config.to_connection_string() == expected
+
+    def test_to_connection_string_survives_a_password_with_uri_delimiters(self):
+        """A password containing ``@`` or ``/`` must not redirect the connection.
+
+        Interpolated raw, ``p@ss/w0rd`` makes the URI parse against the
+        wrong authority: the *last* ``@`` wins, so everything before it
+        becomes userinfo and the host reads as ``ss``. The result is not
+        a rejected DSN — it is a well-formed one pointing somewhere
+        else, handed straight to ``asyncpg.create_pool``. Passwords of
+        this shape are ordinary secrets-manager output.
+        """
+        config = PostgresPoolConfig(
+            host="db.internal",
+            port=5432,
+            database="prod",
+            user="svc",
+            password="p@ss/w0rd",
+        )
+
+        parsed = urlparse(config.to_connection_string())
+
+        assert parsed.hostname == "db.internal"
+        assert parsed.port == 5432
+        assert parsed.path == "/prod"
+        assert unquote(parsed.password or "") == "p@ss/w0rd"
 
     def test_to_hash_key(self):
         """Test hash key generation."""
