@@ -419,16 +419,17 @@ class TestSensorDashboardAsync:
 
         async def async_sensor_stream():
             """Simulate async sensor data stream."""
-            count = 0
-            for reading in self.generator.generate_continuous_stream(
-                [sensor],
-                self.start_time + timedelta(hours=1),  # Start after initial readings
-                duration_hours=1,
-                readings_per_hour=12,
+            for count, reading in enumerate(
+                self.generator.generate_continuous_stream(
+                    [sensor],
+                    self.start_time + timedelta(hours=1),  # Start after initial readings
+                    duration_hours=1,
+                    readings_per_hour=12,
+                ),
+                1,
             ):
                 await asyncio.sleep(0.001)  # Minimal delay for testing
                 yield reading
-                count += 1
                 if count >= 5:  # Only process a few for testing
                     break
 

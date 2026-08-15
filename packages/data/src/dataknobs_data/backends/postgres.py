@@ -2268,11 +2268,19 @@ class AsyncPostgresDatabase(
         params = []
 
         if query and query.filters:
+            # KNOWN DEFECT, preserved deliberately by the enumerate() below rather
+            # than fixed here. The counter advances per filter while `params` is
+            # appended to only for EQ, so one non-EQ filter shifts every later
+            # placeholder past its argument and the SQL names a $N that was never
+            # bound; non-EQ filters are also dropped silently, so a caller that
+            # filtered gets back rows it filtered out. The root cause is that this
+            # loop open-codes SQLQueryBuilder.build_where_clause, which this class
+            # already holds and uses correctly in _vector_search above. Swapping to
+            # it changes query semantics and needs a live Postgres to verify, which
+            # is a different change from making this loop idiomatic.
             where_clauses = []
-            param_count = 0
 
-            for filter in query.filters:
-                param_count += 1
+            for param_count, filter in enumerate(query.filters, 1):
                 field_path = f"data->>'{filter.field}'"
 
                 if filter.operator == Operator.EQ:

@@ -428,10 +428,6 @@ ignore = [
               # is `x = a if cond else b` from the four-line form -- one expression,
               # same branch taken, same object bound. The unsafety is comment
               # placement, which the site it was checked against kept intact.
-    "SIM113", # [behavioural] Use enumerate() for index variable
-              # The advice does not check for async context: at one of its two sites
-              # the loop is an `async for`, where enumerate() raises TypeError. A fix
-              # taken from the rule name rather than the site would break that loop.
     # SIM115 was declined here with the reason "not practical for locks", and
     # that reason is true -- of one file: data's file backend holds a lock handle
     # open across the critical section it protects, which is exactly the shape
