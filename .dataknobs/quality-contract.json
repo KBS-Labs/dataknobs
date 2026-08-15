@@ -91,7 +91,7 @@
         {
           "path": "packages/utils/tests",
           "tier": "deferred",
-          "ceiling": 30,
+          "ceiling": 27,
           "reason": "outside the default lint target set, and unusual in that most of its fixes are the unsafe kind — a plain --fix barely moves this cell; the hand remainder is the os.path call sites the Path migration wants converted"
         },
         {
@@ -216,7 +216,7 @@
         {
           "path": "packages/data/src",
           "tier": "transitional",
-          "ceiling": 657,
+          "ceiling": 626,
           "reason": "ratchet group"
         },
         {

@@ -11,7 +11,6 @@ without a live postgres connection.
 
 import numpy as np
 import pandas as pd
-import pytest
 
 from dataknobs_utils.sql_utils import PostgresDB
 
@@ -24,7 +23,7 @@ class TestPsqlSchemaLineColumnQuoting:
         df = pd.DataFrame({"My Column": pd.array([1], dtype="int64")})
         line = PostgresDB._psql_schema_line(df, "My Column")
         assert '"My Column"' in line
-        assert "integer" in line
+        assert "bigint" in line  # int64; the width contract lives in TestNumericLadderWidth
 
     def test_reserved_word_column_quoted(self):
         df = pd.DataFrame({"user": ["alice"]})
@@ -37,14 +36,17 @@ class TestPsqlSchemaLineColumnQuoting:
         assert line == '"name" varchar(1)'
 
     def test_integer_dtype(self):
+        # int64 -> bigint: the width comes from the dtype. TestNumericLadderWidth
+        # in test_psql_schema_dtypes.py owns that contract; asserted here too
+        # because these cases pin the WHOLE emitted line, quoting included.
         df = pd.DataFrame({"count": pd.array([1, 2, 3], dtype="int64")})
         line = PostgresDB._psql_schema_line(df, "count")
-        assert line == '"count" integer'
+        assert line == '"count" bigint'
 
     def test_float_dtype(self):
         df = pd.DataFrame({"score": [1.0, 2.0]})
         line = PostgresDB._psql_schema_line(df, "score")
-        assert line == '"score" real'
+        assert line == '"score" double precision'
 
     def test_float32_dtype(self):
         df = pd.DataFrame({"score": np.array([1.0, 2.0], dtype=np.float32)})
@@ -54,22 +56,22 @@ class TestPsqlSchemaLineColumnQuoting:
     def test_nullable_float_dtype(self):
         df = pd.DataFrame({"score": pd.array([1.0, None], dtype="Float64")})
         line = PostgresDB._psql_schema_line(df, "score")
-        assert line == '"score" real'
+        assert line == '"score" double precision'
 
     def test_nullable_integer_dtype(self):
         df = pd.DataFrame({"count": pd.array([1, None], dtype="Int64")})
         line = PostgresDB._psql_schema_line(df, "count")
-        assert line == '"count" integer'
+        assert line == '"count" bigint'
 
     def test_empty_dataframe_varchar(self):
         df = pd.DataFrame({"tag": pd.Series([], dtype="string")})
         line = PostgresDB._psql_schema_line(df, "tag")
-        assert '"tag" varchar(1)' == line
+        assert line == '"tag" varchar(1)'
 
     def test_empty_dataframe_numpy_varchar(self):
         df = pd.DataFrame({"tag": np.array([], dtype=object)})
         line = PostgresDB._psql_schema_line(df, "tag")
-        assert '"tag" varchar(1)' == line
+        assert line == '"tag" varchar(1)'
 
 
 class TestBuildInsertColumns:

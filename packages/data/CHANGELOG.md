@@ -7,6 +7,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Fixed
+
+- **`SyncPostgresDatabase.close()` closed nothing.** The body set
+  `_connected = False` and carried a comment giving the reason — "PostgresDB
+  manages its own connections via context managers". That is false: psycopg2's
+  `with conn` is a transaction scope, not a close, and the `PostgresDB` it
+  wraps had no `close()` to delegate to. Nothing surfaced as exhausted
+  connections because CPython reclaimed each connection when the frame exited,
+  which left the method's own contract unmet rather than satisfied. It now
+  closes the `PostgresDB` it owns, through `close_if_owned_sync`.
+
+  The same change removes a full TCP+auth handshake from every CRUD operation:
+  `PostgresDB` now reuses one connection, so a read and a write share a
+  backend instead of each opening their own.
+
+- **Attributes assigned `None` in `__init__` were typed as `None`.**
+  `SyncPostgresDatabase.db` and `.query_builder` are both set in `connect()`,
+  so mypy read each as `None`-typed and every use of them — `self.db.query(...)`,
+  `self.query_builder.build_search_query(...)` — as an error against `None`,
+  with the surrounding bodies written off as unreachable and therefore never
+  checked at all. Both now declare the type they hold.
+
+- **`vector_search` passed a pandas `Series` where a row `dict` was declared.**
+  Its three sibling loops convert with `.to_dict()` first; this one did not.
+  It survived because a `Series` answers `.get`/`in`/`[]` the way a mapping
+  does, and would have stopped surviving the moment the shared serializer used
+  anything a `Series` implements differently. All four sites now go through one
+  conversion helper.
+
+- **Connection parameters lost their types at a dict boundary.** The five
+  values passed to `PostgresDB` are individually typed on the config class, but
+  collecting them into an unannotated dict joined them to `object` — which
+  neither `PostgresDB` nor `validate_database_name` accepts. The dict is now
+  declared per key, and read by key rather than through `.get(key, default)`:
+  the declaration is total and every key is populated, so each default was
+  unreachable while reading as though it still applied.
+
+- **`connect()` replaced its `PostgresDB` without closing the first one.** When
+  the initial connection fails because the target database does not exist and
+  `ensure_database` is enabled, the database is created and the connection
+  reopened — which rebound the attribute and left the previous object to the
+  garbage collector. It holds no live connection on that path, so nothing
+  leaked in practice, but it was the one construction path not applying the
+  ownership rule the rest of the class follows.
+
 ## v0.8.0 - 2026-08-11
 
 ### Added

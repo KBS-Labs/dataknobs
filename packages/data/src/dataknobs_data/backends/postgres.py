@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import logging
 from contextlib import asynccontextmanager
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, TypedDict, cast
 
 import asyncpg
 import psycopg2
 from dataknobs_common.exceptions import ConfigurationError
+from dataknobs_common.lifecycle import close_if_owned_sync
 from dataknobs_common.structured_config import StructuredConfigConsumer
 
 from dataknobs_utils.sql_utils import PostgresDB, quote_ident
@@ -44,8 +45,26 @@ from .sql_base import (
 )
 from ..vector.types import DistanceMetric
 
+
+class _ConnConfig(TypedDict):
+    """psycopg2 connection parameters, one declared type per key.
+
+    A plain dict literal would infer ``dict[str, object]`` from the five
+    different value types, and ``object`` is not something ``PostgresDB`` or
+    ``validate_database_name`` accept — so every read became an error at the
+    call it fed, for a dict whose contents were fully known.
+    """
+
+    host: str
+    port: int
+    database: str
+    user: str
+    password: str
+
+
 if TYPE_CHECKING:
     import numpy as np
+    import pandas as pd
 
     from collections.abc import AsyncIterator, Iterator, Callable, Awaitable
     from typing import ClassVar
@@ -130,7 +149,12 @@ class SyncPostgresDatabase(
         )
 
         # Connection params consumed by connect()/_create_database.
-        self._conn_config = {
+        # Typed per key rather than left to inference: the values have five
+        # different types, so an inferred dict joins them to ``object`` and
+        # every read out of it becomes an error at the call it feeds. The
+        # config class already declares each one — this carries that through
+        # instead of discarding it at the dict boundary.
+        self._conn_config: _ConnConfig = {
             "host": cfg.host,
             "port": cfg.port,
             "database": cfg.database,
@@ -141,8 +165,24 @@ class SyncPostgresDatabase(
         # an unsupported value such as an SSLContext).
         self._sslmode = _ssl_to_sslmode(cfg.ssl)
 
-        self.db = None  # Will be initialized in connect()
-        self.query_builder = None  # Will be initialized in connect()
+        # Annotated rather than inferred. A bare ``= None`` makes mypy read the
+        # attribute's type as ``None``, so every ``self.db.query(...)`` below
+        # was an error against ``None`` and the bodies around them were
+        # written off as unreachable — which is what forced the
+        # ``type: ignore[unreachable]`` that used to sit on ``close``, and what
+        # kept mypy from ever type-checking the code it had declared dead.
+        #
+        # Declared as the type it holds in every method that uses it: those
+        # methods have always assumed ``connect()`` ran first, and none of them
+        # guards. The ``None`` is the pre-connect window, narrowed at the one
+        # place that can be reached before ``connect()``.
+        self.db: PostgresDB = None  # type: ignore[assignment]  # set in connect()
+        self._owns_db = False  # set in _open_connection(), which builds it
+        # The same treatment, for the same reason: left inferred, this reads as
+        # ``None`` and every ``self.query_builder.build_*`` below becomes an
+        # attribute error on ``None``. It sits one line from the attribute that
+        # made the point, and had the identical defect.
+        self.query_builder: SQLQueryBuilder = None  # type: ignore[assignment]  # set in connect()
 
     def connect(self) -> None:
         """Connect to the PostgreSQL database."""
@@ -164,6 +204,13 @@ class SyncPostgresDatabase(
         except Exception as e:
             if self._ensure_database_enabled and self._is_invalid_catalog_error(e):
                 self._create_database()
+                # The first PostgresDB is about to be replaced, so it is closed
+                # rather than dropped. It holds no live connection in the case
+                # that gets here — connecting is what failed — but "the object
+                # that is going away is closed by whoever owns it" is the rule
+                # the rest of this class follows, and an ownership discipline
+                # with one path exempted is one nobody can rely on.
+                close_if_owned_sync(self.db, self._owns_db)
                 self._open_connection()
                 self._ensure_table()
             else:
@@ -187,14 +234,21 @@ class SyncPostgresDatabase(
         lookup is needed here — the normalizer is the single env-var
         contract.
         """
+        # Indexed, not ``.get(key, default)``: ``_ConnConfig`` is total and is
+        # built with all five keys, so every default was unreachable while
+        # reading as though it still applied. The normalizer above is where a
+        # missing value acquires one.
         self.db = PostgresDB(
-            host=self._conn_config.get("host", "localhost"),
-            db=self._conn_config.get("database", "postgres"),
-            user=self._conn_config.get("user", "postgres"),
-            pwd=self._conn_config.get("password"),
-            port=self._conn_config.get("port", 5432),
+            host=self._conn_config["host"],
+            db=self._conn_config["database"],
+            user=self._conn_config["user"],
+            pwd=self._conn_config["password"],
+            port=self._conn_config["port"],
             sslmode=self._sslmode,
         )
+        # Constructed here, so closed by close(). Recorded at the point of the
+        # decision rather than re-derived from the attribute later.
+        self._owns_db = True
 
     @staticmethod
     def _is_invalid_catalog_error(exc: Exception) -> bool:
@@ -228,14 +282,14 @@ class SyncPostgresDatabase(
 
         from .postgres_mixins import validate_database_name
 
-        target_db = self._conn_config.get("database", "postgres")
+        target_db = self._conn_config["database"]
         validate_database_name(target_db)
 
         conn_kwargs: dict[str, Any] = {
-            "host": self._conn_config.get("host", "localhost"),
-            "port": self._conn_config.get("port", 5432),
-            "user": self._conn_config.get("user", "postgres"),
-            "password": self._conn_config.get("password"),
+            "host": self._conn_config["host"],
+            "port": self._conn_config["port"],
+            "user": self._conn_config["user"],
+            "password": self._conn_config["password"],
             "database": "postgres",
             "connect_timeout": 10,
         }
@@ -257,11 +311,31 @@ class SyncPostgresDatabase(
             conn.close()
 
     def close(self) -> None:
-        """Close the database connection."""
-        if self.db:
-            # PostgresDB manages its own connections via context managers
-            # but we can mark as disconnected
-            self._connected = False  # type: ignore[unreachable]
+        """Close the database connection.
+
+        This used to close nothing, on the stated grounds that "PostgresDB
+        manages its own connections via context managers". It does not:
+        psycopg2's ``with conn`` is a transaction scope, not a close. What kept
+        that from showing up as exhausted connections was CPython refcounting
+        reclaiming each connection when the frame exited — an interpreter
+        detail, and one that left this method's own contract unmet.
+
+        Ownership is recorded where it is decided — :meth:`_open_connection`,
+        the one place that constructs a ``PostgresDB`` — rather than inferred
+        here from the attribute being set. The two agree today, because
+        construction is the only way ``self.db`` becomes non-``None``; passing
+        ``self.db is not None`` would say *existence* while meaning
+        *ownership*, and the day an injection path is added the two stop being
+        the same thing silently. ``close_if_owned_sync`` null-guards its own
+        argument, so the existence half needs no help from the caller.
+
+        ``self.db`` is left in place rather than cleared: :meth:`connect`
+        rebuilds it through :meth:`_open_connection`, so clearing it would buy
+        nothing and would contradict the attribute's declared type.
+        """
+        close_if_owned_sync(self.db, self._owns_db)
+        self._owns_db = False
+        self._connected = False
 
     def _initialize(self) -> None:
         """Initialize method - connection setup moved to connect()."""
@@ -318,6 +392,22 @@ class SyncPostgresDatabase(
         """Convert a Record to a database row (delegates to shared serializer)."""
         return SQLRecordSerializer.record_to_row(record, id)
 
+    @staticmethod
+    def _frame_row_to_dict(row: pd.Series[Any]) -> dict[str, Any]:
+        """A DataFrame row as the ``dict[str, Any]`` the serializer declares.
+
+        ``Series.to_dict()`` is typed ``dict[Hashable, Any]``, because a
+        DataFrame's labels need not be strings. A row out of these queries
+        always has string column names, so the conversion is safe — but it has
+        to be *stated*, and stating it once is the point. Written out at each
+        call site it was stated three times and forgotten at a fourth, where
+        ``vector_search`` passed the ``Series`` itself: harmless today only
+        because ``Series`` happens to answer ``.get``/``in``/``[]`` the way a
+        mapping does, and a latent bug the moment the serializer uses anything
+        a ``Series`` implements differently.
+        """
+        return {str(key): value for key, value in row.to_dict().items()}
+
     def _row_to_record(self, row: dict[str, Any]) -> Record:
         """Convert a database row to a Record (delegates to shared serializer)."""
         return self.row_to_record(row)
@@ -358,8 +448,7 @@ class SyncPostgresDatabase(
         if df.empty:
             return None
 
-        row = df.iloc[0].to_dict()
-        return self._row_to_record(row)
+        return self._row_to_record(self._frame_row_to_dict(df.iloc[0]))
 
     def get_version(self, id: str) -> str | None:
         """Return the row's ``xmin`` transaction id as the version token.
@@ -559,8 +648,7 @@ class SyncPostgresDatabase(
         # Convert to records
         records = []
         for _, row in df.iterrows():
-            row_dict = row.to_dict()
-            record = self._row_to_record(row_dict)
+            record = self._row_to_record(self._frame_row_to_dict(row))
 
             # Apply field projection if specified
             if query.fields:
@@ -816,7 +904,7 @@ class SyncPostgresDatabase(
                 break
 
             for _, row in df.iterrows():
-                record = self._row_to_record(row.to_dict())
+                record = self._row_to_record(self._frame_row_to_dict(row))
                 if query and query.fields:
                     record = record.project(query.fields)
                 yield record
@@ -977,7 +1065,7 @@ class SyncPostgresDatabase(
         # Convert results
         results = []
         for _, row in df.iterrows():
-            record = self._row_to_record(row)
+            record = self._row_to_record(self._frame_row_to_dict(row))
 
             # Calculate similarity score from distance
             distance = row["distance"]

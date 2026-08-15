@@ -9,6 +9,139 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`upload` rejected a DataFrame with default column labels, and said only
+  `Invalid SQL identifier: 0`.** Rejecting is right — an unnamed SQL column is
+  not something `upload` should invent a name for — but the message named
+  neither the subject, nor that pandas supplies integer labels by default, nor
+  that `df.columns = [...]` is the fix. Labels are now checked up front, and
+  the error names every offending position with its type.
+
+  A *repeated* label is refused in the same place, naming the label and its
+  positions. Two columns of one name have no distinguishable destination in the
+  INSERT, so the frame could never have uploaded; it now fails up front with a
+  message that says which label, rather than deeper in with one that does not.
+
+- **`upload` built a syntactically invalid INSERT for a DataFrame with no
+  rows.** The VALUES list is joined from the frame's rows, so an empty frame
+  produced `INSERT INTO "t" ("a") VALUES ` and the server answered with a
+  syntax error. A frame with no rows is an ordinary result — a filter that
+  matched nothing, a batch that came up empty — and nothing distinguished it
+  from the frames that worked, so callers had to test `len(df)` before every
+  call. It now creates the table and inserts nothing, since a caller uploading
+  an empty frame is asking for somewhere to put the rows they did not have
+  this time. A frame with no columns is empty on the same terms.
+
+- **An `object` column holding lists or arrays uploads as text.** The declared
+  `varchar` width and the written value are both produced by `str`, so a
+  container round-trips as its Python repr instead of having to be flattened
+  before upload.
+
+- **`PostgresRecordFetcher.get_records` inlined three identifiers unquoted, and
+  one of them is caller-supplied per call.** The field list, the table name and
+  the ID field name all went into the SQL through bare f-string slots, while
+  every other SQL site in the module already used `quote_ident`. Because
+  `fields_to_retrieve` is a per-call argument, it was a reachable injection
+  vector rather than a hardening gap: a fetcher configured for one table
+  returned a column from another one, plus `current_user`, through nothing but
+  that parameter. The same gap broke ordinary input — a legitimate `Mixed Case`
+  column name failed with `column "mixed" does not exist`.
+
+  All three positions are now quoted. `fields_to_retrieve` is a list of column
+  names, which is what the parameter already means on the other `RecordFetcher`
+  implementations, so this matches the family rather than narrowing it.
+
+- **`get_records` inlined its `ids` too, and was safe only by side effect.**
+  Entries passed through `str(value + offset)`, which raises `TypeError` on
+  anything non-numeric — so caller text could not reach the SQL, but only
+  because of what the arithmetic happened to reject. Two things fell outside
+  it: an empty list built `IN ()`, which is a syntax error, and a `nan` or
+  `inf` survived the addition to arrive as a bare literal the server refused.
+  The values are bound now, and `operator.index` states the requirement the
+  arithmetic used to imply — `ids` is declared `List[int]`, so a string or a
+  float is refused rather than coerced. (`int()` would accept `"5"` and
+  silently truncate `1.9` to `1`, returning a different, wrong row where the
+  caller previously got none.) numpy integers are still accepted, since ids
+  commonly come from a DataFrame column. An empty `ids` returns an empty frame
+  carrying the same columns a populated one would, matching both sibling
+  fetchers; a zero-column frame would make `got["id"]` raise `KeyError` on a
+  result that merely has no rows.
+
+- **`table_head` interpolated its row count.** `LIMIT {n}` was the last caller
+  value in the module reaching SQL by interpolation. It is bound.
+
+- **`PostgresDB` never closed a connection, and opened a new one per call.**
+  psycopg2's `with conn` is a *transaction* scope, not a close, so every
+  `query` / `execute` / `upload` left its connection open — and the class had
+  no `close()` at all. Nothing accumulated, because CPython reclaims the
+  connection when the frame exits, which is an interpreter detail rather than
+  anything the code arranged, and it does not cover a caller of the public
+  `get_conn()`. What the mask did not hide was the cost: a full TCP+auth
+  handshake in front of every call, measured at 79% of wall time for a trivial
+  `SELECT 1`.
+
+  `DotenvPostgresConnector` now holds one connection **per thread** and reuses
+  it. Per thread because reuse must not become sharing: psycopg2's `with conn`
+  transaction block is not re-entrant, so two threads on one connection raise
+  `the connection cannot be re-entered recursively` — and beneath that error
+  they would share a transaction, where either thread's commit commits the
+  other's uncommitted work. `close()` reaches every connection the connector
+  opened on any thread, and a thread that exits releases its own without
+  waiting for it, so a pool that cycles workers does not accumulate backends.
+  `PostgresDB` gains `close()` and context-manager support; a connector passed
+  in explicitly belongs to its caller and is left open.
+
+  A cached connection is validated with `SELECT 1` before being handed back.
+  `connection.closed` reports only what this process did to the connection, so
+  a backend killed by `pg_terminate_backend`, an idle timeout or a pooler
+  eviction leaves it reading 0 — and the socket cannot settle it either, since
+  readable means EOF, an error *or* data, and a terminated backend sends an
+  error message before closing. Only a round trip distinguishes them. It costs
+  0.29 ms against the 4.1 ms handshake reuse saves; `validate_on_reuse=False`
+  trades it back, though the free local checks still run so a connection libpq
+  has already given up on is never returned. The probe runs under `autocommit`
+  when the connection is idle, so it never returns one idle-in-transaction, and
+  it joins rather than disturbs a transaction the caller already has open.
+
+  What the probe asks is whether the **server answered**, not whether the
+  statement succeeded. A live server refuses every statement inside an aborted
+  transaction and cancels one that trips `statement_timeout`, and in both cases
+  the reply is itself the proof of life; conversely, a local status of "in a
+  failed transaction" says nothing about the backend, which
+  `idle_in_transaction_session_timeout` reaps exactly as it reaps an open one.
+  `connection.closed` separates the two, because psycopg2 sets it when the
+  transport failed and leaves it alone when the server merely refused — so an
+  aborted transaction is handed back for its caller to unwind, and a killed one
+  is replaced.
+
+  `query` / `execute` / `upload` use a **different connection** from the one
+  `get_conn()` hands out. A transaction belongs to a connection and those
+  methods each enter `with conn`, which commits on the way out — so on a shared
+  connection an ordinary `query` would commit whatever the caller had left
+  open, with nothing nested and nothing raised. A thread that calls `get_conn`
+  therefore holds two connections; one that never calls it holds one, as
+  before.
+
+  **Compatibility:** `close()` is a shutdown operation rather than a barrier —
+  it does not wait for other threads to go idle, so join workers before calling
+  it. Whatever `psycopg2.connect` returns must be weak-referenceable, which
+  every real connection is; a test that patches `connect` to return a bare
+  `object()` will need a stand-in that is.
+
+- **`upload` sent every value as text, so nothing reached psycopg2 typed.**
+  Cells were rendered with `str()` over `df.to_records()`, which produced four
+  distinct failures: a null arrived as the text `'nan'`/`'<NA>'`, which no
+  typed column accepts at any width; `to_records()` upcast a nullable `Int64`
+  to float, sending `'1.0'` into the integer column just created for it; `str`
+  on a timedelta follows the column's resolution, so a `timedelta64[ns]` column
+  produced `'86400000000000 nanoseconds'` and `interval` rejected it outright;
+  and on a `varchar` column the null rendering failed as a *width* error, since
+  the declared width measured the non-null values.
+
+  Values are now gathered per column, so each keeps its own dtype, and passed
+  as typed parameters. Nulls become SQL `NULL`. Columns the ladder types as
+  `varchar` still go through `str` — that branch is the catch-all for dtypes
+  with no SQL type, and it is measured with the same `str` that writes it.
+
 - **`PostgresDB` generated a `CREATE TABLE` that crashed on boolean and
   timestamp columns, and typed duration columns as `integer`.**
   `_psql_schema_line` named only integer and float, and fell through to
@@ -29,6 +162,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Float columns are typed by width too.** `real` is 4-byte `float4`,
+  carrying about 7 significant digits, and `float64` is pandas' default: a
+  value with more precision was accepted and silently rounded, so
+  `1.2345678901234567` read back as `1.2345679`. Unlike its integer sibling
+  this never failed, which is what made it the worse of the two -- the round
+  trip looked successful. 64-bit floats now map to `double precision`, by the
+  same itemsize rule, so a `float32` column keeps `real`.
+
+- **Integer columns are typed by range rather than by family.** `integer` is
+  PostgreSQL's 4-byte type while pandas defaults to `int64`, so a column
+  holding a value past 2<sup>31</sup> created a column its own data could not
+  enter: the `CREATE TABLE` succeeded and the `INSERT` then failed. 64-bit
+  integers now map to `bigint`, and a genuinely narrow column keeps `integer`.
+  Nullable extension dtypes are measured by the numpy dtype behind them, which
+  they do not expose an itemsize for.
+
+  Range rather than width, because **PostgreSQL has no unsigned integer
+  types**: `integer` is a *signed* int4 stopping at 2<sup>31</sup>−1, so a
+  `uint32` running to 2<sup>32</sup>−1 needs a `bigint` despite being four
+  bytes wide. `uint64` overflows `bigint` for the same reason, with no wider
+  integer type to be promoted into, and maps to `numeric(20)`.
+
+  Note the interaction with `CREATE TABLE IF NOT EXISTS`: a table already
+  created with the narrower column keeps it, so an existing estate has column
+  widths that depend on when each table was made.
+
 - **`_psql_schema_line` is one ladder rather than two.** It previously branched
   on `isinstance(dtype, np.dtype)` and repeated the whole ladder in each half,
   because `np.issubdtype` raises `TypeError` on every pandas `ExtensionDtype`.
@@ -37,8 +196,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   two copies — is gone. This removes the last `np.issubdtype` calls in the
   workspace.
 
+  The write side now reads that same ladder rather than restating it. Deciding
+  which columns are text was a separately maintained negated predicate, so the
+  two agreed only as long as someone kept them in step — and disagreement is
+  precisely how `'nan'` came to be sent into a typed column. The type decision
+  is split out from the width measurement so both callers can share it.
+
 - **The `varchar` width is measured on the rendered value, with the renderer
-  that sends it.** `upload` sends `str(value)` for every cell, so
+  that sends it.** `upload` renders `varchar` cells with `str`, so
   `_psql_varchar_width` measures `dropna().map(str).str.len()` instead of
   calling `.str` on the column directly. An object column holding non-strings
   previously raised `AttributeError`. `map(str)` rather than `astype(str)`

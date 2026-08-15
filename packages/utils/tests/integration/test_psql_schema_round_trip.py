@@ -102,8 +102,11 @@ class TestDtypeRoundTrip:
 
         types = _column_types(db, table)
         assert types["flag"] == "boolean"
-        assert types["count"] == "integer"
-        assert types["score"] == "real"
+        # `bigint`/`double precision` rather than `integer`/`real`: these two
+        # columns are int64 and float64, and the widths are now taken from the
+        # dtype. See TestNumericWidth for what the narrower mapping cost.
+        assert types["count"] == "bigint"
+        assert types["score"] == "double precision"
         assert types["ts"] == "timestamp without time zone"
         assert types["dur"] == "interval"
         assert types["label"] == "character varying"
@@ -152,3 +155,113 @@ class TestDtypeRoundTrip:
 
         rows = db.query(f'SELECT * FROM "{table}" ORDER BY "c"')
         assert sorted(rows["c"]) == ["1", "222"]
+
+
+class TestNumericWidth:
+    """A column has to fit its own dtype's range, not the common case's.
+
+    The ladder mapped *every* integer dtype to ``integer`` (int4) and *every*
+    float dtype to ``real`` (float4), while pandas' defaults for both families
+    are 64-bit. The two fail differently, which is why the silent one is the
+    worse of the pair: an out-of-range integer is rejected outright, and an
+    over-precise float is accepted and rounded.
+
+    The module docstring above listed the float case as deliberately uncovered
+    — *"Round-tripping 0.1 or 1/3 is what would [see it]"*. This is that test.
+    """
+
+    def test_int64_column_holds_a_value_past_int4(
+        self, db: PostgresDB, schema_test_db: dict[str, Any]
+    ) -> None:
+        """Bug: CREATE TABLE made an int4 column and the INSERT then failed,
+        so the schema was created and the data could not go into it.
+        """
+        df = pd.DataFrame({"big": pd.array([3000000000], dtype="int64")})
+
+        table = schema_test_db["table"]
+        db.upload(table, df)
+
+        assert _column_types(db, table)["big"] == "bigint"
+        assert db.query(f'SELECT * FROM "{table}"')["big"].iloc[0] == 3000000000
+
+    def test_float64_column_keeps_its_precision(
+        self, db: PostgresDB, schema_test_db: dict[str, Any]
+    ) -> None:
+        """Bug: float4 carries ~7 significant digits, so the value was accepted
+        and silently rounded — the round trip looked successful and was not.
+        """
+        precise = 1.2345678901234567
+        df = pd.DataFrame({"exact": [precise]})
+
+        table = schema_test_db["table"]
+        db.upload(table, df)
+
+        assert _column_types(db, table)["exact"] == "double precision"
+        assert db.query(f'SELECT * FROM "{table}"')["exact"].iloc[0] == precise
+
+    def test_uint32_column_holds_a_value_past_int4(
+        self, db: PostgresDB, schema_test_db: dict[str, Any]
+    ) -> None:
+        """Bug: signedness was not read, so a 4-byte *unsigned* column was
+        emitted as ``integer`` — a signed int4 stopping at 2_147_483_647 while
+        the dtype runs to 4_294_967_295.
+
+        The same shape as the int64 case above, and it survived that fix
+        because both dtypes are 4 bytes wide: only the range differs.
+        """
+        df = pd.DataFrame({"big": pd.array([4000000000], dtype="uint32")})
+
+        table = schema_test_db["table"]
+        db.upload(table, df)
+
+        assert _column_types(db, table)["big"] == "bigint"
+        assert db.query(f'SELECT * FROM "{table}"')["big"].iloc[0] == 4000000000
+
+    def test_uint64_column_holds_a_value_past_int8(
+        self, db: PostgresDB, schema_test_db: dict[str, Any]
+    ) -> None:
+        """``bigint`` is signed int8, so ``uint64``'s upper half does not fit
+        and there is no wider integer type — the column becomes ``numeric``.
+        """
+        past_int8 = 2**63 + 1
+        df = pd.DataFrame({"huge": pd.array([past_int8], dtype="uint64")})
+
+        table = schema_test_db["table"]
+        db.upload(table, df)
+
+        assert _column_types(db, table)["huge"] == "numeric"
+        assert int(db.query(f'SELECT * FROM "{table}"')["huge"].iloc[0]) == past_int8
+
+    def test_narrow_dtypes_keep_the_narrow_column(
+        self, db: PostgresDB, schema_test_db: dict[str, Any]
+    ) -> None:
+        """Widening is itemsize-aware, not blanket: a column that genuinely fits
+        int4/float4 keeps it, so an int16 flag column does not become a bigint.
+        """
+        df = pd.DataFrame(
+            {
+                "small": pd.array([7], dtype="int16"),
+                "rough": pd.array([1.5], dtype="float32"),
+            }
+        )
+
+        table = schema_test_db["table"]
+        db.upload(table, df)
+
+        types = _column_types(db, table)
+        assert types["small"] == "integer"
+        assert types["rough"] == "real"
+
+    def test_nullable_extension_dtype_is_measured_by_its_backing_width(
+        self, db: PostgresDB, schema_test_db: dict[str, Any]
+    ) -> None:
+        """Nullable ``Int64`` is an ExtensionDtype with no ``itemsize`` of its
+        own; the width has to come from the numpy dtype behind it, or a
+        nullable 64-bit column silently gets an int4.
+        """
+        df = pd.DataFrame({"nullable_big": pd.array([3000000000], dtype="Int64")})
+
+        table = schema_test_db["table"]
+        db.upload(table, df)
+
+        assert _column_types(db, table)["nullable_big"] == "bigint"
