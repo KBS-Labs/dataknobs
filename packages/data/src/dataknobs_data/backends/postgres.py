@@ -780,7 +780,16 @@ class SyncPostgresDatabase(
         params = {}
 
         if query and query.filters:
-            # Add WHERE clause (simplified for now)
+            # KNOWN DEFECT, shared with AsyncPostgresDatabase.stream_read (see the
+            # longer note there). Only the EQ branch appends a clause, so every
+            # non-EQ filter is dropped silently and a caller that filtered gets
+            # back rows it filtered out -- while search() over the same Query
+            # applies them. This twin does NOT have the placeholder-shift half of
+            # that defect: parameters are keyed by name here, so a skipped filter
+            # leaves a gap in the numbering rather than a misalignment. The root
+            # cause is the same: this loop open-codes SQLQueryBuilder's WHERE
+            # construction instead of using it, and one change closes both.
+            # Recorded in the project work tracker with the reproductions attached.
             where_clauses = []
             for i, filter in enumerate(query.filters):
                 field_path = f"data->>'{filter.field}'"
@@ -2278,6 +2287,10 @@ class AsyncPostgresDatabase(
             # already holds and uses correctly in _vector_search above. Swapping to
             # it changes query semantics and needs a live Postgres to verify, which
             # is a different change from making this loop idiomatic.
+            #
+            # Recorded in the project work tracker with the reproductions attached,
+            # including the measured EQ-semantics change a swap would cause. The
+            # sync twin below carries the matching note for the half they share.
             where_clauses = []
 
             for param_count, filter in enumerate(query.filters, 1):

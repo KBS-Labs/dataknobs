@@ -335,12 +335,24 @@ ignore = [
     # where a decline was a claim about every line in the repository.
     "E501", # [behavioural] Line too long (configured at 100)
             # What is left of that argument, and it does not reduce the same way.
-            # 13 files hold a >100-character line inside a multi-line string token
-            # today, and unlike the two above there is no autofix, so acting on one
-            # is a hand-rewrite of literal text rather than deleting a space that
-            # nothing can observe. Its old reason -- "already configured at 100" --
-            # described the limit rather than the decline, which is the shape a
-            # category marker with no required argument leaves undisturbed.
+            # Unlike the two above there is no autofix, so acting on a finding is a
+            # hand-rewrite rather than deleting a space nothing can observe.
+            #
+            # Where the 200 findings actually are, classified with a 3.12-aware
+            # tokenizer (f-strings tokenize as FSTRING_START..FSTRING_END, not
+            # STRING; reading STRING alone finds only 130 of them and understates
+            # the case by 60): 190 sit inside a string token, 27 of them spanning
+            # multiple lines, and only 10 in 9 files are outside a string token
+            # entirely. So the decline is argued on where its findings are,
+            # not on the limit: the multi-line 27 are literal text whose width is
+            # content, while the single-line 163 are the weaker half of the case --
+            # shortening one of those is an ordinary refactor. That is the part to
+            # re-read if this entry is ever revisited, and re-measure rather than
+            # trusting these numbers, which are true of one tree on one day.
+            #
+            # Its old reason -- "already configured at 100" -- described the limit
+            # rather than the decline, which is the shape a category marker with no
+            # required argument leaves undisturbed.
 
     # Type annotations — covered by mypy, which measures the same property with teeth.
     # `disallow_untyped_defs` is what the strict tier turns on, and `no-untyped-def`

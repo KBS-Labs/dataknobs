@@ -232,11 +232,23 @@ ShellCheck's `style` severity is stylistic preference with no defect content
 class the check most exists to catch. Raising the floor to `style` is the next
 turn of the ratchet, not a separate decision.
 
-## Package-Specific Checklists
+## What a package owes today
 
-Each package should maintain its own error checklist documenting specific issues to address:
-- Location: `packages/[package-name]/docs/linting-errors-checklist.md`
-- Format: Checkbox list organized by priority
-- Updates: As errors are fixed, check them off and remove when complete
+Not a hand-maintained checklist. Packages used to keep one under
+`docs/linting-errors-checklist.md`, and exactly one was ever written — it is
+filed under `packages/data/docs/history/linting-and-type-checking/` as the
+record of a finished cleanup, and nothing has been added to it since.
 
-Example: `packages/data/docs/linting-errors-checklist.md`
+The live work list is the contract:
+
+```bash
+bin/quality-contract.py check                         # every cell against its ceiling
+bin/quality-contract.py census --tool ruff --cell packages/data/tests
+```
+
+The ceilings live in `.dataknobs/quality-contract.json`. A ceiling only ever
+falls: lowering one is what fixing findings looks like, and raising one has to
+be argued for in a pull request rather than absorbed by re-running
+`update-baseline`. That ratchet is what makes the numbers a work list rather
+than a status report, and it is why nothing here has to be checked off by
+hand.

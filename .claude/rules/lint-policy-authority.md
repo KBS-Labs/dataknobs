@@ -80,11 +80,21 @@ rule detects — which is why neither rule's findings had ever been read.
 **A rule declined repo-wide for a handful of findings is an accommodation,
 not a posture.** The threshold applied here: **three or fewer findings ⇒
 un-decline**, unless the family carries a written posture that binds its
-members (the `PTH` gradual transition, the sibling-coherence argument under
-`ARG00x`). A site that genuinely needs an exception takes a per-line
-`# noqa` naming the rule and the reason.
+members. Three such postures are in the config today, and the list is not
+closed — a fourth is written the day a family needs one:
+
+| Family | The posture that survives a low count |
+|---|---|
+| `PTH` | a gradual transition, declined as a whole while it runs |
+| `ARG00x` | sibling coherence: an unused argument is part of a signature its siblings share |
+| `TC00x` | the hazard is a property of the *library*, not of the count — today's three findings are `import pytest`, but the next could be one that resolves annotations at runtime |
+
+`TC00x` is the one that shows why the count alone cannot decide. It sits at
+exactly three, and un-declining on that basis would trade a bounded backlog
+for an unbounded runtime failure. A site that genuinely needs an exception
+takes a per-line `# noqa` naming the rule and the reason.
 
 Prefer per-line over per-file. A per-file waiver also unflags a **future**
-finding of that code in that file — the cost `.claude/rules/
-async-transport.md` names for the per-file form, paid deliberately, per
-file, with the file read first.
+finding of that code in that file — the cost
+`.claude/rules/async-transport.md` names for the per-file form, paid
+deliberately, per file, with the file read first.
