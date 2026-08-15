@@ -6,7 +6,7 @@ awaits async transforms and pre-tests.
 
 import pytest
 
-from dataknobs_bots.reasoning.wizard_fsm import WizardFSM, create_wizard_fsm
+from dataknobs_bots.reasoning.wizard_fsm import create_wizard_fsm
 from dataknobs_fsm.api.advanced import StepResult
 
 

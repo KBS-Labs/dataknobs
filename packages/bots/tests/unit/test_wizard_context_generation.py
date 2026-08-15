@@ -986,7 +986,7 @@ class TestLoaderTransitionDerive:
     """Tests for WizardConfigLoader extracting derive from transitions."""
 
     def test_derive_in_transition_metadata(self) -> None:
-        """derive block is extracted into transition metadata."""
+        """The ``derive`` block is extracted into transition metadata."""
         config: dict[str, Any] = {
             "name": "test",
             "stages": [

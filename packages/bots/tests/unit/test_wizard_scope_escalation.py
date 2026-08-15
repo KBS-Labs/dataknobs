@@ -282,7 +282,8 @@ class TestScopeEscalation:
     @pytest.mark.asyncio
     async def test_escalation_with_empty_result(self) -> None:
         """When escalated extraction returns empty data, wizard falls
-        through to the confidence gate with the original extraction."""
+        through to the confidence gate with the original extraction.
+        """
         config = _wizard_config()
         config["settings"] = {
             "extraction_scope": "current_message",

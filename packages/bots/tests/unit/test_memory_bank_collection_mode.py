@@ -9,7 +9,6 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
-import pytest_asyncio
 
 from dataknobs_bots.reasoning.wizard import WizardReasoning, WizardState
 from dataknobs_bots.reasoning.wizard_extraction import WizardExtractor
@@ -138,24 +137,6 @@ class TestCollectionModeIntegration:
     def test_handle_collection_adds_to_bank(self) -> None:
         """Verify the low-level _handle_collection_mode adds records."""
         reasoning = _make_collection_wizard()
-        state = WizardState(current_stage="collect", data={})
-        stage = {
-            "name": "collect",
-            "collection_mode": "collection",
-            "collection_config": {
-                "bank_name": "ingredients",
-                "done_keywords": ["done"],
-            },
-            "schema": {
-                "type": "object",
-                "properties": {
-                    "name": {"type": "string"},
-                    "amount": {"type": "string"},
-                },
-            },
-        }
-        # Simulate extraction result
-        extracted = {"name": "flour", "amount": "2 cups"}
 
         # The method is async, but for the core bank-addition logic
         # we can verify by directly calling the bank
@@ -185,7 +166,6 @@ class TestCollectionModeIntegration:
 
     def test_field_clearing_between_records(self) -> None:
         """Schema fields should be cleared between collection records."""
-        reasoning = _make_collection_wizard()
         state = WizardState(
             current_stage="collect",
             data={
@@ -602,7 +582,7 @@ class TestCollectionModeGenerateFlow:
 
         # generate() produces a response — no LLM calls needed
         # because "review" uses a response_template.
-        result = await reasoning.generate(manager=manager, llm=provider)
+        await reasoning.generate(manager=manager, llm=provider)
 
         # Read persisted wizard state back from manager metadata
         fsm_state = manager.metadata["wizard"]["fsm_state"]
@@ -635,7 +615,7 @@ class TestCollectionModeGenerateFlow:
             ]
         )
 
-        result = await reasoning.generate(manager=manager, llm=provider)
+        await reasoning.generate(manager=manager, llm=provider)
 
         fsm_state = manager.metadata["wizard"]["fsm_state"]
         assert fsm_state["current_stage"] == "collect"
@@ -666,7 +646,7 @@ class TestCollectionModeGenerateFlow:
             ]
         )
 
-        result = await reasoning.generate(manager=manager, llm=provider)
+        await reasoning.generate(manager=manager, llm=provider)
 
         # Should stay on collect, ingredient added to bank
         fsm_state = manager.metadata["wizard"]["fsm_state"]
@@ -939,7 +919,6 @@ class TestCollectionModeBranching:
 
         # Active-path view misses intermediate branches
         active_nodes = manager.state.get_current_nodes()
-        active_user_msgs = [n.message.content for n in active_nodes if n.message.role == "user"]
 
         # Full-tree view includes everything
         all_nodes = manager.state.get_all_nodes()

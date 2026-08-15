@@ -95,7 +95,8 @@ class TestRAGChunkerInjection:
     @pytest.mark.asyncio
     async def test_default_chunker_is_markdown_tree(self):
         """Without explicit chunker or 'chunker' config key, the default
-        MarkdownTreeChunker is used (backward compat)."""
+        MarkdownTreeChunker is used (backward compat).
+        """
         kb = await _make_kb()
         assert isinstance(kb._chunker, MarkdownTreeChunker)
 
@@ -136,7 +137,8 @@ class TestRAGChunkerInjection:
     @pytest.mark.asyncio
     async def test_explicit_chunker_overrides_config(self):
         """When both chunker= and chunking_config= are provided, the
-        explicit instance wins."""
+        explicit instance wins.
+        """
         stub = StubChunker(marker="winner")
         kb = await _make_kb(
             chunking_config={"max_chunk_size": 100},
@@ -147,7 +149,8 @@ class TestRAGChunkerInjection:
     @pytest.mark.asyncio
     async def test_from_config_passes_chunking_to_registry(self):
         """RAGKnowledgeBase.from_config() passes the chunking dict
-        through to create_chunker()."""
+        through to create_chunker().
+        """
         config = {
             "vector_store": {"backend": "memory", "dimensions": 384},
             "embedding_provider": "echo",

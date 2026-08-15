@@ -110,7 +110,7 @@ async def test_get_items_isolation(registry: ArtifactRegistry) -> None:
 
 @pytest.mark.asyncio
 async def test_count(registry: ArtifactRegistry, config: CorpusConfig) -> None:
-    """count returns correct item count with optional status filter."""
+    """The ``count`` method returns correct item count with optional status filter."""
     corpus = await ArtifactCorpus.create(registry, config)
 
     await corpus.add_item(content={"stem": "Q1"})
@@ -181,12 +181,12 @@ async def test_load_restores_dedup(registry: ArtifactRegistry) -> None:
     assert result.is_exact_duplicate is True
 
     # add_item also detects the duplicate
-    a_dup, result_dup = await loaded.add_item(content={"stem": "What is 3+3?"})
+    _, result_dup = await loaded.add_item(content={"stem": "What is 3+3?"})
     assert result_dup is not None
     assert result_dup.is_exact_duplicate is True
 
     # New content is accepted
-    a_new, result_new = await loaded.add_item(content={"stem": "What is 4+4?"})
+    _, result_new = await loaded.add_item(content={"stem": "What is 4+4?"})
     assert result_new is not None
     assert result_new.is_exact_duplicate is False
 
@@ -330,9 +330,9 @@ async def test_end_to_end_flow(registry: ArtifactRegistry, config: CorpusConfig)
     """Full flow: create corpus, add items, finalize."""
     corpus = await ArtifactCorpus.create(registry, config)
 
-    a1, _ = await corpus.add_item(content={"stem": "Q1", "answer": "A1"})
-    a2, _ = await corpus.add_item(content={"stem": "Q2", "answer": "A2"})
-    a3, _ = await corpus.add_item(content={"stem": "Q3", "answer": "A3"})
+    await corpus.add_item(content={"stem": "Q1", "answer": "A1"})
+    await corpus.add_item(content={"stem": "Q2", "answer": "A2"})
+    await corpus.add_item(content={"stem": "Q3", "answer": "A3"})
 
     assert await corpus.count() == 3
 

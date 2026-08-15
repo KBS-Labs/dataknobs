@@ -385,7 +385,7 @@ async def test_bound_tenant_overrides_extra_metadata_tenant_id() -> None:
             "cohort": "preserved",
         },
     )
-    for chunk_id, meta in _stored_metadata(kb2).items():
+    for meta in _stored_metadata(kb2).values():
         assert meta.get("tenant_id") == "acme"
         assert meta.get("domain_id") == "real-domain"
 
@@ -412,7 +412,7 @@ async def test_compose_preserves_non_identity_metadata_keys() -> None:
             "cohort": "beta",  # preserved
         },
     )
-    for chunk_id, meta in _stored_metadata(kb).items():
+    for meta in _stored_metadata(kb).values():
         assert meta.get("tenant_id") == "acme"
         assert meta.get("region") == "us-west"
         assert meta.get("cohort") == "beta"

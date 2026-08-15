@@ -530,7 +530,8 @@ class TestModuleDefaults:
 
 class TestTopicIndexPath:
     """The topic-index vector_query_fn closure must respect the same
-    callables when configured."""
+    callables when configured.
+    """
 
     async def test_topic_index_default_source_id(self) -> None:
         kb = ScriptedKnowledgeBase(
@@ -598,7 +599,8 @@ class TestTopicIndexPath:
 
 class TestFactoryResolution:
     """``_create_vector_kb_source`` must resolve dotted-import callable
-    strings from ``config.options`` and pass them through."""
+    strings from ``config.options`` and pass them through.
+    """
 
     def _config(self, **options: Any) -> GroundedSourceConfig:
         return GroundedSourceConfig(

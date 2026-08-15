@@ -12,8 +12,6 @@ Run all tests:
     pytest tests/integration/test_config_tools_integration.py
 """
 
-import os
-
 import pytest
 from dataknobs_common.exceptions import ConfigurationError
 from dataknobs_common.imports import dotted_path

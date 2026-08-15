@@ -165,7 +165,7 @@ class TestToolResolutionFailure:
 
     @pytest.mark.asyncio
     async def test_optional_xref_propagates_to_resolved_definition(self) -> None:
-        """optional flag propagates through xref to the resolved definition."""
+        """The ``optional`` flag propagates through xref to the resolved definition."""
         config = {
             "llm": {"provider": "echo", "model": "test"},
             "conversation_storage": {"backend": "memory"},

@@ -17,17 +17,8 @@ from typing import Any
 import pytest
 from dataknobs_common.imports import dotted_path
 
+from dataknobs_bots.reasoning.lifecycle import LifecycleHooks
 from dataknobs_common.exceptions import ConfigurationError
-
-
-def _import_lifecycle():
-    """Lazy import — until the module ships these tests collect-fail (RED)."""
-    from dataknobs_bots.reasoning.lifecycle import (
-        LifecycleHooks,
-        TurnHookCallback,
-    )
-
-    return LifecycleHooks, TurnHookCallback
 
 
 def _evt(stage: str = "s", **extra: Any) -> dict[str, Any]:
@@ -42,7 +33,6 @@ def _evt(stage: str = "s", **extra: Any) -> dict[str, Any]:
 
 @pytest.mark.asyncio
 async def test_on_turn_start_fires_registered_async_callback() -> None:
-    LifecycleHooks, _ = _import_lifecycle()
     fired: list[dict[str, Any]] = []
 
     async def cb(event: dict[str, Any]) -> None:
@@ -61,7 +51,6 @@ async def test_on_turn_start_fires_registered_async_callback() -> None:
 
 @pytest.mark.asyncio
 async def test_on_turn_end_fires_registered_async_callback() -> None:
-    LifecycleHooks, _ = _import_lifecycle()
     fired: list[str] = []
 
     async def cb(event: dict[str, Any]) -> None:
@@ -81,7 +70,6 @@ async def test_on_turn_end_fires_registered_async_callback() -> None:
 
 @pytest.mark.asyncio
 async def test_sync_callback_accepted_for_turn_start() -> None:
-    LifecycleHooks, _ = _import_lifecycle()
     fired = 0
 
     def sync_cb(event: dict[str, Any]) -> None:
@@ -101,7 +89,6 @@ async def test_sync_callback_accepted_for_turn_start() -> None:
 
 @pytest.mark.asyncio
 async def test_stage_scoped_hook_fires_only_for_its_stage() -> None:
-    LifecycleHooks, _ = _import_lifecycle()
     seen: list[str] = []
 
     async def cb(event: dict[str, Any]) -> None:
@@ -117,7 +104,6 @@ async def test_stage_scoped_hook_fires_only_for_its_stage() -> None:
 
 @pytest.mark.asyncio
 async def test_global_hook_fires_for_every_stage() -> None:
-    LifecycleHooks, _ = _import_lifecycle()
     seen: list[str] = []
 
     async def cb(event: dict[str, Any]) -> None:
@@ -138,7 +124,6 @@ async def test_global_hook_fires_for_every_stage() -> None:
 
 @pytest.mark.asyncio
 async def test_multiple_callbacks_fire_in_registration_order() -> None:
-    LifecycleHooks, _ = _import_lifecycle()
     order: list[str] = []
 
     async def first(event: dict[str, Any]) -> None:
@@ -162,7 +147,6 @@ async def test_multiple_callbacks_fire_in_registration_order() -> None:
 
 @pytest.mark.asyncio
 async def test_trigger_on_empty_registry_is_noop() -> None:
-    LifecycleHooks, _ = _import_lifecycle()
     hooks = LifecycleHooks()
     # Must not raise — no hooks registered.
     await hooks.trigger_turn_start(_evt())
@@ -177,8 +161,6 @@ async def test_trigger_on_empty_registry_is_noop() -> None:
 @pytest.mark.asyncio
 async def test_from_config_loads_dotted_path_callbacks(monkeypatch) -> None:
     """Pins the config-driven shape used by wizard YAML adopters."""
-    LifecycleHooks, _ = _import_lifecycle()
-
     # Register a callable in this module's namespace so the dotted-path
     # resolver can find it.
     fired: list[str] = []
@@ -217,8 +199,6 @@ def test_from_config_with_unparseable_path_raises() -> None:
     start cleanly and never fire it. The only trace was a WARNING, in a
     process that logs plenty of them.
     """
-    LifecycleHooks, _ = _import_lifecycle()
-
     with pytest.raises(ConfigurationError, match="not_a_valid_path"):
         LifecycleHooks.from_config(
             {"on_turn_start": [{"function": "not_a_valid_path"}]},
@@ -232,23 +212,17 @@ def test_an_entry_with_no_function_key_raises() -> None:
     registered nothing and said nothing at all. It was the only one of the
     four lenient exits with no WARNING, and no test covered it.
     """
-    LifecycleHooks, _ = _import_lifecycle()
-
     with pytest.raises(ConfigurationError, match="names no callback"):
         LifecycleHooks.from_config({"on_turn_start": [{"stage": "triage"}]})
 
 
 def test_an_entry_of_the_wrong_type_raises() -> None:
-    LifecycleHooks, _ = _import_lifecycle()
-
     with pytest.raises(ConfigurationError, match="must be a dotted path"):
         LifecycleHooks.from_config({"on_turn_start": [42]})
 
 
 def test_every_bad_entry_is_reported_together() -> None:
     """One error names all three, so three typos take one round trip."""
-    LifecycleHooks, _ = _import_lifecycle()
-
     with pytest.raises(ConfigurationError) as excinfo:
         LifecycleHooks.from_config(
             {
@@ -267,7 +241,6 @@ def test_nothing_is_registered_when_any_entry_is_bad() -> None:
     catching the error and carrying on would otherwise get exactly the
     half-loaded hook set this change exists to prevent.
     """
-    LifecycleHooks, _ = _import_lifecycle()
     hooks = LifecycleHooks()
 
     with pytest.raises(ConfigurationError):
@@ -289,8 +262,6 @@ def _a_valid_hook(event: dict[str, Any]) -> None:
 
 def test_a_dot_separated_path_is_accepted() -> None:
     """``.`` was rejected here and accepted at four other resolution sites."""
-    LifecycleHooks, _ = _import_lifecycle()
-
     hooks = LifecycleHooks.from_config(
         {
             "on_turn_start": [dotted_path(_a_valid_hook)],
@@ -306,7 +277,6 @@ async def test_from_config_with_stage_scoping_round_trips() -> None:
     behaviorally: the stage-scoped callback fires for the matching
     stage and is filtered out for non-matching stages.
     """
-    LifecycleHooks, _ = _import_lifecycle()
     fired: list[str] = []
 
     async def _registered_hook_for_stage(event: dict[str, Any]) -> None:
@@ -339,7 +309,6 @@ def test_turn_count_properties_track_registrations() -> None:
     ``WizardHooks.hook_count`` and consumer diagnostics use; they replace
     the prior private-list-length accesses.
     """
-    LifecycleHooks, _ = _import_lifecycle()
     hooks = LifecycleHooks()
     assert hooks.turn_start_count == 0
     assert hooks.turn_end_count == 0
@@ -360,7 +329,6 @@ async def test_clear_drains_in_place_and_preserves_identity() -> None:
     instance identity (so a consumer holding a reference via
     :attr:`WizardHooks.lifecycle` remains attached after a clear).
     """
-    LifecycleHooks, _ = _import_lifecycle()
     fired: list[str] = []
 
     async def cb(event: dict[str, Any]) -> None:

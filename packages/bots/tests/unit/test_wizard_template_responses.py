@@ -78,7 +78,7 @@ class TestRenderResponseTemplate:
         assert result == "Hello !"
 
     def test_history_and_completed_in_context(self, wizard_reasoning: WizardReasoning) -> None:
-        """history and completed are accessible in template."""
+        """The ``history`` and ``completed`` variables are accessible in template."""
         state = WizardState(
             current_stage="configure",
             data={},

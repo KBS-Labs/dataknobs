@@ -20,8 +20,6 @@ import pytest
 from dataknobs_bots.reasoning.wizard import WizardReasoning
 from dataknobs_bots.reasoning.wizard_loader import WizardConfigLoader
 from dataknobs_bots.reasoning.wizard_types import WizardState
-from dataknobs_llm import EchoProvider
-from dataknobs_llm.testing import scripted_schema_extractor
 
 
 # ---------------------------------------------------------------------------
@@ -340,7 +338,7 @@ class TestConcurrentTurnsIsolated:
         await asyncio.gather(run_a(), run_b())
 
         # Both transforms should have captured their own LLM
-        captured = {label: ctx for label, ctx in _captured_contexts}
+        captured = dict(_captured_contexts)
         assert captured["A"].config.get("llm") is llm_a
         assert captured["B"].config.get("llm") is llm_b
 

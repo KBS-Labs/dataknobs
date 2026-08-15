@@ -670,7 +670,7 @@ class TestLifecycleHooksSync:
     def test_on_add_hook_fires(self) -> None:
         bank = _make_bank()
         captured: list[BankRecord] = []
-        bank.on_add(lambda r: captured.append(r))
+        bank.on_add(captured.append)
         bank.add({"name": "flour"})
         assert len(captured) == 1
         assert captured[0].data == {"name": "flour"}
@@ -678,7 +678,7 @@ class TestLifecycleHooksSync:
     def test_on_update_hook_fires(self) -> None:
         bank = _make_bank()
         captured: list[BankRecord] = []
-        bank.on_update(lambda r: captured.append(r))
+        bank.on_update(captured.append)
         rid = bank.add({"name": "flour"})
         bank.update(rid, {"name": "sugar"})
         assert len(captured) == 1
@@ -688,7 +688,7 @@ class TestLifecycleHooksSync:
     def test_on_remove_hook_fires(self) -> None:
         bank = _make_bank()
         captured: list[BankRecord] = []
-        bank.on_remove(lambda r: captured.append(r))
+        bank.on_remove(captured.append)
         rid = bank.add({"name": "flour"})
         bank.remove(rid)
         assert len(captured) == 1
@@ -731,7 +731,7 @@ class TestLifecycleHooksSync:
     def test_remove_nonexistent_does_not_fire_hook(self) -> None:
         bank = _make_bank()
         captured: list[BankRecord] = []
-        bank.on_remove(lambda r: captured.append(r))
+        bank.on_remove(captured.append)
         result = bank.remove("nonexistent0")
         assert result is False
         assert len(captured) == 0
@@ -739,7 +739,7 @@ class TestLifecycleHooksSync:
     def test_update_nonexistent_does_not_fire_hook(self) -> None:
         bank = _make_bank()
         captured: list[BankRecord] = []
-        bank.on_update(lambda r: captured.append(r))
+        bank.on_update(captured.append)
         result = bank.update("nonexistent0", {"name": "x"})
         assert result is False
         assert len(captured) == 0

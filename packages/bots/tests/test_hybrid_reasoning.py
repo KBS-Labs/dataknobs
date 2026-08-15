@@ -14,7 +14,6 @@ from dataknobs_bots.reasoning.hybrid import HybridReasoning
 from dataknobs_bots.reasoning.hybrid_config import HybridReasoningConfig
 from dataknobs_bots.reasoning.grounded_config import (
     GroundedReasoningConfig,
-    GroundedSynthesisConfig,
 )
 from dataknobs_bots.testing import BotTestHarness, StubManager
 from dataknobs_llm.testing import text_response, tool_call_response

@@ -114,7 +114,7 @@ class TestConfigToolkitEndToEnd:
         # Verify draft exists
         draft_result = draft_mgr.get_draft(draft_id)
         assert draft_result is not None
-        draft_config, draft_meta = draft_result
+        _, draft_meta = draft_result
         assert draft_meta.stage == "review"
         assert draft_meta.config_name == "helper-bot"
 

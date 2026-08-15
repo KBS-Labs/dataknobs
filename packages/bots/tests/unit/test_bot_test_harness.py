@@ -316,10 +316,12 @@ class TestBotTestHarness:
         async with await BotTestHarness.create(
             wizard_config=_two_field_config(),
         ) as harness:
-            bot = harness.bot
+            assert harness.bot is not None
 
-        # After context exit, bot should be closed
-        # (no assertion — just verifying no exception on close)
+        # After context exit, bot should be closed. Nothing asserts that
+        # directly: neither DynaBot nor the providers it owns expose a
+        # closed state to read back, so what this pins is that exit runs
+        # close() without raising.
 
     @pytest.mark.asyncio
     async def test_bot_and_provider_access(self) -> None:
@@ -360,7 +362,7 @@ class TestInjectProvidersExtractor:
 
     @pytest.mark.asyncio
     async def test_extractor_kwarg_replaces_strategy_extractor(self) -> None:
-        """extractor kwarg replaces strategy._extractor."""
+        """The ``extractor`` kwarg replaces strategy._extractor."""
         from dataknobs_bots.bot.base import DynaBot
 
         config = _two_field_config()

@@ -120,7 +120,8 @@ class TestDetectBooleanSignal:
     def test_not_correct_known_limitation(self) -> None:
         """'that's not correct' — 'correct' is affirmative, 'not' is
         not a negative signal or negation keyword.  Returns True.
-        This is a known limitation of single-word signal matching."""
+        This is a known limitation of single-word signal matching.
+        """
         assert self._detect("That's not correct.") is True
 
     def test_custom_affirmative_signals(self) -> None:
@@ -445,7 +446,8 @@ class TestBooleanRecoveryIntegration:
     @pytest.mark.asyncio
     async def test_affirmative_recovery_fills_confirmed(self) -> None:
         """'Yes, save it!' recovers confirmed=True when extraction
-        returns nothing for the field."""
+        returns nothing for the field.
+        """
         config = _confirm_stage_config(
             pipeline=[RECOVERY_DERIVATION, RECOVERY_BOOLEAN],
         )
@@ -518,7 +520,8 @@ class TestBooleanRecoveryIntegration:
     @pytest.mark.asyncio
     async def test_recovery_disabled_via_class_level_flag(self) -> None:
         """With boolean_recovery=False, no recovery happens even when
-        the strategy is in the pipeline."""
+        the strategy is in the pipeline.
+        """
         config = _confirm_stage_config(
             boolean_recovery=False,
             pipeline=[RECOVERY_BOOLEAN],
@@ -543,7 +546,8 @@ class TestBooleanRecoveryIntegration:
     @pytest.mark.asyncio
     async def test_per_field_override_enables(self) -> None:
         """Per-field x-extraction.boolean_recovery=True overrides
-        class-level False."""
+        class-level False.
+        """
         config = _confirm_stage_config(
             boolean_recovery=False,
             per_field_recovery=True,
@@ -567,7 +571,8 @@ class TestBooleanRecoveryIntegration:
     @pytest.mark.asyncio
     async def test_per_field_override_disables(self) -> None:
         """Per-field x-extraction.boolean_recovery=False overrides
-        class-level True."""
+        class-level True.
+        """
         config = _confirm_stage_config(
             boolean_recovery=True,
             per_field_recovery=False,
@@ -613,7 +618,8 @@ class TestBooleanRecoveryIntegration:
     @pytest.mark.asyncio
     async def test_pipeline_ordering_boolean_before_escalation(self) -> None:
         """Boolean recovery in pipeline runs before scope escalation.
-        When it fills the field, escalation is skipped."""
+        When it fills the field, escalation is skipped.
+        """
         config = _confirm_stage_config(
             pipeline=[RECOVERY_BOOLEAN, "scope_escalation"],
         )
@@ -691,7 +697,8 @@ class TestBooleanRecoveryIntegration:
     @pytest.mark.asyncio
     async def test_non_boolean_field_not_recovered(self) -> None:
         """Boolean recovery only applies to boolean-type fields.
-        A missing string field remains missing after boolean recovery."""
+        A missing string field remains missing after boolean recovery.
+        """
         builder = WizardConfigBuilder("non-bool-test")
         builder.stage("gather", is_start=True, prompt="Tell me.")
         builder.field(
@@ -731,7 +738,8 @@ class TestMultiBooleanScopeRestriction:
     @pytest.mark.asyncio
     async def test_scope_restriction_requires_field_keywords(self) -> None:
         """With 2 missing boolean fields, only the one whose keywords
-        appear in the message gets recovered."""
+        appear in the message gets recovered.
+        """
         config = _multi_bool_config()
         async with await BotTestHarness.create(
             wizard_config=config,
@@ -751,7 +759,8 @@ class TestMultiBooleanScopeRestriction:
     @pytest.mark.asyncio
     async def test_scope_restriction_other_field(self) -> None:
         """The other boolean field can be recovered when its keywords
-        appear."""
+        appear.
+        """
         config = _multi_bool_config()
         async with await BotTestHarness.create(
             wizard_config=config,
@@ -769,7 +778,8 @@ class TestMultiBooleanScopeRestriction:
     @pytest.mark.asyncio
     async def test_single_missing_boolean_no_scope_restriction(self) -> None:
         """When only one boolean field is missing, scope restriction
-        is relaxed — any affirmative signal fills it."""
+        is relaxed — any affirmative signal fills it.
+        """
         config = _multi_bool_config()
         async with await BotTestHarness.create(
             wizard_config=config,
@@ -788,7 +798,8 @@ class TestMultiBooleanScopeRestriction:
     @pytest.mark.asyncio
     async def test_empty_keywords_skipped_with_warning(self) -> None:
         """A boolean field with no extractable keywords (short name,
-        no description) is skipped in multi-boolean scope restriction."""
+        no description) is skipped in multi-boolean scope restriction.
+        """
         builder = WizardConfigBuilder("empty-kw-test")
         builder.stage("gather", is_start=True, prompt="Confirm.")
         # "ok" → all words ≤ 2 chars → significant_words returns empty set

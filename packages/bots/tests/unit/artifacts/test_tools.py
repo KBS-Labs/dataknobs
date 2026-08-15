@@ -2,14 +2,9 @@
 
 from __future__ import annotations
 
-from typing import Any
-
-import pytest
 
 from dataknobs_data.backends.memory import AsyncMemoryDatabase
 
-from dataknobs_bots.artifacts.models import ArtifactStatus
-from dataknobs_bots.artifacts.provenance import create_provenance
 from dataknobs_bots.artifacts.registry import ArtifactRegistry
 from dataknobs_bots.artifacts.tools import (
     CreateArtifactTool,

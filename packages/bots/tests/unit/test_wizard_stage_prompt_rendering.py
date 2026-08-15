@@ -15,7 +15,6 @@ import pytest
 
 from dataknobs_bots.bot.base import normalize_wizard_state
 from dataknobs_bots.reasoning.wizard import (
-    WizardAdvanceResult,
     WizardReasoning,
     WizardState,
 )

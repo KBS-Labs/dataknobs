@@ -218,7 +218,8 @@ async def test_ingestion_result_reports_files_skipped() -> None:
     :class:`DirectoryProcessor` counter end-to-end: config files,
     excluded paths, and unsupported-extension files enumerated by an
     explicit pattern all flow through the stats dict into the
-    result type."""
+    result type.
+    """
     backend = InMemoryKnowledgeBackend()
     await backend.initialize()
     await backend.create_kb("d1")
@@ -261,7 +262,8 @@ async def test_ingest_from_backend_accepts_extra_metadata() -> None:
 @pytest.mark.asyncio
 async def test_ingestion_manager_publishes_failure_event() -> None:
     """When ingest fails, manager marks status ``error`` and fires a
-    ``status="failed"`` end event."""
+    ``status="failed"`` end event.
+    """
     from dataknobs_bots.knowledge import INGEST_DOMAIN_END
     from dataknobs_common.events import InMemoryEventBus
 

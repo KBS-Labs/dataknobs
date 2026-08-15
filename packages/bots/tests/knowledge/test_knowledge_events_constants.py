@@ -22,7 +22,8 @@ from dataknobs_bots.knowledge import (
 
 def test_topic_constants_stable() -> None:
     """Drift guard: literal topic values are part of the cross-package
-    contract. A rename must be a deliberate, changelogged change."""
+    contract. A rename must be a deliberate, changelogged change.
+    """
     assert INGEST_DOMAIN_START == "ingest:domain:start"
     assert INGEST_DOMAIN_END == "ingest:domain:end"
     assert INGEST_METADATA_WRITE == "ingest:metadata:write"
@@ -31,7 +32,8 @@ def test_topic_constants_stable() -> None:
 
 def test_trigger_payload_json_roundtrip() -> None:
     """The wire format is ``dict[str, Any]``; the TypedDict is just a
-    documented shape. A constructed payload round-trips through JSON."""
+    documented shape. A constructed payload round-trips through JSON.
+    """
     payload: KnowledgeTriggerPayload = {
         "domain_id": "d1",
         "tenant_id": "acme",

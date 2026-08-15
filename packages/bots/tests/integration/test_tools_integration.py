@@ -380,7 +380,7 @@ class TestReActWithToolsOllama:
 
     @pytest.mark.asyncio
     @pytest.mark.skipif(
-        not os.environ.get("TEST_OLLAMA", "").lower() == "true",
+        os.environ.get("TEST_OLLAMA", "").lower() != "true",
         reason="Real LLM tool execution requires TEST_OLLAMA=true",
     )
     async def test_react_tool_execution_flow(self, bot_config_react):
@@ -405,7 +405,7 @@ class TestReActWithToolsOllama:
 
     @pytest.mark.asyncio
     @pytest.mark.skipif(
-        not os.environ.get("TEST_OLLAMA", "").lower() == "true",
+        os.environ.get("TEST_OLLAMA", "").lower() != "true",
         reason="Real LLM tool chaining requires TEST_OLLAMA=true",
     )
     async def test_tool_chaining(self, bot_config_react):

@@ -11,9 +11,7 @@ Validates:
 from __future__ import annotations
 
 from typing import Any
-from unittest.mock import MagicMock
 
-import pytest
 
 from dataknobs_bots.reasoning.wizard import (
     DEFAULT_EPHEMERAL_KEYS,
@@ -95,8 +93,6 @@ class TestPerTurnKeysConfig:
 
     def test_per_turn_keys_merged_into_ephemeral(self) -> None:
         """per_turn_keys are included in _ephemeral_keys."""
-        reasoning = WizardReasoning.__new__(WizardReasoning)
-
         # Simulate __init__ logic for ephemeral keys
         per_turn_keys = frozenset(["action", "intent_raw"])
         config_ephemeral: list[str] = []

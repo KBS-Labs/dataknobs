@@ -146,6 +146,6 @@ class TestDynaBotWithKnowledgeBase:
         assert len(results) > 0
 
         # Check that we have results from different sources
-        sources = set(r["source"] for r in results)
+        sources = {r["source"] for r in results}
         # Should have at least one source
         assert len(sources) >= 1

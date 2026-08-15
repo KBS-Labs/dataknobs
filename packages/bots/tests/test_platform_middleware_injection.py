@@ -397,7 +397,8 @@ class TestPrebuiltPathUnaffected:
 
 class TestHarnessPlatformPassThrough:
     """``BotTestHarness.create`` routes platform middleware through
-    ``from_config``."""
+    ``from_config``.
+    """
 
     @pytest.mark.asyncio
     async def test_harness_platform_pass_through(self) -> None:

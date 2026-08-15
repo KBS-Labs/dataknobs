@@ -472,7 +472,8 @@ class TestWizardRestoreFromCheckpoint:
 
     def test_noop_when_wizard_fsm_state_empty_dict(self) -> None:
         """Empty ``wizard_fsm_state`` dict is falsy and skipped (matches
-        the original bot-side behaviour exactly)."""
+        the original bot-side behaviour exactly).
+        """
         strategy = _build_wizard()
         manager = _StubManager()
         strategy.restore_from_checkpoint(manager, {"wizard_fsm_state": {}})
@@ -529,7 +530,8 @@ class TestWizardUndoToCheckpoint:
     def test_with_real_memory_bank_does_not_raise(self) -> None:
         """A wizard with a real ``MemoryBank`` undoes cleanly even when the
         bank has no records yet — guards against the loop breaking on
-        zero-record edge cases."""
+        zero-record edge cases.
+        """
         strategy = _build_wizard(bank_names=("ingredients",))
         banks = strategy.banks
         # The wizard's auto-built bank is keyed by config name.

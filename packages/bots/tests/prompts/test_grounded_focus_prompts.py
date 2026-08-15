@@ -8,8 +8,6 @@ Verifies:
 - Focus drift meta-prompt renders with tangent count branching
 """
 
-import pytest
-
 from dataknobs_llm.prompts import ConfigPromptLibrary, TemplateRenderer
 from dataknobs_llm.prompts.base.types import TemplateMode
 

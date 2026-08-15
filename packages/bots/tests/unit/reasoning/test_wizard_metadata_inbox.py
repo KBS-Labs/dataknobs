@@ -171,7 +171,8 @@ async def test_empty_dict_inbox_is_silent_no_op(caplog) -> None:
 @pytest.mark.asyncio
 async def test_inbox_merge_runs_after_per_turn_clear() -> None:
     """Inbox value for an ephemeral (per-turn) key survives the per-turn
-    clear because the merge happens after."""
+    clear because the merge happens after.
+    """
     wizard_dict = _minimal_wizard_dict()
     wizard_dict["settings"] = {"per_turn_keys": ["_intent"]}
     loader = WizardConfigLoader()

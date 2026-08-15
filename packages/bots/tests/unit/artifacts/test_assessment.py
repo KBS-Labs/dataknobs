@@ -245,7 +245,7 @@ class TestStartAssessmentSession:
     async def test_without_question_ids(self) -> None:
         data: dict[str, Any] = {}
 
-        session = await start_assessment_session(
+        await start_assessment_session(
             data,
             assessment_artifact_id="art_001",
             student_id="s1",

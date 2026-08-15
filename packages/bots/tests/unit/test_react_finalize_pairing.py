@@ -302,7 +302,8 @@ class TestToolLoopTimeout:
 
 class TestMonolithicGenerateDuplicateBreak:
     """The monolithic generate() path (used by HybridReasoning) also
-    leaves an orphan on a duplicate break."""
+    leaves an orphan on a duplicate break.
+    """
 
     @pytest.mark.asyncio
     async def test_generate_pairs_orphan_tool_use(self) -> None:
@@ -379,7 +380,8 @@ class TestStreamingDuplicateBreak:
 
 class TestMaxIterationsNoFalsePositive:
     """max_iterations ends the loop with the last call already paired, so
-    the helper must be a no-op (no spurious synthetic tool_result)."""
+    the helper must be a no-op (no spurious synthetic tool_result).
+    """
 
     @pytest.mark.asyncio
     async def test_max_iterations_no_spurious_pairing(self) -> None:
@@ -419,7 +421,8 @@ class TestMaxIterationsNoFalsePositive:
 
 class TestHappyPathUnchanged:
     """A normal turn ending in a real final answer is unchanged: the
-    finalize helper never runs (stored final_response short-circuits)."""
+    finalize helper never runs (stored final_response short-circuits).
+    """
 
     @pytest.mark.asyncio
     async def test_final_answer_no_synthetic_pairing(self) -> None:
@@ -466,7 +469,7 @@ class TestPairOrphanToolCallsCore:
     """Direct unit tests for the pure ``list[LLMMessage]`` pairing core.
 
     These exercise the core without a bot, pinning behaviours the
-    integration tests (T1–T6) reach only indirectly: route-aware guidance
+    integration tests (T1-T6) reach only indirectly: route-aware guidance
     selection, the id-less duplicate-name collapse, purity, and idempotency.
     """
 

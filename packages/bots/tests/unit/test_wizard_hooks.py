@@ -104,7 +104,8 @@ class TestWizardHooksRegistration:
 
     def test_clear_hooks(self) -> None:
         """Test clearing all registered hooks — including the composed
-        turn-lifecycle surface (``turn_start`` / ``turn_end``)."""
+        turn-lifecycle surface (``turn_start`` / ``turn_end``).
+        """
         hooks = WizardHooks()
 
         hooks.on_enter(lambda s, d: None)
@@ -202,7 +203,7 @@ class TestWizardHooksExecution:
         hooks = WizardHooks()
         final_data: list[dict] = []
 
-        hooks.on_complete(lambda d: final_data.append(d))
+        hooks.on_complete(final_data.append)
 
         await hooks.trigger_complete({"result": "success"})
 

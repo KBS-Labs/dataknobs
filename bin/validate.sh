@@ -738,7 +738,16 @@ else
     done
 
     # Count unique files
-    total_files=$(echo "${PRINT_RESULTS[@]}" | tr ' ' '\n' | cut -d: -f1 | sort -u | wc -l | tr -d ' ')
+    #
+    # One element per line, not the whole array through `tr ' ' '\n'`. An element
+    # is `path:line:col:content`, and content is a line of source with spaces in
+    # it, so splitting on spaces made every word its own "file": `cut -d: -f1`
+    # then reduced `print(f"Error` to a token, and `sort -u | wc -l` counted the
+    # vocabulary of the offending lines. Four findings in ONE file reported
+    # twenty-two, so the reader was told "... and 12 more files" that do not
+    # exist. The count only ever exceeded the real one, which is why it read as
+    # a plausible number and survived.
+    total_files=$(printf '%s\n' "${PRINT_RESULTS[@]}" | cut -d: -f1 | sort -u | wc -l | tr -d ' ')
     if [[ $total_files -gt 10 ]]; then
         echo -e "${RED}      ... and $(($total_files - 10)) more files${NC}"
     fi

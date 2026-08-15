@@ -9,7 +9,6 @@ from dataknobs_data.backends.memory import AsyncMemoryDatabase
 from dataknobs_bots.artifacts import (
     ArtifactCorpus,
     ArtifactRegistry,
-    ArtifactStatus,
     TransformContext,
     add_to_corpus,
     create_corpus,

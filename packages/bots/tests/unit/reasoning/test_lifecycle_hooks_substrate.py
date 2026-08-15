@@ -45,7 +45,8 @@ def test_lifecycle_hooks_supports_callback_registry_capability() -> None:
 
 def test_supported_capabilities_classvar_declared() -> None:
     """The class-level capability set is the registration surface that
-    :class:`~dataknobs_common.capabilities.CapabilityMixin` reads."""
+    :class:`~dataknobs_common.capabilities.CapabilityMixin` reads.
+    """
     assert Capability.CALLBACK_REGISTRY in LifecycleHooks.SUPPORTED_CAPABILITIES
 
 
@@ -61,7 +62,8 @@ def test_registry_accessor_returns_callback_registry() -> None:
 
 def test_registry_accessor_returns_same_instance_on_repeat() -> None:
     """The accessor is stable — a consumer caching the reference can
-    rely on it across calls."""
+    rely on it across calls.
+    """
     hooks = LifecycleHooks()
     assert hooks.registry is hooks.registry
 
@@ -75,7 +77,8 @@ def test_registry_accessor_returns_same_instance_on_repeat() -> None:
 async def test_consumer_can_swap_ordering_via_registry() -> None:
     """A consumer reaching through ``hooks.registry`` can swap in
     :class:`PriorityOrdering`. Subsequent ``trigger_turn_start`` calls
-    honor the new ordering."""
+    honor the new ordering.
+    """
     hooks = LifecycleHooks()
     seen: list[str] = []
     hooks.registry.set_ordering(PriorityOrdering())
@@ -110,7 +113,8 @@ async def test_consumer_can_fanout_lifecycle_events_to_bus() -> None:
     composes the lifecycle surface with an EventBus — every trigger
     additionally publishes the event payload to the bus under the
     prefixed topic. Cross-replica observability without changing the
-    wizard surface."""
+    wizard surface.
+    """
     hooks = LifecycleHooks()
     bus = InMemoryEventBus()
     await bus.connect()
@@ -124,7 +128,7 @@ async def test_consumer_can_fanout_lifecycle_events_to_bus() -> None:
 
     # Also register a local callback to confirm both paths run.
     local_seen: list[dict[str, Any]] = []
-    hooks.on_turn_start(lambda e: local_seen.append(e))
+    hooks.on_turn_start(local_seen.append)
 
     payload = _evt(stage="greet")
     await hooks.trigger_turn_start(payload)

@@ -71,7 +71,7 @@ def _react_config(compaction: dict[str, Any] | None) -> dict[str, Any]:
 
 
 def _tool_loop_script(n_iterations: int) -> list[Any]:
-    """n tool-call turns (drives the loop) then a final text answer."""
+    """A script of ``n`` tool-call turns (drives the loop) then a final text answer."""
     script = [tool_call_response("echo", {"text": f"step {i}"}) for i in range(n_iterations)]
     script.append(text_response("All done."))
     return script

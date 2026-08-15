@@ -16,9 +16,6 @@ from dataknobs_bots.rubrics.meta import (
     check_weight_distribution,
 )
 from dataknobs_bots.rubrics.models import (
-    RubricCriterion,
-    RubricLevel,
-    ScoringMethod,
     ScoringType,
 )
 

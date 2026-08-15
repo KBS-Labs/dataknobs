@@ -308,7 +308,8 @@ class TestFromComponents:
 
     def test_requires_prompt_builder_and_storage(self) -> None:
         """``from_components`` shares the pre-built collaborator contract:
-        a built bot needs both a prompt builder and conversation storage."""
+        a built bot needs both a prompt builder and conversation storage.
+        """
         provider = EchoProvider({"provider": "echo", "model": "test"})
         with pytest.raises(TypeError, match="prompt_builder and conversation_storage"):
             DynaBot.from_components(llm=provider)

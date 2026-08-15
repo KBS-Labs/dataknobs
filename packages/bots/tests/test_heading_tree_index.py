@@ -7,7 +7,7 @@ from typing import Any
 import pytest
 
 from dataknobs_data.sources.base import RetrievalIntent, SourceResult
-from dataknobs_data.sources.topic_index import DEFAULT_HEADING_STOPWORDS, HeadingMatchConfig
+from dataknobs_data.sources.topic_index import DEFAULT_HEADING_STOPWORDS
 
 from dataknobs_bots.knowledge.sources.heading_tree import (
     HeadingTreeConfig,
@@ -788,7 +788,6 @@ class TestResultLimits:
     @pytest.mark.asyncio
     async def test_seed_score_threshold_filters_weak_seeds(self) -> None:
         """Vector seeds below the threshold are dropped."""
-        chunks = _rfc_chunks()
 
         async def low_score_fn(
             query: str,

@@ -9,11 +9,9 @@ Covers artifact file seeding:
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from typing import Any
 
-import pytest
 from dataknobs_data.backends.memory import SyncMemoryDatabase
 
 from dataknobs_bots.memory.artifact_bank import ArtifactBank

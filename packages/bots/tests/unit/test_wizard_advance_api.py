@@ -13,7 +13,6 @@ import pytest
 
 from dataknobs_bots.reasoning.observability import TransitionRecord
 from dataknobs_bots.reasoning.wizard import (
-    ExtractionPipelineResult,
     SubflowContext,
     WizardAdvanceResult,
     WizardReasoning,
@@ -727,7 +726,6 @@ class TestGenerateBackwardCompatibility:
     ) -> None:
         """generate() produces a response after refactoring."""
         from dataknobs_llm.conversations import ConversationManager
-        from dataknobs_llm.llm.providers.echo import EchoProvider
 
         manager: ConversationManager = conversation_manager_pair[0]
         provider: EchoProvider = conversation_manager_pair[1]

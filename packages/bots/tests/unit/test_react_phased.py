@@ -419,7 +419,7 @@ class TestProcessResultIterate:
     """Verify ProcessResult iterate field behavior."""
 
     def test_iterate_defaults_to_false(self) -> None:
-        """iterate defaults to False (wizard behavior)."""
+        """The ``iterate`` field defaults to False (wizard behavior)."""
         result = ProcessResult()
         assert result.iterate is False
 

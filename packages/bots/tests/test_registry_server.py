@@ -66,7 +66,7 @@ async def test_list_empty_returns_items_shape(app_client) -> None:
 
 @pytest.mark.asyncio
 async def test_list_returns_registration_dicts(app_client) -> None:
-    """list response contains Registration.to_dict() items the client can parse."""
+    """The ``list`` response contains Registration.to_dict() items the client can parse."""
     client, backend = app_client
     await backend.register(
         "alice",

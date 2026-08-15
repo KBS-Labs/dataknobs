@@ -123,7 +123,7 @@ async def test_ingest_changes_purges_deleted_file_chunks(wired) -> None:
 
 async def test_ingest_changes_invalid_version_falls_back_to_full(wired, caplog) -> None:
     """An unresolvable version → full re-ingest, not a silent skip."""
-    backend, rag, manager = wired
+    _, rag, manager = wired
 
     await manager.ingest("d")
 
@@ -139,7 +139,7 @@ async def test_ingest_changes_invalid_version_falls_back_to_full(wired, caplog) 
 
 async def test_ingest_changes_noop_when_unchanged(wired) -> None:
     """No change since the captured version → successful no-op."""
-    backend, rag, manager = wired
+    backend, _, manager = wired
 
     await manager.ingest("d")
     version = await manager.get_current_version("d")

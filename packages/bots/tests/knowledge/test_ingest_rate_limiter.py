@@ -35,7 +35,8 @@ class RecordingRateLimiter(InMemoryRateLimiter):
     """Real ``InMemoryRateLimiter`` that records the category names it
     is asked to acquire. Subclass (not a mock) so the real acquire
     code path still runs — it proves the seam *and* exercises the
-    actual limiter."""
+    actual limiter.
+    """
 
     def __init__(self) -> None:
         super().__init__(RateLimiterConfig(default_rates=[RateLimit(limit=10_000, interval=60.0)]))
@@ -92,7 +93,8 @@ async def test_ingest_from_backend_accepts_rate_limiter(
 ) -> None:
     """The seam is reachable directly on
     :meth:`RAGKnowledgeBase.ingest_from_backend`, not only via the
-    manager."""
+    manager.
+    """
     kb = await _make_kb()
     rl = RecordingRateLimiter()
 
@@ -108,7 +110,8 @@ async def test_real_inmemory_rate_limiter_consumes_capacity(
 ) -> None:
     """A plain (non-recording) real ``InMemoryRateLimiter`` is actually
     exercised once per chunk — proven via its own status, no timing
-    assertion (deterministic)."""
+    assertion (deterministic).
+    """
     kb = await _make_kb()
     rl = create_rate_limiter({"rates": [{"limit": 1000, "interval": 60}]})
     mgr = KnowledgeIngestionManager(source=backend, destination=kb, rate_limiter=rl)
@@ -124,7 +127,8 @@ async def test_no_rate_limiter_is_unchanged(
     backend: InMemoryKnowledgeBackend,
 ) -> None:
     """Regression guard: omitting ``rate_limiter`` (the default) leaves
-    ingest behaviour identical to prior releases."""
+    ingest behaviour identical to prior releases.
+    """
     kb = await _make_kb()
     mgr = KnowledgeIngestionManager(source=backend, destination=kb)
 

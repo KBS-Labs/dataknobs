@@ -44,7 +44,7 @@ class TestCreateBotResolver:
 
             from dataknobs_bots.config import create_bot_resolver
 
-            resolver = create_bot_resolver(mock_env_config)
+            create_bot_resolver(mock_env_config)
 
             # Should register 4 factories
             assert mock_resolver.register_factory.call_count == 4
@@ -66,7 +66,7 @@ class TestCreateBotResolver:
 
             from dataknobs_bots.config import create_bot_resolver
 
-            resolver = create_bot_resolver(mock_env_config, register_defaults=False)
+            create_bot_resolver(mock_env_config, register_defaults=False)
 
             # Should not register any factories
             assert mock_resolver.register_factory.call_count == 0
@@ -208,6 +208,7 @@ class TestBotResourceResolver:
             mock_resolver.resolve.assert_called_once_with(
                 "llm_providers", "default", use_cache=False, temperature=0.5
             )
+            assert llm is mock_llm
 
     @pytest.mark.asyncio
     async def test_get_database(self, mock_env_config):

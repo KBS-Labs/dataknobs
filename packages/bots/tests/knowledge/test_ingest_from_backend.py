@@ -204,9 +204,8 @@ async def test_pattern_intersection_across_local_and_backend(
     tmp_path: Path,
 ) -> None:
     """LocalDocumentSource and BackendDocumentSource(FileKnowledgeBackend)
-    yield the same set of files for the same patterns."""
-    from typing import Any
-
+    yield the same set of files for the same patterns.
+    """
     from dataknobs_xization.ingestion.source import LocalDocumentSource
 
     corpus = tmp_path / "corpus"
@@ -279,7 +278,8 @@ async def test_ingest_raises_ingestion_config_error_on_non_dict(
 ) -> None:
     """Config that parses to a non-dict (e.g. a list) raises
     ``IngestionConfigError`` — symmetric with
-    :meth:`KnowledgeBaseConfig._load_file`."""
+    :meth:`KnowledgeBaseConfig._load_file`.
+    """
     from dataknobs_xization.ingestion.config import IngestionConfigError
 
     await populated_memory_backend.put_file("d1", "knowledge_base.json", b"[1, 2, 3]")

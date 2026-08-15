@@ -37,7 +37,7 @@ class _CaptureStrategy(ReasoningStrategy):
     last_kwargs: ClassVar[dict[str, Any]] = {}
 
     @classmethod
-    def from_config(cls, config: dict[str, Any], **kwargs: Any) -> "_CaptureStrategy":
+    def from_config(cls, config: dict[str, Any], **kwargs: Any) -> _CaptureStrategy:
         cls.last_kwargs = dict(kwargs)
         return cls(greeting_template=None)
 
@@ -62,7 +62,7 @@ class _StrictStrategy(ReasoningStrategy):
     @classmethod
     def from_config(  # type: ignore[override]
         cls, config: dict[str, Any]
-    ) -> "_StrictStrategy":
+    ) -> _StrictStrategy:
         return cls(greeting_template=None)
 
     async def generate(

@@ -120,7 +120,8 @@ class TestS3VersioningMode:
 
     async def test_minimal_diff_via_version_history(self, s3_kb_versioned_config) -> None:
         """No snapshot objects written — the diff is reconstructed from
-        the metadata object's S3 version history."""
+        the metadata object's S3 version history.
+        """
         be = await _backend(s3_kb_versioned_config, "s3_versioning")
         try:
             await be.create_kb("d")

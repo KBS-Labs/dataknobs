@@ -810,7 +810,8 @@ class TestTransformEndToEnd:
     @pytest.mark.asyncio
     async def test_transform_filter_stores_transformed_value(self) -> None:
         """A custom filter that transforms values should result in
-        the transformed value being stored in wizard_state.data."""
+        the transformed value being stored in wizard_state.data.
+        """
         extractor = ConfigurableExtractor(
             results=[
                 SimpleExtractionResult(

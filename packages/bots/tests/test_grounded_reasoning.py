@@ -284,7 +284,7 @@ class TestGroundedReasoningUnit:
         assert isinstance(strategy._sources[0], VectorKnowledgeSource)
 
     def test_add_source(self) -> None:
-        from dataknobs_data.sources.base import GroundedSource, RetrievalIntent, SourceResult
+        from dataknobs_data.sources.base import GroundedSource
 
         class StubSource(GroundedSource):
             @property
@@ -565,7 +565,7 @@ class TestGroundedReasoningIntegration:
 
             manager = harness.bot.get_conversation_manager(harness.context.conversation_id)
             prov = manager.metadata["retrieval_provenance"]
-            # Source deduplicates internally: 3 queries × 3 results → 3 unique
+            # Source deduplicates internally: 3 queries x 3 results → 3 unique
             assert prov["deduplicated_to"] == 3
 
     @pytest.mark.asyncio
@@ -1303,7 +1303,7 @@ class TestSourceFactory:
 
     @pytest.mark.asyncio
     async def test_database_source_from_config(self) -> None:
-        """database type creates DatabaseSource from config options."""
+        """The ``database`` type creates DatabaseSource from config options."""
         from dataknobs_bots.knowledge.sources.factory import create_source_from_config
 
         config = GroundedSourceConfig(
@@ -1334,7 +1334,7 @@ class TestSourceFactory:
 
     @pytest.mark.asyncio
     async def test_database_source_minimal_config(self) -> None:
-        """database type works with minimal config (defaults)."""
+        """The ``database`` type works with minimal config (defaults)."""
         from dataknobs_bots.knowledge.sources.factory import create_source_from_config
 
         config = GroundedSourceConfig(
@@ -1390,9 +1390,6 @@ class TestDynaBotSourceWiring:
     @pytest.mark.asyncio
     async def test_config_driven_database_source(self) -> None:
         """DynaBot.from_config() constructs database sources from config."""
-        from dataknobs_data import Record
-        from dataknobs_data.backends.memory import AsyncMemoryDatabase
-
         config = {
             "llm": {"provider": "echo", "model": "echo-test"},
             "conversation_storage": {"backend": "memory"},
@@ -1978,7 +1975,7 @@ class TestStyleResolution:
 
     def test_valid_styles_constant(self) -> None:
         """Verify the valid styles set matches expectations."""
-        assert _VALID_STYLES == {"conversational", "structured", "hybrid"}
+        assert _VALID_STYLES == {"conversational", "structured", "hybrid"}  # noqa: SIM300 — subject on the left
 
 
 # ------------------------------------------------------------------
@@ -2577,14 +2574,14 @@ class TestIntentGrounding:
             )
             strategy.set_extractor(extractor)
 
-            result = await harness.chat("Tell me about auth patterns")
+            await harness.chat("Tell me about auth patterns")
             # Queries should still reach the KB despite not being
             # literally in the user message — they're required fields
             assert len(kb.queries) >= 1
 
     @pytest.mark.asyncio
     async def test_scope_ungrounded_dropped(self) -> None:
-        """scope is optional enum — dropped if not in user message."""
+        """The ``scope`` field is an optional enum — dropped if not in user message."""
         from dataknobs_llm.testing import scripted_schema_extractor
 
         kb = InMemoryKnowledgeBase(results=SAMPLE_KB_RESULTS)
@@ -3280,7 +3277,7 @@ class TestPublicCompositionAPI:
 
         pre_intent = RetrievalIntent(text_queries=["pre-resolved query"])
 
-        context, provenance = await strategy.retrieve_context(
+        _, provenance = await strategy.retrieve_context(
             manager,
             None,
             intent=pre_intent,

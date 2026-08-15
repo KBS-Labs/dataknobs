@@ -510,7 +510,7 @@ def pg_dsn(
     ensure_postgres_ready: None,
     postgres_connection_params: dict[str, Any],
 ) -> str:
-    """libpq URI for the shared test DB (advisory locks are global)."""
+    """A ``libpq`` URI for the shared test DB (advisory locks are global)."""
     p = postgres_connection_params
     return f"postgresql://{p['user']}:{p['password']}@{p['host']}:{p['port']}/{p['database']}"
 
@@ -647,7 +647,8 @@ class TestLockConfigConstruction:
     @pytest.mark.asyncio
     async def test_config_built_lock_serializes_per_domain(self) -> None:
         """A config-built lock still serializes concurrent same-domain
-        triggers (end-to-end behavioural proof, not just type check)."""
+        triggers (end-to-end behavioural proof, not just type check).
+        """
         from dataknobs_common.locks import InProcessLock
 
         bus = await _make_bus()

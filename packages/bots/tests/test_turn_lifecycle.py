@@ -222,7 +222,8 @@ class TestPluginDataParameter:
     @pytest.mark.asyncio
     async def test_plugin_data_seeded_from_greet(self) -> None:
         """plugin_data passed to greet() triggers finally_turn even
-        when strategy returns None (no greeting template)."""
+        when strategy returns None (no greeting template).
+        """
         tracker = LifecycleTracker()
         async with await BotTestHarness.create(
             bot_config={
@@ -251,7 +252,8 @@ class TestPluginDataParameter:
         self,
     ) -> None:
         """greet() with no reasoning strategy fires finally_turn for cleanup
-        when plugin_data is provided."""
+        when plugin_data is provided.
+        """
         tracker = LifecycleTracker()
         # Bot with NO reasoning strategy
         async with await BotTestHarness.create(

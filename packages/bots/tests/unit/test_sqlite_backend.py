@@ -13,10 +13,9 @@ connected before use.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
-
-import pytest
 
 from dataknobs_bots.memory.artifact_bank import ArtifactBank
 from dataknobs_bots.memory.bank import MemoryBank
@@ -57,7 +56,7 @@ def _make_sqlite_db_factory(
     tmp_path: Path,
 ) -> tuple[
     list[tuple[str, dict[str, Any]]],
-    "callable[[str, dict[str, Any]], tuple[SyncDatabase, str]]",
+    Callable[[str, dict[str, Any]], tuple[SyncDatabase, str]],
 ]:
     """Create a db_factory that produces SQLite backends in tmp_path.
 
@@ -136,7 +135,7 @@ class TestCreateBankDb:
     def test_sqlite_backend_table_defaults_to_bank_name(self, tmp_path: Path) -> None:
         wizard = _make_wizard()
         db_path = str(tmp_path / "test.db")
-        db, mode = wizard._create_bank_db(
+        db, _ = wizard._create_bank_db(
             "ingredients",
             {
                 "backend": "sqlite",
@@ -149,7 +148,7 @@ class TestCreateBankDb:
     def test_sqlite_backend_respects_table_config(self, tmp_path: Path) -> None:
         wizard = _make_wizard()
         db_path = str(tmp_path / "test.db")
-        db, mode = wizard._create_bank_db(
+        db, _ = wizard._create_bank_db(
             "ingredients",
             {
                 "backend": "sqlite",

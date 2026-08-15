@@ -77,7 +77,8 @@ def test_adapter_classifies_consistent_with_backend(
     file_backend: FileKnowledgeBackend,
 ) -> None:
     """The adapter MUST return what ``backend.classify_key`` returns —
-    the adapter is a pure projection, never a re-implementation."""
+    the adapter is a pure projection, never a re-implementation.
+    """
     discriminator = BackendKeyDiscriminator(file_backend)
     test_keys = [
         "kb1/content/foo.pdf",
@@ -100,7 +101,8 @@ def test_adapter_works_for_all_in_tree_backends(
 ) -> None:
     """Every in-tree backend honors the same key layout via the mixin's
     canonical ``classify_key`` — the adapter therefore works across all
-    three without backend-specific branches."""
+    three without backend-specific branches.
+    """
     backend = {
         "file": file_backend,
         "memory": memory_backend,
@@ -116,7 +118,8 @@ def test_adapter_equality_on_same_backend(
     file_backend: FileKnowledgeBackend,
 ) -> None:
     """``frozen=True`` dataclass: two adapters wrapping the same
-    backend instance compare equal (useful for adapter-cache lookups)."""
+    backend instance compare equal (useful for adapter-cache lookups).
+    """
     d1 = BackendKeyDiscriminator(file_backend)
     d2 = BackendKeyDiscriminator(file_backend)
     assert d1 == d2

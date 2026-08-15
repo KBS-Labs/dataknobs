@@ -9,8 +9,6 @@ Verifies:
 - Key count matches expected totals
 """
 
-import pytest
-
 from dataknobs_llm.prompts import ConfigPromptLibrary, CompositePromptLibrary
 
 from dataknobs_bots.prompts.defaults import (

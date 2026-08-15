@@ -19,7 +19,6 @@ from dataknobs_bots.reasoning.observability import (
     transition_stats_to_execution_stats,
     # FSM types
     ExecutionRecord,
-    ExecutionStats,
 )
 
 

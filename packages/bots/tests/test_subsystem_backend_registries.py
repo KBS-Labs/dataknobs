@@ -218,7 +218,8 @@ class TestErrorContract:
     async def test_null_source_type_raises_friendly_value_error(self) -> None:
         """A null ``type:`` (``source_type`` is ``None``) surfaces the
         documented unknown-type message — not the registry's internal
-        "key is required when config_key is not configured"."""
+        "key is required when config_key is not configured".
+        """
         config = GroundedSourceConfig.from_dict({"type": None, "name": "s"})
         assert config.source_type is None
         with pytest.raises(ValueError, match="Unknown grounded source type"):
@@ -624,7 +625,8 @@ class TestSubsystemConfigRedaction:
     def test_rag_vector_store_connection_string_masked(self) -> None:
         """A pgvector password nested in the raw ``vector_store`` mapping is
         masked by interior-key descent (no per-class ``_SENSITIVE_FIELDS``
-        entry for ``connection_string`` — the module default set covers it)."""
+        entry for ``connection_string`` — the module default set covers it).
+        """
         cfg = RAGKnowledgeBaseConfig(
             vector_store={
                 "backend": "pgvector",
@@ -654,7 +656,8 @@ class TestSubsystemConfigRedaction:
     def test_summary_memory_llm_api_key_masked(self) -> None:
         """``SummaryMemoryConfig`` declares NO ``_SENSITIVE_FIELDS`` at all,
         yet a credential in its raw ``llm`` mapping is masked by the module
-        default set — the zero-config benefit."""
+        default set — the zero-config benefit.
+        """
         cfg = SummaryMemoryConfig(llm={"provider": "openai", "api_key": "sk-x"})
         rendered = repr(cfg)
         assert "sk-x" not in rendered

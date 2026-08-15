@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from typing import Any
 
-import pytest
 
 from dataknobs_bots.config.schema import DynaBotConfigSchema
 from dataknobs_bots.config.validation import ConfigValidator, ValidationResult

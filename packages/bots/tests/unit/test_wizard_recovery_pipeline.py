@@ -68,7 +68,7 @@ class TestRecoveryConstants:
             RECOVERY_BOOLEAN,
             RECOVERY_CLARIFICATION,
         }
-        assert VALID_RECOVERY_STRATEGIES == expected
+        assert VALID_RECOVERY_STRATEGIES == expected  # noqa: SIM300 — subject on the left
 
     def test_default_pipeline_order(self) -> None:
         assert DEFAULT_RECOVERY_PIPELINE == [

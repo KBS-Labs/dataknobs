@@ -26,7 +26,6 @@ from dataknobs_bots.reasoning import (
     get_strategy_factory,
     is_strategy_registered,
     list_strategies,
-    register_strategy,
 )
 from dataknobs_bots.reasoning.registry import _register_builtins
 

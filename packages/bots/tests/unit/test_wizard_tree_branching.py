@@ -274,7 +274,8 @@ class TestPostRestartStagesIsolatedFromOldBranch:
         conversation_manager_pair: tuple[ConversationManager, EchoProvider],
     ) -> None:
         """Full restart scenario: Run-2 topic/summary are descendants of
-        Run-2 greeting, not siblings of Run-1 nodes."""
+        Run-2 greeting, not siblings of Run-1 nodes.
+        """
         manager, _provider = conversation_manager_pair
 
         # ── Run 1 ──────────────────────────────────────────────
@@ -365,7 +366,8 @@ class TestWithinRunRevisitStillBranchesAfterRestart:
         conversation_manager_pair: tuple[ConversationManager, EchoProvider],
     ) -> None:
         """After restart + back within Run 2, new nodes stay on Run-2's
-        branch and do not leak into Run-1."""
+        branch and do not leak into Run-1.
+        """
         manager, _provider = conversation_manager_pair
 
         # ── Run 1 ──────────────────────────────────────────────
@@ -417,7 +419,8 @@ class TestWithinRunRevisitStillBranchesAfterRestart:
 
 class TestLinearizedContextExcludesOldBranch:
     """The linearized message path (what the LLM sees) must not contain
-    messages from the old branch after a restart."""
+    messages from the old branch after a restart.
+    """
 
     @pytest.mark.asyncio
     async def test_linearized_context_excludes_old_branch(
@@ -426,7 +429,8 @@ class TestLinearizedContextExcludesOldBranch:
         conversation_manager_pair: tuple[ConversationManager, EchoProvider],
     ) -> None:
         """After restart + advance, the linearized path must descend
-        entirely through Run-2's greeting branch, not through Run-1's."""
+        entirely through Run-2's greeting branch, not through Run-1's.
+        """
         manager, _provider = conversation_manager_pair
 
         # ── Run 1 ──────────────────────────────────────────────

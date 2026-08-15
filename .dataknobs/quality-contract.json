@@ -120,9 +120,9 @@
         },
         {
           "path": "packages/bots/tests",
-          "tier": "deferred",
-          "ceiling": 288,
-          "reason": "outside the default lint target set; what a fixer leaves behind is dominated by naming inside test helpers"
+          "tier": "checked",
+          "ceiling": 0,
+          "reason": "promoted into the linted set; its bulk was docstring closings and unused imports, and the naming findings that once described it were one dead red-phase scaffold binding a class to a local, deleted rather than waived; D403 and SIM300 were false at every site here — a convention of opening a docstring with the identifier under test, and assertions whose SCREAMING_SNAKE subject ruff reads as the expectation — reworded and suppressed per line respectively"
         },
         {
           "path": "packages/data/tests",

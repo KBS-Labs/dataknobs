@@ -23,7 +23,8 @@ TRIGGER_TOPIC = "knowledge:trigger"
 
 class _KeyStubManager:
     """Stub manager exposing a real backend ``source`` for key
-    classification plus a recording ``ingest_if_changed``."""
+    classification plus a recording ``ingest_if_changed``.
+    """
 
     def __init__(self, backend: InMemoryKnowledgeBackend) -> None:
         self._source = backend
@@ -37,7 +38,6 @@ class _KeyStubManager:
         self, domain_id: str, last_version: str | None = None, **_: Any
     ) -> None:
         self.calls.append(domain_id)
-        return None
 
 
 async def _make_bus() -> InMemoryEventBus:

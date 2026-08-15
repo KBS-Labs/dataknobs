@@ -101,7 +101,7 @@ class TestConfigVersionManager:
     def test_update(self) -> None:
         """Test updating configuration."""
         manager = ConfigVersionManager()
-        v1 = manager.create(config={"name": "Bot1"})
+        manager.create(config={"name": "Bot1"})
 
         v2 = manager.update(
             config={"name": "Bot2"},
@@ -151,8 +151,8 @@ class TestConfigVersionManager:
         """Test rolling back to previous version."""
         manager = ConfigVersionManager()
         v1 = manager.create(config={"name": "Bot1", "llm": "gpt-3.5"})
-        v2 = manager.update(config={"name": "Bot1", "llm": "gpt-4"})
-        v3 = manager.update(config={"name": "Bot1", "llm": "gpt-4o"})
+        manager.update(config={"name": "Bot1", "llm": "gpt-4"})
+        manager.update(config={"name": "Bot1", "llm": "gpt-4o"})
 
         # Rollback to v1
         v4 = manager.rollback(to_version=1, reason="Reverting LLM change")
