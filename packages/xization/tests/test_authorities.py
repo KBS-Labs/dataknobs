@@ -33,7 +33,7 @@ def test_regex_authority_named_groups():
             atts = auth_annotations.attributes
             month = int(atts["month"])
             day = int(atts["day"])
-            year = int(atts["year"])
+            int(atts["year"])  # must parse; range is not validated here
             if month < 1 or month > 12:
                 return False
             if day < 1 or day > 31:

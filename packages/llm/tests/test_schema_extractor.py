@@ -662,6 +662,7 @@ class TestSchemaExtractorJSONParsing:
 
         # Direct parse would fail type check, JSONExtractor finds no objects
         assert data == {}
+        assert errors
 
 
 class TestSchemaExtractorValidation:

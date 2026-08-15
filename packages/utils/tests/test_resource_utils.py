@@ -23,7 +23,7 @@ def test_get_nltk_wordnet():
         assert resource_utils.active_datadir() == cur_datadir
 
         # "download" nltk resources
-        nltk_wn = resource_utils.get_nltk_wordnet(downloader=downloader)
+        resource_utils.get_nltk_wordnet(downloader=downloader)
 
         # Check "downloaded"
         assert os.path.basename(resources["wordnet"]) == "nltk_resources"

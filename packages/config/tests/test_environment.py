@@ -158,11 +158,10 @@ class TestEnvironmentOverrides:
         """Test overriding nested attributes."""
         env_vars(DATAKNOBS_DATABASE__0__CONNECTION__TIMEOUT="60")
 
-        config = Config({"database": [{"name": "db", "connection": {"timeout": 30, "retry": 3}}]})
+        Config({"database": [{"name": "db", "connection": {"timeout": 30, "retry": 3}}]})
 
         # Note: Simple implementation might not handle nested attrs
-        # This test documents expected behavior
-        pass
+        # This test documents expected behavior — construction must not raise
 
 
 class TestEnvironmentIntegration:

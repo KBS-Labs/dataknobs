@@ -29,7 +29,7 @@ def test_xml_element_grabber():
              </a>
           """
     xml_file = io.StringIO(xml)
-    xls = xml_utils.XmlLeafStream(xml_file)
+    xml_utils.XmlLeafStream(xml_file)
     xeg = xml_utils.XmlElementGrabber(xml_file, "foo")
     first2 = list(xeg.take(2))
     assert len(first2) == 2

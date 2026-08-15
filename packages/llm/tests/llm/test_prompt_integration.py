@@ -315,7 +315,7 @@ class TestSyncRenderAndComplete:
         from dataknobs_llm.llm.providers import SyncProviderAdapter
 
         async_provider = EchoProvider(echo_config, prompt_builder=sync_prompt_builder)
-        llm = SyncProviderAdapter(async_provider)
+        SyncProviderAdapter(async_provider)
 
         # Note: SyncProviderAdapter doesn't have render_and_complete
         # This is expected - sync providers should use PromptBuilder directly

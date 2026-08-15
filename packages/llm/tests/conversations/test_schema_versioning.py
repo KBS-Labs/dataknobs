@@ -124,7 +124,7 @@ class TestSchemaVersioning:
         }
 
         with caplog.at_level(logging.INFO):
-            state = ConversationState.from_dict(data)
+            ConversationState.from_dict(data)
 
         # Should log migration
         assert "Migrating conversation test-123" in caplog.text
@@ -196,7 +196,7 @@ class TestSchemaVersioning:
         }
 
         with caplog.at_level(logging.WARNING):
-            state = ConversationState.from_dict(data)
+            ConversationState.from_dict(data)
 
         # Should warn about no migration path
         assert "No migration path defined" in caplog.text

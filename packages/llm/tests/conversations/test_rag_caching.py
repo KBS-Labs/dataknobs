@@ -70,7 +70,7 @@ class TestConversationRAGMetadataStorage:
     @pytest.mark.asyncio
     async def test_rag_metadata_stored_in_node(self, manager_with_caching):
         """Test that RAG metadata is stored in conversation node metadata."""
-        manager, adapter = manager_with_caching
+        manager, _ = manager_with_caching
 
         # Add message with RAG
         await manager.add_message(

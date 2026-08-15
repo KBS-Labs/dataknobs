@@ -229,6 +229,8 @@ class TestAnthropicAdaptMessages:
         system, msgs = adapter.adapt_messages(messages, system_prompt="Base prompt.")
         assert "Base prompt." in system
         assert "Extra instructions." in system
+        # The system message merged into `system` rather than staying in msgs
+        assert [m["role"] for m in msgs] == ["user"]
 
     def test_user_and_assistant_passthrough(self):
         """Plain user/assistant messages pass through unchanged."""

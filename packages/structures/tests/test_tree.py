@@ -152,12 +152,12 @@ def make_simple_tree():
     a = dk_tree.Tree("a")
     b = a.add_child("b")
     c = a.add_child("c")
-    d = b.add_child("d")
+    b.add_child("d")
     e = b.add_child("e")
-    f = c.add_child("f")
+    c.add_child("f")
     g = c.add_child("g")
-    h = e.add_child("h")
-    i = g.add_child("i")
+    e.add_child("h")
+    g.add_child("i")
     return a
 
 
