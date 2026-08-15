@@ -27,6 +27,16 @@ if is_chromadb_available():
     from dataknobs_data.vector.stores.chroma import ChromaVectorStore
 
 
+def _vectors(count: int, dim: int, seed: int = 0) -> np.ndarray:
+    """Draw ``count`` deterministic ``dim``-dimensional float32 vectors.
+
+    One generator per call, seeded explicitly, so a draw here cannot shift
+    what any other test draws. Pass a distinct ``seed`` where a single test
+    needs two sets that differ.
+    """
+    return np.random.default_rng(seed).random((count, dim), dtype=np.float32)
+
+
 @requires_chromadb
 @pytest.mark.asyncio
 async def test_list_metadata_does_not_bleed_from_deleted_collection() -> None:
@@ -39,7 +49,7 @@ async def test_list_metadata_does_not_bleed_from_deleted_collection() -> None:
     a = ChromaVectorStore({"dimensions": 4, "collection_name": "bleed_src"})
     await a.initialize()
     await a.add_vectors(
-        np.random.rand(3, 4).astype(np.float32),
+        _vectors(3, 4),
         ids=["a", "b", "c"],
         metadata=[
             {"domain_id": "x", "tags": ["red"]},
@@ -55,7 +65,7 @@ async def test_list_metadata_does_not_bleed_from_deleted_collection() -> None:
     await b.initialize()
     try:
         await b.add_vectors(
-            np.random.rand(3, 384).astype(np.float32),
+            _vectors(3, 384),
             ids=["1", "2", "3"],
             metadata=[
                 {"headings": "A", "source": "doc.md"},
@@ -83,12 +93,12 @@ async def test_list_metadata_does_not_bleed_across_concurrent_stores() -> None:
     await b.initialize()
     try:
         await a.add_vectors(
-            np.random.rand(2, 4).astype(np.float32),
+            _vectors(2, 4),
             ids=["a1", "a2"],
             metadata=[{"tags": ["a"]}, {"tags": ["a"]}],
         )
         await b.add_vectors(
-            np.random.rand(2, 4).astype(np.float32),
+            _vectors(2, 4, seed=1),
             ids=["b1", "b2"],
             metadata=[{"labels": ["b"]}, {"labels": ["b"]}],
         )
@@ -118,7 +128,7 @@ async def test_nonscalar_metadata_round_trips() -> None:
             "n": 7,
         }
         await store.add_vectors(
-            np.random.rand(1, 4).astype(np.float32),
+            _vectors(1, 4),
             ids=["r1"],
             metadata=[meta],
         )

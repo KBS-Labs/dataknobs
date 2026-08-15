@@ -19,6 +19,16 @@ from dataknobs_data.vector.types import DistanceMetric
 logger = logging.getLogger(__name__)
 
 
+def _vectors(count: int, dim: int, seed: int = 0) -> np.ndarray:
+    """Draw ``count`` deterministic ``dim``-dimensional float32 vectors.
+
+    One generator per call, seeded explicitly, so a draw here cannot shift
+    what any other test draws. Pass a distinct ``seed`` where a single test
+    needs two sets that differ.
+    """
+    return np.random.default_rng(seed).random((count, dim), dtype=np.float32)
+
+
 class TestMemoryVectorStore:
     """Test the in-memory vector store."""
 
@@ -45,7 +55,7 @@ class TestMemoryVectorStore:
         await store.initialize()
 
         # Create test vectors
-        vectors = np.random.rand(5, 128).astype(np.float32)
+        vectors = _vectors(5, 128)
         ids = [str(uuid4()) for _ in range(5)]
         metadata = [{"index": i} for i in range(5)]
 
@@ -82,7 +92,7 @@ class TestMemoryVectorStore:
         await store.initialize()
 
         # Add vectors
-        vectors = np.random.rand(3, 128).astype(np.float32)
+        vectors = _vectors(3, 128)
         ids = [str(uuid4()) for _ in range(3)]
 
         await store.add_vectors(vectors, ids=ids)
@@ -170,7 +180,7 @@ class TestMemoryVectorStore:
         await store.initialize()
 
         # Add vectors with metadata
-        vectors = np.random.rand(10, 128).astype(np.float32)
+        vectors = _vectors(10, 128)
         ids = [str(i) for i in range(10)]
         metadata = [{"category": "A" if i < 5 else "B", "index": i} for i in range(10)]
 
@@ -189,7 +199,7 @@ class TestMemoryVectorStore:
         await store.initialize()
 
         # Add vectors
-        vectors = np.random.rand(3, 128).astype(np.float32)
+        vectors = _vectors(3, 128)
         ids = ["a", "b", "c"]
         metadata = [{"version": 1} for _ in range(3)]
 
@@ -211,7 +221,7 @@ class TestMemoryVectorStore:
         assert await store.count() == 0
 
         # Add vectors
-        vectors = np.random.rand(5, 128).astype(np.float32)
+        vectors = _vectors(5, 128)
         metadata = [{"type": "A" if i < 3 else "B"} for i in range(5)]
         await store.add_vectors(vectors, metadata=metadata)
 
@@ -225,7 +235,7 @@ class TestMemoryVectorStore:
         await store.initialize()
 
         # Add vectors
-        vectors = np.random.rand(5, 128).astype(np.float32)
+        vectors = _vectors(5, 128)
         await store.add_vectors(vectors)
         assert await store.count() == 5
 
@@ -246,7 +256,7 @@ class TestMemoryVectorStore:
     async def test_metadata_fields_with_data(self, store):
         """Test metadata_fields returns union of all field names."""
         await store.initialize()
-        vectors = np.random.rand(3, 128).astype(np.float32)
+        vectors = _vectors(3, 128)
         metadata = [
             {"headings": ["A"], "heading_levels": [1], "source": "doc.md"},
             {"headings": ["B"], "category": "test"},
@@ -260,7 +270,7 @@ class TestMemoryVectorStore:
     async def test_metadata_fields_after_delete(self, store):
         """Test metadata_fields reflects current state after deletion."""
         await store.initialize()
-        vectors = np.random.rand(2, 128).astype(np.float32)
+        vectors = _vectors(2, 128)
         ids = ["v1", "v2"]
         metadata = [
             {"field_a": 1},
@@ -345,7 +355,7 @@ class TestMemoryVectorStoreTimestamps:
     async def test_clear_removes_timestamps(self, store):
         """clear() empties the timestamps dict."""
         await store.initialize()
-        vectors = np.random.rand(3, 4).astype(np.float32)
+        vectors = _vectors(3, 4)
         await store.add_vectors(vectors, ids=["a", "b", "c"])
         assert len(store.timestamps) == 3
 
@@ -414,7 +424,7 @@ class TestMemoryVectorStoreTimestamps:
     async def test_search_include_timestamps(self, store):
         """Same include_timestamps semantics on search."""
         await store.initialize()
-        vectors = np.random.rand(3, 4).astype(np.float32)
+        vectors = _vectors(3, 4)
         await store.add_vectors(
             vectors,
             ids=["a", "b", "c"],
@@ -514,7 +524,7 @@ try:
                 await store.initialize()
 
                 # Add vectors
-                vectors = np.random.rand(100, 128).astype(np.float32)
+                vectors = _vectors(100, 128)
                 ids = [str(i) for i in range(100)]
                 metadata = [{"index": i} for i in range(100)]
 
@@ -541,7 +551,7 @@ try:
                 await store.initialize()
 
                 # Add enough vectors to train IVF
-                vectors = np.random.rand(100, 64).astype(np.float32)
+                vectors = _vectors(100, 64)
                 await store.add_vectors(vectors)
 
                 # Search
@@ -555,7 +565,7 @@ try:
                 await persistent_store.initialize()
 
                 # Add vectors
-                vectors = np.random.rand(10, 128).astype(np.float32)
+                vectors = _vectors(10, 128)
                 ids = [str(i) for i in range(10)]
                 metadata = [{"value": i} for i in range(10)]
 
@@ -594,7 +604,7 @@ try:
             async def test_metadata_fields_with_data(self, store):
                 """Test metadata_fields returns union of all field names."""
                 await store.initialize()
-                vectors = np.random.rand(3, 128).astype(np.float32)
+                vectors = _vectors(3, 128)
                 ids = ["f1", "f2", "f3"]
                 metadata = [
                     {"headings": ["A"], "source": "doc.md"},
@@ -658,7 +668,7 @@ try:
                 await store.initialize()
 
                 # Add vectors
-                vectors = np.random.rand(50, 384).astype(np.float32)
+                vectors = _vectors(50, 384)
                 ids = [str(uuid4()) for _ in range(50)]
                 metadata = [{"index": i} for i in range(50)]
 
@@ -677,7 +687,7 @@ try:
                 await store.initialize()
 
                 # Add vectors with categories
-                vectors = np.random.rand(20, 384).astype(np.float32)
+                vectors = _vectors(20, 384)
                 ids = [str(i) for i in range(20)]
                 metadata = [{"category": "A" if i < 10 else "B", "value": i} for i in range(20)]
 
@@ -697,7 +707,7 @@ try:
                 await store.initialize()
 
                 # Add vectors
-                vectors = np.random.rand(5, 384).astype(np.float32)
+                vectors = _vectors(5, 384)
                 ids = [str(i) for i in range(5)]
 
                 await store.add_vectors(vectors, ids=ids)
@@ -722,7 +732,7 @@ try:
             async def test_metadata_fields_with_data(self, store):
                 """Test metadata_fields returns union of all field names."""
                 await store.initialize()
-                vectors = np.random.rand(3, 384).astype(np.float32)
+                vectors = _vectors(3, 384)
                 ids = [str(uuid4()) for _ in range(3)]
                 metadata = [
                     {"headings": "A", "source": "doc.md"},
