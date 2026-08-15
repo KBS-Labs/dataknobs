@@ -19,22 +19,12 @@ list/dict values) still holds. These tests exercise the real
 
 from __future__ import annotations
 
-import numpy as np
 import pytest
 from dataknobs_common.testing import is_chromadb_available, requires_chromadb
+from dataknobs_data.testing import vectors as _vectors
 
 if is_chromadb_available():
     from dataknobs_data.vector.stores.chroma import ChromaVectorStore
-
-
-def _vectors(count: int, dim: int, seed: int = 0) -> np.ndarray:
-    """Draw ``count`` deterministic ``dim``-dimensional float32 vectors.
-
-    One generator per call, seeded explicitly, so a draw here cannot shift
-    what any other test draws. Pass a distinct ``seed`` where a single test
-    needs two sets that differ.
-    """
-    return np.random.default_rng(seed).random((count, dim), dtype=np.float32)
 
 
 @requires_chromadb

@@ -20,6 +20,7 @@ The DataKnobs Data Package provides a unified data abstraction layer with suppor
   - [Migrations](#migrations)
   - [Migrator](#migrator)
 - [Backends](#backends)
+- [Testing Utilities](#testing-utilities)
 - [Exceptions](#exceptions)
 
 ## Core Components
@@ -1058,6 +1059,38 @@ pre-filters agree:
   `id`-queryable; `read(id)` is unaffected.
 - An operator the translator cannot express raises `ValueError` rather than
   silently matching every document.
+
+## Testing Utilities
+
+`dataknobs_data.testing` provides deterministic vector draws — for this
+package's own tests, and for consumers testing their own implementations of the
+`VectorStore` protocol.
+
+Each helper builds its own `numpy.random.Generator`. Nothing here touches the
+process-global RNG, so a draw in one test cannot shift what any later test
+draws.
+
+```python
+from dataknobs_data.testing import text_embedding, vector, vectors
+
+stored = vectors(10, 128)       # (10, 128) float32 — ten rows that differ
+query = vector(128, seed=1)     # one (128,) float32 vector; the distinct seed
+                                # keeps it from being row 0 of `stored`
+embedding = text_embedding("some document text")   # (384,), derived from text
+```
+
+| Function | Returns |
+|---|---|
+| `vectors(count, dim, seed=0)` | `(count, dim)` float32 array |
+| `vector(dim, seed=0)` | one `(dim,)` float32 vector — row 0 of the above |
+| `text_embedding(text, dim=384)` | `(dim,)` float64 vector seeded from `text[:10]` |
+
+Two draws sharing a seed are equal, which is the property `text_embedding`
+exists to provide: the same text always yields the same vector. It also means
+that where a test needs N vectors that differ, they have to be drawn together
+with `vectors(n, dim)` and indexed into — calling `vector(dim)` once per loop
+iteration passes the same default seed every time and returns N copies of one
+vector.
 
 ## Exceptions
 

@@ -22,11 +22,11 @@ import os
 from collections.abc import AsyncIterator, Iterator
 from typing import Any
 
-import numpy as np
 import pytest
 import pytest_asyncio
 from dataknobs_common.testing import requires_postgres
 
+from dataknobs_data.testing import vector as _vector
 from dataknobs_data.vector.stores.memory import MemoryVectorStore
 
 try:
@@ -44,21 +44,6 @@ except ImportError:
 # TCP port is open; ``TEST_POSTGRES=true`` is the canonical "postgres
 # is fully provisioned (db + extension)" signal and is what
 # ``bin/test.sh`` sets when it brings services up.
-def _vectors(count: int, dim: int, seed: int = 0) -> np.ndarray:
-    """Draw ``count`` deterministic ``dim``-dimensional float32 vectors.
-
-    One generator per call, seeded explicitly, so a draw here cannot shift
-    what any other test draws. Pass a distinct ``seed`` where a single test
-    needs two sets that differ.
-    """
-    return np.random.default_rng(seed).random((count, dim), dtype=np.float32)
-
-
-def _vector(dim: int, seed: int = 0) -> np.ndarray:
-    """Draw one deterministic ``dim``-dimensional float32 vector."""
-    return _vectors(1, dim, seed)[0]
-
-
 _pgvector_marks = [
     requires_postgres,
     pytest.mark.skipif(

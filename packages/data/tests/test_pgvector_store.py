@@ -14,6 +14,7 @@ import numpy as np
 import pytest
 
 from dataknobs_common.testing import safe_sql_ident
+from dataknobs_data.testing import vector as _vector, vectors as _vectors
 
 # Skip all tests if PostgreSQL is not available
 pytestmark = pytest.mark.skipif(
@@ -33,21 +34,6 @@ except ImportError:
 if ASYNCPG_AVAILABLE:
     from dataknobs_data.vector.stores.pgvector import PgVectorStore
     from dataknobs_data.vector.types import DistanceMetric
-
-
-def _vectors(count: int, dim: int, seed: int = 0) -> np.ndarray:
-    """Draw ``count`` deterministic ``dim``-dimensional float32 vectors.
-
-    One generator per call, seeded explicitly, so a draw here cannot shift
-    what any other test draws. Pass a distinct ``seed`` where a single test
-    needs two sets that differ.
-    """
-    return np.random.default_rng(seed).random((count, dim), dtype=np.float32)
-
-
-def _vector(dim: int, seed: int = 0) -> np.ndarray:
-    """Draw one deterministic ``dim``-dimensional float32 vector."""
-    return _vectors(1, dim, seed)[0]
 
 
 def get_test_connection_string() -> str:

@@ -17,24 +17,12 @@ from dataknobs_data.backends.memory import AsyncMemoryDatabase
 from dataknobs_data.fields import FieldType
 from dataknobs_data.records import Record
 from dataknobs_data.schema import DatabaseSchema, FieldSchema
+from dataknobs_data.testing import text_embedding as _text_embedding
 from dataknobs_data.vector.sync import (
     SyncConfig,
     SyncStatus,
     VectorTextSynchronizer,
 )
-
-
-def _text_embedding(text: str) -> np.ndarray:
-    """Draw a 384-dim vector deterministically derived from ``text``.
-
-    The generator is built per call and seeded from the text, so
-    ``same text -> same vector`` still holds while nothing outside this call
-    is affected. Seeding the process-global RNG instead — as this did — made
-    every later unseeded draw in the session depend on which tests had
-    already run.
-    """
-    rng = np.random.default_rng(sum(ord(c) for c in text[:10]))
-    return rng.random(384)
 
 
 @pytest.fixture

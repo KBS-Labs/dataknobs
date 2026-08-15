@@ -12,26 +12,12 @@ from uuid import uuid4
 import numpy as np
 import pytest
 
+from dataknobs_data.testing import vector as _vector, vectors as _vectors
 from dataknobs_data.vector.stores import VectorStore, VectorStoreFactory
 from dataknobs_data.vector.stores.memory import MemoryVectorStore
 from dataknobs_data.vector.types import DistanceMetric
 
 logger = logging.getLogger(__name__)
-
-
-def _vectors(count: int, dim: int, seed: int = 0) -> np.ndarray:
-    """Draw ``count`` deterministic ``dim``-dimensional float32 vectors.
-
-    One generator per call, seeded explicitly, so a draw here cannot shift
-    what any other test draws. Pass a distinct ``seed`` where a single test
-    needs two sets that differ.
-    """
-    return np.random.default_rng(seed).random((count, dim), dtype=np.float32)
-
-
-def _vector(dim: int, seed: int = 0) -> np.ndarray:
-    """Draw one deterministic ``dim``-dimensional float32 vector."""
-    return _vectors(1, dim, seed)[0]
 
 
 class TestMemoryVectorStore:
