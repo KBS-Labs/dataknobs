@@ -68,6 +68,46 @@ class TestTheDiagnosticNamesWhatIsWrong:
         assert "position 0" in _message(df)
 
 
+class TestDuplicateLabelsAreRejectedHereToo:
+    """A repeated label is unusable for the same reason, one step later.
+
+    ``df[col]`` returns a *DataFrame* rather than a Series when the label
+    appears twice, so the value conversion died on ``values.dtype`` with
+    ``AttributeError: 'DataFrame' object has no attribute 'dtype'`` — a message
+    naming an internal type, from a helper the caller never invoked, about a
+    frame whose actual problem is one the guard right above it already exists
+    to describe.
+
+    It also cannot succeed on its own terms: the INSERT names each column once,
+    so two columns of the same name have no distinguishable destination.
+    """
+
+    def test_a_repeated_label_is_named_with_its_positions(self) -> None:
+        """Bug: this reached the value conversion and raised ``AttributeError``
+        about a DataFrame having no ``dtype``.
+        """
+        df = pd.DataFrame([[1, 2, 3]], columns=["a", "b", "a"])
+
+        message = _message(df)
+
+        assert "duplicate" in message.lower()
+        assert "'a'" in message
+        assert "0" in message and "2" in message, "both positions should be named"
+
+    def test_the_message_distinguishes_it_from_the_unusable_label_case(self) -> None:
+        """Two different problems, two different fixes — a caller must not have
+        to guess which one they have.
+        """
+        duplicate = _message(pd.DataFrame([[1, 2]], columns=["a", "a"]))
+        unusable = _message(pd.DataFrame([[1, 2]]))
+
+        assert "non-empty strings" not in duplicate
+        assert "duplicate" not in unusable.lower()
+
+    def test_distinct_labels_are_still_accepted(self) -> None:
+        PostgresDB._require_usable_column_labels(pd.DataFrame([[1, 2]], columns=["a", "b"]))
+
+
 class TestUsableLabelsPass:
     def test_ordinary_names_are_accepted(self) -> None:
         PostgresDB._require_usable_column_labels(pd.DataFrame({"a": [1], "b": [2]}))

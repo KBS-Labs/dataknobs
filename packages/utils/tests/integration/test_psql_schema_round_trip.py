@@ -199,6 +199,39 @@ class TestNumericWidth:
         assert _column_types(db, table)["exact"] == "double precision"
         assert db.query(f'SELECT * FROM "{table}"')["exact"].iloc[0] == precise
 
+    def test_uint32_column_holds_a_value_past_int4(
+        self, db: PostgresDB, schema_test_db: dict[str, Any]
+    ) -> None:
+        """Bug: signedness was not read, so a 4-byte *unsigned* column was
+        emitted as ``integer`` — a signed int4 stopping at 2_147_483_647 while
+        the dtype runs to 4_294_967_295.
+
+        The same shape as the int64 case above, and it survived that fix
+        because both dtypes are 4 bytes wide: only the range differs.
+        """
+        df = pd.DataFrame({"big": pd.array([4000000000], dtype="uint32")})
+
+        table = schema_test_db["table"]
+        db.upload(table, df)
+
+        assert _column_types(db, table)["big"] == "bigint"
+        assert db.query(f'SELECT * FROM "{table}"')["big"].iloc[0] == 4000000000
+
+    def test_uint64_column_holds_a_value_past_int8(
+        self, db: PostgresDB, schema_test_db: dict[str, Any]
+    ) -> None:
+        """``bigint`` is signed int8, so ``uint64``'s upper half does not fit
+        and there is no wider integer type — the column becomes ``numeric``.
+        """
+        past_int8 = 2**63 + 1
+        df = pd.DataFrame({"huge": pd.array([past_int8], dtype="uint64")})
+
+        table = schema_test_db["table"]
+        db.upload(table, df)
+
+        assert _column_types(db, table)["huge"] == "numeric"
+        assert int(db.query(f'SELECT * FROM "{table}"')["huge"].iloc[0]) == past_int8
+
     def test_narrow_dtypes_keep_the_narrow_column(
         self, db: PostgresDB, schema_test_db: dict[str, Any]
     ) -> None:

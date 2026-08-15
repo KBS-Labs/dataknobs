@@ -7,7 +7,9 @@ with support for connection management, query execution, and data loading.
 from __future__ import annotations
 
 import os
+import select
 import threading
+import weakref
 from abc import ABC, abstractmethod
 from types import TracebackType
 from typing import IO, Any, Dict, List, Self
@@ -199,9 +201,49 @@ class DotenvPostgresConnector:
         )
         # Per thread, not per connector — see get_conn. The registry beside it
         # is what lets close() reach a connection another thread opened.
+        #
+        # Weak, so that reachability does not become ownership. A strong set
+        # would keep every connection alive for the life of the connector, and
+        # a worker thread that opens one and exits would strand its backend
+        # with nothing able to reach it — the caller's frame is gone and only
+        # an explicit close() remains. Holding weakly restores the reclamation
+        # that made the pre-reuse code safe: the thread-local slot dies with
+        # the thread, the last strong reference goes with it, and psycopg2's
+        # dealloc closes the socket. close() still sees every connection whose
+        # thread is alive, which is the set it needs to reach.
         self._local = threading.local()
-        self._open_conns: set[Any] = set()
+        self._open_conns: weakref.WeakSet[Any] = weakref.WeakSet()
         self._conns_lock = threading.Lock()
+
+    @staticmethod
+    def _is_usable(conn: Any) -> bool:
+        """Whether ``conn`` can still carry a statement.
+
+        ``connection.closed`` answers a narrower question than it appears to:
+        it reports what *this process* did to the connection. psycopg2 sets it
+        when it closes the connection itself, or when it detects a broken one
+        during an operation — so a backend killed by ``pg_terminate_backend``,
+        an idle timeout, or a pooler eviction leaves it at 0 until something
+        tries to use the connection and fails.
+
+        The socket knows sooner. A healthy idle connection has nothing to read;
+        a server that went away leaves EOF pending, which ``select`` reports as
+        readable. That check is local — no round trip, measured at well under a
+        microsecond against the 4.6 ms handshake it protects — so the cache can
+        afford it on every acquisition.
+
+        A connection made readable by something other than EOF (an asynchronous
+        notification, which this class never subscribes to) is treated as
+        unusable and replaced. That costs one reconnect and cannot cost
+        correctness, which is the right way round for an ambiguous signal.
+        """
+        if conn is None or conn.closed:
+            return False
+        try:
+            readable, _, _ = select.select([conn], [], [], 0)
+        except (OSError, ValueError):  # closed or invalid file descriptor
+            return False
+        return not readable
 
     def get_conn(self) -> Any:
         """Return this thread's PostgreSQL connection, opening it if needed.
@@ -216,7 +258,11 @@ class DotenvPostgresConnector:
         ``with conn`` is a *transaction* scope and does not close, so every
         connection was left open and then reclaimed by CPython refcounting when
         the caller's frame exited. Reuse replaces that accident with a
-        lifecycle — one connection per thread, closed by :meth:`close`.
+        lifecycle — one connection per thread, closed by :meth:`close` or, if
+        the thread ends first, reclaimed with the thread-local that held it.
+        That second half is not a detail: the registry backing :meth:`close`
+        holds its connections weakly precisely so a worker that exits cannot
+        strand one.
 
         **Per thread rather than per connector**, because reuse must not become
         sharing. psycopg2 is threadsafety level 2, so a connection *may* be
@@ -227,16 +273,28 @@ class DotenvPostgresConnector:
         either thread's commit commits the other's uncommitted work. The error
         is the louder half and the transaction is the worse one.
 
-        A connection closed underneath us (a dropped server-side connection, or
-        a caller that closed what it was handed) is replaced rather than
+        A connection closed underneath us — by a caller that closed what it was
+        handed, or by the server dropping it — is replaced rather than
         returned, so a stale cache cannot surface as ``InterfaceError:
-        connection already closed`` on a call that did nothing wrong.
+        connection already closed`` or ``OperationalError: server closed the
+        connection unexpectedly`` on a call that did nothing wrong. See
+        :meth:`_is_usable` for why testing ``conn.closed`` alone is not enough
+        to make that promise.
+
+        Note that the returned connection is **shared within the thread**. Do
+        not hold it in a ``with`` block across a call to :meth:`~PostgresDB.query`,
+        :meth:`~PostgresDB.execute` or :meth:`~PostgresDB.upload` on the same
+        thread: those enter ``with conn`` themselves, and psycopg2's
+        transaction block is not re-entrant, so the inner entry raises
+        ``ProgrammingError: the connection cannot be re-entered recursively``.
+        Before reuse each acquisition returned a private connection and the
+        combination was safe; it is not any more.
 
         Returns:
             psycopg2.connection: Active database connection using configured parameters.
         """
         conn = getattr(self._local, "conn", None)
-        if conn is not None and not conn.closed:
+        if self._is_usable(conn):
             return conn
         kwargs: dict[str, Any] = {
             "host": self.host,
@@ -250,10 +308,17 @@ class DotenvPostgresConnector:
         if self.sslmode is not None:
             kwargs["sslmode"] = self.sslmode
         new_conn = psycopg2.connect(**kwargs)
-        self._local.conn = new_conn
+        # Publication and registration under one lock, so close() is a barrier.
+        # Assigning the thread-local first leaves a window in which close()
+        # drains a registry the new connection has not entered yet: the caller
+        # would keep using a connection the closed connector no longer knows
+        # about.
         with self._conns_lock:
-            self._open_conns.discard(conn)
+            if conn is not None:
+                # WeakSet.discard(None) raises rather than no-opping.
+                self._open_conns.discard(conn)
             self._open_conns.add(new_conn)
+            self._local.conn = new_conn
         return new_conn
 
     def close(self) -> None:
@@ -267,9 +332,14 @@ class DotenvPostgresConnector:
         at a closed connection — :meth:`get_conn` tests for that and reopens, so
         a thread that closes while another is idle does not break the other.
         Idempotent, and safe on a connector that never connected.
+
+        This is a **shutdown** operation and does not wait for quiescence. A
+        thread closed out from under mid-statement sees ``InterfaceError:
+        connection already closed``; callers that close while other threads may
+        still be working are responsible for joining them first.
         """
         with self._conns_lock:
-            conns, self._open_conns = list(self._open_conns), set()
+            conns, self._open_conns = list(self._open_conns), weakref.WeakSet()
         for conn in conns:
             if not conn.closed:
                 conn.close()
@@ -359,6 +429,12 @@ class PostgresDB:
     def table_head(self, table_name: str, n: int = 10) -> pd.DataFrame:
         """Get the first N rows from a table.
 
+        The table name is quoted and the row count is bound. ``n`` is the last
+        caller value in this module still reaching SQL by interpolation, which
+        it did for no reason other than being a number rather than a name —
+        the same "it cannot be text, so it needs no binding" reasoning that
+        turned out to have gaps in the fetcher's ``ids``.
+
         Args:
             table_name: Name of the table to sample.
             n: Number of rows to return. Defaults to 10.
@@ -366,7 +442,10 @@ class PostgresDB:
         Returns:
             pd.DataFrame: First N rows from the table.
         """
-        return self.query(f"""SELECT * FROM {quote_ident(table_name)} LIMIT {n}""")
+        return self.query(
+            f"SELECT * FROM {quote_ident(table_name)} LIMIT %(row_limit)s",
+            params={"row_limit": int(n)},
+        )
 
     def get_conn(self) -> Any:
         """Get a connection to the PostgreSQL database.
@@ -479,45 +558,88 @@ class PostgresDB:
         return int(itemsize) if itemsize else 8
 
     @staticmethod
+    def _psql_integer_type(dtype: Any) -> str:
+        """The narrowest PostgreSQL integer type that holds every ``dtype`` value.
+
+        Width alone does not decide this, because **PostgreSQL has no unsigned
+        integer types**. ``integer`` is a *signed* int4 and stops at 2^31-1,
+        while a 4-byte unsigned dtype runs to 2^32-1 — so reading the itemsize
+        without reading the signedness reproduces, one dtype family over, the
+        exact defect this ladder exists to fix: a column that its own data
+        cannot enter.
+
+        ``uint64`` overflows ``bigint`` for the same reason and has no wider
+        integer type to be promoted into, so it becomes ``numeric``, which is
+        unbounded. The precision is stated rather than left open because 20
+        digits is what 2^64-1 needs, and saying so keeps the declaration
+        readable as a range.
+        """
+        base = getattr(dtype, "numpy_dtype", dtype)
+        itemsize = PostgresDB._dtype_itemsize(dtype)
+        if getattr(base, "kind", "") == "u":
+            if itemsize >= 8:
+                return "numeric(20)"
+            return "bigint" if itemsize >= 4 else "integer"
+        return "bigint" if itemsize > 4 else "integer"
+
+    @staticmethod
+    def _psql_type_for_dtype(dtype: Any) -> str | None:
+        """The SQL type for ``dtype``, or ``None`` if it has none of its own.
+
+        ``None`` means "this becomes ``varchar``" — the ladder's catch-all,
+        whose width cannot be decided from the dtype alone because it depends
+        on the values. Separating the two questions is what lets
+        :meth:`_psql_schema_line` and :meth:`_column_is_text` share one ladder
+        instead of keeping two in step by hand: the declaration side asks what
+        the type is, the write side asks only whether it came back ``None``.
+
+        That drift is not hypothetical. The write side previously restated the
+        ladder as its own negated predicate, and a rendering that disagreed
+        with the declaration is how ``'nan'`` came to be sent into a typed
+        column.
+        """
+        if pd.api.types.is_bool_dtype(dtype):
+            return "boolean"
+        # The SQL type comes from the dtype's own range rather than from its
+        # family. `integer` is int4 and `real` is float4, while pandas defaults
+        # to 64 bits for both: an int64 past 2^31 produced a column its own data
+        # could not enter, and a float64 was accepted into float4's ~7
+        # significant digits and silently rounded. The two fail differently and
+        # the silent one is worse, since the round trip looks successful.
+        # Integers additionally have to account for signedness — see
+        # _psql_integer_type — because PostgreSQL has no unsigned types.
+        if pd.api.types.is_integer_dtype(dtype):
+            return PostgresDB._psql_integer_type(dtype)
+        if pd.api.types.is_float_dtype(dtype):
+            return "double precision" if PostgresDB._dtype_itemsize(dtype) > 4 else "real"
+        # Tz-aware first: is_datetime64_any_dtype is True for both, and emitting
+        # a bare ``timestamp`` for a tz-aware column silently drops the offset.
+        if isinstance(dtype, pd.DatetimeTZDtype):
+            return "timestamptz"
+        if pd.api.types.is_datetime64_any_dtype(dtype):
+            return "timestamp"
+        if pd.api.types.is_timedelta64_dtype(dtype):
+            return "interval"
+        return None
+
+    @staticmethod
     def _psql_schema_line(df: pd.DataFrame, col: str) -> str:
         """Build a single quoted column definition line for CREATE TABLE."""
         q_col = quote_ident(col)
         dtype = df[col].dtype
-        # ``pd.api.types`` predicates rather than ``np.issubdtype``: the latter
-        # raises TypeError on every pandas ExtensionDtype — which is why this
-        # ladder used to be written twice, once per branch of an
-        # ``isinstance(dtype, np.dtype)`` split — and it reports timedelta64 as
-        # an integer, since timedelta64 subclasses np.signedinteger. One ladder
-        # answers correctly for numpy dtypes and ExtensionDtypes alike.
-        if pd.api.types.is_bool_dtype(dtype):
-            return f"{q_col} boolean"
-        # Width comes from the dtype rather than from the family. `integer` is
-        # int4 and `real` is float4, while pandas defaults to 64 bits for both:
-        # an int64 past 2^31 produced a column its own data could not enter,
-        # and a float64 was accepted into float4's ~7 significant digits and
-        # silently rounded. The two fail differently and the silent one is
-        # worse, since the round trip looks successful.
-        if pd.api.types.is_integer_dtype(dtype):
-            return f"{q_col} {'bigint' if PostgresDB._dtype_itemsize(dtype) > 4 else 'integer'}"
-        if pd.api.types.is_float_dtype(dtype):
-            precision = "double precision" if PostgresDB._dtype_itemsize(dtype) > 4 else "real"
-            return f"{q_col} {precision}"
-        # Tz-aware first: is_datetime64_any_dtype is True for both, and emitting
-        # a bare ``timestamp`` for a tz-aware column silently drops the offset.
-        if isinstance(dtype, pd.DatetimeTZDtype):
-            return f"{q_col} timestamptz"
-        if pd.api.types.is_datetime64_any_dtype(dtype):
-            return f"{q_col} timestamp"
-        if pd.api.types.is_timedelta64_dtype(dtype):
-            return f"{q_col} interval"
+        sql_type = PostgresDB._psql_type_for_dtype(dtype)
+        if sql_type is not None:
+            return f"{q_col} {sql_type}"
         return f"{q_col} varchar({PostgresDB._psql_varchar_width(df[col])})"
 
     @staticmethod
     def _psql_varchar_width(values: pd.Series) -> int:
         """Width of the widest value in ``values`` once rendered as text.
 
-        ``upload`` sends ``str(value)`` for every cell, so the width that has to
-        fit is the rendered one — and it is measured with that same ``str``.
+        ``upload`` renders the cells of a ``varchar`` column with ``str`` — the
+        one kind of column it still renders rather than sending typed — so the
+        width that has to fit is the rendered one, and it is measured with that
+        same ``str``.
         ``astype(str)`` is a different renderer and disagrees on some object
         payloads (``bytes`` renders as ``abc`` there and ``b'abc'`` here),
         which would declare the column narrower than the text written into it.
@@ -546,18 +668,16 @@ class PostgresDB:
 
         The two methods have to agree: a column declared ``varchar`` is written
         as text and measured as text, and a column with a real SQL type is
-        written as a typed value. Reading the same predicate ladder from one
-        place is what keeps the write side from drifting from the declaration
-        side, which is how the previous rendering came to send ``'nan'`` into a
-        typed column.
+        written as a typed value. Drift between them is how the previous
+        rendering came to send ``'nan'`` into a typed column.
+
+        So this asks the ladder rather than restating it. Written out as its
+        own negated predicate — which is what it used to be — agreement was a
+        property two lists of ``pd.api.types`` calls happened to have, and
+        adding a branch to one of them was enough to lose it silently. Derived,
+        there is nothing to keep in step.
         """
-        return not (
-            pd.api.types.is_bool_dtype(dtype)
-            or pd.api.types.is_integer_dtype(dtype)
-            or pd.api.types.is_float_dtype(dtype)
-            or pd.api.types.is_datetime64_any_dtype(dtype)
-            or pd.api.types.is_timedelta64_dtype(dtype)
-        )
+        return PostgresDB._psql_type_for_dtype(dtype) is None
 
     @staticmethod
     def _column_values_for_insert(values: pd.Series) -> list[Any]:
@@ -589,11 +709,18 @@ class PostgresDB:
         ``ProgrammingError: can't adapt type``. Rendering them here with the
         same ``str`` that :meth:`_psql_varchar_width` measures keeps the
         declared width and the written value in agreement.
+
+        The null test is guarded by ``is_scalar`` because ``pd.isna`` is
+        *elementwise*: handed a ``list`` or an ``ndarray`` it answers about each
+        element and returns an array, which the surrounding ``or`` then asks for
+        a single truth value it cannot give. Asking only about scalars keeps the
+        question well-posed, and loses nothing — every null sentinel pandas
+        recognises (``None``, ``nan``, ``NA``, ``NaT``) is itself a scalar.
         """
         as_text = PostgresDB._column_is_text(values.dtype)
         out: list[Any] = []
         for value in values:
-            if value is None or (value is not pd.NaT and pd.isna(value)) or value is pd.NaT:
+            if value is None or (pd.api.types.is_scalar(value) and pd.isna(value)):
                 out.append(None)
             elif as_text:
                 out.append(str(value))
@@ -629,25 +756,50 @@ class PostgresDB:
         DataFrame; and up-front rather than per column, so the message names
         every offending label instead of stopping at the first.
 
+        A *repeated* label is refused in the same place, for the same reason
+        one step later: ``df[col]`` returns a DataFrame rather than a Series
+        when the label appears twice, so the value conversion died on
+        ``values.dtype`` with ``AttributeError: 'DataFrame' object has no
+        attribute 'dtype'`` — an internal type, from a helper the caller never
+        called. It could not have succeeded either way, since the INSERT names
+        each column once and two columns of one name have no distinguishable
+        destination.
+
         Raises:
-            ValueError: If any column label is not a non-empty string.
+            ValueError: If any column label is not a non-empty string, or if
+                any label is repeated.
         """
         bad = [
             (position, label)
             for position, label in enumerate(df.columns)
             if not isinstance(label, str) or not label
         ]
-        if not bad:
-            return
-        described = ", ".join(
-            f"position {position}: {label!r} ({type(label).__name__})" for position, label in bad
-        )
-        raise ValueError(
-            f"DataFrame column labels must be non-empty strings to be used as SQL "
-            f"identifiers; {len(bad)} of {len(df.columns)} are not — {described}. "
-            f"A DataFrame built without column names gets pandas' default integer "
-            f"labels; set them with df.columns = [...] before uploading."
-        )
+        if bad:
+            described = ", ".join(
+                f"position {position}: {label!r} ({type(label).__name__})"
+                for position, label in bad
+            )
+            raise ValueError(
+                f"DataFrame column labels must be non-empty strings to be used as SQL "
+                f"identifiers; {len(bad)} of {len(df.columns)} are not — {described}. "
+                f"A DataFrame built without column names gets pandas' default integer "
+                f"labels; set them with df.columns = [...] before uploading."
+            )
+
+        positions: dict[Any, list[int]] = {}
+        for position, label in enumerate(df.columns):
+            positions.setdefault(label, []).append(position)
+        repeated = {label: at for label, at in positions.items() if len(at) > 1}
+        if repeated:
+            described = ", ".join(
+                f"{label!r} at positions {at}" for label, at in sorted(repeated.items())
+            )
+            raise ValueError(
+                f"DataFrame column labels must be unique to be used as SQL identifiers; "
+                f"{len(repeated)} label(s) are duplicated — {described}. Each column of "
+                f"the INSERT is named once, so repeated labels have no distinguishable "
+                f"destination; rename them before uploading."
+            )
 
     def upload(self, table_name: str, df: pd.DataFrame) -> None:
         """Upload DataFrame data to a database table.
@@ -740,9 +892,18 @@ class PostgresRecordFetcher(RecordFetcher):
         a name is not a SQL expression, and passing one that reaches outside the
         configured table used to work.
 
-        ``ids`` needs no quoting and gets none: values go through
-        ``str(value + offset)``, which raises ``TypeError`` on anything that is
-        not a number, so the clause cannot carry caller text.
+        ``ids`` are **bound**, not inlined. Inlining them was safe by side
+        effect — ``str(value + offset)`` raises ``TypeError`` on anything
+        non-numeric, so caller text could not reach the SQL — but a side effect
+        only covers what it happens to cover, and two things fell outside it:
+        an empty list built ``IN ()``, which is a syntax error, and a ``nan``
+        or ``inf`` survived the arithmetic to arrive as a bare literal the
+        server then rejected. Binding removes the question instead of answering
+        it, and ``int()`` states the numeric requirement the arithmetic used to
+        imply.
+
+        An empty ``ids`` returns an empty frame without a round trip, matching
+        the sibling fetchers: an empty request has an empty answer.
 
         Args:
             ids: Collection of record IDs to retrieve.
@@ -755,8 +916,10 @@ class PostgresRecordFetcher(RecordFetcher):
 
         Raises:
             ValueError: If a field name, the table name or the ID field name is
-                not a usable SQL identifier.
+                not a usable SQL identifier, or if an entry in ``ids`` is not a
+                finite number.
             TypeError: If an entry in ``ids`` is not a number.
+            OverflowError: If an entry in ``ids`` is infinite.
         """
         if fields_to_retrieve is None:
             fields_to_retrieve = self.fields_to_retrieve
@@ -767,12 +930,21 @@ class PostgresRecordFetcher(RecordFetcher):
         offset = 0
         if one_based != self.one_based:
             offset = 1 if self.one_based else -1
-        values = ", ".join([str(value + offset) for value in ids])
-        return self.db.query(f"""
+        # int() before the offset: it raises TypeError on a non-number and
+        # ValueError/OverflowError on nan/inf, which the bare addition let
+        # through to become a literal the server had to reject.
+        wanted = tuple(int(value) + offset for value in ids)
+        if not wanted:
+            # ``IN ()`` is a syntax error, and there is nothing to ask for.
+            return pd.DataFrame(columns=fields_to_retrieve or [])
+        return self.db.query(
+            f"""
            SELECT {fields}
            FROM {quote_ident(self.table_name)}
-           WHERE {quote_ident(self.id_field_name)} IN ({values})
-        """)
+           WHERE {quote_ident(self.id_field_name)} IN %(ids)s
+        """,
+            params={"ids": wanted},
+        )
 
 
 class DictionaryRecordFetcher(RecordFetcher):

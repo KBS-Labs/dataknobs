@@ -16,7 +16,6 @@ Requires a reachable PostgreSQL instance (``bin/dk up``).
 
 from __future__ import annotations
 
-import datetime as dt
 from collections.abc import Iterator
 from typing import Any
 
@@ -179,52 +178,19 @@ class TestValuesGoThroughPsycopg2Adaptation:
         assert sorted(rows["b"]) == [False, True]
 
 
-class TestColumnValuesForInsertUnit:
-    """The conversion itself, without a server — one case per branch."""
+class TestContainerCellsRoundTrip:
+    """The server-side half of the non-scalar-cell fix.
 
-    def test_text_column_is_rendered_with_str(self) -> None:
-        got = PostgresDB._column_values_for_insert(pd.Series([1, "a"], dtype=object))
+    The conversion itself is pinned without a server in
+    ``tests/test_upload_value_conversion.py``; this is the end-to-end proof that
+    a frame carrying containers still creates a table and fills it.
+    """
 
-        assert got == ["1", "a"]
+    def test_a_column_of_lists_round_trips_as_text(
+        self, db: PostgresDB, render_db: dict[str, Any]
+    ) -> None:
+        df = pd.DataFrame({"c": pd.Series([[1, 2], ["a"]], dtype=object)})
 
-    def test_typed_column_is_not_rendered(self) -> None:
-        got = PostgresDB._column_values_for_insert(pd.Series([1, 2], dtype="int64"))
+        rows = _round_trip(db, render_db["table"], df)
 
-        assert got == [1, 2]
-        assert all(type(v) is int for v in got), "numpy scalars reached psycopg2"
-
-    def test_nulls_become_none_in_both_kinds(self) -> None:
-        text = PostgresDB._column_values_for_insert(pd.Series(["a", None], dtype=object))
-        typed = PostgresDB._column_values_for_insert(pd.array([1, None], dtype="Int64"))
-
-        assert text == ["a", None]
-        assert list(typed) == [1, None]
-
-    def test_timedelta_becomes_a_python_timedelta(self) -> None:
-        got = PostgresDB._column_values_for_insert(pd.to_timedelta(["1 days"]).to_series())
-
-        assert got == [dt.timedelta(days=1)]
-        assert type(got[0]) is dt.timedelta
-
-    def test_timestamp_becomes_a_python_datetime(self) -> None:
-        got = PostgresDB._column_values_for_insert(pd.to_datetime(["2024-01-01"]).to_series())
-
-        assert got == [dt.datetime(2024, 1, 1)]
-
-    def test_text_predicate_matches_the_schema_ladder(self) -> None:
-        """The two sides have to agree, so the agreement is asserted rather
-        than left to two copies of one predicate staying in step.
-        """
-        cases = {
-            "b": pd.Series([True]),
-            "i": pd.array([1], dtype="int64"),
-            "f": pd.Series([1.0]),
-            "ts": pd.to_datetime(["2024-01-01"]),
-            "td": pd.to_timedelta(["1 days"]),
-            "s": pd.Series(["x"]),
-        }
-        for name, values in cases.items():
-            frame = pd.DataFrame({name: values})
-            declared_varchar = "varchar" in PostgresDB._psql_schema_line(frame, name)
-
-            assert PostgresDB._column_is_text(frame[name].dtype) == declared_varchar, name
+        assert sorted(rows["c"]) == ["['a']", "[1, 2]"]

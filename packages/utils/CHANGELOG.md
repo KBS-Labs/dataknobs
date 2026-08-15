@@ -16,6 +16,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   that `df.columns = [...]` is the fix. Labels are now checked up front, and
   the error names every offending position with its type.
 
+  A *repeated* label is refused in the same place. `df[col]` returns a
+  DataFrame rather than a Series when a label appears twice, so the frame used
+  to die in the value conversion with `AttributeError: 'DataFrame' object has
+  no attribute 'dtype'`; it could not have succeeded either way, since the
+  INSERT names each column once.
+
+- **`upload` crashed on an `object` column holding lists or arrays.** The null
+  check called `pd.isna`, which is elementwise: given a `list` or `ndarray` it
+  returns an array of answers, and asking that array for a single truth value
+  raised `ValueError: The truth value of an array with more than one element is
+  ambiguous`. The schema half handled these frames throughout — it measures
+  widths with `Series.dropna()` — so the two halves of one feature disagreed.
+  The null test now asks only about scalars, which is what every pandas null
+  sentinel is.
+
 - **`PostgresRecordFetcher.get_records` inlined three identifiers unquoted, and
   one of them is caller-supplied per call.** The field list, the table name and
   the ID field name all went into the SQL through bare f-string slots, while
@@ -28,9 +43,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   All three positions are now quoted. `fields_to_retrieve` is a list of column
   names, which is what the parameter already means on the other `RecordFetcher`
-  implementations, so this matches the family rather than narrowing it. `ids` is
-  unchanged and needs no quoting: entries pass through `str(value + offset)`,
-  which rejects anything non-numeric.
+  implementations, so this matches the family rather than narrowing it.
+
+- **`get_records` inlined its `ids` too, and was safe only by side effect.**
+  Entries passed through `str(value + offset)`, which raises `TypeError` on
+  anything non-numeric — so caller text could not reach the SQL, but only
+  because of what the arithmetic happened to reject. Two things fell outside
+  it: an empty list built `IN ()`, which is a syntax error, and a `nan` or
+  `inf` survived the addition to arrive as a bare literal the server refused.
+  The values are bound now, an empty `ids` returns an empty frame without a
+  round trip, and `int()` states the numeric requirement the arithmetic used
+  to imply.
+
+- **`table_head` interpolated its row count.** `LIMIT {n}` was the last caller
+  value in the module reaching SQL by interpolation. It is bound.
 
 - **`PostgresDB` never closed a connection, and opened a new one per call.**
   psycopg2's `with conn` is a *transaction* scope, not a close, so every
@@ -43,14 +69,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `SELECT 1`.
 
   `DotenvPostgresConnector` now holds one connection **per thread** and reuses
-  it, reopening if it is found closed. Per thread because reuse must not become
-  sharing: psycopg2's `with conn` transaction block is not re-entrant, so two
-  threads on one connection raise `the connection cannot be re-entered
-  recursively` — and beneath that error they would share a transaction, where
-  either thread's commit commits the other's uncommitted work. `close()` reaches
-  every connection the connector opened on any thread. `PostgresDB` gains
-  `close()` and context-manager support; a connector passed in explicitly
-  belongs to its caller and is left open.
+  it. Per thread because reuse must not become sharing: psycopg2's `with conn`
+  transaction block is not re-entrant, so two threads on one connection raise
+  `the connection cannot be re-entered recursively` — and beneath that error
+  they would share a transaction, where either thread's commit commits the
+  other's uncommitted work. `close()` reaches every connection the connector
+  opened on any thread, and a thread that exits releases its own without
+  waiting for it, so a pool that cycles workers does not accumulate backends.
+  `PostgresDB` gains `close()` and context-manager support; a connector passed
+  in explicitly belongs to its caller and is left open.
+
+  A cached connection is checked for liveness before being handed back, since
+  `connection.closed` reports only what this process did to the connection — a
+  backend killed by `pg_terminate_backend`, an idle timeout or a pooler
+  eviction leaves it reading 0. The check reads the socket and costs no round
+  trip.
+
+  **Compatibility:** holding `get_conn()` in a `with` block across a `query`,
+  `execute` or `upload` call on the same thread now raises
+  `ProgrammingError: the connection cannot be re-entered recursively`. Each
+  acquisition previously returned a private connection, which made the
+  combination safe. `close()` is also a shutdown operation rather than a
+  barrier: it does not wait for other threads to go idle.
 
 - **`upload` sent every value as text, so nothing reached psycopg2 typed.**
   Cells were rendered with `str()` over `df.to_records()`, which produced four
@@ -95,13 +135,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   trip looked successful. 64-bit floats now map to `double precision`, by the
   same itemsize rule, so a `float32` column keeps `real`.
 
-- **Integer columns are typed by width rather than by family.** `integer` is
+- **Integer columns are typed by range rather than by family.** `integer` is
   PostgreSQL's 4-byte type while pandas defaults to `int64`, so a column
   holding a value past 2<sup>31</sup> created a column its own data could not
   enter: the `CREATE TABLE` succeeded and the `INSERT` then failed. 64-bit
-  integers now map to `bigint`, taken from the dtype's itemsize so a genuinely
-  narrow column keeps `integer`. Nullable extension dtypes are measured by the
-  numpy dtype behind them, which they do not expose an itemsize for.
+  integers now map to `bigint`, and a genuinely narrow column keeps `integer`.
+  Nullable extension dtypes are measured by the numpy dtype behind them, which
+  they do not expose an itemsize for.
+
+  Range rather than width, because **PostgreSQL has no unsigned integer
+  types**: `integer` is a *signed* int4 stopping at 2<sup>31</sup>−1, so a
+  `uint32` running to 2<sup>32</sup>−1 needs a `bigint` despite being four
+  bytes wide. `uint64` overflows `bigint` for the same reason, with no wider
+  integer type to be promoted into, and maps to `numeric(20)`.
 
   Note the interaction with `CREATE TABLE IF NOT EXISTS`: a table already
   created with the narrower column keeps it, so an existing estate has column
@@ -115,8 +161,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   two copies — is gone. This removes the last `np.issubdtype` calls in the
   workspace.
 
+  The write side now reads that same ladder rather than restating it. Deciding
+  which columns are text was a separately maintained negated predicate, so the
+  two agreed only as long as someone kept them in step — and disagreement is
+  precisely how `'nan'` came to be sent into a typed column. The type decision
+  is split out from the width measurement so both callers can share it.
+
 - **The `varchar` width is measured on the rendered value, with the renderer
-  that sends it.** `upload` sends `str(value)` for every cell, so
+  that sends it.** `upload` renders `varchar` cells with `str`, so
   `_psql_varchar_width` measures `dropna().map(str).str.len()` instead of
   calling `.str` on the column directly. An object column holding non-strings
   previously raised `AttributeError`. `map(str)` rather than `astype(str)`

@@ -143,6 +143,65 @@ class TestNumericLadderWidth:
         df = pd.DataFrame({"score": np.array([1.0, 2.0], dtype=np.float32)})
         assert PostgresDB._psql_schema_line(df, "score") == '"score" real'
 
+    def test_uint32_is_bigint(self):
+        """Bug: width was read without signedness, so a 4-byte unsigned column
+        was emitted as ``integer``.
+
+        PostgreSQL has no unsigned integers. ``integer`` is a *signed* int4 and
+        stops at 2_147_483_647, while ``uint32`` runs to 4_294_967_295 — so the
+        upper half of the dtype's range produced ``value out of range for type
+        integer`` on INSERT, which is verbatim the failure the int64 fix in this
+        same ladder was written to remove.
+        """
+        df = pd.DataFrame({"count": pd.array([1, 2], dtype="uint32")})
+        assert PostgresDB._psql_schema_line(df, "count") == '"count" bigint'
+
+    def test_uint64_is_numeric(self):
+        """``bigint`` is signed int8, so it stops at 2^63-1 while ``uint64``
+        runs to 2^64-1. There is no wider integer type to promote into, so the
+        column becomes ``numeric``, which is unbounded.
+        """
+        df = pd.DataFrame({"count": pd.array([1, 2], dtype="uint64")})
+        assert PostgresDB._psql_schema_line(df, "count") == '"count" numeric(20)'
+
+    def test_nullable_unsigned_follows_the_same_rule(self):
+        """The ExtensionDtype path reads signedness off the numpy dtype behind
+        it, the same way it reads width.
+        """
+        wide = pd.DataFrame({"count": pd.array([1, None], dtype="UInt32")})
+        widest = pd.DataFrame({"count": pd.array([1, None], dtype="UInt64")})
+
+        assert PostgresDB._psql_schema_line(wide, "count") == '"count" bigint'
+        assert PostgresDB._psql_schema_line(widest, "count") == '"count" numeric(20)'
+
+    def test_narrow_unsigned_still_fits_integer(self):
+        """The widening is where the range calls for it, not across the family:
+        ``uint8`` and ``uint16`` both fit inside a signed int4.
+        """
+        for dtype in ("uint8", "uint16"):
+            df = pd.DataFrame({"count": pd.array([1, 2], dtype=dtype)})
+            assert PostgresDB._psql_schema_line(df, "count") == '"count" integer', dtype
+
+    def test_every_integer_dtype_gets_a_type_that_holds_its_range(self):
+        """The property behind the individual cases, asserted against numpy's
+        own limits rather than against a hand-written table — so a dtype added
+        later cannot be mapped to something too narrow without this failing.
+        """
+        ceilings = {
+            "integer": 2**31 - 1,
+            "bigint": 2**63 - 1,
+            "numeric(20)": 2**64 - 1,
+        }
+        for dtype in ("int8", "int16", "int32", "int64", "uint8", "uint16", "uint32", "uint64"):
+            df = pd.DataFrame({"n": pd.array([1], dtype=dtype)})
+            sql_type = PostgresDB._psql_schema_line(df, "n").removeprefix('"n" ')
+
+            assert sql_type in ceilings, f"{dtype} -> unknown type {sql_type}"
+            assert ceilings[sql_type] >= int(np.iinfo(dtype).max), (
+                f"{dtype} (max {np.iinfo(dtype).max}) mapped to {sql_type}, which stops at "
+                f"{ceilings[sql_type]}"
+            )
+
     def test_unmeasurable_dtype_gets_the_widest(self):
         """A dtype exposing no itemsize must not silently get the narrow type.
 

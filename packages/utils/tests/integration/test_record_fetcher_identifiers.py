@@ -145,6 +145,53 @@ class TestLegalIdentifiersSurvive:
         assert list(fetcher.get_records([1]).columns) == ["id", "Mixed Case"]
 
 
+class TestIdsAreBoundNotInlined:
+    """The ``ids`` clause stops relying on arithmetic to keep it safe.
+
+    Leaving ``ids`` inlined was defensible — ``str(value + offset)`` raises
+    ``TypeError`` on anything non-numeric, so caller text could not reach the
+    SQL. But safety by side effect covers only what the side effect happens to
+    cover, and two things fell outside it: an empty list produced ``IN ()``,
+    which is a syntax error, and a ``nan``/``inf`` passed the arithmetic to
+    become the literal ``IN (nan)``, which the server rejects.
+
+    Binding the values removes the question rather than answering it, and the
+    two gaps close with it.
+    """
+
+    def test_no_ids_returns_nothing_instead_of_failing(
+        self, db: PostgresDB, tables: dict[str, str]
+    ) -> None:
+        """Bug: ``IN ()`` is not valid SQL, so asking for no records raised
+        ``SyntaxError`` from the server rather than returning none.
+
+        The sibling fetchers answer an empty request with an empty frame, which
+        is also the only reading that makes sense.
+        """
+        got = PostgresRecordFetcher(db, tables["main"]).get_records([])
+
+        assert len(got) == 0
+
+    @pytest.mark.parametrize("value", [float("nan"), float("inf")])
+    def test_a_non_finite_id_is_refused_rather_than_sent(
+        self, db: PostgresDB, tables: dict[str, str], value: float
+    ) -> None:
+        """Bug: these survive ``value + offset``, so they reached the SQL as the
+        bare literals ``nan`` / ``inf`` and failed inside the server.
+        """
+        fetcher = PostgresRecordFetcher(db, tables["main"])
+
+        with pytest.raises((TypeError, ValueError, OverflowError)):
+            fetcher.get_records([value])  # type: ignore[list-item]
+
+    def test_binding_does_not_disturb_a_normal_fetch(
+        self, db: PostgresDB, tables: dict[str, str]
+    ) -> None:
+        got = PostgresRecordFetcher(db, tables["main"]).get_records([1, 2])
+
+        assert sorted(got["id"]) == [1, 2]
+
+
 class TestUnchangedBehaviour:
     """What the fix must not move."""
 
@@ -156,16 +203,20 @@ class TestUnchangedBehaviour:
         assert set(got.columns) >= {"id", "Mixed Case", "note"}
         assert len(got) == 2
 
-    def test_ids_remain_non_injectable_by_construction(
-        self, db: PostgresDB, tables: dict[str, str]
-    ) -> None:
-        """Not a vector before the fix and not one after: ``str(value + offset)``
-        rejects a non-numeric id outright. Pinned so the reasoning behind
-        leaving ``ids`` alone stays checkable.
+    def test_ids_remain_non_injectable(self, db: PostgresDB, tables: dict[str, str]) -> None:
+        """Not a vector before the identifier fix, and not one now.
+
+        The mechanism changed and the property did not. It used to rest on
+        ``str(value + offset)`` raising ``TypeError`` on a non-number; the
+        values are bound now, and ``int()`` refuses the same input a step
+        earlier — as ``ValueError``, since that is what ``int`` raises on a
+        string it cannot parse. Asserting the refusal rather than its type is
+        the point: the guarantee is that caller text cannot reach the SQL, not
+        that a particular exception carries the news.
         """
         fetcher = PostgresRecordFetcher(db, tables["main"])
 
-        with pytest.raises(TypeError):
+        with pytest.raises((TypeError, ValueError)):
             fetcher.get_records(["1 OR 1=1"])  # type: ignore[list-item]
 
     def test_one_based_offset_still_applies(self, db: PostgresDB, tables: dict[str, str]) -> None:

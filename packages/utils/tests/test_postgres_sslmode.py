@@ -18,13 +18,27 @@ import psycopg2
 from dataknobs_utils.sql_utils import DotenvPostgresConnector, PostgresDB
 
 
+class _StandInConnection:
+    """What ``psycopg2.connect`` returns, for the little of it used here.
+
+    A bare ``object()`` was the previous stand-in and is the one thing a real
+    connection is not: ``object`` is the sole built-in with no ``__weakref__``
+    slot, so it cannot be weak-referenced, while ``psycopg2.extensions.connection``
+    can. That difference stopped being invisible once the connector began
+    holding its open connections in a ``weakref.WeakSet`` — the stand-in failed
+    where every real connection succeeds.
+    """
+
+    closed = 0
+
+
 def _capture_connect(monkeypatch: Any) -> dict[str, Any]:
     """Patch ``psycopg2.connect`` to capture its kwargs instead of connecting."""
     captured: dict[str, Any] = {}
 
-    def fake_connect(**kwargs: Any) -> object:
+    def fake_connect(**kwargs: Any) -> _StandInConnection:
         captured.update(kwargs)
-        return object()  # stand-in connection; never used by these tests
+        return _StandInConnection()
 
     monkeypatch.setattr(psycopg2, "connect", fake_connect)
     return captured
