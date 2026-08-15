@@ -18,11 +18,12 @@ used as an additional env fallback layer (they do NOT override
 
 from __future__ import annotations
 
+import ipaddress
 import logging
 import os
 from pathlib import Path
 from typing import Any
-from urllib.parse import quote, urlparse
+from urllib.parse import quote, unquote, urlparse
 
 from dataknobs_common.exceptions import ConfigurationError
 
@@ -141,11 +142,16 @@ def normalize_postgres_connection_config(
     are all accepted.
 
     When synthesizing a ``connection_string`` from individual keys,
-    ``host`` and ``database`` are validated for shell-unsafe
-    characters (``@``, ``/``, whitespace) that could produce a
-    malformed or misrouted URI; ``user`` and ``password`` are
-    URL-encoded so values containing those characters (common in
-    secrets-manager output) produce a valid URI.
+    ``host`` and ``database`` are validated for characters that would
+    re-delimit the URI, and ``port`` for being an integer in range;
+    ``user`` and ``password`` are URL-encoded so values containing
+    those characters (common in secrets-manager output) produce a
+    valid URI. :func:`build_postgres_dsn` holds the full rule.
+
+    Values arriving *via* a ``connection_string`` are percent-decoded
+    on the way in, so a given field has one representation in the
+    returned dict whichever input shape produced it — see
+    :func:`_parse_connection_string` for why that matters.
 
     If the caller supplies a partial individual-keys config and we
     have to synthesize missing values from defaults (e.g. ``user`` or
@@ -174,8 +180,9 @@ def normalize_postgres_connection_config(
     Raises:
         ConfigurationError: If ``require=True`` and no connection can
             be resolved from any of the accepted input shapes.
-        ValueError: If ``host`` or ``database`` contain shell-unsafe
-            characters (``@``, ``/``, whitespace).
+        ValueError: If ``host`` or ``database`` contain a character
+            that would re-delimit the URI, or if ``port`` is not an
+            integer in ``1-65535``.
     """
     out: dict[str, Any] = dict(config or {})
 
@@ -266,7 +273,10 @@ def normalize_postgres_connection_config(
         return default
 
     host = _resolve("host", "localhost")
-    port = int(_resolve("port", 5432))
+    # Coerced through the builder's own check so a bad ``POSTGRES_PORT``
+    # names the field it came from rather than surfacing a bare
+    # "invalid literal for int()".
+    port = _coerce_port(_resolve("port", 5432))
     database = _resolve("database", "postgres")
     user = _resolve("user", "postgres")
     # Password has a special rule: an empty string is a valid explicit
@@ -283,9 +293,10 @@ def normalize_postgres_connection_config(
         password = ""
 
     # Validate host/database — URL-encoding them would distort values
-    # that actually need to parse cleanly as URI components. Reject
-    # shell-unsafe characters instead so misconfiguration surfaces
-    # loudly rather than producing a malformed URI.
+    # that actually need to parse cleanly as URI components. Reject the
+    # characters that would re-delimit the URI instead, so
+    # misconfiguration surfaces loudly rather than producing a
+    # malformed one.
     _validate_url_component("host", str(host))
     _validate_url_component("database", str(database))
 
@@ -337,23 +348,121 @@ def normalize_postgres_connection_config(
             )
         out["connection_string"] = preserved
     else:
-        userinfo = f"{quote(str(user), safe='')}:{quote(str(password), safe='')}@"
-        out["connection_string"] = f"postgresql://{userinfo}{host}:{port}/{database}"
+        out["connection_string"] = build_postgres_dsn(
+            host=host,
+            port=port,
+            database=database,
+            user=user,
+            password=password,
+        )
     return out
 
 
+def build_postgres_dsn(
+    *,
+    host: str,
+    port: int | str,
+    database: str,
+    user: str,
+    password: str,
+) -> str:
+    """Build a libpq URI from already-resolved connection fields.
+
+    This is the single definition of how the five canonical fields
+    become a ``postgresql://`` URL. It resolves nothing — no env, no
+    ``.env``, no defaults. Callers that need resolution want
+    :func:`normalize_postgres_connection_config`, which delegates here
+    for its synthesis step.
+
+    Two things separate this from an f-string, and both are the
+    difference between a working connection and a silently wrong one:
+
+    ``user`` and ``password`` are URL-encoded. A password containing
+    ``@`` is ordinary secrets-manager output, and interpolated raw it
+    does not produce a *rejected* URI — it produces a well-formed URI
+    pointing somewhere else, because the last ``@`` delimits userinfo.
+    ``postgresql://svc:p@ss/w0rd@db.internal:5432/prod`` parses with
+    host ``ss`` and database ``/w0rd@db.internal:5432/prod``.
+
+    ``host`` and ``database`` are validated rather than encoded, since
+    percent-encoding them would mangle values that must parse cleanly
+    as URI components; a character that would re-delimit the URI raises
+    instead. See :data:`_STRUCTURAL_URI_CHARS` and
+    :func:`_validate_url_component` for the rule.
+
+    Args:
+        host: Server hostname. Rejected if it contains a structural URI
+            character or whitespace. A valid IPv6 literal is bracketed;
+            any other ``:`` is a port smuggled into the host and raises.
+        port: Server port. Coerced with ``int`` — ``POSTGRES_PORT``
+            arrives as a string — and rejected outside ``1-65535``.
+        database: Database name, validated as ``host`` is.
+        user: Role name; URL-encoded.
+        password: Password; URL-encoded.
+
+            An empty string produces ``postgresql://user:@host/db``,
+            which is *not* the same as an empty password at the
+            transport layer: asyncpg treats an empty DSN password as
+            absent and falls through to ``PGPASSWORD`` / ``.pgpass``.
+            Pass a password, or omit the field and let the caller's
+            ambient credentials apply deliberately.
+
+    Returns:
+        A ``postgresql://user:password@host:port/database`` URI whose
+        every component round-trips through ``urllib.parse.urlparse``.
+
+    Raises:
+        ValueError: If ``host`` or ``database`` is empty or contains a
+            character that would produce a malformed or misrouted URI,
+            or if ``port`` is not an integer in ``1-65535``.
+    """
+    # Validated here as well as in the caller above: this is a public
+    # entry point reached directly by callers that never run the
+    # normalizer, and the check is idempotent.
+    _validate_url_component("host", str(host))
+    _validate_url_component("database", str(database))
+    userinfo = f"{quote(str(user), safe='')}:{quote(str(password), safe='')}@"
+    authority = f"{_format_host(str(host))}:{_coerce_port(port)}"
+    return f"postgresql://{userinfo}{authority}/{database}"
+
+
+#: Characters that change a URI's *structure* rather than its content.
+#: ``host`` and ``database`` are interpolated bare (see
+#: :func:`_validate_url_component`), so any of these would re-delimit the
+#: URI instead of appearing in the value.
+#:
+#: ``%`` is here because this builder does not encode these two
+#: components: emitted raw it would be read back as the start of an
+#: escape sequence, so the value that parses out is not the value that
+#: went in. ``:`` is absent because it is legal in a path and, in a host,
+#: means IPv6 — :func:`_format_host` handles that case.
+_STRUCTURAL_URI_CHARS = ("@", "/", "?", "#", "[", "]", "%")
+
+
 def _validate_url_component(field: str, value: str) -> None:
-    """Reject shell-unsafe characters in a URI host or database name.
+    r"""Reject characters that would re-delimit a URI host or database name.
 
     URL-encoding ``host``/``database`` would mangle legitimate values;
-    asyncpg/psycopg2 expect them in bare form. So we instead reject
+    asyncpg/psycopg2 expect them in bare form. So we instead reject the
     characters that would produce a malformed or misrouted URI if
-    interpolated directly: ``@`` (userinfo delimiter), ``/`` (path
-    separator), and whitespace.
+    interpolated directly.
+
+    The check is a positive one — every character must be printable and
+    non-space — because a denylist of the whitespace that matters is not
+    writable: ``\v``, ``\f``, ``\x00`` and non-ASCII spaces such as
+    ``\xa0`` are all as capable of corrupting an authority as the four
+    ASCII ones, and ``\x00`` additionally truncates a C string on its
+    way into libpq.
     """
     if not value:
         raise ValueError(f"Postgres {field} must be non-empty")
-    for bad in ("@", "/", " ", "\t", "\n", "\r"):
+    for char in value:
+        if not char.isprintable() or char.isspace():
+            raise ValueError(
+                f"Postgres {field}={value!r} contains a non-printable or "
+                f"whitespace character {char!r}."
+            )
+    for bad in _STRUCTURAL_URI_CHARS:
         if bad in value:
             raise ValueError(
                 f"Postgres {field}={value!r} contains a disallowed "
@@ -362,23 +471,84 @@ def _validate_url_component(field: str, value: str) -> None:
             )
 
 
+def _format_host(host: str) -> str:
+    """Render a host for the authority section, bracketing IPv6.
+
+    A bare IPv6 literal makes the authority unreadable — ``::1`` yields
+    ``postgresql://u:p@::1:5432/db``, whose ``hostname`` parses as
+    ``None`` and whose ``.port`` raises — so it is bracketed rather than
+    rejected. Any *other* use of ``:`` is a second port smuggled into the
+    host, which would otherwise leave two in the authority.
+    """
+    if ":" not in host:
+        return host
+    try:
+        ipaddress.ip_address(host)
+    except ValueError:
+        raise ValueError(
+            f"Postgres host={host!r} contains ':' but is not an IPv6 "
+            f"address. Pass the port as ``port``, not inside ``host``."
+        ) from None
+    return f"[{host}]"
+
+
+def _coerce_port(port: int | str) -> int:
+    """Coerce a port to an int in range, or reject it.
+
+    ``port`` is interpolated like the other components, so it is an
+    injection point like the other components: unvalidated,
+    ``"5432/otherdb?sslmode=disable"`` yields a URI whose path is
+    ``/otherdb`` and whose query disables TLS, discarding the requested
+    database into the query string. ``POSTGRES_PORT`` arrives as a
+    string, so coercion rather than a type check is the contract.
+    """
+    try:
+        coerced = int(port)
+    except (TypeError, ValueError):
+        raise ValueError(f"Postgres port={port!r} is not an integer") from None
+    if not 1 <= coerced <= 65535:
+        raise ValueError(f"Postgres port={port!r} is outside the range 1-65535")
+    return coerced
+
+
 def _parse_connection_string(conn_str: str) -> dict[str, Any]:
     """Parse a postgres URI into canonical keys.
 
     Pure: does not mutate anything. Returns a dict with the canonical
     keys populated from the URI; keys absent from the URI map to
     ``None`` (except ``host``/``port`` which have URL-level defaults).
+
+    Values are percent-**decoded**, because ``urlparse`` decodes
+    nothing: ``.username``/``.password`` come back exactly as written in
+    the URI. Without the decode the canonical dict would hold encoded
+    values from a URI and raw ones from individual keys — one field with
+    two representations, and every consumer wrong for one of them:
+
+    * :func:`build_postgres_dsn` encodes what it is given, so an
+      already-encoded password would be encoded twice (``%40`` →
+      ``%2540``) and authentication would fail against a DSN that had
+      worked;
+    * the backends' ``_create_database`` passes the same field to
+      ``psycopg2.connect`` / ``asyncpg.connect`` as a **kwarg**, which
+      takes it raw and would otherwise authenticate with the literal
+      escape sequence.
+
+    ``host`` is deliberately not decoded. ``urlparse`` already applies
+    host-specific normalization to it (lower-casing, IPv6 bracket
+    stripping), and the one real use of escaping there — a percent-
+    encoded unix-socket directory — is a shape this module rejects on
+    every other input path, so decoding it here would half-support it.
     """
     if conn_str.startswith("postgresql+asyncpg://"):
         conn_str = conn_str.replace("postgresql+asyncpg://", "postgresql://", 1)
     parsed = urlparse(conn_str)
     database: str | None = None
     if parsed.path and len(parsed.path) > 1:
-        database = parsed.path[1:]
+        database = unquote(parsed.path[1:])
     return {
         "host": parsed.hostname,
         "port": parsed.port,
         "database": database,
-        "user": parsed.username,
-        "password": parsed.password,
+        "user": unquote(parsed.username) if parsed.username is not None else None,
+        "password": unquote(parsed.password) if parsed.password is not None else None,
     }

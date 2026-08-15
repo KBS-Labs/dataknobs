@@ -17,7 +17,7 @@ import pytest
 
 from dataknobs_common.events import Event, EventType, PostgresEventBusConfig, Subscription
 from dataknobs_common.events.postgres import PostgresEventBus
-from dataknobs_common.testing import is_postgres_available
+from dataknobs_common.testing import is_postgres_available, postgres_dsn, postgres_env_params
 
 
 class TestTopicToChannel:
@@ -763,14 +763,10 @@ class TestCloseIsSafeWhileItsOwnTeardownIsObservable:
 # Integration tests — require a real PostgreSQL instance
 # ---------------------------------------------------------------------------
 
-# Construct DSN from individual env vars (matches bin/run-integration-tests.sh)
-PG_DSN = "postgresql://{}:{}@{}:{}/{}".format(
-    os.getenv("POSTGRES_USER", "postgres"),
-    os.getenv("POSTGRES_PASSWORD", "postgres"),
-    os.getenv("POSTGRES_HOST", "localhost"),
-    os.getenv("POSTGRES_PORT", "5432"),
-    os.getenv("POSTGRES_DB", "dataknobs"),
-)
+# Module-level, so it cannot take ``postgres_connection_params``; it
+# takes the same resolution the fixture wraps instead of restating the
+# defaults.
+PG_DSN = postgres_dsn(postgres_env_params())
 
 TEST_POSTGRES = os.getenv("TEST_POSTGRES", "").lower() != "false"
 

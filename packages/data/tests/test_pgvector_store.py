@@ -13,7 +13,7 @@ from typing import Any
 import numpy as np
 import pytest
 
-from dataknobs_common.testing import safe_sql_ident
+from dataknobs_common.testing import postgres_dsn, postgres_env_params, safe_sql_ident
 from dataknobs_data.testing import vector as _vector, vectors as _vectors
 
 # Skip all tests if PostgreSQL is not available
@@ -37,13 +37,13 @@ if ASYNCPG_AVAILABLE:
 
 
 def get_test_connection_string() -> str:
-    """Build connection string from environment variables."""
-    host = os.environ.get("POSTGRES_HOST", "localhost")
-    port = os.environ.get("POSTGRES_PORT", "5432")
-    user = os.environ.get("POSTGRES_USER", "postgres")
-    password = os.environ.get("POSTGRES_PASSWORD", "postgres")
-    database = os.environ.get("POSTGRES_DB", "test_dataknobs")
-    return f"postgresql://{user}:{password}@{host}:{port}/{database}"
+    """Build a connection string for the test Postgres.
+
+    A plain function rather than a fixture, so it takes
+    ``postgres_env_params`` directly — the same resolution the
+    ``postgres_connection_params`` fixture performs.
+    """
+    return postgres_dsn(postgres_env_params())
 
 
 @pytest.fixture(scope="session")

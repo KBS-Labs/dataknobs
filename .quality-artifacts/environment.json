@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-08-15T21:16:04Z",
+  "timestamp": "2026-08-15T23:33:50Z",
   "python_version": "Python 3.12.12",
-  "uv_version": "uv 0.12.4 (Homebrew 2026-08-13 aarch64-apple-darwin)",
+  "uv_version": "uv 0.12.5 (Homebrew 2026-08-14 aarch64-apple-darwin)",
   "os": "Darwin",
   "os_version": "24.6.0",
-  "git_branch": "sbk/collection-mode-tests-call-the-method",
-  "git_commit": "1ddeeb80694d722ae9bccd713fa9e41583265277",
+  "git_branch": "sbk/one-postgres-dsn-builder",
+  "git_commit": "c4778e421b1fe50ab04917b4cdff973ef47fbc2d",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }

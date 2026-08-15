@@ -16,14 +16,17 @@ The factory pattern keeps the table prefix consumer-controlled without
 forcing each consumer to re-declare ``@pytest.fixture(params=[...])`` indirect
 parameterization.
 
-Environment variables (read at fixture-creation time):
+Environment variables, resolved by :func:`postgres_env_params` (which
+the ``postgres_connection_params`` fixture wraps, and which non-fixture
+callers should use directly rather than re-reading these by hand):
 
 - ``POSTGRES_HOST`` (default: ``postgres`` in Docker, ``localhost`` otherwise)
 - ``POSTGRES_PORT`` (default: ``5432``)
 - ``POSTGRES_USER`` (default: ``postgres``)
 - ``POSTGRES_PASSWORD`` (default: ``postgres``)
 - ``POSTGRES_DB`` (default: ``dataknobs_test``)
-- ``DOCKER_CONTAINER`` (any truthy value forces ``postgres`` host default)
+- ``DOCKER_CONTAINER`` (``true``/``1``/``yes``/``on`` forces the
+  ``postgres`` host default; anything else, including ``false``, does not)
 """
 
 from __future__ import annotations
@@ -32,12 +35,92 @@ import logging
 import os
 import time
 import uuid
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Mapping
 from typing import Any
 
-from dataknobs_common.testing._core import safe_sql_ident
+from dataknobs_common.postgres_config import build_postgres_dsn
+from dataknobs_common.testing._core import _docker_aware_default_host, safe_sql_ident
 
 logger = logging.getLogger(__name__)
+
+
+def postgres_env_params() -> dict[str, Any]:
+    """Resolve Postgres connection parameters from the environment.
+
+    The single definition of what "the test Postgres" means: which
+    host, port, user, password and database an integration test reaches
+    when the environment does not say otherwise. The
+    :func:`postgres_connection_params` fixture is a thin wrapper over
+    this, so a caller that cannot take a fixture — a module-level
+    constant, a plain helper function — resolves identically instead of
+    restating the defaults.
+
+    Restating them is not hypothetical. Four sites that read these env
+    vars by hand had drifted on three of the five fields: they defaulted
+    ``POSTGRES_DB`` to a name no runner creates, left ``port`` a string,
+    and omitted the container check below entirely — so under Docker
+    they resolved to ``localhost`` while every fixture-based test
+    resolved to the compose service.
+
+    Detects whether the test process is running inside a Docker
+    container (see :func:`_in_docker_container`) and defaults the host to
+    ``postgres`` (the typical compose service name) in that case,
+    ``localhost`` otherwise.
+
+    Returns:
+        A fresh dict with ``host``, ``port`` (``int``), ``user``,
+        ``password`` and ``database``. Suitable for
+        :func:`postgres_dsn`, or for splatting into a connect call.
+    """
+    default_host = _docker_aware_default_host("postgres")
+
+    return {
+        "host": os.environ.get("POSTGRES_HOST", default_host),
+        "port": int(os.environ.get("POSTGRES_PORT", "5432")),
+        "user": os.environ.get("POSTGRES_USER", "postgres"),
+        "password": os.environ.get("POSTGRES_PASSWORD", "postgres"),
+        "database": os.environ.get("POSTGRES_DB", "dataknobs_test"),
+    }
+
+
+def postgres_dsn(params: Mapping[str, Any]) -> str:
+    """Build a libpq URI from a ``postgres_connection_params`` mapping.
+
+    The counterpart to the :func:`postgres_connection_params` fixture:
+    tests that need a connection *string* rather than keyword arguments
+    pass the fixture's dict straight through.
+
+    Only the five connection keys are read, so a mapping that has been
+    copied and extended — as the table fixtures do, adding ``table`` and
+    ``schema`` — can be passed without stripping it first.
+
+    Encoding and validation come from
+    :func:`~dataknobs_common.postgres_config.build_postgres_dsn`, which
+    is also what the production normalizer uses. That shared definition
+    is the point: a hand-rolled f-string in a test silently accepts a
+    password containing ``@`` and produces a URI aimed at another host,
+    so a test written that way passes or fails for reasons unrelated to
+    its subject.
+
+    Args:
+        params: Mapping carrying ``host``, ``port``, ``database``,
+            ``user`` and ``password``. Extra keys are ignored.
+
+    Returns:
+        A ``postgresql://`` URI.
+
+    Raises:
+        KeyError: If any of the five connection keys is absent.
+        ValueError: If ``host`` or ``database`` would produce a
+            malformed or misrouted URI.
+    """
+    return build_postgres_dsn(
+        host=params["host"],
+        port=params["port"],
+        database=params["database"],
+        user=params["user"],
+        password=params["password"],
+    )
 
 
 def wait_for_postgres(
@@ -90,23 +173,10 @@ try:
     def postgres_connection_params() -> dict[str, Any]:
         """PostgreSQL connection parameters for integration tests.
 
-        Detects whether the test process is running inside a Docker container
-        (presence of ``/.dockerenv`` or ``DOCKER_CONTAINER`` env var) and
-        defaults the host to ``postgres`` (the typical compose service name)
-        in that case, ``localhost`` otherwise.
+        The fixture form of :func:`postgres_env_params`, which holds the
+        resolution rules and their defaults.
         """
-        if os.path.exists("/.dockerenv") or os.environ.get("DOCKER_CONTAINER"):
-            default_host = "postgres"
-        else:
-            default_host = "localhost"
-
-        return {
-            "host": os.environ.get("POSTGRES_HOST", default_host),
-            "port": int(os.environ.get("POSTGRES_PORT", "5432")),
-            "user": os.environ.get("POSTGRES_USER", "postgres"),
-            "password": os.environ.get("POSTGRES_PASSWORD", "postgres"),
-            "database": os.environ.get("POSTGRES_DB", "dataknobs_test"),
-        }
+        return postgres_env_params()
 
     @pytest.fixture(scope="session")
     def ensure_postgres_ready(
@@ -215,13 +285,6 @@ try:
 
         return factory
 
-    def _pg_conn_str(params: dict[str, Any]) -> str:
-        """Build a libpq URI from the shared connection-params shape."""
-        return (
-            f"postgresql://{params['user']}:{params['password']}"
-            f"@{params['host']}:{params['port']}/{params['database']}"
-        )
-
     @pytest.fixture
     def make_pgvector_test_table(
         ensure_postgres_ready: None,
@@ -305,7 +368,7 @@ try:
             _drop()  # pre-drop: defeat the IF-NOT-EXISTS dimension shadow
             config = {
                 "backend": "pgvector",
-                "connection_string": _pg_conn_str(params),
+                "connection_string": postgres_dsn(params),
                 "dimensions": dimensions,
                 "schema": schema,
                 "table_name": table,

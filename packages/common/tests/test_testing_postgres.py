@@ -4,7 +4,8 @@ Covers:
 
 * ``wait_for_postgres`` retry + timeout paths (psycopg2 stubbed to control
   failure / success ordering, ``time.sleep`` neutralized).
-* ``postgres_connection_params`` Docker-detection branch (env-var driven).
+* ``postgres_env_params`` Docker-detection branch (env-var driven), and
+  that the ``postgres_connection_params`` fixture delegates to it.
 * Factory-fixture cleanup runs even when the test body raises
   (gated by ``@requires_postgres`` — needs a real cluster).
 """
@@ -12,10 +13,13 @@ Covers:
 from __future__ import annotations
 
 import os
+from urllib.parse import unquote, urlparse
 
 import pytest
 
 from dataknobs_common.testing import (
+    postgres_dsn,
+    postgres_env_params,
     postgres_fixtures,
     requires_postgres,
     safe_sql_ident,
@@ -82,13 +86,13 @@ def test_wait_for_postgres_raises_after_max_retries(monkeypatch):
     assert fake.connect_calls == 3
 
 
-# -- postgres_connection_params Docker detection ---------------------------
-
-
-def _call_params_fixture(env_overrides: dict[str, str | None]) -> dict[str, object]:
-    """Invoke the underlying fixture function with a controlled environment."""
-    fixture_fn = postgres_fixtures.postgres_connection_params.__wrapped__  # type: ignore[attr-defined]
-    return fixture_fn()
+# -- postgres_env_params Docker detection ----------------------------------
+#
+# These call the resolver directly. They used to reach it through
+# ``postgres_connection_params.__wrapped__``, unwrapping the fixture to
+# get at the logic inside it — which was the same inaccessibility that
+# led four call sites to reimplement the resolution rather than import
+# it. The function is public now, so the unwrapping is gone.
 
 
 def _clear_postgres_env(monkeypatch) -> None:
@@ -110,11 +114,11 @@ def test_postgres_connection_params_localhost_default(monkeypatch):
     # patch os.path.exists for that specific path.
     real_exists = os.path.exists
     monkeypatch.setattr(
-        "dataknobs_common.testing.postgres_fixtures.os.path.exists",
+        "dataknobs_common.testing._core.os.path.exists",
         lambda p: False if p == "/.dockerenv" else real_exists(p),
     )
 
-    params = _call_params_fixture({})
+    params = postgres_env_params()
     assert params["host"] == "localhost"
     assert params["port"] == 5432
     assert params["database"] == "dataknobs_test"
@@ -125,12 +129,30 @@ def test_postgres_connection_params_docker_default(monkeypatch):
     _clear_postgres_env(monkeypatch)
     monkeypatch.setenv("DOCKER_CONTAINER", "1")
     monkeypatch.setattr(
-        "dataknobs_common.testing.postgres_fixtures.os.path.exists",
+        "dataknobs_common.testing._core.os.path.exists",
         lambda _p: False,
     )
 
-    params = _call_params_fixture({})
+    params = postgres_env_params()
     assert params["host"] == "postgres"
+
+
+def test_postgres_connection_params_ignores_a_negative_docker_container(monkeypatch):
+    """``DOCKER_CONTAINER=false`` must not resolve to the compose host.
+
+    Bare truthiness read every non-empty string as Docker, so the value a
+    developer writes to mean "not in a container" selected the container
+    default and every integration test pointed at a hostname that does
+    not resolve outside compose.
+    """
+    _clear_postgres_env(monkeypatch)
+    monkeypatch.setenv("DOCKER_CONTAINER", "false")
+    monkeypatch.setattr(
+        "dataknobs_common.testing._core.os.path.exists",
+        lambda _p: False,
+    )
+
+    assert postgres_env_params()["host"] == "localhost"
 
 
 def test_postgres_connection_params_explicit_env_overrides(monkeypatch):
@@ -143,7 +165,7 @@ def test_postgres_connection_params_explicit_env_overrides(monkeypatch):
     monkeypatch.setenv("POSTGRES_PASSWORD", "secret")
     monkeypatch.setenv("POSTGRES_DB", "mydb")
 
-    params = _call_params_fixture({})
+    params = postgres_env_params()
     assert params == {
         "host": "custom-host",
         "port": 6543,
@@ -151,6 +173,109 @@ def test_postgres_connection_params_explicit_env_overrides(monkeypatch):
         "password": "secret",
         "database": "mydb",
     }
+
+
+def test_params_fixture_delegates_to_the_resolver(monkeypatch):
+    """The fixture must not carry a second copy of the resolution rules.
+
+    It is the fixture form of ``postgres_env_params``, and the two
+    resolving differently is the failure this whole helper exists to
+    prevent — a test taking the fixture and a module-level constant
+    calling the function would then reach different servers.
+    """
+    _clear_postgres_env(monkeypatch)
+    monkeypatch.setenv("POSTGRES_HOST", "custom-host")
+    monkeypatch.setenv("POSTGRES_DB", "mydb")
+
+    fixture_fn = postgres_fixtures.postgres_connection_params.__wrapped__  # type: ignore[attr-defined]
+
+    assert fixture_fn() == postgres_env_params()
+
+
+def test_resolver_output_feeds_the_dsn_builder(monkeypatch):
+    """The two published helpers compose without adaptation.
+
+    This is the idiom every non-fixture call site now uses, and the
+    reason none of them needs its own defaults.
+    """
+    _clear_postgres_env(monkeypatch)
+    monkeypatch.setenv("POSTGRES_HOST", "db.internal")
+    monkeypatch.setenv("POSTGRES_PORT", "6543")
+    monkeypatch.setenv("POSTGRES_USER", "alice")
+    monkeypatch.setenv("POSTGRES_PASSWORD", "secret")
+    monkeypatch.setenv("POSTGRES_DB", "mydb")
+
+    assert postgres_dsn(postgres_env_params()) == "postgresql://alice:secret@db.internal:6543/mydb"
+
+
+# -- postgres_dsn ----------------------------------------------------------
+
+
+def test_postgres_dsn_consumes_the_params_fixture_shape():
+    """The fixture's output must be accepted verbatim.
+
+    These two are a matched pair — the helper exists so a test holding
+    ``postgres_connection_params`` can reach a connection string without
+    restating the URI format. If the fixture grows or renames a key,
+    this is what notices.
+    """
+    params = {
+        "host": "db.internal",
+        "port": 6543,
+        "user": "alice",
+        "password": "secret",
+        "database": "mydb",
+    }
+
+    assert postgres_dsn(params) == "postgresql://alice:secret@db.internal:6543/mydb"
+
+
+def test_postgres_dsn_ignores_extra_keys():
+    """Callers copy the params dict and add to it before building a DSN.
+
+    ``make_pgvector_test_table`` does exactly this, adding ``table`` and
+    ``schema``. A helper that splatted the mapping would fail there, so
+    the extra keys have to be ignored rather than tolerated by accident.
+    """
+    params = {
+        "host": "h",
+        "port": 5432,
+        "user": "u",
+        "password": "p",
+        "database": "db",
+        "table": "test_vectors_abc",
+        "schema": "public",
+    }
+
+    assert postgres_dsn(params) == "postgresql://u:p@h:5432/db"
+
+
+def test_postgres_dsn_encodes_a_password_with_uri_delimiters():
+    """Encoding must come from the shared builder, not be reimplemented.
+
+    A test that builds its DSN by hand and happens to run against a
+    password containing ``@`` connects to the wrong host and then fails
+    for a reason having nothing to do with its subject.
+    """
+    params = {
+        "host": "db.internal",
+        "port": 5432,
+        "user": "svc",
+        "password": "p@ss/w0rd",
+        "database": "prod",
+    }
+
+    parsed = urlparse(postgres_dsn(params))
+
+    assert parsed.hostname == "db.internal"
+    assert parsed.path == "/prod"
+    assert unquote(parsed.password or "") == "p@ss/w0rd"
+
+
+def test_postgres_dsn_reports_a_missing_connection_key():
+    """An incomplete mapping must name the key, not build a broken URI."""
+    with pytest.raises(KeyError, match="password"):
+        postgres_dsn({"host": "h", "port": 5432, "user": "u", "database": "db"})
 
 
 # -- safe_sql_ident is the same module's identifier guard ------------------

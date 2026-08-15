@@ -21,7 +21,6 @@ pool across ``close()`` and reuses it on the next ``initialize()``.
 from __future__ import annotations
 
 import asyncio
-import os
 import uuid
 from collections.abc import AsyncIterator
 from typing import Any
@@ -30,6 +29,8 @@ import pytest
 import pytest_asyncio
 from dataknobs_common.exceptions import ResourceError
 from dataknobs_common.testing import (
+    postgres_dsn,
+    postgres_env_params,
     requires_real_postgres,
     safe_sql_ident,
 )
@@ -42,12 +43,7 @@ from dataknobs_data.vector.stores.pgvector import PgVectorStore
 
 
 def _get_test_connection_string() -> str:
-    host = os.environ.get("POSTGRES_HOST", "localhost")
-    port = os.environ.get("POSTGRES_PORT", "5432")
-    user = os.environ.get("POSTGRES_USER", "postgres")
-    password = os.environ.get("POSTGRES_PASSWORD", "postgres")
-    database = os.environ.get("POSTGRES_DB", "test_dataknobs")
-    return f"postgresql://{user}:{password}@{host}:{port}/{database}"
+    return postgres_dsn(postgres_env_params())
 
 
 @pytest.fixture(scope="session")

@@ -3,11 +3,19 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from dataknobs_common import normalize_postgres_connection_config
+from dataknobs_common import build_postgres_dsn, normalize_postgres_connection_config
 
 from .base import BasePoolConfig
+
+if TYPE_CHECKING:
+    # asyncpg is an optional extra (``dataknobs-data[postgres]`` /
+    # ``[pgvector]``), so it must not be imported at module scope — the
+    # two helpers below defer it to call time. Annotations are strings
+    # under ``from __future__ import annotations``, so naming the types
+    # here costs nothing at runtime.
+    import asyncpg
 
 
 @dataclass
@@ -25,8 +33,21 @@ class PostgresPoolConfig(BasePoolConfig):
     ssl: Any | None = None
 
     def to_connection_string(self) -> str:
-        """Convert to PostgreSQL connection string."""
-        return f"postgresql://{self.user}:{self.password}@{self.host}:{self.port}/{self.database}"
+        """Convert to PostgreSQL connection string.
+
+        Delegates to the shared builder so a password containing URI
+        delimiters is encoded rather than interpolated raw — the result
+        of this call goes straight to ``asyncpg.create_pool``, and a raw
+        ``@`` there yields a valid URI aimed at the wrong host rather
+        than an error.
+        """
+        return build_postgres_dsn(
+            host=self.host,
+            port=self.port,
+            database=self.database,
+            user=self.user,
+            password=self.password,
+        )
 
     def to_hash_key(self) -> tuple:
         """Create a hashable key for this configuration."""
@@ -83,7 +104,7 @@ class PostgresPoolConfig(BasePoolConfig):
         )
 
 
-async def create_asyncpg_pool(config: PostgresPoolConfig):
+async def create_asyncpg_pool(config: PostgresPoolConfig) -> asyncpg.Pool:
     """Create an asyncpg connection pool."""
     import asyncpg
 
@@ -96,7 +117,7 @@ async def create_asyncpg_pool(config: PostgresPoolConfig):
     )
 
 
-async def validate_asyncpg_pool(pool) -> None:
+async def validate_asyncpg_pool(pool: asyncpg.Pool) -> None:
     """Validate an asyncpg pool by running a simple query."""
     async with pool.acquire() as conn:
         await conn.fetchval("SELECT 1")

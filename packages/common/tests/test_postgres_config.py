@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+from urllib.parse import unquote, urlparse
+
 import pytest
 
 from dataknobs_common.exceptions import ConfigurationError
 from dataknobs_common.postgres_config import (
+    build_postgres_dsn,
     normalize_postgres_connection_config,
 )
 
@@ -354,4 +357,272 @@ def test_database_with_slash_rejected() -> None:
                 "user": "u",
                 "password": "p",
             }
+        )
+
+
+# -- percent-decoding on the way in -----------------------------------------
+#
+# ``urlparse`` decodes nothing: ``.username``/``.password`` come back
+# exactly as they appeared in the URI, still percent-encoded. So the
+# canonical dict is only uniform — raw values whichever input shape
+# produced them — if the parser decodes. Everything downstream depends
+# on that: ``build_postgres_dsn`` encodes what it is given, and the
+# backends' ``_create_database`` passes the same field to
+# ``psycopg2.connect``/``asyncpg.connect`` as a kwarg, which wants it
+# raw. A field that is sometimes encoded breaks one of the two.
+
+
+def test_dsn_userinfo_is_decoded_into_the_canonical_keys() -> None:
+    """A percent-encoded DSN must yield raw ``user``/``password``.
+
+    ``postgresql://svc:p%40ss@h/db`` is the *only* correct way to write
+    the password ``p@ss`` as a URI, so this is the ordinary shape of a
+    working config — not an edge case.
+    """
+    result = normalize_postgres_connection_config(
+        {"connection_string": "postgresql://sv%40c:p%40ss%2Fw0rd@db.internal:5432/prod"}
+    )
+
+    assert result is not None
+    assert result["user"] == "sv@c"
+    assert result["password"] == "p@ss/w0rd"
+
+
+def test_dsn_password_survives_a_decode_and_rebuild_round_trip() -> None:
+    """Parsing a DSN then re-synthesizing one must not change the password.
+
+    The rebuild is forced by an individual key the URI did not carry, so
+    the normalizer re-synthesizes rather than preserving the original
+    string. Decode-then-encode is the identity; decode-less-then-encode
+    doubles the escaping and the credential silently changes.
+    """
+    result = normalize_postgres_connection_config(
+        {
+            "connection_string": "postgresql://svc:p%40ss@db.internal:5432/prod",
+            "port": 5433,
+        }
+    )
+
+    assert result is not None
+    parsed = urlparse(result["connection_string"])
+    assert unquote(parsed.password or "") == "p@ss"
+    assert parsed.hostname == "db.internal"
+    assert parsed.port == 5433
+
+
+def test_dsn_database_encoding_cannot_smuggle_a_path_separator() -> None:
+    """``%2F`` in the database must be rejected, not passed through.
+
+    The validator rejects a literal ``/`` in a database name. Left
+    encoded, ``db%2Fetc`` walks straight past that check and the driver
+    unquotes it back to ``db/etc`` at connect time — the rejection
+    defeated by spelling.
+    """
+    with pytest.raises(ValueError, match="database"):
+        normalize_postgres_connection_config(
+            {"connection_string": "postgresql://u:p@h:5432/db%2Fetc"}
+        )
+
+
+# -- build_postgres_dsn -----------------------------------------------------
+#
+# The synthesis step above, reachable on its own. The tests above assert
+# encoding by substring; these assert it by parsing the result back,
+# which is the property that actually matters — a DSN can contain the
+# expected substring and still resolve to the wrong server.
+
+
+def test_build_dsn_round_trips_every_component() -> None:
+    """Each field must survive a parse back out of the built URI."""
+    dsn = build_postgres_dsn(
+        host="db.internal",
+        port=5432,
+        database="prod",
+        user="svc",
+        password="p@ss/w0rd",
+    )
+
+    parsed = urlparse(dsn)
+
+    assert parsed.scheme == "postgresql"
+    assert parsed.hostname == "db.internal"
+    assert parsed.port == 5432
+    assert parsed.path == "/prod"
+    assert unquote(parsed.username or "") == "svc"
+    assert unquote(parsed.password or "") == "p@ss/w0rd"
+
+
+def test_build_dsn_would_misroute_if_interpolated_raw() -> None:
+    """Pin why the encoding exists, not merely that it happens.
+
+    The naive f-string this function replaces does not yield a URI that
+    fails to parse — it yields one that parses cleanly against the wrong
+    authority, because the last ``@`` delimits userinfo. A caller gets a
+    working connection to a host it never configured.
+    """
+    fields = {
+        "host": "db.internal",
+        "port": 5432,
+        "database": "prod",
+        "user": "svc",
+        "password": "p@ss/w0rd",
+    }
+    naive = (
+        f"postgresql://{fields['user']}:{fields['password']}"
+        f"@{fields['host']}:{fields['port']}/{fields['database']}"
+    )
+
+    assert urlparse(naive).hostname == "ss"
+    assert urlparse(build_postgres_dsn(**fields)).hostname == "db.internal"  # type: ignore[arg-type]
+
+
+def test_build_dsn_resolves_nothing_from_the_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The builder takes what it is given; only the normalizer resolves.
+
+    This is the whole distinction between the two entry points, and a
+    caller picking the wrong one would otherwise find out through a
+    connection aimed at whatever ``POSTGRES_*`` happened to be exported.
+    """
+    monkeypatch.setenv("POSTGRES_HOST", "env-host")
+    monkeypatch.setenv("POSTGRES_DB", "env-db")
+    monkeypatch.setenv("DATABASE_URL", "postgresql://env:env@env-host:5432/env-db")
+
+    dsn = build_postgres_dsn(
+        host="explicit-host",
+        port=5432,
+        database="explicit-db",
+        user="u",
+        password="p",
+    )
+
+    assert dsn == "postgresql://u:p@explicit-host:5432/explicit-db"
+
+
+def test_build_dsn_empty_password_emits_an_empty_userinfo_field() -> None:
+    """An empty password must not be dropped from the URI's shape.
+
+    Named for what it checks: the *string* keeps the ``user:@host`` form
+    rather than collapsing to ``user@host``. It does not claim the
+    connection authenticates with an empty password — asyncpg reads an
+    empty DSN password as absent and falls through to ``PGPASSWORD`` /
+    ``.pgpass``, which the builder's docstring records.
+    """
+    dsn = build_postgres_dsn(host="h", port=5432, database="db", user="u", password="")
+
+    assert dsn == "postgresql://u:@h:5432/db"
+    assert urlparse(dsn).hostname == "h"
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("host", "bad@host"),
+        ("host", "bad/host"),
+        ("host", ""),
+        ("database", "bad/db"),
+        ("database", "bad@db"),
+        ("database", ""),
+        # ``?`` and ``#`` end the path just as surely as ``/`` splits it.
+        ("database", "tenant?sslmode=disable"),
+        ("database", "tenant#frag"),
+        ("host", "h?host=elsewhere"),
+        ("host", "h#frag"),
+        # ``%`` would be read back as the start of an escape sequence,
+        # which is ambiguous in a component this builder does not encode.
+        ("database", "db%2Fetc"),
+        ("host", "h%2Fx"),
+        # Whitespace beyond the four ASCII ones originally listed. Written
+        # as escapes, not literals: a raw NO-BREAK SPACE in the source is
+        # invisible to a reader and indistinguishable from the ordinary
+        # space one line up, which is the same ambiguity ``RUF001`` exists
+        # to catch.
+        ("database", "db\vetc"),
+        ("host", "h\x00x"),
+        ("database", "db\xa0etc"),
+    ],
+)
+def test_build_dsn_rejects_unencodable_components(field: str, value: str) -> None:
+    """Validation must reach the direct entry point, not only the normalizer.
+
+    ``host`` and ``database`` are validated rather than encoded, so the
+    check is the only thing standing between a bad value and a malformed
+    URI — and callers reaching this function skip the normalizer that
+    would otherwise have run it.
+    """
+    fields: dict[str, object] = {
+        "host": "h",
+        "port": 5432,
+        "database": "db",
+        "user": "u",
+        "password": "p",
+    }
+    fields[field] = value
+
+    with pytest.raises(ValueError, match=field):
+        build_postgres_dsn(**fields)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize(
+    "port",
+    [
+        "5432/otherdb?sslmode=disable",
+        "not-a-port",
+        "",
+        -1,
+        0,
+        65536,
+    ],
+)
+def test_build_dsn_rejects_a_port_that_is_not_a_port(port: object) -> None:
+    """``port`` is interpolated, so it is an injection point like any other.
+
+    Unvalidated, ``5432/otherdb?sslmode=disable`` yields a URI whose path
+    is ``/otherdb`` and whose query disables TLS — the requested database
+    discarded into the query string, on a connection no longer encrypted.
+    """
+    with pytest.raises(ValueError, match="port"):
+        build_postgres_dsn(
+            host="h",
+            port=port,  # type: ignore[arg-type]
+            database="db",
+            user="u",
+            password="p",
+        )
+
+
+def test_build_dsn_accepts_a_port_given_as_a_string() -> None:
+    """``POSTGRES_PORT`` arrives as a string; coercion is the contract."""
+    assert (
+        build_postgres_dsn(host="h", port="5433", database="db", user="u", password="p")
+        == "postgresql://u:p@h:5433/db"
+    )
+
+
+def test_build_dsn_brackets_an_ipv6_host() -> None:
+    """A bare IPv6 literal makes the authority unreadable — bracket it.
+
+    Unbracketed, ``::1`` gives ``postgresql://u:p@::1:5432/db``, whose
+    ``hostname`` parses as ``None`` and whose ``.port`` raises. IPv6 is a
+    legitimate host, so the fix is to bracket rather than to reject.
+    """
+    dsn = build_postgres_dsn(host="::1", port=5432, database="db", user="u", password="p")
+
+    parsed = urlparse(dsn)
+
+    assert dsn == "postgresql://u:p@[::1]:5432/db"
+    assert parsed.hostname == "::1"
+    assert parsed.port == 5432
+
+
+def test_build_dsn_rejects_a_host_that_only_looks_like_ipv6() -> None:
+    """``:`` in a host is an IPv6 literal or it is a smuggled port."""
+    with pytest.raises(ValueError, match="host"):
+        build_postgres_dsn(
+            host="evil.com:9999",
+            port=5432,
+            database="db",
+            user="u",
+            password="p",
         )

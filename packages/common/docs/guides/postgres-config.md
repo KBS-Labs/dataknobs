@@ -165,9 +165,95 @@ no connection is resolvable.
 
 - `ConfigurationError`: When `require=True` and no connection can be
   resolved from any of the accepted input shapes.
-- `ValueError`: When `host` or `database` contain shell-unsafe
-  characters (`@`, `/`, whitespace) that would produce a malformed or
-  misrouted URI.
+- `ValueError`: When `host` or `database` contain characters that would
+  re-delimit the URI, or when `port` is not an integer in `1-65535`.
+  See [`build_postgres_dsn`](#build_postgres_dsn) for the full rule.
+
+**Percent-decoding.** Values parsed out of a `connection_string` are
+percent-**decoded** before they reach the canonical keys, so `password`
+holds `p@ss` whether it arrived as an individual key or as `p%40ss` in a
+URI. One field, one representation. This matters because the two
+consumers want opposite things: `build_postgres_dsn` re-encodes on the
+way out (an already-encoded value would be encoded twice — `%40` →
+`%2540` — and authentication would fail), while the backends pass the
+same field to `psycopg2.connect` / `asyncpg.connect` as a **kwarg**,
+which takes it raw.
+
+`host` is the exception: `urlparse` already applies host-specific
+normalization to it, and a percent-encoded unix-socket directory is a
+shape this module rejects on every other input path.
+
+### `build_postgres_dsn`
+
+The synthesis step above, reachable on its own — for callers that
+already hold resolved fields and want only the URI.
+
+```python
+from dataknobs_common import build_postgres_dsn
+
+dsn = build_postgres_dsn(
+    host="db.internal",
+    port=5432,
+    database="prod",
+    user="svc",
+    password="p@ss/w0rd",
+)
+# 'postgresql://svc:p%40ss%2Fw0rd@db.internal:5432/prod'
+```
+
+All five parameters are keyword-only. It **resolves nothing** — no
+env vars, no `.env` files, no defaults. That is the whole difference
+between it and `normalize_postgres_connection_config`, which calls
+this function for its own synthesis. Reach for the normalizer when
+input may be partial; reach for this when it is not.
+
+Use it rather than an f-string. `user` and `password` are URL-encoded,
+and that is not cosmetic: a password containing `@` is ordinary
+secrets-manager output, and interpolated raw it does not produce a
+*rejected* URI but a well-formed one pointing elsewhere, because the
+last `@` delimits userinfo.
+
+```python
+# postgresql://svc:p@ss/w0rd@db.internal:5432/prod
+#                  ^ the parser stops here
+#   -> host 'ss', path '/w0rd@db.internal:5432/prod'
+```
+
+Handed to `asyncpg.create_pool`, that connects to a server the caller
+never configured.
+
+`host` and `database` are validated rather than encoded, since
+percent-encoding them would mangle values that must parse cleanly as
+URI components. Every character must be printable and non-space, and
+these are rejected outright:
+
+| Rejected in `host` / `database` | Why |
+|---|---|
+| `@` | delimits userinfo — the misroute above |
+| `/` | splits the path |
+| `?` `#` | end the path; `?sslmode=disable` in a database name is a silent TLS downgrade, since a driver reads it as a query parameter |
+| `[` `]` | delimit an IPv6 literal |
+| `%` | read back as the start of an escape sequence, so the value that parses out is not the value that went in |
+| whitespace, non-printable | `\v`, `\f`, `\xa0` and friends corrupt an authority as readily as a space; `\x00` truncates a C string on its way into libpq |
+
+`:` is allowed. In a path it is ordinary; in a host it means IPv6, and
+a valid literal is **bracketed** rather than rejected —
+`build_postgres_dsn(host="::1", ...)` yields
+`postgresql://u:p@[::1]:5432/db`, which parses back with
+`hostname == "::1"`. A `:` in a host that is *not* a valid IPv6 address
+is a port smuggled into the host, and raises.
+
+`port` is coerced with `int()` (so `POSTGRES_PORT`'s string is fine) and
+must land in `1-65535`. It is interpolated like every other component,
+so it is an injection point like every other component: unvalidated,
+`"5432/otherdb?sslmode=disable"` would yield a URI whose path is
+`/otherdb` and whose query disables TLS.
+
+**Raises:**
+
+- `ValueError`: When `host` or `database` is empty or contains a
+  character from the table above, when `host` contains a `:` that is not
+  a valid IPv6 address, or when `port` is not an integer in `1-65535`.
 
 ## Examples
 

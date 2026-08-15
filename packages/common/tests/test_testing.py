@@ -187,6 +187,44 @@ class TestServiceProbeHostResolution:
         assert "postgres" not in hosts
         assert "elasticsearch" not in hosts
 
+    @pytest.mark.parametrize("value", ["false", "0", "no", "off", ""])
+    def test_a_negative_docker_container_value_does_not_mean_docker(self, monkeypatch, value):
+        """``DOCKER_CONTAINER=false`` must read as "not in Docker".
+
+        The check was a bare truthiness test, so every string but ``""``
+        was Docker — and ``false`` is the value a developer writes when
+        they mean the opposite. On a host that exports it, every probe
+        and every ``*_connection_params`` default silently retargets from
+        ``localhost`` to a compose hostname that does not resolve, and
+        the ``requires_*`` markers false-skip the suite rather than
+        failing it.
+        """
+        captured = self._install_addr_capture(monkeypatch)
+        monkeypatch.setenv("DOCKER_CONTAINER", value)
+        for var in ("POSTGRES_HOST", "ELASTICSEARCH_HOST"):
+            monkeypatch.delenv(var, raising=False)
+        real_exists = __import__("os").path.exists
+        monkeypatch.setattr(
+            "dataknobs_common.testing._core.os.path.exists",
+            lambda p: False if p == "/.dockerenv" else real_exists(p),
+        )
+
+        is_postgres_available()
+        is_elasticsearch_available()
+
+        assert {addr[0] for addr in captured} == {"localhost"}
+
+    @pytest.mark.parametrize("value", ["1", "true", "TRUE", "yes", "on"])
+    def test_an_affirmative_docker_container_value_still_means_docker(self, monkeypatch, value):
+        """The affirmative spellings must keep working, case-insensitively."""
+        captured = self._install_addr_capture(monkeypatch)
+        monkeypatch.setenv("DOCKER_CONTAINER", value)
+        monkeypatch.delenv("POSTGRES_HOST", raising=False)
+
+        is_postgres_available()
+
+        assert {addr[0] for addr in captured} == {"postgres"}
+
     def test_is_package_available_returns_true_for_installed(self):
         """Test that is_package_available returns True for installed packages."""
         # pytest is definitely installed since we're running tests

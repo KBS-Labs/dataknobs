@@ -30,7 +30,7 @@ from dataknobs_common.locks import (
     create_lock,
     lock_backends,
 )
-from dataknobs_common.testing import requires_real_postgres
+from dataknobs_common.testing import postgres_dsn, requires_real_postgres
 
 
 class TestInProcessLock:
@@ -431,10 +431,9 @@ def pg_dsn(
 
     Depends on ``ensure_postgres_ready`` so the server is reachable and
     the test DB exists; advisory locks are cluster-global (no table
-    needed). Mirrors ``postgres_fixtures._pg_conn_str``.
+    needed).
     """
-    p = postgres_connection_params
-    return f"postgresql://{p['user']}:{p['password']}@{p['host']}:{p['port']}/{p['database']}"
+    return postgres_dsn(postgres_connection_params)
 
 
 class TestPostgresAdvisoryLock:

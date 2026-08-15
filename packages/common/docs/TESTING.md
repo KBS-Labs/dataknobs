@@ -835,9 +835,54 @@ controls its table/index naming.
 
 The non-fixture helpers `wait_for_postgres()` and `wait_for_elasticsearch()`
 are also importable from `dataknobs_common.testing`, along with
+`postgres_env_params()` and `postgres_dsn()` (see below),
 `sweep_stale_test_indices()` (see [Session-Start Index Sweep](#session-start-index-sweep))
 and the availability probes / skip markers `is_postgres_available()` /
 `requires_postgres`, `is_elasticsearch_available()` / `requires_elasticsearch`.
+
+#### Outside a fixture: `postgres_env_params`
+
+`postgres_connection_params` is the fixture form of
+`postgres_env_params()`, which holds the resolution rules — including
+the Docker-container host detection and the defaults in the table
+below. Code that cannot take a fixture (a module-level constant, a
+plain helper function) calls the function:
+
+```python
+from dataknobs_common.testing import postgres_dsn, postgres_env_params
+
+PG_DSN = postgres_dsn(postgres_env_params())
+```
+
+Call it rather than re-reading `POSTGRES_*` with your own defaults.
+Those defaults are operational facts — which database the runners
+create, which host the compose service uses — and a second copy of them
+in a test file drifts from the first without anything failing until
+someone runs in the environment where they disagree.
+
+#### Building a connection string: `postgres_dsn`
+
+`postgres_connection_params` yields keyword arguments. A test needing a
+connection *string* passes that dict straight to `postgres_dsn`:
+
+```python
+from dataknobs_common.testing import postgres_dsn
+
+def test_something(postgres_connection_params):
+    store = PgVectorStore(connection_string=postgres_dsn(postgres_connection_params))
+```
+
+Only the five connection keys are read, so a mapping that has been
+copied and extended — as the table fixtures do, adding `table` and
+`schema` — can be passed without stripping it first.
+
+Prefer it to a hand-written f-string. Encoding and validation come from
+`build_postgres_dsn` (see the Postgres Connection Configuration guide),
+the same builder the production normalizer uses, so a password
+containing `@` percent-encodes instead of silently redirecting the
+connection to another host — which a hand-rolled URI does without
+erroring, leaving the test to fail for reasons unrelated to its
+subject.
 
 ### Environment Variables
 
@@ -848,13 +893,15 @@ Postgres fixtures read (defaults shown):
 - `POSTGRES_USER` — `postgres`
 - `POSTGRES_PASSWORD` — `postgres`
 - `POSTGRES_DB` — `dataknobs_test`
-- `DOCKER_CONTAINER` — any truthy value forces the `postgres` host default
+- `DOCKER_CONTAINER` — `true`/`1`/`yes`/`on` (case-insensitive) forces the
+  `postgres` host default; anything else, including `false`, does not
 
 Elasticsearch fixtures read:
 
 - `ELASTICSEARCH_HOST` — `elasticsearch` in Docker, `localhost` otherwise
 - `ELASTICSEARCH_PORT` — `9200`
-- `DOCKER_CONTAINER` — any truthy value forces the `elasticsearch` host default
+- `DOCKER_CONTAINER` — `true`/`1`/`yes`/`on` (case-insensitive) forces the
+  `elasticsearch` host default; anything else, including `false`, does not
 - `DK_ES_TEST_INDEX_MAX_AGE_SECONDS` — staleness threshold (seconds) for the
   session-start index sweep; default `300`
 
@@ -864,7 +911,8 @@ Elasticsearch fixtures read:
 - `AWS_ENDPOINT_URL` — full URL fallback when `LOCALSTACK_ENDPOINT` is unset
 - `LOCALSTACK_HOST` — `localstack` in Docker, `localhost` otherwise
 - `LOCALSTACK_PORT` — `4566`
-- `DOCKER_CONTAINER` — any truthy value forces the `localstack` host default
+- `DOCKER_CONTAINER` — `true`/`1`/`yes`/`on` (case-insensitive) forces the
+  `localstack` host default; anything else, including `false`, does not
 
 Docker detection also checks for `/.dockerenv`.
 

@@ -153,7 +153,7 @@ def test_elasticsearch_connection_params_localhost_default(monkeypatch):
     _clear_es_env(monkeypatch)
     real_exists = os.path.exists
     monkeypatch.setattr(
-        "dataknobs_common.testing.elasticsearch_fixtures.os.path.exists",
+        "dataknobs_common.testing._core.os.path.exists",
         lambda p: False if p == "/.dockerenv" else real_exists(p),
     )
 
@@ -166,12 +166,24 @@ def test_elasticsearch_connection_params_docker_default(monkeypatch):
     _clear_es_env(monkeypatch)
     monkeypatch.setenv("DOCKER_CONTAINER", "1")
     monkeypatch.setattr(
-        "dataknobs_common.testing.elasticsearch_fixtures.os.path.exists",
+        "dataknobs_common.testing._core.os.path.exists",
         lambda _p: False,
     )
 
     params = _call_params_fixture()
     assert params["host"] == "elasticsearch"
+
+
+def test_elasticsearch_connection_params_ignores_a_negative_docker_container(monkeypatch):
+    """``DOCKER_CONTAINER=false`` must not resolve to the compose host."""
+    _clear_es_env(monkeypatch)
+    monkeypatch.setenv("DOCKER_CONTAINER", "false")
+    monkeypatch.setattr(
+        "dataknobs_common.testing._core.os.path.exists",
+        lambda _p: False,
+    )
+
+    assert _call_params_fixture()["host"] == "localhost"
 
 
 def test_elasticsearch_connection_params_env_overrides(monkeypatch):
