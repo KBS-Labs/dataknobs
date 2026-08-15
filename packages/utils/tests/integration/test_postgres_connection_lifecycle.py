@@ -36,6 +36,7 @@ from typing import Any
 
 import psycopg2
 import pytest
+from psycopg2 import extensions
 from dataknobs_common.testing import requires_postgres
 
 from dataknobs_utils.sql_utils import DotenvPostgresConnector, PostgresDB
@@ -394,6 +395,85 @@ class TestADeadThreadsConnectionIsReclaimed:
             connector.close()
 
 
+class TestAWrapperCallLeavesTheCallersTransactionAlone:
+    """The hazard reuse creates on a *single* thread.
+
+    ``query`` / ``execute`` / ``upload`` each enter ``with conn:``, and
+    psycopg2's ``connection.__exit__`` commits on success and rolls back on an
+    exception — over the whole *connection*, because a transaction belongs to a
+    connection rather than to a cursor. Once the same connection is handed to a
+    caller and used by the wrappers, a wrapper call commits whatever the caller
+    had open.
+
+    This is the cross-thread argument the reuse work already makes — "either
+    thread's commit commits the other's uncommitted work" — applied to one
+    thread, where it needs no second thread and raises nothing. The re-entrancy
+    ``ProgrammingError`` is the loud half and needs the caller to nest a
+    ``with``; this is the quiet half and needs only a bare ``get_conn()``.
+
+    Before reuse each acquisition was a private connection, so it could not
+    happen at all.
+    """
+
+    def test_a_query_does_not_commit_what_the_caller_left_open(
+        self, db: PostgresDB, lifecycle_db: dict[str, Any]
+    ) -> None:
+        """Bug: ``db.query`` committed the caller's uncommitted INSERT, with no
+        error and nothing in the caller's code entering a transaction block.
+        """
+        table = lifecycle_db["table"]
+        db.execute(f'CREATE TABLE IF NOT EXISTS "{table}" (n integer)')
+
+        conn = db.get_conn()
+        with conn.cursor() as curs:
+            curs.execute(f'INSERT INTO "{table}" (n) VALUES (1)')  # deliberately uncommitted
+
+        db.query("SELECT 1")
+        conn.rollback()
+
+        rows = db.query(f'SELECT n FROM "{table}"')
+        assert len(rows) == 0, "a wrapper call committed the caller's open transaction"
+
+    def test_a_failing_query_does_not_roll_back_what_the_caller_left_open(
+        self, db: PostgresDB, lifecycle_db: dict[str, Any]
+    ) -> None:
+        """The same defect in the other direction: ``__exit__`` rolls back on an
+        exception, so a wrapper call that *fails* discarded the caller's work.
+        """
+        table = lifecycle_db["table"]
+        db.execute(f'CREATE TABLE IF NOT EXISTS "{table}" (n integer)')
+
+        conn = db.get_conn()
+        with conn.cursor() as curs:
+            curs.execute(f'INSERT INTO "{table}" (n) VALUES (2)')
+
+        with pytest.raises(psycopg2.Error):
+            db.query("SELECT * FROM a_table_that_does_not_exist")
+        conn.commit()
+
+        rows = db.query(f'SELECT n FROM "{table}"')
+        assert list(rows["n"]) == [2], "a failing wrapper call discarded the caller's work"
+
+    def test_the_wrappers_still_commit_their_own_work(
+        self, db: PostgresDB, lifecycle_db: dict[str, Any]
+    ) -> None:
+        """The guard against over-fixing: separating the transactions must not
+        stop ``execute`` from committing what it was asked to do.
+        """
+        table = lifecycle_db["table"]
+        db.execute(f'CREATE TABLE IF NOT EXISTS "{table}" (n integer)')
+        db.execute(f'INSERT INTO "{table}" (n) VALUES (7)')
+
+        assert list(db.query(f'SELECT n FROM "{table}"')["n"]) == [7]
+
+    def test_a_caller_connection_is_not_the_wrappers_connection(self, db: PostgresDB) -> None:
+        """States the mechanism directly, so the reason survives a refactor."""
+        caller = db.get_conn()
+        wrapper_pid = int(db.query("SELECT pg_backend_pid() AS pid")["pid"].iloc[0])
+
+        assert caller.get_backend_pid() != wrapper_pid
+
+
 class TestAStaleConnectionIsNotHandedBack:
     """A cached connection the server has already dropped.
 
@@ -465,6 +545,138 @@ class TestAStaleConnectionIsNotHandedBack:
                 curs.execute("SELECT 1")
 
             assert all(connector.get_conn() is first for _ in range(5))
+        finally:
+            connector.close()
+
+    def test_a_connection_with_a_pending_notification_is_kept(
+        self, lifecycle_db: dict[str, Any], observer: Any
+    ) -> None:
+        """A readable socket is not a dead socket.
+
+        ``select`` reports readable for EOF, for an error, and for *data*. A
+        check that reads readability alone therefore condemns a perfectly
+        healthy connection the moment a ``NOTIFY`` arrives — and discarding it
+        drops the ``LISTEN`` subscription and the notification with it, without
+        anything being raised.
+
+        The two cases cannot be told apart at the socket: a terminated backend
+        sends an error message *before* closing, so peeking at the first byte
+        finds data there too. Distinguishing them takes a real round trip.
+        """
+        connector = DotenvPostgresConnector(
+            host=lifecycle_db["host"],
+            db=lifecycle_db["database"],
+            user=lifecycle_db["user"],
+            pwd=lifecycle_db["password"],
+            port=lifecycle_db["port"],
+        )
+        try:
+            first = connector.get_conn()
+            first.autocommit = True
+            with first.cursor() as curs:
+                curs.execute("LISTEN dk_lifecycle_chan")
+            with observer.cursor() as curs:
+                curs.execute("NOTIFY dk_lifecycle_chan, 'payload'")
+            deadline = time.monotonic() + 5.0
+            while not _backends_alive(observer, [first.get_backend_pid()]):
+                if time.monotonic() > deadline:  # pragma: no cover - server went away
+                    pytest.fail("the listening backend disappeared")
+
+            second = connector.get_conn()
+
+            assert second is first, "a pending notification was mistaken for a dead connection"
+        finally:
+            connector.close()
+
+    def test_validating_leaves_an_idle_connection_idle(self, lifecycle_db: dict[str, Any]) -> None:
+        """The check must not hand back a connection idle-in-transaction.
+
+        A probe on a non-autocommit connection would open a transaction that
+        nothing closes, holding a snapshot and blocking VACUUM for as long as
+        the caller sits on it.
+        """
+        connector = DotenvPostgresConnector(
+            host=lifecycle_db["host"],
+            db=lifecycle_db["database"],
+            user=lifecycle_db["user"],
+            pwd=lifecycle_db["password"],
+            port=lifecycle_db["port"],
+        )
+        try:
+            first = connector.get_conn()
+            assert first.get_transaction_status() == extensions.TRANSACTION_STATUS_IDLE
+
+            connector.get_conn()
+
+            assert first.get_transaction_status() == extensions.TRANSACTION_STATUS_IDLE, (
+                "validating the connection left it idle-in-transaction"
+            )
+            assert first.autocommit is False, "validating the connection changed autocommit"
+        finally:
+            connector.close()
+
+    def test_a_failed_transaction_is_the_callers_to_unwind(
+        self, lifecycle_db: dict[str, Any]
+    ) -> None:
+        """A connection in a failed transaction is alive, not dead.
+
+        After a statement errors, psycopg2 leaves the connection ``INERROR``:
+        every further statement raises ``InFailedSqlTransaction`` until someone
+        rolls back. That is a live connection with a problem the caller owns —
+        so the check must hand it back rather than quietly swapping in a fresh
+        one, which would discard whatever the caller had done before the
+        failure and leave them holding an orphan.
+        """
+        connector = DotenvPostgresConnector(
+            host=lifecycle_db["host"],
+            db=lifecycle_db["database"],
+            user=lifecycle_db["user"],
+            pwd=lifecycle_db["password"],
+            port=lifecycle_db["port"],
+        )
+        try:
+            first = connector.get_conn()
+            with pytest.raises(psycopg2.Error), first.cursor() as curs:
+                curs.execute("SELECT * FROM a_table_that_does_not_exist")
+            assert first.get_transaction_status() == extensions.TRANSACTION_STATUS_INERROR
+
+            second = connector.get_conn()
+
+            assert second is first, "a failed transaction was mistaken for a dead connection"
+            second.rollback()
+            with second.cursor() as curs:  # and it is usable again afterwards
+                curs.execute("SELECT 1")
+                assert curs.fetchone()[0] == 1
+        finally:
+            connector.close()
+
+    def test_validating_does_not_disturb_an_open_transaction(
+        self, lifecycle_db: dict[str, Any]
+    ) -> None:
+        """A caller mid-transaction must get their connection back untouched —
+        the check may not commit it, roll it back, or start a second one.
+        """
+        connector = DotenvPostgresConnector(
+            host=lifecycle_db["host"],
+            db=lifecycle_db["database"],
+            user=lifecycle_db["user"],
+            pwd=lifecycle_db["password"],
+            port=lifecycle_db["port"],
+        )
+        try:
+            first = connector.get_conn()
+            with first.cursor() as curs:
+                curs.execute("CREATE TEMP TABLE dk_probe (n integer)")
+                curs.execute("INSERT INTO dk_probe VALUES (1)")
+            assert first.get_transaction_status() == extensions.TRANSACTION_STATUS_INTRANS
+
+            second = connector.get_conn()
+
+            assert second is first
+            assert second.get_transaction_status() == extensions.TRANSACTION_STATUS_INTRANS
+            with second.cursor() as curs:
+                curs.execute("SELECT n FROM dk_probe")
+                assert curs.fetchall() == [(1,)], "the caller's uncommitted work is gone"
         finally:
             connector.close()
 

@@ -171,6 +171,38 @@ class TestIdsAreBoundNotInlined:
         got = PostgresRecordFetcher(db, tables["main"]).get_records([])
 
         assert len(got) == 0
+        assert set(got.columns) >= {"id", "Mixed Case", "note"}, (
+            "an empty result must carry the same columns a non-empty one does"
+        )
+
+    def test_the_empty_frame_has_the_same_columns_as_a_populated_one(
+        self, db: PostgresDB, tables: dict[str, str]
+    ) -> None:
+        """Bug: the empty case returned a *zero-column* frame, so ``got["id"]``
+        raised ``KeyError`` on a result that merely had no rows — and
+        ``pd.concat`` over batched calls produced a frame that was not the
+        union of the non-empty batches' columns.
+
+        Both sibling fetchers return every column for an empty request, so this
+        was also the odd one out of three.
+        """
+        fetcher = PostgresRecordFetcher(db, tables["main"])
+
+        populated = fetcher.get_records([1])
+        empty = fetcher.get_records([])
+
+        assert list(empty.columns) == list(populated.columns)
+        assert list(empty["id"]) == []
+
+    def test_the_empty_frame_honours_fields_to_retrieve(
+        self, db: PostgresDB, tables: dict[str, str]
+    ) -> None:
+        """The projection has to apply to the empty case the same way."""
+        fetcher = PostgresRecordFetcher(db, tables["main"])
+
+        empty = fetcher.get_records([], fields_to_retrieve=["id", "note"])
+
+        assert list(empty.columns) == ["id", "note"]
 
     @pytest.mark.parametrize("value", [float("nan"), float("inf")])
     def test_a_non_finite_id_is_refused_rather_than_sent(
@@ -181,8 +213,37 @@ class TestIdsAreBoundNotInlined:
         """
         fetcher = PostgresRecordFetcher(db, tables["main"])
 
-        with pytest.raises((TypeError, ValueError, OverflowError)):
+        with pytest.raises(TypeError):
             fetcher.get_records([value])  # type: ignore[list-item]
+
+    @pytest.mark.parametrize("value", ["5", 1.9, 2.0])
+    def test_a_non_integer_id_is_refused_rather_than_coerced(
+        self, db: PostgresDB, tables: dict[str, str], value: object
+    ) -> None:
+        """``ids`` is declared ``List[int]``, so it should mean it.
+
+        ``int()`` accepted ``"5"`` and silently truncated ``1.9`` to ``1`` —
+        returning a *different, wrong row* rather than the empty result the
+        caller used to get. ``operator.index`` is the "must be an integer"
+        test: it rejects strings and floats, including whole-valued ones,
+        while accepting ``int`` and numpy integers.
+        """
+        fetcher = PostgresRecordFetcher(db, tables["main"])
+
+        with pytest.raises(TypeError):
+            fetcher.get_records([value])  # type: ignore[list-item]
+
+    def test_numpy_integers_are_still_accepted(
+        self, db: PostgresDB, tables: dict[str, str]
+    ) -> None:
+        """The guard against over-tightening: ids commonly arrive from a
+        DataFrame column, whose entries are ``np.int64`` rather than ``int``.
+        """
+        import numpy as np
+
+        got = PostgresRecordFetcher(db, tables["main"]).get_records([np.int64(1)])
+
+        assert list(got["id"]) == [1]
 
     def test_binding_does_not_disturb_a_normal_fetch(
         self, db: PostgresDB, tables: dict[str, str]

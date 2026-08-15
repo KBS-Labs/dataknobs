@@ -16,20 +16,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   that `df.columns = [...]` is the fix. Labels are now checked up front, and
   the error names every offending position with its type.
 
-  A *repeated* label is refused in the same place. `df[col]` returns a
-  DataFrame rather than a Series when a label appears twice, so the frame used
-  to die in the value conversion with `AttributeError: 'DataFrame' object has
-  no attribute 'dtype'`; it could not have succeeded either way, since the
-  INSERT names each column once.
+  A *repeated* label is refused in the same place, naming the label and its
+  positions. Two columns of one name have no distinguishable destination in the
+  INSERT, so the frame could never have uploaded; it now fails up front with a
+  message that says which label, rather than deeper in with one that does not.
 
-- **`upload` crashed on an `object` column holding lists or arrays.** The null
-  check called `pd.isna`, which is elementwise: given a `list` or `ndarray` it
-  returns an array of answers, and asking that array for a single truth value
-  raised `ValueError: The truth value of an array with more than one element is
-  ambiguous`. The schema half handled these frames throughout — it measures
-  widths with `Series.dropna()` — so the two halves of one feature disagreed.
-  The null test now asks only about scalars, which is what every pandas null
-  sentinel is.
+- **An `object` column holding lists or arrays uploads as text.** The declared
+  `varchar` width and the written value are both produced by `str`, so a
+  container round-trips as its Python repr instead of having to be flattened
+  before upload.
 
 - **`PostgresRecordFetcher.get_records` inlined three identifiers unquoted, and
   one of them is caller-supplied per call.** The field list, the table name and
@@ -51,9 +46,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   because of what the arithmetic happened to reject. Two things fell outside
   it: an empty list built `IN ()`, which is a syntax error, and a `nan` or
   `inf` survived the addition to arrive as a bare literal the server refused.
-  The values are bound now, an empty `ids` returns an empty frame without a
-  round trip, and `int()` states the numeric requirement the arithmetic used
-  to imply.
+  The values are bound now, and `operator.index` states the requirement the
+  arithmetic used to imply — `ids` is declared `List[int]`, so a string or a
+  float is refused rather than coerced. (`int()` would accept `"5"` and
+  silently truncate `1.9` to `1`, returning a different, wrong row where the
+  caller previously got none.) numpy integers are still accepted, since ids
+  commonly come from a DataFrame column. An empty `ids` returns an empty frame
+  carrying the same columns a populated one would, matching both sibling
+  fetchers; a zero-column frame would make `got["id"]` raise `KeyError` on a
+  result that merely has no rows.
 
 - **`table_head` interpolated its row count.** `LIMIT {n}` was the last caller
   value in the module reaching SQL by interpolation. It is bound.
@@ -79,18 +80,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `PostgresDB` gains `close()` and context-manager support; a connector passed
   in explicitly belongs to its caller and is left open.
 
-  A cached connection is checked for liveness before being handed back, since
-  `connection.closed` reports only what this process did to the connection — a
-  backend killed by `pg_terminate_backend`, an idle timeout or a pooler
-  eviction leaves it reading 0. The check reads the socket and costs no round
-  trip.
+  A cached connection is validated with `SELECT 1` before being handed back.
+  `connection.closed` reports only what this process did to the connection, so
+  a backend killed by `pg_terminate_backend`, an idle timeout or a pooler
+  eviction leaves it reading 0 — and the socket cannot settle it either, since
+  readable means EOF, an error *or* data, and a terminated backend sends an
+  error message before closing. Only a round trip distinguishes them. It costs
+  0.29 ms against the 4.1 ms handshake reuse saves; `validate_on_reuse=False`
+  trades it back. The probe runs under `autocommit` when the connection is
+  idle, so it never returns one idle-in-transaction, and it joins rather than
+  disturbs a transaction the caller already has open.
 
-  **Compatibility:** holding `get_conn()` in a `with` block across a `query`,
-  `execute` or `upload` call on the same thread now raises
-  `ProgrammingError: the connection cannot be re-entered recursively`. Each
-  acquisition previously returned a private connection, which made the
-  combination safe. `close()` is also a shutdown operation rather than a
-  barrier: it does not wait for other threads to go idle.
+  `query` / `execute` / `upload` use a **different connection** from the one
+  `get_conn()` hands out. A transaction belongs to a connection and those
+  methods each enter `with conn`, which commits on the way out — so on a shared
+  connection an ordinary `query` would commit whatever the caller had left
+  open, with nothing nested and nothing raised. A thread that calls `get_conn`
+  therefore holds two connections; one that never calls it holds one, as
+  before.
+
+  **Compatibility:** `close()` is a shutdown operation rather than a barrier —
+  it does not wait for other threads to go idle, so join workers before calling
+  it. Whatever `psycopg2.connect` returns must be weak-referenceable, which
+  every real connection is; a test that patches `connect` to return a bare
+  `object()` will need a stand-in that is.
 
 - **`upload` sent every value as text, so nothing reached psycopg2 typed.**
   Cells were rendered with `str()` over `df.to_records()`, which produced four

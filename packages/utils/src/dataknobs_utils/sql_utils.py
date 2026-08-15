@@ -6,8 +6,9 @@ with support for connection management, query execution, and data loading.
 
 from __future__ import annotations
 
+import contextlib
+import operator
 import os
-import select
 import threading
 import weakref
 from abc import ABC, abstractmethod
@@ -39,6 +40,25 @@ except ImportError:  # pragma: no cover - exercised only without python-dotenv
 from dataknobs_common.lifecycle import close_if_owned_sync
 
 from dataknobs_utils.sys_utils import load_project_vars
+
+
+CALLER_LANE = "caller"
+"""The connection :meth:`PostgresDB.get_conn` hands to a caller.
+
+A caller owns the transaction on the connection it is given, so nothing else
+may commit or roll it back. See :attr:`INTERNAL_LANE`.
+"""
+
+INTERNAL_LANE = "internal"
+"""The connection ``query`` / ``execute`` / ``upload`` use among themselves.
+
+Kept apart from :attr:`CALLER_LANE` because a transaction belongs to a
+*connection*: those methods each enter ``with conn``, which commits on the way
+out, so sharing one connection with a caller would make an ordinary ``query``
+commit whatever that caller had left open — with nothing nested and nothing
+raised. A caller that never calls ``get_conn`` opens one connection per thread,
+exactly as before.
+"""
 
 
 def quote_ident(name: str, dialect: str = "postgres") -> str:
@@ -142,6 +162,7 @@ class DotenvPostgresConnector:
         port: int | None = None,
         pvname: str = ".project_vars",
         sslmode: str | None = None,
+        validate_on_reuse: bool = True,
     ) -> None:
         """Initialize PostgreSQL connector with environment-based configuration.
 
@@ -160,8 +181,17 @@ class DotenvPostgresConnector:
             sslmode: psycopg2 ``sslmode`` (e.g. ``"require"``, ``"verify-full"``,
                 ``"disable"``). When None (the default), no ``sslmode`` is passed
                 and libpq's own default applies — preserving prior behavior.
+            validate_on_reuse: Whether to confirm a cached connection is still
+                alive before handing it back, with a ``SELECT 1``. Defaults to
+                True. A server-side drop leaves ``connection.closed`` reading 0
+                and cannot be detected locally, so without this a connection
+                idle long enough to be dropped fails on the next statement.
+                Costs 0.29 ms against the 4.1 ms handshake reuse saves; set
+                False to trade correctness for that last 7% where connections
+                are known not to sit idle.
         """
         self.sslmode = sslmode
+        self.validate_on_reuse = validate_on_reuse
         config = load_project_vars(pvname=pvname)
         if host is None or db is None or user is None or pwd is None or port is None:
             load_dotenv()
@@ -215,37 +245,65 @@ class DotenvPostgresConnector:
         self._open_conns: weakref.WeakSet[Any] = weakref.WeakSet()
         self._conns_lock = threading.Lock()
 
-    @staticmethod
-    def _is_usable(conn: Any) -> bool:
+    def _is_usable(self, conn: Any) -> bool:
         """Whether ``conn`` can still carry a statement.
 
         ``connection.closed`` answers a narrower question than it appears to:
         it reports what *this process* did to the connection. psycopg2 sets it
         when it closes the connection itself, or when it detects a broken one
         during an operation — so a backend killed by ``pg_terminate_backend``,
-        an idle timeout, or a pooler eviction leaves it at 0 until something
-        tries to use the connection and fails.
+        an idle timeout, or a pooler eviction leaves it reading 0 until
+        something tries to use the connection and fails.
 
-        The socket knows sooner. A healthy idle connection has nothing to read;
-        a server that went away leaves EOF pending, which ``select`` reports as
-        readable. That check is local — no round trip, measured at well under a
-        microsecond against the 4.6 ms handshake it protects — so the cache can
-        afford it on every acquisition.
+        **There is no correct local answer.** A readable socket means EOF, an
+        error, *or* data, and the three are indistinguishable without reading
+        the wire protocol: a terminated backend sends an error message before
+        closing, so peeking at the first byte finds a byte there exactly as a
+        pending ``NOTIFY`` would. A check built on readability alone therefore
+        discards healthy connections — dropping a ``LISTEN`` subscription with
+        them — while a check built on ``conn.closed`` alone misses the case it
+        exists for. Only a round trip separates them.
 
-        A connection made readable by something other than EOF (an asynchronous
-        notification, which this class never subscribes to) is treated as
-        unusable and replaced. That costs one reconnect and cannot cost
-        correctness, which is the right way round for an ambiguous signal.
+        So the connection is asked. ``SELECT 1`` costs 0.29 ms against the
+        4.1 ms handshake it saves, leaving reuse ~93% ahead of reconnecting per
+        call, and it is unambiguous. Set ``validate_on_reuse=False`` to trade
+        that back for the last 7% where a caller knows its connections are not
+        idle long enough to be dropped.
+
+        The probe runs under ``autocommit`` when the connection is idle, so it
+        does not open a transaction that nothing closes — a connection handed
+        back idle-in-transaction holds a snapshot and blocks VACUUM. When the
+        caller already has a transaction open the probe joins it and no
+        autocommit change is made, because switching mid-transaction is both an
+        error and none of this method's business.
         """
         if conn is None or conn.closed:
             return False
-        try:
-            readable, _, _ = select.select([conn], [], [], 0)
-        except (OSError, ValueError):  # closed or invalid file descriptor
+        if not self.validate_on_reuse:
+            return True
+        status = conn.get_transaction_status()  # local; no round trip
+        if status == psycopg2.extensions.TRANSACTION_STATUS_UNKNOWN:
             return False
-        return not readable
+        if status == psycopg2.extensions.TRANSACTION_STATUS_INERROR:
+            # Live, and inside a transaction the caller has to unwind itself.
+            # Replacing it here would discard their work without telling them.
+            return True
+        was_autocommit = conn.autocommit
+        idle = status == psycopg2.extensions.TRANSACTION_STATUS_IDLE
+        try:
+            if idle:
+                conn.autocommit = True
+            with conn.cursor() as curs:
+                curs.execute("SELECT 1")
+            return True
+        except psycopg2.Error:
+            return False
+        finally:
+            if idle:
+                with contextlib.suppress(psycopg2.Error):
+                    conn.autocommit = was_autocommit
 
-    def get_conn(self) -> Any:
+    def get_conn(self, lane: str = CALLER_LANE) -> Any:
         """Return this thread's PostgreSQL connection, opening it if needed.
 
         The connection is **reused within a thread**. It used to be built fresh
@@ -258,11 +316,11 @@ class DotenvPostgresConnector:
         ``with conn`` is a *transaction* scope and does not close, so every
         connection was left open and then reclaimed by CPython refcounting when
         the caller's frame exited. Reuse replaces that accident with a
-        lifecycle — one connection per thread, closed by :meth:`close` or, if
-        the thread ends first, reclaimed with the thread-local that held it.
-        That second half is not a detail: the registry backing :meth:`close`
-        holds its connections weakly precisely so a worker that exits cannot
-        strand one.
+        lifecycle — one connection per thread per lane, closed by :meth:`close`
+        or, if the thread ends first, reclaimed with the thread-local that held
+        it. That second half is not a detail: the registry backing
+        :meth:`close` holds its connections weakly precisely so a worker that
+        exits cannot strand one.
 
         **Per thread rather than per connector**, because reuse must not become
         sharing. psycopg2 is threadsafety level 2, so a connection *may* be
@@ -273,27 +331,32 @@ class DotenvPostgresConnector:
         either thread's commit commits the other's uncommitted work. The error
         is the louder half and the transaction is the worse one.
 
+        **Per lane** for the same reason, one thread down. A transaction
+        belongs to a connection, and ``PostgresDB``'s wrapper methods each
+        enter ``with conn`` — which commits on the way out. Sharing one
+        connection between a caller and those wrappers would mean a ``query``
+        call committing whatever the caller had open, silently and without
+        anything being nested. ``CALLER_LANE`` is what :meth:`PostgresDB.get_conn`
+        hands out; ``INTERNAL_LANE`` is what the wrappers use. A caller that
+        never touches ``get_conn`` opens one connection per thread as before.
+
         A connection closed underneath us — by a caller that closed what it was
         handed, or by the server dropping it — is replaced rather than
         returned, so a stale cache cannot surface as ``InterfaceError:
         connection already closed`` or ``OperationalError: server closed the
         connection unexpectedly`` on a call that did nothing wrong. See
-        :meth:`_is_usable` for why testing ``conn.closed`` alone is not enough
-        to make that promise.
+        :meth:`_is_usable` for why that needs a round trip.
 
-        Note that the returned connection is **shared within the thread**. Do
-        not hold it in a ``with`` block across a call to :meth:`~PostgresDB.query`,
-        :meth:`~PostgresDB.execute` or :meth:`~PostgresDB.upload` on the same
-        thread: those enter ``with conn`` themselves, and psycopg2's
-        transaction block is not re-entrant, so the inner entry raises
-        ``ProgrammingError: the connection cannot be re-entered recursively``.
-        Before reuse each acquisition returned a private connection and the
-        combination was safe; it is not any more.
+        Args:
+            lane: Which of this thread's connections to return. Defaults to
+                ``CALLER_LANE``; the wrapper methods pass ``INTERNAL_LANE`` so
+                that their transactions and the caller's stay separate.
 
         Returns:
             psycopg2.connection: Active database connection using configured parameters.
         """
-        conn = getattr(self._local, "conn", None)
+        conns = self._lane_conns()
+        conn = conns.get(lane)
         if self._is_usable(conn):
             return conn
         kwargs: dict[str, Any] = {
@@ -308,18 +371,26 @@ class DotenvPostgresConnector:
         if self.sslmode is not None:
             kwargs["sslmode"] = self.sslmode
         new_conn = psycopg2.connect(**kwargs)
-        # Publication and registration under one lock, so close() is a barrier.
-        # Assigning the thread-local first leaves a window in which close()
-        # drains a registry the new connection has not entered yet: the caller
-        # would keep using a connection the closed connector no longer knows
-        # about.
+        # Publication and registration under one lock, so a connection is never
+        # live-but-unregistered. Assigning the thread-local first would leave a
+        # window in which close() drains a registry this connection has not
+        # entered yet, and the caller would keep using a connection the closed
+        # connector no longer knows about.
         with self._conns_lock:
             if conn is not None:
                 # WeakSet.discard(None) raises rather than no-opping.
                 self._open_conns.discard(conn)
             self._open_conns.add(new_conn)
-            self._local.conn = new_conn
+            conns[lane] = new_conn
         return new_conn
+
+    def _lane_conns(self) -> dict[str, Any]:
+        """This thread's connection-per-lane mapping, created on first use."""
+        conns: dict[str, Any] | None = getattr(self._local, "conns", None)
+        if conns is None:
+            conns = {}
+            self._local.conns = conns
+        return conns
 
     def close(self) -> None:
         """Close every connection this connector opened, on any thread.
@@ -343,7 +414,7 @@ class DotenvPostgresConnector:
         for conn in conns:
             if not conn.closed:
                 conn.close()
-        self._local.conn = None
+        self._lane_conns().clear()
 
 
 class PostgresDB:
@@ -364,6 +435,7 @@ class PostgresDB:
         pwd: str | None = None,
         port: int | None = None,
         sslmode: str | None = None,
+        validate_on_reuse: bool = True,
     ) -> None:
         """Initialize PostgreSQL database wrapper.
 
@@ -378,6 +450,10 @@ class PostgresDB:
             sslmode: psycopg2 ``sslmode`` forwarded to the connector (e.g.
                 ``"require"``). Ignored when ``host`` is an already-built
                 ``DotenvPostgresConnector`` (it carries its own ``sslmode``).
+            validate_on_reuse: Forwarded to the connector — whether to confirm a
+                cached connection is alive before reusing it. Defaults to True.
+                Ignored when ``host`` is an already-built connector (it carries
+                its own setting).
         """
         # Allow passing a connector directly (for backward compatibility).
         # A connector handed in belongs to the caller: it may be shared with
@@ -388,7 +464,13 @@ class PostgresDB:
             self._owns_connector = False
         else:
             self._connector = DotenvPostgresConnector(
-                host=host, db=db, user=user, pwd=pwd, port=port, sslmode=sslmode
+                host=host,
+                db=db,
+                user=user,
+                pwd=pwd,
+                port=port,
+                sslmode=sslmode,
+                validate_on_reuse=validate_on_reuse,
             )
             self._owns_connector = True
         self._tables_df: pd.DataFrame | None = None
@@ -456,10 +538,24 @@ class PostgresDB:
         tolerated (the connector reopens on the next call) but discards the
         reuse this method exists to provide.
 
+        **The transaction on this connection is yours.** :meth:`query`,
+        :meth:`execute` and :meth:`upload` run on a separate connection, so a
+        wrapper call cannot commit or roll back work you have left open — and
+        equally, nothing you do here is committed by them. Commit it yourself.
+
         Returns:
             psycopg2.connection: Active database connection.
         """
-        return self._connector.get_conn()
+        return self._connector.get_conn(lane=CALLER_LANE)
+
+    def _internal_conn(self) -> Any:
+        """The connection the wrapper methods share among themselves.
+
+        Separate from what :meth:`get_conn` hands out, because ``with conn``
+        commits the whole connection: on one shared connection an ordinary
+        :meth:`query` would commit a caller's open transaction, silently.
+        """
+        return self._connector.get_conn(lane=INTERNAL_LANE)
 
     def close(self) -> None:
         """Close the connection, if this instance owns the connector.
@@ -508,7 +604,7 @@ class PostgresDB:
         Returns:
             pd.DataFrame: Query results with column names from the cursor.
         """
-        with self.get_conn() as conn:
+        with self._internal_conn() as conn:
             with conn.cursor() as curs:
                 if params is None:
                     curs.execute(query)
@@ -528,7 +624,7 @@ class PostgresDB:
         Returns:
             int: Number of rows affected by the statement.
         """
-        with self.get_conn() as conn:
+        with self._internal_conn() as conn:
             with conn.cursor() as curs:
                 curs.execute(stmt, params)
                 rowcount: int = curs.rowcount
@@ -819,7 +915,7 @@ class PostgresDB:
         # column's dtype. Going row-first through ``to_records()`` upcast a
         # nullable Int64 to float64 and sent '1.0' into an integer column.
         by_column = [self._column_values_for_insert(df[col]) for col in df.columns]
-        with self.get_conn() as conn:
+        with self._internal_conn() as conn:
             with conn.cursor() as curs:
                 sql = f"INSERT INTO {quote_ident(table_name)} ({fields}) VALUES " + ",".join(
                     curs.mogrify(f"({template})", list(row)).decode("utf-8")
@@ -902,8 +998,12 @@ class PostgresRecordFetcher(RecordFetcher):
         it, and ``int()`` states the numeric requirement the arithmetic used to
         imply.
 
-        An empty ``ids`` returns an empty frame without a round trip, matching
-        the sibling fetchers: an empty request has an empty answer.
+        An empty ``ids`` returns an empty frame **with the columns a populated
+        one would have**, matching both sibling fetchers. Returning a
+        zero-column frame instead would make ``got["id"]`` raise ``KeyError``
+        on a result that merely has no rows, and would make ``pd.concat`` over
+        batched calls produce something that is not the union of the non-empty
+        batches' columns.
 
         Args:
             ids: Collection of record IDs to retrieve.
@@ -916,10 +1016,8 @@ class PostgresRecordFetcher(RecordFetcher):
 
         Raises:
             ValueError: If a field name, the table name or the ID field name is
-                not a usable SQL identifier, or if an entry in ``ids`` is not a
-                finite number.
-            TypeError: If an entry in ``ids`` is not a number.
-            OverflowError: If an entry in ``ids`` is infinite.
+                not a usable SQL identifier.
+            TypeError: If an entry in ``ids`` is not an integer.
         """
         if fields_to_retrieve is None:
             fields_to_retrieve = self.fields_to_retrieve
@@ -930,13 +1028,18 @@ class PostgresRecordFetcher(RecordFetcher):
         offset = 0
         if one_based != self.one_based:
             offset = 1 if self.one_based else -1
-        # int() before the offset: it raises TypeError on a non-number and
-        # ValueError/OverflowError on nan/inf, which the bare addition let
-        # through to become a literal the server had to reject.
-        wanted = tuple(int(value) + offset for value in ids)
+        # operator.index rather than int(): ``ids`` is declared List[int] and
+        # this is the "must be an integer" test. int() accepts "5" and silently
+        # truncates 1.9 to 1 — returning a different, wrong row rather than the
+        # empty result such a value used to produce. index() rejects both while
+        # still accepting numpy integers, which is what a DataFrame column
+        # yields.
+        wanted = tuple(operator.index(value) + offset for value in ids)
         if not wanted:
-            # ``IN ()`` is a syntax error, and there is nothing to ask for.
-            return pd.DataFrame(columns=fields_to_retrieve or [])
+            # ``IN ()`` is a syntax error, so ask for a row that cannot exist.
+            # The round trip is what gives the empty frame its columns; deriving
+            # them locally would mean reimplementing ``SELECT *``.
+            wanted = (None,)  # type: ignore[assignment]  # renders as IN (NULL)
         return self.db.query(
             f"""
            SELECT {fields}
