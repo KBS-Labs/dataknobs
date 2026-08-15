@@ -28,6 +28,15 @@ _LISTEN_POLL_INTERVAL = 2.0
 _LISTEN_RECONNECT_TIMEOUT = 10.0
 """Bound on a single LISTEN-connection reconnect attempt (seconds)."""
 
+_MAX_DRAIN_ROUNDS = 8
+"""How many times close() re-checks for dispatches created during the drain.
+
+Deregistering the listeners stops new notifications, so in-flight work
+normally settles in one round and a second confirms it. The bound exists for
+the case where deregistration failed: without it, a listener still delivering
+would turn close() into an unbounded wait.
+"""
+
 
 class PostgresEventBus(StructuredConfigConsumer[PostgresEventBusConfig]):
     """Event bus using PostgreSQL LISTEN/NOTIFY.
@@ -248,8 +257,28 @@ class PostgresEventBus(StructuredConfigConsumer[PostgresEventBusConfig]):
             logger.info("PostgresEventBus connected")
 
     async def close(self) -> None:
-        """Close connections and cleanup resources."""
+        """Close connections, drain in-flight dispatches, and release resources.
+
+        Runs in three parts, because the drain in the middle cannot hold the
+        lock (see below). The bus reports itself closed for all three: the
+        window between them is bounded only by the slowest subscriber
+        handler, and callers must not see an open bus across it.
+
+        Returns once every dispatch that was already running has finished. A
+        subscriber handler may call this on the bus it is running under; its
+        own dispatch is excluded from the drain rather than awaited.
+        """
         async with self._lock:
+            # First, so no caller sees an open bus across the unlocked drain.
+            # subscribe() and publish() read this before taking the lock, so
+            # leaving it set until the end let a subscribe() land in the gap,
+            # LISTEN on a connection about to close, and write into dicts the
+            # last section then cleared -- returning a live-looking
+            # Subscription that could never deliver. Both sibling backends
+            # clear their stop flag here for the same reason. Nothing on the
+            # drain path reads it.
+            self._connected = False
+
             if self._listen_task:
                 self._listen_task.cancel()
                 try:
@@ -259,27 +288,73 @@ class PostgresEventBus(StructuredConfigConsumer[PostgresEventBusConfig]):
 
             # Unlisten from all channels and remove listeners. Doing this
             # before the drain below is what bounds the drain: with no
-            # listener registered, asyncpg cannot invoke
-            # _notification_handler again, so the set cannot gain a new task
-            # while we are waiting on it.
+            # listener registered, asyncpg stops invoking
+            # _notification_handler, so the set stops gaining new tasks.
+            #
+            # A failure here is logged rather than swallowed, because it is
+            # exactly the case where that bound does not hold: a listener
+            # that outlived remove_listener can still deliver during the
+            # drain, and a silent `pass` left the drain looking bounded when
+            # it was not.
             for channel in self._channel_topics:
                 try:
                     if self._listen_conn:
                         await self._listen_conn.remove_listener(channel, self._notification_handler)
                         await self._listen_conn.execute(f"UNLISTEN {channel}")
                 except Exception:
-                    pass
+                    logger.warning(
+                        "Failed to deregister listener for channel %s; late "
+                        "notifications may still arrive during the drain",
+                        channel,
+                        exc_info=True,
+                    )
 
         # Wait for dispatches already in flight, OUTSIDE the lock.
         # _dispatch_event takes this same lock to read _subscriptions, so
         # awaiting from inside it would deadlock; and clearing _subscriptions
         # first would let the drain complete while every dispatch found an
         # empty subscriber list, which is the same lost event by a quieter
-        # route. Exceptions are already logged per handler in _dispatch_event
-        # and are collected here only so one failure cannot abandon the rest.
-        in_flight = list(self._dispatch_tasks)
-        if in_flight:
-            await asyncio.gather(*in_flight, return_exceptions=True)
+        # route.
+        #
+        # The calling task is excluded: a subscriber handler runs *inside* a
+        # dispatch task, so a handler that closes the bus would otherwise put
+        # gather() on the task awaiting that same gather. asyncio raises
+        # "Task cannot await on itself" only for a direct `await task`;
+        # through gather it is an unbounded hang with no exception.
+        #
+        # Drained to a fixpoint rather than from one snapshot. asyncpg
+        # delivers notifications through loop.call_soon, so a callback
+        # scheduled before remove_listener completed can run *after* the
+        # snapshot was taken; the task it creates would never be awaited, and
+        # would then dispatch against the subscriptions the last section
+        # clears. Rounds are bounded: an unbounded loop would convert a
+        # listener that refused to deregister from a lost event into a hang.
+        current = asyncio.current_task()
+        for _ in range(_MAX_DRAIN_ROUNDS):
+            in_flight = [task for task in self._dispatch_tasks if task is not current]
+            if not in_flight:
+                break
+            results = await asyncio.gather(*in_flight, return_exceptions=True)
+            # Handler exceptions are already logged per handler in
+            # _dispatch_event; what surfaces here is what _dispatch_event
+            # itself raised, which nothing else reports. Discarding these
+            # was strictly worse than before the drain existed, when an
+            # un-retrieved task exception at least reached asyncio's
+            # "Task exception was never retrieved".
+            for result in results:
+                if isinstance(result, BaseException) and not isinstance(
+                    result, asyncio.CancelledError
+                ):
+                    logger.error("Event dispatch failed during close: %s", result, exc_info=result)
+        else:
+            remaining = [task for task in self._dispatch_tasks if task is not current]
+            if remaining:
+                logger.warning(
+                    "PostgresEventBus.close: %d dispatch task(s) still in flight after "
+                    "%d drain rounds; abandoning them",
+                    len(remaining),
+                    _MAX_DRAIN_ROUNDS,
+                )
 
         async with self._lock:
             if self._listen_conn:
@@ -293,7 +368,6 @@ class PostgresEventBus(StructuredConfigConsumer[PostgresEventBusConfig]):
             self._subscriptions.clear()
             self._topic_channels.clear()
             self._channel_topics.clear()
-            self._connected = False
             logger.info("PostgresEventBus closed")
 
     async def publish(self, topic: str, event: Event) -> None:

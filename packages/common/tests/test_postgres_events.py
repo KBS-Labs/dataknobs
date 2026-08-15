@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 from typing import Any
 
@@ -524,7 +525,12 @@ class TestDispatchTasksAreRetainedAndDrained:
         bus = self._armed_bus(slow_handler)
         bus._notification_handler(None, 0, "events_test", self._payload())
 
-        await bus.close()
+        # Timed, because the two ways to break this arrangement fail
+        # differently: clearing _subscriptions before the drain leaves
+        # `completed` empty and fails the assertion, but moving the drain
+        # inside the lock deadlocks _dispatch_event against it and would
+        # otherwise hang the suite with nothing reporting why.
+        await asyncio.wait_for(bus.close(), timeout=5.0)
 
         assert completed, "close() returned while a dispatch was still in flight"
 
@@ -551,6 +557,206 @@ class TestDispatchTasksAreRetainedAndDrained:
 
         await bus.close()
         assert not bus._dispatch_tasks, "finished tasks are not discarded from the set"
+
+
+class TestCloseIsSafeWhileItsOwnTeardownIsObservable:
+    """Splitting close() into two locked sections around the drain is what
+    makes the drain possible, and it introduced two hazards of its own.
+
+    Both are about the window between the sections -- a window that did not
+    exist when close() held the lock from end to end, and whose length is
+    bounded only by the slowest subscriber handler.
+
+    Every assertion here carries a timeout. The regressions these guard
+    against do not raise; they *hang*, and an unbounded hang in a suite is a
+    worse failure than a red test because nothing reports it.
+    """
+
+    def _armed_bus(self, handler: Any) -> PostgresEventBus:
+        """A bus in the state connect() + subscribe() would have left it."""
+        bus = PostgresEventBus(connection_string="postgresql://unused")
+        bus._connected = True
+        bus._channel_topics["events_test"] = "test"
+        bus._topic_channels["test"] = "events_test"
+        bus._subscriptions["sub-1"] = Subscription(
+            subscription_id="sub-1",
+            topic="test",
+            handler=handler,
+            pattern=None,
+            _cancel_callback=bus._unsubscribe,
+        )
+        return bus
+
+    @staticmethod
+    def _payload() -> str:
+        return json.dumps(Event(type=EventType.CREATED, topic="test", payload={"n": 1}).to_dict())
+
+    @pytest.mark.asyncio
+    async def test_a_handler_may_close_the_bus_it_is_running_under(self):
+        """close() must not wait on the dispatch task that is calling it.
+
+        Bug: the drain awaited every task in ``_dispatch_tasks``, and a
+        handler runs *inside* one of them. A subscriber that tears the bus
+        down -- a shutdown topic, or a test closing from a handler -- put
+        close() into ``gather`` on the task awaiting that same gather.
+
+        asyncio raises ``Task cannot await on itself`` only for a direct
+        ``await task``; routed through ``gather`` it is an unbounded hang
+        with no exception and no log. Hence the timeout: unfixed, this test
+        does not fail on an assertion, it stops.
+        """
+        closed = asyncio.Event()
+
+        async def closing_handler(event: Event) -> None:
+            await bus.close()
+            closed.set()
+
+        bus = self._armed_bus(closing_handler)
+        bus._notification_handler(None, 0, "events_test", self._payload())
+
+        await asyncio.wait_for(closed.wait(), timeout=2.0)
+        assert not bus._connected, "close() returned without finishing its teardown"
+
+    @pytest.mark.asyncio
+    async def test_the_bus_reports_itself_closed_before_it_begins_draining(self):
+        """The drain window must not look like an open bus.
+
+        Bug: ``_connected`` was cleared only in the final locked section,
+        after the drain. ``subscribe()`` reads ``_connected`` and
+        ``_listen_conn`` at its first line, before taking the lock, so
+        throughout the drain it saw an open bus, acquired the lock in the
+        gap, ran LISTEN against a connection that section was about to
+        close, and wrote into the very dicts it then cleared -- handing back
+        a live-looking Subscription that would never deliver anything.
+        Before the split the same call blocked on the lock for the whole of
+        close() and then failed loudly.
+
+        Both sibling backends clear their stop flag as the first statement
+        inside the lock (``SqsEventBus`` ``_running``, ``RedisEventBus``
+        ``_running``); this one borrowed the task-retention shape from
+        ``sqs.py`` without its guard shape.
+
+        The ``_connected`` assertion is the reproduction -- it is the flag
+        ``subscribe()`` actually reads. The ``subscribe()`` call below
+        corroborates the consumer-visible half but cannot stand alone: this
+        bus has no listen connection, so unfixed code refuses it for the
+        second half of the same guard.
+        """
+        in_handler = asyncio.Event()
+        release = asyncio.Event()
+
+        async def slow_handler(event: Event) -> None:
+            in_handler.set()
+            await release.wait()
+
+        bus = self._armed_bus(slow_handler)
+        bus._notification_handler(None, 0, "events_test", self._payload())
+        await asyncio.wait_for(in_handler.wait(), timeout=1.0)
+
+        closing = asyncio.create_task(bus.close())
+        try:
+            # The first locked section holds no awaits for a bus with no
+            # listen task and no listen connection, so one scheduling turn
+            # puts close() in the drain, where it stays until the handler is
+            # released.
+            await asyncio.sleep(0.01)
+            assert not closing.done(), "close() finished without waiting for the dispatch"
+
+            assert not bus._connected, "the bus reports itself open while it is tearing down"
+            with pytest.raises(RuntimeError):
+                await bus.subscribe("other", slow_handler)
+        finally:
+            release.set()
+            await asyncio.wait_for(closing, timeout=2.0)
+
+    @pytest.mark.asyncio
+    async def test_a_dispatch_created_during_the_drain_is_also_awaited(self):
+        """The drain runs to a fixpoint, not from a single snapshot.
+
+        Bug: ``in_flight`` was taken once. asyncpg delivers notifications
+        through ``loop.call_soon``, so a callback scheduled before
+        ``remove_listener`` completed can run *after* that snapshot -- and
+        the task it creates is then never awaited, blocks on the lock the
+        final section holds, and dispatches against subscriptions that
+        section has cleared. That is the lost event this whole arrangement
+        exists to prevent, reached by a later route.
+
+        The second notification here stands in for that late callback; it is
+        delivered through the real ``_notification_handler``, which is the
+        same entry point asyncpg uses.
+        """
+        calls = 0
+        first_release = asyncio.Event()
+        second_started = asyncio.Event()
+        second_release = asyncio.Event()
+        completed: list[Event] = []
+
+        async def handler(event: Event) -> None:
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                await first_release.wait()
+            else:
+                second_started.set()
+                await second_release.wait()
+            completed.append(event)
+
+        bus = self._armed_bus(handler)
+        bus._notification_handler(None, 0, "events_test", self._payload())
+
+        closing = asyncio.create_task(bus.close())
+        try:
+            await asyncio.sleep(0.01)
+            assert not closing.done(), "close() finished without waiting for the first dispatch"
+
+            # The late delivery, arriving while close() is in the drain.
+            bus._notification_handler(None, 0, "events_test", self._payload())
+            await asyncio.wait_for(second_started.wait(), timeout=1.0)
+
+            first_release.set()
+            await asyncio.sleep(0.02)
+            assert not closing.done(), (
+                "close() returned while a dispatch created during the drain was still running"
+            )
+        finally:
+            first_release.set()
+            second_release.set()
+            await asyncio.wait_for(closing, timeout=2.0)
+
+        assert len(completed) == 2, "the late dispatch was abandoned rather than drained"
+
+    @pytest.mark.asyncio
+    async def test_a_dispatch_failing_outside_its_handler_is_logged(self, caplog):
+        """The drain must not be where an exception goes to disappear.
+
+        ``gather(..., return_exceptions=True)``'s results were discarded with
+        a comment claiming they were "already logged per handler". That holds
+        only for exceptions raised *by a handler*, which ``_dispatch_event``
+        catches itself. Anything ``_dispatch_event`` raises on its own --
+        acquiring the lock, matching a malformed pattern -- reached nobody,
+        which is worse than before the drain existed: an un-retrieved task
+        exception at least produced asyncio's "Task exception was never
+        retrieved" on the console.
+
+        ``_dispatch_event`` is replaced rather than provoked because the
+        property under test belongs to the drain, not to any particular way
+        of reaching it -- the same substitution this file already uses to
+        pin the payload-parsing path.
+        """
+
+        async def exploding_dispatch(topic: str, event: Event) -> None:
+            raise RuntimeError("dispatch machinery failed")
+
+        bus = self._armed_bus(lambda event: None)
+        bus._dispatch_event = exploding_dispatch  # type: ignore[method-assign]
+        bus._notification_handler(None, 0, "events_test", self._payload())
+
+        with caplog.at_level(logging.ERROR, logger="dataknobs_common.events.postgres"):
+            await asyncio.wait_for(bus.close(), timeout=5.0)
+
+        assert "dispatch machinery failed" in caplog.text, (
+            "an exception raised by _dispatch_event itself was swallowed by the drain"
+        )
 
 
 # ---------------------------------------------------------------------------
