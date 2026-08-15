@@ -123,7 +123,9 @@ def verify_ollama_model(model: str, host: str = "localhost", port: int = 11434) 
             # Extract model names from the response
             model_names = [m.get("name", "") for m in models]
             # Check if our model is in the list (handle both with and without tag)
-            return any(model_name.startswith(model.split(":")[0]) for model_name in model_names)
+            return any(
+                model_name.startswith(model.split(":", maxsplit=1)[0]) for model_name in model_names
+            )
     except Exception as e:
         print(f"Error verifying Ollama model: {e}")
         return False

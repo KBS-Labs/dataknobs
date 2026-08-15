@@ -1975,7 +1975,7 @@ class TestStyleResolution:
 
     def test_valid_styles_constant(self) -> None:
         """Verify the valid styles set matches expectations."""
-        assert _VALID_STYLES == {"conversational", "structured", "hybrid"}
+        assert _VALID_STYLES == {"conversational", "structured", "hybrid"}  # noqa: SIM300 — subject on the left
 
 
 # ------------------------------------------------------------------

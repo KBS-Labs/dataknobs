@@ -128,7 +128,7 @@ async def test_consumer_can_fanout_lifecycle_events_to_bus() -> None:
 
     # Also register a local callback to confirm both paths run.
     local_seen: list[dict[str, Any]] = []
-    hooks.on_turn_start(lambda e: local_seen.append(e))
+    hooks.on_turn_start(local_seen.append)
 
     payload = _evt(stage="greet")
     await hooks.trigger_turn_start(payload)

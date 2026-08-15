@@ -104,7 +104,7 @@ class TestChatbotWithMemoryIntegration:
 
     @pytest.mark.asyncio
     @pytest.mark.skipif(
-        not os.environ.get("TEST_OLLAMA", "").lower() == "true",
+        os.environ.get("TEST_OLLAMA", "").lower() != "true",
         reason="Semantic memory test requires real LLM (TEST_OLLAMA=true)",
     )
     async def test_memory_retention_with_ollama(self, bot_config_with_memory):
@@ -420,7 +420,7 @@ class TestOllamaConnectivity:
 
     @pytest.mark.asyncio
     @pytest.mark.skipif(
-        not os.environ.get("TEST_OLLAMA", "").lower() == "true",
+        os.environ.get("TEST_OLLAMA", "").lower() != "true",
         reason="Ollama connectivity test requires TEST_OLLAMA=true",
     )
     async def test_ollama_basic_chat(self, ollama_config):

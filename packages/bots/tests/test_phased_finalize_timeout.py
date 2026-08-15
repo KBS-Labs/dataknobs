@@ -325,7 +325,7 @@ class _HangingCloseStream:
     def __init__(self) -> None:
         self.closed = False
 
-    def __aiter__(self) -> "_HangingCloseStream":
+    def __aiter__(self) -> _HangingCloseStream:
         return self
 
     async def __anext__(self) -> Any:

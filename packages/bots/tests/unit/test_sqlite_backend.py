@@ -13,9 +13,9 @@ connected before use.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
-
 
 from dataknobs_bots.memory.artifact_bank import ArtifactBank
 from dataknobs_bots.memory.bank import MemoryBank
@@ -56,7 +56,7 @@ def _make_sqlite_db_factory(
     tmp_path: Path,
 ) -> tuple[
     list[tuple[str, dict[str, Any]]],
-    "callable[[str, dict[str, Any]], tuple[SyncDatabase, str]]",
+    Callable[[str, dict[str, Any]], tuple[SyncDatabase, str]],
 ]:
     """Create a db_factory that produces SQLite backends in tmp_path.
 

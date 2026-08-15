@@ -231,7 +231,6 @@ class TestBoundedManagerCache:
             async def on_turn_start(self, turn):
                 if turn.message == "raise-before-pin":
                     raise RuntimeError("boom before pin")
-                return None
 
             async def after_turn(self, turn):
                 if turn.message == "keep-alive":

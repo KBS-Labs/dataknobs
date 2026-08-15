@@ -38,7 +38,6 @@ class _KeyStubManager:
         self, domain_id: str, last_version: str | None = None, **_: Any
     ) -> None:
         self.calls.append(domain_id)
-        return None
 
 
 async def _make_bus() -> InMemoryEventBus:

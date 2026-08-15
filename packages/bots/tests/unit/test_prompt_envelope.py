@@ -87,7 +87,7 @@ async def test_build_message_with_context_default_is_markdown_no_xml() -> None:
 
     # No XML envelope tags of any kind.
     assert _ANY_XML_TAG.search(message) is None, (
-        "Default envelope must not produce XML tags; got: %r" % message
+        f"Default envelope must not produce XML tags; got: {message!r}"
     )
     # The KB query returned hits above, so Knowledge base + Question
     # sections joined by the markdown rule must be present. (Memory is

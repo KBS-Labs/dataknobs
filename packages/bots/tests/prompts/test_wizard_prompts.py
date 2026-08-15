@@ -175,7 +175,9 @@ class TestMemoryPromptKeys:
 
     def test_backward_compat_constant(self) -> None:
         """DEFAULT_SUMMARY_PROMPT matches the fragment template text."""
-        assert DEFAULT_SUMMARY_PROMPT == MEMORY_PROMPT_KEYS["memory.summary"]["template"]
+        # The constant is the subject under test, so it belongs on the left;
+        # SIM300 would move the expectation there instead.
+        assert DEFAULT_SUMMARY_PROMPT == MEMORY_PROMPT_KEYS["memory.summary"]["template"]  # noqa: SIM300
 
     def test_summary_format_renders(self) -> None:
         """The summary prompt renders with .format() correctly."""

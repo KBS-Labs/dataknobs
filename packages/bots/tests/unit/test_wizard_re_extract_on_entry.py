@@ -820,9 +820,8 @@ class TestReExtractRequiredFieldsGate:
             await harness.greet()
             # Pre-populate ALL optional fields with empty strings
             harness.seed_wizard_data(
-                {
-                    field: ""
-                    for field in [
+                dict.fromkeys(
+                    [
                         "llm_model",
                         "llm_provider",
                         "kb_enabled",
@@ -831,8 +830,9 @@ class TestReExtractRequiredFieldsGate:
                         "max_hints",
                         "domain_name",
                         "domain_id",
-                    ]
-                }
+                    ],
+                    "",
+                )
             )
 
             await harness.chat("Set tone to casual")

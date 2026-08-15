@@ -469,7 +469,7 @@ class TestApplyDerivations:
         derived = apply_field_derivations(
             rules,
             data,
-            field_is_present=lambda v: bool(v),
+            field_is_present=bool,
         )
         assert derived == set()
 

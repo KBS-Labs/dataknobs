@@ -203,7 +203,7 @@ class TestWizardHooksExecution:
         hooks = WizardHooks()
         final_data: list[dict] = []
 
-        hooks.on_complete(lambda d: final_data.append(d))
+        hooks.on_complete(final_data.append)
 
         await hooks.trigger_complete({"result": "success"})
 

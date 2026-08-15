@@ -338,7 +338,7 @@ class TestConcurrentTurnsIsolated:
         await asyncio.gather(run_a(), run_b())
 
         # Both transforms should have captured their own LLM
-        captured = {label: ctx for label, ctx in _captured_contexts}
+        captured = dict(_captured_contexts)
         assert captured["A"].config.get("llm") is llm_a
         assert captured["B"].config.get("llm") is llm_b
 

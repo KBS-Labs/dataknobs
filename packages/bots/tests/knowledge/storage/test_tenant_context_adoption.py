@@ -233,7 +233,7 @@ async def test_fresh_tenant_get_info_is_default_view_across_backends(
     assert mem_info.generation == fil_info.generation
     # ...and specifically NOT the leaked domain status/generation.
     assert mem_info.generation is None
-    assert str(mem_info.ingestion_status) != str("ingesting")
+    assert str(mem_info.ingestion_status) != "ingesting"
 
     await mem.close()
     await fil.close()
