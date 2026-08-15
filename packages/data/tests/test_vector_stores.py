@@ -12,6 +12,7 @@ from uuid import uuid4
 import numpy as np
 import pytest
 
+from dataknobs_data.testing import vector as _vector, vectors as _vectors
 from dataknobs_data.vector.stores import VectorStore, VectorStoreFactory
 from dataknobs_data.vector.stores.memory import MemoryVectorStore
 from dataknobs_data.vector.types import DistanceMetric
@@ -45,7 +46,7 @@ class TestMemoryVectorStore:
         await store.initialize()
 
         # Create test vectors
-        vectors = np.random.rand(5, 128).astype(np.float32)
+        vectors = _vectors(5, 128)
         ids = [str(uuid4()) for _ in range(5)]
         metadata = [{"index": i} for i in range(5)]
 
@@ -62,7 +63,7 @@ class TestMemoryVectorStore:
         await store.initialize()
 
         # Add vectors
-        vector = np.random.rand(128).astype(np.float32)
+        vector = _vector(128)
         vector_id = str(uuid4())
         metadata = {"test": "value"}
 
@@ -82,7 +83,7 @@ class TestMemoryVectorStore:
         await store.initialize()
 
         # Add vectors
-        vectors = np.random.rand(3, 128).astype(np.float32)
+        vectors = _vectors(3, 128)
         ids = [str(uuid4()) for _ in range(3)]
 
         await store.add_vectors(vectors, ids=ids)
@@ -170,7 +171,7 @@ class TestMemoryVectorStore:
         await store.initialize()
 
         # Add vectors with metadata
-        vectors = np.random.rand(10, 128).astype(np.float32)
+        vectors = _vectors(10, 128)
         ids = [str(i) for i in range(10)]
         metadata = [{"category": "A" if i < 5 else "B", "index": i} for i in range(10)]
 
@@ -189,7 +190,7 @@ class TestMemoryVectorStore:
         await store.initialize()
 
         # Add vectors
-        vectors = np.random.rand(3, 128).astype(np.float32)
+        vectors = _vectors(3, 128)
         ids = ["a", "b", "c"]
         metadata = [{"version": 1} for _ in range(3)]
 
@@ -211,7 +212,7 @@ class TestMemoryVectorStore:
         assert await store.count() == 0
 
         # Add vectors
-        vectors = np.random.rand(5, 128).astype(np.float32)
+        vectors = _vectors(5, 128)
         metadata = [{"type": "A" if i < 3 else "B"} for i in range(5)]
         await store.add_vectors(vectors, metadata=metadata)
 
@@ -225,7 +226,7 @@ class TestMemoryVectorStore:
         await store.initialize()
 
         # Add vectors
-        vectors = np.random.rand(5, 128).astype(np.float32)
+        vectors = _vectors(5, 128)
         await store.add_vectors(vectors)
         assert await store.count() == 5
 
@@ -246,7 +247,7 @@ class TestMemoryVectorStore:
     async def test_metadata_fields_with_data(self, store):
         """Test metadata_fields returns union of all field names."""
         await store.initialize()
-        vectors = np.random.rand(3, 128).astype(np.float32)
+        vectors = _vectors(3, 128)
         metadata = [
             {"headings": ["A"], "heading_levels": [1], "source": "doc.md"},
             {"headings": ["B"], "category": "test"},
@@ -260,7 +261,7 @@ class TestMemoryVectorStore:
     async def test_metadata_fields_after_delete(self, store):
         """Test metadata_fields reflects current state after deletion."""
         await store.initialize()
-        vectors = np.random.rand(2, 128).astype(np.float32)
+        vectors = _vectors(2, 128)
         ids = ["v1", "v2"]
         metadata = [
             {"field_a": 1},
@@ -285,7 +286,7 @@ class TestMemoryVectorStoreTimestamps:
     async def test_add_vectors_tracks_timestamps(self, store):
         """Fresh add populates self.timestamps; created == updated."""
         await store.initialize()
-        vec = np.random.rand(4).astype(np.float32)
+        vec = _vector(4)
         await store.add_vectors([vec], ids=["t1"], metadata=[{"k": "v"}])
 
         assert "t1" in store.timestamps
@@ -300,8 +301,8 @@ class TestMemoryVectorStoreTimestamps:
     async def test_upsert_refreshes_updated_only(self, store):
         """Re-add same ID: created preserved, updated advances."""
         await store.initialize()
-        vec1 = np.random.rand(4).astype(np.float32)
-        vec2 = np.random.rand(4).astype(np.float32)
+        vec1 = _vector(4)
+        vec2 = _vector(4, seed=1)
 
         await store.add_vectors([vec1], ids=["t1"])
         created_1, updated_1 = store.timestamps["t1"]
@@ -318,7 +319,7 @@ class TestMemoryVectorStoreTimestamps:
     async def test_update_metadata_refreshes_updated(self, store):
         """update_metadata advances updated, preserves created."""
         await store.initialize()
-        vec = np.random.rand(4).astype(np.float32)
+        vec = _vector(4)
         await store.add_vectors([vec], ids=["t1"], metadata=[{"k": "v"}])
         created_1, updated_1 = store.timestamps["t1"]
 
@@ -334,7 +335,7 @@ class TestMemoryVectorStoreTimestamps:
     async def test_delete_vectors_removes_timestamp(self, store):
         """delete_vectors removes the timestamp entry."""
         await store.initialize()
-        vec = np.random.rand(4).astype(np.float32)
+        vec = _vector(4)
         await store.add_vectors([vec], ids=["t1"])
         assert "t1" in store.timestamps
 
@@ -345,7 +346,7 @@ class TestMemoryVectorStoreTimestamps:
     async def test_clear_removes_timestamps(self, store):
         """clear() empties the timestamps dict."""
         await store.initialize()
-        vectors = np.random.rand(3, 4).astype(np.float32)
+        vectors = _vectors(3, 4)
         await store.add_vectors(vectors, ids=["a", "b", "c"])
         assert len(store.timestamps) == 3
 
@@ -365,7 +366,7 @@ class TestMemoryVectorStoreTimestamps:
         )
         await store.initialize()
 
-        vec = np.random.rand(4).astype(np.float32)
+        vec = _vector(4)
         await store.add_vectors([vec], ids=["t1"], metadata=[{"k": "v"}])
         original_created, original_updated = store.timestamps["t1"]
 
@@ -390,11 +391,11 @@ class TestMemoryVectorStoreTimestamps:
     async def test_get_vectors_include_timestamps(self, store):
         """include_timestamps=True injects _created_at / _updated_at."""
         await store.initialize()
-        vec = np.random.rand(4).astype(np.float32)
+        vec = _vector(4)
         await store.add_vectors([vec], ids=["t1"], metadata=[{"k": "v"}])
 
         results = await store.get_vectors(["t1"], include_timestamps=True)
-        _vector, meta = results[0]
+        _, meta = results[0]
 
         assert meta is not None
         assert meta["k"] == "v"
@@ -414,7 +415,7 @@ class TestMemoryVectorStoreTimestamps:
     async def test_search_include_timestamps(self, store):
         """Same include_timestamps semantics on search."""
         await store.initialize()
-        vectors = np.random.rand(3, 4).astype(np.float32)
+        vectors = _vectors(3, 4)
         await store.add_vectors(
             vectors,
             ids=["a", "b", "c"],
@@ -461,7 +462,7 @@ class TestMemoryVectorStoreTimestamps:
         # include_timestamps=True surfaces keys-present-with-None values
         # (analogous to pgvector pre-migration NULL rows).
         results = await store.get_vectors(["legacy-id"], include_timestamps=True)
-        _vector, meta = results[0]
+        _, meta = results[0]
         assert meta is not None
         assert meta["k"] == "v"
         assert "_created_at" in meta
@@ -514,7 +515,7 @@ try:
                 await store.initialize()
 
                 # Add vectors
-                vectors = np.random.rand(100, 128).astype(np.float32)
+                vectors = _vectors(100, 128)
                 ids = [str(i) for i in range(100)]
                 metadata = [{"index": i} for i in range(100)]
 
@@ -541,7 +542,7 @@ try:
                 await store.initialize()
 
                 # Add enough vectors to train IVF
-                vectors = np.random.rand(100, 64).astype(np.float32)
+                vectors = _vectors(100, 64)
                 await store.add_vectors(vectors)
 
                 # Search
@@ -555,7 +556,7 @@ try:
                 await persistent_store.initialize()
 
                 # Add vectors
-                vectors = np.random.rand(10, 128).astype(np.float32)
+                vectors = _vectors(10, 128)
                 ids = [str(i) for i in range(10)]
                 metadata = [{"value": i} for i in range(10)]
 
@@ -594,7 +595,7 @@ try:
             async def test_metadata_fields_with_data(self, store):
                 """Test metadata_fields returns union of all field names."""
                 await store.initialize()
-                vectors = np.random.rand(3, 128).astype(np.float32)
+                vectors = _vectors(3, 128)
                 ids = ["f1", "f2", "f3"]
                 metadata = [
                     {"headings": ["A"], "source": "doc.md"},
@@ -658,7 +659,7 @@ try:
                 await store.initialize()
 
                 # Add vectors
-                vectors = np.random.rand(50, 384).astype(np.float32)
+                vectors = _vectors(50, 384)
                 ids = [str(uuid4()) for _ in range(50)]
                 metadata = [{"index": i} for i in range(50)]
 
@@ -677,7 +678,7 @@ try:
                 await store.initialize()
 
                 # Add vectors with categories
-                vectors = np.random.rand(20, 384).astype(np.float32)
+                vectors = _vectors(20, 384)
                 ids = [str(i) for i in range(20)]
                 metadata = [{"category": "A" if i < 10 else "B", "value": i} for i in range(20)]
 
@@ -697,7 +698,7 @@ try:
                 await store.initialize()
 
                 # Add vectors
-                vectors = np.random.rand(5, 384).astype(np.float32)
+                vectors = _vectors(5, 384)
                 ids = [str(i) for i in range(5)]
 
                 await store.add_vectors(vectors, ids=ids)
@@ -722,7 +723,7 @@ try:
             async def test_metadata_fields_with_data(self, store):
                 """Test metadata_fields returns union of all field names."""
                 await store.initialize()
-                vectors = np.random.rand(3, 384).astype(np.float32)
+                vectors = _vectors(3, 384)
                 ids = [str(uuid4()) for _ in range(3)]
                 metadata = [
                     {"headings": "A", "source": "doc.md"},

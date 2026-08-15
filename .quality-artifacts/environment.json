@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-08-15T17:14:19Z",
+  "timestamp": "2026-08-15T19:03:49Z",
   "python_version": "Python 3.12.12",
   "uv_version": "uv 0.12.4 (Homebrew 2026-08-13 aarch64-apple-darwin)",
   "os": "Darwin",
   "os_version": "24.6.0",
-  "git_branch": "sbk/ruff-promote-small-test-cells",
-  "git_commit": "931a4c51c9a1b5011f45dffd30758b57df070edd",
+  "git_branch": "sbk/data-tests-numpy-rng",
+  "git_commit": "7b14602637e541e47aa931f0800a1a84dafbd145",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }

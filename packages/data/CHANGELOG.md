@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Added
+
+- **`dataknobs_data.testing`** — deterministic vector draws, for this package's
+  tests and for consumers testing their own `VectorStore` implementations.
+  `vectors(count, dim, seed=0)` returns a `(count, dim)` float32 array,
+  `vector(dim, seed=0)` its first row, and `text_embedding(text, dim=384)` a
+  vector derived from the text, so the same text always yields the same one.
+
+  Each call builds its own `numpy.random.Generator`. None of them reads or
+  seeds the process-global RNG, so a draw in one test cannot shift what any
+  later test draws.
+
 ### Fixed
 
 - **`SyncPostgresDatabase.close()` closed nothing.** The body set

@@ -22,11 +22,11 @@ import os
 from collections.abc import AsyncIterator, Iterator
 from typing import Any
 
-import numpy as np
 import pytest
 import pytest_asyncio
 from dataknobs_common.testing import requires_postgres
 
+from dataknobs_data.testing import vector as _vector
 from dataknobs_data.vector.stores.memory import MemoryVectorStore
 
 try:
@@ -109,7 +109,7 @@ async def any_vector_store(
 @pytest.mark.asyncio
 async def test_timestamps_present_and_ordered(any_vector_store: Any) -> None:
     """include_timestamps=True exposes _created_at / _updated_at on every backend."""
-    vec = np.random.rand(4).astype(np.float32)
+    vec = _vector(4)
     await any_vector_store.add_vectors([vec], ids=["t1"], metadata=[{"k": "v"}])
 
     results = await any_vector_store.get_vectors(["t1"], include_timestamps=True)
@@ -126,7 +126,7 @@ async def test_timestamps_present_and_ordered(any_vector_store: Any) -> None:
 @pytest.mark.asyncio
 async def test_timestamps_absent_by_default(any_vector_store: Any) -> None:
     """Default get_vectors() omits timestamp keys on every backend."""
-    vec = np.random.rand(4).astype(np.float32)
+    vec = _vector(4)
     await any_vector_store.add_vectors([vec], ids=["t1"], metadata=[{"k": "v"}])
 
     results = await any_vector_store.get_vectors(["t1"])
@@ -143,8 +143,8 @@ async def test_upsert_refreshes_updated_consistently(
     any_vector_store: Any,
 ) -> None:
     """Second add_vectors with same id: created preserved, updated advances."""
-    vec1 = np.random.rand(4).astype(np.float32)
-    vec2 = np.random.rand(4).astype(np.float32)
+    vec1 = _vector(4)
+    vec2 = _vector(4, seed=1)
 
     await any_vector_store.add_vectors([vec1], ids=["t1"])
     first_results = await any_vector_store.get_vectors(["t1"], include_timestamps=True)

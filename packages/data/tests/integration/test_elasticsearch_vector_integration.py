@@ -9,6 +9,7 @@ from dataknobs_data import Record
 from dataknobs_data.backends.elasticsearch_async import AsyncElasticsearchDatabase
 from dataknobs_data.fields import VectorField
 from dataknobs_data.query import Filter, Query, Operator
+from dataknobs_data.testing import vector as _vector, vectors as _vectors
 from dataknobs_data.vector.types import DistanceMetric
 
 # Skip tests if Elasticsearch integration testing is not enabled
@@ -36,7 +37,7 @@ class TestElasticsearchVectorIntegration:
 
         try:
             # Create a record with a vector field
-            vector = np.random.rand(128).astype(np.float32)
+            vector = _vector(128)
             record = Record(
                 {
                     "title": "Test Document",
@@ -93,9 +94,9 @@ class TestElasticsearchVectorIntegration:
             )
 
             # Create test vectors
-            base_vector = np.random.rand(128).astype(np.float32)
-            similar_vector = base_vector + np.random.randn(128) * 0.1
-            different_vector = np.random.rand(128).astype(np.float32)
+            base_vector = _vector(128)
+            similar_vector = base_vector + np.random.default_rng(2).standard_normal(128) * 0.1
+            different_vector = _vector(128, seed=1)
 
             # Create records with vectors
             records = [
@@ -162,7 +163,7 @@ class TestElasticsearchVectorIntegration:
             )
 
             # Create test data
-            vectors = [np.random.rand(64).astype(np.float32) for _ in range(5)]
+            vectors = _vectors(5, 64)
             categories = ["A", "B", "A", "B", "C"]
 
             # Create and store records
@@ -256,8 +257,14 @@ class TestElasticsearchVectorIntegration:
             batch_size = 10
             records = []
 
+            # One draw, `batch_size` rows: the records have to differ from each
+            # other for the search below to mean anything. Calling the
+            # single-vector helper per iteration would pass it the same default
+            # seed every time and store one vector ten times.
+            batch_vecs = _vectors(batch_size, 32)
+
             for i in range(batch_size):
-                vec = np.random.rand(32).astype(np.float32)
+                vec = batch_vecs[i]
                 record = Record(
                     {
                         "batch_id": i,
@@ -292,7 +299,7 @@ class TestElasticsearchVectorIntegration:
 
         try:
             # Create record with detailed vector metadata
-            vec = np.random.rand(64).astype(np.float32)
+            vec = _vector(64)
             record = Record({"document": "Test content"})
 
             record.fields["embedding"] = VectorField(
@@ -341,7 +348,7 @@ class TestElasticsearchVectorIntegration:
                 dimensions=8,
                 metric=DistanceMetric.COSINE,
             )
-            vectors = [np.random.rand(8).astype(np.float32) for _ in range(4)]
+            vectors = _vectors(4, 8)
             keys = ["artifacts/a", "artifacts/b", "orders/1", "orders/2"]
             for key, vec in zip(keys, vectors):
                 await db.create(
@@ -374,7 +381,7 @@ class TestElasticsearchVectorIntegration:
                 dimensions=8,
                 metric=DistanceMetric.COSINE,
             )
-            vectors = [np.random.rand(8).astype(np.float32) for _ in range(2)]
+            vectors = _vectors(2, 8)
             await db.create(
                 Record(
                     {"tag": "red apple", "embedding": VectorField(vectors[0], name="embedding")},

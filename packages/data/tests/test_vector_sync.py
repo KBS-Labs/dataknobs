@@ -7,20 +7,24 @@ from datetime import datetime
 import numpy as np
 import pytest
 
-# Skip all tests if PostgreSQL is not available
-pytestmark = pytest.mark.skipif(
-    not os.environ.get("TEST_POSTGRES", "").lower() == "true",
-    reason="Vector sync tests require TEST_POSTGRES=true and a running PostgreSQL instance with pgvector",
-)
-
 from dataknobs_data.backends.memory import AsyncMemoryDatabase
 from dataknobs_data.fields import FieldType
 from dataknobs_data.records import Record
 from dataknobs_data.schema import DatabaseSchema, FieldSchema
+from dataknobs_data.testing import text_embedding as _text_embedding
 from dataknobs_data.vector.sync import (
     SyncConfig,
     SyncStatus,
     VectorTextSynchronizer,
+)
+
+# Skip all tests if PostgreSQL is not available. Below the imports, not above
+# them: a module-level mark does not stop the imports beneath it from running,
+# so the earlier position bought nothing and made every import under it an
+# E402.
+pytestmark = pytest.mark.skipif(
+    not os.environ.get("TEST_POSTGRES", "").lower() == "true",
+    reason="Vector sync tests require TEST_POSTGRES=true and a running PostgreSQL instance with pgvector",
 )
 
 
@@ -64,8 +68,7 @@ def simple_embedding_fn():
         if not text:
             return None
         # Use text length and char codes for deterministic output
-        np.random.seed(sum(ord(c) for c in text[:10]))
-        return np.random.rand(384)
+        return _text_embedding(text)
 
     return embedding_fn
 
@@ -79,8 +82,7 @@ def async_embedding_fn():
         await asyncio.sleep(0.001)
         if not text:
             return None
-        np.random.seed(sum(ord(c) for c in text[:10]))
-        return np.random.rand(384)
+        return _text_embedding(text)
 
     return embedding_fn
 
@@ -271,7 +273,7 @@ class TestVectorTextSynchronizer:
             fail_count += 1
             if fail_count < 2:
                 raise Exception("Temporary failure")
-            return np.random.rand(384)
+            return _text_embedding(text)
 
         sync.embedding_fn = failing_fn
         sync.config.max_retries = 3
@@ -528,8 +530,7 @@ class TestVectorTextSynchronizer:
             call_count += 1
             if call_count in [2, 4]:  # Fail on 2nd and 4th calls
                 return None
-            np.random.seed(sum(ord(c) for c in text[:10]))
-            return np.random.rand(384)
+            return _text_embedding(text)
 
         sync = VectorTextSynchronizer(
             database=memory_database,

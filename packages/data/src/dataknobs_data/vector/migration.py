@@ -677,8 +677,11 @@ class IncrementalVectorizer:
         db = database_factory.create(backend="memory")
 
         def embedding_fn(text):
-            # In practice, use a real model like sentence-transformers
-            return np.random.rand(384).astype(np.float32)
+            # In practice, use a real model like sentence-transformers.
+            # `default_rng` builds its own generator; `np.random.rand` would
+            # read — and `np.random.seed` would mutate — state shared by the
+            # whole process.
+            return np.random.default_rng().random(384, dtype=np.float32)
 
         # Simple usage with single field
         vectorizer = IncrementalVectorizer(

@@ -72,9 +72,10 @@ class TestSQLiteVectorSupport:
     def test_vector_search(self, db):
         """Test vector similarity search."""
         # Add some test vectors
+        rng = np.random.default_rng(0)
         vectors = []
         for i in range(5):
-            vec = np.random.randn(8).astype(np.float32)
+            vec = rng.standard_normal(8, dtype=np.float32)
             vec = vec / np.linalg.norm(vec)  # Normalize
             vectors.append(vec)
 
@@ -86,7 +87,7 @@ class TestSQLiteVectorSupport:
         assert len(ids) == 5
 
         # Search for similar vectors
-        query_vec = vectors[0] + np.random.randn(8) * 0.01  # Slightly perturbed first vector
+        query_vec = vectors[0] + rng.standard_normal(8) * 0.01  # Slightly perturbed first vector
         query_vec = query_vec / np.linalg.norm(query_vec)
 
         results = db.vector_search(query_vector=query_vec, field_name="embedding", k=3)
@@ -101,11 +102,12 @@ class TestSQLiteVectorSupport:
         from dataknobs_data.query import Query, Filter, Operator
 
         # Add vectors with categories
+        rng = np.random.default_rng(0)
         vectors = []
         categories = ["A", "B", "A", "B", "A"]
 
         for i in range(5):
-            vec = np.random.randn(4).astype(np.float32)
+            vec = rng.standard_normal(4, dtype=np.float32)
             vec = vec / np.linalg.norm(vec)
             vectors.append(vec)
 
@@ -121,7 +123,7 @@ class TestSQLiteVectorSupport:
             ids.append(db.create(record))
 
         # Search with filter for category A
-        query_vec = np.random.randn(4).astype(np.float32)
+        query_vec = rng.standard_normal(4, dtype=np.float32)
         query_vec = query_vec / np.linalg.norm(query_vec)
 
         # Create a Query object for filtering
@@ -186,9 +188,10 @@ class TestSQLiteVectorSupport:
     def test_batch_operations_with_vectors(self, db):
         """Test batch create with vector fields."""
         # Create multiple records with vectors
+        rng = np.random.default_rng(0)
         records = []
         for i in range(10):
-            vec = np.random.randn(4).astype(np.float32)
+            vec = rng.standard_normal(4, dtype=np.float32)
             vector_field = VectorField(name="embedding", value=vec, dimensions=4)
 
             record = Record(
@@ -221,7 +224,8 @@ class TestSQLiteVectorSupport:
         record_id = db.create(record)
 
         # Also create a record with a vector for comparison
-        vec = np.random.randn(4).astype(np.float32)
+        rng = np.random.default_rng(0)
+        vec = rng.standard_normal(4, dtype=np.float32)
         vector_field = VectorField(name="embedding", value=vec, dimensions=4)
 
         record_with_vector = Record(
@@ -230,7 +234,7 @@ class TestSQLiteVectorSupport:
         db.create(record_with_vector)
 
         # Search should only return the record with a vector
-        query_vec = np.random.randn(4).astype(np.float32)
+        query_vec = rng.standard_normal(4, dtype=np.float32)
         results = db.vector_search(query_vector=query_vec, field_name="embedding", k=10)
 
         # Should not include the record without a vector field

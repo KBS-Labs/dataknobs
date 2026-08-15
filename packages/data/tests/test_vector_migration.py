@@ -7,21 +7,25 @@ from datetime import datetime
 import numpy as np
 import pytest
 
-# Skip all tests if PostgreSQL is not available
-pytestmark = pytest.mark.skipif(
-    not os.environ.get("TEST_POSTGRES", "").lower() == "true",
-    reason="Vector migration tests require TEST_POSTGRES=true and a running PostgreSQL instance with pgvector",
-)
-
 from dataknobs_data.backends.memory import AsyncMemoryDatabase
 from dataknobs_data.fields import FieldType
 from dataknobs_data.records import Record
 from dataknobs_data.schema import DatabaseSchema, FieldSchema
+from dataknobs_data.testing import text_embedding as _text_embedding
 from dataknobs_data.vector.migration import (
     IncrementalVectorizer,
     MigrationConfig,
     MigrationStatus,
     VectorMigration,
+)
+
+# Skip all tests if PostgreSQL is not available. Below the imports, not above
+# them: a module-level mark does not stop the imports beneath it from running,
+# so the earlier position bought nothing and made every import under it an
+# E402.
+pytestmark = pytest.mark.skipif(
+    not os.environ.get("TEST_POSTGRES", "").lower() == "true",
+    reason="Vector migration tests require TEST_POSTGRES=true and a running PostgreSQL instance with pgvector",
 )
 
 
@@ -96,8 +100,7 @@ def simple_embedding_fn():
         if not text:
             return None
         # Create deterministic embeddings based on text
-        np.random.seed(sum(ord(c) for c in text[:10]))
-        return np.random.rand(384)
+        return _text_embedding(text)
 
     return embedding_fn
 
@@ -110,8 +113,7 @@ def async_embedding_fn():
         await asyncio.sleep(0.001)  # Simulate async work
         if not text:
             return None
-        np.random.seed(sum(ord(c) for c in text[:10]))
-        return np.random.rand(384)
+        return _text_embedding(text)
 
     return embedding_fn
 
@@ -311,8 +313,7 @@ class TestVectorMigration:
             call_count += 1
             if call_count > 3:
                 raise Exception("Embedding service failed")
-            np.random.seed(sum(ord(c) for c in text[:10]))
-            return np.random.rand(384)
+            return _text_embedding(text)
 
         source_database.schema.add_vector_field(
             "content_embedding", dimensions=384, source_field="content"
@@ -338,7 +339,7 @@ class TestVectorMigration:
         """Test migrating data between different backends."""
         # Add some vectors to source
         for record in await source_database.all():
-            embedding = np.random.rand(384)
+            embedding = _text_embedding(record.get_value("content"))
             record.set_value("content_embedding", embedding.tolist())
             record.set_value("title_embedding", embedding.tolist())
             await source_database.update(record.id, record)
@@ -563,7 +564,7 @@ class TestIncrementalVectorizer:
         # Add vector to first record
         records = await source_database.all()
         first_record = records[0]
-        existing_vector = np.random.rand(384).tolist()
+        existing_vector = np.random.default_rng(0).random(384).tolist()
         first_record.set_value("content_embedding", existing_vector)
         await source_database.update(first_record.id, first_record)
 

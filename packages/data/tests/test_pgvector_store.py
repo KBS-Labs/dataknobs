@@ -14,6 +14,7 @@ import numpy as np
 import pytest
 
 from dataknobs_common.testing import safe_sql_ident
+from dataknobs_data.testing import vector as _vector, vectors as _vectors
 
 # Skip all tests if PostgreSQL is not available
 pytestmark = pytest.mark.skipif(
@@ -249,7 +250,7 @@ class TestPgVectorStoreBasicOperations:
 
     async def test_add_vectors(self, pgvector_store):
         """Test adding vectors."""
-        vectors = np.random.rand(5, 128).astype(np.float32)
+        vectors = _vectors(5, 128)
         ids = [str(uuid.uuid4()) for _ in range(5)]
         metadata = [{"index": i} for i in range(5)]
 
@@ -261,7 +262,7 @@ class TestPgVectorStoreBasicOperations:
 
     async def test_add_vectors_generates_ids(self, pgvector_store):
         """Test that add_vectors generates IDs when not provided."""
-        vectors = np.random.rand(3, 128).astype(np.float32)
+        vectors = _vectors(3, 128)
         result_ids = await pgvector_store.add_vectors(vectors)
 
         assert len(result_ids) == 3
@@ -271,7 +272,7 @@ class TestPgVectorStoreBasicOperations:
 
     async def test_get_vectors(self, pgvector_store):
         """Test retrieving vectors by ID."""
-        vectors = np.random.rand(3, 128).astype(np.float32)
+        vectors = _vectors(3, 128)
         ids = [str(uuid.uuid4()) for _ in range(3)]
         metadata = [{"key": f"value{i}"} for i in range(3)]
 
@@ -294,7 +295,7 @@ class TestPgVectorStoreBasicOperations:
 
     async def test_delete_vectors(self, pgvector_store):
         """Test deleting vectors by ID."""
-        vectors = np.random.rand(5, 128).astype(np.float32)
+        vectors = _vectors(5, 128)
         ids = [str(uuid.uuid4()) for _ in range(5)]
 
         await pgvector_store.add_vectors(vectors, ids=ids)
@@ -307,7 +308,7 @@ class TestPgVectorStoreBasicOperations:
 
     async def test_update_metadata(self, pgvector_store):
         """Test updating vector metadata."""
-        vectors = np.random.rand(2, 128).astype(np.float32)
+        vectors = _vectors(2, 128)
         ids = [str(uuid.uuid4()) for _ in range(2)]
         metadata = [{"version": 1}, {"version": 1}]
 
@@ -328,7 +329,7 @@ class TestPgVectorStoreBasicOperations:
         """Test counting vectors."""
         assert await pgvector_store.count() == 0
 
-        vectors = np.random.rand(10, 128).astype(np.float32)
+        vectors = _vectors(10, 128)
         metadata = [{"type": "A" if i < 6 else "B"} for i in range(10)]
         await pgvector_store.add_vectors(vectors, metadata=metadata)
 
@@ -338,7 +339,7 @@ class TestPgVectorStoreBasicOperations:
 
     async def test_clear(self, pgvector_store):
         """Test clearing all vectors."""
-        vectors = np.random.rand(5, 128).astype(np.float32)
+        vectors = _vectors(5, 128)
         await pgvector_store.add_vectors(vectors)
         assert await pgvector_store.count() == 5
 
@@ -370,10 +371,10 @@ class TestPgVectorStoreSearch:
 
         try:
             # Add random vectors with different similarities to query
-            np.random.seed(42)  # For reproducibility
-            base_vector = np.random.rand(128).astype(np.float32)
-            similar_vector = base_vector + np.random.rand(128).astype(np.float32) * 0.1
-            different_vector = np.random.rand(128).astype(np.float32)
+            rng = np.random.default_rng(42)  # For reproducibility
+            base_vector = rng.random(128, dtype=np.float32)
+            similar_vector = base_vector + rng.random(128, dtype=np.float32) * 0.1
+            different_vector = rng.random(128, dtype=np.float32)
 
             vectors = np.array(
                 [
@@ -406,7 +407,7 @@ class TestPgVectorStoreSearch:
 
     async def test_search_with_filter(self, pgvector_store):
         """Test vector search with metadata filter."""
-        vectors = np.random.rand(10, 128).astype(np.float32)
+        vectors = _vectors(10, 128)
         ids = [str(uuid.uuid4()) for _ in range(10)]
         metadata = [{"category": "A" if i < 5 else "B", "index": i} for i in range(10)]
 
@@ -422,10 +423,10 @@ class TestPgVectorStoreSearch:
 
     async def test_search_returns_k_results(self, pgvector_store):
         """Test that search returns exactly k results."""
-        vectors = np.random.rand(20, 128).astype(np.float32)
+        vectors = _vectors(20, 128)
         await pgvector_store.add_vectors(vectors)
 
-        query = np.random.rand(128).astype(np.float32)
+        query = _vector(128, seed=1)
 
         results = await pgvector_store.search(query, k=5)
         assert len(results) == 5
@@ -435,7 +436,7 @@ class TestPgVectorStoreSearch:
 
     async def test_search_includes_metadata(self, pgvector_store):
         """Test that search includes metadata when requested."""
-        vectors = np.random.rand(5, 128).astype(np.float32)
+        vectors = _vectors(5, 128)
         metadata = [{"key": f"value{i}"} for i in range(5)]
         await pgvector_store.add_vectors(vectors, metadata=metadata)
 
@@ -508,7 +509,7 @@ class TestPgVectorStoreDistanceMetrics:
         await store.initialize()
 
         try:
-            vectors = np.random.rand(10, 128).astype(np.float32)
+            vectors = _vectors(10, 128)
             await store.add_vectors(vectors)
 
             query = vectors[0]
@@ -563,8 +564,8 @@ class TestPgVectorStoreDomainIsolation:
 
         try:
             # Add vectors to each domain
-            vectors1 = np.random.rand(5, 128).astype(np.float32)
-            vectors2 = np.random.rand(3, 128).astype(np.float32)
+            vectors1 = _vectors(5, 128)
+            vectors2 = _vectors(3, 128)
 
             await store1.add_vectors(vectors1)
             await store2.add_vectors(vectors2)
@@ -574,7 +575,7 @@ class TestPgVectorStoreDomainIsolation:
             assert await store2.count() == 3
 
             # Search should only return domain-specific results
-            query = np.random.rand(128).astype(np.float32)
+            query = _vector(128, seed=1)
             results1 = await store1.search(query, k=10)
             results2 = await store2.search(query, k=10)
 
@@ -612,7 +613,7 @@ class TestPgVectorStoreTextIds:
         await store.initialize()
 
         try:
-            vectors = np.random.rand(3, 128).astype(np.float32)
+            vectors = _vectors(3, 128)
             ids = ["item-001", "item-002", "item-003"]
             metadata = [{"name": f"Item {i}"} for i in range(3)]
 
@@ -669,7 +670,7 @@ class TestPgVectorStoreIdTypeDefaults:
         await store.initialize()
 
         try:
-            vectors = np.random.rand(2, 128).astype(np.float32)
+            vectors = _vectors(2, 128)
             ids = ["01-fundamentals_0", "01-fundamentals_1"]
             result_ids = await store.add_vectors(vectors, ids=ids)
             assert result_ids == ids
@@ -703,7 +704,7 @@ class TestPgVectorStoreIdTypeDefaults:
 
         try:
             uuid_str = str(uuid.uuid4())
-            vectors = np.random.rand(1, 128).astype(np.float32)
+            vectors = _vectors(1, 128)
             await store.add_vectors(vectors, ids=[uuid_str])
             retrieved = await store.get_vectors([uuid_str])
             assert retrieved[0][0] is not None
@@ -733,7 +734,7 @@ class TestPgVectorStoreIdTypeDefaults:
 
         try:
             ids = [str(uuid.uuid4()) for _ in range(3)]
-            vectors = np.random.rand(3, 128).astype(np.float32)
+            vectors = _vectors(3, 128)
             result_ids = await store.add_vectors(vectors, ids=ids)
             assert result_ids == ids
             retrieved = await store.get_vectors(ids)
@@ -764,7 +765,7 @@ class TestPgVectorStoreIdTypeDefaults:
         await store.initialize()
 
         try:
-            vectors = np.random.rand(1, 128).astype(np.float32)
+            vectors = _vectors(1, 128)
             with pytest.raises(ValueError) as excinfo:
                 await store.add_vectors(vectors, ids=["not-a-uuid"])
             msg = str(excinfo.value)
@@ -949,7 +950,7 @@ class TestPgVectorStoreIdTypeDefaults:
         await text_store.initialize()
 
         try:
-            vectors = np.random.rand(1, 128).astype(np.float32)
+            vectors = _vectors(1, 128)
             with pytest.raises(ValueError) as excinfo:
                 await text_store.add_vectors(
                     vectors,
@@ -991,7 +992,7 @@ class TestPgVectorStoreCustomColumns:
         await store.initialize()
 
         try:
-            vectors = np.random.rand(3, 128).astype(np.float32)
+            vectors = _vectors(3, 128)
             ids = ["prod-1", "prod-2", "prod-3"]
             metadata = [{"type": "widget"}, {"type": "gadget"}, {"type": "widget"}]
 
@@ -1016,13 +1017,13 @@ class TestPgVectorStoreEdgeCases:
 
     async def test_empty_search(self, pgvector_store):
         """Test searching an empty store."""
-        query = np.random.rand(128).astype(np.float32)
+        query = _vector(128, seed=1)
         results = await pgvector_store.search(query, k=5)
         assert len(results) == 0
 
     async def test_single_vector(self, pgvector_store):
         """Test operations with single vector."""
-        vector = np.random.rand(128).astype(np.float32)
+        vector = _vector(128)
         ids = await pgvector_store.add_vectors(vector)
 
         assert len(ids) == 1
@@ -1032,8 +1033,8 @@ class TestPgVectorStoreEdgeCases:
 
     async def test_upsert_behavior(self, pgvector_store):
         """Test that adding vectors with same ID updates them."""
-        vector1 = np.random.rand(128).astype(np.float32)
-        vector2 = np.random.rand(128).astype(np.float32)
+        vector1 = _vector(128)
+        vector2 = _vector(128, seed=1)
         id_ = str(uuid.uuid4())
 
         # Add first vector
@@ -1054,7 +1055,7 @@ class TestPgVectorStoreEdgeCases:
         Previously the ON CONFLICT clause only updated embedding and metadata,
         leaving the content column stale on re-ingestion.
         """
-        vector = np.random.rand(128).astype(np.float32)
+        vector = _vector(128)
         id_ = str(uuid.uuid4())
 
         # Initial insert with original content
@@ -1088,7 +1089,7 @@ class TestPgVectorStoreEdgeCases:
 
     async def test_large_batch(self, pgvector_store):
         """Test adding a large batch of vectors."""
-        vectors = np.random.rand(100, 128).astype(np.float32)
+        vectors = _vectors(100, 128)
         metadata = [{"index": i} for i in range(100)]
 
         ids = await pgvector_store.add_vectors(vectors, metadata=metadata)
@@ -1207,7 +1208,7 @@ class TestPgVectorStoreIndexOperations:
 
         try:
             # Add some data first (IVFFlat works better with data)
-            vectors = np.random.rand(50, 128).astype(np.float32)
+            vectors = _vectors(50, 128)
             await store.add_vectors(vectors)
 
             # Create IVFFlat index
@@ -1272,11 +1273,11 @@ class TestPgVectorStoreIndexOperations:
 
         try:
             # Add only 50 vectors (below threshold)
-            vectors = np.random.rand(50, 128).astype(np.float32)
+            vectors = _vectors(50, 128)
             await store.add_vectors(vectors)
 
             # Search should trigger _maybe_create_index but not create index
-            query = np.random.rand(128).astype(np.float32)
+            query = _vector(128, seed=1)
             await store.search(query, k=5)
 
             # Index should NOT exist (below threshold)
@@ -1306,14 +1307,14 @@ class TestPgVectorStoreIndexOperations:
 
         try:
             # Add 100 vectors (above threshold)
-            vectors = np.random.rand(100, 128).astype(np.float32)
+            vectors = _vectors(100, 128)
             await store.add_vectors(vectors)
 
             # No index yet (not searched)
             assert await store._check_index_exists() is False
 
             # Search should trigger auto-creation
-            query = np.random.rand(128).astype(np.float32)
+            query = _vector(128, seed=1)
             await store.search(query, k=5)
 
             # Index should now exist
@@ -1342,11 +1343,11 @@ class TestPgVectorStoreIndexOperations:
 
         try:
             # Add vectors above threshold
-            vectors = np.random.rand(50, 128).astype(np.float32)
+            vectors = _vectors(50, 128)
             await store.add_vectors(vectors)
 
             # Search
-            query = np.random.rand(128).astype(np.float32)
+            query = _vector(128, seed=1)
             await store.search(query, k=5)
 
             # Index should NOT exist (auto_create_index=False)
@@ -1397,7 +1398,7 @@ class TestPgVectorStoreMetadataFields:
 
     async def test_metadata_fields_with_data(self, pgvector_store):
         """Test metadata_fields returns union of all JSONB keys."""
-        vectors = np.random.rand(3, 128).astype(np.float32)
+        vectors = _vectors(3, 128)
         ids = [str(uuid.uuid4()) for _ in range(3)]
         metadata = [
             {"headings": ["A"], "heading_levels": [1], "source": "doc.md"},
@@ -1414,7 +1415,7 @@ class TestPgVectorStoreMetadataFields:
 
     async def test_metadata_fields_after_delete(self, pgvector_store):
         """Test metadata_fields reflects current state after deletion."""
-        vectors = np.random.rand(2, 128).astype(np.float32)
+        vectors = _vectors(2, 128)
         ids = [str(uuid.uuid4()) for _ in range(2)]
         metadata = [
             {"field_a": 1},
@@ -1442,7 +1443,7 @@ class TestPgVectorStoreUpdatedAtColumn:
 
     async def test_updated_at_column_populated_on_insert(self, pgvector_store):
         """Fresh insert: updated_at is set and approximately equals created_at."""
-        vectors = np.random.rand(1, 128).astype(np.float32)
+        vectors = _vectors(1, 128)
         ids = ["test-id-1"]
         await pgvector_store.add_vectors(vectors, ids=ids)
 
@@ -1462,7 +1463,7 @@ class TestPgVectorStoreUpdatedAtColumn:
         """Second add_vectors with same ID advances updated_at, preserves created_at."""
         import asyncio
 
-        vectors1 = np.random.rand(1, 128).astype(np.float32)
+        vectors1 = _vectors(1, 128)
         ids = ["test-id-upsert"]
         await pgvector_store.add_vectors(vectors1, ids=ids)
 
@@ -1478,7 +1479,7 @@ class TestPgVectorStoreUpdatedAtColumn:
         # truncation granularity of pg TIMESTAMP (microseconds).
         await asyncio.sleep(0.05)
 
-        vectors2 = np.random.rand(1, 128).astype(np.float32)
+        vectors2 = _vectors(1, 128, seed=1)
         await pgvector_store.add_vectors(vectors2, ids=ids)
 
         async with pgvector_store._pool.acquire() as conn:
@@ -1496,7 +1497,7 @@ class TestPgVectorStoreUpdatedAtColumn:
         """update_metadata advances updated_at, preserves created_at."""
         import asyncio
 
-        vectors = np.random.rand(1, 128).astype(np.float32)
+        vectors = _vectors(1, 128)
         ids = ["test-id-update-meta"]
         await pgvector_store.add_vectors(vectors, ids=ids, metadata=[{"k": "v1"}])
 
@@ -1608,7 +1609,7 @@ class TestPgVectorStoreUpdatedAtColumn:
                 )
 
                 # A new insert populates updated_at via DEFAULT NOW().
-                vectors = np.random.rand(1, 128).astype(np.float32)
+                vectors = _vectors(1, 128)
                 await store.add_vectors(vectors, ids=["fresh-row"])
                 fresh = await conn.fetchrow(
                     f"SELECT updated_at "
@@ -1711,7 +1712,7 @@ class TestPgVectorStoreIncludeTimestamps:
 
     async def test_get_vectors_include_timestamps(self, pgvector_store):
         """Default format (iso): both keys present, ISO-8601 strings."""
-        vectors = np.random.rand(1, 128).astype(np.float32)
+        vectors = _vectors(1, 128)
         ids = ["ts-id-1"]
         await pgvector_store.add_vectors(vectors, ids=ids, metadata=[{"topic": "math"}])
 
@@ -1730,7 +1731,7 @@ class TestPgVectorStoreIncludeTimestamps:
 
     async def test_search_include_timestamps(self, pgvector_store):
         """search() also injects timestamps when include_timestamps=True."""
-        vectors = np.random.rand(3, 128).astype(np.float32)
+        vectors = _vectors(3, 128)
         ids = ["ts-search-1", "ts-search-2", "ts-search-3"]
         await pgvector_store.add_vectors(
             vectors,
@@ -1750,7 +1751,7 @@ class TestPgVectorStoreIncludeTimestamps:
 
     async def test_include_timestamps_noop_without_metadata(self, pgvector_store):
         """include_metadata=False + include_timestamps=True: no injection, no error."""
-        vectors = np.random.rand(1, 128).astype(np.float32)
+        vectors = _vectors(1, 128)
         ids = ["ts-nometa-1"]
         await pgvector_store.add_vectors(vectors, ids=ids)
 
@@ -1776,7 +1777,7 @@ class TestPgVectorStoreIncludeTimestamps:
         store = PgVectorStore(config)
         try:
             await store.initialize()
-            vectors = np.random.rand(1, 128).astype(np.float32)
+            vectors = _vectors(1, 128)
             await store.add_vectors(vectors, ids=["ts-epoch-1"])
 
             results = await store.get_vectors(["ts-epoch-1"], include_timestamps=True)
@@ -1807,7 +1808,7 @@ class TestPgVectorStoreIncludeTimestamps:
         store = PgVectorStore(config)
         try:
             await store.initialize()
-            vectors = np.random.rand(1, 128).astype(np.float32)
+            vectors = _vectors(1, 128)
             await store.add_vectors(vectors, ids=["ts-custom-1"])
 
             results = await store.get_vectors(["ts-custom-1"], include_timestamps=True)
@@ -1849,11 +1850,7 @@ class TestPgVectorStoreIncludeTimestamps:
                     created_at TIMESTAMP DEFAULT NOW()
                 )
             """)
-            vec_literal = (
-                "["
-                + ",".join(str(x) for x in np.random.rand(128).astype(np.float32).tolist())
-                + "]"
-            )
+            vec_literal = "[" + ",".join(str(x) for x in _vector(128).tolist()) + "]"
             await conn.execute(
                 f"INSERT INTO {safe_sql_ident(schema)}.{safe_sql_ident(old_schema_table)} "
                 f"(id, content, embedding, metadata) "

@@ -19,9 +19,9 @@ list/dict values) still holds. These tests exercise the real
 
 from __future__ import annotations
 
-import numpy as np
 import pytest
 from dataknobs_common.testing import is_chromadb_available, requires_chromadb
+from dataknobs_data.testing import vectors as _vectors
 
 if is_chromadb_available():
     from dataknobs_data.vector.stores.chroma import ChromaVectorStore
@@ -39,7 +39,7 @@ async def test_list_metadata_does_not_bleed_from_deleted_collection() -> None:
     a = ChromaVectorStore({"dimensions": 4, "collection_name": "bleed_src"})
     await a.initialize()
     await a.add_vectors(
-        np.random.rand(3, 4).astype(np.float32),
+        _vectors(3, 4),
         ids=["a", "b", "c"],
         metadata=[
             {"domain_id": "x", "tags": ["red"]},
@@ -55,7 +55,7 @@ async def test_list_metadata_does_not_bleed_from_deleted_collection() -> None:
     await b.initialize()
     try:
         await b.add_vectors(
-            np.random.rand(3, 384).astype(np.float32),
+            _vectors(3, 384),
             ids=["1", "2", "3"],
             metadata=[
                 {"headings": "A", "source": "doc.md"},
@@ -83,12 +83,12 @@ async def test_list_metadata_does_not_bleed_across_concurrent_stores() -> None:
     await b.initialize()
     try:
         await a.add_vectors(
-            np.random.rand(2, 4).astype(np.float32),
+            _vectors(2, 4),
             ids=["a1", "a2"],
             metadata=[{"tags": ["a"]}, {"tags": ["a"]}],
         )
         await b.add_vectors(
-            np.random.rand(2, 4).astype(np.float32),
+            _vectors(2, 4, seed=1),
             ids=["b1", "b2"],
             metadata=[{"labels": ["b"]}, {"labels": ["b"]}],
         )
@@ -118,7 +118,7 @@ async def test_nonscalar_metadata_round_trips() -> None:
             "n": 7,
         }
         await store.add_vectors(
-            np.random.rand(1, 4).astype(np.float32),
+            _vectors(1, 4),
             ids=["r1"],
             metadata=[meta],
         )
