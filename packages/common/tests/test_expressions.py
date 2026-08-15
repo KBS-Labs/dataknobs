@@ -304,7 +304,7 @@ class TestSecurity:
 
         # An object with its own .format() method is still blocked.
         class _Custom:
-            def format(self) -> str:  # noqa: D401 - test fixture
+            def format(self) -> str:
                 return "formatted"
 
         result = safe_eval("obj.format()", scope={"obj": _Custom()})

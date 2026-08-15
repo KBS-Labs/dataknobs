@@ -68,7 +68,7 @@ class _FakeSession:
         self.client_kwargs: dict[str, Any] = {}
         self.client_service: str | None = None
 
-    def client(self, service: str, **kwargs: Any) -> "_FakeSessionCM":
+    def client(self, service: str, **kwargs: Any) -> _FakeSessionCM:
         self.client_service = service
         self.client_kwargs = kwargs
         return _FakeSessionCM(self._client)
@@ -81,7 +81,7 @@ class _FakeSessionCM:
     async def __aenter__(self) -> _FakeS3Client:
         return self._client
 
-    async def __aexit__(self, *_args: Any) -> None:
+    async def __aexit__(self, *_args: object) -> None:
         return None
 
 

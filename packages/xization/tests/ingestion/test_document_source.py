@@ -68,7 +68,7 @@ async def test_local_iter_files_skips_directories(corpus: Path) -> None:
     source = LocalDocumentSource(corpus)
     refs = await _collect_refs(source, ["**/*"])
     # "docs/nested" would match **/* but is a directory
-    assert all("nested" != Path(r.path).name for r in refs)
+    assert all(Path(r.path).name != "nested" for r in refs)
     # And the directory entry itself shouldn't appear
     assert not any(r.path == "docs/nested" for r in refs)
 

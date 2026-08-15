@@ -20,7 +20,7 @@ which has no ``service`` awareness.
 from __future__ import annotations
 
 import json
-from typing import Any
+from typing import Any, Self
 from urllib.error import URLError
 
 import pytest
@@ -42,7 +42,7 @@ class _FakeResponse:
     def __init__(self, body: bytes) -> None:
         self._body = body
 
-    def __enter__(self) -> "_FakeResponse":
+    def __enter__(self) -> Self:
         return self
 
     def __exit__(self, *exc: object) -> bool:

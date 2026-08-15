@@ -397,7 +397,6 @@ class TestPluginProtocol:
             def expand(self, value, message, deterministic_result, config):
                 received["value"] = value
                 received["deterministic"] = deterministic_result
-                return None
 
         _expand(
             "formal",

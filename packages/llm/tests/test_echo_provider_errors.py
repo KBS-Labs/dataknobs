@@ -90,7 +90,7 @@ async def test_error_response_via_response_function(provider: EchoProvider) -> N
         nonlocal call_count
         call_count += 1
         if call_count == 2:
-            return ErrorResponse(IOError("disk full"))
+            return ErrorResponse(OSError("disk full"))
         return text_response(f"response {call_count}")
 
     provider.set_response_function(dynamic_response)

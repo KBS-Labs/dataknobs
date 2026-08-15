@@ -214,7 +214,7 @@ class TestAsyncRenderAndStream:
             chunks.append(chunk.delta)
 
         full_content = "".join(chunks)
-        assert "[ECHO] Hello! My name is Eve." == full_content
+        assert full_content == "[ECHO] Hello! My name is Eve."
 
     @pytest.mark.asyncio
     async def test_render_and_stream_no_builder(self, echo_config):
