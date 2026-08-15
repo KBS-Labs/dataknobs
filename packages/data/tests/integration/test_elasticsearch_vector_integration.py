@@ -109,7 +109,7 @@ class TestElasticsearchVectorIntegration:
 
             # Create test vectors
             base_vector = _vector(128)
-            similar_vector = base_vector + np.random.randn(128) * 0.1
+            similar_vector = base_vector + np.random.default_rng(2).standard_normal(128) * 0.1
             different_vector = _vector(128, seed=1)
 
             # Create records with vectors

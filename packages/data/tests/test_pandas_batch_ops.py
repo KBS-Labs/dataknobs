@@ -99,7 +99,9 @@ class TestChunkedProcessor:
         """Test reading CSV in chunks."""
         # Create a temporary CSV file
         with tempfile.NamedTemporaryFile(mode="w", suffix=".csv", delete=False) as f:
-            df = pd.DataFrame({"id": range(250), "value": np.random.randn(250)})
+            df = pd.DataFrame(
+                {"id": range(250), "value": np.random.default_rng(0).standard_normal(250)}
+            )
             df.to_csv(f.name, index=False)
             filepath = f.name
 
@@ -180,7 +182,9 @@ class TestBatchOperations:
         batch_ops = BatchOperations(db)
 
         # Create DataFrame larger than chunk size
-        df = pd.DataFrame({"id": range(250), "value": np.random.randn(250)})
+        df = pd.DataFrame(
+            {"id": range(250), "value": np.random.default_rng(0).standard_normal(250)}
+        )
 
         config = BatchConfig(chunk_size=100, memory_efficient=True)
         stats = batch_ops.bulk_insert_dataframe(df, config)

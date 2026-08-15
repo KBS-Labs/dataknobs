@@ -71,9 +71,10 @@ class TestVectorIntegration:
             await store.initialize()
 
         # Add some vectors
+        rng = np.random.default_rng(0)
         vectors = []
         for i in range(10):
-            vec = np.random.randn(64).astype(np.float32)
+            vec = rng.standard_normal(64, dtype=np.float32)
             vec = vec / np.linalg.norm(vec)  # Normalize
             vectors.append(vec)
 
@@ -94,7 +95,7 @@ class TestVectorIntegration:
             assert results[0][1] > 0.99  # Should be ~1.0 for exact match
 
         # Now test with slightly perturbed vector
-        query_vec2 = vectors[1] + np.random.randn(64) * 0.1
+        query_vec2 = vectors[1] + rng.standard_normal(64) * 0.1
         query_vec2 = query_vec2 / np.linalg.norm(query_vec2)
 
         results2 = await store.search(query_vector=query_vec2, k=5)
@@ -129,8 +130,9 @@ class TestVectorIntegration:
             await store.initialize()
 
         # Add vectors with metadata
+        rng = np.random.default_rng(0)
         for i in range(20):
-            vec = np.random.randn(128).astype(np.float32)
+            vec = rng.standard_normal(128, dtype=np.float32)
             await store.add_vectors(
                 vectors=[vec],
                 ids=[f"doc_{i}"],
@@ -145,7 +147,7 @@ class TestVectorIntegration:
 
         # Create a vector query
         query = Query().similar_to(
-            vector=np.random.randn(128).astype(np.float32), field="embedding", k=5
+            vector=rng.standard_normal(128, dtype=np.float32), field="embedding", k=5
         )
 
         # The store should be able to handle this query
@@ -162,9 +164,10 @@ class TestVectorIntegration:
             await store.initialize()
 
         # Add data
+        rng = np.random.default_rng(0)
         categories = ["tech", "science", "health"]
         for i in range(30):
-            vec = np.random.randn(64).astype(np.float32)
+            vec = rng.standard_normal(64, dtype=np.float32)
             vec = vec / np.linalg.norm(vec)
 
             await store.add_vectors(
@@ -174,7 +177,7 @@ class TestVectorIntegration:
             )
 
         # Hybrid query: vector similarity + metadata filter
-        query_vec = np.random.randn(64).astype(np.float32)
+        query_vec = rng.standard_normal(64, dtype=np.float32)
         query_vec = query_vec / np.linalg.norm(query_vec)
 
         # Search with filter
@@ -218,7 +221,7 @@ class TestVectorIntegration:
                 await store.initialize()
 
             # Basic operations should work
-            vec = np.random.randn(64).astype(np.float32)
+            vec = np.random.default_rng(0).standard_normal(64, dtype=np.float32)
             await store.add_vectors([vec], ["test_id"], [{"test": True}])
 
             results = await store.search(vec, k=1)
@@ -242,13 +245,14 @@ class TestPerformanceRegression:
 
         # Measure indexing time
         num_vectors = 1000
+        rng = np.random.default_rng(0)
         start_time = time.time()
 
         # Batch add for better performance
         vectors = []
         ids = []
         for i in range(num_vectors):
-            vec = np.random.randn(128).astype(np.float32)
+            vec = rng.standard_normal(128, dtype=np.float32)
             vectors.append(vec)
             ids.append(f"vec_{i}")
 
@@ -275,7 +279,8 @@ class TestPerformanceRegression:
         await store.initialize()
 
         # Add vectors in batch for efficiency
-        vectors = [np.random.randn(128).astype(np.float32) for _ in range(1000)]
+        rng = np.random.default_rng(0)
+        vectors = [rng.standard_normal(128, dtype=np.float32) for _ in range(1000)]
         ids = [f"vec_{i}" for i in range(1000)]
         await store.add_vectors(vectors, ids)
 
@@ -284,7 +289,7 @@ class TestPerformanceRegression:
         start_time = time.time()
 
         for _ in range(num_searches):
-            query = np.random.randn(128).astype(np.float32)
+            query = rng.standard_normal(128, dtype=np.float32)
             await store.search(query_vector=query, k=10)
 
         elapsed = time.time() - start_time
