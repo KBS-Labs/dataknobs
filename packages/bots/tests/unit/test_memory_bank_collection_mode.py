@@ -9,7 +9,6 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
-import pytest_asyncio
 
 from dataknobs_bots.reasoning.wizard import WizardReasoning, WizardState
 from dataknobs_bots.reasoning.wizard_extraction import WizardExtractor

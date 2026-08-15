@@ -20,12 +20,10 @@ Run Ollama tests (requires Ollama + gemma3:1b):
 """
 
 import os
-from typing import Any, Dict
 
 import pytest
 
 from dataknobs_bots import BotContext, DynaBot
-from dataknobs_llm.tools import Tool
 
 
 # =============================================================================

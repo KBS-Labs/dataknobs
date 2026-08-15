@@ -205,8 +205,6 @@ async def test_pattern_intersection_across_local_and_backend(
 ) -> None:
     """LocalDocumentSource and BackendDocumentSource(FileKnowledgeBackend)
     yield the same set of files for the same patterns."""
-    from typing import Any
-
     from dataknobs_xization.ingestion.source import LocalDocumentSource
 
     corpus = tmp_path / "corpus"

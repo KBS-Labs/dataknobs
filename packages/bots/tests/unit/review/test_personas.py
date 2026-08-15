@@ -1,7 +1,5 @@
 """Tests for review personas."""
 
-import pytest
-
 from dataknobs_bots.review.personas import (
     BUILT_IN_PERSONAS,
     ReviewPersona,

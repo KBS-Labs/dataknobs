@@ -16,7 +16,6 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-import pytest
 
 from dataknobs_bots.memory.artifact_bank import ArtifactBank
 from dataknobs_bots.memory.bank import MemoryBank

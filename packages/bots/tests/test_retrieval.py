@@ -1,7 +1,5 @@
 """Tests for retrieval utilities (ChunkMerger and ContextFormatter)."""
 
-import pytest
-
 from dataknobs_bots.knowledge.retrieval import (
     ChunkMerger,
     ContextFormatter,

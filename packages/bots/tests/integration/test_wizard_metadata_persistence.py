@@ -17,7 +17,7 @@ from typing import Any
 
 import pytest
 import pytest_asyncio
-from dataknobs_bots.reasoning.wizard import WizardReasoning, WizardState
+from dataknobs_bots.reasoning.wizard import WizardReasoning
 from dataknobs_bots.reasoning.wizard_loader import WizardConfigLoader
 from dataknobs_data.backends.memory import AsyncMemoryDatabase
 from dataknobs_llm import EchoProvider

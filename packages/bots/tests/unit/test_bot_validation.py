@@ -7,8 +7,6 @@ Verifies that:
 - Backward-compat infer_main_capability_requirements works
 """
 
-import pytest
-
 from dataknobs_bots.bot.validation import (
     infer_capability_requirements,
     infer_main_capability_requirements,

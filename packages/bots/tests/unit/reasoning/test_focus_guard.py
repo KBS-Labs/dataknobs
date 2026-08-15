@@ -1,7 +1,5 @@
 """Tests for focus guard system."""
 
-import pytest
-
 from dataknobs_bots.reasoning.focus_guard import (
     FocusContext,
     FocusEvaluation,

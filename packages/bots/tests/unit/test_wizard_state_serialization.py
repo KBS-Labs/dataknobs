@@ -23,7 +23,6 @@ from typing import Any
 import pytest
 
 from dataknobs_bots.reasoning.wizard import (
-    DEFAULT_EPHEMERAL_KEYS,
     SubflowContext,
     WizardReasoning,
     WizardState,

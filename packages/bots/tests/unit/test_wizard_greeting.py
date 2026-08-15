@@ -13,7 +13,7 @@ from typing import Any
 import pytest
 
 from dataknobs_bots.reasoning.simple import SimpleReasoning
-from dataknobs_bots.reasoning.wizard import WizardReasoning, WizardState
+from dataknobs_bots.reasoning.wizard import WizardReasoning
 from dataknobs_bots.reasoning.wizard_loader import WizardConfigLoader
 from dataknobs_llm.conversations import ConversationManager
 from dataknobs_llm.llm.providers.echo import EchoProvider

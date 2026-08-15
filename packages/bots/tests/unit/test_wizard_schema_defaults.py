@@ -10,7 +10,7 @@ import pytest
 
 from dataknobs_bots.reasoning.wizard import WizardReasoning, WizardState
 from dataknobs_bots.reasoning.wizard_loader import WizardConfigLoader
-from dataknobs_llm.testing import ConfigurableExtractor, SimpleExtractionResult
+from dataknobs_llm.testing import ConfigurableExtractor
 
 
 @pytest.fixture

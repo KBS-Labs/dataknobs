@@ -4,8 +4,6 @@ Post-completion amendments allow users to make changes after the wizard
 has completed, re-opening the wizard at the relevant stage.
 """
 
-from typing import Any
-
 import pytest
 
 from dataknobs_bots.reasoning.wizard import WizardReasoning, WizardState

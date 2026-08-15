@@ -10,7 +10,7 @@ from typing import Any
 
 import pytest
 
-from dataknobs_bots.memory.bank import AsyncMemoryBank, BankRecord
+from dataknobs_bots.memory.bank import AsyncMemoryBank
 from dataknobs_data.backends.memory import AsyncMemoryDatabase
 
 

@@ -2,7 +2,6 @@
 
 import os
 import time
-from typing import Generator
 
 import pytest
 import requests

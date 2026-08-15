@@ -20,7 +20,6 @@ from dataknobs_bots.reasoning.wizard_grounding import (
     _has_negation,
     significant_words,
 )
-from dataknobs_bots.reasoning.wizard_types import StageSchema
 from dataknobs_bots.reasoning.wizard_utils import word_in_text
 from dataknobs_bots.reasoning.wizard_loader import WizardConfigLoader
 from dataknobs_bots.testing import BotTestHarness, WizardConfigBuilder

@@ -27,7 +27,11 @@ from collections.abc import Callable
 # that validate() resolves the sections against. Do NOT remove as "unused" —
 # without them the bindings are unregistered and validate() degrades to a
 # no-op skip.
-import dataknobs_bots.knowledge.registry  # noqa: F401
+#
+# Only the last three carry a directive. The first binds ``dataknobs_bots``,
+# which the line below rebinds, so ruff attributes the unused binding to that
+# line and never reports this one — a directive here would suppress nothing.
+import dataknobs_bots.knowledge.registry
 import dataknobs_bots.memory.registry  # noqa: F401
 import dataknobs_data.vector.stores  # noqa: F401
 import dataknobs_llm  # noqa: F401

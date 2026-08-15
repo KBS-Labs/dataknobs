@@ -20,8 +20,6 @@ import pytest
 from dataknobs_bots.reasoning.wizard import WizardReasoning
 from dataknobs_bots.reasoning.wizard_loader import WizardConfigLoader
 from dataknobs_bots.reasoning.wizard_types import WizardState
-from dataknobs_llm import EchoProvider
-from dataknobs_llm.testing import scripted_schema_extractor
 
 
 # ---------------------------------------------------------------------------

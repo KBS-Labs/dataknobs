@@ -6,7 +6,6 @@ WizardFSM for programmatic stage introspection.
 
 from typing import Any
 
-import pytest
 
 from dataknobs_bots.reasoning.wizard_loader import WizardConfigLoader
 

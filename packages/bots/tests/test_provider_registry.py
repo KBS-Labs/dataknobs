@@ -12,7 +12,6 @@ import pytest
 from dataknobs_bots import DynaBot
 from dataknobs_bots.bot.base import (
     PROVIDER_ROLE_EXTRACTION,
-    PROVIDER_ROLE_KB_EMBEDDING,
     PROVIDER_ROLE_MAIN,
     PROVIDER_ROLE_MEMORY_EMBEDDING,
     PROVIDER_ROLE_SUMMARY_LLM,

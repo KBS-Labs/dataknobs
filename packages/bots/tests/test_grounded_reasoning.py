@@ -284,7 +284,7 @@ class TestGroundedReasoningUnit:
         assert isinstance(strategy._sources[0], VectorKnowledgeSource)
 
     def test_add_source(self) -> None:
-        from dataknobs_data.sources.base import GroundedSource, RetrievalIntent, SourceResult
+        from dataknobs_data.sources.base import GroundedSource
 
         class StubSource(GroundedSource):
             @property
@@ -1390,9 +1390,6 @@ class TestDynaBotSourceWiring:
     @pytest.mark.asyncio
     async def test_config_driven_database_source(self) -> None:
         """DynaBot.from_config() constructs database sources from config."""
-        from dataknobs_data import Record
-        from dataknobs_data.backends.memory import AsyncMemoryDatabase
-
         config = {
             "llm": {"provider": "echo", "model": "echo-test"},
             "conversation_storage": {"backend": "memory"},

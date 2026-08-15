@@ -1,7 +1,5 @@
 """Tests for context accumulator."""
 
-import pytest
-
 from dataknobs_bots.context.accumulator import (
     Assumption,
     ContextSection,

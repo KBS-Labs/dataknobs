@@ -6,8 +6,6 @@ Verifies that:
 - DynaBot.close() calls strategy.close() without hasattr guard
 """
 
-import asyncio
-
 import pytest
 
 from dataknobs_bots.reasoning.base import ReasoningStrategy
