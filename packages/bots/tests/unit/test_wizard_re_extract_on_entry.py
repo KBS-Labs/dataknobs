@@ -1334,7 +1334,8 @@ class TestCaptureOnlyMode:
     @pytest.mark.asyncio
     async def test_capture_only_extracts_data(self) -> None:
         """Data IS captured at the landing stage even though gates
-        are not relaxed."""
+        are not relaxed.
+        """
         config = _capture_only_config()
 
         async with await BotTestHarness.create(

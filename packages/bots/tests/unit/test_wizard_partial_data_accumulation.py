@@ -100,7 +100,8 @@ class TestPartialDataAccumulation:
     @pytest.mark.asyncio
     async def test_accumulated_data_enables_advancement(self) -> None:
         """After partial data accumulates, the remaining fields allow
-        the wizard to advance."""
+        the wizard to advance.
+        """
         async with await BotTestHarness.create(
             wizard_config=_gather_config(),
             main_responses=["Could you tell me the level?", "All done!"],
@@ -122,7 +123,8 @@ class TestPartialDataAccumulation:
     @pytest.mark.asyncio
     async def test_clarification_still_fires_when_fields_missing(self) -> None:
         """Even though data is merged, clarification must still fire
-        when confidence is low and required fields are missing."""
+        when confidence is low and required fields are missing.
+        """
         async with await BotTestHarness.create(
             wizard_config=_gather_config(),
             main_responses=["Could you tell me more?"],
@@ -170,7 +172,8 @@ class TestPartialDataAccumulation:
     @pytest.mark.asyncio
     async def test_schema_defaults_applied_before_confidence_check(self) -> None:
         """Schema defaults should be applied before can_satisfy is
-        evaluated, so fields with defaults don't block advancement."""
+        evaluated, so fields with defaults don't block advancement.
+        """
         async with await BotTestHarness.create(
             wizard_config=_gather_with_defaults_config(),
             main_responses=["All done!"],
@@ -187,7 +190,8 @@ class TestPartialDataAccumulation:
     @pytest.mark.asyncio
     async def test_conflict_detection_with_accumulated_data(self) -> None:
         """When turn 2's extraction conflicts with turn 1's accumulated
-        data, latest_wins should apply and the new value should persist."""
+        data, latest_wins should apply and the new value should persist.
+        """
         async with await BotTestHarness.create(
             wizard_config=_gather_config(),
             main_responses=["What level?", "All done!"],
@@ -226,7 +230,8 @@ class TestPartialDataAccumulation:
         self,
     ) -> None:
         """When accumulated partial data + new low-confidence extraction
-        satisfy all required fields, the wizard should advance."""
+        satisfy all required fields, the wizard should advance.
+        """
         async with await BotTestHarness.create(
             wizard_config=_gather_config(),
             main_responses=["What level?", "All done!"],

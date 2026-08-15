@@ -982,7 +982,8 @@ class TestHTTPRegistryBackendWithMockServer:
     @pytest.mark.asyncio
     async def test_count_pushes_status_to_server(self, backend, mock_server):
         """``count(filter_metadata=...)`` already sends ``filter_metadata``;
-        this confirms ``count_all(status=...)`` adds ``?status=``."""
+        this confirms ``count_all(status=...)`` adds ``?status=``.
+        """
         mock_server.get(
             "/api/v1/configs",
             payload=[

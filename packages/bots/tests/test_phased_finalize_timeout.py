@@ -204,7 +204,8 @@ async def test_phased_finalize_stored_response_no_synthesis(
 
 async def test_finalize_budget_floor_grants_real_attempt() -> None:
     """At zero remaining budget the finalize still gets the floor, so a quick
-    synthesis (under the floor) completes rather than being killed at 0."""
+    synthesis (under the floor) completes rather than being killed at 0.
+    """
     quick = _MIN_FINALIZE_BUDGET / 2.0
     async with await BotTestHarness.create(
         bot_config=_react_config(tool_loop_timeout=0.0),
@@ -223,7 +224,8 @@ async def test_finalize_budget_floor_grants_real_attempt() -> None:
 
 async def test_finalize_budget_tracks_remaining() -> None:
     """``_finalize_budget`` returns the remaining budget when it exceeds the
-    floor, and the floor when it does not."""
+    floor, and the floor when it does not.
+    """
     async with await BotTestHarness.create(
         bot_config=_react_config(tool_loop_timeout=10.0),
         main_responses=[text_response("noop")],
@@ -245,7 +247,8 @@ async def test_finalize_budget_tracks_remaining() -> None:
 
 async def test_finalize_timeout_builders_markers() -> None:
     """The fallback response/chunk carry the canonical finish_reason plus the
-    precise reason in metadata (no minted finish_reason value)."""
+    precise reason in metadata (no minted finish_reason value).
+    """
     async with await BotTestHarness.create(
         bot_config=_react_config(tool_loop_timeout=0.0),
         main_responses=[text_response("noop")],

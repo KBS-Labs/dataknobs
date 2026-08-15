@@ -181,7 +181,8 @@ class TestWizardStateSerialization:
         self, conversation_manager: ConversationManager
     ) -> None:
         """json.dumps(metadata) succeeds with mixed data including
-        non-serializable objects and dataclasses."""
+        non-serializable objects and dataclasses.
+        """
         reasoning = _make_wizard()
 
         state = reasoning._get_wizard_state(conversation_manager)
@@ -329,7 +330,8 @@ class TestWizardFSMRestoreDecoupling:
 
     def test_restore_preserves_original_data_values(self) -> None:
         """restore() deep-copies data, so context.data has the correct
-        values but is independent of the original."""
+        values but is independent of the original.
+        """
         from dataknobs_bots.reasoning.wizard_loader import WizardConfigLoader
 
         config = {
@@ -441,7 +443,8 @@ class TestWizardStateSharedReference:
         self, conversation_manager: ConversationManager
     ) -> None:
         """Transition records with non-serializable data in snapshot must
-        not crash json.dumps after _save_wizard_state."""
+        not crash json.dumps after _save_wizard_state.
+        """
         from dataknobs_bots.reasoning.observability import create_transition_record
 
         reasoning = _make_wizard()

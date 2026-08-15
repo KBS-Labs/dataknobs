@@ -114,7 +114,8 @@ class TestFirstRender:
         self,
     ) -> None:
         """When both confirm_first_render=False and confirm_on_new_data
-        is not set, no snapshot is saved."""
+        is not set, no snapshot is saved.
+        """
         evaluator = ConfirmationEvaluator()
         stage = _make_stage(
             confirm_first_render=False,
@@ -132,7 +133,8 @@ class TestFirstRender:
     ) -> None:
         """When confirm_first_render=False skips confirmation but
         confirm_on_new_data is set, should_save_snapshot is True
-        so a baseline exists for future diffs."""
+        so a baseline exists for future diffs.
+        """
         evaluator = ConfirmationEvaluator()
         stage = _make_stage(
             confirm_first_render=False,
@@ -221,7 +223,8 @@ class TestReconfirmOnNewData:
 
     def test_bug_a_confirm_keys_is_union(self) -> None:
         """Bug A regression: confirm_keys must include BOTH extraction
-        keys AND snapshot diff keys."""
+        keys AND snapshot diff keys.
+        """
         evaluator = ConfirmationEvaluator()
         stage = _make_stage(
             confirm_on_new_data=True,
@@ -241,7 +244,8 @@ class TestReconfirmOnNewData:
 
     def test_bug_b_empty_extraction_with_diff_triggers_reconfirm(self) -> None:
         """Bug B regression: empty new_data_keys must NOT prevent
-        re-confirmation when the snapshot diff is non-empty."""
+        re-confirmation when the snapshot diff is non-empty.
+        """
         evaluator = ConfirmationEvaluator()
         stage = _make_stage(
             confirm_on_new_data=True,
@@ -303,7 +307,8 @@ class TestComputeSnapshotDiff:
 
     def test_cleared_field_detected(self) -> None:
         """A field present in the prior snapshot but now None/absent
-        should appear in the diff (field deletion)."""
+        should appear in the diff (field deletion).
+        """
         evaluator = ConfirmationEvaluator()
         stage = _make_stage(fields={"a": "string", "b": "string"})
         state = _make_state({"a": "1"})
@@ -317,7 +322,8 @@ class TestComputeSnapshotDiff:
 
     def test_cleared_field_set_to_none_detected(self) -> None:
         """A field set to None (rather than absent) should also be
-        detected as cleared."""
+        detected as cleared.
+        """
         evaluator = ConfirmationEvaluator()
         stage = _make_stage(fields={"a": "string", "b": "string"})
         state = _make_state({"a": "1", "b": None})

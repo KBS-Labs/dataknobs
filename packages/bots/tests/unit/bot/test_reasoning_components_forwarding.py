@@ -70,7 +70,8 @@ _TEST_STRATEGY_KEY = "_test_component_capture"
 def _register_capture_strategy() -> Iterator[None]:
     """Register the capture strategy for this module's tests and remove it
     on teardown so the process-global strategy registry doesn't accumulate
-    test-only keys across runs."""
+    test-only keys across runs.
+    """
     register_strategy(
         _TEST_STRATEGY_KEY,
         _ComponentCaptureStrategy,
@@ -135,7 +136,8 @@ class TestReasoningComponentsForwarding:
     @pytest.mark.asyncio
     async def test_unknown_component_name_is_silently_absorbed(self) -> None:
         """SimpleReasoning ignores unknown components without raising —
-        the mixin's signature-aware absorb contract."""
+        the mixin's signature-aware absorb contract.
+        """
         config: dict[str, Any] = {
             "llm": {"provider": "echo", "model": "test"},
             "conversation_storage": {"backend": "memory"},

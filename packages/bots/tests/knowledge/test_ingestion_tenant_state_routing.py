@@ -71,7 +71,8 @@ async def _seed_backend(*files: tuple[str, bytes]) -> InMemoryKnowledgeBackend:
 async def test_tenant_bound_manager_isolates_ingest_status() -> None:
     """A tenant-bound manager's status write is visible only under its
     own tenant context — not to another tenant, and not to the shared
-    domain view."""
+    domain view.
+    """
     backend = await _seed_backend(("doc.md", b"# Heading\n\nBody content for the shared kb.\n"))
     acme_kb = await _make_kb()
 
@@ -105,7 +106,8 @@ async def test_tenant_bound_manager_isolates_ingest_status() -> None:
 
 async def test_two_tenants_track_status_independently() -> None:
     """Two managers bound to distinct tenants, sharing one backend,
-    track independent ingestion status."""
+    track independent ingestion status.
+    """
     backend = await _seed_backend(("doc.md", b"# H\n\nShared body.\n"))
     acme_kb = await _make_kb()
     beta_kb = await _make_kb()
@@ -172,7 +174,8 @@ async def test_tenant_change_detection_is_minimal_via_shared_lineage() -> None:
 async def test_fresh_tenant_get_info_is_default_view_through_manager() -> None:
     """A tenant that has never ingested observes a fresh DEFAULT view
     (PENDING, no in-flight generation token) — not the shared domain
-    view, nor another tenant's in-flight state."""
+    view, nor another tenant's in-flight state.
+    """
     backend = await _seed_backend(("a.md", b"# A\n\nDoc.\n"))
     kb = await _make_kb()
 
@@ -203,7 +206,8 @@ async def test_fresh_tenant_get_info_is_default_view_through_manager() -> None:
 
 async def test_unbound_manager_resolves_none_and_ingests_unchanged() -> None:
     """An unbound manager resolves ``None`` for every domain and its
-    state calls are unchanged (ctx=None == single-tenant)."""
+    state calls are unchanged (ctx=None == single-tenant).
+    """
     backend = await _seed_backend(("doc.md", b"# H\n\nBody.\n"))
     kb = await _make_kb()
     mgr = KnowledgeIngestionManager(source=backend, destination=kb)
@@ -254,7 +258,8 @@ async def test_resolve_context_bound_vs_unbound() -> None:
 
 async def test_context_config_selects_shared_corpus() -> None:
     """A ``shared_corpus`` config keeps per-tenant state but locks/matches
-    on the corpus, so two domain views of one corpus are the same scope."""
+    on the corpus, so two domain views of one corpus are the same scope.
+    """
     backend = await _seed_backend()
     kb = await _make_kb()
 
@@ -284,7 +289,8 @@ async def test_context_config_selects_shared_corpus() -> None:
 
 async def test_context_config_selects_prefixed_changes_state_prefix() -> None:
     """A ``prefixed`` config redirects where the backend writes state —
-    the seam changes backend behavior, not just the returned type."""
+    the seam changes backend behavior, not just the returned type.
+    """
     backend = await _seed_backend()
     kb = await _make_kb()
 
@@ -313,7 +319,8 @@ async def test_context_config_selects_prefixed_changes_state_prefix() -> None:
 
 async def test_context_config_identity_is_authoritative() -> None:
     """The manager's bound tenant and per-call domain override any identity
-    a config tries to smuggle in."""
+    a config tries to smuggle in.
+    """
     backend = await _seed_backend()
     kb = await _make_kb()
 
@@ -335,7 +342,8 @@ async def test_context_config_identity_is_authoritative() -> None:
 
 async def test_unbound_manager_with_non_single_config_raises() -> None:
     """A tenant-requiring config on an unbound manager fails fast at
-    construction."""
+    construction.
+    """
     backend = await _seed_backend()
     kb = await _make_kb()
 
@@ -358,7 +366,8 @@ async def test_unbound_manager_with_inferred_shape_raises() -> None:
     config carrying only the tenant-requiring keys (here ``shared_corpus_id``,
     which ``create_tenant_context`` would infer as ``shared_corpus``) on an
     unbound manager still raises at construction. Absent an explicit
-    ``"single"``, the config is treated as tenant-requiring."""
+    ``"single"``, the config is treated as tenant-requiring.
+    """
     backend = await _seed_backend()
     kb = await _make_kb()
 
@@ -378,7 +387,8 @@ async def test_context_config_single_resolves_single_context_not_none() -> None:
     """``{"kind": "single"}`` on a bound manager resolves a real
     :class:`SingleTenantContext` with an empty state-key prefix —
     byte-identical backend state to the unbound path, but distinctly
-    **not** ``None`` (the documented distinction the seam preserves)."""
+    **not** ``None`` (the documented distinction the seam preserves).
+    """
     backend = await _seed_backend()
     kb = await _make_kb()
 
@@ -402,7 +412,8 @@ async def test_malformed_bound_config_raises_at_construction() -> None:
     """A bound manager with a malformed shape (here ``prefixed`` missing its
     required ``prefix_pattern``) fails fast at construction with a
     ``ConfigurationError`` — not lazily on the first backend state call as a
-    bare ``ValueError`` from ``create_tenant_context``."""
+    bare ``ValueError`` from ``create_tenant_context``.
+    """
     backend = await _seed_backend()
     kb = await _make_kb()
 
@@ -433,7 +444,8 @@ async def test_malformed_bound_config_raises_at_construction() -> None:
 async def test_capability_advertisement() -> None:
     """Bound or unbound, the manager advertises the two state
     capabilities (they are structural) but never the locking
-    capabilities (locking is the orchestrator's contract)."""
+    capabilities (locking is the orchestrator's contract).
+    """
     backend = await _seed_backend()
     kb = await _make_kb()
 
@@ -456,7 +468,8 @@ async def test_capability_advertisement() -> None:
 
 async def test_event_bus_emission_still_config_dependent() -> None:
     """Adding the static state capabilities must not disturb the
-    config-dependent EVENT_BUS_EMISSION advertisement."""
+    config-dependent EVENT_BUS_EMISSION advertisement.
+    """
     from dataknobs_common.events import InMemoryEventBus
 
     backend = await _seed_backend()

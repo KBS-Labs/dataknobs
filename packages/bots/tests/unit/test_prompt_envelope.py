@@ -353,11 +353,11 @@ async def test_xml_envelope_byte_identical_to_legacy_assembly() -> None:
 
 
 def test_xml_envelope_synthesis_prompt_byte_identical() -> None:
-    """The XML-envelope synthesis prompt is byte-for-byte equal to a hand-built legacy assembly.
+    r"""The XML-envelope synthesis prompt is byte-for-byte equal to a hand-built legacy assembly.
 
     The grounded reasoning module previously emitted a literal
-    ``"\\n\\n<knowledge_base>\\n{kb_context}\\n</knowledge_base>"``
-    block as one of the parts joined with ``"\\n"``. After the refactor,
+    ``"\n\n<knowledge_base>\n{kb_context}\n</knowledge_base>"``
+    block as one of the parts joined with ``"\n"``. After the refactor,
     the envelope renders the same bytes. This test pins the full
     assembled prompt — not a substring — so a future drift in
     separators, ordering, or kb_block prefix is caught.

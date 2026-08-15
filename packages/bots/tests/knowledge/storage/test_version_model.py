@@ -132,7 +132,8 @@ class TestChangeSetInvariants:
 
     async def test_unchanged_short_circuit_is_empty(self, backend) -> None:
         """Equal version ⇒ empty ChangeSet for every backend (no snapshot
-        store needed — this is the fix that works universally)."""
+        store needed — this is the fix that works universally).
+        """
         await backend.create_kb("d")
         await backend.put_file("d", "a.md", b"A")
         version = await backend.get_checksum("d")
@@ -145,7 +146,8 @@ class TestChangeSetInvariants:
 class TestFileBackendNativeSnapshot:
     """The file backend retains a per-version ``_snapshots/<v>.json``
     store, so ``list_changes_since`` is a minimal file-level diff (not
-    the mixin's full-set default)."""
+    the mixin's full-set default).
+    """
 
     async def test_file_backend_minimal_disjoint_diff(self, tmp_path: Path) -> None:
         be = FileKnowledgeBackend(base_path=tmp_path / "kb")
@@ -176,7 +178,8 @@ class TestFileBackendNativeSnapshot:
 
     async def test_file_backend_empty_baseline_round_trips(self, tmp_path: Path) -> None:
         """The empty-KB identity ("") resolves to the empty snapshot
-        even though no file is written for it."""
+        even though no file is written for it.
+        """
         be = FileKnowledgeBackend(base_path=tmp_path / "kb")
         await be.initialize()
         await be.create_kb("d")
@@ -192,7 +195,8 @@ class TestFileBackendNativeSnapshot:
     async def test_file_backend_unretained_version_raises(self, tmp_path: Path) -> None:
         """A real store ⇒ an unknown version is reported, not silently
         treated as the empty snapshot (which would mis-report a full
-        add-everything diff)."""
+        add-everything diff).
+        """
         be = FileKnowledgeBackend(base_path=tmp_path / "kb")
         await be.initialize()
         await be.create_kb("d")
@@ -207,7 +211,8 @@ class TestFileBackendNativeSnapshot:
 
 class TestInvalidVersionError:
     """Memory has a real store ⇒ an unretained version is reported, not
-    silently treated as the empty snapshot."""
+    silently treated as the empty snapshot.
+    """
 
     async def test_list_changes_since_raises_for_unretained(self) -> None:
         be = InMemoryKnowledgeBackend()
@@ -220,7 +225,8 @@ class TestInvalidVersionError:
 
     async def test_has_changes_since_swallows_invalid_version(self) -> None:
         """`has_changes_since` maps an unresolvable version to "changed"
-        so callers safely re-ingest (no exception leaks)."""
+        so callers safely re-ingest (no exception leaks).
+        """
         be = InMemoryKnowledgeBackend()
         await be.initialize()
         await be.create_kb("d")
@@ -231,7 +237,8 @@ class TestInvalidVersionError:
 
 class TestIngestIfChangedRoundTrip:
     """At the manager layer, capturing get_current_version and
-    passing it back must NOT spuriously re-ingest an unchanged KB."""
+    passing it back must NOT spuriously re-ingest an unchanged KB.
+    """
 
     async def test_no_spurious_reingest_then_detects_real_change(
         self,

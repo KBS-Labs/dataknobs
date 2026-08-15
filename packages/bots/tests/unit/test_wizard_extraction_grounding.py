@@ -1188,7 +1188,8 @@ class TestStageOverrideWithSkipBuiltinGrounding:
     @pytest.mark.asyncio
     async def test_stage_reenable_overrides_skip_builtin(self) -> None:
         """Stage extraction_grounding: true works even when
-        skip_builtin_grounding=True globally."""
+        skip_builtin_grounding=True globally.
+        """
         config: dict[str, Any] = {
             "name": "skip-override-test",
             "version": "1.0",

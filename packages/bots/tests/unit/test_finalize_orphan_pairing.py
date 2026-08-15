@@ -183,7 +183,8 @@ def _bot_config(
 
 class TestSimpleCapHitBuffered:
     """``reasoning: simple`` + a tool, never satisfied, hits the iteration
-    cap with a pending unexecuted call — the last ``tool_use`` dangles."""
+    cap with a pending unexecuted call — the last ``tool_use`` dangles.
+    """
 
     @pytest.mark.asyncio
     async def test_cap_hit_pairs_orphan_on_replay(self) -> None:
@@ -225,7 +226,8 @@ class TestSimpleCapHitBuffered:
 
 class TestSimpleTimeoutBuffered:
     """A ``tool_loop_timeout`` break leaves the first ``tool_use`` dangling —
-    a *different* break path than the cap (Part 4 both-routes requirement)."""
+    a *different* break path than the cap (Part 4 both-routes requirement).
+    """
 
     @pytest.mark.asyncio
     async def test_timeout_pairs_orphan_on_replay(self) -> None:
@@ -297,7 +299,8 @@ class TestGroundedPassThrough:
 
 class TestSimpleCapHitStreaming:
     """The streaming loop finalizes through the same ``_finalize_turn`` — one
-    chokepoint covers both delivery modes."""
+    chokepoint covers both delivery modes.
+    """
 
     @pytest.mark.asyncio
     async def test_streaming_cap_hit_pairs_orphan_on_replay(self) -> None:
@@ -363,7 +366,8 @@ class TestSimpleTimeoutStreaming:
 class TestReActUnchanged:
     """A ReAct cap-hit turn stays green: ReAct pairs before its in-turn
     synthesis (Layer B), and the new ``_finalize_turn`` call (Layer A) is an
-    idempotent no-op on the already-paired history."""
+    idempotent no-op on the already-paired history.
+    """
 
     @pytest.mark.asyncio
     async def test_react_turn_still_paired_and_unchanged(self) -> None:
@@ -394,7 +398,8 @@ class TestReActUnchanged:
 
 class TestNoFalsePositive:
     """A normal turn appends no synthetic pairing; a no-tools bot never
-    reaches the pairing call (guard short-circuits)."""
+    reaches the pairing call (guard short-circuits).
+    """
 
     @pytest.mark.asyncio
     async def test_tool_satisfied_turn_no_synthetic_pairing(self) -> None:
@@ -495,7 +500,8 @@ class TestWizardUnaffected:
 
 class TestPureCoreIdempotency:
     """The Layer-A call at ``_finalize_turn`` runs on *every* tool-bot turn,
-    so its idempotency on an already-paired history is load-bearing."""
+    so its idempotency on an already-paired history is load-bearing.
+    """
 
     def test_paired_history_is_noop(self) -> None:
         from dataknobs_llm.llm.base import ToolCall

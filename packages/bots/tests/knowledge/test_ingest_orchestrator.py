@@ -647,7 +647,8 @@ class TestLockConfigConstruction:
     @pytest.mark.asyncio
     async def test_config_built_lock_serializes_per_domain(self) -> None:
         """A config-built lock still serializes concurrent same-domain
-        triggers (end-to-end behavioural proof, not just type check)."""
+        triggers (end-to-end behavioural proof, not just type check).
+        """
         from dataknobs_common.locks import InProcessLock
 
         bus = await _make_bus()

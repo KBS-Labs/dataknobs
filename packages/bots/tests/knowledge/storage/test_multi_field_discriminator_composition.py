@@ -27,7 +27,8 @@ def test_multi_field_composes_with_backend_key_discriminator(
     tmp_path: Path,
 ) -> None:
     """A consumer wiring multi-aspect event routing classifies the
-    backend key kind AND a payload label through one composable surface."""
+    backend key kind AND a payload label through one composable surface.
+    """
     backend = FileKnowledgeBackend(base_path=tmp_path)
     multi = MultiFieldDiscriminator(
         {
@@ -56,7 +57,8 @@ def test_multi_field_missing_payload_field_returns_none(
 ) -> None:
     """Missing payload fields surface as None in the result dict — the
     consumer's dispatch logic can distinguish 'absent' from 'classified
-    as None'."""
+    as None'.
+    """
     backend = FileKnowledgeBackend(base_path=tmp_path)
     multi = MultiFieldDiscriminator(
         {

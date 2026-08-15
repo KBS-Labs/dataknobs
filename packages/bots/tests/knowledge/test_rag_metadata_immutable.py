@@ -189,7 +189,7 @@ async def test_chunk_id_does_not_collide_for_snake_case_domains():
 
 @pytest.mark.asyncio
 async def test_single_domain_chunk_id_uses_underscore_separator():
-    """Single-domain consumers' chunk-id format is unchanged on re-ingest.
+    r"""Single-domain consumers' chunk-id format is unchanged on re-ingest.
 
     Pre-PR (main): ``chunk_id = f"{stem}_{chunk_index}"``.
 
@@ -198,7 +198,7 @@ async def test_single_domain_chunk_id_uses_underscore_separator():
     the historical ``_`` separator when no ``domain_id`` is threaded
     through. Otherwise existing populated stores re-ingested under
     the new code would silently double up: every old chunk_id
-    ``stem_index`` would fail to upsert against the new ``stem\\x1findex``
+    ``stem_index`` would fail to upsert against the new ``stem\x1findex``
     and insert as a new row.
     """
     kb = await _make_kb()

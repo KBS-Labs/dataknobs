@@ -132,7 +132,8 @@ async def test_lifecycle_callbacks_stable_identity() -> None:
 @pytest.mark.asyncio
 async def test_event_bus_auto_composes_fan_out() -> None:
     """An event_bus-bound manager fans out to the bus AND fires the
-    in-process callback — both observers see the end event."""
+    in-process callback — both observers see the end event.
+    """
     source = await _make_source()
     rag = await _make_rag()
     bus = InMemoryEventBus()
