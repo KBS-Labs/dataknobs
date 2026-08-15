@@ -174,6 +174,9 @@ class PostgresEventBus(StructuredConfigConsumer[PostgresEventBusConfig]):
         self._channel_topics: dict[str, str] = {}  # channel -> topic
         self._lock = asyncio.Lock()
         self._listen_task: asyncio.Task[Any] | None = None
+        # In-flight dispatches, held so the loop's weak reference is not the
+        # only one and so close() can wait for them. See _notification_handler.
+        self._dispatch_tasks: set[asyncio.Task[None]] = set()
         self._connected = False
 
     def _topic_to_channel(self, topic: str) -> str:
@@ -254,7 +257,11 @@ class PostgresEventBus(StructuredConfigConsumer[PostgresEventBusConfig]):
                 except asyncio.CancelledError:
                     pass
 
-            # Unlisten from all channels and remove listeners
+            # Unlisten from all channels and remove listeners. Doing this
+            # before the drain below is what bounds the drain: with no
+            # listener registered, asyncpg cannot invoke
+            # _notification_handler again, so the set cannot gain a new task
+            # while we are waiting on it.
             for channel in self._channel_topics:
                 try:
                     if self._listen_conn:
@@ -263,6 +270,18 @@ class PostgresEventBus(StructuredConfigConsumer[PostgresEventBusConfig]):
                 except Exception:
                     pass
 
+        # Wait for dispatches already in flight, OUTSIDE the lock.
+        # _dispatch_event takes this same lock to read _subscriptions, so
+        # awaiting from inside it would deadlock; and clearing _subscriptions
+        # first would let the drain complete while every dispatch found an
+        # empty subscriber list, which is the same lost event by a quieter
+        # route. Exceptions are already logged per handler in _dispatch_event
+        # and are collected here only so one failure cannot abandon the rest.
+        in_flight = list(self._dispatch_tasks)
+        if in_flight:
+            await asyncio.gather(*in_flight, return_exceptions=True)
+
+        async with self._lock:
             if self._listen_conn:
                 await self._listen_conn.close()
                 self._listen_conn = None
@@ -509,8 +528,15 @@ class PostgresEventBus(StructuredConfigConsumer[PostgresEventBusConfig]):
         if not topic:
             return
 
-        # Dispatch to handlers (in a new task to not block the notification handler)
-        asyncio.create_task(self._dispatch_event(topic, event))
+        # Dispatch in a task so this callback does not block the LISTEN
+        # connection. The handle is RETAINED: the event loop keeps only a weak
+        # reference to a bare create_task, so a dispatch dropped here could be
+        # garbage-collected mid-flight and silently never reach a handler.
+        # close() awaits whatever is still in this set; the done callback keeps
+        # it from growing without bound.
+        task = asyncio.create_task(self._dispatch_event(topic, event))
+        self._dispatch_tasks.add(task)
+        task.add_done_callback(self._dispatch_tasks.discard)
 
     async def _dispatch_event(self, topic: str, event: Event) -> None:
         """Dispatch an event to all matching subscribers.

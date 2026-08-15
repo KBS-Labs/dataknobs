@@ -14,7 +14,7 @@ from typing import Any
 
 import pytest
 
-from dataknobs_common.events import Event, EventType, PostgresEventBusConfig
+from dataknobs_common.events import Event, EventType, PostgresEventBusConfig, Subscription
 from dataknobs_common.events.postgres import PostgresEventBus
 from dataknobs_common.testing import is_postgres_available
 
@@ -475,6 +475,84 @@ class TestNotificationHandlerParsesPayload:
         assert len(dispatched_events) == 0
 
 
+class TestDispatchTasksAreRetainedAndDrained:
+    """Bug: a dispatched event could silently never happen.
+
+    ``_notification_handler`` fired ``asyncio.create_task(...)`` and threw the
+    handle away. asyncio keeps only a *weak* reference to a bare task, so a
+    dispatch could be garbage-collected mid-flight, and ``close()`` — which
+    knew nothing about these tasks — tore the bus down out from under any that
+    were still running. An event the bus accepted and reported dispatching
+    could reach no handler at all.
+
+    These drive the real ``_notification_handler``, ``_dispatch_event`` and
+    ``close()``. No connection is stubbed because this path needs none: every
+    connection attribute is None-guarded, so the only setup is the private
+    state ``connect()``/``subscribe()`` would have written. The end-to-end
+    path over a real server is covered by the integration test of the same
+    name below.
+    """
+
+    def _armed_bus(self, handler: Any) -> PostgresEventBus:
+        """A bus in the state connect() + subscribe() would have left it."""
+        bus = PostgresEventBus(connection_string="postgresql://unused")
+        bus._connected = True
+        bus._channel_topics["events_test"] = "test"
+        bus._topic_channels["test"] = "events_test"
+        bus._subscriptions["sub-1"] = Subscription(
+            subscription_id="sub-1",
+            topic="test",
+            handler=handler,
+            pattern=None,
+            _cancel_callback=bus._unsubscribe,
+        )
+        return bus
+
+    @staticmethod
+    def _payload() -> str:
+        return json.dumps(Event(type=EventType.CREATED, topic="test", payload={"n": 1}).to_dict())
+
+    @pytest.mark.asyncio
+    async def test_close_waits_for_an_in_flight_dispatch(self):
+        """close() must not drop a dispatch that is already running."""
+        completed: list[Event] = []
+
+        async def slow_handler(event: Event) -> None:
+            await asyncio.sleep(0.05)
+            completed.append(event)
+
+        bus = self._armed_bus(slow_handler)
+        bus._notification_handler(None, 0, "events_test", self._payload())
+
+        await bus.close()
+
+        assert completed, "close() returned while a dispatch was still in flight"
+
+    @pytest.mark.asyncio
+    async def test_the_dispatch_task_is_retained_while_it_runs(self):
+        """Structural: the handle is held, so the loop's weak reference is not the only one.
+
+        This asserts the mechanism that makes mid-flight collection
+        impossible, not the collection itself -- a garbage-collection race is
+        not deterministically reproducible, which is why the test above
+        targets the half that is.
+        """
+        started = asyncio.Event()
+
+        async def blocking_handler(event: Event) -> None:
+            started.set()
+            await asyncio.sleep(0.05)
+
+        bus = self._armed_bus(blocking_handler)
+        bus._notification_handler(None, 0, "events_test", self._payload())
+
+        await asyncio.wait_for(started.wait(), timeout=1.0)
+        assert bus._dispatch_tasks, "the dispatch task is referenced by nothing but the loop"
+
+        await bus.close()
+        assert not bus._dispatch_tasks, "finished tasks are not discarded from the set"
+
+
 # ---------------------------------------------------------------------------
 # Integration tests — require a real PostgreSQL instance
 # ---------------------------------------------------------------------------
@@ -670,6 +748,46 @@ class TestPostgresEventBusIntegration:
             assert received[0].payload == {"resumed": True}
         finally:
             await bus.close()
+
+    @pytest.mark.asyncio
+    async def test_close_waits_for_an_in_flight_dispatch(self):
+        """close() must not drop a dispatch already running, over a real server.
+
+        The unit test of the same name drives ``_notification_handler``
+        directly; this drives the whole path -- real LISTEN/NOTIFY, real
+        asyncpg callback, real handler -- so the drain is proven where the
+        notification actually originates rather than where it is simulated.
+        """
+        bus = PostgresEventBus(connection_string=PG_DSN)
+        await bus.connect()
+        closed = False
+        try:
+            started = asyncio.Event()
+            completed: list[Event] = []
+
+            async def slow_handler(event: Event) -> None:
+                started.set()
+                await asyncio.sleep(0.2)
+                completed.append(event)
+
+            await bus.subscribe("test:drain", slow_handler)
+            await bus.publish(
+                "test:drain",
+                Event(type=EventType.CREATED, topic="test:drain", payload={"n": 1}),
+            )
+
+            # Close only once the handler is demonstrably mid-flight; closing
+            # before delivery would prove nothing about the drain.
+            await asyncio.wait_for(started.wait(), timeout=10.0)
+            assert not completed, "handler finished before close() was called"
+
+            await bus.close()
+            closed = True
+
+            assert completed, "close() returned while a dispatch was still in flight"
+        finally:
+            if not closed:
+                await bus.close()
 
     @pytest.mark.asyncio
     async def test_close_then_publish_raises(self):
