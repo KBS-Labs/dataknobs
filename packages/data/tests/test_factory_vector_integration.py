@@ -6,7 +6,11 @@ import pytest
 import numpy as np
 from collections import OrderedDict
 
-from dataknobs_common.testing import safe_sql_ident
+from dataknobs_common.testing import (
+    requires_real_elasticsearch,
+    requires_real_postgres_sync,
+    safe_sql_ident,
+)
 from dataknobs_data.factory import DatabaseFactory
 from dataknobs_data.records import Record
 from dataknobs_data.fields import VectorField
@@ -135,10 +139,7 @@ class TestFactoryVectorIntegration:
         memory_info = factory.get_backend_info("memory")
         assert "vector_support" not in memory_info
 
-    @pytest.mark.skipif(
-        not os.environ.get("TEST_POSTGRES", "").lower() == "true",
-        reason="PostgreSQL tests require TEST_POSTGRES=true and a running PostgreSQL instance",
-    )
+    @requires_real_postgres_sync
     def test_postgres_vector_enabled(self, factory):
         """Test PostgreSQL with vector support (requires actual database)."""
         import uuid
@@ -213,10 +214,7 @@ class TestFactoryVectorIntegration:
 
             db.close()
 
-    @pytest.mark.skipif(
-        not os.environ.get("TEST_ELASTICSEARCH", "").lower() == "true",
-        reason="Elasticsearch tests require TEST_ELASTICSEARCH=true and a running Elasticsearch instance",
-    )
+    @requires_real_elasticsearch
     def test_elasticsearch_vector_enabled(self, factory):
         """Test Elasticsearch with vector support (requires actual instance)."""
         import uuid

@@ -11,17 +11,13 @@ closed`` — a sibling close hard-closed the pool out from under the other
 holder. After the fix it passes.
 """
 
-import os
-
 import pytest
 
+from dataknobs_common.testing import requires_real_postgres
 from dataknobs_data import AsyncDatabase, Record
 from dataknobs_data.backends.postgres import _pool_manager
 
-pytestmark = pytest.mark.skipif(
-    not os.environ.get("TEST_POSTGRES", "").lower() == "true",
-    reason="PostgreSQL tests require TEST_POSTGRES=true and a running PostgreSQL instance",
-)
+pytestmark = requires_real_postgres
 
 
 def _sibling_config(base_config: dict, table: str) -> dict:

@@ -4,16 +4,13 @@ import os
 import pytest
 import psycopg2
 from psycopg2.extensions import ISOLATION_LEVEL_AUTOCOMMIT
-from dataknobs_common.testing import safe_sql_ident
+from dataknobs_common.testing import requires_real_postgres_sync, safe_sql_ident
 from dataknobs_data import Query, Record, SyncDatabase
 from dataknobs_data.query import Operator
 
 
-# Skip tests if database environment variables are not set
-pytestmark = pytest.mark.skipif(
-    not os.environ.get("TEST_POSTGRES", "").lower() == "true",
-    reason="PostgreSQL tests require TEST_POSTGRES=true and a running PostgreSQL instance",
-)
+# SyncDatabase only, through psycopg2.
+pytestmark = requires_real_postgres_sync
 
 
 class TestSqlBackendsIdFiltering:

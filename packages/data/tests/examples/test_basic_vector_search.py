@@ -8,6 +8,8 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch, AsyncMock
 from typing import List, Dict, Any
 
+from dataknobs_common.testing import requires_package
+
 # Add examples to path
 examples_path = Path(__file__).parent.parent.parent / "examples"
 sys.path.insert(0, str(examples_path))
@@ -236,14 +238,9 @@ class TestIntegrationWithRealModel:
     """Integration tests with real model (optional, requires sentence-transformers)."""
 
     @pytest.mark.asyncio
+    @requires_package("sentence_transformers")
     async def test_with_real_model(self):
         """Test with actual SentenceTransformer model."""
-        # Skip if sentence_transformers is not available
-        try:
-            import sentence_transformers
-        except ImportError:
-            pytest.skip("sentence-transformers not installed")
-
         example = VectorSearchExample(model_name="all-MiniLM-L6-v2", verbose=False)
 
         try:

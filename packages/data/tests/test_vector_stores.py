@@ -12,6 +12,7 @@ from uuid import uuid4
 import numpy as np
 import pytest
 
+from dataknobs_common.testing import is_chromadb_available, is_faiss_available
 from dataknobs_data.testing import vector as _vector, vectors as _vectors
 from dataknobs_data.vector.stores import VectorStore, VectorStoreFactory
 from dataknobs_data.vector.stores.memory import MemoryVectorStore
@@ -738,20 +739,12 @@ except ImportError:
     pass
 
 
-# Check what's available for the factory tests
-try:
-    import faiss
-
-    FAISS_AVAILABLE_FOR_FACTORY = True
-except ImportError:
-    FAISS_AVAILABLE_FOR_FACTORY = False
-
-try:
-    import chromadb
-
-    CHROMA_AVAILABLE_FOR_FACTORY = True
-except ImportError:
-    CHROMA_AVAILABLE_FOR_FACTORY = False
+# Not gates: the two factory tests below assert both branches -- the store is
+# built when the backend is installed, and a named ValueError is raised when it
+# is not. So these ask the published predicate rather than carrying a marker,
+# which would delete the missing-dependency half of each test.
+FAISS_AVAILABLE_FOR_FACTORY = is_faiss_available()
+CHROMA_AVAILABLE_FOR_FACTORY = is_chromadb_available()
 
 
 class TestVectorStoreFactory:

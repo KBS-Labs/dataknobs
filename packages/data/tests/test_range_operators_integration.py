@@ -5,7 +5,7 @@ import pytest
 import psycopg2
 from psycopg2.extensions import ISOLATION_LEVEL_AUTOCOMMIT
 from datetime import datetime, timedelta
-from dataknobs_common.testing import safe_sql_ident
+from dataknobs_common.testing import requires_real_postgres_sync, safe_sql_ident
 from dataknobs_data import Record, Query, Filter, Operator
 
 
@@ -15,10 +15,12 @@ pytestmark = pytest.mark.integration
 
 @pytest.fixture(scope="session")
 def ensure_postgres_test_db():
-    """Ensure the test database exists for integration tests."""
-    if not os.environ.get("TEST_POSTGRES", "").lower() == "true":
-        return
+    """Ensure the test database exists for integration tests.
 
+    No opt-in guard: the only class requesting this fixture carries
+    ``requires_real_postgres_sync``, and a fixture is set up only for a
+    test that runs.
+    """
     host = os.environ.get("POSTGRES_HOST", "localhost")
     port = int(os.environ.get("POSTGRES_PORT", 5432))
     user = os.environ.get("POSTGRES_USER", "postgres")
@@ -48,10 +50,7 @@ def ensure_postgres_test_db():
         print(f"Warning: Could not ensure test database exists: {e}")
 
 
-@pytest.mark.skipif(
-    not os.environ.get("TEST_POSTGRES", "").lower() == "true",
-    reason="PostgreSQL tests require TEST_POSTGRES=true",
-)
+@requires_real_postgres_sync
 class TestPostgresRangeOperators:
     """Test BETWEEN operators with real PostgreSQL backend."""
 

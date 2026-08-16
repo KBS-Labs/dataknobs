@@ -3,6 +3,7 @@
 import numpy as np
 import pytest
 
+from dataknobs_common.testing import is_chromadb_available, is_faiss_available
 from dataknobs_data.factory import DatabaseFactory, VectorStoreFactory
 from dataknobs_data.query import Query
 
@@ -42,23 +43,20 @@ class TestVectorIntegration:
 
     def test_faiss_backend_missing_dependency(self, factory):
         """Test Faiss backend with missing dependency."""
-        try:
-            import faiss
-
+        # Inverted: this asserts the error raised when faiss is ABSENT, so it
+        # skips when the package is present. A requires_faiss marker would
+        # invert the test.
+        if is_faiss_available():
             pytest.skip("Faiss is installed, skipping missing dependency test")
-        except ImportError:
-            with pytest.raises(ValueError, match="Faiss backend requires faiss-cpu"):
-                factory.create(backend="faiss", dimensions=256)
+        with pytest.raises(ValueError, match="Faiss backend requires faiss-cpu"):
+            factory.create(backend="faiss", dimensions=256)
 
     def test_chroma_backend_missing_dependency(self, factory):
         """Test Chroma backend with missing dependency."""
-        try:
-            import chromadb
-
+        if is_chromadb_available():
             pytest.skip("ChromaDB is installed, skipping missing dependency test")
-        except ImportError:
-            with pytest.raises(ValueError, match="Chroma backend requires chromadb"):
-                factory.create(backend="chroma", dimensions=256)
+        with pytest.raises(ValueError, match="Chroma backend requires chromadb"):
+            factory.create(backend="chroma", dimensions=256)
 
     @pytest.mark.asyncio
     async def test_end_to_end_vector_workflow(self, factory):

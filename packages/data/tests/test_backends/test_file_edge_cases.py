@@ -12,6 +12,7 @@ import csv
 
 import pytest
 
+from dataknobs_common.testing import is_package_available
 from dataknobs_data.backends.file import (
     FileLock,
     FileFormat,
@@ -490,12 +491,8 @@ class TestSyncFileDatabaseEdgeCases:
         ]
 
         # Add parquet only if pyarrow is available
-        try:
-            import pyarrow
-
+        if is_package_available("pyarrow"):
             test_cases.append((".parquet", "parquet"))
-        except ImportError:
-            pass
 
         for ext, expected_format in test_cases:
             with tempfile.NamedTemporaryFile(suffix=ext, delete=False) as f:

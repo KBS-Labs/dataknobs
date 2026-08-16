@@ -2,21 +2,22 @@
 
 import asyncio
 import concurrent.futures
-import os
 import uuid
 
 import pytest
 
+from dataknobs_common.testing import (
+    requires_real_postgres,
+    requires_real_postgres_sync,
+)
 from dataknobs_data import AsyncDatabase, Query, Record, SyncDatabase
 from dataknobs_data.query import Filter, Operator, SortOrder
 
 # pytestmark = pytest.mark.integration
 
-# Skip all tests if PostgreSQL is not available
-pytestmark = pytest.mark.skipif(
-    not os.environ.get("TEST_POSTGRES", "").lower() == "true",
-    reason="PostgreSQL tests require TEST_POSTGRES=true and a running PostgreSQL instance",
-)
+# Both drivers: this module exercises the sync backend (psycopg2) and the
+# async one (asyncpg), so it needs each of them present and the server up.
+pytestmark = [requires_real_postgres, requires_real_postgres_sync]
 
 
 class TestPostgresIntegration:

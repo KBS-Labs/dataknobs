@@ -2,22 +2,14 @@
 
 import pytest
 
-# Try to import duckdb and dependencies - skip tests if not available
-try:
-    import duckdb
-    from dataknobs_data.factory import AsyncDatabaseFactory, DatabaseFactory
-    from dataknobs_data.records import Record
+from dataknobs_common.testing import requires_package
+from dataknobs_data.factory import AsyncDatabaseFactory, DatabaseFactory
+from dataknobs_data.records import Record
 
-    DUCKDB_AVAILABLE = True
-except ImportError:
-    DUCKDB_AVAILABLE = False
-    # Create dummy classes to prevent NameError
-    AsyncDatabaseFactory = DatabaseFactory = Record = None
-
-# Skip all tests if DuckDB is not installed
-pytestmark = pytest.mark.skipif(
-    not DUCKDB_AVAILABLE, reason="DuckDB tests require duckdb package (pip install duckdb)"
-)
+# The imports above load without duckdb -- the factory reaches its backends
+# lazily -- so the probe that used to guard them, and the three dummy None
+# bindings that kept the class bodies importable when it failed, are gone.
+pytestmark = requires_package("duckdb")
 
 
 class TestDuckDBFactoryIntegration:

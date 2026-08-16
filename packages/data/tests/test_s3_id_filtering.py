@@ -2,15 +2,12 @@
 
 import os
 import pytest
+from dataknobs_common.testing import requires_real_s3
 from dataknobs_data import Query, Record, SyncDatabase
 from dataknobs_data.query import Operator
 
 
-# Skip tests if S3 is not available
-pytestmark = pytest.mark.skipif(
-    not os.environ.get("TEST_S3", "").lower() == "true",
-    reason="S3 tests require TEST_S3=true and a running LocalStack or S3 instance",
-)
+pytestmark = requires_real_s3
 
 
 class TestS3IdFiltering:

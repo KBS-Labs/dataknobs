@@ -2,15 +2,12 @@
 
 import os
 import pytest
+from dataknobs_common.testing import requires_real_elasticsearch
 from dataknobs_data import Query, Record, SyncDatabase
 from dataknobs_data.query import Operator
 
 
-# Skip tests if Elasticsearch is not available
-pytestmark = pytest.mark.skipif(
-    not os.environ.get("TEST_ELASTICSEARCH", "").lower() == "true",
-    reason="Elasticsearch tests require TEST_ELASTICSEARCH=true and a running Elasticsearch instance",
-)
+pytestmark = requires_real_elasticsearch
 
 
 class TestElasticsearchIdFiltering:

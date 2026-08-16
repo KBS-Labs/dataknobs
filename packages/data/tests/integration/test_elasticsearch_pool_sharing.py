@@ -20,17 +20,13 @@ manager) is correct end-to-end, which the backend-agnostic unit tests
 cannot see.
 """
 
-import os
-
 import pytest
 
+from dataknobs_common.testing import requires_real_elasticsearch
 from dataknobs_data import AsyncDatabase, Record
 from dataknobs_data.backends.elasticsearch_async import _client_manager
 
-pytestmark = pytest.mark.skipif(
-    not os.environ.get("TEST_ELASTICSEARCH", "").lower() == "true",
-    reason="Elasticsearch tests require TEST_ELASTICSEARCH=true and a running Elasticsearch instance",
-)
+pytestmark = requires_real_elasticsearch
 
 
 class TestElasticsearchPoolSharing:

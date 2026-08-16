@@ -7,23 +7,27 @@ import pytest
 import psycopg2
 from psycopg2.extensions import ISOLATION_LEVEL_AUTOCOMMIT
 
-from dataknobs_common.testing import safe_sql_ident
+from dataknobs_common.testing import (
+    requires_real_postgres,
+    requires_real_postgres_sync,
+    safe_sql_ident,
+)
 from dataknobs_data import AsyncDatabase, Query, Record, SyncDatabase
 from dataknobs_data.query import Filter, Operator, SortOrder, SortSpec
 
-# Skip all tests if PostgreSQL is not available
-pytestmark = pytest.mark.skipif(
-    not os.environ.get("TEST_POSTGRES", "").lower() == "true",
-    reason="PostgreSQL tests require TEST_POSTGRES=true and a running PostgreSQL instance",
-)
+# Both drivers: this module exercises the sync backend (psycopg2) and the
+# async one (asyncpg), so it needs each of them present and the server up.
+pytestmark = [requires_real_postgres, requires_real_postgres_sync]
 
 
 @pytest.fixture(scope="session")
 def ensure_test_database():
-    """Ensure the test database exists."""
-    if not os.environ.get("TEST_POSTGRES", "").lower() == "true":
-        return
+    """Ensure the test database exists.
 
+    No opt-in guard: the module markers skip every test here unless the
+    server is up and both drivers are installed, and a fixture is set up
+    only for a test that runs.
+    """
     host = os.environ.get("POSTGRES_HOST", "localhost")
     port = int(os.environ.get("POSTGRES_PORT", 5432))
     user = os.environ.get("POSTGRES_USER", "postgres")

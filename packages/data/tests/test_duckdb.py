@@ -7,9 +7,9 @@ from pathlib import Path
 import pytest
 import pytest_asyncio
 
-# Try to import duckdb and backend - skip tests if not available
+# The backend module imports duckdb at its top, so the import below is itself
+# the probe -- a bare `import duckdb` beside it tested the same thing twice.
 try:
-    import duckdb
     from dataknobs_data.backends.duckdb import AsyncDuckDBDatabase
     from dataknobs_data.query import Filter, Operator, Query, SortOrder
     from dataknobs_data.query_logic import (
