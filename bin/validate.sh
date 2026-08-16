@@ -625,6 +625,18 @@ PRINT_EXCEPTIONS=(
     # Imported by pytest before any logging is configured, so a logger call here
     # goes nowhere. print is the mechanism conftest has.
     "conftest.py"
+    # A runner living under tests/ rather than a test: python_files is test_*.py
+    # in both pytest.ini and the package's own config, so pytest does not
+    # collect it. Its stdout IS its product -- a per-example pass/fail table, a
+    # summary, and a syntax pass over the example scripts -- so routing it
+    # through logging would empty the output rather than improve it. That is the
+    # bin/*.py argument above, arriving in a directory this list did not name.
+    #
+    # Named in full rather than globbed, because the reason bin/ takes its whole
+    # directory does not hold here: everything in bin/ is an entry point by
+    # definition, and under tests/ this is the exception. One file, and the next
+    # one argues for itself.
+    "packages/data/tests/examples/run_example_tests.py"
 )
 
 # A test file, by name — the naming convention pytest collects on.
