@@ -12,8 +12,8 @@ from dataknobs_data.backends import async_backends, sync_backends
 
 
 def _backend_items(
-    registry: "PluginRegistry[type]",
-) -> "Generator[tuple[str, type], None, None]":
+    registry: PluginRegistry[type],
+) -> Generator[tuple[str, type], None, None]:
     """Yield (name, class) pairs from a PluginRegistry."""
     for key in registry.list_keys():
         yield key, registry.get_factory(key)

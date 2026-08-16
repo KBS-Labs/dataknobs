@@ -1,5 +1,4 @@
-"""
-Test cases for sensor dashboard using advanced query features.
+"""Test cases for sensor dashboard using advanced query features.
 
 These tests exercise the new boolean logic and range operators through
 practical sensor monitoring scenarios.

@@ -797,7 +797,8 @@ def test_persist_migration_emits_no_event_or_audit_sync(migrator: Any) -> None:
 
 class _EraseOnGetVersionAsyncDB(AsyncMemoryDatabase):
     """Deletes the record inside ``get_version``, simulating a concurrent
-    ``clear()`` landing between the migration read and the CAS write-back."""
+    ``clear()`` landing between the migration read and the CAS write-back.
+    """
 
     async def get_version(self, id: str) -> str | None:
         token = await super().get_version(id)

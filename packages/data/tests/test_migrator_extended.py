@@ -888,7 +888,8 @@ class TestMigratorConflictPolicy:
 
     def test_duckdb_streaming_insert_fails_closed(self):
         """DuckDB streaming INSERT fails closed on a colliding id (sibling of the
-        sqlite case — same tightened ``create_batch`` + per-record fallback)."""
+        sqlite case — same tightened ``create_batch`` + per-record fallback).
+        """
         src = SyncDuckDBDatabase({"path": ":memory:"})
         tgt = SyncDuckDBDatabase({"path": ":memory:"})
         src.connect()

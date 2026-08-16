@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
-"""
-Test runner for validating all vector store example scripts.
+"""Test runner for validating all vector store example scripts.
 
 This script runs all example tests and validates that the examples work correctly
 with the current DataKnobs implementation.

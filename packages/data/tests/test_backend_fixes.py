@@ -97,7 +97,7 @@ async def test_postgres_update_persists_changes(postgres_connection_params):
         assert verify_results[0].data["status"] == "completed", "Status should be updated"
         assert verify_results[0].data["count"] == 5, "Count should be updated"
 
-        print(f"✓ Test passed: Update persisted successfully")
+        print("✓ Test passed: Update persisted successfully")
 
     finally:
         await backend.close()
@@ -135,7 +135,7 @@ async def test_postgres_connection_string(postgres_connection_params):
         assert read_record is not None, "Should read record successfully"
         assert read_record.data["test"] == "connection_string"
 
-        print(f"✓ Test passed: Connection string works")
+        print("✓ Test passed: Connection string works")
 
     finally:
         await backend.close()

@@ -1,5 +1,4 @@
-"""
-Cross-backend integration tests for streaming and migration.
+"""Cross-backend integration tests for streaming and migration.
 
 Tests real data movement between different backend types.
 """

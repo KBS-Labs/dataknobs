@@ -256,7 +256,7 @@ class TestAsyncStreamingMixinDefaults:
         class TestableAsyncMemoryDB(AsyncMemoryDatabase):
             async def create(self, record: Record) -> str:
                 if record.get_value("fail"):
-                    raise ValueError(f"Record failed")
+                    raise ValueError("Record failed")
                 return await super().create(record)
 
             async def create_batch(self, records: List[Record]) -> List[str]:

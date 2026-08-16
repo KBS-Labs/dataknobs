@@ -162,7 +162,7 @@ class TestFileFormats:
             JSONFormat.save(filepath, data)
 
             # Read and verify formatting
-            with open(filepath, "r") as f:
+            with open(filepath) as f:
                 content = f.read()
                 # Should be indented
                 assert "  " in content or "    " in content

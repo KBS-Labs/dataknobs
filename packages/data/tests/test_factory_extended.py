@@ -55,8 +55,8 @@ class TestDatabaseFactoryPostgres:
                         raise ImportError("No module named 'psycopg2'")
                     except ImportError as e:
                         raise ValueError(
-                            f"PostgreSQL backend requires psycopg2. "
-                            f"Install with: pip install dataknobs-data[postgres]"
+                            "PostgreSQL backend requires psycopg2. "
+                            "Install with: pip install dataknobs-data[postgres]"
                         ) from e
                 return MagicMock()
 
@@ -123,8 +123,8 @@ class TestDatabaseFactoryElasticsearch:
                         raise ImportError("No module named 'elasticsearch'")
                     except ImportError as e:
                         raise ValueError(
-                            f"Elasticsearch backend requires elasticsearch package. "
-                            f"Install with: pip install dataknobs-data[elasticsearch]"
+                            "Elasticsearch backend requires elasticsearch package. "
+                            "Install with: pip install dataknobs-data[elasticsearch]"
                         ) from e
                 return MagicMock()
 
@@ -150,8 +150,8 @@ class TestDatabaseFactoryS3ImportError:
                         raise ImportError("No module named 'boto3'")
                     except ImportError as e:
                         raise ValueError(
-                            f"S3 backend requires boto3. "
-                            f"Install with: pip install dataknobs-data[s3]"
+                            "S3 backend requires boto3. "
+                            "Install with: pip install dataknobs-data[s3]"
                         ) from e
                 return MagicMock()
 

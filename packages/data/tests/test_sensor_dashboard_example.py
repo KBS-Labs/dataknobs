@@ -1,5 +1,4 @@
-"""
-Tests using the Sensor Dashboard Example
+"""Tests using the Sensor Dashboard Example
 
 These tests demonstrate real-world usage of the data package
 through a practical sensor monitoring application.

@@ -1,5 +1,4 @@
-"""
-Test sensor dashboard streaming improvements.
+"""Test sensor dashboard streaming improvements.
 
 These tests exercise the new batch/streaming features through
 practical sensor monitoring scenarios.
