@@ -13,18 +13,15 @@ module skips otherwise.
 
 from __future__ import annotations
 
-import os
 
 import pytest
 
+from dataknobs_common.testing import requires_real_elasticsearch
 from dataknobs_data import ConcurrencyError, Record
 from dataknobs_data.backends.elasticsearch import SyncElasticsearchDatabase
 from dataknobs_data.backends.elasticsearch_async import AsyncElasticsearchDatabase
 
-pytestmark = pytest.mark.skipif(
-    os.environ.get("TEST_ELASTICSEARCH") != "true",
-    reason="Elasticsearch integration tests not enabled",
-)
+pytestmark = requires_real_elasticsearch
 
 
 def test_sync_conditional_write(elasticsearch_test_index) -> None:

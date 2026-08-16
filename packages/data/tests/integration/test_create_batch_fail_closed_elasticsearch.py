@@ -19,19 +19,16 @@ skips otherwise.
 
 from __future__ import annotations
 
-import os
 
 import pytest
 
+from dataknobs_common.testing import requires_real_elasticsearch
 from dataknobs_data import DuplicateRecordError, Record
 from dataknobs_data.backends.elasticsearch import SyncElasticsearchDatabase
 from dataknobs_data.backends.elasticsearch_async import AsyncElasticsearchDatabase
 from dataknobs_data.streaming import StreamConfig
 
-pytestmark = pytest.mark.skipif(
-    os.environ.get("TEST_ELASTICSEARCH") != "true",
-    reason="Elasticsearch integration tests not enabled",
-)
+pytestmark = requires_real_elasticsearch
 
 
 def test_sync_create_batch_fails_closed(elasticsearch_test_index) -> None:

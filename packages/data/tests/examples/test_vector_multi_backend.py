@@ -11,6 +11,8 @@ from typing import List, Dict, Any
 
 import numpy as np
 
+from dataknobs_common.testing import requires_real_s3
+
 # Add examples to path
 examples_path = Path(__file__).parent.parent.parent / "examples"
 sys.path.insert(0, str(examples_path))
@@ -367,10 +369,7 @@ class TestS3Backend:
         """Ensure ``test-bucket`` exists on LocalStack for this test."""
         yield from make_localstack_s3_bucket("test-bucket")
 
-    @pytest.mark.skipif(
-        os.getenv("TEST_S3") != "true",
-        reason="S3 tests require TEST_S3=true and localstack/AWS setup",
-    )
+    @requires_real_s3
     def test_s3_sync_backend(self, s3_test_bucket):
         """Test S3 backend with vector support."""
         from dataknobs_data import DatabaseFactory
@@ -412,10 +411,7 @@ class TestS3Backend:
         finally:
             db.clear()
 
-    @pytest.mark.skipif(
-        os.getenv("TEST_S3") != "true",
-        reason="S3 tests require TEST_S3=true and localstack/AWS setup",
-    )
+    @requires_real_s3
     @pytest.mark.asyncio
     async def test_s3_async_backend(self, s3_test_bucket):
         """Test async S3 backend with vector support."""

@@ -15,18 +15,18 @@ These backends also cover the copy-first invariant on real services: neither
 
 Real services, no mocks: per-backend sentinel subclasses override
 ``_generate_id`` to a recognizable prefix. Postgres requires a running server
-(``@requires_postgres``); Elasticsearch requires ``TEST_ELASTICSEARCH=true`` and
-a running cluster. Each skips when its service is unavailable.
+(``@requires_postgres``); Elasticsearch requires a reachable cluster,
+``TEST_ELASTICSEARCH=true`` and the driver installed
+(``@requires_real_elasticsearch``). Each skips when its service is unavailable.
 """
 
 from __future__ import annotations
 
-import os
 import uuid
 from collections.abc import AsyncGenerator, AsyncIterator, Generator
 
 import pytest
-from dataknobs_common.testing import requires_postgres
+from dataknobs_common.testing import requires_postgres, requires_real_elasticsearch
 
 from dataknobs_data import Record
 from dataknobs_data.backends.elasticsearch import SyncElasticsearchDatabase
@@ -37,10 +37,7 @@ pytestmark = pytest.mark.integration
 
 _PREFIX = "MINT-SENTINEL-"
 
-_requires_es = pytest.mark.skipif(
-    os.environ.get("TEST_ELASTICSEARCH") != "true",
-    reason="Elasticsearch integration tests not enabled",
-)
+_requires_es = requires_real_elasticsearch
 
 
 class _SentinelMixin:

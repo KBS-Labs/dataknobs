@@ -23,7 +23,6 @@ with the pgvector extension (``TEST_POSTGRES=true``).
 
 from __future__ import annotations
 
-import os
 import uuid
 from typing import TYPE_CHECKING
 
@@ -34,6 +33,7 @@ from dataknobs_common.testing import (
     postgres_env_params,
     requires_chromadb,
     requires_faiss,
+    requires_real_postgres,
 )
 
 from dataknobs_data.vector.stores.memory import MemoryVectorStore
@@ -44,8 +44,6 @@ if TYPE_CHECKING:
     from dataknobs_data.vector.stores.base import VectorStore
 
 DIMS = 8
-
-_RUN_PG = os.environ.get("TEST_POSTGRES", "").lower() == "true"
 
 
 def _pg_connection_string() -> str:
@@ -107,14 +105,7 @@ _BACKENDS = [
     pytest.param(_make_memory, id="memory"),
     pytest.param(_make_faiss, id="faiss", marks=requires_faiss),
     pytest.param(_make_chroma, id="chroma", marks=requires_chromadb),
-    pytest.param(
-        _make_pgvector,
-        id="pgvector",
-        marks=pytest.mark.skipif(
-            not _RUN_PG,
-            reason="pgvector requires TEST_POSTGRES=true and a running instance",
-        ),
-    ),
+    pytest.param(_make_pgvector, id="pgvector", marks=requires_real_postgres),
 ]
 
 

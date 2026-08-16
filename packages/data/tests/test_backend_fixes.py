@@ -4,16 +4,11 @@ Each test names the behaviour it pins; the three were reported together
 by a downstream user of the Postgres backend.
 """
 
-import os
-
 import pytest
-from dataknobs_common.testing import postgres_dsn
+from dataknobs_common.testing import postgres_dsn, requires_real_postgres
 
-# Check if PostgreSQL tests should run
-TEST_POSTGRES = os.getenv("TEST_POSTGRES", "false").lower() == "true"
-skip_postgres = pytest.mark.skipif(
-    not TEST_POSTGRES, reason="PostgreSQL tests skipped. Set TEST_POSTGRES=true to run."
-)
+# Async backends only, so asyncpg is the driver these need.
+skip_postgres = requires_real_postgres
 
 
 @skip_postgres

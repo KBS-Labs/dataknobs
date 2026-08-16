@@ -17,22 +17,23 @@ canonical form across every postgres-using construct. It is gated by
 from __future__ import annotations
 
 import asyncio
-import os
 import uuid
 
 import pytest
 from dataknobs_common.events import Event, EventType
 from dataknobs_common.events.postgres import PostgresEventBus
-from dataknobs_common.testing import safe_sql_ident
+from dataknobs_common.testing import (
+    requires_real_postgres,
+    requires_real_postgres_sync,
+    safe_sql_ident,
+)
 
 from dataknobs_data import AsyncDatabase, Record, SyncDatabase
 from dataknobs_data.pooling.postgres import PostgresPoolConfig
 
-pytestmark = pytest.mark.skipif(
-    os.environ.get("TEST_POSTGRES", "").lower() != "true",
-    reason="Postgres parity tests require TEST_POSTGRES=true and a running "
-    "postgres instance (bin/dk up).",
-)
+# Both drivers: the parity asserted here is between the sync backend
+# (psycopg2) and the async one (asyncpg), so it needs each of them.
+pytestmark = [requires_real_postgres, requires_real_postgres_sync]
 
 # pgvector requires numpy for vector storage.
 np = pytest.importorskip("numpy")

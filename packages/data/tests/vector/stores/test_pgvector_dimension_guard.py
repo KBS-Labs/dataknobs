@@ -17,7 +17,6 @@ guard is read-only (reads ``pg_attribute.atttypmod``; no DDL).
 from __future__ import annotations
 
 import asyncio
-import os
 import uuid
 from collections.abc import AsyncIterator
 from typing import Any
@@ -27,29 +26,22 @@ import pytest_asyncio
 
 from dataknobs_common.exceptions import ConfigurationError
 from dataknobs_common.testing import (
+    is_package_available,
     postgres_dsn,
     postgres_env_params,
-    requires_postgres,
+    requires_real_postgres,
     safe_sql_ident,
 )
 
-try:
+if is_package_available("asyncpg"):
     import asyncpg
 
     from dataknobs_data.vector.stores.pgvector import PgVectorStore
 
-    ASYNCPG_AVAILABLE = True
-except ImportError:
-    ASYNCPG_AVAILABLE = False
 
-
-_pgvector_marks = [
-    requires_postgres,
-    pytest.mark.skipif(
-        os.environ.get("TEST_POSTGRES", "").lower() != "true" or not ASYNCPG_AVAILABLE,
-        reason="pgvector tests require TEST_POSTGRES=true and asyncpg",
-    ),
-]
+# requires_real_postgres is exactly the three terms this list assembled by
+# hand: a reachable server, TEST_POSTGRES=true, and asyncpg installed.
+_pgvector_marks = [requires_real_postgres]
 
 
 def _get_test_connection_string() -> str:
@@ -58,9 +50,6 @@ def _get_test_connection_string() -> str:
 
 @pytest.fixture(scope="session")
 def _ensure_pgvector_extension() -> None:
-    if not ASYNCPG_AVAILABLE:
-        return
-
     async def _setup() -> None:
         conn = await asyncpg.connect(_get_test_connection_string())
         try:
