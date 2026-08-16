@@ -58,6 +58,8 @@ from dataknobs_common.testing._core import (
     is_package_available,
     is_postgres_available,
     is_redis_available,
+    list_ollama_models,
+    ollama_env_params,
     requires_bedrock,
     requires_chromadb,
     requires_elasticsearch,
@@ -72,6 +74,7 @@ from dataknobs_common.testing._core import (
     requires_real_postgres,
     requires_redis,
     safe_sql_ident,
+    wait_for_ollama,
 )
 from dataknobs_common.testing.blocking import (
     assert_no_blocking,
@@ -171,12 +174,14 @@ __all__ = [
     "is_package_available",
     "is_postgres_available",
     "is_redis_available",
+    "list_ollama_models",
     "live_dk_daemon_threads",
     "localstack_endpoint",
     "make_elasticsearch_test_index",
     "make_localstack_s3_bucket",
     "make_postgres_test_db",
     "no_blocking",
+    "ollama_env_params",
     "postgres_connection_params",
     "postgres_dsn",
     "postgres_env_params",
@@ -197,5 +202,6 @@ __all__ = [
     "safe_sql_ident",
     "sweep_stale_test_indices",
     "wait_for_elasticsearch",
+    "wait_for_ollama",
     "wait_for_postgres",
 ]

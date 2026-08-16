@@ -29,6 +29,11 @@ from dataknobs_common import (
     is_ollama_model_available,
     is_ollama_model_usable,
 )
+from dataknobs_common.testing import (
+    list_ollama_models,
+    ollama_env_params,
+    wait_for_ollama,
+)
 
 # Check if Ollama service is running
 if is_ollama_available():
@@ -56,6 +61,44 @@ diagnosis when none do — so a broken Ollama runtime surfaces as one actionable
 signal instead of a cascade of misleading `assert None == ...` failures. The
 `requires_ollama_usable_model("<model>")` marker skips a test on the same
 stronger condition.
+
+#### Where these probes look
+
+Every function above resolves its endpoint the same way — explicit `host` /
+`port` argument, else `$OLLAMA_HOST` / `$OLLAMA_PORT`, else
+`localhost:11434` — through `ollama_env_params()`, which returns that
+resolution as a `{"host", "port"}` dict. A fixture that needs the endpoint
+should wrap `ollama_env_params()` rather than re-reading the variables, so a
+probe and the code it gates never disagree about which server they mean.
+
+`OLLAMA_HOST` is Ollama's own variable, and all three of its forms are
+accepted:
+
+| Value | Resolves to |
+|---|---|
+| `http://ollama.internal:11434` | `ollama.internal`, port `11434` |
+| `ollama.internal:11434` | `ollama.internal`, port `11434` |
+| `ollama.internal` | `ollama.internal`, default port |
+
+`OLLAMA_PORT` is the more specific statement and overrides a port carried in
+`OLLAMA_HOST`. There is no Docker-aware host default here as there is for
+Postgres and Elasticsearch, because Ollama runs on the host rather than as a
+dev-stack service — inside a container, `OLLAMA_HOST` is how you point at it.
+
+#### Which models satisfy a request
+
+`is_ollama_model_available` matches against the names `/api/tags` reports. An
+untagged request accepts any tag of that model, and nothing else:
+
+| Requested | Installed | Match |
+|---|---|---|
+| `gemma3` | `gemma3:1b` | ✅ same model, explicit tag |
+| `gemma3` | `gemma3-uncensored:latest` | ❌ different model |
+| `gemma3:1b` | `gemma3:27b` | ❌ a named tag must match |
+
+`list_ollama_models()` returns those names directly when a fixture needs to
+choose among what is installed, and `wait_for_ollama()` blocks until the
+service answers, raising `ConnectionError` naming the endpoint it tried.
 
 ### Packages
 
