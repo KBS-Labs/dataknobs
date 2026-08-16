@@ -256,13 +256,13 @@ class TestSyncMemoryDatabase:
         query = Query().filter("id", Operator.IN, ["0", "2", "4"])
         results = db.search(query)
         assert len(results) == 3
-        assert set(r.id for r in results) == {"0", "2", "4"}
+        assert {r.id for r in results} == {"0", "2", "4"}
 
         # Test combined filters (id AND value)
         query = Query().filter("id", Operator.GT, "1").filter("value", Operator.LTE, 30)
         results = db.search(query)
         assert len(results) == 2
-        assert set(r.id for r in results) == {"2", "3"}
+        assert {r.id for r in results} == {"2", "3"}
 
     def test_batch_operations(self):
         """Test batch operations."""
@@ -421,7 +421,7 @@ class TestAsyncMemoryDatabase:
         query = Query().filter("id", Operator.GT, "1").filter("value", Operator.LTE, 30)
         results = await db.search(query)
         assert len(results) == 2
-        assert set(r.id for r in results) == {"2", "3"}
+        assert {r.id for r in results} == {"2", "3"}
 
     @pytest.mark.asyncio
     async def test_async_search(self):

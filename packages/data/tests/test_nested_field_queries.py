@@ -212,13 +212,13 @@ class TestNestedFieldQueries:
         query = Query(filters=[Filter("metrics.memory", Operator.LTE, 60)])
         results = db.search(query)
         assert len(results) == 2
-        assert set(r.id for r in results) == {"reading-1", "reading-3"}
+        assert {r.id for r in results} == {"reading-1", "reading-3"}
 
         # Test on metadata
         query = Query(filters=[Filter("metadata.priority", Operator.LT, 3)])
         results = db.search(query)
         assert len(results) == 2
-        assert set(r.id for r in results) == {"reading-1", "reading-2"}
+        assert {r.id for r in results} == {"reading-1", "reading-2"}
 
     def test_metadata_as_field_not_attribute(self):
         """Test that 'metadata' field is accessed before metadata attribute.

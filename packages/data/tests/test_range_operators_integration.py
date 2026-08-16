@@ -491,14 +491,14 @@ class TestCrossBackendConsistency:
         query = Query(filters=[Filter("price", Operator.BETWEEN, (100, 300))])
         results = db.search(query)
         assert len(results) == 2
-        assert set(r.id for r in results) == {"2", "3"}
+        assert {r.id for r in results} == {"2", "3"}
 
         # Test string BETWEEN (Note: "Delta" is between "Beta" and "Gamma" alphabetically)
         # So we use "Alpha" to "Beta" to get just 2 results
         query = Query(filters=[Filter("name", Operator.BETWEEN, ("Alpha", "Beta"))])
         results = db.search(query)
         assert len(results) == 2
-        assert set(r.id for r in results) == {"1", "2"}
+        assert {r.id for r in results} == {"1", "2"}
 
         # Test datetime BETWEEN
         base_time = datetime(2025, 1, 15, 12, 0, 0)
@@ -507,7 +507,7 @@ class TestCrossBackendConsistency:
         query = Query(filters=[Filter("timestamp", Operator.BETWEEN, (start, end))])
         results = db.search(query)
         assert len(results) == 2
-        assert set(r.id for r in results) == {"2", "3"}
+        assert {r.id for r in results} == {"2", "3"}
 
     @pytest.mark.skipif(not os.getenv("POSTGRES_HOST"), reason="PostgreSQL not configured")
     def test_postgres_consistency(self, test_data):

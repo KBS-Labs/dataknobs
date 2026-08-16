@@ -81,7 +81,7 @@ class TestS3IdFiltering:
         query = Query().filter("id", Operator.IN, ["obj_0", "obj_2", "obj_4"]).sort_by("id", "asc")
         results = db.search(query)
         assert len(results) == 3
-        assert set(r.id for r in results) == {"obj_0", "obj_2", "obj_4"}
+        assert {r.id for r in results} == {"obj_0", "obj_2", "obj_4"}
 
         # Test NOT_IN
         query = (
@@ -89,7 +89,7 @@ class TestS3IdFiltering:
         )
         results = db.search(query)
         assert len(results) == 2
-        assert set(r.id for r in results) == {"obj_1", "obj_3"}
+        assert {r.id for r in results} == {"obj_1", "obj_3"}
 
     def test_id_field_sorting(self, db):
         """Test sorting by ID field."""

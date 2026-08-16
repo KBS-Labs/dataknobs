@@ -56,7 +56,7 @@ class TestElasticsearchIdFiltering:
         query = Query().filter("id", Operator.IN, ["doc_0", "doc_2", "doc_4"]).sort_by("id", "asc")
         results = db.search(query)
         assert len(results) == 3
-        assert set(r.id for r in results) == {"doc_0", "doc_2", "doc_4"}
+        assert {r.id for r in results} == {"doc_0", "doc_2", "doc_4"}
 
         # Test NOT_IN
         query = (
@@ -64,7 +64,7 @@ class TestElasticsearchIdFiltering:
         )
         results = db.search(query)
         assert len(results) == 2
-        assert set(r.id for r in results) == {"doc_1", "doc_3"}
+        assert {r.id for r in results} == {"doc_1", "doc_3"}
 
     def test_id_field_sorting(self, db):
         """Test sorting by ID field."""

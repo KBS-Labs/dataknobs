@@ -690,7 +690,7 @@ class TestQueryClusterScorer:
 
         # Security cluster should score higher than database
         sec_score = out[0].metadata["cluster_query_score"]
-        db_result = [r for r in out if r.source_id == "c"][0]
+        db_result = next(r for r in out if r.source_id == "c")
         db_score = db_result.metadata["cluster_query_score"]
         assert sec_score > db_score
 
@@ -759,8 +759,8 @@ class TestQueryClusterScorer:
             _intent(),
             "security concerns",
         )
-        sec = [r for r in out if r.source_id == "a"][0]
-        db = [r for r in out if r.source_id == "b"][0]
+        sec = next(r for r in out if r.source_id == "a")
+        db = next(r for r in out if r.source_id == "b")
         assert sec.metadata["cluster_query_score"] > db.metadata["cluster_query_score"]
 
 

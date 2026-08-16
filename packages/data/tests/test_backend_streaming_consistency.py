@@ -121,8 +121,8 @@ class TestBackendConsistency:
         """Verify streaming methods have consistent signatures."""
         # Check async backends
         for backend_name, backend_class in _backend_items(async_backends):
-            stream_read = getattr(backend_class, "stream_read")
-            stream_write = getattr(backend_class, "stream_write")
+            stream_read = backend_class.stream_read
+            stream_write = backend_class.stream_write
 
             # Check parameters
             read_sig = inspect.signature(stream_read)
@@ -146,8 +146,8 @@ class TestBackendConsistency:
 
         # Check sync backends
         for backend_name, backend_class in _backend_items(sync_backends):
-            stream_read = getattr(backend_class, "stream_read")
-            stream_write = getattr(backend_class, "stream_write")
+            stream_read = backend_class.stream_read
+            stream_write = backend_class.stream_write
 
             # Check parameters
             read_sig = inspect.signature(stream_read)
