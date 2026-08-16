@@ -48,6 +48,11 @@ class ExampleTestRunner:
                 capture_output=True,
                 text=True,
                 cwd=self.tests_dir.parent.parent,  # Run from package root
+                # A failing example is this runner's subject, not its error:
+                # the return code is read below and reported per example.
+                # check=True would raise instead, and the table would end at
+                # the first failure.
+                check=False,
             )
             elapsed = time.time() - start_time
 

@@ -202,7 +202,7 @@ class TestSensorDashboardSync:
         assert "humidity" in hourly.columns
         assert "reading_count" in hourly.columns
 
-        # Should have data for 2 sensors × 6 hours = 12 rows
+        # Should have data for 2 sensors over 6 hours, so at most 12 rows
         assert len(hourly) <= 12
         # Each hour should have ~12 readings
         assert all(hourly["reading_count"] <= 12)

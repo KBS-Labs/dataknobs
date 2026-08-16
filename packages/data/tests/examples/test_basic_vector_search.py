@@ -7,13 +7,13 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch, AsyncMock
 
 from dataknobs_common.testing import requires_package
+from dataknobs_data import VectorField
 
 # Add examples to path
 examples_path = Path(__file__).parent.parent.parent / "examples"
 sys.path.insert(0, str(examples_path))
 
-from basic_vector_search import VectorSearchExample
-from dataknobs_data import VectorField
+from basic_vector_search import VectorSearchExample  # noqa: E402 - must follow the sys.path.insert above
 
 
 class MockEmbeddingModel:
@@ -280,9 +280,9 @@ class TestIntegrationWithRealModel:
 async def test_example_main_function():
     """Test the main function runs without errors."""
     # Mock the VectorSearchExample to avoid loading real model
-    with patch("basic_vector_search.VectorSearchExample") as MockExample:
+    with patch("basic_vector_search.VectorSearchExample") as mock_example:
         mock_instance = AsyncMock()
-        MockExample.return_value = mock_instance
+        mock_example.return_value = mock_instance
 
         # Mock all the methods
         mock_instance.setup_database = AsyncMock()

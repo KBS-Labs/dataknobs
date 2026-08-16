@@ -259,16 +259,13 @@ class TestBatchConfigCompatibility:
 
     def test_usage_documentation_exists(self):
         """Test that documentation exists for when to use each config."""
-        import os
+        from pathlib import Path
 
-        docs_path = os.path.join(
-            os.path.dirname(os.path.dirname(__file__)), "docs", "BATCH_PROCESSING_GUIDE.md"
-        )
+        docs_path = Path(__file__).parent.parent / "docs" / "BATCH_PROCESSING_GUIDE.md"
 
-        assert os.path.exists(docs_path)
+        assert docs_path.exists()
 
-        with open(docs_path) as f:
-            content = f.read()
+        content = docs_path.read_text()
 
         # Verify key sections exist
         assert "When to Use Each Configuration" in content

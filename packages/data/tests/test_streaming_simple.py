@@ -11,6 +11,7 @@ from dataknobs_data.migration import (
     Migration,
     AddField,
     RenameField,
+    RemoveField,
     Transformer,
 )
 
@@ -234,7 +235,3 @@ class TestStreamingIntegration:
         assert "deprecated" not in first.fields
 
         await db.close()
-
-
-# Import RemoveField for the test
-from dataknobs_data.migration import RemoveField

@@ -6,10 +6,6 @@ from pathlib import Path
 from typing import List
 import numpy as np
 
-# Add examples to path
-examples_path = Path(__file__).parent.parent.parent / "examples"
-sys.path.insert(0, str(examples_path))
-
 # Import real implementations
 from dataknobs_data import (
     AsyncDatabaseFactory,
@@ -24,6 +20,11 @@ from dataknobs_data.vector import (
     VectorMigration,
     IncrementalVectorizer,
 )
+
+# Add examples to path. The example modules themselves are imported inside the
+# tests that use them, so nothing at module scope depends on this.
+examples_path = Path(__file__).parent.parent.parent / "examples"
+sys.path.insert(0, str(examples_path))
 
 
 class TestEmbedding:

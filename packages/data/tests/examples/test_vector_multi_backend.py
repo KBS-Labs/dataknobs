@@ -9,13 +9,13 @@ from pathlib import Path
 import numpy as np
 
 from dataknobs_common.testing import requires_real_s3
+from dataknobs_data import Record, VectorField, Field
 
 # Add examples to path
 examples_path = Path(__file__).parent.parent.parent / "examples"
 sys.path.insert(0, str(examples_path))
 
-from vector_multi_backend import MultiBackendVectorExample
-from dataknobs_data import Record, VectorField, Field
+from vector_multi_backend import MultiBackendVectorExample  # noqa: E402 - must follow the sys.path.insert above
 
 
 @pytest.fixture

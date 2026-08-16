@@ -20,7 +20,7 @@ class TestGetTableExistsSql:
         assert params == ("public", "records")
 
     def test_postgres_qmark_raises(self):
-        """qmark placeholders are invalid for postgres — caught at construction time."""
+        """Reject qmark placeholders for postgres at construction time."""
         with pytest.raises(
             ValueError, match="param_style='qmark' is not valid for dialect='postgres'"
         ):

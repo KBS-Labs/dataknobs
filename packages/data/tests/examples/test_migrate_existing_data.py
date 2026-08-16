@@ -1,16 +1,10 @@
 """Tests for the migration example."""
 
 import pytest
-import sys
 import time
 import zlib
-from pathlib import Path
 from typing import List
 from dataclasses import dataclass
-
-# Add examples to path
-examples_path = Path(__file__).parent.parent.parent / "examples"
-sys.path.insert(0, str(examples_path))
 
 from dataknobs_data import AsyncDatabaseFactory, Record, VectorField
 from dataknobs_data.vector import VectorMigration, IncrementalVectorizer

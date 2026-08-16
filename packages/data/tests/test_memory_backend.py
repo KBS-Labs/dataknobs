@@ -6,9 +6,9 @@ from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
-pytest_plugins = ("pytest_asyncio",)
-
 from dataknobs_data import AsyncDatabase, Query, Record, SyncDatabase
+
+pytest_plugins = ("pytest_asyncio",)
 
 
 class TestSyncMemoryDatabase:
