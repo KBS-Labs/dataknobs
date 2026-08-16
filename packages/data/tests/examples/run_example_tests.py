@@ -66,14 +66,13 @@ class ExampleTestRunner:
             return False, str(e), elapsed
 
     def run_all_tests(self, filter_pattern: str = None) -> bool:
-        """Run all example tests."""
-        test_files = [
-            "test_basic_vector_search.py",
-            "test_text_to_vector_sync.py",
-            "test_migrate_existing_data.py",
-            "test_hybrid_search.py",
-            "test_examples_integration.py",
-        ]
+        """Run all example tests.
+
+        Discovered rather than listed. The list this replaced named a file that
+        had been renamed and omitted one added since, so every run reported a
+        missing test and exited non-zero on a suite that passes.
+        """
+        test_files = sorted(path.name for path in self.tests_dir.glob("test_*.py"))
 
         if filter_pattern:
             test_files = [f for f in test_files if filter_pattern in f]
@@ -86,11 +85,6 @@ class ExampleTestRunner:
 
         for test_file in test_files:
             test_path = self.tests_dir / test_file
-
-            if not test_path.exists():
-                print(f"\n❌ Test file not found: {test_file}")
-                all_passed = False
-                continue
 
             print(f"\n📝 Testing: {test_file}")
             print("-" * 40)
@@ -135,28 +129,23 @@ class ExampleTestRunner:
             print(f"  {status} {result['test']:40} {result['time']:.2f}s")
 
     def validate_examples(self) -> bool:
-        """Validate that example scripts can be imported and run."""
+        """Validate that example scripts can be imported and run.
+
+        Discovered for the same reason the tests above are: the list this
+        replaced named half of what the directory holds, so the other half was
+        reported valid by never being looked at.
+        """
         print("\n" + "=" * 60)
         print("Validating Example Scripts")
         print("=" * 60)
 
         examples_dir = self.tests_dir.parent.parent / "examples"
-        example_files = [
-            "basic_vector_search.py",
-            "text_to_vector_sync.py",
-            "migrate_existing_data.py",
-            "hybrid_search.py",
-        ]
+        example_files = sorted(path.name for path in examples_dir.glob("*.py"))
 
         all_valid = True
 
         for example_file in example_files:
             example_path = examples_dir / example_file
-
-            if not example_path.exists():
-                print(f"❌ Example not found: {example_file}")
-                all_valid = False
-                continue
 
             # Try to import the example
             try:
