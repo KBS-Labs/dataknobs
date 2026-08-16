@@ -151,7 +151,7 @@ class TestFactoryVectorIntegration:
         db = factory.create(
             backend="postgres",
             host=os.environ.get("POSTGRES_HOST", "localhost"),
-            port=int(os.environ.get("POSTGRES_PORT", 5432)),
+            port=int(os.environ.get("POSTGRES_PORT", "5432")),
             database=os.environ.get("POSTGRES_DB", "dataknobs_test"),
             user=os.environ.get("POSTGRES_USER", "postgres"),
             password=os.environ.get("POSTGRES_PASSWORD", "postgres"),
@@ -199,7 +199,7 @@ class TestFactoryVectorIntegration:
 
                 conn = psycopg2.connect(
                     host=postgres_host,
-                    port=int(os.environ.get("POSTGRES_PORT", 5432)),
+                    port=int(os.environ.get("POSTGRES_PORT", "5432")),
                     database=os.environ.get("POSTGRES_DB", "dataknobs_test"),
                     user=os.environ.get("POSTGRES_USER", "postgres"),
                     password=os.environ.get("POSTGRES_PASSWORD", "postgres"),

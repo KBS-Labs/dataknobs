@@ -22,7 +22,7 @@ def ensure_postgres_test_db():
     test that runs.
     """
     host = os.environ.get("POSTGRES_HOST", "localhost")
-    port = int(os.environ.get("POSTGRES_PORT", 5432))
+    port = int(os.environ.get("POSTGRES_PORT", "5432"))
     user = os.environ.get("POSTGRES_USER", "postgres")
     password = os.environ.get("POSTGRES_PASSWORD", "postgres")
     db_name = os.environ.get("POSTGRES_DB", "test_dataknobs")
@@ -67,7 +67,7 @@ class TestPostgresRangeOperators:
         db = SyncPostgresDatabase(
             config={
                 "host": os.getenv("POSTGRES_HOST", "localhost"),
-                "port": int(os.getenv("POSTGRES_PORT", 5432)),
+                "port": int(os.getenv("POSTGRES_PORT", "5432")),
                 "database": os.getenv("POSTGRES_DB", "test_dataknobs"),
                 "user": os.getenv("POSTGRES_USER", "postgres"),
                 "password": os.getenv("POSTGRES_PASSWORD", "postgres"),
@@ -84,8 +84,11 @@ class TestPostgresRangeOperators:
             db.db.execute(
                 f"TRUNCATE TABLE {safe_sql_ident(db.schema_name)}.{safe_sql_ident(db.table_name)}"
             )
-        except:
-            pass  # Table might not exist yet
+        except psycopg2.errors.UndefinedTable:
+            # What a missing table raises -- though connect() above ensures
+            # the table, so this is belt-and-braces rather than the guard the
+            # original comment implied.
+            pass
 
         yield db
 
@@ -94,7 +97,11 @@ class TestPostgresRangeOperators:
             db.db.execute(
                 f"DROP TABLE IF EXISTS {safe_sql_ident(db.schema_name)}.{safe_sql_ident(db.table_name)}"
             )
-        except:
+        except psycopg2.Error:
+            # IF EXISTS already covers the missing table, so what is left to
+            # tolerate is a connection that did not survive the test. Letting
+            # that surface here would replace the real failure with a
+            # teardown error.
             pass
         finally:
             db.close()
@@ -183,6 +190,7 @@ class TestPostgresRangeOperators:
         """Test BETWEEN with async PostgreSQL backend."""
         from dataknobs_data.backends.postgres import AsyncPostgresDatabase
 
+        import asyncpg
         import uuid
 
         # Use public schema with unique table name to avoid conflicts
@@ -191,7 +199,7 @@ class TestPostgresRangeOperators:
         db = AsyncPostgresDatabase(
             config={
                 "host": os.getenv("POSTGRES_HOST", "localhost"),
-                "port": int(os.getenv("POSTGRES_PORT", 5432)),
+                "port": int(os.getenv("POSTGRES_PORT", "5432")),
                 "database": os.getenv("POSTGRES_DB", "test_dataknobs"),
                 "user": os.getenv("POSTGRES_USER", "postgres"),
                 "password": os.getenv("POSTGRES_PASSWORD", "postgres"),
@@ -235,7 +243,11 @@ class TestPostgresRangeOperators:
                     await db._pool.execute(
                         f"DROP TABLE IF EXISTS {safe_sql_ident(db.schema_name)}.{safe_sql_ident(db.table_name)}"
                     )
-            except:
+            except (asyncpg.PostgresError, asyncpg.InterfaceError):
+                # Both are needed: asyncpg's server-side and client-side error
+                # families share no base beyond Exception. As above, IF EXISTS
+                # covers the missing table, so this tolerates a pool that did
+                # not survive the test rather than a table that was never made.
                 pass
             finally:
                 await db.close()
@@ -249,6 +261,8 @@ class TestElasticsearchRangeOperators:
     def es_db(self):
         """Create an Elasticsearch database connection."""
         from dataknobs_data.backends.elasticsearch import SyncElasticsearchDatabase
+
+        import requests
 
         es_host = os.getenv("ELASTICSEARCH_HOST", "localhost:9200")
         if ":" in es_host:
@@ -270,10 +284,12 @@ class TestElasticsearchRangeOperators:
         # Connect
         db.connect()
 
-        # Clean up any existing index
+        # Clean up any existing index. Deleting an index that is not there
+        # returns False rather than raising, so the only failure this has to
+        # tolerate is the server going away between connect() and here.
         try:
             db.es_index.delete()
-        except:
+        except requests.RequestException:
             pass
 
         # Create fresh index
@@ -284,7 +300,7 @@ class TestElasticsearchRangeOperators:
         # Cleanup
         try:
             db.es_index.delete()
-        except:
+        except requests.RequestException:
             pass
         db.disconnect()
 
@@ -385,6 +401,8 @@ class TestElasticsearchRangeOperators:
         """Test BETWEEN with async Elasticsearch backend."""
         from dataknobs_data.backends.elasticsearch_async import AsyncElasticsearchDatabase
 
+        from elasticsearch import NotFoundError
+
         es_host = os.getenv("ELASTICSEARCH_HOST", "localhost:9200")
         if ":" in es_host:
             host, port = es_host.split(":")
@@ -400,10 +418,12 @@ class TestElasticsearchRangeOperators:
         await db.connect()
 
         try:
-            # Clean and recreate index
+            # Clean and recreate index. The async client raises on a missing
+            # index rather than reporting it in the response, which is the
+            # opposite of the sync helper used by the fixture above.
             try:
                 await db._client.indices.delete(index=db.index_name)
-            except:
+            except NotFoundError:
                 pass
 
             await db._client.indices.create(index=db.index_name)
@@ -437,7 +457,7 @@ class TestElasticsearchRangeOperators:
             # Cleanup
             try:
                 await db._client.indices.delete(index=db.index_name)
-            except:
+            except NotFoundError:
                 pass
             await db.disconnect()
 
@@ -522,7 +542,7 @@ class TestCrossBackendConsistency:
         db = SyncPostgresDatabase(
             config={
                 "host": os.getenv("POSTGRES_HOST", "localhost"),
-                "port": int(os.getenv("POSTGRES_PORT", 5432)),
+                "port": int(os.getenv("POSTGRES_PORT", "5432")),
                 "database": os.getenv("POSTGRES_DB", "test_db"),
                 "user": os.getenv("POSTGRES_USER", "postgres"),
                 "password": os.getenv("POSTGRES_PASSWORD", "postgres"),
@@ -556,7 +576,9 @@ class TestCrossBackendConsistency:
                 db.db.execute(
                     f"DROP TABLE IF EXISTS {safe_sql_ident(db.schema_name)}.{safe_sql_ident(db.table_name)}"
                 )
-            except:
+            except psycopg2.Error:
+                # As in the fixture above: IF EXISTS makes a missing table a
+                # non-event, so this tolerates a dead connection at teardown.
                 pass
             finally:
                 db.close()

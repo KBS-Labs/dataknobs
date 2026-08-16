@@ -19,7 +19,7 @@ def elasticsearch_config():
     """Elasticsearch configuration for testing."""
     return {
         "host": os.environ.get("ELASTICSEARCH_HOST", "localhost"),
-        "port": int(os.environ.get("ELASTICSEARCH_PORT", 9200)),
+        "port": int(os.environ.get("ELASTICSEARCH_PORT", "9200")),
         "index": f"test_records_{uuid.uuid4().hex[:8]}",  # Unique index per test
         "refresh": True,  # Immediate refresh for testing
         "settings": {

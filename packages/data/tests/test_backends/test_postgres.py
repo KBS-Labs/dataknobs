@@ -29,7 +29,7 @@ def ensure_test_database():
     only for a test that runs.
     """
     host = os.environ.get("POSTGRES_HOST", "localhost")
-    port = int(os.environ.get("POSTGRES_PORT", 5432))
+    port = int(os.environ.get("POSTGRES_PORT", "5432"))
     user = os.environ.get("POSTGRES_USER", "postgres")
     password = os.environ.get("POSTGRES_PASSWORD", "postgres")
     db_name = os.environ.get("POSTGRES_DB", "test_dataknobs")
@@ -66,7 +66,7 @@ def postgres_config(ensure_test_database):
     """PostgreSQL configuration for testing."""
     return {
         "host": os.environ.get("POSTGRES_HOST", "localhost"),
-        "port": int(os.environ.get("POSTGRES_PORT", 5432)),
+        "port": int(os.environ.get("POSTGRES_PORT", "5432")),
         "database": os.environ.get("POSTGRES_DB", "test_dataknobs"),
         "user": os.environ.get("POSTGRES_USER", "postgres"),
         "password": os.environ.get("POSTGRES_PASSWORD", "postgres"),
