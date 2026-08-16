@@ -126,9 +126,9 @@
         },
         {
           "path": "packages/data/tests",
-          "tier": "deferred",
-          "ceiling": 339,
-          "reason": "outside the default lint target set; the legacy np.random block that made up its bulk is gone — every draw converted by hand, no autofix existing for any of them — and with it the process-global seeding that left unseeded draws dependent on test order; what remains is the ordinary unused-import and discarded-value backlog, most of it fixable, with E402 and E722 the part needing a reader"
+          "tier": "checked",
+          "ceiling": 0,
+          "reason": "promoted into the linted set; its bulk was unused imports and generator-fed constructors, and the parts needing a reader were the teardown fixtures whose bare excepts became the driver error each one actually expects — the drivers here disagree about what deleting a missing table does, so no single exception type covered them — and the module-level imports sitting below sys.path writes, most of which resolved through an installed package rather than the inserted directory and moved above it rather than taking a waiver; the hand-rolled environment reads that stood in for service gates became the published markers, which is what puts part of this cell in front of a runner at all"
         },
         {
           "path": "packages/*/examples",
