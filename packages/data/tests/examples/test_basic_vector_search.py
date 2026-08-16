@@ -3,6 +3,7 @@
 import pytest
 import asyncio
 import sys
+import zlib
 from pathlib import Path
 from unittest.mock import MagicMock, patch, AsyncMock
 from typing import List, Dict, Any
@@ -22,8 +23,10 @@ class MockEmbeddingModel:
         """Generate deterministic fake embeddings based on text hash."""
         import numpy as np
 
-        # Create a simple deterministic embedding based on text
-        hash_val = hash(text) % 1000
+        # Create a simple deterministic embedding based on text. crc32, not
+        # hash(): str.__hash__ is salted per process (PYTHONHASHSEED), so
+        # hash() would make these "deterministic" embeddings differ every run.
+        hash_val = zlib.crc32(text.encode()) % 1000
         # Return 384-dimensional vector (matching all-MiniLM-L6-v2)
         embedding = [float((hash_val + i) % 100) / 100.0 for i in range(384)]
         return np.array(embedding)

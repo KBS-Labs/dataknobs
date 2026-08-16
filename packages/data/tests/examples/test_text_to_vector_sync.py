@@ -3,6 +3,7 @@
 import pytest
 import asyncio
 import sys
+import zlib
 from pathlib import Path
 from unittest.mock import MagicMock, patch, AsyncMock
 from typing import List, Dict, Any
@@ -20,7 +21,10 @@ class MockEmbeddingModel:
 
     def encode(self, text: str) -> List[float]:
         """Generate deterministic fake embeddings."""
-        hash_val = hash(text) % 1000
+        # crc32, not hash(): str.__hash__ is salted per process
+        # (PYTHONHASHSEED), so hash() would break the determinism this
+        # docstring promises.
+        hash_val = zlib.crc32(text.encode()) % 1000
         return [float((hash_val + i) % 100) / 100.0 for i in range(384)]
 
 

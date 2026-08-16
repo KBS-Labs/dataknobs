@@ -410,9 +410,12 @@ class TestChangeTracker:
         )
 
         processed_records = []
+        all_processed = asyncio.Event()
 
         async def track_callback(task):
             processed_records.append(task.record_id)
+            if len(processed_records) >= 3:
+                all_processed.set()
 
         tracker.add_update_callback(track_callback)
 
@@ -424,8 +427,13 @@ class TestChangeTracker:
             tracker.track_change(str(i), "content", "old", f"new {i}")
             await asyncio.sleep(0.02)
 
-        # Wait for processing
-        await asyncio.sleep(0.2)
+        # Wait on an event the callback sets, not a fixed sleep. This suite
+        # runs in the PR gate under `pytest -n 4`, and a contended runner can
+        # leave a fixed 0.2s wait one tick short of the third record — failing
+        # a test that has nothing wrong with it, and passing on the re-run.
+        # The timeout is generous because it is only reached when the
+        # processing loop is genuinely stuck, which is a real failure.
+        await asyncio.wait_for(all_processed.wait(), timeout=5.0)
 
         # Stop processing
         await tracker.stop_processing()
