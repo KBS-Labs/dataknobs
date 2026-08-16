@@ -1,11 +1,22 @@
-"""Integration test configuration and fixtures."""
+"""Integration test configuration and fixtures.
 
-import os
-import time
+The Ollama probes — ``ollama_env_params``, ``wait_for_ollama``,
+``is_ollama_model_available`` — come from ``dataknobs_common.testing``. They
+were reimplemented here, and the local copy of the model match accepted any
+installed name that merely *began* with the requested one, so a request for
+``gemma3`` was satisfied by ``gemma3-uncensored:latest`` and the suite ran
+green against a model nobody asked for.
+"""
+
 import warnings
 
 import pytest
-import requests
+
+from dataknobs_common.testing import (
+    is_ollama_model_available,
+    ollama_env_params,
+    wait_for_ollama,
+)
 
 
 # =============================================================================
@@ -78,73 +89,18 @@ def bot_config_echo_react(echo_config) -> dict:
 # =============================================================================
 
 
-def wait_for_ollama(host: str = "localhost", port: int = 11434, max_retries: int = 30):
-    """Wait for Ollama to be ready.
-
-    Args:
-        host: Ollama host
-        port: Ollama port
-        max_retries: Maximum number of connection attempts
-
-    Raises:
-        ConnectionError: If Ollama is not accessible after max retries
-    """
-    for i in range(max_retries):
-        try:
-            response = requests.get(f"http://{host}:{port}/api/tags", timeout=2)
-            if response.status_code == 200:
-                return True
-        except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as exc:
-            if i == max_retries - 1:
-                raise ConnectionError(
-                    f"Could not connect to Ollama at {host}:{port} after {max_retries} attempts. "
-                    f"Please ensure Ollama is running and accessible."
-                ) from exc
-            time.sleep(1)
-
-    return False
-
-
-def verify_ollama_model(model: str, host: str = "localhost", port: int = 11434) -> bool:
-    """Verify that a specific Ollama model is available.
-
-    Args:
-        model: Model name (e.g., "gemma3:1b")
-        host: Ollama host
-        port: Ollama port
-
-    Returns:
-        True if model is available, False otherwise
-    """
-    try:
-        response = requests.get(f"http://{host}:{port}/api/tags", timeout=5)
-        if response.status_code == 200:
-            data = response.json()
-            models = data.get("models", [])
-            # Extract model names from the response
-            model_names = [m.get("name", "") for m in models]
-            # Check if our model is in the list (handle both with and without tag)
-            return any(
-                model_name.startswith(model.split(":", maxsplit=1)[0]) for model_name in model_names
-            )
-    except Exception as e:
-        # A warning rather than a print. The probe returns False either way, so
-        # what is at stake is only whether the reason survives: stdout written
-        # during fixture setup is captured and replayed for a test that FAILS,
-        # and the interesting case here is the other one — the probe reports the
-        # model missing, the suite adapts, and everything passes with nobody
-        # told why. The warnings summary is printed at the end of every run.
-        warnings.warn(f"Error verifying Ollama model: {e}", stacklevel=2)
-        return False
+#: The model :func:`ollama_config` asks for. The readiness check below verifies
+#: this exact name rather than also trying a bare ``gemma3``: the untagged retry
+#: existed to work around a match that could not tell ``gemma3:1b`` from any
+#: other name starting with ``gemma3``, and the shared matcher makes an untagged
+#: request accept any *tag* of the model without accepting a different model.
+OLLAMA_TEST_MODEL = "gemma3:1b"
 
 
 @pytest.fixture(scope="session")
 def ollama_connection_params():
     """Ollama connection parameters for integration tests."""
-    return {
-        "host": os.environ.get("OLLAMA_HOST", "localhost"),
-        "port": int(os.environ.get("OLLAMA_PORT", "11434")),
-    }
+    return ollama_env_params()
 
 
 @pytest.fixture(scope="session")
@@ -155,23 +111,15 @@ def ensure_ollama_ready(ollama_connection_params):
         port=ollama_connection_params["port"],
     )
 
-    # Verify required models are available
-    required_models = ["gemma3:1b", "gemma3"]  # Try both with and without tag
-    model_available = False
-
-    for model in required_models:
-        if verify_ollama_model(
-            model,
-            host=ollama_connection_params["host"],
-            port=ollama_connection_params["port"],
-        ):
-            model_available = True
-            break
-
-    if not model_available:
+    if not is_ollama_model_available(
+        OLLAMA_TEST_MODEL,
+        host=ollama_connection_params["host"],
+        port=ollama_connection_params["port"],
+    ):
         warnings.warn(
-            "gemma3:1b model not found in Ollama. Run: ollama pull gemma3:1b — "
-            "tests will attempt to run but may fail if the model is unavailable.",
+            f"{OLLAMA_TEST_MODEL} model not found in Ollama. "
+            f"Run: ollama pull {OLLAMA_TEST_MODEL} — tests will attempt to run "
+            "but may fail if the model is unavailable.",
             stacklevel=2,
         )
 
@@ -181,7 +129,7 @@ def ollama_config(ensure_ollama_ready, ollama_connection_params) -> dict:
     """Provide Ollama configuration for tests that need real LLM."""
     return {
         "provider": "ollama",
-        "model": "gemma3:1b",
+        "model": OLLAMA_TEST_MODEL,
         "temperature": 0.7,
         "max_tokens": 500,
         **ollama_connection_params,

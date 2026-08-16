@@ -1,113 +1,32 @@
 """Integration test configuration and fixtures for LLM package.
 
-Postgres infrastructure fixtures (``postgres_connection_params``,
-``ensure_postgres_ready``, ``wait_for_postgres``) come from the
-``dataknobs_common.testing`` pytest11 plugin — no duplication here. The
-:func:`postgres_test_db` wrapper below uses the ``dataknobs-llm`` package's
-``test_conversations_`` table prefix.
+Postgres and Ollama infrastructure — ``postgres_connection_params``,
+``ensure_postgres_ready``, ``wait_for_postgres``, ``ollama_env_params``,
+``wait_for_ollama``, ``list_ollama_models``, ``is_ollama_model_available``,
+``is_ollama_model_usable`` — comes from ``dataknobs_common.testing``, so no
+probe is defined here. The :func:`postgres_test_db` wrapper below uses the
+``dataknobs-llm`` package's ``test_conversations_`` table prefix.
 """
 
 import os
-import time
 import warnings
 from typing import Any, Generator
 
 import pytest
-import requests
 
-from dataknobs_common.testing import is_ollama_model_usable
-
-
-def is_ollama_available(host: str = "localhost", port: int = 11434, timeout: float = 2.0) -> bool:
-    """Check if Ollama is available.
-
-    Args:
-        host: Ollama host
-        port: Ollama port
-        timeout: Connection timeout in seconds
-
-    Returns:
-        True if Ollama is accessible, False otherwise
-    """
-    try:
-        response = requests.get(f"http://{host}:{port}/api/tags", timeout=timeout)
-        return response.status_code == 200
-    except (requests.exceptions.ConnectionError, requests.exceptions.Timeout):
-        return False
-
-
-def wait_for_ollama(host: str = "localhost", port: int = 11434, max_retries: int = 30) -> bool:
-    """Wait for Ollama to be ready.
-
-    Args:
-        host: Ollama host
-        port: Ollama port
-        max_retries: Maximum number of connection attempts
-
-    Returns:
-        True if Ollama became available
-
-    Raises:
-        ConnectionError: If Ollama is not accessible after max retries
-    """
-    for i in range(max_retries):
-        if is_ollama_available(host, port):
-            return True
-        if i == max_retries - 1:
-            raise ConnectionError(
-                f"Could not connect to Ollama at {host}:{port} after {max_retries} attempts. "
-                f"Please ensure Ollama is running and accessible."
-            )
-        time.sleep(1)
-    return False
-
-
-def get_available_models(host: str = "localhost", port: int = 11434) -> list[str]:
-    """Get list of available Ollama models.
-
-    Args:
-        host: Ollama host
-        port: Ollama port
-
-    Returns:
-        List of model names
-    """
-    try:
-        response = requests.get(f"http://{host}:{port}/api/tags", timeout=5)
-        if response.status_code == 200:
-            data = response.json()
-            return [m.get("name", "") for m in data.get("models", [])]
-    except Exception:
-        pass
-    return []
-
-
-def verify_ollama_model(model: str, host: str = "localhost", port: int = 11434) -> bool:
-    """Verify that a specific Ollama model is available.
-
-    Args:
-        model: Model name (e.g., "llama3.1:8b")
-        host: Ollama host
-        port: Ollama port
-
-    Returns:
-        True if model is available, False otherwise
-    """
-    models = get_available_models(host, port)
-    # Check if our model is in the list (handle both with and without tag).
-    # Match exact name or name with any tag suffix (e.g., 'llama2' matches
-    # 'llama2:latest' but NOT 'llama2-uncensored:latest').
-    base_model = model.split(":", maxsplit=1)[0]
-    return any(m == base_model or m.startswith(base_model + ":") for m in models)
+from dataknobs_common.testing import (
+    is_ollama_model_available,
+    is_ollama_model_usable,
+    list_ollama_models,
+    ollama_env_params,
+    wait_for_ollama,
+)
 
 
 @pytest.fixture(scope="session")
 def ollama_connection_params() -> dict[str, Any]:
     """Ollama connection parameters for integration tests."""
-    return {
-        "host": os.environ.get("OLLAMA_HOST", "localhost"),
-        "port": int(os.environ.get("OLLAMA_PORT", "11434")),
-    }
+    return ollama_env_params()
 
 
 @pytest.fixture(scope="session")
@@ -143,7 +62,7 @@ def ollama_model(ollama_connection_params: dict[str, Any]) -> str:
     host = ollama_connection_params["host"]
     port = ollama_connection_params["port"]
 
-    available = get_available_models(host, port)
+    available = list_ollama_models(host, port)
     if not available:
         pytest.skip(f"No Ollama models installed. Run: ollama pull {preferred}")
 
@@ -158,7 +77,7 @@ def ollama_model(ollama_connection_params: dict[str, Any]) -> str:
         if name and name not in candidates:
             candidates.append(name)
 
-    if verify_ollama_model(preferred, host, port):
+    if is_ollama_model_available(preferred, host, port):
         base = preferred.split(":", maxsplit=1)[0]
         for model in available:
             if model in (preferred, base) or model.startswith(base + ":"):

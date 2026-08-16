@@ -110,7 +110,68 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   supported way to opt into the check. The Protocol's `tenant_id` docstring
   now states the requirement and names the function.
 
+- **`ollama_env_params()`, `list_ollama_models()` and `wait_for_ollama()` in
+  `dataknobs_common.testing`.** `ollama_env_params()` is the single definition
+  of where the test Ollama lives — the counterpart to `postgres_env_params()` —
+  returning `{"host", "port"}` resolved from `$OLLAMA_HOST` / `$OLLAMA_PORT`.
+  Every Ollama probe now resolves through it, so a fixture that wraps it and a
+  marker that gates on it cannot disagree about which server they mean.
+  `list_ollama_models()` returns the installed model names for a fixture that
+  picks among them; `wait_for_ollama()` blocks until the service answers and
+  otherwise raises `ConnectionError` naming the endpoint it tried, so a probe
+  aimed at the wrong host does not read as "Ollama is down".
+
+### Fixed
+
+- **The Ollama probes ask the service, not this machine.**
+  `is_ollama_available()` and `is_ollama_model_available()` shelled out to the
+  local `ollama` CLI and took no host or port, so no caller could aim them and
+  a process without the binary on `PATH` reported the service down while a
+  reachable server answered on the configured endpoint — a silent skip of every
+  `requires_ollama` test rather than a failure anyone would notice. Both now
+  probe `GET /api/tags` over HTTP (standard library only) and take `host` /
+  `port`, matching the four sibling probes in the same module.
+
+- **`is_ollama_model_available` matches model names, not table text.** It
+  substring-searched the rendered `ollama list` output, in which every column
+  was as matchable as the name: a request for `mistral` was satisfied by an
+  installed `mistral-small`, and requests for `latest`, `GB` and the table's
+  own `NAME` header all reported available. Matching is now against the names
+  `/api/tags` reports — an untagged request accepts any tag of that model
+  (`gemma3` ← `gemma3:1b`) and nothing else (`gemma3` ↚ `gemma3-uncensored`),
+  and a request naming a tag must match it exactly.
+
+- **`$OLLAMA_HOST` is understood in all three of its forms.** It is Ollama's
+  own variable and is written `http://host:port`, `host:port` or as a bare
+  hostname. Only the last was handled, so the URL form — which this repo's own
+  service scripts default it to — was pasted in where a hostname belonged and
+  produced `http://http://host:port:11434/api/tags`: a probe that failed to
+  connect while looking exactly like a service that was simply down.
+  `$OLLAMA_PORT` is the more specific statement and overrides a port carried in
+  `$OLLAMA_HOST`.
+
+- **Service probes read a bounded response body.** A probe reads from whatever
+  endpoint the environment names, and an unbounded read there turned a
+  misdirected variable into a hang — the probe never answers, so the suite it
+  gates neither runs nor skips. The Ollama probes and the LocalStack health
+  probe now cap the body at 1 MiB, far above any real one, and treat anything
+  larger as a failed probe.
+
+- **`is_ollama_model_usable` resolves its endpoint like everything else.** Its
+  `host` / `port` defaults were hardcoded to `localhost:11434`, so with
+  `$OLLAMA_HOST` set the availability check reported the service down while the
+  readiness canary reported a model on it ready — one process, two answers
+  about one service.
+
 ### Changed
+
+- **The Ollama probes and markers take `host` / `port`.**
+  `is_ollama_available(host=None, port=None, *, timeout=2.0)`,
+  `is_ollama_model_available(model_name, host=None, port=None, *,
+  timeout=5.0)`, `requires_ollama_model(model_name, *, host=None, port=None)`
+  and `requires_ollama_usable_model(model_name, *, host=None, port=None)`.
+  Existing calls are unaffected; `None` now means "resolve from the
+  environment" where `is_ollama_model_usable` previously meant `localhost`.
 
 - **`validate_tenant_id` is now `safe_segment` under a different name.** Same
   rule, same rejections, same `ValueError` — it raises `SegmentEscapeError`

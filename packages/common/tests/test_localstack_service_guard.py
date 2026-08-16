@@ -37,7 +37,14 @@ ENDPOINT = "http://localhost:4566"
 
 
 class _FakeResponse:
-    """Context-manager stand-in for a ``urlopen`` response."""
+    """Context-manager stand-in for a ``urlopen`` response.
+
+    ``read`` takes the optional byte count ``http.client.HTTPResponse.read``
+    takes. A stand-in narrower than the interface it stands for reports a
+    breakage where there is none: this one accepted no argument, so bounding
+    the probe's read — a change the real response handles without noticing —
+    failed every test here with a ``TypeError``.
+    """
 
     def __init__(self, body: bytes) -> None:
         self._body = body
@@ -48,8 +55,8 @@ class _FakeResponse:
     def __exit__(self, *exc: object) -> bool:
         return False
 
-    def read(self) -> bytes:
-        return self._body
+    def read(self, amt: int | None = None) -> bytes:
+        return self._body if amt is None else self._body[:amt]
 
 
 def _health_payload(**services: str) -> bytes:

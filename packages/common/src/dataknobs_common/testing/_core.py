@@ -37,8 +37,9 @@ import json
 import logging
 import os
 import re
-import subprocess
+import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 from typing import Any
@@ -69,55 +70,277 @@ def safe_sql_ident(name: str) -> str:
 # Service Availability Checks
 
 
-def is_ollama_available() -> bool:
-    """Check if Ollama service is available.
+_OLLAMA_DEFAULT_PORT = 11434
 
-    Returns:
-        True if Ollama is running, False otherwise
+#: Cap on a probe response body, well above any real one (an ``/api/tags``
+#: listing or a LocalStack health document is kilobytes). A probe reads from
+#: whatever endpoint the environment names, and an unbounded read there turns
+#: a misdirected variable into a hang: the probe never answers, so the suite
+#: it gates neither runs nor skips. Over the cap is treated as a failed probe.
+_MAX_PROBE_BODY_BYTES = 1024 * 1024
+
+
+def _read_probe_json(response: Any) -> Any:
+    """Decode a bounded JSON body from an open HTTP response.
+
+    Raises:
+        ValueError: If the body exceeds :data:`_MAX_PROBE_BODY_BYTES` or is not
+            JSON — the same type every caller here already treats as "no".
     """
-    try:
-        result = subprocess.run(
-            ["ollama", "list"],
-            capture_output=True,
-            text=True,
-            timeout=5,
-            check=False,
-        )
-        return result.returncode == 0
-    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
-        return False
+    body = response.read(_MAX_PROBE_BODY_BYTES + 1)
+    if len(body) > _MAX_PROBE_BODY_BYTES:
+        raise ValueError(f"probe response exceeded {_MAX_PROBE_BODY_BYTES} bytes")
+    return json.loads(body)
 
 
-def is_ollama_model_available(model_name: str = "nomic-embed-text") -> bool:
-    """Check if a specific Ollama model is available.
+def _parse_ollama_host(raw: str) -> tuple[str, int | None]:
+    """Split an ``OLLAMA_HOST`` value into a hostname and an optional port.
+
+    ``OLLAMA_HOST`` is Ollama's own variable, not one this project invented,
+    and it is written three ways in the wild: ``http://host:port`` (what this
+    repo's ``bin/check-ollama.sh`` and ``bin/manage-services.sh`` default it
+    to), ``host:port`` (what the ``ollama`` CLI documents), and a bare
+    hostname. All three are accepted here, because a reader that accepts only
+    one of them turns a correctly-set variable into a wrong endpoint rather
+    than an error — the URL form pasted into a hostname slot yields
+    ``http://http://host:port:11434/api/tags``, which fails to connect while
+    looking like the service is simply down.
 
     Args:
-        model_name: Name of the model to check (default: nomic-embed-text)
+        raw: The raw environment value, already stripped and non-empty.
 
     Returns:
-        True if model is available, False otherwise
+        ``(host, port)`` where port is ``None`` if the value carried none.
     """
-    if not is_ollama_available():
-        return False
-
+    # urlsplit needs a scheme (or a leading '//') to read an authority; with
+    # neither it puts everything in `path`. Supplying '//' also gets the
+    # bracketed IPv6 form parsed for free.
+    candidate = raw if "://" in raw else f"//{raw}"
+    parsed = urllib.parse.urlsplit(candidate)
+    if not parsed.hostname:
+        return raw, None
     try:
-        result = subprocess.run(
-            ["ollama", "list"],
-            capture_output=True,
-            text=True,
-            timeout=5,
-            check=False,
+        port = parsed.port
+    except ValueError:
+        # A non-numeric port: keep the hostname, let the default supply a port.
+        return parsed.hostname, None
+    return parsed.hostname, port
+
+
+def ollama_env_params() -> dict[str, Any]:
+    """Resolve the Ollama endpoint from the environment.
+
+    The single definition of what "the test Ollama" means, so a probe, a
+    fixture and a plain helper function all reach the same service. Its
+    Postgres counterpart is :func:`postgres_env_params`; the reason both exist
+    is the same one — sites that restate the resolution drift apart, and the
+    drift shows up as a probe reporting a service down while the code beside
+    it talks to that service happily.
+
+    ``OLLAMA_HOST`` supplies the host and may carry a port (see
+    :func:`_parse_ollama_host`); an explicit ``OLLAMA_PORT`` is the more
+    specific statement and wins over a port embedded in the host.
+
+    Unlike its siblings this has no Docker-aware default: there is no Ollama
+    compose service to name, because Ollama runs on the host rather than in
+    the dev stack. Inside a container, ``OLLAMA_HOST`` is the way to point at
+    it — which is precisely why the URL form above has to be understood.
+
+    Returns:
+        A fresh dict with ``host`` and ``port`` (``int``).
+    """
+    host = "localhost"
+    port: int | None = None
+
+    raw_host = os.environ.get("OLLAMA_HOST", "").strip()
+    if raw_host:
+        host, port = _parse_ollama_host(raw_host)
+
+    raw_port = os.environ.get("OLLAMA_PORT", "").strip()
+    if raw_port:
+        port = int(raw_port)
+
+    return {"host": host, "port": _OLLAMA_DEFAULT_PORT if port is None else port}
+
+
+def _resolve_ollama_endpoint(host: str | None, port: int | None) -> tuple[str, int]:
+    """Resolve host/port as explicit argument → environment → default."""
+    params = ollama_env_params()
+    return (
+        params["host"] if host is None else host,
+        params["port"] if port is None else port,
+    )
+
+
+def _ollama_get_json(
+    path: str,
+    host: str | None,
+    port: int | None,
+    timeout: float,
+) -> Any | None:
+    """GET a JSON document from the resolved Ollama endpoint.
+
+    Returns the decoded body, or ``None`` for any failure — unreachable,
+    timeout, HTTP error, or a body that is not JSON. Standard library only:
+    ``dataknobs-common`` installs with no required dependencies, so a probe
+    that reached for ``requests`` would be unusable in exactly the minimal
+    environment a probe is for.
+    """
+    resolved_host, resolved_port = _resolve_ollama_endpoint(host, port)
+    request = urllib.request.Request(f"http://{resolved_host}:{resolved_port}{path}")
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            return _read_probe_json(response)
+    except (urllib.error.URLError, TimeoutError, ValueError, OSError) as exc:
+        logger.debug(
+            "Ollama request to %s at %s:%s failed: %s", path, resolved_host, resolved_port, exc
         )
-        return model_name in result.stdout
-    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+        return None
+
+
+def is_ollama_available(
+    host: str | None = None,
+    port: int | None = None,
+    *,
+    timeout: float = 2.0,
+) -> bool:
+    """Check if the Ollama service is available.
+
+    Resolves the endpoint as ``host``/``port`` args → ``$OLLAMA_HOST`` /
+    ``$OLLAMA_PORT`` → ``localhost:11434``, then probes ``GET /api/tags``.
+
+    This asks the service, not this machine. The previous implementation shelled
+    out to the local ``ollama`` CLI and took no host or port, so it could not be
+    aimed anywhere by a caller, and a container running the suite without the
+    binary installed reported the service down while a perfectly reachable
+    server answered on the configured endpoint — a silent skip of every
+    ``requires_ollama`` test rather than a failure anyone would notice.
+
+    Args:
+        host: Ollama host (default: ``$OLLAMA_HOST`` or ``localhost``)
+        port: Ollama HTTP port (default: ``$OLLAMA_PORT`` or ``11434``)
+        timeout: Per-request timeout in seconds.
+
+    Returns:
+        True if Ollama answered, False otherwise
+    """
+    return _ollama_get_json("/api/tags", host, port, timeout) is not None
+
+
+def list_ollama_models(
+    host: str | None = None,
+    port: int | None = None,
+    *,
+    timeout: float = 5.0,
+) -> list[str]:
+    """List the models installed on the resolved Ollama endpoint.
+
+    Args:
+        host: Ollama host (default: ``$OLLAMA_HOST`` or ``localhost``)
+        port: Ollama HTTP port (default: ``$OLLAMA_PORT`` or ``11434``)
+        timeout: Per-request timeout in seconds.
+
+    Returns:
+        Installed model names, tags included (e.g. ``["gemma3:1b"]``). Empty
+        when Ollama is unreachable — indistinguishable from "none installed",
+        which is why availability has its own check.
+    """
+    body = _ollama_get_json("/api/tags", host, port, timeout)
+    if not isinstance(body, dict):
+        return []
+    return [
+        str(entry["name"])
+        for entry in body.get("models") or []
+        if isinstance(entry, dict) and entry.get("name")
+    ]
+
+
+def _model_request_is_satisfied_by(requested: str, installed: str) -> bool:
+    """Whether an ``installed`` model name satisfies a ``requested`` one.
+
+    An untagged request accepts any tag of that model — ``gemma3`` is satisfied
+    by ``gemma3:1b`` — but not a different model whose name merely begins the
+    same way, so ``gemma3`` is *not* satisfied by ``gemma3-uncensored:latest``.
+    A request that names a tag must match it exactly.
+    """
+    if installed == requested:
+        return True
+    if ":" in requested:
         return False
+    return installed.startswith(f"{requested}:")
+
+
+def is_ollama_model_available(
+    model_name: str = "nomic-embed-text",
+    host: str | None = None,
+    port: int | None = None,
+    *,
+    timeout: float = 5.0,
+) -> bool:
+    """Check whether a specific Ollama model is installed.
+
+    Matches against the model names ``/api/tags`` reports, by the rule in
+    :func:`_model_request_is_satisfied_by`. The previous implementation
+    substring-searched the rendered ``ollama list`` table, where every column
+    was as matchable as the name: a request for ``mistral`` was satisfied by an
+    installed ``mistral-small``, and requests for ``latest``, ``GB`` and even
+    the table's own ``NAME`` header all reported available.
+
+    Args:
+        model_name: Name of the model to check, with or without a tag.
+        host: Ollama host (default: ``$OLLAMA_HOST`` or ``localhost``)
+        port: Ollama HTTP port (default: ``$OLLAMA_PORT`` or ``11434``)
+        timeout: Per-request timeout in seconds.
+
+    Returns:
+        True if a matching model is installed, False otherwise
+    """
+    return any(
+        _model_request_is_satisfied_by(model_name, installed)
+        for installed in list_ollama_models(host, port, timeout=timeout)
+    )
+
+
+def wait_for_ollama(
+    host: str | None = None,
+    port: int | None = None,
+    *,
+    max_retries: int = 30,
+    delay: float = 1.0,
+) -> bool:
+    """Block until Ollama answers on the resolved endpoint.
+
+    Args:
+        host: Ollama host (default: ``$OLLAMA_HOST`` or ``localhost``)
+        port: Ollama HTTP port (default: ``$OLLAMA_PORT`` or ``11434``)
+        max_retries: Number of probes before giving up.
+        delay: Seconds between probes.
+
+    Returns:
+        True once Ollama answers.
+
+    Raises:
+        ConnectionError: If Ollama never answered, naming the endpoint tried —
+            without which the failure reads as "Ollama is down" when the real
+            cause is a probe aimed at the wrong host.
+    """
+    resolved_host, resolved_port = _resolve_ollama_endpoint(host, port)
+    for attempt in range(max_retries):
+        if is_ollama_available(resolved_host, resolved_port):
+            return True
+        if attempt < max_retries - 1:
+            time.sleep(delay)
+    raise ConnectionError(
+        f"Could not connect to Ollama at {resolved_host}:{resolved_port} after "
+        f"{max_retries} attempts. Please ensure Ollama is running and accessible."
+    )
 
 
 def is_ollama_model_usable(
     model_name: str,
     *,
-    host: str = "localhost",
-    port: int = 11434,
+    host: str | None = None,
+    port: int | None = None,
     prompt: str = "Reply with the single word: ok",
     num_predict: int = 32,
     timeout: float = 60.0,
@@ -138,10 +361,16 @@ def is_ollama_model_usable(
     dependency). Any error (unreachable, timeout, HTTP error, malformed body)
     returns ``False`` — the caller decides whether that is a skip or a failure.
 
+    The endpoint resolves through :func:`ollama_env_params`, the same path
+    :func:`is_ollama_available` uses. It did not, and the two disagreed: with
+    ``OLLAMA_HOST`` pointing at an unreachable name the availability check
+    reported the service down while this one, hardcoded to ``localhost``,
+    reported a model on it ready — one process, two answers about one service.
+
     Args:
         model_name: Ollama model to probe (e.g. ``"llama3.1:8b"``).
-        host: Ollama host.
-        port: Ollama HTTP port.
+        host: Ollama host (default: ``$OLLAMA_HOST`` or ``localhost``)
+        port: Ollama HTTP port (default: ``$OLLAMA_PORT`` or ``11434``)
         prompt: Trivial prompt for the canary generation.
         num_predict: Output-token cap for the canary — kept small; the check is
             "did it produce anything", not "is the answer correct".
@@ -150,6 +379,7 @@ def is_ollama_model_usable(
     Returns:
         ``True`` if the model returned non-empty content, ``False`` otherwise.
     """
+    resolved_host, resolved_port = _resolve_ollama_endpoint(host, port)
     payload = json.dumps(
         {
             "model": model_name,
@@ -159,13 +389,13 @@ def is_ollama_model_usable(
         }
     ).encode()
     request = urllib.request.Request(
-        f"http://{host}:{port}/api/chat",
+        f"http://{resolved_host}:{resolved_port}/api/chat",
         data=payload,
         headers={"Content-Type": "application/json"},
     )
     try:
         with urllib.request.urlopen(request, timeout=timeout) as response:
-            body = json.load(response)
+            body = _read_probe_json(response)
     except (urllib.error.URLError, TimeoutError, ValueError, OSError) as exc:
         logger.debug("Ollama usability canary for model %r failed: %s", model_name, exc)
         return False
@@ -449,14 +679,13 @@ def _localstack_service_enabled(endpoint: str, service: str) -> bool:
     Returns:
         True only when the health endpoint reports the service ready.
     """
-    import json
     from urllib.error import URLError
     from urllib.request import urlopen
 
     url = f"{endpoint.rstrip('/')}/_localstack/health"
     try:
         with urlopen(url, timeout=2) as response:
-            payload = json.loads(response.read().decode("utf-8"))
+            payload = _read_probe_json(response)
     except (URLError, OSError, ValueError):
         return False
     if not isinstance(payload, dict):
@@ -735,22 +964,29 @@ try:
             reason=f"{package_name} not installed",
         )
 
-    def requires_ollama_model(model_name: str = "nomic-embed-text") -> Any:
+    def requires_ollama_model(
+        model_name: str = "nomic-embed-text",
+        *,
+        host: str | None = None,
+        port: int | None = None,
+    ) -> Any:
         """Create a skip marker for a required Ollama model.
 
         Args:
             model_name: Name of the required model
+            host: Ollama host (default: ``$OLLAMA_HOST`` or ``localhost``)
+            port: Ollama HTTP port (default: ``$OLLAMA_PORT`` or ``11434``)
 
         Returns:
             pytest.mark.skipif marker
         """
         return pytest.mark.skipif(
-            not is_ollama_model_available(model_name),
+            not is_ollama_model_available(model_name, host, port),
             reason=f"Ollama model {model_name} not available",
         )
 
     def requires_ollama_usable_model(
-        model_name: str, *, host: str = "localhost", port: int = 11434
+        model_name: str, *, host: str | None = None, port: int | None = None
     ) -> Any:
         """Create a skip marker requiring an Ollama model that produces output.
 
@@ -761,8 +997,8 @@ try:
 
         Args:
             model_name: Name of the required model
-            host: Ollama host
-            port: Ollama HTTP port
+            host: Ollama host (default: ``$OLLAMA_HOST`` or ``localhost``)
+            port: Ollama HTTP port (default: ``$OLLAMA_PORT`` or ``11434``)
 
         Returns:
             pytest.mark.skipif marker
@@ -797,11 +1033,16 @@ except ImportError:
     def requires_package(package_name: str) -> Any:
         return None
 
-    def requires_ollama_model(model_name: str = "nomic-embed-text") -> Any:
+    def requires_ollama_model(
+        model_name: str = "nomic-embed-text",
+        *,
+        host: str | None = None,
+        port: int | None = None,
+    ) -> Any:
         return None
 
     def requires_ollama_usable_model(
-        model_name: str, *, host: str = "localhost", port: int = 11434
+        model_name: str, *, host: str | None = None, port: int | None = None
     ) -> Any:
         return None
 
