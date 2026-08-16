@@ -1,18 +1,12 @@
 """Tests for the hybrid search example using real implementations."""
 
-import os
 import pytest
 import asyncio
 import sys
+import zlib
 from pathlib import Path
 from typing import List, Dict, Any
 from dataclasses import dataclass
-
-# Skip all tests if PostgreSQL is not available
-pytestmark = pytest.mark.skipif(
-    not os.environ.get("TEST_POSTGRES", "").lower() == "true",
-    reason="Hybrid search tests require TEST_POSTGRES=true and a running PostgreSQL instance with pgvector",
-)
 
 # Add examples to path
 examples_path = Path(__file__).parent.parent.parent / "examples"
@@ -43,8 +37,11 @@ class SimpleEmbeddingModel:
         for i in range(384):
             value = 0.0
             for word in words:
-                # Simple hash-based approach for deterministic embeddings
-                word_hash = hash(word + str(i)) % 1000
+                # crc32, not hash(): str.__hash__ is salted per process
+                # (PYTHONHASHSEED), so hash() would give this "deterministic"
+                # embedding a different value every run — and the ranking
+                # assertions below depend on it being stable.
+                word_hash = zlib.crc32((word + str(i)).encode()) % 1000
                 value += word_hash / 1000.0
             # Normalize
             value = value / (len(words) + 1)
@@ -387,31 +384,29 @@ class TestRealPerformance:
 
     @pytest.mark.asyncio
     async def test_vector_search_performance(self, populated_vector_db):
-        """Test vector search performance metrics."""
-        import time
+        """Test repeated vector search over a small dataset.
 
-        # Perform multiple searches
-        search_times = []
+        No wall-clock budget is asserted, deliberately. This suite runs in the
+        PR gate under ``pytest -n 4``, where a throughput assertion goes red on
+        a contended runner for reasons unrelated to any change. What is pinned
+        here is that repeated searches all succeed and stay within ``k``;
+        measuring how fast they are belongs in a benchmark job.
+        """
+        searches_completed = 0
 
         for i in range(5):
             query_text = f"search query {i}"
             query_embedding = create_test_embedding(query_text)
 
-            start = time.time()
             results = await populated_vector_db.vector_search(
                 query_vector=query_embedding, k=3, vector_field="embedding"
             )
-            search_time = time.time() - start
-            search_times.append(search_time)
+            searches_completed += 1
 
             assert len(results) <= 3
 
-        # Calculate average search time
-        avg_time = sum(search_times) / len(search_times)
-        assert avg_time < 1.0  # Should be fast for small dataset
-
         # All searches should complete
-        assert len(search_times) == 5
+        assert searches_completed == 5
 
 
 class TestRealDatabaseIntegration:

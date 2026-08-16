@@ -1,19 +1,11 @@
 """Integration tests for all example scripts using real implementations."""
 
-import os
 import pytest
 import asyncio
 import sys
-import time
 from pathlib import Path
 from typing import List, Dict, Any
 import numpy as np
-
-# Skip all tests if PostgreSQL is not available
-pytestmark = pytest.mark.skipif(
-    not os.environ.get("TEST_POSTGRES", "").lower() == "true",
-    reason="Example integration tests require TEST_POSTGRES=true and a running PostgreSQL instance with pgvector",
-)
 
 # Add examples to path
 examples_path = Path(__file__).parent.parent.parent / "examples"
@@ -545,29 +537,25 @@ class TestPerformanceIntegration:
             docs.append(record)
 
         # Batch create
-        start = time.time()
         record_ids = await vector_db.create_batch(docs)
-        create_time = time.time() - start
 
         assert len(record_ids) == num_docs
-        assert create_time < 5.0  # Should be reasonably fast
 
-        # Test search performance
-        search_times = []
-
+        # No wall-clock budget is asserted here, deliberately. This suite runs
+        # in the PR gate under `pytest -n 4` (`run-quality-checks.sh` passes
+        # --parallel in pr mode), where a contended runner makes a throughput
+        # assertion go red for reasons unrelated to any change — and a gate
+        # that flakes is a gate people learn to ignore. What this test pins is
+        # that batch create and repeated search behave correctly at 100 docs;
+        # measuring how fast they are belongs in a benchmark job.
         for i in range(10):
             query = TestEmbedding.generate(f"topic {i % 5}")
 
-            start = time.time()
             results = await vector_db.vector_search(
                 query_vector=query, k=5, vector_field="embedding"
             )
-            search_times.append(time.time() - start)
 
             assert len(results) <= 5
-
-        avg_search_time = sum(search_times) / len(search_times)
-        assert avg_search_time < 0.5  # Searches should be fast
 
     @pytest.mark.asyncio
     async def test_large_embedding_dimensions(self):

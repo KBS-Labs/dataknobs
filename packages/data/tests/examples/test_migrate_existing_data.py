@@ -1,20 +1,14 @@
 """Tests for the migration example."""
 
-import os
 import pytest
 import asyncio
 import sys
 import time
+import zlib
 from pathlib import Path
 from unittest.mock import MagicMock, patch, AsyncMock
 from typing import List, Dict, Any
 from dataclasses import dataclass
-
-# Skip all tests if PostgreSQL is not available
-pytestmark = pytest.mark.skipif(
-    not os.environ.get("TEST_POSTGRES", "").lower() == "true",
-    reason="Migration tests require TEST_POSTGRES=true and a running PostgreSQL instance with pgvector",
-)
 
 # Add examples to path
 examples_path = Path(__file__).parent.parent.parent / "examples"
@@ -29,7 +23,10 @@ class MockEmbeddingModel:
 
     def encode(self, text: str) -> List[float]:
         """Generate deterministic fake embeddings."""
-        hash_val = hash(text) % 1000
+        # crc32, not hash(): str.__hash__ is salted per process
+        # (PYTHONHASHSEED), so hash() would break the determinism this
+        # docstring promises.
+        hash_val = zlib.crc32(text.encode()) % 1000
         return [float((hash_val + i) % 100) / 100.0 for i in range(384)]
 
 

@@ -127,7 +127,7 @@
         {
           "path": "packages/data/tests",
           "tier": "deferred",
-          "ceiling": 356,
+          "ceiling": 339,
           "reason": "outside the default lint target set; the legacy np.random block that made up its bulk is gone — every draw converted by hand, no autofix existing for any of them — and with it the process-global seeding that left unseeded draws dependent on test order; what remains is the ordinary unused-import and discarded-value backlog, most of it fixable, with E402 and E722 the part needing a reader"
         },
         {
