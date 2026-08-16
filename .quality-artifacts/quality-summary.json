@@ -1,21 +1,27 @@
 {
-  "timestamp": "2026-08-16T05:21:54Z",
+  "timestamp": "2026-08-16T05:33:22Z",
   "overall_status": "PASS",
   "run_mode": "pr",
   "environment": "host",
-  "packages": "bots data fsm llm",
+  "packages": "bots common config data fsm legacy llm structures utils xization",
   "tested_packages": [
     "bots",
+    "common",
+    "config",
     "data",
     "fsm",
-    "llm"
+    "legacy",
+    "llm",
+    "structures",
+    "utils",
+    "xization"
   ],
   "coverage_percent": null,
   "package_hashes": {
     "bots": "afa8aa3bffaa0da0502be5f2295437371f1aa432425ea52b1319168c9c090796",
-    "common": "3de6f921d5225dfa0f82a018e5c72f1785c09bbbe14b2de4d5f46c5806a0e47f",
+    "common": "85a4b75674e1dc384ad098ec88c2ced4b2abdb04148037e3b6805dc49f56c228",
     "config": "64593625c5ebfe7f5a542538d813aca9f8db2ecfb3d5ed3172649b0ae07a224b",
-    "data": "f3532f6af8c245b757c27ed743796c46ac8357171fc69cd0f29804482a71646b",
+    "data": "e502bbab7edd8acb59633537e34694064ff5c33a85e042b8790350d8086cbdda",
     "fsm": "afefb3f5a8706866e81f7ce4cbc9e07658b056c598c95a628d76f8122cc394ce",
     "legacy": "f77592a12b3780ae22e0ac113ff15dc537020de05664eea34c0a2734bb91e5a8",
     "llm": "ff0e128a7c9a7635103fb54a6e3e3ca2351b43fa2f0ddb750978c4d5fe0365f6",
@@ -25,17 +31,17 @@
     "_algorithm_version": 3
   },
   "workspace_hashes": {
-    "toolchain": "d91855ee8d0f162b8785b82ac5a8edbd04785e29783ec4ba14eeef3b6447df2c",
-    "workspace_tests": "55ebc45179149b00085512618b3a14c8c0a488cee046ed754cffcd09655c1072",
+    "toolchain": "28a71da0ebbeae63d7b3ceb98512e9dd2fdc626ca1c84d77fd444a8fa7c28d6d",
+    "workspace_tests": "b21c3fa0df54ad14eac35e527672590eacacbb632eeba9ed2b42e537962cbf4a",
     "docs": "014eb723d91a6180c40c5fcd9935b580a80653532ef443f08886001280984957"
   },
-  "total_seconds": 187,
+  "total_seconds": 236,
   "checks": {
     "workflow_lint": {
       "status": "pass",
       "exit_code": 0,
       "tool": "lint-workflows.sh",
-      "duration_seconds": 0
+      "duration_seconds": 1
     },
     "shell_lint": {
       "status": "pass",
@@ -47,14 +53,14 @@
       "status": "pass",
       "exit_code": 0,
       "tool": "quality-contract.py",
-      "duration_seconds": 2
+      "duration_seconds": 1
     },
     "validation": {
       "status": "pass",
       "exit_code": 0,
       "skipped": false,
       "tool": "validate.sh",
-      "duration_seconds": 52
+      "duration_seconds": 74
     },
     "documentation": {
       "status": "pass",
@@ -81,14 +87,14 @@
       "status": "pass",
       "exit_code": 0,
       "skipped": false,
-      "duration_seconds": 71,
-      "workspace_guards_seconds": 43
+      "duration_seconds": 95,
+      "workspace_guards_seconds": 42
     },
     "integration_tests": {
       "status": "pass",
       "exit_code": 0,
       "skipped": false,
-      "duration_seconds": 53
+      "duration_seconds": 55
     }
   }
 }
