@@ -303,7 +303,7 @@ class TestAsyncDuckDBDatabase:
         assert all(results)
 
         # Verify updates - check that values were doubled
-        for i, record_id in enumerate(ids):
+        for _i, record_id in enumerate(ids):
             record = await memory_db.read(record_id)
             # The batch update in DuckDB backend works correctly, the issue was the test expectations
             assert record is not None
@@ -339,7 +339,7 @@ class TestAsyncDuckDBDatabase:
         config = StreamConfig(batch_size=10)
 
         count = 0
-        async for record in memory_db.stream_read(config=config):
+        async for _record in memory_db.stream_read(config=config):
             count += 1
 
         assert count == 50

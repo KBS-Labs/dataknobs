@@ -283,6 +283,13 @@ class TestElasticsearchIntegration:
         assert page1_ages.isdisjoint(page2_ages)
         assert page2_ages.isdisjoint(page3_ages)
 
+        # The pages must also reconstruct the unpaged result exactly: the
+        # checks above allow pages that skip a record or reorder across a
+        # boundary, which is what an offset bug actually looks like.
+        assert [r.get_value("age") for r in page1 + page2 + page3] == [
+            r.get_value("age") for r in all_results
+        ]
+
         # Cleanup
         db.delete_batch(ids)
         db.close()
@@ -465,7 +472,7 @@ class TestElasticsearchIntegration:
         assert db.count() == 0
 
         # Insert sample data
-        ids = db.create_batch(sample_records)
+        db.create_batch(sample_records)
 
         time.sleep(1)
 
@@ -662,7 +669,7 @@ class TestElasticsearchAsyncIntegration:
         db = await AsyncDatabase.from_backend("elasticsearch", elasticsearch_test_index)
 
         # Insert data
-        ids = await db.create_batch(sample_records)
+        await db.create_batch(sample_records)
 
         await asyncio.sleep(1)
 

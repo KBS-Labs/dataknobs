@@ -434,8 +434,6 @@ class TestErrorHandlingAcrossBackends:
 
             target.create = failing_create
 
-            original_create_batch = target.create_batch
-
             def failing_create_batch(records):
                 results = []
                 for record in records:

@@ -251,7 +251,7 @@ class TestStreamProcessor:
         """Test async batching records."""
 
         async def record_generator():
-            for i in range(10):
+            for _i in range(10):
                 yield Record()
 
         batches = []

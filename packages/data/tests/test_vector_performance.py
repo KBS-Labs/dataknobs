@@ -264,7 +264,7 @@ class TestConnectionPool:
 
         # Acquire max connections
         conn1 = await pool.acquire()
-        conn2 = await pool.acquire()
+        await pool.acquire()
 
         # Try to acquire one more (should timeout quickly in test)
         with pytest.raises(TimeoutError):
@@ -295,7 +295,7 @@ class TestConnectionPool:
 
         # Create some connections
         conn1 = await pool.acquire()
-        conn2 = await pool.acquire()
+        await pool.acquire()
         await pool.release(conn1)
 
         # Close pool

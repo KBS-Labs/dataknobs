@@ -106,7 +106,7 @@ class TestMigratorAdvanced:
 
         # Test should now raise since no error handler is provided
         with pytest.raises(ValueError, match="Database error"):
-            progress = migrator.migrate(
+            migrator.migrate(
                 source=source,
                 target=target,
                 batch_size=1,  # Process one at a time to control error timing

@@ -284,7 +284,7 @@ class TestSyncSQLiteDatabase:
         """Test transaction rollback on error."""
         # Create a record with a specific ID
         record1 = Record(data={"name": "First"})
-        id1 = memory_db.create(record1)
+        memory_db.create(record1)
 
         # Try to create batch with duplicate ID
         records = [Record(data={"name": "Second"}), Record(data={"name": "Third"})]

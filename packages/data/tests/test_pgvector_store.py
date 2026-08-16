@@ -434,7 +434,7 @@ class TestPgVectorStoreSearch:
         query = vectors[0]
         results = await pgvector_store.search(query, k=5, include_metadata=True)
 
-        for id_, score, meta in results:
+        for _, _, meta in results:
             assert meta is not None
             assert "key" in meta
 

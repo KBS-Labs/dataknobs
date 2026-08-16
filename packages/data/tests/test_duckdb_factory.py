@@ -77,7 +77,7 @@ class TestDuckDBFactoryIntegration:
 
         # Verify operations work with custom table
         record = Record(data={"value": 42})
-        record_id = db.create(record)
+        db.create(record)
 
         count = db.count()
         assert count == 1
@@ -96,7 +96,7 @@ class TestDuckDBFactoryIntegration:
 
         # Verify operations work with custom table
         record = Record(data={"value": 100})
-        record_id = await db.create(record)
+        await db.create(record)
 
         count = await db.count()
         assert count == 1

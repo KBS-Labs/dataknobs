@@ -482,7 +482,7 @@ class TestMigrator:
 
         # Use migrator to properly migrate data
         migrator = Migrator()
-        progress = migrator.migrate(source=source, target=target)
+        migrator.migrate(source=source, target=target)
 
         # Add same records to source
         for record in records:
@@ -612,7 +612,7 @@ class TestIntegrationScenarios:
         target = MemoryDatabase()
         migrator = Migrator()
 
-        progress = migrator.migrate(source=source, target=target, transform=transformer)
+        migrator.migrate(source=source, target=target, transform=transformer)
 
         # Check cleaned data
         cleaned = target.search(Query())

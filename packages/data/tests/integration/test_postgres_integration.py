@@ -401,7 +401,7 @@ class TestPostgresIntegration:
         assert db.count() == 0
 
         # Insert sample data
-        ids = db.create_batch(sample_records)
+        db.create_batch(sample_records)
 
         # Count all
         assert db.count() == len(sample_records)
@@ -621,7 +621,7 @@ class TestPostgresAsyncIntegration:
         db = await AsyncDatabase.from_backend("postgres", postgres_test_db)
 
         # Insert data
-        ids = await db.create_batch(sample_records)
+        await db.create_batch(sample_records)
 
         # Search
         query = Query().filter("department", Operator.EQ, "Engineering")

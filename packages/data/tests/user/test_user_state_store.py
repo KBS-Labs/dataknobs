@@ -348,7 +348,7 @@ async def test_write_emits_metadata_only_event() -> None:
 
     store = await AsyncUserStateStore.from_config(_config(), event_bus=bus)
     local: list[dict[str, Any]] = []
-    store._callbacks.register(SECTION_WRITTEN_TOPIC, lambda p: local.append(p))
+    store._callbacks.register(SECTION_WRITTEN_TOPIC, local.append)
 
     def failing(_: dict[str, Any]) -> None:
         raise RuntimeError("subscriber down")
@@ -523,7 +523,7 @@ def test_sync_store_local_callbacks_still_fire() -> None:
     store = UserStateStore.from_config(_config())
     try:
         seen: list[dict[str, Any]] = []
-        store._callbacks.register(SECTION_WRITTEN_TOPIC, lambda p: seen.append(p))
+        store._callbacks.register(SECTION_WRITTEN_TOPIC, seen.append)
         store.put_document("u1", "preferences", {"theme": "dark"})
         assert seen and seen[0]["op"] == "put_document"
     finally:

@@ -217,7 +217,7 @@ class TestVectorSearchExample:
         await vector_example.setup_database()
 
         # Create documents
-        record_ids, records = await vector_example.create_documents_with_embeddings()
+        record_ids, _records = await vector_example.create_documents_with_embeddings()
         assert len(record_ids) == 6
 
         # Search
@@ -261,7 +261,7 @@ class TestIntegrationWithRealModel:
                 },
             ]
 
-            record_ids, records = await example.create_documents_with_embeddings(small_docs)
+            record_ids, _records = await example.create_documents_with_embeddings(small_docs)
             assert len(record_ids) == 2
 
             # Search should return results with valid scores

@@ -120,11 +120,11 @@ class TestBasicVectorSearchIntegration:
 
         # Create example with test embedding
         example = VectorSearchExample(verbose=False)
-        example.generate_embedding = lambda text: TestEmbedding.generate(text)
+        example.generate_embedding = TestEmbedding.generate
         example.db = vector_db
 
         # Create documents
-        record_ids, records = await example.create_documents_with_embeddings()
+        record_ids, _records = await example.create_documents_with_embeddings()
         assert len(record_ids) == 6
 
         # Perform vector search

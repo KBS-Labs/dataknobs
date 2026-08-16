@@ -286,7 +286,7 @@ class TestSyncDuckDBDatabase:
         assert all(results)
 
         # Verify updates
-        for i, record_id in enumerate(ids):
+        for _i, record_id in enumerate(ids):
             record = memory_db.read(record_id)
             assert record is not None
             assert "value" in record.fields
@@ -318,7 +318,7 @@ class TestSyncDuckDBDatabase:
         config = StreamConfig(batch_size=10)
 
         count = 0
-        for record in memory_db.stream_read(config=config):
+        for _record in memory_db.stream_read(config=config):
             count += 1
 
         assert count == 50

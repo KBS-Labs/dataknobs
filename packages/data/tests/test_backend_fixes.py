@@ -74,7 +74,7 @@ async def test_postgres_update_persists_changes(postgres_connection_params):
 
         # Create initial record
         record = Record(data={"status": "pending", "count": 0})
-        record_id = await backend.create(record)
+        await backend.create(record)
 
         # Search for it to get the storage_id
         query = Query().filter("status", "==", "pending")
