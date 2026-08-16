@@ -18,39 +18,26 @@ not change.
 from __future__ import annotations
 
 import asyncio
-import os
 from collections.abc import AsyncIterator, Iterator
 from typing import Any
 
 import pytest
 import pytest_asyncio
-from dataknobs_common.testing import requires_postgres
+from dataknobs_common.testing import (
+    is_package_available,
+    requires_real_postgres,
+)
 
 from dataknobs_data.testing import vector as _vector
 from dataknobs_data.vector.stores.memory import MemoryVectorStore
 
-try:
-    import asyncpg  # noqa: F401
-
+if is_package_available("asyncpg"):
     from dataknobs_data.vector.stores.pgvector import PgVectorStore
 
-    ASYNCPG_AVAILABLE = True
-except ImportError:
-    ASYNCPG_AVAILABLE = False
 
-
-# Gate pgvector parameterization on the same env flag as
-# test_pgvector_store.py. ``requires_postgres`` only checks that the
-# TCP port is open; ``TEST_POSTGRES=true`` is the canonical "postgres
-# is fully provisioned (db + extension)" signal and is what
-# ``bin/test.sh`` sets when it brings services up.
-_pgvector_marks = [
-    requires_postgres,
-    pytest.mark.skipif(
-        os.environ.get("TEST_POSTGRES", "").lower() != "true" or not ASYNCPG_AVAILABLE,
-        reason="pgvector parity tests require TEST_POSTGRES=true and asyncpg",
-    ),
-]
+# requires_real_postgres is exactly the three terms this list assembled by
+# hand: a reachable server, TEST_POSTGRES=true, and asyncpg installed.
+_pgvector_marks = [requires_real_postgres]
 
 
 @pytest.fixture

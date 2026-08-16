@@ -3,22 +3,31 @@
 Requires a running PostgreSQL instance and TEST_POSTGRES=true.
 """
 
-import os
 import uuid
 
-import asyncpg
 import psycopg2
 import pytest
 from psycopg2.extensions import ISOLATION_LEVEL_AUTOCOMMIT
 
-from dataknobs_common.testing import postgres_dsn
+from dataknobs_common.testing import (
+    postgres_dsn,
+    requires_real_postgres,
+    requires_real_postgres_sync,
+)
 from dataknobs_data import Record
 from dataknobs_data.backends.postgres import AsyncPostgresDatabase, SyncPostgresDatabase
 
-pytestmark = pytest.mark.skipif(
-    not os.environ.get("TEST_POSTGRES", "").lower() == "true",
-    reason="PostgreSQL tests require TEST_POSTGRES=true and a running PostgreSQL instance",
-)
+# asyncpg is an optional extra (dataknobs-data[postgres]); psycopg2 arrives as a
+# hard dependency of dataknobs-utils and so cannot be missing here. A plain
+# ``import asyncpg`` would therefore make its absence a *collection* error,
+# which pytestmark cannot prevent -- skipif is evaluated during setup, by which
+# point the module has already been imported. importorskip turns that into the
+# skip the marker below is promising.
+asyncpg = pytest.importorskip("asyncpg")
+
+# Both drivers: this module exercises the sync backend (psycopg2) and the
+# async one (asyncpg), so it needs each of them present and the server up.
+pytestmark = [requires_real_postgres, requires_real_postgres_sync]
 
 
 def _drop_database(params: dict, name: str) -> None:

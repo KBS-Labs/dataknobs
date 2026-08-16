@@ -1,20 +1,15 @@
 """Test sync Elasticsearch vector functionality."""
 
-import os
 import time
-import pytest
 import numpy as np
 
+from dataknobs_common.testing import requires_real_elasticsearch
 from dataknobs_data import Record
 from dataknobs_data.backends.elasticsearch import SyncElasticsearchDatabase
 from dataknobs_data.fields import VectorField
 from dataknobs_data.vector.types import DistanceMetric
 
-# Skip tests if Elasticsearch integration testing is not enabled
-pytestmark = pytest.mark.skipif(
-    os.environ.get("TEST_ELASTICSEARCH") != "true",
-    reason="Elasticsearch integration tests not enabled",
-)
+pytestmark = requires_real_elasticsearch
 
 
 def test_sync_vector_search(elasticsearch_test_index):

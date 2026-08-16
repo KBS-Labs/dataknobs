@@ -2,15 +2,12 @@
 
 import os
 import pytest
+from dataknobs_common.testing import requires_real_elasticsearch
 from dataknobs_data import Query, Record, SyncDatabase
 from dataknobs_data.query import Operator
 
 
-# Skip tests if Elasticsearch is not available
-pytestmark = pytest.mark.skipif(
-    not os.environ.get("TEST_ELASTICSEARCH", "").lower() == "true",
-    reason="Elasticsearch tests require TEST_ELASTICSEARCH=true and a running Elasticsearch instance",
-)
+pytestmark = requires_real_elasticsearch
 
 
 class TestElasticsearchIdFiltering:
@@ -59,7 +56,7 @@ class TestElasticsearchIdFiltering:
         query = Query().filter("id", Operator.IN, ["doc_0", "doc_2", "doc_4"]).sort_by("id", "asc")
         results = db.search(query)
         assert len(results) == 3
-        assert set(r.id for r in results) == {"doc_0", "doc_2", "doc_4"}
+        assert {r.id for r in results} == {"doc_0", "doc_2", "doc_4"}
 
         # Test NOT_IN
         query = (
@@ -67,7 +64,7 @@ class TestElasticsearchIdFiltering:
         )
         results = db.search(query)
         assert len(results) == 2
-        assert set(r.id for r in results) == {"doc_1", "doc_3"}
+        assert {r.id for r in results} == {"doc_1", "doc_3"}
 
     def test_id_field_sorting(self, db):
         """Test sorting by ID field."""

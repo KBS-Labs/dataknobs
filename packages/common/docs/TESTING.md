@@ -883,6 +883,50 @@ are also importable from `dataknobs_common.testing`, along with
 and the availability probes / skip markers `is_postgres_available()` /
 `requires_postgres`, `is_elasticsearch_available()` / `requires_elasticsearch`.
 
+#### Two marker families: reachable, and *really* usable
+
+`requires_postgres` and `requires_elasticsearch` test **one** term — did the
+service answer its probe. That is the right gate for a suite that only needs
+the server up, and the wrong one for a behavioural suite, which also needs the
+run to have opted in and the driver to be installed.
+
+For those, use the `requires_real_*` family. Each tests **three** terms —
+reachable, opt-in variable set to `true`, and the driver its suite actually
+goes through:
+
+| Marker | Opt-in variable | Driver |
+|---|---|---|
+| `requires_real_postgres` | `TEST_POSTGRES` | `asyncpg` |
+| `requires_real_postgres_sync` | `TEST_POSTGRES` | `psycopg2` |
+| `requires_real_elasticsearch` | `TEST_ELASTICSEARCH` | `elasticsearch` |
+| `requires_real_s3` | `TEST_S3` | `boto3` |
+
+Postgres carries two markers because the term that differs between a sync and
+an async suite is the driver, and a gate should name the one its suite needs.
+**A module that exercises both takes both** — gating a dual-driver suite on one
+term lets the other half run with its driver absent, which is an `ImportError`
+reported as a failure rather than the skip the marker is promising.
+
+The predicate is also importable on its own, as
+`must_skip_real_service(opt_in_var=…, reachable=…, package=…)`, so a test can
+drive it with an environment of its own; the markers themselves are
+module-level constants evaluated once at import.
+
+> **A marker cannot rescue a module-level import.** `skipif` is evaluated
+> during test *setup*, by which point the module has been imported. If a suite
+> imports an optional driver at module level, its absence is a collection
+> error and no marker prevents it — use
+> `driver = pytest.importorskip("driver")` instead. This matters only for
+> genuinely optional packages: `psycopg2` arrives as a hard dependency of
+> `dataknobs-utils`, while `asyncpg` is an extra.
+
+Pair a real-service marker with the matching endpoint resolver rather than
+reading environment variables directly — `get_localstack_endpoint()` for
+`requires_real_s3`, `postgres_env_params()` / `postgres_dsn()` for the Postgres
+pair. The probe behind the marker and the client inside the test then resolve
+through the same chain, so the gate cannot pass while the client connects
+somewhere else.
+
 #### Outside a fixture: `postgres_env_params`
 
 `postgres_connection_params` is the fixture form of

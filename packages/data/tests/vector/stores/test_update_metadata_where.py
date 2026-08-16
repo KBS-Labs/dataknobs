@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
 import uuid
 from collections.abc import AsyncIterator, Iterator
 from typing import Any
@@ -25,7 +24,8 @@ import pytest_asyncio
 from dataknobs_common.testing import (
     is_chromadb_available,
     is_faiss_available,
-    requires_postgres,
+    is_package_available,
+    requires_real_postgres,
 )
 
 from dataknobs_data.vector.stores.memory import MemoryVectorStore
@@ -38,26 +38,16 @@ if is_faiss_available():
 if is_chromadb_available():
     from dataknobs_data.vector.stores.chroma import ChromaVectorStore
 
-try:
-    import asyncpg  # noqa: F401
-
+if is_package_available("asyncpg"):
     from dataknobs_data.vector.stores.pgvector import PgVectorStore
-
-    ASYNCPG_AVAILABLE = True
-except ImportError:
-    ASYNCPG_AVAILABLE = False
 
 
 logger = logging.getLogger(__name__)
 
 
-_pgvector_marks = [
-    requires_postgres,
-    pytest.mark.skipif(
-        os.environ.get("TEST_POSTGRES", "").lower() != "true" or not ASYNCPG_AVAILABLE,
-        reason="pgvector tests require TEST_POSTGRES=true and asyncpg",
-    ),
-]
+# requires_real_postgres is exactly the three terms this list assembled by
+# hand: a reachable server, TEST_POSTGRES=true, and asyncpg installed.
+_pgvector_marks = [requires_real_postgres]
 
 
 @pytest.fixture

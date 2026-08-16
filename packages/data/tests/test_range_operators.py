@@ -1,7 +1,7 @@
 """Test range operators (BETWEEN, type-aware comparisons)."""
 
 import pytest
-from datetime import datetime, date, timedelta
+from datetime import datetime, timedelta
 from dataknobs_data import Record, Query, Filter, Operator
 from dataknobs_data.backends.memory import SyncMemoryDatabase, AsyncMemoryDatabase
 
@@ -28,19 +28,19 @@ class TestRangeOperators:
         query = Query(filters=[Filter("temperature", Operator.BETWEEN, (20, 40))])
         results = db.search(query)
         assert len(results) == 2
-        assert set(r.id for r in results) == {"2", "3"}
+        assert {r.id for r in results} == {"2", "3"}
 
         # Test BETWEEN with integers
         query = Query(filters=[Filter("humidity", Operator.BETWEEN, (40, 80))])
         results = db.search(query)
         assert len(results) == 2
-        assert set(r.id for r in results) == {"2", "3"}
+        assert {r.id for r in results} == {"2", "3"}
 
         # Test NOT_BETWEEN
         query = Query(filters=[Filter("temperature", Operator.NOT_BETWEEN, (20, 40))])
         results = db.search(query)
         assert len(results) == 2
-        assert set(r.id for r in results) == {"1", "4"}
+        assert {r.id for r in results} == {"1", "4"}
 
     def test_datetime_between(self):
         """Test BETWEEN operator with datetime values."""
@@ -65,7 +65,7 @@ class TestRangeOperators:
         query = Query(filters=[Filter("timestamp", Operator.BETWEEN, (start, end))])
         results = db.search(query)
         assert len(results) == 2
-        assert set(r.id for r in results) == {"2", "3"}
+        assert {r.id for r in results} == {"2", "3"}
 
         # Test BETWEEN with ISO strings
         query = Query(
@@ -73,13 +73,13 @@ class TestRangeOperators:
         )
         results = db.search(query)
         assert len(results) == 2
-        assert set(r.id for r in results) == {"2", "3"}
+        assert {r.id for r in results} == {"2", "3"}
 
         # Test NOT_BETWEEN
         query = Query(filters=[Filter("timestamp", Operator.NOT_BETWEEN, (start, end))])
         results = db.search(query)
         assert len(results) == 2
-        assert set(r.id for r in results) == {"1", "4"}
+        assert {r.id for r in results} == {"1", "4"}
 
     def test_string_between(self):
         """Test BETWEEN operator with string values."""
@@ -100,13 +100,13 @@ class TestRangeOperators:
         query = Query(filters=[Filter("name", Operator.BETWEEN, ("Bob", "David"))])
         results = db.search(query)
         assert len(results) == 3
-        assert set(r.id for r in results) == {"2", "3", "4"}
+        assert {r.id for r in results} == {"2", "3", "4"}
 
         # Test with codes
         query = Query(filters=[Filter("code", Operator.BETWEEN, ("B000", "C999"))])
         results = db.search(query)
         assert len(results) == 2
-        assert set(r.id for r in results) == {"2", "3"}
+        assert {r.id for r in results} == {"2", "3"}
 
     def test_mixed_type_comparisons(self):
         """Test comparisons with mixed types."""
@@ -128,7 +128,7 @@ class TestRangeOperators:
         results = db.search(query)
         # Should match numeric values > 15
         assert len(results) == 2
-        assert set(r.id for r in results) == {"2", "4"}
+        assert {r.id for r in results} == {"2", "4"}
 
         # Test BETWEEN with mixed types (won't match string "30")
         query = Query(filters=[Filter("value", Operator.BETWEEN, (15, 35))])
@@ -155,13 +155,13 @@ class TestRangeOperators:
         query = Query(filters=[Filter("metrics.cpu", Operator.BETWEEN, (40, 80))])
         results = db.search(query)
         assert len(results) == 2
-        assert set(r.id for r in results) == {"2", "3"}
+        assert {r.id for r in results} == {"2", "3"}
 
         # Test on metadata
         query = Query(filters=[Filter("metadata.priority", Operator.BETWEEN, (2, 3))])
         results = db.search(query)
         assert len(results) == 2
-        assert set(r.id for r in results) == {"2", "3"}
+        assert {r.id for r in results} == {"2", "3"}
 
     def test_between_edge_cases(self):
         """Test BETWEEN operator edge cases."""
@@ -181,7 +181,7 @@ class TestRangeOperators:
         query = Query(filters=[Filter("value", Operator.BETWEEN, (5, 25))])
         results = db.search(query)
         assert len(results) == 2
-        assert set(r.id for r in results) == {"1", "2"}
+        assert {r.id for r in results} == {"1", "2"}
 
         # Test BETWEEN with invalid range format
         query = Query(filters=[Filter("value", Operator.BETWEEN, 15)])  # Not a tuple
@@ -192,13 +192,13 @@ class TestRangeOperators:
         query = Query(filters=[Filter("value", Operator.NOT_BETWEEN, 15)])
         results = db.search(query)
         assert len(results) == 2  # All records with values
-        assert set(r.id for r in results) == {"1", "2"}
+        assert {r.id for r in results} == {"1", "2"}
 
         # Test BETWEEN inclusive boundaries
         query = Query(filters=[Filter("value", Operator.BETWEEN, (10, 20))])
         results = db.search(query)
         assert len(results) == 2
-        assert set(r.id for r in results) == {"1", "2"}  # Both boundaries included
+        assert {r.id for r in results} == {"1", "2"}  # Both boundaries included
 
     @pytest.mark.asyncio
     async def test_async_between_operator(self):
@@ -220,13 +220,13 @@ class TestRangeOperators:
         query = Query(filters=[Filter("score", Operator.BETWEEN, (70, 90))])
         results = await db.search(query)
         assert len(results) == 2
-        assert set(r.id for r in results) == {"2", "3"}
+        assert {r.id for r in results} == {"2", "3"}
 
         # Test NOT_BETWEEN
         query = Query(filters=[Filter("score", Operator.NOT_BETWEEN, (70, 90))])
         results = await db.search(query)
         assert len(results) == 2
-        assert set(r.id for r in results) == {"1", "4"}
+        assert {r.id for r in results} == {"1", "4"}
 
     def test_fluent_interface_between(self):
         """Test using BETWEEN through the fluent interface."""
@@ -246,19 +246,19 @@ class TestRangeOperators:
         query = Query().filter("price", "between", (20, 40))
         results = db.search(query)
         assert len(results) == 2
-        assert set(r.id for r in results) == {"2", "3"}
+        assert {r.id for r in results} == {"2", "3"}
 
         # Test using Operator enum
         query = Query().filter("price", Operator.BETWEEN, (20, 40))
         results = db.search(query)
         assert len(results) == 2
-        assert set(r.id for r in results) == {"2", "3"}
+        assert {r.id for r in results} == {"2", "3"}
 
         # Test NOT_BETWEEN with string
         query = Query().filter("price", "not_between", (20, 40))
         results = db.search(query)
         assert len(results) == 2
-        assert set(r.id for r in results) == {"1", "4"}
+        assert {r.id for r in results} == {"1", "4"}
 
     def test_combined_filters_with_between(self):
         """Test BETWEEN combined with other filters."""
@@ -328,7 +328,7 @@ class TestRangeOperators:
 
         results = db.search(query)
         assert len(results) == 2
-        assert set(r.id for r in results) == {"2", "3"}
+        assert {r.id for r in results} == {"2", "3"}
 
 
 class TestImprovedComparisons:
@@ -359,7 +359,7 @@ class TestImprovedComparisons:
         query = Query(filters=[Filter("timestamp", Operator.LTE, base_time)])
         results = db.search(query)
         assert len(results) == 2
-        assert set(r.id for r in results) == {"1", "2"}
+        assert {r.id for r in results} == {"1", "2"}
 
     def test_numeric_type_mixing(self):
         """Test comparisons between int and float types."""
@@ -378,7 +378,7 @@ class TestImprovedComparisons:
         query = Query(filters=[Filter("value", Operator.GT, 10.2)])
         results = db.search(query)
         assert len(results) == 2
-        assert set(r.id for r in results) == {"2", "3"}
+        assert {r.id for r in results} == {"2", "3"}
 
         # Test with int threshold
         query = Query(filters=[Filter("value", Operator.GTE, 11)])

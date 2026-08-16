@@ -2,22 +2,17 @@
 
 import asyncio
 import concurrent.futures
-import os
 import time
-import uuid
 
 import pytest
 
+from dataknobs_common.testing import requires_real_elasticsearch
 from dataknobs_data import AsyncDatabase, Query, Record, SyncDatabase
-from dataknobs_data.query import Filter, Operator, SortOrder
+from dataknobs_data.query import Operator, SortOrder
 
 # pytestmark = pytest.mark.integration
 
-# Skip all tests if Elasticsearch is not available
-pytestmark = pytest.mark.skipif(
-    not os.environ.get("TEST_ELASTICSEARCH", "").lower() == "true",
-    reason="Elasticsearch tests require TEST_ELASTICSEARCH=true and a running Elasticsearch instance",
-)
+pytestmark = requires_real_elasticsearch
 
 
 class TestElasticsearchIntegration:
@@ -288,6 +283,13 @@ class TestElasticsearchIntegration:
         assert page1_ages.isdisjoint(page2_ages)
         assert page2_ages.isdisjoint(page3_ages)
 
+        # The pages must also reconstruct the unpaged result exactly: the
+        # checks above allow pages that skip a record or reorder across a
+        # boundary, which is what an offset bug actually looks like.
+        assert [r.get_value("age") for r in page1 + page2 + page3] == [
+            r.get_value("age") for r in all_results
+        ]
+
         # Cleanup
         db.delete_batch(ids)
         db.close()
@@ -470,7 +472,7 @@ class TestElasticsearchIntegration:
         assert db.count() == 0
 
         # Insert sample data
-        ids = db.create_batch(sample_records)
+        db.create_batch(sample_records)
 
         time.sleep(1)
 
@@ -667,7 +669,7 @@ class TestElasticsearchAsyncIntegration:
         db = await AsyncDatabase.from_backend("elasticsearch", elasticsearch_test_index)
 
         # Insert data
-        ids = await db.create_batch(sample_records)
+        await db.create_batch(sample_records)
 
         await asyncio.sleep(1)
 

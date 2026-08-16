@@ -9,6 +9,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`requires_real_postgres`, `requires_real_postgres_sync`,
+  `requires_real_elasticsearch`, `requires_real_s3` — a service gate that tests
+  the three terms a behavioural suite actually depends on.** The existing
+  `requires_postgres` / `requires_elasticsearch` markers test one: did the
+  server answer a probe. That is right for a suite that only needs the service
+  up, and wrong for one that exercises it, which also needs the run to have
+  opted in and the driver to be installed. Gating on the opt-in variable alone
+  — the shape hand-rolled across suites for years — turns a *down* server into
+  a wall of connection errors where a skip naming the cause is the honest
+  answer, and turns a missing optional driver into a test failure rather than
+  an absent dependency.
+
+  Postgres carries two markers because the driver is the term that differs
+  between a sync and an async suite (`psycopg2` vs `asyncpg`), and a gate
+  should name the one its suite needs; a module exercising both takes both.
+  The reason string is derived from the same three terms the condition tests,
+  so it cannot drift into describing a gate other than the one that fired.
+
+- **`must_skip_real_service(opt_in_var=…, reachable=…, package=…)`** — the
+  predicate behind that family, split out so the four markers share one
+  definition of "real service available" rather than four copies, and so the
+  condition is reachable from a test. Each marker is a module-level constant
+  evaluated once at import, which leaves the predicate the only part a test can
+  drive with an environment of its own.
+
 - **`safe_segment` — the second question a composed name has to answer.**
   `safe_join` asks *may this name address here?*; this asks *is this name one
   segment?* They are not interchangeable, and reading one as the other hides a

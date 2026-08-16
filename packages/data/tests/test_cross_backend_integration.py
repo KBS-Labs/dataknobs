@@ -1,28 +1,23 @@
-"""
-Cross-backend integration tests for streaming and migration.
+"""Cross-backend integration tests for streaming and migration.
 
 Tests real data movement between different backend types.
 """
 
 import pytest
-import asyncio
 import tempfile
 import os
-from typing import List
 
 from dataknobs_data.records import Record
-from dataknobs_data.fields import FieldType
 from dataknobs_data.backends.memory import SyncMemoryDatabase, AsyncMemoryDatabase
 from dataknobs_data.backends.file import SyncFileDatabase, AsyncFileDatabase
 from dataknobs_data.query import Query
-from dataknobs_data.streaming import StreamConfig, StreamResult
+from dataknobs_data.streaming import StreamConfig
 from dataknobs_data.migration import (
     Migrator,
     Transformer,
     Migration,
     AddField,
     RenameField,
-    MigrationProgress,
 )
 
 
@@ -438,8 +433,6 @@ class TestErrorHandlingAcrossBackends:
                 return original_create(record)
 
             target.create = failing_create
-
-            original_create_batch = target.create_batch
 
             def failing_create_batch(records):
                 results = []

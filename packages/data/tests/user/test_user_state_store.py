@@ -122,7 +122,8 @@ async def test_query_with_caller_filter() -> None:
 
 async def test_cas_without_guard_shows_lost_update() -> None:
     """Reproduce-first: without ``expected_version``, the second write wins
-    silently (the lost-update the CAS guard exists to prevent)."""
+    silently (the lost-update the CAS guard exists to prevent).
+    """
     store = await _make_async()
     try:
         await store.put_document("u1", "preferences", {"theme": "dark"})
@@ -347,7 +348,7 @@ async def test_write_emits_metadata_only_event() -> None:
 
     store = await AsyncUserStateStore.from_config(_config(), event_bus=bus)
     local: list[dict[str, Any]] = []
-    store._callbacks.register(SECTION_WRITTEN_TOPIC, lambda p: local.append(p))
+    store._callbacks.register(SECTION_WRITTEN_TOPIC, local.append)
 
     def failing(_: dict[str, Any]) -> None:
         raise RuntimeError("subscriber down")
@@ -470,7 +471,8 @@ def test_config_roundtrip() -> None:
 
 def test_duplicate_section_name_rejected() -> None:
     """A duplicate section name would silently collapse in the name map — it
-    must fail at config-load time, not as a confusing runtime error later."""
+    must fail at config-load time, not as a confusing runtime error later.
+    """
     with pytest.raises(ConfigurationError):
         UserStateStoreConfig.from_dict(
             {
@@ -502,7 +504,8 @@ def test_empty_sections_tuple_is_allowed() -> None:
 
 def test_sync_store_rejects_event_bus() -> None:
     """The sync store cannot serve async EventBus fan-out — it must fail fast
-    at construction, not after a write under a running loop."""
+    at construction, not after a write under a running loop.
+    """
     with pytest.raises(ConfigurationError):
         UserStateStore.from_config(_config(), event_bus=InMemoryEventBus())
 
@@ -520,7 +523,7 @@ def test_sync_store_local_callbacks_still_fire() -> None:
     store = UserStateStore.from_config(_config())
     try:
         seen: list[dict[str, Any]] = []
-        store._callbacks.register(SECTION_WRITTEN_TOPIC, lambda p: seen.append(p))
+        store._callbacks.register(SECTION_WRITTEN_TOPIC, seen.append)
         store.put_document("u1", "preferences", {"theme": "dark"})
         assert seen and seen[0]["op"] == "put_document"
     finally:
@@ -536,7 +539,8 @@ def test_sync_store_local_callbacks_still_fire() -> None:
 async def test_add_record_rejects_identity_key_async(id_key: str) -> None:
     """A payload carrying a storage-identity key is rejected — closing the
     sync/async divergence where the sync backend would key a collection
-    ``create`` off a payload ``id`` while the async backend mints a UUID."""
+    ``create`` off a payload ``id`` while the async backend mints a UUID.
+    """
     store = await _make_async()
     try:
         with pytest.raises(ValueError):
@@ -580,7 +584,8 @@ def test_put_document_rejects_identity_key_sync() -> None:
 
 async def test_record_version_scoped() -> None:
     """An out-of-scope or missing record id yields None (no existence leak);
-    the owning scope still gets a usable CAS token."""
+    the owning scope still gets a usable CAS token.
+    """
     store = await _make_async()
     try:
         rid = await store.add_record("u1", "alerts", {"text": "mine"})

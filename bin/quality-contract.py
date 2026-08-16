@@ -113,8 +113,25 @@ def cell_matches(path: PurePosixPath, pattern: str) -> bool:
     Segment by segment from the repository root, with the pattern's segments
     required to be a prefix of the path's. That covers a cell naming one file
     (``conftest.py``) and one naming a tree (``packages/*/src``) with the same
-    rule, and it lets one cell stand for all ten packages without listing them
-    — a list would leave the eleventh package silently in no cell at all.
+    rule, and it lets one cell stand for every package without listing them.
+
+    **What the glob buys is brevity, not safety.** This once said a list
+    "would leave the eleventh package silently in no cell at all", and the
+    silence is the false part: ``verify`` reports an unmatched file as
+    ``"<tool>: <path> is in no cell, so nobody decided about it"``, and
+    ``test_the_contract_is_total_and_well_formed`` drives ``verify`` as a
+    subprocess and asserts it exits zero. So an eleventh package arriving
+    under a listed set of cells turns the suite red. Under a glob it is
+    matched instead — and therefore declared, at whatever tier and ceiling
+    the glob carries, over files nobody has opened. The list's default is
+    *undecided*; the glob's is *decided already*.
+
+    Which shape is right therefore follows the tier, not a preference. ``mypy``
+    and the formatter give every package's tests the same answer — unchecked,
+    and enforced at zero — and one ``packages/*/tests`` cell says it once.
+    ``ruff`` lists them one per package, because each arrived carrying its own
+    backlog and left carrying its own promotion reason, and the cell is where
+    that reason lives.
 
     **Anchored at the root, which the obvious implementation is not.**
     ``PurePosixPath.match`` matches a relative pattern from the *right*, so

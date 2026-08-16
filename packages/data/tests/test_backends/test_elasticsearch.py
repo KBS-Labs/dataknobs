@@ -7,14 +7,11 @@ import uuid
 
 import pytest
 
+from dataknobs_common.testing import requires_real_elasticsearch
 from dataknobs_data import AsyncDatabase, Query, Record, SyncDatabase
-from dataknobs_data.query import Filter, Operator, SortOrder, SortSpec
+from dataknobs_data.query import Operator, SortOrder
 
-# Skip all tests if Elasticsearch is not available
-pytestmark = pytest.mark.skipif(
-    not os.environ.get("TEST_ELASTICSEARCH", "").lower() == "true",
-    reason="Elasticsearch tests require TEST_ELASTICSEARCH=true and a running Elasticsearch instance",
-)
+pytestmark = requires_real_elasticsearch
 
 
 @pytest.fixture
@@ -22,7 +19,7 @@ def elasticsearch_config():
     """Elasticsearch configuration for testing."""
     return {
         "host": os.environ.get("ELASTICSEARCH_HOST", "localhost"),
-        "port": int(os.environ.get("ELASTICSEARCH_PORT", 9200)),
+        "port": int(os.environ.get("ELASTICSEARCH_PORT", "9200")),
         "index": f"test_records_{uuid.uuid4().hex[:8]}",  # Unique index per test
         "refresh": True,  # Immediate refresh for testing
         "settings": {

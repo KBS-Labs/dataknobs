@@ -1,6 +1,5 @@
 """Test that record IDs are properly handled across all database operations."""
 
-import asyncio
 import pytest
 
 from dataknobs_data.backends.memory import AsyncMemoryDatabase, SyncMemoryDatabase

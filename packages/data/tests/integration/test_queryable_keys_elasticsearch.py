@@ -13,20 +13,17 @@ skips otherwise.
 
 from __future__ import annotations
 
-import os
 
 import pytest
 
+from dataknobs_common.testing import requires_real_elasticsearch
 from dataknobs_data import Filter, Operator, Query, Record, SortOrder, SortSpec
 from dataknobs_data.backends.elasticsearch import SyncElasticsearchDatabase
 from dataknobs_data.backends.elasticsearch_async import AsyncElasticsearchDatabase
 from dataknobs_data.query_logic import ComplexQuery, LogicCondition, LogicOperator
 from dataknobs_data.query_logic import FilterCondition
 
-pytestmark = pytest.mark.skipif(
-    os.environ.get("TEST_ELASTICSEARCH") != "true",
-    reason="Elasticsearch integration tests not enabled",
-)
+pytestmark = requires_real_elasticsearch
 
 _KEYS = [
     "artifacts/alice/report/final",

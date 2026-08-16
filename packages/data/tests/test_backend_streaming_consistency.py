@@ -12,8 +12,8 @@ from dataknobs_data.backends import async_backends, sync_backends
 
 
 def _backend_items(
-    registry: "PluginRegistry[type]",
-) -> "Generator[tuple[str, type], None, None]":
+    registry: PluginRegistry[type],
+) -> Generator[tuple[str, type], None, None]:
     """Yield (name, class) pairs from a PluginRegistry."""
     for key in registry.list_keys():
         yield key, registry.get_factory(key)
@@ -90,13 +90,13 @@ class TestBackendConsistency:
     def test_backend_naming_convention(self):
         """Verify backend classes follow naming conventions."""
         # Async backends should not have 'Sync' prefix
-        for backend_name, backend_class in _backend_items(async_backends):
+        for _backend_name, backend_class in _backend_items(async_backends):
             assert not backend_class.__name__.startswith("Sync"), (
                 f"Async backend {backend_class.__name__} should not start with 'Sync'"
             )
 
         # Sync backends should have 'Sync' prefix (except S3Database which was historically sync)
-        for backend_name, backend_class in _backend_items(sync_backends):
+        for _backend_name, backend_class in _backend_items(sync_backends):
             assert backend_class.__name__.startswith("Sync"), (
                 f"Sync backend {backend_class.__name__} should start with 'Sync'"
             )
@@ -106,13 +106,13 @@ class TestBackendConsistency:
         from dataknobs_data.database import AsyncDatabase, SyncDatabase
 
         # Check async backends inherit from AsyncDatabase
-        for backend_name, backend_class in _backend_items(async_backends):
+        for _backend_name, backend_class in _backend_items(async_backends):
             assert issubclass(backend_class, AsyncDatabase), (
                 f"Async backend {backend_class.__name__} should inherit from AsyncDatabase"
             )
 
         # Check sync backends inherit from SyncDatabase
-        for backend_name, backend_class in _backend_items(sync_backends):
+        for _backend_name, backend_class in _backend_items(sync_backends):
             assert issubclass(backend_class, SyncDatabase), (
                 f"Sync backend {backend_class.__name__} should inherit from SyncDatabase"
             )
@@ -120,9 +120,9 @@ class TestBackendConsistency:
     def test_streaming_method_signatures(self):
         """Verify streaming methods have consistent signatures."""
         # Check async backends
-        for backend_name, backend_class in _backend_items(async_backends):
-            stream_read = getattr(backend_class, "stream_read")
-            stream_write = getattr(backend_class, "stream_write")
+        for _backend_name, backend_class in _backend_items(async_backends):
+            stream_read = backend_class.stream_read
+            stream_write = backend_class.stream_write
 
             # Check parameters
             read_sig = inspect.signature(stream_read)
@@ -145,9 +145,9 @@ class TestBackendConsistency:
             )
 
         # Check sync backends
-        for backend_name, backend_class in _backend_items(sync_backends):
-            stream_read = getattr(backend_class, "stream_read")
-            stream_write = getattr(backend_class, "stream_write")
+        for _backend_name, backend_class in _backend_items(sync_backends):
+            stream_read = backend_class.stream_read
+            stream_write = backend_class.stream_write
 
             # Check parameters
             read_sig = inspect.signature(stream_read)

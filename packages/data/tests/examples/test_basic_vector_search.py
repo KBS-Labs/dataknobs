@@ -1,19 +1,19 @@
 """Tests for the basic vector search example."""
 
 import pytest
-import asyncio
 import sys
 import zlib
 from pathlib import Path
 from unittest.mock import MagicMock, patch, AsyncMock
-from typing import List, Dict, Any
+
+from dataknobs_common.testing import requires_package
+from dataknobs_data import VectorField
 
 # Add examples to path
 examples_path = Path(__file__).parent.parent.parent / "examples"
 sys.path.insert(0, str(examples_path))
 
-from basic_vector_search import VectorSearchExample
-from dataknobs_data import Record, VectorField
+from basic_vector_search import VectorSearchExample  # noqa: E402 - must follow the sys.path.insert above
 
 
 class MockEmbeddingModel:
@@ -217,7 +217,7 @@ class TestVectorSearchExample:
         await vector_example.setup_database()
 
         # Create documents
-        record_ids, records = await vector_example.create_documents_with_embeddings()
+        record_ids, _records = await vector_example.create_documents_with_embeddings()
         assert len(record_ids) == 6
 
         # Search
@@ -236,14 +236,9 @@ class TestIntegrationWithRealModel:
     """Integration tests with real model (optional, requires sentence-transformers)."""
 
     @pytest.mark.asyncio
+    @requires_package("sentence_transformers")
     async def test_with_real_model(self):
         """Test with actual SentenceTransformer model."""
-        # Skip if sentence_transformers is not available
-        try:
-            import sentence_transformers
-        except ImportError:
-            pytest.skip("sentence-transformers not installed")
-
         example = VectorSearchExample(model_name="all-MiniLM-L6-v2", verbose=False)
 
         try:
@@ -266,7 +261,7 @@ class TestIntegrationWithRealModel:
                 },
             ]
 
-            record_ids, records = await example.create_documents_with_embeddings(small_docs)
+            record_ids, _records = await example.create_documents_with_embeddings(small_docs)
             assert len(record_ids) == 2
 
             # Search should return results with valid scores
@@ -285,9 +280,9 @@ class TestIntegrationWithRealModel:
 async def test_example_main_function():
     """Test the main function runs without errors."""
     # Mock the VectorSearchExample to avoid loading real model
-    with patch("basic_vector_search.VectorSearchExample") as MockExample:
+    with patch("basic_vector_search.VectorSearchExample") as mock_example:
         mock_instance = AsyncMock()
-        MockExample.return_value = mock_instance
+        mock_example.return_value = mock_instance
 
         # Mock all the methods
         mock_instance.setup_database = AsyncMock()

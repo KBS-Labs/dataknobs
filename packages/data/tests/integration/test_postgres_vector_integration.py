@@ -1,20 +1,20 @@
 """Integration tests for PostgreSQL with pgvector extension using real database."""
 
-import os
-import uuid
 from typing import TYPE_CHECKING
 
 import pytest
 
-from dataknobs_data import AsyncDatabase, Query, Record, SyncDatabase, VectorField
+from dataknobs_common.testing import (
+    requires_real_postgres,
+    requires_real_postgres_sync,
+)
+from dataknobs_data import Record, SyncDatabase, VectorField
 from dataknobs_data.query import Filter, Operator
 from dataknobs_data.vector import DistanceMetric, VectorSearchResult
 
-# Skip all tests if PostgreSQL is not available or numpy is not installed
-pytestmark = pytest.mark.skipif(
-    not os.environ.get("TEST_POSTGRES", "").lower() == "true",
-    reason="PostgreSQL tests require TEST_POSTGRES=true and a running PostgreSQL instance with pgvector",
-)
+# Both drivers: this module exercises the sync backend (psycopg2) and the
+# async one (asyncpg), so it needs each of them present and the server up.
+pytestmark = [requires_real_postgres, requires_real_postgres_sync]
 
 # Also skip if numpy is not available.
 #

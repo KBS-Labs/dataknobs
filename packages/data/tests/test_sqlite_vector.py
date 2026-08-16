@@ -74,7 +74,7 @@ class TestSQLiteVectorSupport:
         # Add some test vectors
         rng = np.random.default_rng(0)
         vectors = []
-        for i in range(5):
+        for _i in range(5):
             vec = rng.standard_normal(8, dtype=np.float32)
             vec = vec / np.linalg.norm(vec)  # Normalize
             vectors.append(vec)
@@ -106,7 +106,7 @@ class TestSQLiteVectorSupport:
         vectors = []
         categories = ["A", "B", "A", "B", "A"]
 
-        for i in range(5):
+        for _ in range(5):
             vec = rng.standard_normal(4, dtype=np.float32)
             vec = vec / np.linalg.norm(vec)
             vectors.append(vec)
@@ -144,7 +144,7 @@ class TestSQLiteVectorSupport:
         vec2 = np.array([0.0, 1.0, 0.0, 0.0], dtype=np.float32)
 
         # Add them to database
-        ids = db.add_vectors(vectors=[vec1, vec2], metadata=[{"name": "vec1"}, {"name": "vec2"}])
+        db.add_vectors(vectors=[vec1, vec2], metadata=[{"name": "vec1"}, {"name": "vec2"}])
 
         # Test cosine similarity
         results_cosine = db.vector_search(query_vector=vec1, k=2, metric=DistanceMetric.COSINE)

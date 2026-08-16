@@ -1,24 +1,14 @@
 """Tests for the hybrid search example using real implementations."""
 
 import pytest
-import asyncio
-import sys
 import zlib
-from pathlib import Path
-from typing import List, Dict, Any
-from dataclasses import dataclass
-
-# Add examples to path
-examples_path = Path(__file__).parent.parent.parent / "examples"
-sys.path.insert(0, str(examples_path))
+from typing import List
 
 from dataknobs_data import (
-    DatabaseFactory,
     AsyncDatabaseFactory,
     Record,
     VectorField,
     Query,
-    ComplexQuery,
     Operator,
 )
 

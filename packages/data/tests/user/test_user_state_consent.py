@@ -290,7 +290,7 @@ async def test_consent_write_fires_metadata_only_event() -> None:
 
     store = await _make_async()
     captured: list[dict[str, Any]] = []
-    store._callbacks.register(SECTION_WRITTEN_TOPIC, lambda payload: captured.append(payload))
+    store._callbacks.register(SECTION_WRITTEN_TOPIC, captured.append)
     try:
         await store.grant_consent("u1", _SCOPE)
         await store.revoke_consent("u1", _SCOPE)
@@ -319,7 +319,7 @@ def test_consent_write_fires_event_sync() -> None:
 
     store = UserStateStore.from_config(_config())
     captured: list[dict[str, Any]] = []
-    store._callbacks.register(SECTION_WRITTEN_TOPIC, lambda payload: captured.append(payload))
+    store._callbacks.register(SECTION_WRITTEN_TOPIC, captured.append)
     try:
         store.grant_consent("u1", _SCOPE)
         store.revoke_consent("u1", _SCOPE)

@@ -1,8 +1,6 @@
 """Comprehensive tests for migration_v2 module using real components."""
 
-import pytest
 import time
-from typing import List
 
 from dataknobs_data.records import Record
 from dataknobs_data.fields import FieldType
@@ -10,7 +8,6 @@ from dataknobs_data.backends.memory import SyncMemoryDatabase as MemoryDatabase
 from dataknobs_data.query import Query
 
 from dataknobs_data.migration import (
-    Operation,
     AddField,
     RemoveField,
     RenameField,
@@ -18,10 +15,6 @@ from dataknobs_data.migration import (
     CompositeOperation,
     Migration,
     Transformer,
-    TransformRule,
-    MapRule,
-    ExcludeRule,
-    AddRule,
     MigrationProgress,
     Migrator,
 )
@@ -489,7 +482,7 @@ class TestMigrator:
 
         # Use migrator to properly migrate data
         migrator = Migrator()
-        progress = migrator.migrate(source=source, target=target)
+        migrator.migrate(source=source, target=target)
 
         # Add same records to source
         for record in records:
@@ -619,7 +612,7 @@ class TestIntegrationScenarios:
         target = MemoryDatabase()
         migrator = Migrator()
 
-        progress = migrator.migrate(source=source, target=target, transform=transformer)
+        migrator.migrate(source=source, target=target, transform=transformer)
 
         # Check cleaned data
         cleaned = target.search(Query())

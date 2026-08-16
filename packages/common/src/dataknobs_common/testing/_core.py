@@ -875,6 +875,50 @@ def is_package_available(package_name: str) -> bool:
     return importlib.util.find_spec(package_name) is not None
 
 
+def must_skip_real_service(
+    *,
+    opt_in_var: str,
+    reachable: bool,
+    package: str,
+) -> bool:
+    """Report whether a real-service suite must skip.
+
+    The condition behind the ``requires_real_*`` markers, and the reason
+    they take three terms rather than one. A gate gets the opt-in variable
+    alone -- the shape hand-rolled across suites for years -- turns a *down*
+    server into a wall of connection errors, where a skip naming the cause
+    is the honest answer. It also treats a missing driver as a test failure
+    rather than an absent optional dependency.
+
+    Split out so the family shares one definition of "real service
+    available" instead of four copies, and so the condition is reachable
+    from a test: each marker is a module-level constant evaluated once at
+    import, which leaves the predicate itself the only part a test can
+    drive with an environment of its own.
+
+    Args:
+        opt_in_var: Environment variable the suite opts in with. Compared
+            case-insensitively against ``"true"``; anything else, including
+            unset, means skip.
+        reachable: Whether the service answered its probe. Passed as a
+            value rather than a callable because the caller evaluates it
+            once at import time, alongside the marker it gates.
+        package: Import name of the driver the suite goes through. Named
+            per marker, not shared, because it is the term that differs --
+            a sync suite and an async suite reach the same server through
+            different drivers, and a gate should state the one its suite
+            actually needs.
+
+    Returns:
+        True when the suite must be skipped.
+    """
+    if not reachable:
+        return True
+    if os.environ.get(opt_in_var, "").lower() != "true":
+        return True
+    return not is_package_available(package)
+
+
 # Pytest Markers
 
 
@@ -942,12 +986,68 @@ try:
         "resolvable AWS credentials",
     )
 
-    requires_real_postgres = pytest.mark.skipif(
-        not is_postgres_available()
-        or os.environ.get("TEST_POSTGRES", "").lower() != "true"
-        or not is_package_available("asyncpg"),
-        reason="real-Postgres behavioural test requires a reachable "
-        "server, TEST_POSTGRES=true, and asyncpg installed",
+    def _requires_real_service(
+        *,
+        service: str,
+        opt_in_var: str,
+        reachable: bool,
+        package: str,
+        endpoint: str = "server",
+    ) -> Any:
+        """Build one ``requires_real_*`` marker.
+
+        The reason is generated from the same arguments as the condition
+        rather than written beside it, so the two cannot drift. A reason
+        naming psycopg2 over a gate that tests for asyncpg is prose nothing
+        compares -- it reads correct in review and misreports at the moment
+        someone is trying to find out why a suite skipped.
+        """
+        return pytest.mark.skipif(
+            must_skip_real_service(
+                opt_in_var=opt_in_var,
+                reachable=reachable,
+                package=package,
+            ),
+            reason=(
+                f"real-{service} behavioural test requires a reachable "
+                f"{endpoint}, {opt_in_var}=true, and {package} installed"
+            ),
+        )
+
+    # One probe, shared by both Postgres markers. Not for the saved socket
+    # timeout, which is negligible: probing twice lets the two markers disagree
+    # about the same server if it goes away between the calls, so a module
+    # carrying both -- the dual-driver case these markers exist for -- could
+    # skip on one term and run on the other.
+    _postgres_reachable = is_postgres_available()
+
+    requires_real_postgres = _requires_real_service(
+        service="Postgres",
+        opt_in_var="TEST_POSTGRES",
+        reachable=_postgres_reachable,
+        package="asyncpg",
+    )
+
+    requires_real_postgres_sync = _requires_real_service(
+        service="Postgres",
+        opt_in_var="TEST_POSTGRES",
+        reachable=_postgres_reachable,
+        package="psycopg2",
+    )
+
+    requires_real_elasticsearch = _requires_real_service(
+        service="Elasticsearch",
+        opt_in_var="TEST_ELASTICSEARCH",
+        reachable=is_elasticsearch_available(),
+        package="elasticsearch",
+    )
+
+    requires_real_s3 = _requires_real_service(
+        service="S3",
+        opt_in_var="TEST_S3",
+        reachable=is_localstack_available(),
+        package="boto3",
+        endpoint="LocalStack endpoint",
     )
 
     def requires_package(package_name: str) -> Any:
@@ -1023,7 +1123,14 @@ except ImportError:
     requires_redis = None  # type: ignore[assignment]
     requires_postgres = None  # type: ignore[assignment]
     requires_elasticsearch = None  # type: ignore[assignment]
-    requires_real_postgres = None  # type: ignore[assignment]
+    # The four below carry no directive: they are built by
+    # _requires_real_service, which is annotated -> Any, so rebinding them to
+    # None is not the assignment mismatch their neighbours' MarkDecorator
+    # bindings are. A directive here would be dead, and RUF100/mypy say so.
+    requires_real_postgres = None
+    requires_real_postgres_sync = None
+    requires_real_elasticsearch = None
+    requires_real_s3 = None
     requires_localstack = None  # type: ignore[assignment]
     requires_bedrock = None  # type: ignore[assignment]
 

@@ -15,7 +15,6 @@ from dataknobs_data.sources.cluster_index import (
     ClusterTopicIndex,
     _resolve_params,
 )
-from dataknobs_data.sources.processing import cosine_similarity
 from dataknobs_data.sources.topic_index import DEFAULT_HEADING_STOPWORDS
 
 

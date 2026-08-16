@@ -1,5 +1,4 @@
-"""
-Test cases for sensor dashboard using advanced query features.
+"""Test cases for sensor dashboard using advanced query features.
 
 These tests exercise the new boolean logic and range operators through
 practical sensor monitoring scenarios.
@@ -8,7 +7,7 @@ practical sensor monitoring scenarios.
 import pytest
 import pytest_asyncio
 from datetime import datetime, timedelta
-from dataknobs_data import Query, Filter, Operator, QueryBuilder, ComplexQuery, Record
+from dataknobs_data import Query, Filter, Operator, QueryBuilder
 from dataknobs_data.backends.memory import SyncMemoryDatabase, AsyncMemoryDatabase
 import sys
 from pathlib import Path

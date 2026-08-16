@@ -1,5 +1,4 @@
-"""
-Test sensor dashboard streaming improvements.
+"""Test sensor dashboard streaming improvements.
 
 These tests exercise the new batch/streaming features through
 practical sensor monitoring scenarios.
@@ -8,7 +7,6 @@ practical sensor monitoring scenarios.
 import pytest
 import pytest_asyncio
 from datetime import datetime, timedelta
-from dataknobs_data import StreamConfig, StreamProcessor
 from dataknobs_data.backends.memory import SyncMemoryDatabase, AsyncMemoryDatabase
 import sys
 from pathlib import Path
@@ -18,7 +16,6 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "examples"))
 
 from sensor_dashboard.sensor_dashboard import SensorDashboard, AsyncSensorDashboard
 from sensor_dashboard.models import SensorInfo, SensorReading
-from sensor_dashboard.data_generator import SensorDataGenerator
 
 
 class TestSensorDashboardStreamingEnhancements:

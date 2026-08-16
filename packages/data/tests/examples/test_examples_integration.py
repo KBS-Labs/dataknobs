@@ -1,19 +1,13 @@
 """Integration tests for all example scripts using real implementations."""
 
 import pytest
-import asyncio
 import sys
 from pathlib import Path
-from typing import List, Dict, Any
+from typing import List
 import numpy as np
-
-# Add examples to path
-examples_path = Path(__file__).parent.parent.parent / "examples"
-sys.path.insert(0, str(examples_path))
 
 # Import real implementations
 from dataknobs_data import (
-    DatabaseFactory,
     AsyncDatabaseFactory,
     Record,
     VectorField,
@@ -26,6 +20,11 @@ from dataknobs_data.vector import (
     VectorMigration,
     IncrementalVectorizer,
 )
+
+# Add examples to path. The example modules themselves are imported inside the
+# tests that use them, so nothing at module scope depends on this.
+examples_path = Path(__file__).parent.parent.parent / "examples"
+sys.path.insert(0, str(examples_path))
 
 
 class TestEmbedding:
@@ -122,11 +121,11 @@ class TestBasicVectorSearchIntegration:
 
         # Create example with test embedding
         example = VectorSearchExample(verbose=False)
-        example.generate_embedding = lambda text: TestEmbedding.generate(text)
+        example.generate_embedding = TestEmbedding.generate
         example.db = vector_db
 
         # Create documents
-        record_ids, records = await example.create_documents_with_embeddings()
+        record_ids, _records = await example.create_documents_with_embeddings()
         assert len(record_ids) == 6
 
         # Perform vector search

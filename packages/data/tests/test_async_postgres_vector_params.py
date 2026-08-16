@@ -5,8 +5,6 @@ It translates [(quoted_col, vec_str), ...] into the three parallel lists
 (columns, placeholders, values) that create/update/upsert splice into SQL.
 """
 
-import pytest
-
 from dataknobs_data.backends.postgres import AsyncPostgresDatabase
 
 

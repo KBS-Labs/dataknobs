@@ -5,7 +5,12 @@ import pytest
 import psycopg2
 from psycopg2.extensions import ISOLATION_LEVEL_AUTOCOMMIT
 from datetime import datetime, timedelta
-from dataknobs_common.testing import safe_sql_ident
+from dataknobs_common.testing import (
+    requires_real_elasticsearch,
+    requires_real_postgres,
+    requires_real_postgres_sync,
+    safe_sql_ident,
+)
 from dataknobs_data import Record, Query, Filter, Operator
 
 
@@ -15,12 +20,14 @@ pytestmark = pytest.mark.integration
 
 @pytest.fixture(scope="session")
 def ensure_postgres_test_db():
-    """Ensure the test database exists for integration tests."""
-    if not os.environ.get("TEST_POSTGRES", "").lower() == "true":
-        return
+    """Ensure the test database exists for integration tests.
 
+    No opt-in guard: the only class requesting this fixture carries
+    ``requires_real_postgres_sync``, and a fixture is set up only for a
+    test that runs.
+    """
     host = os.environ.get("POSTGRES_HOST", "localhost")
-    port = int(os.environ.get("POSTGRES_PORT", 5432))
+    port = int(os.environ.get("POSTGRES_PORT", "5432"))
     user = os.environ.get("POSTGRES_USER", "postgres")
     password = os.environ.get("POSTGRES_PASSWORD", "postgres")
     db_name = os.environ.get("POSTGRES_DB", "test_dataknobs")
@@ -48,10 +55,13 @@ def ensure_postgres_test_db():
         print(f"Warning: Could not ensure test database exists: {e}")
 
 
-@pytest.mark.skipif(
-    not os.environ.get("TEST_POSTGRES", "").lower() == "true",
-    reason="PostgreSQL tests require TEST_POSTGRES=true",
-)
+# Both driver terms: the class is mostly psycopg2, but
+# ``test_async_postgres_between`` below imports asyncpg. Gating on the sync
+# term alone would let that test run with asyncpg absent, turning a skip into
+# an ImportError -- the failure mode these markers exist to remove. The four
+# sibling dual-driver modules carry both for the same reason.
+@requires_real_postgres
+@requires_real_postgres_sync
 class TestPostgresRangeOperators:
     """Test BETWEEN operators with real PostgreSQL backend."""
 
@@ -68,7 +78,7 @@ class TestPostgresRangeOperators:
         db = SyncPostgresDatabase(
             config={
                 "host": os.getenv("POSTGRES_HOST", "localhost"),
-                "port": int(os.getenv("POSTGRES_PORT", 5432)),
+                "port": int(os.getenv("POSTGRES_PORT", "5432")),
                 "database": os.getenv("POSTGRES_DB", "test_dataknobs"),
                 "user": os.getenv("POSTGRES_USER", "postgres"),
                 "password": os.getenv("POSTGRES_PASSWORD", "postgres"),
@@ -85,8 +95,13 @@ class TestPostgresRangeOperators:
             db.db.execute(
                 f"TRUNCATE TABLE {safe_sql_ident(db.schema_name)}.{safe_sql_ident(db.table_name)}"
             )
-        except:
-            pass  # Table might not exist yet
+        except psycopg2.Error:
+            # connect() above runs CREATE TABLE IF NOT EXISTS, so UndefinedTable
+            # is the one thing that cannot fire here. What can is a connection
+            # that did not survive -- OperationalError -- and letting that
+            # escape would abort fixture setup before the finally below, so
+            # db.close() would never run. Matches the two sibling sites.
+            pass
 
         yield db
 
@@ -95,7 +110,11 @@ class TestPostgresRangeOperators:
             db.db.execute(
                 f"DROP TABLE IF EXISTS {safe_sql_ident(db.schema_name)}.{safe_sql_ident(db.table_name)}"
             )
-        except:
+        except psycopg2.Error:
+            # IF EXISTS already covers the missing table, so what is left to
+            # tolerate is a connection that did not survive the test. Letting
+            # that surface here would replace the real failure with a
+            # teardown error.
             pass
         finally:
             db.close()
@@ -184,6 +203,7 @@ class TestPostgresRangeOperators:
         """Test BETWEEN with async PostgreSQL backend."""
         from dataknobs_data.backends.postgres import AsyncPostgresDatabase
 
+        import asyncpg
         import uuid
 
         # Use public schema with unique table name to avoid conflicts
@@ -192,7 +212,7 @@ class TestPostgresRangeOperators:
         db = AsyncPostgresDatabase(
             config={
                 "host": os.getenv("POSTGRES_HOST", "localhost"),
-                "port": int(os.getenv("POSTGRES_PORT", 5432)),
+                "port": int(os.getenv("POSTGRES_PORT", "5432")),
                 "database": os.getenv("POSTGRES_DB", "test_dataknobs"),
                 "user": os.getenv("POSTGRES_USER", "postgres"),
                 "password": os.getenv("POSTGRES_PASSWORD", "postgres"),
@@ -236,13 +256,19 @@ class TestPostgresRangeOperators:
                     await db._pool.execute(
                         f"DROP TABLE IF EXISTS {safe_sql_ident(db.schema_name)}.{safe_sql_ident(db.table_name)}"
                     )
-            except:
+            except (asyncpg.PostgresError, asyncpg.InterfaceError, OSError):
+                # All three are needed: asyncpg's server-side and client-side
+                # error families share no base beyond Exception, and
+                # connect_utils re-raises a raw OSError when the server is
+                # unreachable. As above, IF EXISTS covers the missing table, so
+                # this tolerates a pool that did not survive the test rather
+                # than a table that was never made.
                 pass
             finally:
                 await db.close()
 
 
-@pytest.mark.skipif(not os.getenv("ELASTICSEARCH_HOST"), reason="Elasticsearch not configured")
+@requires_real_elasticsearch
 class TestElasticsearchRangeOperators:
     """Test BETWEEN operators with real Elasticsearch backend."""
 
@@ -250,6 +276,8 @@ class TestElasticsearchRangeOperators:
     def es_db(self):
         """Create an Elasticsearch database connection."""
         from dataknobs_data.backends.elasticsearch import SyncElasticsearchDatabase
+
+        import requests
 
         es_host = os.getenv("ELASTICSEARCH_HOST", "localhost:9200")
         if ":" in es_host:
@@ -271,10 +299,12 @@ class TestElasticsearchRangeOperators:
         # Connect
         db.connect()
 
-        # Clean up any existing index
+        # Clean up any existing index. Deleting an index that is not there
+        # returns False rather than raising, so the only failure this has to
+        # tolerate is the server going away between connect() and here.
         try:
             db.es_index.delete()
-        except:
+        except requests.RequestException:
             pass
 
         # Create fresh index
@@ -282,12 +312,17 @@ class TestElasticsearchRangeOperators:
 
         yield db
 
-        # Cleanup
+        # Cleanup. Tolerate broadly and always disconnect: this runs while an
+        # assertion failure may already be propagating, and a teardown error
+        # would replace it with a less useful one. ValueError joins
+        # RequestException because the response handler parses with json.loads,
+        # so a non-JSON error body raises from the parse, not the transport.
         try:
             db.es_index.delete()
-        except:
+        except (requests.RequestException, ValueError):
             pass
-        db.disconnect()
+        finally:
+            db.disconnect()
 
     def test_numeric_between_elasticsearch(self, es_db):
         """Test BETWEEN with numeric values in Elasticsearch."""
@@ -386,6 +421,8 @@ class TestElasticsearchRangeOperators:
         """Test BETWEEN with async Elasticsearch backend."""
         from dataknobs_data.backends.elasticsearch_async import AsyncElasticsearchDatabase
 
+        from elasticsearch import ApiError, NotFoundError, TransportError
+
         es_host = os.getenv("ELASTICSEARCH_HOST", "localhost:9200")
         if ":" in es_host:
             host, port = es_host.split(":")
@@ -401,10 +438,12 @@ class TestElasticsearchRangeOperators:
         await db.connect()
 
         try:
-            # Clean and recreate index
+            # Clean and recreate index. The async client raises on a missing
+            # index rather than reporting it in the response, which is the
+            # opposite of the sync helper used by the fixture above.
             try:
                 await db._client.indices.delete(index=db.index_name)
-            except:
+            except NotFoundError:
                 pass
 
             await db._client.indices.create(index=db.index_name)
@@ -435,12 +474,18 @@ class TestElasticsearchRangeOperators:
             assert all(v < 20 or v > 50 for v in values)
 
         finally:
-            # Cleanup
+            # Cleanup. Tolerate broadly and always disconnect. ApiError (which
+            # NotFoundError specialises) and TransportError are siblings in the
+            # async client's hierarchy, sharing no base below Exception, so
+            # catching NotFoundError alone would let a connection failure here
+            # escape -- replacing whatever assertion was already failing, and
+            # skipping the disconnect below so the pooled client leaks.
             try:
                 await db._client.indices.delete(index=db.index_name)
-            except:
+            except (ApiError, TransportError):
                 pass
-            await db.disconnect()
+            finally:
+                await db.disconnect()
 
 
 class TestCrossBackendConsistency:
@@ -492,14 +537,14 @@ class TestCrossBackendConsistency:
         query = Query(filters=[Filter("price", Operator.BETWEEN, (100, 300))])
         results = db.search(query)
         assert len(results) == 2
-        assert set(r.id for r in results) == {"2", "3"}
+        assert {r.id for r in results} == {"2", "3"}
 
         # Test string BETWEEN (Note: "Delta" is between "Beta" and "Gamma" alphabetically)
         # So we use "Alpha" to "Beta" to get just 2 results
         query = Query(filters=[Filter("name", Operator.BETWEEN, ("Alpha", "Beta"))])
         results = db.search(query)
         assert len(results) == 2
-        assert set(r.id for r in results) == {"1", "2"}
+        assert {r.id for r in results} == {"1", "2"}
 
         # Test datetime BETWEEN
         base_time = datetime(2025, 1, 15, 12, 0, 0)
@@ -508,9 +553,9 @@ class TestCrossBackendConsistency:
         query = Query(filters=[Filter("timestamp", Operator.BETWEEN, (start, end))])
         results = db.search(query)
         assert len(results) == 2
-        assert set(r.id for r in results) == {"2", "3"}
+        assert {r.id for r in results} == {"2", "3"}
 
-    @pytest.mark.skipif(not os.getenv("POSTGRES_HOST"), reason="PostgreSQL not configured")
+    @requires_real_postgres_sync
     def test_postgres_consistency(self, test_data):
         """Verify PostgreSQL backend matches memory backend behavior."""
         from dataknobs_data.backends.postgres import SyncPostgresDatabase
@@ -523,7 +568,7 @@ class TestCrossBackendConsistency:
         db = SyncPostgresDatabase(
             config={
                 "host": os.getenv("POSTGRES_HOST", "localhost"),
-                "port": int(os.getenv("POSTGRES_PORT", 5432)),
+                "port": int(os.getenv("POSTGRES_PORT", "5432")),
                 "database": os.getenv("POSTGRES_DB", "test_db"),
                 "user": os.getenv("POSTGRES_USER", "postgres"),
                 "password": os.getenv("POSTGRES_PASSWORD", "postgres"),
@@ -557,7 +602,9 @@ class TestCrossBackendConsistency:
                 db.db.execute(
                     f"DROP TABLE IF EXISTS {safe_sql_ident(db.schema_name)}.{safe_sql_ident(db.table_name)}"
                 )
-            except:
+            except psycopg2.Error:
+                # As in the fixture above: IF EXISTS makes a missing table a
+                # non-event, so this tolerates a dead connection at teardown.
                 pass
             finally:
                 db.close()

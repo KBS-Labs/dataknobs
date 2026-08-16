@@ -1,7 +1,7 @@
 """Enhanced tests for Query system covering edge cases and recent fixes."""
 
 import pytest
-from dataknobs_data import Filter, Operator, Query, SortOrder, SortSpec
+from dataknobs_data import Filter, Operator, Query, SortOrder
 
 
 class TestQueryOperatorMapping:

@@ -1,7 +1,6 @@
 """Tests for hybrid search functionality."""
 
 import pytest
-import numpy as np
 
 from dataknobs_data.vector.hybrid import (
     FusionStrategy,
@@ -136,7 +135,11 @@ class TestReciprocalRankFusion:
         fused_vector_dict = dict(fused_vector)
         fused_equal_dict = dict(fused_equal)
 
-        # doc2's score should be relatively higher with vector weight
+        # "Relatively" is the whole claim, and it needs both runs to state:
+        # doc2's own score is identical under either weighting. Equal weights
+        # tie the two documents; the heavy vector weight separates them by
+        # pushing doc1 down, not by lifting doc2.
+        assert fused_equal_dict["doc2"] == pytest.approx(fused_equal_dict["doc1"])
         assert fused_vector_dict["doc2"] > fused_vector_dict["doc1"]
 
     def test_rrf_empty_results(self):

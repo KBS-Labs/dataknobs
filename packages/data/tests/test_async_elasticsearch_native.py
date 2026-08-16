@@ -1,9 +1,8 @@
 """Tests for native async Elasticsearch backend with connection pooling."""
 
-import asyncio
 import pytest
 import pytest_asyncio
-from unittest.mock import AsyncMock, MagicMock, patch, call
+from unittest.mock import AsyncMock, patch
 
 from dataknobs_data.backends.elasticsearch_async import AsyncElasticsearchDatabase
 from dataknobs_data.exceptions import DuplicateRecordError

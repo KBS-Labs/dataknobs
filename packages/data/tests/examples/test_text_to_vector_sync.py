@@ -1,18 +1,10 @@
 """Tests for the text-to-vector synchronization example."""
 
 import pytest
-import asyncio
-import sys
 import zlib
-from pathlib import Path
-from unittest.mock import MagicMock, patch, AsyncMock
-from typing import List, Dict, Any
+from typing import List
 
-# Add examples to path
-examples_path = Path(__file__).parent.parent.parent / "examples"
-sys.path.insert(0, str(examples_path))
-
-from dataknobs_data import DatabaseFactory, AsyncDatabaseFactory, Record, VectorField
+from dataknobs_data import AsyncDatabaseFactory, Record, VectorField
 from dataknobs_data.vector import VectorTextSynchronizer, ChangeTracker
 
 

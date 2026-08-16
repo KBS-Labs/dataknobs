@@ -2,15 +2,12 @@
 
 import os
 import pytest
+from dataknobs_common.testing import get_localstack_endpoint, requires_real_s3
 from dataknobs_data import Query, Record, SyncDatabase
 from dataknobs_data.query import Operator
 
 
-# Skip tests if S3 is not available
-pytestmark = pytest.mark.skipif(
-    not os.environ.get("TEST_S3", "").lower() == "true",
-    reason="S3 tests require TEST_S3=true and a running LocalStack or S3 instance",
-)
+pytestmark = requires_real_s3
 
 
 class TestS3IdFiltering:
@@ -24,7 +21,14 @@ class TestS3IdFiltering:
             "prefix": "test_id_filtering/",
             "aws_access_key_id": os.environ.get("AWS_ACCESS_KEY_ID", "test"),
             "aws_secret_access_key": os.environ.get("AWS_SECRET_ACCESS_KEY", "test"),
-            "endpoint_url": os.environ.get("S3_ENDPOINT", "http://localhost:4566"),
+            # Resolve through the same chain the gate probes. requires_real_s3
+            # calls is_localstack_available(), which follows
+            # LOCALSTACK_ENDPOINT -> AWS_ENDPOINT_URL -> LOCALSTACK_HOST/PORT;
+            # reading S3_ENDPOINT here instead meant the probe and the client
+            # could disagree -- in a container the harness sets
+            # LOCALSTACK_ENDPOINT, so the gate passed while this connected to
+            # localhost and failed.
+            "endpoint_url": get_localstack_endpoint(),
             "region_name": os.environ.get("AWS_REGION", "us-east-1"),
         }
 
@@ -84,7 +88,7 @@ class TestS3IdFiltering:
         query = Query().filter("id", Operator.IN, ["obj_0", "obj_2", "obj_4"]).sort_by("id", "asc")
         results = db.search(query)
         assert len(results) == 3
-        assert set(r.id for r in results) == {"obj_0", "obj_2", "obj_4"}
+        assert {r.id for r in results} == {"obj_0", "obj_2", "obj_4"}
 
         # Test NOT_IN
         query = (
@@ -92,7 +96,7 @@ class TestS3IdFiltering:
         )
         results = db.search(query)
         assert len(results) == 2
-        assert set(r.id for r in results) == {"obj_1", "obj_3"}
+        assert {r.id for r in results} == {"obj_1", "obj_3"}
 
     def test_id_field_sorting(self, db):
         """Test sorting by ID field."""

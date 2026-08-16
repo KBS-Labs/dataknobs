@@ -1,5 +1,4 @@
-"""
-Tests using the Sensor Dashboard Example
+"""Tests using the Sensor Dashboard Example
 
 These tests demonstrate real-world usage of the data package
 through a practical sensor monitoring application.
@@ -15,8 +14,7 @@ import math
 
 from dataknobs_data.backends.memory import SyncMemoryDatabase, AsyncMemoryDatabase
 from dataknobs_data.backends.file import SyncFileDatabase, AsyncFileDatabase
-from dataknobs_data.streaming import StreamConfig
-from dataknobs_data import Query, Filter, Operator
+from dataknobs_data import Query
 
 # Import from examples
 import sys
@@ -26,7 +24,6 @@ from sensor_dashboard import (
     SensorDashboard,
     AsyncSensorDashboard,
     SensorReading,
-    SensorInfo,
     SensorDataGenerator,
 )
 
@@ -205,7 +202,7 @@ class TestSensorDashboardSync:
         assert "humidity" in hourly.columns
         assert "reading_count" in hourly.columns
 
-        # Should have data for 2 sensors × 6 hours = 12 rows
+        # Should have data for 2 sensors over 6 hours, so at most 12 rows
         assert len(hourly) <= 12
         # Each hour should have ~12 readings
         assert all(hourly["reading_count"] <= 12)

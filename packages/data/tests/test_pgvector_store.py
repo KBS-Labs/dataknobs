@@ -5,35 +5,30 @@ Set TEST_POSTGRES=true to enable these tests.
 """
 
 import json
-import os
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Any
 
 import numpy as np
 import pytest
 
-from dataknobs_common.testing import postgres_dsn, postgres_env_params, safe_sql_ident
-from dataknobs_data.testing import vector as _vector, vectors as _vectors
-
-# Skip all tests if PostgreSQL is not available
-pytestmark = pytest.mark.skipif(
-    not os.environ.get("TEST_POSTGRES", "").lower() == "true",
-    reason="pgvector tests require TEST_POSTGRES=true and a running PostgreSQL instance with pgvector",
+from dataknobs_common.testing import (
+    postgres_dsn,
+    postgres_env_params,
+    requires_real_postgres,
+    safe_sql_ident,
 )
+from dataknobs_data.testing import vector as _vector, vectors as _vectors
+from dataknobs_data.vector.stores.pgvector import PgVectorStore
 
-# Check if asyncpg is available
-try:
-    import asyncpg
+# asyncpg is called directly below (connect, DataError), so this module cannot
+# load without it. importorskip turns an absent driver into a module skip at
+# collection rather than a collection error -- the job the try/except probe and
+# its ASYNCPG_AVAILABLE flag did, without a flag for fourteen class decorators
+# to re-test. The marker covers the same driver for the tests themselves.
+asyncpg = pytest.importorskip("asyncpg")
 
-    ASYNCPG_AVAILABLE = True
-except ImportError:
-    ASYNCPG_AVAILABLE = False
-
-# Only import if available to avoid import errors
-if ASYNCPG_AVAILABLE:
-    from dataknobs_data.vector.stores.pgvector import PgVectorStore
-    from dataknobs_data.vector.types import DistanceMetric
+pytestmark = requires_real_postgres
 
 
 def get_test_connection_string() -> str:
@@ -48,13 +43,12 @@ def get_test_connection_string() -> str:
 
 @pytest.fixture(scope="session")
 def ensure_pgvector_extension():
-    """Ensure pgvector extension is available in test database."""
-    if not os.environ.get("TEST_POSTGRES", "").lower() == "true":
-        return
+    """Ensure pgvector extension is available in test database.
 
-    if not ASYNCPG_AVAILABLE:
-        pytest.skip("asyncpg not installed")
-
+    No opt-in or driver guard: the module-level marker skips every test
+    here unless the server is reachable, TEST_POSTGRES=true and asyncpg is
+    installed, and a fixture is only set up for a test that runs.
+    """
     import asyncio
 
     async def setup_extension():
@@ -119,7 +113,6 @@ async def pgvector_store(pgvector_config):
     await store.close()
 
 
-@pytest.mark.skipif(not ASYNCPG_AVAILABLE, reason="asyncpg not installed")
 class TestPgVectorStoreConfiguration:
     """Test PgVectorStore configuration options."""
 
@@ -238,7 +231,6 @@ class TestPgVectorStoreConfiguration:
         assert store._col("metadata") == "metadata"
 
 
-@pytest.mark.skipif(not ASYNCPG_AVAILABLE, reason="asyncpg not installed")
 @pytest.mark.asyncio
 class TestPgVectorStoreBasicOperations:
     """Test basic vector store operations."""
@@ -347,7 +339,6 @@ class TestPgVectorStoreBasicOperations:
         assert await pgvector_store.count() == 0
 
 
-@pytest.mark.skipif(not ASYNCPG_AVAILABLE, reason="asyncpg not installed")
 @pytest.mark.asyncio
 class TestPgVectorStoreSearch:
     """Test vector similarity search operations."""
@@ -443,12 +434,11 @@ class TestPgVectorStoreSearch:
         query = vectors[0]
         results = await pgvector_store.search(query, k=5, include_metadata=True)
 
-        for id_, score, meta in results:
+        for _, _, meta in results:
             assert meta is not None
             assert "key" in meta
 
 
-@pytest.mark.skipif(not ASYNCPG_AVAILABLE, reason="asyncpg not installed")
 @pytest.mark.asyncio
 class TestPgVectorStoreDistanceMetrics:
     """Test different distance metrics."""
@@ -527,7 +517,6 @@ class TestPgVectorStoreDistanceMetrics:
             await store.close()
 
 
-@pytest.mark.skipif(not ASYNCPG_AVAILABLE, reason="asyncpg not installed")
 @pytest.mark.asyncio
 class TestPgVectorStoreDomainIsolation:
     """Test multi-tenant domain isolation."""
@@ -594,7 +583,6 @@ class TestPgVectorStoreDomainIsolation:
             await store2.close()
 
 
-@pytest.mark.skipif(not ASYNCPG_AVAILABLE, reason="asyncpg not installed")
 @pytest.mark.asyncio
 class TestPgVectorStoreTextIds:
     """Test text-based IDs instead of UUIDs."""
@@ -637,7 +625,6 @@ class TestPgVectorStoreTextIds:
             await store.close()
 
 
-@pytest.mark.skipif(not ASYNCPG_AVAILABLE, reason="asyncpg not installed")
 @pytest.mark.asyncio
 class TestPgVectorStoreIdTypeDefaults:
     """Defect A + C: id_type default flip + guided error wrapping.
@@ -966,7 +953,6 @@ class TestPgVectorStoreIdTypeDefaults:
             await text_store.close()
 
 
-@pytest.mark.skipif(not ASYNCPG_AVAILABLE, reason="asyncpg not installed")
 @pytest.mark.asyncio
 class TestPgVectorStoreCustomColumns:
     """Test custom column mappings."""
@@ -1010,7 +996,6 @@ class TestPgVectorStoreCustomColumns:
             await store.close()
 
 
-@pytest.mark.skipif(not ASYNCPG_AVAILABLE, reason="asyncpg not installed")
 @pytest.mark.asyncio
 class TestPgVectorStoreEdgeCases:
     """Test edge cases and error handling."""
@@ -1102,7 +1087,6 @@ class TestPgVectorStoreEdgeCases:
         assert len(results) == 10
 
 
-@pytest.mark.skipif(not ASYNCPG_AVAILABLE, reason="asyncpg not installed")
 class TestPgVectorStoreIndexConfiguration:
     """Test index configuration options."""
 
@@ -1151,7 +1135,6 @@ class TestPgVectorStoreIndexConfiguration:
         assert store.index_params["ef_construction"] == 128
 
 
-@pytest.mark.skipif(not ASYNCPG_AVAILABLE, reason="asyncpg not installed")
 @pytest.mark.asyncio
 class TestPgVectorStoreIndexOperations:
     """Test index creation and management operations."""
@@ -1386,7 +1369,6 @@ class TestPgVectorStoreIndexOperations:
                 await store.close()
 
 
-@pytest.mark.skipif(not ASYNCPG_AVAILABLE, reason="asyncpg not installed")
 @pytest.mark.asyncio
 class TestPgVectorStoreMetadataFields:
     """Test metadata field introspection."""
@@ -1429,7 +1411,6 @@ class TestPgVectorStoreMetadataFields:
         assert "field_a" not in fields
 
 
-@pytest.mark.skipif(not ASYNCPG_AVAILABLE, reason="asyncpg not installed")
 @pytest.mark.asyncio
 class TestPgVectorStoreUpdatedAtColumn:
     """Test the ``updated_at`` column and migration.
@@ -1697,7 +1678,6 @@ class TestPgVectorStoreUpdatedAtColumn:
             await store.close()
 
 
-@pytest.mark.skipif(not ASYNCPG_AVAILABLE, reason="asyncpg not installed")
 @pytest.mark.asyncio
 class TestPgVectorStoreIncludeTimestamps:
     """Tests for ``include_timestamps`` exposure on get_vectors/search.

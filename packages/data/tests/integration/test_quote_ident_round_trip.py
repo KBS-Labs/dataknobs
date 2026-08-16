@@ -1,7 +1,6 @@
 """Integration tests: unusual-but-valid table names work after identifier quoting."""
 
 import pytest
-import pytest_asyncio
 
 from dataknobs_data.records import Record
 

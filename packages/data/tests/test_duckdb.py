@@ -1,15 +1,13 @@
 """Tests for DuckDB backend implementation."""
 
 import asyncio
-import tempfile
-from pathlib import Path
 
 import pytest
 import pytest_asyncio
 
-# Try to import duckdb and backend - skip tests if not available
+# The backend module imports duckdb at its top, so the import below is itself
+# the probe -- a bare `import duckdb` beside it tested the same thing twice.
 try:
-    import duckdb
     from dataknobs_data.backends.duckdb import AsyncDuckDBDatabase
     from dataknobs_data.query import Filter, Operator, Query, SortOrder
     from dataknobs_data.query_logic import (
@@ -305,7 +303,7 @@ class TestAsyncDuckDBDatabase:
         assert all(results)
 
         # Verify updates - check that values were doubled
-        for i, record_id in enumerate(ids):
+        for _i, record_id in enumerate(ids):
             record = await memory_db.read(record_id)
             # The batch update in DuckDB backend works correctly, the issue was the test expectations
             assert record is not None
@@ -341,7 +339,7 @@ class TestAsyncDuckDBDatabase:
         config = StreamConfig(batch_size=10)
 
         count = 0
-        async for record in memory_db.stream_read(config=config):
+        async for _record in memory_db.stream_read(config=config):
             count += 1
 
         assert count == 50

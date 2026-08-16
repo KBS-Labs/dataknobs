@@ -1,7 +1,6 @@
 """Extended tests for migrator module to improve coverage."""
 
 import pytest
-import asyncio
 from typing import Any
 
 from dataknobs_data.exceptions import OperationError
@@ -107,7 +106,7 @@ class TestMigratorAdvanced:
 
         # Test should now raise since no error handler is provided
         with pytest.raises(ValueError, match="Database error"):
-            progress = migrator.migrate(
+            migrator.migrate(
                 source=source,
                 target=target,
                 batch_size=1,  # Process one at a time to control error timing
@@ -889,7 +888,8 @@ class TestMigratorConflictPolicy:
 
     def test_duckdb_streaming_insert_fails_closed(self):
         """DuckDB streaming INSERT fails closed on a colliding id (sibling of the
-        sqlite case — same tightened ``create_batch`` + per-record fallback)."""
+        sqlite case — same tightened ``create_batch`` + per-record fallback).
+        """
         src = SyncDuckDBDatabase({"path": ":memory:"})
         tgt = SyncDuckDBDatabase({"path": ":memory:"})
         src.connect()

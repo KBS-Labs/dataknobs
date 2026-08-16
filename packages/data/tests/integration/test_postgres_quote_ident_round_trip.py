@@ -257,7 +257,6 @@ class TestVectorUpsertMixedCaseField:
         try:
             from dataknobs_data import VectorField
 
-            vec1 = [0.1, 0.2, 0.3, 0.4]
             vec2 = [0.5, 0.6, 0.7, 0.8]
 
             # Insert without a vector first

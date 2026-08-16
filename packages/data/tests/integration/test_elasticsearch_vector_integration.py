@@ -1,10 +1,10 @@
 """Integration tests for Elasticsearch vector functionality."""
 
 import asyncio
-import os
 import pytest
 import numpy as np
 
+from dataknobs_common.testing import requires_real_elasticsearch
 from dataknobs_data import Record
 from dataknobs_data.backends.elasticsearch_async import AsyncElasticsearchDatabase
 from dataknobs_data.fields import VectorField
@@ -12,11 +12,7 @@ from dataknobs_data.query import Filter, Query, Operator
 from dataknobs_data.testing import vector as _vector, vectors as _vectors
 from dataknobs_data.vector.types import DistanceMetric
 
-# Skip tests if Elasticsearch integration testing is not enabled
-pytestmark = pytest.mark.skipif(
-    os.environ.get("TEST_ELASTICSEARCH") != "true",
-    reason="Elasticsearch integration tests not enabled",
-)
+pytestmark = requires_real_elasticsearch
 
 
 class TestElasticsearchVectorIntegration:

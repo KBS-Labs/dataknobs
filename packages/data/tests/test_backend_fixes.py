@@ -4,16 +4,11 @@ Each test names the behaviour it pins; the three were reported together
 by a downstream user of the Postgres backend.
 """
 
-import os
-
 import pytest
-from dataknobs_common.testing import postgres_dsn
+from dataknobs_common.testing import postgres_dsn, requires_real_postgres
 
-# Check if PostgreSQL tests should run
-TEST_POSTGRES = os.getenv("TEST_POSTGRES", "false").lower() == "true"
-skip_postgres = pytest.mark.skipif(
-    not TEST_POSTGRES, reason="PostgreSQL tests skipped. Set TEST_POSTGRES=true to run."
-)
+# Async backends only, so asyncpg is the driver these need.
+skip_postgres = requires_real_postgres
 
 
 @skip_postgres
@@ -79,7 +74,7 @@ async def test_postgres_update_persists_changes(postgres_connection_params):
 
         # Create initial record
         record = Record(data={"status": "pending", "count": 0})
-        record_id = await backend.create(record)
+        await backend.create(record)
 
         # Search for it to get the storage_id
         query = Query().filter("status", "==", "pending")
@@ -102,7 +97,7 @@ async def test_postgres_update_persists_changes(postgres_connection_params):
         assert verify_results[0].data["status"] == "completed", "Status should be updated"
         assert verify_results[0].data["count"] == 5, "Count should be updated"
 
-        print(f"✓ Test passed: Update persisted successfully")
+        print("✓ Test passed: Update persisted successfully")
 
     finally:
         await backend.close()
@@ -140,7 +135,7 @@ async def test_postgres_connection_string(postgres_connection_params):
         assert read_record is not None, "Should read record successfully"
         assert read_record.data["test"] == "connection_string"
 
-        print(f"✓ Test passed: Connection string works")
+        print("✓ Test passed: Connection string works")
 
     finally:
         await backend.close()

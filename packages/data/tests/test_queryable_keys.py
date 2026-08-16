@@ -310,7 +310,8 @@ def test_data_id_field_is_shadowed_by_filter_id(sync_db: object) -> None:
 @pytest.mark.asyncio
 async def test_async_data_id_field_is_shadowed_by_filter_id(async_db: object) -> None:
     """Async twin of the shadowing pin — the async in-process backends (where the
-    181 audit found the sync/async drift) agree that ``data["id"]`` is shadowed."""
+    181 audit found the sync/async drift) agree that ``data["id"]`` is shadowed.
+    """
     await async_db.create(Record({"id": "node-abc", "name": "widget"}, id="row-1"))
     await async_db.create(Record({"id": "node-xyz", "name": "gadget"}, id="row-2"))
 
@@ -355,7 +356,8 @@ def test_data_id_field_is_not_orderable_by_sort_id(sync_db: object) -> None:
 @pytest.mark.asyncio
 async def test_async_sort_by_id_orders_by_storage_key(async_db: object) -> None:
     """Async twin of the sort parity pin — the async in-process backends order by
-    the storage key when sorting on the reserved ``id`` field."""
+    the storage key when sorting on the reserved ``id`` field.
+    """
     await _aseed_keys(async_db, ["c", "a", "b"])
     asc = [r.id for r in await async_db.search(Query(sort_specs=[SortSpec("id", SortOrder.ASC)]))]
     assert asc == ["a", "b", "c"]
@@ -433,7 +435,8 @@ def test_starts_with_all_maximal_prefix_is_lower_bounded(sync_db: object) -> Non
 def test_string_only_operators_guard_non_string_json_fields() -> None:
     """The SQL push-down carries a JSON-string-type guard for string-only
     operators on a JSON data field, so a non-string value cannot match via text
-    projection — parity with the in-memory ``isinstance(str)`` contract."""
+    projection — parity with the in-memory ``isinstance(str)`` contract.
+    """
     guards = {
         "postgres": "jsonb_typeof(data->'code') = 'string'",
         "sqlite": "json_type(data, '$.code') = 'text'",

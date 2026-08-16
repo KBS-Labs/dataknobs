@@ -1,17 +1,17 @@
 """Simplified test for v2 modules streaming integration."""
 
-import asyncio
 import pytest
 
 from dataknobs_data.backends.memory import AsyncMemoryDatabase, SyncMemoryDatabase
 from dataknobs_data.records import Record
 from dataknobs_data.query import Query
 
-from dataknobs_data.validation import Schema, Required, Range
+from dataknobs_data.validation import Schema, Range
 from dataknobs_data.migration import (
     Migration,
     AddField,
     RenameField,
+    RemoveField,
     Transformer,
 )
 
@@ -235,7 +235,3 @@ class TestStreamingIntegration:
         assert "deprecated" not in first.fields
 
         await db.close()
-
-
-# Import RemoveField for the test
-from dataknobs_data.migration import RemoveField

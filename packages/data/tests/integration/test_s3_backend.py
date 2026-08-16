@@ -2,8 +2,6 @@
 
 import os
 import pytest
-from datetime import datetime
-from typing import Generator
 import boto3
 from botocore.exceptions import BotoCoreError, ClientError
 from moto import mock_aws

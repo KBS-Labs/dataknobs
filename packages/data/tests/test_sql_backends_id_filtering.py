@@ -4,16 +4,13 @@ import os
 import pytest
 import psycopg2
 from psycopg2.extensions import ISOLATION_LEVEL_AUTOCOMMIT
-from dataknobs_common.testing import safe_sql_ident
+from dataknobs_common.testing import requires_real_postgres_sync, safe_sql_ident
 from dataknobs_data import Query, Record, SyncDatabase
 from dataknobs_data.query import Operator
 
 
-# Skip tests if database environment variables are not set
-pytestmark = pytest.mark.skipif(
-    not os.environ.get("TEST_POSTGRES", "").lower() == "true",
-    reason="PostgreSQL tests require TEST_POSTGRES=true and a running PostgreSQL instance",
-)
+# SyncDatabase only, through psycopg2.
+pytestmark = requires_real_postgres_sync
 
 
 class TestSqlBackendsIdFiltering:
@@ -125,7 +122,7 @@ class TestSqlBackendsIdFiltering:
         query = Query().filter("id", Operator.IN, ["rec_0", "rec_2", "rec_4"]).sort_by("id", "asc")
         results = db.search(query)
         assert len(results) == 3
-        assert set(r.id for r in results) == {"rec_0", "rec_2", "rec_4"}
+        assert {r.id for r in results} == {"rec_0", "rec_2", "rec_4"}
 
         # Test NOT_IN
         query = (
@@ -133,7 +130,7 @@ class TestSqlBackendsIdFiltering:
         )
         results = db.search(query)
         assert len(results) == 2
-        assert set(r.id for r in results) == {"rec_1", "rec_3"}
+        assert {r.id for r in results} == {"rec_1", "rec_3"}
 
     def test_id_field_between_filter(self, db):
         """Test filtering by ID with BETWEEN operator."""
@@ -242,13 +239,13 @@ class TestSqlBackendsIdFiltering:
         query = Query().filter("id", Operator.LIKE, "%001").sort_by("id", "asc")
         results = db.search(query)
         assert len(results) == 3
-        assert set(r.id for r in results) == {"user_001", "admin_001", "guest_001"}
+        assert {r.id for r in results} == {"user_001", "admin_001", "guest_001"}
 
         # Test NOT_LIKE
         query = Query().filter("id", Operator.NOT_LIKE, "admin%").sort_by("id", "asc")
         results = db.search(query)
         assert len(results) == 3
-        assert set(r.id for r in results) == {"user_001", "user_002", "guest_001"}
+        assert {r.id for r in results} == {"user_001", "user_002", "guest_001"}
 
     def test_numeric_id_comparison(self, db):
         """Test that numeric IDs are compared as strings in SQL."""

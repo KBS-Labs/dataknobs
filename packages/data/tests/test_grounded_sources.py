@@ -2,17 +2,15 @@
 
 from __future__ import annotations
 
-from typing import Any
 
 import pytest
 
 from dataknobs_data.backends.memory import AsyncMemoryDatabase
 from dataknobs_data.fields import FieldType
-from dataknobs_data.query import Filter, Operator
+from dataknobs_data.query import Operator
 from dataknobs_data.records import Record
 from dataknobs_data.schema import DatabaseSchema
 from dataknobs_data.sources.base import (
-    GroundedSource,
     RetrievalIntent,
     SourceResult,
     SourceSchema,

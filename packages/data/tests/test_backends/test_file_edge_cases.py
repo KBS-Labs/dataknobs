@@ -1,17 +1,14 @@
 """Edge case tests for file backend implementation."""
 
 import asyncio
-import json
 import os
 import tempfile
 import platform
-from pathlib import Path
-from unittest.mock import Mock, MagicMock, patch, mock_open
-import gzip
-import csv
+from unittest.mock import MagicMock, patch, mock_open
 
 import pytest
 
+from dataknobs_common.testing import is_package_available
 from dataknobs_data.backends.file import (
     FileLock,
     FileFormat,
@@ -21,8 +18,6 @@ from dataknobs_data.backends.file import (
     AsyncFileDatabase,
     SyncFileDatabase,
 )
-from dataknobs_data import AsyncDatabase, SyncDatabase
-from dataknobs_data.query import Query
 from dataknobs_data.records import Record
 
 
@@ -53,7 +48,7 @@ class TestFileLock:
             filepath = f.name
 
         try:
-            with FileLock(filepath) as lock:
+            with FileLock(filepath):
                 assert os.path.exists(filepath + ".lock")
             # Lock file should be removed after context exit
             assert not os.path.exists(filepath + ".lock")
@@ -71,8 +66,6 @@ class TestFileLock:
 
         try:
             with patch("platform.system", return_value="Windows"):
-                import_mock = MagicMock()
-
                 # Mock msvcrt module
                 msvcrt_mock = MagicMock()
                 lock_attempts = [OSError("locked"), OSError("locked"), None]
@@ -83,7 +76,7 @@ class TestFileLock:
                 with patch.dict("sys.modules", {"msvcrt": msvcrt_mock}):
                     with patch("time.sleep") as sleep_mock:
                         lock = FileLock(filepath)
-                        with patch("builtins.open", mock_open()) as open_mock:
+                        with patch("builtins.open", mock_open()):
                             lock.acquire()
                             # Should retry on OSError
                             assert sleep_mock.call_count == 2
@@ -167,7 +160,7 @@ class TestFileFormats:
             JSONFormat.save(filepath, data)
 
             # Read and verify formatting
-            with open(filepath, "r") as f:
+            with open(filepath) as f:
                 content = f.read()
                 # Should be indented
                 assert "  " in content or "    " in content
@@ -312,7 +305,7 @@ class TestFileDatabaseEdgeCases:
             db = AsyncFileDatabase({"path": filepath})
 
             record = Record({"name": "bz2_test"})
-            record_id = await db.create(record)
+            await db.create(record)
 
             # Verify record was saved (FileDatabase doesn't actually support bz2)
             # The test shows that FileDatabase accepts the path
@@ -332,7 +325,7 @@ class TestFileDatabaseEdgeCases:
             db = AsyncFileDatabase({"path": filepath})
 
             record = Record({"name": "xz_test"})
-            record_id = await db.create(record)
+            await db.create(record)
 
             # Verify record was saved (FileDatabase doesn't actually support xz)
             # The test shows that FileDatabase accepts the path
@@ -484,18 +477,19 @@ class TestSyncFileDatabaseEdgeCases:
             (".json", "json"),
             (".csv", "csv"),
             (".json.gz", "json"),
-            (".csv.bz2", "csv"),
+            # Only ".gz" is stripped before the extension is read, so a
+            # ".bz2" path never reaches its inner ".csv" and falls through
+            # to the json default. Pinned as the behaviour that exists, not
+            # as the behaviour intended -- if bz2 gains real support this
+            # row is meant to fail and be updated.
+            (".csv.bz2", "json"),
             (".JSON", "json"),  # Case insensitive
             (".CSV", "csv"),
         ]
 
         # Add parquet only if pyarrow is available
-        try:
-            import pyarrow
-
+        if is_package_available("pyarrow"):
             test_cases.append((".parquet", "parquet"))
-        except ImportError:
-            pass
 
         for ext, expected_format in test_cases:
             with tempfile.NamedTemporaryFile(suffix=ext, delete=False) as f:
@@ -503,8 +497,11 @@ class TestSyncFileDatabaseEdgeCases:
 
             try:
                 db = SyncFileDatabase({"path": filepath})
-                # Format should be detected correctly
-                # Test by creating a record
+                # The detected format is the subject of this test, so assert
+                # it directly rather than inferring it from a round-trip that
+                # the json default would also pass.
+                assert db.format == expected_format, f"{ext} detected as {db.format}"
+                # And the round-trip still has to work under that format.
                 record = Record({"test": "format_detection"})
                 record_id = db.create(record)
                 retrieved = db.read(record_id)

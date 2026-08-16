@@ -228,7 +228,7 @@ def test_sync_write_methods_do_not_mutate_caller_record(sync_db: object) -> None
     already copy-first); pins that single ``upsert`` now matches these siblings.
     """
     for write in (
-        lambda r: sync_db.create(r),
+        sync_db.create,
         lambda r: sync_db.create_batch([r]),
         lambda r: sync_db.upsert_batch([r]),
     ):
