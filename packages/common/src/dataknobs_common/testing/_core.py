@@ -1014,17 +1014,24 @@ try:
             ),
         )
 
+    # One probe, shared by both Postgres markers. Not for the saved socket
+    # timeout, which is negligible: probing twice lets the two markers disagree
+    # about the same server if it goes away between the calls, so a module
+    # carrying both -- the dual-driver case these markers exist for -- could
+    # skip on one term and run on the other.
+    _postgres_reachable = is_postgres_available()
+
     requires_real_postgres = _requires_real_service(
         service="Postgres",
         opt_in_var="TEST_POSTGRES",
-        reachable=is_postgres_available(),
+        reachable=_postgres_reachable,
         package="asyncpg",
     )
 
     requires_real_postgres_sync = _requires_real_service(
         service="Postgres",
         opt_in_var="TEST_POSTGRES",
-        reachable=is_postgres_available(),
+        reachable=_postgres_reachable,
         package="psycopg2",
     )
 
