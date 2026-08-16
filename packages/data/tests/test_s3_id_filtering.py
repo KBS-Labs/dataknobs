@@ -2,7 +2,7 @@
 
 import os
 import pytest
-from dataknobs_common.testing import requires_real_s3
+from dataknobs_common.testing import get_localstack_endpoint, requires_real_s3
 from dataknobs_data import Query, Record, SyncDatabase
 from dataknobs_data.query import Operator
 
@@ -21,7 +21,14 @@ class TestS3IdFiltering:
             "prefix": "test_id_filtering/",
             "aws_access_key_id": os.environ.get("AWS_ACCESS_KEY_ID", "test"),
             "aws_secret_access_key": os.environ.get("AWS_SECRET_ACCESS_KEY", "test"),
-            "endpoint_url": os.environ.get("S3_ENDPOINT", "http://localhost:4566"),
+            # Resolve through the same chain the gate probes. requires_real_s3
+            # calls is_localstack_available(), which follows
+            # LOCALSTACK_ENDPOINT -> AWS_ENDPOINT_URL -> LOCALSTACK_HOST/PORT;
+            # reading S3_ENDPOINT here instead meant the probe and the client
+            # could disagree -- in a container the harness sets
+            # LOCALSTACK_ENDPOINT, so the gate passed while this connected to
+            # localhost and failed.
+            "endpoint_url": get_localstack_endpoint(),
             "region_name": os.environ.get("AWS_REGION", "us-east-1"),
         }
 

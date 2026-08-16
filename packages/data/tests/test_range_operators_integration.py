@@ -5,7 +5,12 @@ import pytest
 import psycopg2
 from psycopg2.extensions import ISOLATION_LEVEL_AUTOCOMMIT
 from datetime import datetime, timedelta
-from dataknobs_common.testing import requires_real_postgres_sync, safe_sql_ident
+from dataknobs_common.testing import (
+    requires_real_elasticsearch,
+    requires_real_postgres,
+    requires_real_postgres_sync,
+    safe_sql_ident,
+)
 from dataknobs_data import Record, Query, Filter, Operator
 
 
@@ -50,6 +55,12 @@ def ensure_postgres_test_db():
         print(f"Warning: Could not ensure test database exists: {e}")
 
 
+# Both driver terms: the class is mostly psycopg2, but
+# ``test_async_postgres_between`` below imports asyncpg. Gating on the sync
+# term alone would let that test run with asyncpg absent, turning a skip into
+# an ImportError -- the failure mode these markers exist to remove. The four
+# sibling dual-driver modules carry both for the same reason.
+@requires_real_postgres
 @requires_real_postgres_sync
 class TestPostgresRangeOperators:
     """Test BETWEEN operators with real PostgreSQL backend."""
@@ -84,10 +95,12 @@ class TestPostgresRangeOperators:
             db.db.execute(
                 f"TRUNCATE TABLE {safe_sql_ident(db.schema_name)}.{safe_sql_ident(db.table_name)}"
             )
-        except psycopg2.errors.UndefinedTable:
-            # What a missing table raises -- though connect() above ensures
-            # the table, so this is belt-and-braces rather than the guard the
-            # original comment implied.
+        except psycopg2.Error:
+            # connect() above runs CREATE TABLE IF NOT EXISTS, so UndefinedTable
+            # is the one thing that cannot fire here. What can is a connection
+            # that did not survive -- OperationalError -- and letting that
+            # escape would abort fixture setup before the finally below, so
+            # db.close() would never run. Matches the two sibling sites.
             pass
 
         yield db
@@ -243,17 +256,19 @@ class TestPostgresRangeOperators:
                     await db._pool.execute(
                         f"DROP TABLE IF EXISTS {safe_sql_ident(db.schema_name)}.{safe_sql_ident(db.table_name)}"
                     )
-            except (asyncpg.PostgresError, asyncpg.InterfaceError):
-                # Both are needed: asyncpg's server-side and client-side error
-                # families share no base beyond Exception. As above, IF EXISTS
-                # covers the missing table, so this tolerates a pool that did
-                # not survive the test rather than a table that was never made.
+            except (asyncpg.PostgresError, asyncpg.InterfaceError, OSError):
+                # All three are needed: asyncpg's server-side and client-side
+                # error families share no base beyond Exception, and
+                # connect_utils re-raises a raw OSError when the server is
+                # unreachable. As above, IF EXISTS covers the missing table, so
+                # this tolerates a pool that did not survive the test rather
+                # than a table that was never made.
                 pass
             finally:
                 await db.close()
 
 
-@pytest.mark.skipif(not os.getenv("ELASTICSEARCH_HOST"), reason="Elasticsearch not configured")
+@requires_real_elasticsearch
 class TestElasticsearchRangeOperators:
     """Test BETWEEN operators with real Elasticsearch backend."""
 
@@ -297,12 +312,17 @@ class TestElasticsearchRangeOperators:
 
         yield db
 
-        # Cleanup
+        # Cleanup. Tolerate broadly and always disconnect: this runs while an
+        # assertion failure may already be propagating, and a teardown error
+        # would replace it with a less useful one. ValueError joins
+        # RequestException because the response handler parses with json.loads,
+        # so a non-JSON error body raises from the parse, not the transport.
         try:
             db.es_index.delete()
-        except requests.RequestException:
+        except (requests.RequestException, ValueError):
             pass
-        db.disconnect()
+        finally:
+            db.disconnect()
 
     def test_numeric_between_elasticsearch(self, es_db):
         """Test BETWEEN with numeric values in Elasticsearch."""
@@ -401,7 +421,7 @@ class TestElasticsearchRangeOperators:
         """Test BETWEEN with async Elasticsearch backend."""
         from dataknobs_data.backends.elasticsearch_async import AsyncElasticsearchDatabase
 
-        from elasticsearch import NotFoundError
+        from elasticsearch import ApiError, NotFoundError, TransportError
 
         es_host = os.getenv("ELASTICSEARCH_HOST", "localhost:9200")
         if ":" in es_host:
@@ -454,12 +474,18 @@ class TestElasticsearchRangeOperators:
             assert all(v < 20 or v > 50 for v in values)
 
         finally:
-            # Cleanup
+            # Cleanup. Tolerate broadly and always disconnect. ApiError (which
+            # NotFoundError specialises) and TransportError are siblings in the
+            # async client's hierarchy, sharing no base below Exception, so
+            # catching NotFoundError alone would let a connection failure here
+            # escape -- replacing whatever assertion was already failing, and
+            # skipping the disconnect below so the pooled client leaks.
             try:
                 await db._client.indices.delete(index=db.index_name)
-            except NotFoundError:
+            except (ApiError, TransportError):
                 pass
-            await db.disconnect()
+            finally:
+                await db.disconnect()
 
 
 class TestCrossBackendConsistency:
@@ -529,7 +555,7 @@ class TestCrossBackendConsistency:
         assert len(results) == 2
         assert {r.id for r in results} == {"2", "3"}
 
-    @pytest.mark.skipif(not os.getenv("POSTGRES_HOST"), reason="PostgreSQL not configured")
+    @requires_real_postgres_sync
     def test_postgres_consistency(self, test_data):
         """Verify PostgreSQL backend matches memory backend behavior."""
         from dataknobs_data.backends.postgres import SyncPostgresDatabase
