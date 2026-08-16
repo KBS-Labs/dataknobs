@@ -1,7 +1,6 @@
 """Extended tests for migrator module to improve coverage."""
 
 import pytest
-import asyncio
 from typing import Any
 
 from dataknobs_data.exceptions import OperationError

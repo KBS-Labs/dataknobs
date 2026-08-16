@@ -15,8 +15,7 @@ import math
 
 from dataknobs_data.backends.memory import SyncMemoryDatabase, AsyncMemoryDatabase
 from dataknobs_data.backends.file import SyncFileDatabase, AsyncFileDatabase
-from dataknobs_data.streaming import StreamConfig
-from dataknobs_data import Query, Filter, Operator
+from dataknobs_data import Query
 
 # Import from examples
 import sys
@@ -26,7 +25,6 @@ from sensor_dashboard import (
     SensorDashboard,
     AsyncSensorDashboard,
     SensorReading,
-    SensorInfo,
     SensorDataGenerator,
 )
 

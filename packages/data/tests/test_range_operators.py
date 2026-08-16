@@ -1,7 +1,7 @@
 """Test range operators (BETWEEN, type-aware comparisons)."""
 
 import pytest
-from datetime import datetime, date, timedelta
+from datetime import datetime, timedelta
 from dataknobs_data import Record, Query, Filter, Operator
 from dataknobs_data.backends.memory import SyncMemoryDatabase, AsyncMemoryDatabase
 

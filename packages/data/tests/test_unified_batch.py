@@ -8,11 +8,9 @@ from dataknobs_data import (
     StreamConfig,
     StreamResult,
     StreamProcessor,
-    SyncDatabase,
-    AsyncDatabase,
 )
 from dataknobs_data.backends.memory import SyncMemoryDatabase, AsyncMemoryDatabase
-from dataknobs_data.streaming import process_batch_with_fallback, async_process_batch_with_fallback
+from dataknobs_data.streaming import process_batch_with_fallback
 
 
 class TestStreamResultEnhancements:

@@ -1,8 +1,6 @@
 """Tests for SQLite backend implementation."""
 
 import asyncio
-import os
-import tempfile
 from pathlib import Path
 
 import pytest

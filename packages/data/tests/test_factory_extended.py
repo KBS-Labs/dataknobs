@@ -1,9 +1,8 @@
 """Extended tests for backend factory functionality including all backends."""
 
 import pytest
-from unittest.mock import patch, MagicMock, Mock
+from unittest.mock import patch, MagicMock
 import tempfile
-import os
 
 from dataknobs_data.factory import (
     DatabaseFactory,

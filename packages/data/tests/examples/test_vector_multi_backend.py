@@ -1,13 +1,10 @@
 """Tests for the vector multi-backend example."""
 
 import pytest
-import asyncio
 import sys
 import os
 import tempfile
 from pathlib import Path
-from unittest.mock import MagicMock, patch, AsyncMock
-from typing import List, Dict, Any
 
 import numpy as np
 
@@ -19,7 +16,6 @@ sys.path.insert(0, str(examples_path))
 
 from vector_multi_backend import MultiBackendVectorExample
 from dataknobs_data import Record, VectorField, Field
-from dataknobs_data.query import Query, Operator
 
 
 @pytest.fixture

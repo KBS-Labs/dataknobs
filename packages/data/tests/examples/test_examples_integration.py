@@ -1,10 +1,9 @@
 """Integration tests for all example scripts using real implementations."""
 
 import pytest
-import asyncio
 import sys
 from pathlib import Path
-from typing import List, Dict, Any
+from typing import List
 import numpy as np
 
 # Add examples to path
@@ -13,7 +12,6 @@ sys.path.insert(0, str(examples_path))
 
 # Import real implementations
 from dataknobs_data import (
-    DatabaseFactory,
     AsyncDatabaseFactory,
     Record,
     VectorField,

@@ -8,7 +8,7 @@ practical sensor monitoring scenarios.
 import pytest
 import pytest_asyncio
 from datetime import datetime, timedelta
-from dataknobs_data import Query, Filter, Operator, QueryBuilder, ComplexQuery, Record
+from dataknobs_data import Query, Filter, Operator, QueryBuilder
 from dataknobs_data.backends.memory import SyncMemoryDatabase, AsyncMemoryDatabase
 import sys
 from pathlib import Path

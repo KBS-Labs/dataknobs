@@ -1,6 +1,5 @@
 """Integration tests for PostgreSQL with pgvector extension using real database."""
 
-import uuid
 from typing import TYPE_CHECKING
 
 import pytest
@@ -9,7 +8,7 @@ from dataknobs_common.testing import (
     requires_real_postgres,
     requires_real_postgres_sync,
 )
-from dataknobs_data import AsyncDatabase, Query, Record, SyncDatabase, VectorField
+from dataknobs_data import Record, SyncDatabase, VectorField
 from dataknobs_data.query import Filter, Operator
 from dataknobs_data.vector import DistanceMetric, VectorSearchResult
 

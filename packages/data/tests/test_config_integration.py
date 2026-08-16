@@ -4,8 +4,6 @@ import pytest
 
 from dataknobs_config import Config
 from dataknobs_data.backends.memory import SyncMemoryDatabase
-from dataknobs_data.backends.postgres import SyncPostgresDatabase
-from dataknobs_data.backends.elasticsearch import SyncElasticsearchDatabase
 from dataknobs_data.backends.file import SyncFileDatabase
 from dataknobs_data.records import Record
 

@@ -3,13 +3,12 @@
 import asyncio
 import concurrent.futures
 import time
-import uuid
 
 import pytest
 
 from dataknobs_common.testing import requires_real_elasticsearch
 from dataknobs_data import AsyncDatabase, Query, Record, SyncDatabase
-from dataknobs_data.query import Filter, Operator, SortOrder
+from dataknobs_data.query import Operator, SortOrder
 
 # pytestmark = pytest.mark.integration
 

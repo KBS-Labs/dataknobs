@@ -6,7 +6,7 @@ Set TEST_POSTGRES=true to enable these tests.
 
 import json
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Any
 
 import numpy as np

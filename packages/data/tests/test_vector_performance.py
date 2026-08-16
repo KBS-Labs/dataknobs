@@ -1,14 +1,11 @@
 """Performance tests for vector store operations."""
 
 import asyncio
-import time
-from unittest.mock import Mock, patch
+from unittest.mock import Mock
 
-import numpy as np
 import pytest
 
 from dataknobs_data.vector.benchmarks import (
-    BenchmarkResult,
     ComparativeBenchmark,
     VectorStoreBenchmark,
 )

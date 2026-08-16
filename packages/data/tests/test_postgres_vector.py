@@ -8,7 +8,6 @@ import pytest
 
 from dataknobs_data import Record, VectorField
 from dataknobs_data.backends.memory import AsyncMemoryDatabase
-from dataknobs_data.vector import DistanceMetric, VectorSearchResult
 
 # Skip tests if numpy is not available
 np = pytest.importorskip("numpy")

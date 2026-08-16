@@ -13,7 +13,7 @@ from dataknobs_common.testing import (
     safe_sql_ident,
 )
 from dataknobs_data import AsyncDatabase, Query, Record, SyncDatabase
-from dataknobs_data.query import Filter, Operator, SortOrder, SortSpec
+from dataknobs_data.query import Operator, SortOrder
 
 # Both drivers: this module exercises the sync backend (psycopg2) and the
 # async one (asyncpg), so it needs each of them present and the server up.

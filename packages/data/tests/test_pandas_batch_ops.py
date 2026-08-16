@@ -3,12 +3,12 @@
 import pytest
 import pandas as pd
 import numpy as np
-from unittest.mock import Mock, MagicMock, patch, call
+from unittest.mock import Mock, patch
 import tempfile
 import os
 
 from dataknobs_data.pandas.batch_ops import BatchConfig, ChunkedProcessor, BatchOperations
-from dataknobs_data.pandas.converter import DataFrameConverter, ConversionOptions
+from dataknobs_data.pandas.converter import DataFrameConverter
 from dataknobs_data.records import Record
 from dataknobs_data.query import Query
 from dataknobs_data.backends.memory import SyncMemoryDatabase

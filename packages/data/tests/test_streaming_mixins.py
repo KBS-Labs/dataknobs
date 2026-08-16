@@ -1,8 +1,6 @@
 """Tests for streaming mixin default implementations."""
 
-import asyncio
-import time
-from typing import AsyncIterator, Iterator, List, Optional
+from typing import List
 
 import pytest
 

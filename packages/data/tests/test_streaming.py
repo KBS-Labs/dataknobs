@@ -1,9 +1,6 @@
 """Tests for streaming API functionality."""
 
-import asyncio
 import dataclasses
-import time
-from typing import AsyncIterator, Iterator
 
 import pytest
 from dataknobs_common.structured_config import StructuredConfig

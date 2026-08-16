@@ -3,15 +3,13 @@
 import numpy as np
 import pandas as pd
 import pytest
-from datetime import datetime, date, time, timedelta
-from decimal import Decimal
+from datetime import date, time, timedelta
 from enum import Enum
-from typing import Optional
 
 from dataknobs_data.pandas.converter import DataFrameConverter, ConversionOptions
 from dataknobs_data.pandas.batch_ops import BatchOperations, BatchConfig
 from dataknobs_data.pandas.type_mapper import TypeMapper
-from dataknobs_data.records import Record, Field
+from dataknobs_data.records import Record
 
 
 class Status(Enum):

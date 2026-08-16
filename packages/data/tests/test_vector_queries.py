@@ -1,8 +1,6 @@
 """Tests for vector query functionality."""
 
-import json
 import numpy as np
-import pytest
 
 from dataknobs_data.query import Operator, Query, SortOrder, VectorQuery
 from dataknobs_data.query_logic import ComplexQuery, QueryBuilder

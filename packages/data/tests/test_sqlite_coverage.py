@@ -1,14 +1,8 @@
 """Extended tests for SQLite backend to improve coverage."""
 
-import asyncio
-import os
-import sqlite3
-import tempfile
-from pathlib import Path
 from unittest.mock import Mock, patch
 
 import pytest
-import aiosqlite
 
 from dataknobs_data.backends.sql_base import SQLQueryBuilder, SQLTableManager
 from dataknobs_data.backends.sqlite import SyncSQLiteDatabase
@@ -16,7 +10,6 @@ from dataknobs_data.backends.sqlite_async import AsyncSQLiteDatabase
 from dataknobs_data.query import Filter, Operator, Query, SortOrder
 from dataknobs_data.query_logic import ComplexQuery, FilterCondition, LogicCondition, LogicOperator
 from dataknobs_data.records import Record
-from dataknobs_data.streaming import StreamConfig, StreamResult
 
 
 class TestSQLBase:

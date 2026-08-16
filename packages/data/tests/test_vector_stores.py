@@ -2,11 +2,8 @@
 
 import asyncio
 import logging
-import os
 import pickle
-import tempfile
 from datetime import UTC, datetime
-from typing import Any
 from uuid import uuid4
 
 import numpy as np
@@ -14,7 +11,7 @@ import pytest
 
 from dataknobs_common.testing import is_chromadb_available, is_faiss_available
 from dataknobs_data.testing import vector as _vector, vectors as _vectors
-from dataknobs_data.vector.stores import VectorStore, VectorStoreFactory
+from dataknobs_data.vector.stores import VectorStoreFactory
 from dataknobs_data.vector.stores.memory import MemoryVectorStore
 from dataknobs_data.vector.types import DistanceMetric
 

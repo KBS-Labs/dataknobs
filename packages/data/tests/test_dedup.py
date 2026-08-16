@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
-import numpy as np
 import pytest
 
 from dataknobs_data.backends.memory import AsyncMemoryDatabase
-from dataknobs_data.dedup import DedupChecker, DedupConfig, DedupResult
+from dataknobs_data.dedup import DedupChecker, DedupConfig
 from dataknobs_data.vector.stores.memory import MemoryVectorStore
 
 

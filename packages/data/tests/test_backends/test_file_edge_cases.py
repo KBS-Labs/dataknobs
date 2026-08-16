@@ -1,14 +1,10 @@
 """Edge case tests for file backend implementation."""
 
 import asyncio
-import json
 import os
 import tempfile
 import platform
-from pathlib import Path
-from unittest.mock import Mock, MagicMock, patch, mock_open
-import gzip
-import csv
+from unittest.mock import MagicMock, patch, mock_open
 
 import pytest
 
@@ -22,8 +18,6 @@ from dataknobs_data.backends.file import (
     AsyncFileDatabase,
     SyncFileDatabase,
 )
-from dataknobs_data import AsyncDatabase, SyncDatabase
-from dataknobs_data.query import Query
 from dataknobs_data.records import Record
 
 

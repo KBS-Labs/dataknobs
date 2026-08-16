@@ -1,7 +1,5 @@
 """Test factory integration for validation and migration modules."""
 
-import pytest
-
 from dataknobs_data.validation import (
     SchemaFactory,
     CoercerFactory,

@@ -1,8 +1,5 @@
 """Tests for synchronous DuckDB backend implementation."""
 
-import tempfile
-from pathlib import Path
-
 import pytest
 
 # Try to import duckdb and backend - skip tests if not available

@@ -1,12 +1,10 @@
 """Tests for the basic vector search example."""
 
 import pytest
-import asyncio
 import sys
 import zlib
 from pathlib import Path
 from unittest.mock import MagicMock, patch, AsyncMock
-from typing import List, Dict, Any
 
 from dataknobs_common.testing import requires_package
 
@@ -15,7 +13,7 @@ examples_path = Path(__file__).parent.parent.parent / "examples"
 sys.path.insert(0, str(examples_path))
 
 from basic_vector_search import VectorSearchExample
-from dataknobs_data import Record, VectorField
+from dataknobs_data import VectorField
 
 
 class MockEmbeddingModel:

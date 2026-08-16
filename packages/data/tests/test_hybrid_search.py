@@ -1,7 +1,6 @@
 """Tests for hybrid search functionality."""
 
 import pytest
-import numpy as np
 
 from dataknobs_data.vector.hybrid import (
     FusionStrategy,
