@@ -7,6 +7,7 @@ from dataknobs_config import FactoryBase
 
 from dataknobs_data.backend_selection import (
     available_backends,
+    backend_available,
     backend_info,
     select_backend,
 )
@@ -56,11 +57,14 @@ class VectorStoreFactory(FactoryBase):
         Raises:
             ValueError: If backend type is not recognized or not available
         """
-        backend_class, backend_type = select_backend(config, vector_backends, kind="vector store")
+        backend_class, backend_type, options = select_backend(
+            config, vector_backends, kind="vector store"
+        )
 
         # Create and return backend instance
         try:
-            return backend_class(config)
+            store: VectorStore = backend_class(options)
+            return store
         except ImportError as e:
             # Convert ImportError to ValueError with expected format
             # Extract package name from "pip install X" in error message
@@ -84,8 +88,10 @@ class VectorStoreFactory(FactoryBase):
     def is_backend_available(self, backend_type: str) -> bool:
         """Whether a vector store backend can be created here.
 
-        Registration is guarded by the backend's own import, so a name is
-        registered exactly when its optional dependency is installed.
+        Every store in this package defers its driver's ``ImportError`` to
+        construction, so registration probes the declared driver instead --
+        which is what makes this the guard the documentation describes
+        rather than a restatement of "is the name known".
 
         Args:
             backend_type: Backend name or registration alias
@@ -93,7 +99,7 @@ class VectorStoreFactory(FactoryBase):
         Returns:
             True when ``create(backend=backend_type)`` can resolve it.
         """
-        return vector_backends.is_registered(backend_type)
+        return backend_available(vector_backends, backend_type)
 
     def get_backend_info(self, backend_type: str) -> dict[str, Any]:
         """Get information about a specific backend.

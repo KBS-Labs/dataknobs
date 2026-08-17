@@ -15,10 +15,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   raised `AttributeError`; the reference page's own "Backend Information API"
   section showed all three calls while only `get_backend_info` existed.
 
-  Registration is guarded by each backend's own import, so *registered* means
-  *installed*: `is_backend_available("postgres")` is the check to make before
-  offering a backend, and `get_backend_info(...)["requires_install"]` is what
-  to print when it is absent.
+  Registration probes the driver each backend declares in its new
+  `requires_module` metadata, so *registered* means *installed*:
+  `is_backend_available("postgres")` is the check to make before offering a
+  backend, and `get_backend_info(...)["requires_install"]` is what to print
+  when it is absent.
+
+  The probe is what makes the answer trustworthy. Backends do not agree
+  among themselves about when to fail — `postgres`, `duckdb` and async
+  `sqlite` import their driver at module top level, while `faiss`, `chroma`,
+  `pgvector`, `s3` and async `elasticsearch` catch their own `ImportError`
+  and raise only on construction. Reading "did the module load?" would have
+  answered honestly for the first group and optimistically for the second.
+
+- **Backends stay described when their driver is missing.** A backend whose
+  driver is absent is recorded as known-but-unavailable rather than left out,
+  so `get_backend_info(...)["requires_install"]` answers in the one situation
+  it exists for — nobody reads it while the backend is installed — and
+  `create()` reports the missing driver instead of an unrecognised name.
 
   `get_available_backends()` reports canonical names with registration
   aliases collapsed — `postgres` once rather than `postgres`, `postgresql`
@@ -31,12 +45,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   questions its siblings answer.
 
 - **`dataknobs_data.backend_selection`** — `DEFAULT_BACKEND`,
-  `select_backend()`, `available_backends()` and `backend_info()`, the four
-  answers the three factories previously each held their own copy of. A
-  consumer with a `PluginRegistry` of their own backends gets the same
-  provenance logging and the same alias collapsing without reimplementing
-  either. The module imports nothing from its own package, so it is safe to
-  import from anywhere in it.
+  `select_backend()`, `available_backends()`, `backend_available()`,
+  `backend_info()`, `normalize_backend()`, `register_backend()` and
+  `build_backend()`, the answers the three factories previously each held
+  their own copy of. Re-exported from `dataknobs_data`, so a consumer with a
+  `PluginRegistry` of their own backends gets the same provenance logging,
+  the same alias collapsing and the same availability probing without
+  reimplementing any of it. The module imports nothing from its own package,
+  so it is safe to import from anywhere in it.
 
 - **`dataknobs_data.testing`** — deterministic vector draws, for this package's
   tests and for consumers testing their own `VectorStore` implementations.
@@ -73,7 +89,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   an unrecognised name there usually means the backend exists without an
   async variant, which is worth saying differently from "you typed it wrong".
 
+- **Backend-selection log records now come from
+  `dataknobs_data.backend_selection`.** They were emitted by
+  `dataknobs_data.factory` and `dataknobs_data.vector.stores.factory`, so a
+  consumer routing or filtering by logger name needs to add the new one.
+
+- **A `backend` key that is present but unusable says which way it is
+  unusable.** `backend: null`, `backend: ""` and a non-string all rendered
+  into `Unknown backend type: <value>`, which reads as a backend of that
+  name and sends the reader looking for a spelling mistake. `backend: null`
+  additionally raised `AttributeError` from the config-validation path,
+  where the construction path raised `ValueError` — the two read the config
+  through one function now, so they classify it identically. Names are
+  stripped and lowercased on both paths.
+
+- **A registered object that cannot be built from a config is reported as
+  such.** `PluginRegistry` accepts any callable, while the database
+  factories require the class form; a bare function reached
+  `.from_config` and raised `AttributeError: 'function' object …` from
+  inside the factory, naming nothing that would lead back to the
+  registration. It now raises a `ValueError` naming both.
+
 ### Fixed
+
+- **The async `sqlite` backend recorded `requires_install: False`.** It is on
+  `aiosqlite`, which ships in the `sqlite` extra; only the sync variant is on
+  stdlib `sqlite3`. The two shared a metadata block that described the sync
+  one, so the async backend reported needing no installation while having a
+  driver that can be absent.
 
 - **`SyncPostgresDatabase.close()` closed nothing.** The body set
   `_connected = False` and carried a comment giving the reason — "PostgresDB

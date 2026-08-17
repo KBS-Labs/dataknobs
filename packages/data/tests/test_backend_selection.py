@@ -23,14 +23,18 @@ The last group is not a defect but the guard that keeps the first two from
 drifting apart: the list a factory reports and the list its unknown-backend
 error prints have to be the same list.
 
-The provenance group deliberately names no module. Which file decides the
-backend is an implementation detail the tests should survive; that a factory
-says out loud when nothing asked for one is not.
+The provenance group asserts on a set of candidate loggers rather than on
+one. Which of them currently emits is an implementation detail these tests
+should survive; that a factory says out loud when nothing asked for a
+backend is not. The set is not "any logger" -- moving the decision outside
+it would fail, which is the point at which the choice has become a
+different design rather than the same one relocated.
 """
 
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -136,10 +140,17 @@ class TestProvenanceIsVisibleInTheLog:
         assert type(factory.create()) is type(factory.create(backend=MEMORY))
 
     def test_an_explicit_non_default_backend_does_not_warn(
-        self, selection_log: pytest.LogCaptureFixture
+        self, selection_log: pytest.LogCaptureFixture, tmp_path: Path
     ) -> None:
-        """A backend that is neither absent nor the default is ordinary."""
-        DatabaseFactory().create(backend="file", path=":memory:")
+        """A backend that is neither absent nor the default is ordinary.
+
+        ``path`` is never opened -- construction is disk-free and this
+        asserts on the log, not on storage -- but it names a real temporary
+        file rather than ``:memory:``, which means nothing to the file
+        backend and would become a file of that literal name in the cwd if
+        construction ever did touch the disk.
+        """
+        DatabaseFactory().create(backend="file", path=str(tmp_path / "records.json"))
 
         assert _records(selection_log, logging.WARNING) == []
 
@@ -192,11 +203,126 @@ class TestUnknownBackendMessages:
         from a config that did try to choose, which is the failure this
         module exists to make visible. It raises instead -- previously an
         ``AttributeError`` from calling ``.lower()`` on ``None``.
+
+        The message says which of the two happened. ``Unknown backend type:
+        none`` reads as a backend literally named ``none`` and sends the
+        reader looking for a spelling mistake.
         """
-        with pytest.raises(ValueError, match="Unknown backend type"):
+        with pytest.raises(ValueError, match="present but null"):
             DatabaseFactory().create(backend=None)
 
         assert _records(selection_log, logging.WARNING) == []
+
+    @pytest.mark.parametrize(
+        ("value", "expected"),
+        [
+            (None, "present but null"),
+            ("", "present but empty"),
+            ("   ", "present but empty"),
+            (5, "must be a string"),
+            (["memory"], "must be a string"),
+        ],
+        ids=["null", "empty", "whitespace", "int", "list"],
+    )
+    def test_a_discriminator_that_names_nothing_says_so_specifically(
+        self, value: Any, expected: str, selection_log: pytest.LogCaptureFixture
+    ) -> None:
+        """Every one of these used to render into the unknown-name message."""
+        with pytest.raises(ValueError, match=expected):
+            DatabaseFactory().create(backend=value)
+
+        assert _records(selection_log, logging.WARNING) == []
+
+    def test_a_backend_name_is_stripped_before_lookup(self) -> None:
+        """Whitespace around a name is a config artefact, not a new backend."""
+        assert DatabaseFactory().create(backend="  MEMORY  ") is not None
+
+
+class TestABackendThatCannotBeBuiltFromAConfig:
+    """The registries accept any callable; the factories require a class.
+
+    ``PluginRegistry`` stores ``type[T] | Callable[..., T]``, and the
+    database factories call ``from_config`` on whatever comes back. A
+    consumer registering a plain function -- which ``register`` accepts,
+    and which ``PluginRegistry.create`` supports -- got an
+    ``AttributeError`` naming ``'function' object``, from inside the
+    factory, with nothing pointing at the registration that caused it.
+    """
+
+    def _registry_with_a_bare_callable(self) -> Any:
+        from dataknobs_common.registry import PluginRegistry
+
+        registry: PluginRegistry[Any] = PluginRegistry("bare", canonicalize_keys=True)
+        registry.register("plain", lambda config: {"built": config})
+        return registry
+
+    def test_it_says_what_is_wrong_with_the_registration(self) -> None:
+        from dataknobs_data.backend_selection import build_backend, select_backend
+
+        registry = self._registry_with_a_bare_callable()
+        backend_class, backend_type, options = select_backend(
+            {"backend": "plain"}, registry, kind="database"
+        )
+
+        with pytest.raises(ValueError) as excinfo:
+            build_backend(backend_class, options, kind="database", backend_type=backend_type)
+
+        message = str(excinfo.value)
+        assert "plain" in message
+        assert "from_config" in message
+
+    def test_a_real_backend_class_still_builds(self) -> None:
+        """The guard is a narrowing, not a new restriction."""
+        assert DatabaseFactory().create(backend="memory") is not None
+
+
+class TestTheValidationPathReadsTheConfigTheSameWay:
+    """The resolver mirrors the factory, and used to only nearly.
+
+    ``_resolve_vector_store_config_cls`` re-implemented "read the backend
+    key" rather than sharing it, and the two disagreed on every input the
+    happy path does not cover: the factory raised a ``ValueError`` naming
+    the problem while the resolver called ``.lower()`` on the value and
+    raised ``AttributeError`` -- a crash, from the path whose whole job is
+    to report configuration problems.
+    """
+
+    @pytest.mark.parametrize(
+        ("value", "expected"),
+        [
+            (None, "present but null"),
+            ("", "present but empty"),
+            (7, "must be a string"),
+        ],
+        ids=["null", "empty", "int"],
+    )
+    def test_an_unusable_discriminator_is_a_configuration_error(
+        self, value: Any, expected: str
+    ) -> None:
+        from dataknobs_common.exceptions import ConfigurationError
+
+        from dataknobs_data.vector.stores import _resolve_vector_store_config_cls
+
+        with pytest.raises(ConfigurationError, match=expected):
+            _resolve_vector_store_config_cls({"backend": value})
+
+    def test_it_still_reports_a_genuine_typo_as_unresolvable(self) -> None:
+        """``None`` is the resolver's "no variant matches" answer."""
+        from dataknobs_data.vector.stores import _resolve_vector_store_config_cls
+
+        assert _resolve_vector_store_config_cls({"backend": "nope"}) is None
+
+    def test_it_reads_an_absent_key_as_the_shared_default(self) -> None:
+        from dataknobs_data.vector.stores import _resolve_vector_store_config_cls
+
+        assert _resolve_vector_store_config_cls({"dimensions": 8}) is not None
+
+    def test_it_normalises_case_and_whitespace_as_the_factory_does(self) -> None:
+        from dataknobs_data.vector.stores import _resolve_vector_store_config_cls
+
+        assert _resolve_vector_store_config_cls(
+            {"backend": " MEMORY "}
+        ) is _resolve_vector_store_config_cls({"backend": "memory"})
 
 
 class TestBackendInformationApi:

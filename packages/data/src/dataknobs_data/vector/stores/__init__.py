@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
+from importlib import import_module
 from typing import Any, Type
 
+from dataknobs_common.exceptions import ConfigurationError
 from dataknobs_common.registry import PluginRegistry
-
-from dataknobs_data.backend_selection import DEFAULT_BACKEND
 from dataknobs_common.structured_config import (
     SKIP_VALIDATION,
     ConfigClassResolution,
@@ -16,111 +16,129 @@ from dataknobs_common.structured_config import (
     config_registries,
 )
 
+from dataknobs_data.backend_selection import (
+    DEFAULT_BACKEND,
+    module_installed,
+    normalize_backend,
+    register_backend,
+)
+
 from .base import VectorStore
 
 logger = logging.getLogger(__name__)
 
 
+def _load(module: str, attr: str) -> Callable[[], Any]:
+    """Defer ``from <module> import <attr>`` until the driver is known present."""
+
+    def load() -> Any:
+        return getattr(import_module(module, __name__), attr)
+
+    return load
+
+
 def _register_vector_backends(
     registry: PluginRegistry[Type[VectorStore]],
+    *,
+    installed: Callable[[str], bool] = module_installed,
 ) -> None:
-    """Auto-register all available built-in vector backends."""
-    # Memory backend (always available)
-    try:
-        from .memory import MemoryVectorStore
+    """Register the built-in vector backends this installation can build.
 
-        registry.register(
-            "memory",
-            MemoryVectorStore,
-            metadata={
-                "description": "In-memory vector storage for testing",
-                "persistent": False,
-                "requires_install": False,
-                "config_options": {
-                    "dimensions": "Vector dimensions (required)",
-                    "metric": "Distance metric: cosine, euclidean, dot_product",
-                },
+    Every store here defers its driver's ``ImportError`` to construction --
+    the module sets an ``*_AVAILABLE`` flag and raises from ``_setup`` --
+    so all three used to register whether or not the driver was present.
+    Probing the declared driver at registration is what makes the answer to
+    "is this available?" the same as the answer to "will ``create`` work?"
+
+    Args:
+        registry: The registry to populate.
+        installed: The "is this module importable?" predicate, forwarded to
+            :func:`register_backend`. Injectable so a test can describe an
+            environment the one it runs in is not.
+    """
+    register_backend(
+        registry,
+        "memory",
+        _load(".memory", "MemoryVectorStore"),
+        metadata={
+            "description": "In-memory vector storage for testing",
+            "persistent": False,
+            "requires_install": False,
+            "config_options": {
+                "dimensions": "Vector dimensions (required)",
+                "metric": "Distance metric: cosine, euclidean, dot_product",
             },
-        )
-    except ImportError:
-        pass
+        },
+        installed=installed,
+    )
 
-    # Faiss backend
-    try:
-        from .faiss import FaissVectorStore
-
-        registry.register(
-            "faiss",
-            FaissVectorStore,
-            metadata={
-                "description": "Facebook AI Similarity Search - efficient vector search",
-                "persistent": True,
-                "requires_install": "pip install faiss-cpu",
-                "config_options": {
-                    "dimensions": "Vector dimensions (required)",
-                    "metric": "Distance metric: cosine, euclidean, dot_product",
-                    "index_type": "Index type: flat, ivfflat, hnsw, auto",
-                    "persist_path": "Path to save/load index",
-                    "nlist": "Number of clusters for IVF index",
-                    "m": "Number of connections for HNSW",
-                },
+    register_backend(
+        registry,
+        "faiss",
+        _load(".faiss", "FaissVectorStore"),
+        metadata={
+            "description": "Facebook AI Similarity Search - efficient vector search",
+            "persistent": True,
+            "requires_install": "pip install faiss-cpu",
+            "requires_module": "faiss",
+            "config_options": {
+                "dimensions": "Vector dimensions (required)",
+                "metric": "Distance metric: cosine, euclidean, dot_product",
+                "index_type": "Index type: flat, ivfflat, hnsw, auto",
+                "persist_path": "Path to save/load index",
+                "nlist": "Number of clusters for IVF index",
+                "m": "Number of connections for HNSW",
             },
-        )
-    except ImportError:
-        pass
+        },
+        installed=installed,
+    )
 
-    # Chroma backend
-    try:
-        from .chroma import ChromaVectorStore
-
-        registry.register(
-            "chroma",
-            ChromaVectorStore,
-            metadata={
-                "description": "ChromaDB - AI-native vector database",
-                "persistent": True,
-                "requires_install": "pip install chromadb",
-                "config_options": {
-                    "collection_name": "Name of the collection",
-                    "persist_path": "Path for persistent storage",
-                    "embedding_function": "Embedding function name or object",
-                    "metric": "Distance metric: cosine, euclidean, dot_product",
-                },
+    register_backend(
+        registry,
+        "chroma",
+        _load(".chroma", "ChromaVectorStore"),
+        metadata={
+            "description": "ChromaDB - AI-native vector database",
+            "persistent": True,
+            "requires_install": "pip install chromadb",
+            "requires_module": "chromadb",
+            "config_options": {
+                "collection_name": "Name of the collection",
+                "persist_path": "Path for persistent storage",
+                "embedding_function": "Embedding function name or object",
+                "metric": "Distance metric: cosine, euclidean, dot_product",
             },
-        )
-        registry.register("chromadb", ChromaVectorStore)  # Alias
-    except ImportError:
-        pass
+        },
+        aliases=("chromadb",),
+        installed=installed,
+    )
 
-    # pgvector backend
-    try:
-        from .pgvector import PgVectorStore
-
-        registry.register(
-            "pgvector",
-            PgVectorStore,
-            metadata={
-                "description": "PostgreSQL with pgvector extension - production vector database",
-                "persistent": True,
-                "requires_install": "pip install asyncpg",
-                "config_options": {
-                    "connection_string": "PostgreSQL connection URL (or use DATABASE_URL env)",
-                    "dimensions": "Vector dimensions (required)",
-                    "metric": "Distance metric: cosine, euclidean, inner_product",
-                    "schema": "Database schema (default: public)",
-                    "table_name": "Table name (default: knowledge_embeddings)",
-                    "domain_id": "Domain ID for multi-tenant isolation (optional)",
-                    "pool_min_size": "Min connection pool size (default: 2)",
-                    "pool_max_size": "Max connection pool size (default: 10)",
-                    "columns": "Column name mappings dict (optional)",
-                    "auto_create_table": "Create table if missing (default: True)",
-                    "id_type": "ID column type: uuid or text (default: text)",
-                },
+    register_backend(
+        registry,
+        "pgvector",
+        _load(".pgvector", "PgVectorStore"),
+        metadata={
+            "description": "PostgreSQL with pgvector extension - production vector database",
+            "persistent": True,
+            "requires_install": "pip install asyncpg",
+            "requires_module": "asyncpg",
+            "config_options": {
+                "connection_string": "PostgreSQL connection URL (or use DATABASE_URL env)",
+                "dimensions": "Vector dimensions (required)",
+                "metric": "Distance metric: cosine, euclidean, inner_product",
+                "schema": "Database schema (default: public)",
+                "table_name": "Table name (default: knowledge_embeddings)",
+                "domain_id": "Domain ID for multi-tenant isolation (optional)",
+                "pool_min_size": "Min connection pool size (default: 2)",
+                "pool_max_size": "Max connection pool size (default: 10)",
+                "columns": "Column name mappings dict (optional)",
+                "auto_create_table": "Create table if missing (default: True)",
+                "id_type": "ID column type: uuid or text (default: text)",
             },
-        )
-        registry.register("postgresql", PgVectorStore)  # Alias
-    except ImportError:
-        pass
+        },
+        aliases=("postgresql",),
+        installed=installed,
+    )
 
 
 # Create singleton instance BEFORE importing factory to avoid circular import
@@ -168,7 +186,22 @@ def _resolve_vector_store_config_cls(
     keeps it so); the branch covers a custom bare-callable backend
     registered out of band.
     """
-    backend = raw.get("backend", DEFAULT_BACKEND)
+    if "backend" in raw:
+        # Normalised by the same function the construction path uses. The
+        # two used to normalise separately and disagreed about a present
+        # but unusable discriminator: this path called ``.lower()`` on it
+        # and raised ``AttributeError`` where the factory raised a
+        # ``ValueError`` naming the problem. Same reading of the config,
+        # each path's own exception type.
+        try:
+            backend = normalize_backend(raw["backend"])
+        except ValueError as exc:
+            raise ConfigurationError(
+                f"vector_store: {exc}",
+                context={"binding": "vector_store", "backend": raw["backend"]},
+            ) from exc
+    else:
+        backend = DEFAULT_BACKEND
     store_cls = vector_backends.get_factory(backend)
     if store_cls is None:
         # Unknown discriminator — the legitimate typo path; validate()
