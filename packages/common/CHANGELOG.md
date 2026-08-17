@@ -9,6 +9,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`PluginRegistry.declare_unavailable()`** — record a plugin the registry
+  knows of but cannot create. A plugin behind an optional dependency has
+  three states, not two: creatable, absent because the dependency is
+  missing, and absent because the name is a typo. A registry holding only
+  factories conflates the last two, so the one question worth asking about
+  an uninstalled plugin — what would I install? — had no answer, because
+  the metadata carrying it went unregistered along with the factory.
+
+  A declared key keeps its metadata reachable through `get_metadata()`
+  while `is_registered()` and `list_keys()` go on meaning *creatable*, so
+  nothing that asks what it can build sees a plugin it cannot. `create()`
+  raises the declared reason rather than reporting the name as unknown.
+  `register()` on the same key clears the mark, so the order of the two
+  calls does not decide the outcome.
+
+- **`PluginRegistry.list_canonical_keys()`** — registered keys with aliases
+  collapsed, one name per plugin. `list_keys()` reports every accepted
+  spelling, which is right for the lookup it serves and wrong for a list
+  shown to someone choosing between plugins. Keys sharing a factory form one
+  group, reported under the key carrying metadata.
+
+- **`PluginRegistry.list_known_keys()`** — every key the registry knows,
+  creatable or not.
+
+- **`PluginRegistry.get_metadata(key, follow_alias=True)`** — answer for a
+  key that carries no metadata of its own by resolving to one that shares
+  its factory. An alias is registered without metadata, so asking about it
+  returned `{}` while every other question about it answered for the
+  canonical name. Opt-in; the default keeps the historical shape.
+
+- **`PluginRegistry(default_warning=...)`** — text logged at WARNING when
+  the routing key was absent from config and `config_key_default` supplied
+  it. A registry whose default has consequences should say what they are,
+  because the generic sentence cannot.
+
 - **`requires_real_postgres`, `requires_real_postgres_sync`,
   `requires_real_elasticsearch`, `requires_real_s3` — a service gate that tests
   the three terms a behavioural suite actually depends on.** The existing
@@ -189,6 +224,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   about one service.
 
 ### Changed
+
+- **`PluginRegistry.create()` reports a routing key it supplied itself.** It
+  read `config[config_key]` with `config_key_default` as the fallback and
+  logged nothing at any level, so a config that named no backend and one
+  that named the default produced the same object with no way to tell them
+  apart. Ten registries share the construct. Three of them default to
+  `memory`, where the in-process variant is not a smaller version of the
+  real thing but a different thing that fails silently: `create_lock({})`
+  returned a lock every process holds at once, `create_rate_limiter` a limit
+  enforced once per process rather than once overall, and
+  `create_event_bus({})` a bus whose events reach nobody. Each of those
+  three now says what its own default costs. An explicitly named backend is
+  unchanged and silent.
+
+- **`PluginRegistry.get_metadata()` returns a deep copy.** It copied only
+  the top level, so a nested value — a `config_options` dict, say — was the
+  live registry entry, and a caller reading and editing one changed what
+  every later caller saw.
 
 - **The Ollama probes and markers take `host` / `port`.**
   `is_ollama_available(host=None, port=None, *, timeout=2.0)`,

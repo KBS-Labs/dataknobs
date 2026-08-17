@@ -54,6 +54,13 @@ lock_backends: PluginRegistry[DistributedLock] = PluginRegistry(
     config_key_default="memory",
     not_found_kind="lock backend",
     not_found_exception=ValueError,
+    default_warning=(
+        "No '%(config_key)s' key in this lock config; falling back to "
+        "'%(key)s'. That default is in-process: it excludes only coroutines "
+        "sharing this interpreter, so every process in a multi-process "
+        "deployment acquires it independently and all of them believe they "
+        "hold it. Name a backend explicitly to coordinate across processes."
+    ),
 )
 """Registry of named :data:`LockFactory` callables.
 
@@ -125,7 +132,7 @@ def create_lock(config: dict[str, Any]) -> DistributedLock:
         ```python
         # In-process lock (default)
         lock = create_lock({"backend": "memory"})
-        lock = create_lock({})  # equivalent — "memory" is the default
+        lock = create_lock({})  # same lock, logged at WARNING
         ```
     """
     return lock_backends.create(config=config)
