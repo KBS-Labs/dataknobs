@@ -24,10 +24,10 @@ unset required ``${VAR}`` among them aborts a build that never used it.
 That makes a splice, not the entry point, the place expansion happens, and a
 splice merges two sources whose provenances differ. So each source is
 expanded and resolved on its own terms *before* the merge
-(:meth:`EnvironmentAwareConfig._resolve_source`) rather than the merged
-result being walked once afterwards: one flag cannot be true of both halves,
-and walking the result under it would either expand an environment's values a
-second time or leave a default's nested refs raw.
+(:func:`_resolve_source`) rather than the merged result being walked once
+afterwards: one flag cannot be true of both halves, and walking the result
+under it would either expand an environment's values a second time or leave a
+default's nested refs raw.
 
 A ``$resource`` block nested inside either source is held to one expansion
 too, though not in the same place. Carried by an inline default — or by a
@@ -86,7 +86,12 @@ from dataknobs_common.config_loading import (
     load_yaml_or_json,
 )
 
-from .environment_config import EnvironmentConfig, ResourceNotFoundError
+from .environment_config import (
+    STRICT_RESOURCES_SETTING,
+    EnvironmentConfig,
+    ResourceNotFoundError,
+    parse_strictness_flag,
+)
 from .exceptions import ConfigError
 from .inheritance import substitute_env_vars
 
@@ -104,15 +109,25 @@ logger = logging.getLogger(__name__)
 #: silently mean *not required*.
 RESOURCE_MARKER_KEYS = frozenset({"$resource", "type", "$requires", "$required"})
 
-#: The environment-level spelling of the policy, read through
-#: :meth:`EnvironmentConfig.get_setting`. It is the only level of the chain a
-#: deployment can reach when its references are generated at runtime: there is
-#: no authored reference to annotate, and every other level lives in code the
-#: operator does not deploy.
-STRICT_RESOURCES_SETTING = "strict_resources"
+#: The markers that say nothing on their own. ``type`` is an ordinary word and
+#: appears all over a config; these two exist only to qualify a ``$resource``,
+#: so finding one without it means the selector key is the misspelled one --
+#: the single typo the closed set above cannot catch, because the guard it
+#: feeds fires on a block that already contains ``$resource``.
+_POLICY_MARKER_KEYS = frozenset({"$requires", "$required"})
 
 
-def _validate_reference_markers(reference: Mapping[str, Any]) -> None:
+def _render_path(path: str) -> str:
+    """A dotted config path for a message, naming the root rather than "".
+
+    ``UnresolvedResourceRef.path`` keeps the empty string -- it is a dotted
+    path of zero segments, and a caller matching on prefixes needs it to stay
+    one. A sentence needs a noun.
+    """
+    return path or "<root>"
+
+
+def _validate_reference_markers(reference: Mapping[str, Any], *, path: str) -> None:
     """Reject a ``$``-prefixed key in a reference block that is not a marker.
 
     Runs on both the found and the missing path. A malformed reference is
@@ -131,34 +146,114 @@ def _validate_reference_markers(reference: Mapping[str, Any]) -> None:
     markers = ", ".join(sorted(key for key in RESOURCE_MARKER_KEYS if key.startswith("$")))
     raise ConfigError(
         f"Unknown marker key(s) {unknown} in the $resource reference for "
-        f"'{reference.get('$resource')}'. A $-prefixed key must be one of: "
-        f"{markers}. Everything else in the block is an inline default, so an "
-        f"unrecognised marker would otherwise be passed to a factory as a "
-        f"keyword argument rather than rejected."
+        f"'{reference.get('$resource')}' at config path '{_render_path(path)}'. "
+        f"A $-prefixed key must be one of: {markers}. Everything else in the "
+        f"block is an inline default, so an unrecognised marker would otherwise "
+        f"be passed to a factory as a keyword argument rather than rejected."
     )
 
 
-def _parse_required_marker(value: Any, *, where: str) -> bool:
-    """Read a strictness flag as a bool, or as exactly ``true`` / ``false``.
+def _validate_orphaned_markers(block: Mapping[str, Any], *, path: str) -> None:
+    """Reject ``$required`` / ``$requires`` on a block with no ``$resource``.
 
-    Strings are accepted because both spellings of the flag can arrive through
-    ``${VAR}`` expansion, which does not coerce types -- ``$required:
-    ${STRICT_BINDINGS}`` and ``strict_resources: ${STRICT_BINDINGS}`` both
-    reach here as text.
+    The closed marker set catches a typo in every marker but one. Its guard
+    runs on a block that *is* a reference, and what makes a block a reference
+    is the ``$resource`` key -- so a typo in that key produces an ordinary
+    dict, which resolves to itself and reaches the factory with its markers
+    still attached. ``$resorce: conversations`` is the shape, and it is the
+    same silent degrade as the rest of the class.
 
-    Anything else raises rather than falling back to ``False``. A value that
-    silently reads as "off" is the same silent-degrade defect this vocabulary
-    exists to close, so the match is explicit and never truthiness: ``1``,
-    ``"yes"`` and ``"on"`` are errors, not strict-mode-off.
+    A leftover policy marker is what gives it away, and it is specific enough
+    to act on: neither means anything except on a reference.
     """
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, str) and value.strip().lower() in ("true", "false"):
-        return value.strip().lower() == "true"
+    orphaned = sorted(key for key in block if key in _POLICY_MARKER_KEYS)
+    if not orphaned:
+        return
+
     raise ConfigError(
-        f"{where} must be a boolean or the string 'true'/'false', got {value!r}. "
-        f"It is parsed explicitly rather than by truthiness, because a value "
-        f"that silently read as 'false' would turn the policy off without saying so."
+        f"Marker key(s) {orphaned} at config path '{_render_path(path)}' on a "
+        f"block with no `$resource` key. They qualify a resource reference and "
+        f"mean nothing without one, so this is a misspelled `$resource` -- the "
+        f"block resolves to itself and reaches a factory with its markers "
+        f"attached. Keys present: {sorted(str(key) for key in block)}."
+    )
+
+
+def _parse_requires(value: Any, *, where: str) -> list[str]:
+    """Read ``$requires`` as a list of capability names.
+
+    Its sibling ``$required`` takes a scalar, which makes ``$requires:
+    persistence`` the natural slip. Unvalidated it is merely truthy, so it
+    survived into two messages that read as nonsense -- an absent resource
+    failed for ``['p', 'e', 'r', 's', ...]``, and a present one for eight
+    missing single-character capabilities.
+    """
+    if value is None:
+        return []
+    if isinstance(value, str) or not isinstance(value, Sequence):
+        raise ConfigError(
+            f"{where} must be a list of capability names, got {value!r}. A bare "
+            f"string is iterated character by character, so the check would run "
+            f"against letters rather than capabilities."
+        )
+    non_strings = [item for item in value if not isinstance(item, str)]
+    if non_strings:
+        raise ConfigError(
+            f"{where} must contain only capability names, got {non_strings!r} "
+            f"among {list(value)!r}. Capabilities are matched against the "
+            f"resource's `capabilities` list by value."
+        )
+    return list(value)
+
+
+@dataclass(frozen=True)
+class _ParsedReference:
+    """A ``$resource`` block read once, for whoever walks it.
+
+    The build and the survey used to parse a reference each -- the same five
+    lines twice, one of them the marker guard -- and a shared format read in
+    two places is a format with two definitions. Everything that decides what
+    a reference *means* is settled here; what the callers differ on is what to
+    do about a resource that is absent.
+    """
+
+    name: str
+    resource_type: str
+    defaults: dict[str, Any]
+    requires: list[str]
+    declared_required: bool | None
+
+
+def _parse_reference(block: Mapping[str, Any], *, path: str) -> _ParsedReference:
+    """Validate a reference block and split it into markers and defaults.
+
+    ``$required`` is parsed here rather than on the branch that reads it, for
+    the reason the marker guard runs here: a malformed value is malformed in
+    every environment, and deferring the parse would surface it first in
+    whichever deployment lacks the resource.
+    """
+    _validate_reference_markers(block, path=path)
+    name = block["$resource"]
+    return _ParsedReference(
+        name=name,
+        resource_type=block.get("type", "default"),
+        # Everything the marker set does not claim is an inline default. That
+        # is why the set has to be closed: this comprehension is what would
+        # otherwise promote a misspelled marker to a factory keyword argument.
+        defaults={k: v for k, v in block.items() if k not in RESOURCE_MARKER_KEYS},
+        requires=_parse_requires(
+            block.get("$requires"),
+            where=f"`$requires` on the reference to '{name}' at config path '{_render_path(path)}'",
+        ),
+        declared_required=(
+            parse_strictness_flag(
+                block["$required"],
+                where=f"`$required` on the reference to '{name}' at config path "
+                f"'{_render_path(path)}'",
+            )
+            if "$required" in block
+            else None
+        ),
     )
 
 
@@ -212,7 +307,12 @@ def _reference_is_required(
 
     setting = environment.get_setting(STRICT_RESOURCES_SETTING)
     if setting is not None:
-        strict = _parse_required_marker(
+        # Normally already parsed once, at construction -- see
+        # :meth:`EnvironmentConfig.__post_init__`. This still parses rather
+        # than assuming, because the dataclass is public and mutable: a
+        # setting written into ``settings`` after construction has been
+        # through no guard at all.
+        strict = parse_strictness_flag(
             setting,
             where=(f"Setting '{STRICT_RESOURCES_SETTING}' in environment '{environment.name}'"),
         )
@@ -312,6 +412,377 @@ def _substitute_deferring_defaults(config: Any, *, defer_defaults: bool = True) 
             _substitute_deferring_defaults(item, defer_defaults=defer_defaults) for item in config
         ]
     return substitute_env_vars(config)
+
+
+def _child_path(path: str, key: Any) -> str:
+    """Extend a dotted config path by one mapping key."""
+    return f"{path}.{key}" if path else str(key)
+
+
+def _walk(
+    config: Any,
+    environment: EnvironmentConfig,
+    *,
+    substitute: bool,
+    strict_resources: bool | None,
+    path: str,
+    active: list[tuple[str, str]],
+    survey: list[UnresolvedResourceRef] | None,
+) -> Any:
+    """Resolve every ``$resource`` reference in ``config``, recursively.
+
+    **One traversal, two modes.** A preflight and a build have to reach the
+    same references or the preflight is not one, and the way to guarantee that
+    is not to write two walks carefully -- it is to write one. The two that
+    existed drifted in both directions before either was released: the survey
+    descended into inline defaults the build discards, and stopped short of
+    ones the build reaches.
+
+    ``survey`` is the whole of the difference. When it is ``None`` this
+    resolves for a build: a missing resource raises under a strict policy and
+    warns under a lenient one. When it is a list, a missing resource is
+    appended to it and resolution continues down the lenient path -- so the
+    walk reaches exactly what a build reaches, and reaches it the same way.
+    Every *other* failure (a malformed reference, a cycle, a capability a
+    present resource does not declare) raises in both modes, because a survey
+    that reported a tree sound while the build raises on it would be worse
+    than no survey at all.
+
+    Args:
+        config: The tree to walk
+        environment: Environment resolved against
+        substitute: Whether this source still needs ``${VAR}`` expansion, per
+            :func:`_resolve_source`
+        strict_resources: The collapsed code-level policy, forwarded through
+            every recursion: a missed forward is silent, reverting a nested
+            reference to leniency inside an otherwise strict resolution
+        path: Dotted config path of ``config``, for messages and findings
+        active: Resource identities currently being expanded, innermost last.
+            The cycle guard; see :func:`_splice_reference`.
+        survey: Collector for unresolvable references, or ``None`` to build
+
+    Returns:
+        The tree with every reference replaced by its resolved config
+    """
+    if isinstance(config, dict):
+        if "$resource" in config:
+            return _splice_reference(
+                config,
+                environment,
+                substitute=substitute,
+                strict_resources=strict_resources,
+                path=path,
+                active=active,
+                survey=survey,
+            )
+        _validate_orphaned_markers(config, path=path)
+        return {
+            key: _walk(
+                value,
+                environment,
+                substitute=substitute,
+                strict_resources=strict_resources,
+                path=_child_path(path, key),
+                active=active,
+                survey=survey,
+            )
+            for key, value in config.items()
+        }
+    if isinstance(config, list):
+        return [
+            _walk(
+                item,
+                environment,
+                substitute=substitute,
+                strict_resources=strict_resources,
+                path=f"{path}[{index}]",
+                active=active,
+                survey=survey,
+            )
+            for index, item in enumerate(config)
+        ]
+    return config
+
+
+def _splice_reference(
+    block: Mapping[str, Any],
+    environment: EnvironmentConfig,
+    *,
+    substitute: bool,
+    strict_resources: bool | None,
+    path: str,
+    active: list[tuple[str, str]],
+    survey: list[UnresolvedResourceRef] | None,
+) -> Any:
+    """Replace one reference block with the config it resolves to."""
+    reference = _parse_reference(block, path=path)
+
+    if not environment.has_resource(reference.resource_type, reference.name):
+        resolved = _degrade_to_defaults(
+            reference,
+            environment,
+            substitute=substitute,
+            strict_resources=strict_resources,
+            path=path,
+            active=active,
+            survey=survey,
+        )
+    else:
+        resolved = _splice_found_resource(
+            reference,
+            environment,
+            substitute=substitute,
+            strict_resources=strict_resources,
+            path=path,
+            active=active,
+            survey=survey,
+        )
+
+    # Validate $requires against capabilities metadata. On the degraded path
+    # this is reached only when the reference declared `$required: false` --
+    # absence otherwise fails above, since a resource that is not there
+    # satisfies no capability at all. Where the author did opt out, the check
+    # still runs against whatever capabilities the inline defaults declare:
+    # "it may be absent" is not "and anything will do".
+    if reference.requires and isinstance(resolved, dict):
+        declared_capabilities = resolved.get("capabilities")
+        if declared_capabilities is not None:
+            missing = set(reference.requires) - set(declared_capabilities)
+            if missing:
+                raise ConfigError(
+                    f"Resource '{reference.name}' at config path "
+                    f"'{_render_path(path)}' is missing required capabilities: "
+                    f"{sorted(missing)}. Declared: {declared_capabilities}"
+                )
+
+    return resolved
+
+
+def _degrade_to_defaults(
+    reference: _ParsedReference,
+    environment: EnvironmentConfig,
+    *,
+    substitute: bool,
+    strict_resources: bool | None,
+    path: str,
+    active: list[tuple[str, str]],
+    survey: list[UnresolvedResourceRef] | None,
+) -> Any:
+    """Handle a reference whose resource this environment does not define.
+
+    The one place the two modes differ, and the reason they are one walk
+    everywhere else.
+    """
+    required, why = _reference_is_required(
+        declared=reference.declared_required,
+        requires=reference.requires,
+        resolver_default=strict_resources,
+        environment=environment,
+    )
+
+    if survey is not None:
+        survey.append(
+            UnresolvedResourceRef(
+                path=path,
+                resource_type=reference.resource_type,
+                resource_name=reference.name,
+                required=required,
+                has_inline_defaults=bool(reference.defaults),
+            )
+        )
+    elif required:
+        raise ResourceNotFoundError(
+            f"Resource '{reference.name}' of type '{reference.resource_type}' "
+            f"not found in environment '{environment.name}' at config path "
+            f"'{_render_path(path)}', and {why}"
+        )
+    else:
+        # The only signal a lenient degrade gives, so it distinguishes the two
+        # of them: falling back to declared defaults is a config that still
+        # builds, while falling back to nothing is a factory about to be
+        # called with no arguments at all.
+        logger.warning(
+            "Resource '%s' of type '%s' not found in environment '%s' at config path '%s'; %s",
+            reference.name,
+            reference.resource_type,
+            environment.name,
+            _render_path(path),
+            (
+                "falling back to its inline defaults"
+                if reference.defaults
+                else "it declares no inline defaults, so this resolves to an empty config"
+            ),
+        )
+
+    # Nothing overrides them here, so every default survives and every one is
+    # expanded. A degraded config is still config, so it gets the same walk as
+    # a found one.
+    return _resolve_source(
+        reference.defaults,
+        environment,
+        substitute=substitute,
+        strict_resources=strict_resources,
+        path=path,
+        active=active,
+        survey=survey,
+    )
+
+
+def _splice_found_resource(
+    reference: _ParsedReference,
+    environment: EnvironmentConfig,
+    *,
+    substitute: bool,
+    strict_resources: bool | None,
+    path: str,
+    active: list[tuple[str, str]],
+    survey: list[UnresolvedResourceRef] | None,
+) -> Any:
+    """Merge the environment's resource with the defaults that survive it.
+
+    The two sources are walked separately and merged after, because they do
+    not share a provenance. An environment loaded with substitution arrives
+    expanded; inline defaults always arrive raw. Walking the merged result
+    under one flag would either re-expand the environment's values or leave
+    the defaults' nested refs raw.
+    """
+    marker = (reference.resource_type, reference.name)
+    if marker in active:
+        chain = " -> ".join(f"{kind}/{name}" for kind, name in [*active, marker])
+        raise ConfigError(
+            f"Resource reference cycle at config path '{_render_path(path)}': "
+            f"{chain}. A resource that reaches itself has no resolved form, so "
+            f"this is reported rather than followed round -- unresolved, it "
+            f"exhausts the stack instead."
+        )
+
+    # Held only for the resource's own expansion. A reference's inline
+    # defaults are spliced after this is popped because they belong to the
+    # call site, not to the resource: a default naming the same resource is an
+    # ordinary second reference to it, and reporting that as a cycle would
+    # reject a config that resolves perfectly well.
+    active.append(marker)
+    try:
+        env_needs_pass = substitute and not environment.substituted
+        resolved = _resolve_source(
+            environment.get_resource(reference.resource_type, reference.name),
+            environment,
+            substitute=env_needs_pass,
+            strict_resources=strict_resources,
+            path=path,
+            active=active,
+            survey=survey,
+        )
+    finally:
+        active.pop()
+
+    # Inline defaults fill gaps *after* the source above, and each is expanded
+    # only once it is known to survive -- so no value is handed to a second
+    # expansion, and none is expanded that the environment overrode. The
+    # survey follows the same rule: descending into a default the environment
+    # supplies would report a reference the build never looks at.
+    if isinstance(resolved, dict):
+        for key, value in reference.defaults.items():
+            if key not in resolved:
+                resolved[key] = _resolve_source(
+                    value,
+                    environment,
+                    substitute=substitute,
+                    strict_resources=strict_resources,
+                    path=_child_path(path, key),
+                    active=active,
+                    survey=survey,
+                )
+
+    return resolved
+
+
+def _resolve_source(
+    value: Any,
+    environment: EnvironmentConfig,
+    *,
+    substitute: bool,
+    strict_resources: bool | None,
+    path: str,
+    active: list[tuple[str, str]],
+    survey: list[UnresolvedResourceRef] | None,
+) -> Any:
+    """Expand one source's ``${VAR}`` refs, then resolve its references.
+
+    A splice merges two sources with different provenances, and the single
+    ``substitute`` flag can only be true of one of them. So each is finished
+    here, on its own terms, before the merge — rather than merged first and
+    walked once under a flag that is wrong for half of the result.
+
+    ``substitute`` says whether *this* source still needs expanding: an
+    environment loaded with substitution does not, an inline default always
+    does. The pass defers nested ``$resource`` defaults so that the walk below
+    expands them at their own splice, exactly once.
+    """
+    if substitute:
+        value = _substitute_deferring_defaults(value)
+    return _walk(
+        value,
+        environment,
+        substitute=substitute,
+        strict_resources=strict_resources,
+        path=path,
+        active=active,
+        survey=survey,
+    )
+
+
+def resolve_resource_references(
+    config: Any,
+    environment: EnvironmentConfig,
+    *,
+    substitute: bool = False,
+    strict_resources: bool | None = None,
+) -> Any:
+    """Resolve every ``$resource`` reference in a config tree.
+
+    The shared primitive behind :meth:`EnvironmentAwareConfig.resolve_for_build`
+    and :meth:`ConfigBindingResolver.resolve`, exported so that a consumer with
+    a config tree and an environment does not write a third reader of the
+    format. Reading it independently is what produced the divergences this
+    module now exists to prevent: markers unvalidated, inline defaults
+    dropped, ``$required`` ignored, and a fallback branch for a missing
+    resource that could not be reached.
+
+    Args:
+        config: Config tree, walked recursively. Not mutated.
+        environment: Environment resolved against
+        substitute: Whether ``config`` still needs ``${VAR}`` expansion.
+            ``False`` (default) for a tree already expanded by its loader.
+            When True the expansion happens here, holding inline defaults back
+            for their own splices -- one pass per source, in the one place
+            that knows which sources there are. Nested resources decide for
+            themselves from :attr:`EnvironmentConfig.substituted`.
+        strict_resources: Whether a reference naming a resource this
+            environment does not define raises rather than degrading to its
+            inline defaults. ``None`` defers to the environment's
+            ``strict_resources`` setting, then to ``False``. A reference's own
+            ``$required`` overrides either.
+
+    Returns:
+        The tree with every reference replaced by its resolved config
+
+    Raises:
+        ResourceNotFoundError: If a reference names a resource this
+            environment does not define and the effective policy is strict
+        ConfigError: If a reference is malformed, or a resource does not
+            declare a capability its reference ``$requires``, or a resource
+            reaches itself
+    """
+    return _resolve_source(
+        config,
+        environment,
+        substitute=substitute,
+        strict_resources=strict_resources,
+        path="",
+        active=[],
+        survey=None,
+    )
 
 
 class EnvironmentAwareConfigError(Exception):
@@ -571,22 +1042,35 @@ class EnvironmentAwareConfig:
             Fully resolved configuration dictionary
 
         Raises:
+            ValueError: If ``strict_resources`` is given explicitly while
+                ``resolve_resources`` is False. The flag is only read where
+                references are resolved, so the pair silently checks nothing --
+                and this method documents itself as *the* startup preflight,
+                which is exactly the caller that must not get a green result
+                from a run that validated nothing. The *instance* policy is
+                not refused here: it is a standing default rather than an
+                assertion about this call.
             ResourceNotFoundError: If a reference names a resource this
                 environment does not define and the effective policy is strict
             ConfigError: If a reference is malformed -- an unknown
-                ``$``-prefixed marker key, or an unparseable ``$required``
+                ``$``-prefixed marker key, an unparseable ``$required``, a
+                ``$requires`` that is not a list of names -- or if a resource
+                does not declare a capability its reference ``$requires``, or
+                if a resource reaches itself
         """
+        if strict_resources is not None and not resolve_resources:
+            raise ValueError(
+                "resolve_for_build(strict_resources=...) requires "
+                "resolve_resources=True. The policy is read where references "
+                "are resolved, so the two together would validate nothing and "
+                "still return."
+            )
+
         # Get the base configuration. Annotated because every step below —
         # ``get``, the substitution pass, the resource splice — walks an
         # arbitrary config tree and so is declared ``Any``; this method is
         # where the shape is actually promised.
-        config: dict[str, Any]
-        if config_key:
-            config = self.get(config_key)
-            if config is None:
-                raise EnvironmentAwareConfigError(f"Config key not found: {config_key}")
-        else:
-            config = copy.deepcopy(self._config)
+        config: dict[str, Any] = self._config_subtree(config_key)
 
         # Late-bind app-authored ${VAR} refs BEFORE splicing in environment
         # values. Environment values were already substituted when the
@@ -602,25 +1086,41 @@ class EnvironmentAwareConfig:
         #
         # Only when there is a splice to hold them for, though. Without one
         # nothing discards a default and nothing else expands it, so
-        # deferring would hand a caller literal ${VAR} text.
-        if resolve_env_vars:
-            config = _substitute_deferring_defaults(config, defer_defaults=resolve_resources)
-
-        # Resolve logical resource references. Each resource is substituted
-        # as it is spliced, not the environment as a whole: a resource is
-        # still separable at the splice point, which is the latest point it
-        # can be expanded, and expanding the whole environment would read
-        # values no reference names -- so an unset required ${VAR} in an
+        # deferring would hand a caller literal ${VAR} text -- which is the
+        # branch below, and the only case this method expands anything itself.
+        #
+        # With a splice, the expansion belongs to the resolution: each source
+        # is expanded once, at the point it is spliced, and the resolver is
+        # what knows where those points are. Each resource is substituted as
+        # it is spliced rather than the environment as a whole -- a resource
+        # is still separable there, and expanding the whole environment would
+        # read values no reference names, so an unset required ${VAR} in an
         # unrelated resource would abort a build that never looked at it.
         if resolve_resources:
-            config = self._resolve_resource_refs(
+            config = resolve_resource_references(
                 config,
                 self._environment,
                 substitute=resolve_env_vars,
                 strict_resources=self._effective_strict(strict_resources),
             )
+        elif resolve_env_vars:
+            config = _substitute_deferring_defaults(config, defer_defaults=False)
 
         return config
+
+    def _config_subtree(self, config_key: str | None) -> Any:
+        """The whole config, or the subtree one key names.
+
+        Shared by the build and the survey so the two cannot disagree about
+        what ``config_key`` addresses -- the smallest of the duplications that
+        let them drift, and the one most likely to be copied again.
+        """
+        if not config_key:
+            return copy.deepcopy(self._config)
+        subtree = self.get(config_key)
+        if subtree is None:
+            raise EnvironmentAwareConfigError(f"Config key not found: {config_key}")
+        return subtree
 
     def _effective_strict(self, strict_resources: bool | None) -> bool | None:
         """Collapse the two *code* levels of the precedence chain into one.
@@ -634,237 +1134,6 @@ class EnvironmentAwareConfig:
         are read where they live.
         """
         return strict_resources if strict_resources is not None else self._strict_resources
-
-    def _resolve_resource_refs(
-        self,
-        config: Any,
-        environment: EnvironmentConfig | None = None,
-        substitute: bool = False,
-        strict_resources: bool | None = None,
-    ) -> Any:
-        """Resolve logical resource references in configuration.
-
-        Finds resource references in the config and replaces them
-        with concrete configurations from the environment.
-
-        Resource references are dicts with `$resource` key:
-        ```yaml
-        database:
-          $resource: conversations
-          type: databases
-          extra_param: value  # merged into resolved config
-        ```
-
-        Args:
-            config: Configuration to process
-            environment: Environment to resolve against. Defaults to this
-                config's own environment.
-            substitute: Whether the config being walked still needs
-                expanding. Each source a splice merges is finished by
-                :meth:`_resolve_source` on its own terms before the merge, so
-                an environment that arrived expanded is not expanded again
-                while the inline defaults merged alongside it — which always
-                arrive raw — are, once each, and only where the environment
-                did not supply the key.
-            strict_resources: The collapsed code-level policy for a missing
-                resource, per :meth:`_effective_strict`. Forwarded through
-                every recursion below: a missed forward is silent, reverting a
-                nested reference to leniency inside an otherwise strict
-                resolution.
-
-        Returns:
-            Configuration with resource references resolved
-        """
-        if environment is None:
-            environment = self._environment
-
-        if isinstance(config, dict):
-            if "$resource" in config:
-                # This is a resource reference
-                _validate_reference_markers(config)
-                resource_name = config["$resource"]
-                resource_type = config.get("type", "default")
-
-                # Get defaults from the reference (exclude markers and metadata)
-                defaults = {k: v for k, v in config.items() if k not in RESOURCE_MARKER_KEYS}
-                requires = config.get("$requires", [])
-                # Parsed here rather than on the missing path, for the reason
-                # the marker guard runs here: a malformed value is malformed
-                # in every environment, and deferring the parse would surface
-                # it first in whichever deployment lacks the resource.
-                declared_required = (
-                    _parse_required_marker(
-                        config["$required"],
-                        where=f"`$required` on the reference to '{resource_name}'",
-                    )
-                    if "$required" in config
-                    else None
-                )
-
-                if not environment.has_resource(resource_type, resource_name):
-                    required, why = _reference_is_required(
-                        declared=declared_required,
-                        requires=requires,
-                        resolver_default=strict_resources,
-                        environment=environment,
-                    )
-                    if required:
-                        raise ResourceNotFoundError(
-                            f"Resource '{resource_name}' of type "
-                            f"'{resource_type}' not found in environment "
-                            f"'{environment.name}', and {why}"
-                        )
-                    # Resource not found - degrade to the reference's inline
-                    # defaults. Membership is tested explicitly rather than
-                    # caught: get_resource returns the supplied defaults
-                    # instead of raising whenever a defaults dict is passed,
-                    # and the dict comprehension above always produces one
-                    # (possibly empty). Relying on ResourceNotFoundError here
-                    # made this branch unreachable, so a mistyped $resource
-                    # name degraded in total silence to those inline defaults
-                    # -- an empty config only when none are declared.
-                    # This line is the only signal an operator gets, so it
-                    # distinguishes the two degradations: falling back to
-                    # declared defaults is a config that still builds, while
-                    # falling back to nothing is a factory about to be called
-                    # with no arguments at all.
-                    logger.warning(
-                        "Resource '%s' of type '%s' not found in environment '%s'; %s",
-                        resource_name,
-                        resource_type,
-                        environment.name,
-                        (
-                            "falling back to its inline defaults"
-                            if defaults
-                            else "it declares no inline defaults, so this "
-                            "resolves to an empty config"
-                        ),
-                    )
-                    # Degrade to the inline defaults only -- matching what
-                    # get_resource returned on this path all along. The
-                    # unreachable branch this replaced fell back to the
-                    # reference dict itself when there were no defaults,
-                    # which would put the `$resource` / `type` marker keys
-                    # into the resolved config and hand them to a factory as
-                    # keyword arguments. Making the branch reachable must not
-                    # also make its never-exercised return value live.
-                    #
-                    # Nothing overrides them here, so every default survives
-                    # and every one is expanded. A degraded config is still
-                    # config, so it gets the same $requires check and the
-                    # same recursive walk as a found one.
-                    resolved = self._resolve_source(
-                        defaults,
-                        environment,
-                        substitute=substitute,
-                        strict_resources=strict_resources,
-                    )
-                else:
-                    # The two sources are walked separately and merged after,
-                    # because they do not share a provenance. An environment
-                    # loaded with substitution arrives expanded; inline
-                    # defaults always arrive raw. Walking the merged result
-                    # under one flag would either re-expand the environment's
-                    # values or leave the defaults' nested refs raw.
-                    env_needs_pass = substitute and not environment.substituted
-                    resolved = self._resolve_source(
-                        environment.get_resource(resource_type, resource_name),
-                        environment,
-                        substitute=env_needs_pass,
-                        strict_resources=strict_resources,
-                    )
-                    # Inline defaults fill gaps *after* the source above, and
-                    # each is expanded only once it is known to survive -- so
-                    # no value is handed to a second expansion, and none is
-                    # expanded that the environment overrode.
-                    for key, value in defaults.items():
-                        if key not in resolved:
-                            resolved[key] = self._resolve_source(
-                                value,
-                                environment,
-                                substitute=substitute,
-                                strict_resources=strict_resources,
-                            )
-
-                # Validate $requires against capabilities metadata. On the
-                # degraded path this is now reached only when the reference
-                # declared `$required: false` -- absence otherwise fails
-                # above, since a resource that is not there satisfies no
-                # capability at all. Where the author did opt out, the check
-                # still runs against whatever capabilities the inline defaults
-                # declare: "it may be absent" is not "and anything will do".
-                if requires and isinstance(resolved, dict):
-                    declared_capabilities = resolved.get("capabilities")
-                    if declared_capabilities is not None:
-                        missing = set(requires) - set(declared_capabilities)
-                        if missing:
-                            raise ConfigError(
-                                f"Resource '{resource_name}' missing "
-                                f"required capabilities: {sorted(missing)}. "
-                                f"Declared: {declared_capabilities}"
-                            )
-
-                # Each source was already walked as it was spliced, so the
-                # merged result is fully resolved -- walking it again here
-                # would be the second expansion this splits sources to avoid.
-                return resolved
-            else:
-                # Regular dict - recurse into values
-                return {
-                    key: self._resolve_resource_refs(
-                        value,
-                        environment,
-                        substitute=substitute,
-                        strict_resources=strict_resources,
-                    )
-                    for key, value in config.items()
-                }
-        elif isinstance(config, list):
-            # Recurse into list items
-            return [
-                self._resolve_resource_refs(
-                    item,
-                    environment,
-                    substitute=substitute,
-                    strict_resources=strict_resources,
-                )
-                for item in config
-            ]
-        else:
-            # Return other types unchanged
-            return config
-
-    def _resolve_source(
-        self,
-        value: Any,
-        environment: EnvironmentConfig,
-        *,
-        substitute: bool,
-        strict_resources: bool | None = None,
-    ) -> Any:
-        """Expand one source's ``${VAR}`` refs, then resolve its references.
-
-        A splice merges two sources with different provenances, and the
-        single ``substitute`` flag can only be true of one of them. So each
-        is finished here, on its own terms, before the merge — rather than
-        merged first and walked once under a flag that is wrong for half of
-        the result.
-
-        ``substitute`` says whether *this* source still needs expanding: an
-        environment loaded with substitution does not, an inline default
-        always does. The pass defers nested ``$resource`` defaults so that
-        the walk below expands them at their own splice, exactly once.
-
-        ``strict_resources`` is carried through unchanged: a reference nested
-        inside a resource, or inside an inline default, is as much a binding
-        as the one that spliced it in, and dropping the policy here would make
-        strictness stop one level down without saying so.
-        """
-        if substitute:
-            value = _substitute_deferring_defaults(value)
-        return self._resolve_resource_refs(
-            value, environment, substitute=substitute, strict_resources=strict_resources
-        )
 
     def get_portable_config(self) -> dict[str, Any]:
         """Get the portable (unresolved) configuration.
@@ -927,25 +1196,34 @@ class EnvironmentAwareConfig:
     def find_unresolved_resources(
         self,
         config_key: str | None = None,
+        *,
         strict_resources: bool | None = None,
     ) -> list[UnresolvedResourceRef]:
         """Every ``$resource`` reference whose resource this environment lacks.
 
         Raise-on-first is right for a build and wrong for a preflight: an
         operator auditing a config tree wants every unresolvable reference in
-        one pass, not one per run. This constructs nothing and raises nothing
-        for a missing resource.
+        one pass, not one per run. This constructs nothing -- resolution is
+        dict manipulation, and no factory is reached -- and raises nothing for
+        a missing resource.
 
-        References nested inside a resolved resource are surveyed too, since
-        those are bindings a build would reach; a resource that refers to
-        itself is visited once rather than followed round.
+        It runs the **same walk** as :meth:`resolve_for_build`, differing only
+        in what it does when a resource is absent: record it and carry on down
+        the lenient path, rather than raise or warn. That is what makes it a
+        prediction of the build rather than a second opinion about it. A
+        reference nested inside a resolved resource is surveyed, because a
+        build reaches it; a reference nested inside an inline default the
+        environment overrides is not, because a build discards it.
 
-        **An empty list means no reference names an absent resource -- not
-        that the build will succeed.** A resource that is present but does not
-        declare a capability its reference ``$requires`` still fails at build
-        time, and is not reported here: this surveys *presence*, which is the
-        one question answerable without resolving anything. Use
-        ``resolve_for_build(strict_resources=True)`` for the complete check.
+        **An empty list means a build reaches no unresolvable reference.**
+        Every way a reference can fail *other* than by naming an absent
+        resource raises here instead of being listed -- a malformed reference,
+        a resource that reaches itself, or a present resource that does not
+        declare a capability its reference ``$requires``. Listing is for the
+        failure an operator fixes by adding bindings, and there is no useful
+        sense in which the survey could report those others and still be a
+        survey: a config that a build cannot walk has no complete list of
+        unresolvable references to give.
 
         Args:
             config_key: Specific config key to survey, or None for the whole
@@ -960,151 +1238,29 @@ class EnvironmentAwareConfig:
             One entry per unresolvable reference, depth-first in config order
 
         Raises:
-            ConfigError: If a reference is malformed. A survey that skipped
-                malformed references would report a tree as sound while the
-                build that follows raises on it.
+            ConfigError: If a reference is malformed, a resource reaches
+                itself, or a present resource does not declare a capability
+                its reference ``$requires``. A survey that reported a tree
+                sound while the build raises on it would be worse than no
+                survey.
         """
-        config: Any
-        if config_key:
-            config = self.get(config_key)
-            if config is None:
-                raise EnvironmentAwareConfigError(f"Config key not found: {config_key}")
-        else:
-            config = copy.deepcopy(self._config)
-
-        # Expand first, so a reference selecting its resource by variable is
-        # reported under the name it would actually look up. The raw
-        # `${LLM_BINDING}` text would be a finding nobody can act on.
-        config = _substitute_deferring_defaults(config)
-
+        # ``substitute=True`` expands as the build does, so a reference
+        # selecting its resource by variable is reported under the name it
+        # would actually look up -- the raw `${LLM_BINDING}` text would be a
+        # finding nobody can act on -- and a reference nested in an inline
+        # default is expanded at its own splice rather than early or not at
+        # all.
         found: list[UnresolvedResourceRef] = []
-        self._survey_resource_refs(
-            config,
+        _resolve_source(
+            self._config_subtree(config_key),
+            self._environment,
+            substitute=True,
+            strict_resources=self._effective_strict(strict_resources),
             path="",
-            resolver_default=self._effective_strict(strict_resources),
-            seen=set(),
-            found=found,
+            active=[],
+            survey=found,
         )
         return found
-
-    def _survey_resource_refs(
-        self,
-        config: Any,
-        *,
-        path: str,
-        resolver_default: bool | None,
-        seen: set[tuple[str, str]],
-        found: list[UnresolvedResourceRef],
-    ) -> None:
-        """Walk the config collecting unresolvable references. Never builds."""
-        environment = self._environment
-
-        if isinstance(config, dict):
-            if "$resource" in config:
-                _validate_reference_markers(config)
-                resource_name = config["$resource"]
-                resource_type = config.get("type", "default")
-                defaults = {k: v for k, v in config.items() if k not in RESOURCE_MARKER_KEYS}
-                declared_required = (
-                    _parse_required_marker(
-                        config["$required"],
-                        where=f"`$required` on the reference to '{resource_name}'",
-                    )
-                    if "$required" in config
-                    else None
-                )
-
-                if not environment.has_resource(resource_type, resource_name):
-                    required, _why = _reference_is_required(
-                        declared=declared_required,
-                        requires=config.get("$requires", []),
-                        resolver_default=resolver_default,
-                        environment=environment,
-                    )
-                    found.append(
-                        UnresolvedResourceRef(
-                            path=path,
-                            resource_type=resource_type,
-                            resource_name=resource_name,
-                            required=required,
-                            has_inline_defaults=bool(defaults),
-                        )
-                    )
-                    # The defaults are what a lenient build would resolve to,
-                    # so a reference nested among them is still reachable.
-                    self._survey_children(
-                        _substitute_deferring_defaults(defaults),
-                        path=path,
-                        resolver_default=resolver_default,
-                        seen=seen,
-                        found=found,
-                    )
-                    return
-
-                marker = (resource_type, resource_name)
-                if marker in seen:
-                    return
-                seen.add(marker)
-                # Each source is expanded on its own terms before it is
-                # surveyed, mirroring :meth:`_resolve_source`. Inline defaults
-                # always arrive raw, because the entry pass holds them back
-                # for the splice; an environment that recorded itself as
-                # substituted arrives expanded already. Skipping either would
-                # report a variable-selected reference under raw `${VAR}` text
-                # while the build looks up the name it expands to -- a survey
-                # naming something other than what fails is worse than none.
-                resource = environment.get_resource(resource_type, resource_name)
-                if not environment.substituted:
-                    resource = _substitute_deferring_defaults(resource)
-                self._survey_children(
-                    resource,
-                    path=path,
-                    resolver_default=resolver_default,
-                    seen=seen,
-                    found=found,
-                )
-                self._survey_children(
-                    _substitute_deferring_defaults(defaults),
-                    path=path,
-                    resolver_default=resolver_default,
-                    seen=seen,
-                    found=found,
-                )
-                return
-
-            self._survey_children(
-                config, path=path, resolver_default=resolver_default, seen=seen, found=found
-            )
-        elif isinstance(config, list):
-            for index, item in enumerate(config):
-                self._survey_resource_refs(
-                    item,
-                    path=f"{path}[{index}]",
-                    resolver_default=resolver_default,
-                    seen=seen,
-                    found=found,
-                )
-
-    def _survey_children(
-        self,
-        config: Any,
-        *,
-        path: str,
-        resolver_default: bool | None,
-        seen: set[tuple[str, str]],
-        found: list[UnresolvedResourceRef],
-    ) -> None:
-        """Survey each value of a mapping, extending the dotted path."""
-        if not isinstance(config, dict):
-            return
-        for key, value in config.items():
-            self._survey_resource_refs(
-                value,
-                path=f"{path}.{key}" if path else str(key),
-                resolver_default=resolver_default,
-                seen=seen,
-                found=found,
-            )
 
     def get_resource(
         self,

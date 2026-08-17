@@ -11,8 +11,10 @@ none inherits strictness.
 This file pins the vocabulary that lets a reference say which it wants, and
 the precedence chain that decides when it does not say.
 
-Three of these reproduce defects rather than covering a feature, and they were
-written to fail first:
+Several of these reproduce defects rather than covering a feature, and were
+written to fail first.
+
+In the vocabulary itself:
 
 * a non-empty ``$requires`` on an *absent* resource resolved silently — the
   weaker failure (present but under-capable) aborted the build while the total
@@ -20,7 +22,24 @@ written to fail first:
 * a ``$``-prefixed key outside the marker set was promoted to an inline
   default and handed to a factory as a keyword argument;
 * which is why ``$requred: true`` read as *not required* — one character from
-  the marker meant to close this class, at the exact site meant to close it.
+  the marker meant to close this class, at the exact site meant to close it;
+* ``$requires: persistence`` was iterated character by character, because only
+  its sibling's *value* was ever validated, not its own;
+* and ``$resorce:`` — the one misspelling a guard that fires on ``$resource``
+  cannot fire on — left an ordinary dict that resolved to itself.
+
+In the machinery that reads it, where the recurring shape is **two readers of
+one format**:
+
+* the survey walked the tree separately from the build and disagreed with it
+  in both directions, so a preflight could report a tree sound that the build
+  could not resolve;
+* neither walk guarded against a resource reaching itself on the build side,
+  so a cycle was a ``RecursionError``;
+* the binding resolver stopped at the resource it looked up, handing a
+  reference nested inside one to a factory as a literal dict;
+* and the environment's ``strict_resources`` setting was parsed on the branch
+  taken only when a resource is absent, so a malformed flag hid until one was.
 """
 
 from __future__ import annotations
@@ -57,9 +76,9 @@ def environment() -> EnvironmentConfig:
 def _resolve(environment: EnvironmentConfig, reference: dict[str, Any]) -> dict[str, Any]:
     """Resolve a single reference under ``vector_store``, declaring no policy.
 
-    Deliberately touches none of the new vocabulary, so the three
-    reproduce-first cases below fail against unmodified code *for the reason
-    the defect exists* rather than on an unknown keyword argument.
+    Deliberately touches none of the new vocabulary, so the reproduce-first
+    cases below fail against unmodified code *for the reason the defect
+    exists* rather than on an unknown keyword argument.
     """
     config = EnvironmentAwareConfig(
         config={"vector_store": reference},
@@ -311,12 +330,14 @@ class TestPrecedenceChain:
             _resolve(environment, _absent())
 
     def test_unparseable_environment_setting_raises(self):
-        """It must not silently read as lenient -- same rule as the marker."""
-        environment = EnvironmentConfig(
-            name="prod", settings={"strict_resources": "sometimes"}, resources={}
-        )
+        """It must not silently read as lenient -- same rule as the marker.
+
+        Rejected where it is written rather than where it is read, so the
+        deployment that meets it is not the one that happens to be missing a
+        resource. See :class:`TestEnvironmentSettingIsValidatedWhereItIsWritten`.
+        """
         with pytest.raises(ConfigError, match="strict_resources"):
-            _resolve(environment, _absent())
+            EnvironmentConfig(name="prod", settings={"strict_resources": "sometimes"}, resources={})
 
     def test_instance_level_beats_the_environment_setting(self):
         environment = EnvironmentConfig(
@@ -574,22 +595,6 @@ class TestFindUnresolvedResources:
         found = config.find_unresolved_resources()
         assert [ref.resource_name for ref in found] == ["absent"]
 
-    def test_a_self_referential_resource_is_visited_once(self):
-        """A survey must not hang where a build would."""
-        environment = EnvironmentConfig(
-            name="cycle",
-            resources={
-                "vector_stores": {
-                    "loop": {"inner": {"$resource": "loop", "type": "vector_stores"}},
-                },
-            },
-        )
-        config = EnvironmentAwareConfig(
-            config={"store": {"$resource": "loop", "type": "vector_stores"}},
-            environment=environment,
-        )
-        assert config.find_unresolved_resources() == []
-
     def test_a_malformed_reference_raises_rather_than_being_skipped(self, environment):
         """A survey reporting a tree sound while the build raises is worse than none."""
         config = EnvironmentAwareConfig(
@@ -650,3 +655,434 @@ class TestBothResolversAgree:
         with pytest.raises(ConfigError) as excinfo:
             _resolve(environment, _absent(**{"$nonsense": 1}))
         assert not isinstance(excinfo.value, ResourceNotFoundError)
+
+    def test_the_binding_resolver_resolves_a_reference_nested_in_a_resource(self):
+        """A resource may carry a reference, and both resolvers must follow it.
+
+        Reproduces the second half of the disagreement. The policy was
+        unified while the *reach* was not: ``ConfigBindingResolver`` looked a
+        resource up and handed it straight to the factory, so a nested
+        reference arrived as a literal ``{"$resource": ...}`` keyword
+        argument -- the same silent-degrade shape the marker guard closes,
+        one layer down.
+        """
+        from dataknobs_config import ConfigBindingResolver
+
+        environment = EnvironmentConfig(
+            name="nest",
+            resources={
+                "vector_stores": {
+                    "outer": {
+                        "backend": "pgvector",
+                        "embedder": {"$resource": "emb", "type": "embedders"},
+                    },
+                },
+                "embedders": {"emb": {"model": "minilm"}},
+            },
+        )
+        resolver = ConfigBindingResolver(environment)
+        resolver.register_factory("vector_stores", lambda **config: config)
+
+        created = resolver.resolve("vector_stores", "outer")
+
+        assert created["embedder"] == {"model": "minilm"}
+
+    def test_the_binding_resolver_raises_on_a_nested_missing_resource(self):
+        """Strictness reaches the nested reference too, or it stops one level down."""
+        from dataknobs_config import ConfigBindingResolver
+
+        environment = EnvironmentConfig(
+            name="nest",
+            resources={
+                "vector_stores": {
+                    "outer": {"embedder": {"$resource": "gone", "type": "embedders"}},
+                },
+            },
+        )
+        resolver = ConfigBindingResolver(environment)
+        resolver.register_factory("vector_stores", lambda **config: config)
+
+        with pytest.raises(ResourceNotFoundError, match="gone"):
+            resolver.resolve("vector_stores", "outer")
+
+    def test_a_nested_reference_may_still_opt_out(self):
+        """Strict is the binding resolver's default, not its only answer.
+
+        It has no reference of its own to read a policy off, which is why it
+        is strict. A reference *nested* in the resource it resolves does have
+        one, and it is read there like anywhere else.
+        """
+        from dataknobs_config import ConfigBindingResolver
+
+        environment = EnvironmentConfig(
+            name="nest",
+            resources={
+                "vector_stores": {
+                    "outer": {
+                        "embedder": {
+                            "$resource": "gone",
+                            "type": "embedders",
+                            "$required": False,
+                            "model": "fallback",
+                        },
+                    },
+                },
+            },
+        )
+        resolver = ConfigBindingResolver(environment)
+        resolver.register_factory("vector_stores", lambda **config: config)
+
+        created = resolver.resolve("vector_stores", "outer")
+
+        assert created["embedder"] == {"model": "fallback"}
+
+
+class TestTheSurveyAndTheBuildAgree:
+    """The survey exists to predict the build, so a disagreement is the defect.
+
+    Both walked the tree, and they walked it differently -- in both
+    directions. The survey descended where the build discards, and stopped
+    where the build descends. Each of these pins one direction against the
+    build itself rather than against an expected list, so the two cannot
+    drift apart again without failing here.
+    """
+
+    def test_a_second_reference_to_one_resource_still_surveys_its_own_defaults(self):
+        """A visited-set keyed on the resource swallowed the reference's own defaults.
+
+        The set is shared-subtree bookkeeping for the *resource*; a
+        reference's inline defaults belong to the call site, not to the
+        resource it names. Returning early for the second reference dropped
+        them -- and because the guard is a dict-iteration-order artefact,
+        swapping the two keys hid it.
+        """
+        environment = EnvironmentConfig(
+            name="repeat",
+            resources={"vector_stores": {"present": {"backend": "pgvector"}}},
+        )
+        config = EnvironmentAwareConfig(
+            config={
+                "first": {"$resource": "present", "type": "vector_stores"},
+                "second": {
+                    "$resource": "present",
+                    "type": "vector_stores",
+                    "embedder": {"$resource": "gone", "type": "embedders"},
+                },
+            },
+            environment=environment,
+        )
+
+        surveyed = [ref.resource_name for ref in config.find_unresolved_resources()]
+
+        with pytest.raises(ResourceNotFoundError, match="gone"):
+            config.resolve_for_build(resolve_env_vars=False, strict_resources=True)
+
+        assert surveyed == ["gone"], "the build reaches it, so the survey must report it"
+
+    def test_a_default_the_environment_overrides_is_not_reported(self):
+        """The splice discards it, so a reference among it is unreachable.
+
+        The build merges an inline default only where the environment did not
+        supply the key. Surveying every default regardless reports a finding
+        an operator cannot act on -- the build never looks at it.
+        """
+        environment = EnvironmentConfig(
+            name="override",
+            resources={
+                "vector_stores": {
+                    "present": {"backend": "pgvector", "embedder": {"model": "from-env"}},
+                },
+            },
+        )
+        config = EnvironmentAwareConfig(
+            config={
+                "store": {
+                    "$resource": "present",
+                    "type": "vector_stores",
+                    "embedder": {"$resource": "gone", "type": "embedders"},
+                },
+            },
+            environment=environment,
+        )
+
+        surveyed = config.find_unresolved_resources()
+        built = config.resolve_for_build(resolve_env_vars=False, strict_resources=True)
+
+        assert surveyed == [], "the environment supplied `embedder`, so the default is discarded"
+        assert built["store"]["embedder"] == {"model": "from-env"}
+
+    def test_a_capability_failure_is_raised_rather_than_certified_sound(self, environment):
+        """A survey that reports a tree sound while the build raises is worse than none.
+
+        Presence is the question the survey answers by listing. Every other
+        way a reference can fail -- malformed, cyclic, or naming a resource
+        that does not declare a capability it ``$requires`` -- raises here,
+        for the same reason a malformed reference always did.
+        """
+        config = EnvironmentAwareConfig(
+            config={
+                "store": {
+                    "$resource": "present",
+                    "type": "vector_stores",
+                    "$requires": ["persistence"],
+                },
+            },
+            environment=environment,
+        )
+        with pytest.raises(ConfigError, match="persistence"):
+            config.find_unresolved_resources()
+
+    def test_a_root_level_reference_is_reported_with_an_empty_path(self, environment):
+        """A dotted path of zero segments. Rendered ``<root>`` where a message needs a name."""
+        config = EnvironmentAwareConfig(config=_absent(), environment=environment)
+        found = config.find_unresolved_resources()
+        assert [(ref.path, ref.resource_name) for ref in found] == [("", "absent")]
+
+
+class TestReferenceCycles:
+    """A resource that refers to itself terminates, and says so."""
+
+    @pytest.fixture
+    def cyclic(self) -> EnvironmentAwareConfig:
+        environment = EnvironmentConfig(
+            name="cycle",
+            resources={
+                "vector_stores": {
+                    "loop": {"inner": {"$resource": "loop", "type": "vector_stores"}},
+                },
+            },
+        )
+        return EnvironmentAwareConfig(
+            config={"store": {"$resource": "loop", "type": "vector_stores"}},
+            environment=environment,
+        )
+
+    def test_the_build_reports_the_cycle_rather_than_recursing(self, cyclic):
+        """It raised ``RecursionError`` -- a stack trace, not a diagnosis."""
+        with pytest.raises(ConfigError, match="cycle") as excinfo:
+            cyclic.resolve_for_build(resolve_env_vars=False)
+        assert "loop" in str(excinfo.value), "the cycle must name the resource it closes on"
+
+    def test_the_survey_reports_the_cycle_the_same_way(self, cyclic):
+        """The survey guarded itself and left the build to crash.
+
+        A guard on one side of a build/survey pair is the divergence this
+        file exists to prevent: the survey returned ``[]`` -- *sound* -- for
+        a config the build could not resolve at all.
+        """
+        with pytest.raises(ConfigError, match="cycle"):
+            cyclic.find_unresolved_resources()
+
+    def test_two_references_to_one_resource_are_not_a_cycle(self, environment):
+        """A shared subtree is not a loop, and must not be reported as one."""
+        config = EnvironmentAwareConfig(
+            config={
+                "a": {"$resource": "present", "type": "vector_stores"},
+                "b": {"$resource": "present", "type": "vector_stores"},
+            },
+            environment=environment,
+        )
+        built = config.resolve_for_build(resolve_env_vars=False, strict_resources=True)
+        assert built["a"]["backend"] == built["b"]["backend"] == "pgvector"
+
+    def test_a_default_naming_its_own_reference_is_not_a_cycle(self, environment):
+        """The default is spliced after the resource is finished, not inside it."""
+        built = _resolve(
+            environment,
+            {
+                "$resource": "present",
+                "type": "vector_stores",
+                "fallback": {"$resource": "present", "type": "vector_stores"},
+            },
+        )
+        assert built["fallback"]["backend"] == "pgvector"
+
+
+class TestMarkerShape:
+    """The marker set is closed; so is what each marker may hold."""
+
+    def test_requires_must_be_a_list(self, environment):
+        """``$requires: persistence`` iterated as characters.
+
+        A scalar is the natural mistake -- its sibling ``$required`` takes
+        one. Unvalidated it was truthy, so an absent resource failed with
+        ``$requires: ['p', 'e', 'r', ...]`` and a present one reported eight
+        missing single-character capabilities.
+        """
+        with pytest.raises(ConfigError, match=r"\$requires"):
+            _resolve(environment, _absent(**{"$requires": "persistence"}))
+
+    def test_requires_members_must_be_strings(self, environment):
+        with pytest.raises(ConfigError, match=r"\$requires"):
+            _resolve(environment, _absent(**{"$requires": ["ok", 3]}))
+
+    def test_an_empty_requires_list_is_not_a_claim(self, environment):
+        """It declares nothing, so it defers like an absent marker."""
+        assert _resolve(environment, _absent(**{"$requires": []})) == {}
+
+    def test_a_policy_marker_without_a_resource_marker_is_rejected(self, environment):
+        """``$resorce`` is the one misspelling the closed set could not catch.
+
+        The guard fires on a block that already contains ``$resource``, so a
+        typo in that key produced an ordinary dict that resolved to itself.
+        The leftover ``$required`` is what gives it away.
+        """
+        config = EnvironmentAwareConfig(
+            config={
+                "store": {
+                    "$resorce": "present",
+                    "type": "vector_stores",
+                    "$required": True,
+                },
+            },
+            environment=environment,
+        )
+        with pytest.raises(ConfigError, match=r"\$resource"):
+            config.resolve_for_build(resolve_env_vars=False)
+
+    def test_a_malformed_marker_inside_a_list_is_rejected(self, environment):
+        config = EnvironmentAwareConfig(
+            config={"extras": [_absent(**{"$requred": True})]},
+            environment=environment,
+        )
+        with pytest.raises(ConfigError, match=r"\$requred"):
+            config.resolve_for_build(resolve_env_vars=False)
+
+    def test_a_malformed_marker_inside_inline_defaults_is_rejected(self, environment):
+        config = EnvironmentAwareConfig(
+            config={
+                "store": {
+                    "$resource": "present",
+                    "type": "vector_stores",
+                    "fallback": _absent(**{"$requred": True}),
+                },
+            },
+            environment=environment,
+        )
+        with pytest.raises(ConfigError, match=r"\$requred"):
+            config.resolve_for_build(resolve_env_vars=False)
+
+
+class TestEnvironmentSettingIsValidatedWhereItIsWritten:
+    """A malformed setting is malformed before any resource goes missing."""
+
+    def test_a_malformed_setting_is_rejected_even_when_every_resource_resolves(self):
+        """It was parsed on the missing-resource branch, so it hid until one was.
+
+        The same argument the reference marker already got: a malformed value
+        is malformed in every environment, and deferring the parse surfaces
+        it first in whichever deployment lacks the resource -- the one least
+        equipped to read a message about a setting.
+        """
+        with pytest.raises(ConfigError, match="strict_resources"):
+            EnvironmentConfig(name="prod", settings={"strict_resources": "yes"})
+
+    def test_from_dict_rejects_it_too(self):
+        with pytest.raises(ConfigError, match="strict_resources"):
+            EnvironmentConfig.from_dict({"name": "prod", "settings": {"strict_resources": 1}})
+
+    def test_a_setting_still_spelled_as_a_template_is_not_parsed_early(self):
+        """``strict_resources: ${STRICT}`` is a template, not a value yet.
+
+        Loading with ``substitute_vars=False`` is a supported way to hold a
+        config raw. Parsing there would reject every deployment that spells
+        the flag as a variable.
+        """
+        environment = EnvironmentConfig.from_dict(
+            {"name": "prod", "settings": {"strict_resources": "${STRICT}"}},
+            substitute_vars=False,
+        )
+        assert environment.get_setting("strict_resources") == "${STRICT}"
+
+    def test_a_valid_setting_survives_construction(self):
+        for value in (True, False, "true", "FALSE"):
+            EnvironmentConfig(name="prod", settings={"strict_resources": value})
+
+    def test_reference_opt_out_still_beats_the_environment_setting(self):
+        """The level pair the matrix left untested: reference over operator."""
+        environment = EnvironmentConfig(
+            name="prod", settings={"strict_resources": True}, resources={}
+        )
+        assert _resolve(environment, _absent(**{"$required": False})) == {}
+
+
+class TestCallContract:
+    """A preflight that checked nothing must not report green."""
+
+    def test_strict_without_resource_resolution_is_refused(self, environment):
+        """The flag is only read where references are resolved.
+
+        ``resolve_for_build(strict_resources=True)`` is documented as *the*
+        startup preflight, so the combination that silently skips every
+        check it promises cannot be a no-op.
+        """
+        config = EnvironmentAwareConfig(config={"store": _absent()}, environment=environment)
+        with pytest.raises(ValueError, match="resolve_resources"):
+            config.resolve_for_build(resolve_resources=False, strict_resources=True)
+
+    def test_an_instance_policy_with_resources_off_is_not_refused(self, environment):
+        """A standing policy is not a per-call assertion about this call."""
+        config = EnvironmentAwareConfig(
+            config={"store": _absent()}, environment=environment, strict_resources=True
+        )
+        assert config.resolve_for_build(resolve_resources=False, resolve_env_vars=False) == {
+            "store": _absent()
+        }
+
+
+class TestFailureMessages:
+    """An operator reads these under time pressure, in a log."""
+
+    def test_the_failure_names_the_config_path(self, environment):
+        """Three references to ``default`` are indistinguishable without it."""
+        config = EnvironmentAwareConfig(
+            config={"bot": {"knowledge_base": {"vector_store": _absent(**{"$required": True})}}},
+            environment=environment,
+        )
+        with pytest.raises(ResourceNotFoundError) as excinfo:
+            config.resolve_for_build(resolve_env_vars=False)
+
+        assert "bot.knowledge_base.vector_store" in str(excinfo.value)
+
+    def test_the_message_survives_the_keyerror_base(self, environment):
+        """``KeyError.__str__`` is ``repr(args[0])``, which quotes and escapes.
+
+        The type deliberately subclasses both, so callers written against
+        either keep working. The cost landed on the message -- the one part
+        of this that is read by a person.
+        """
+        with pytest.raises(ResourceNotFoundError) as excinfo:
+            _resolve(environment, _absent(**{"$required": True}))
+
+        message = str(excinfo.value)
+        assert message.startswith("Resource 'absent'"), message
+        assert "\\'" not in message, "the repr escaping makes the quoted names unreadable"
+
+
+class TestDirectResourceAccess:
+    """``EnvironmentAwareConfig.get_resource`` forwards the policy it is given."""
+
+    def test_required_true_raises_even_with_defaults(self, environment):
+        config = EnvironmentAwareConfig(config={}, environment=environment)
+        with pytest.raises(ResourceNotFoundError):
+            config.get_resource("vector_stores", "absent", {"metric": "cosine"}, required=True)
+
+    def test_required_false_returns_defaults_when_none_were_given(self, environment):
+        config = EnvironmentAwareConfig(config={}, environment=environment)
+        assert config.get_resource("vector_stores", "absent", required=False) == {}
+
+    def test_required_none_preserves_the_historical_coupling(self, environment):
+        config = EnvironmentAwareConfig(config={}, environment=environment)
+        with pytest.raises(ResourceNotFoundError):
+            config.get_resource("vector_stores", "absent")
+        assert config.get_resource("vector_stores", "absent", {"metric": "cosine"}) == {
+            "metric": "cosine"
+        }
+
+    def test_defaults_fill_gaps_in_a_found_resource(self, environment):
+        config = EnvironmentAwareConfig(config={}, environment=environment)
+        resolved = config.get_resource(
+            "vector_stores", "present", {"backend": "ignored", "metric": "cosine"}
+        )
+        assert resolved["backend"] == "pgvector"
+        assert resolved["metric"] == "cosine"

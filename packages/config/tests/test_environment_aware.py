@@ -568,14 +568,14 @@ class TestResourcesInLists:
 class TestMissingResourceIsObservable:
     """A ``$resource`` name that matches nothing must say so.
 
-    ``_resolve_resource_refs`` degrades to the reference's inline defaults
-    when a resource is missing, which is deliberate. What was not deliberate
-    is that the degrade was **silent**: the warning lived in an
-    ``except KeyError`` branch that could never run, because
-    ``_resolve_resource_refs`` always passes a (possibly empty) defaults dict
-    and ``get_resource`` returns those defaults rather than raising whenever
-    one is supplied. A typo'd binding name therefore produced an empty config
-    and no log line anywhere.
+    Resolution degrades to the reference's inline defaults when a resource is
+    missing and no policy says otherwise, which is deliberate. What was not
+    deliberate is that the degrade was **silent**: the warning lived in an
+    ``except KeyError`` branch that could never run, because the resolver
+    always passed a (possibly empty) defaults dict and ``get_resource``
+    returns those defaults rather than raising whenever one is supplied. A
+    typo'd binding name therefore produced an empty config and no log line
+    anywhere.
     """
 
     @pytest.fixture

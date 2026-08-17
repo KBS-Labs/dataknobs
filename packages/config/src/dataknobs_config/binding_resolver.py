@@ -30,8 +30,8 @@ from __future__ import annotations
 import logging
 from typing import Any, Callable, Protocol, runtime_checkable
 
+from .environment_aware import resolve_resource_references
 from .environment_config import EnvironmentConfig
-from .inheritance import substitute_env_vars
 
 logger = logging.getLogger(__name__)
 
@@ -104,10 +104,15 @@ class ConfigBindingResolver:
 
     The lenient, declarable behaviour belongs to the ``$resource`` reference
     syntax, where a reference can carry ``$required`` and inline defaults; see
-    :meth:`EnvironmentAwareConfig.resolve_for_build`. The two APIs agree on
-    the exception type -- a missing resource is
-    :class:`~dataknobs_config.ResourceNotFoundError` at both -- and differ
-    only in whether a reference exists to say otherwise.
+    :meth:`EnvironmentAwareConfig.resolve_for_build`.
+
+    Everything below the entry point is the same code:
+    :func:`~dataknobs_config.resolve_resource_references` resolves the config
+    this looks up, so a reference *nested* inside a resource is read here
+    exactly as it is there -- same marker validation, same precedence chain,
+    same exception types, same cycle guard. The two APIs differ in one thing
+    only: what happens at the top, where this has no reference to read a
+    policy off and so can only be strict.
 
     Attributes:
         environment: The EnvironmentConfig for resource lookup
@@ -319,27 +324,49 @@ class ConfigBindingResolver:
             Resolved configuration
 
         Raises:
-            ResourceNotFoundError: If the resource is absent. No ``defaults``
-                are passed, which under
-                :meth:`EnvironmentConfig.get_resource` is the strict policy --
-                and it is the right one here, because this API is reached
-                without a reference that could have declared otherwise.
+            ResourceNotFoundError: If the resource is absent, or if one a
+                reference nested inside it names is. No ``defaults`` are
+                passed, which under :meth:`EnvironmentConfig.get_resource` is
+                the strict policy -- and it is the right one here, because
+                this API is reached without a reference that could have
+                declared otherwise. A reference *nested* in the resource does
+                have one, and it is read there as anywhere else.
+            ConfigError: If a nested reference is malformed, names a resource
+                that does not declare a capability it ``$requires``, or
+                reaches itself
         """
         config = self._environment.get_resource(resource_type, logical_name)
 
-        # Substitute each source exactly once, before the two are merged
-        # beyond distinguishing.
+        # Each source is expanded and its references resolved on its own
+        # terms, before the two are merged beyond distinguishing. That split
+        # is the reason for two calls rather than one over the merged dict:
+        # the environment's values may already be expanded while the caller's
+        # overrides never are, and a single flag cannot be true of both.
         #
-        # The environment's values are substituted here only when they have
-        # not been already. This pass is NOT idempotent: a value whose own
-        # text contains ${...} would be expanded a second time, replacing it
-        # with whatever unrelated variable its content happened to name.
+        # Substitution is NOT idempotent: a value whose own text contains
+        # ${...} would be expanded a second time, replacing it with whatever
+        # unrelated variable its content happened to name.
         # EnvironmentConfig.load() and from_dict() substitute by default and
-        # record it on ``substituted``, so this runs only for
-        # directly-constructed environments (or ones loaded with
+        # record it on ``substituted``, so the environment's pass runs only
+        # for directly-constructed instances (or ones loaded with
         # substitute_vars=False), where it is load-bearing.
-        if self._resolve_env_vars and not self._environment.substituted:
-            config = substitute_env_vars(config)
+        #
+        # Resolving references here is what stops this API disagreeing with
+        # the reference resolver about how far a binding reaches. A resource
+        # may itself carry a `$resource` block, and handing that to a factory
+        # as a literal `{"$resource": ...}` keyword argument is the same
+        # silent degrade the reference vocabulary exists to close -- one
+        # layer down, where nothing was looking.
+        #
+        # Annotated because the resolver walks an arbitrary config tree and so
+        # is declared ``Any``; a resource entry is a mapping, and this method
+        # is where that is promised.
+        resolved: dict[str, Any] = resolve_resource_references(
+            config,
+            self._environment,
+            substitute=self._resolve_env_vars and not self._environment.substituted,
+            strict_resources=True,
+        )
 
         # Overrides are a separate source -- caller-supplied and never
         # previously substituted -- so they get their own single pass
@@ -347,12 +374,15 @@ class ConfigBindingResolver:
         # substituted at all is a separate question (199-FU2); this preserves
         # the behaviour they have always had.
         if overrides:
-            if self._resolve_env_vars:
-                overrides = substitute_env_vars(overrides)
-            config = config.copy()
-            config.update(overrides)
+            resolved_overrides: dict[str, Any] = resolve_resource_references(
+                overrides,
+                self._environment,
+                substitute=self._resolve_env_vars,
+                strict_resources=True,
+            )
+            resolved = {**resolved, **resolved_overrides}
 
-        return config
+        return resolved
 
     def _get_factory(self, resource_type: str) -> ResourceFactory | Callable[..., Any]:
         """Get the factory for a resource type.

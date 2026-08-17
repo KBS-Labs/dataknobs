@@ -34,9 +34,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   is no authored reference to annotate, and every other level lives in code
   the operator does not deploy.
 
-  Both `$required` and the environment setting accept a boolean or exactly
-  the strings `"true"` / `"false"`, so either works through `${VAR}`
-  expansion. Any other value raises rather than reading as lenient.
+  Both `$required` and the environment setting accept a boolean, or the
+  strings `"true"` / `"false"` in any case and with surrounding whitespace
+  ignored, so either works through `${VAR}` expansion. Any other value raises
+  rather than reading as lenient. The environment setting is checked when the
+  environment is **constructed** — by `EnvironmentConfig(...)`, `.load()` and
+  `.from_dict()` alike — rather than when a resource turns out to be missing:
+  a malformed flag is malformed in every environment, and deferring the check
+  would surface it first in whichever deployment happened to lack a resource,
+  as an error about a setting. A value still spelled as a template
+  (`${STRICT}`, under `substitute_vars=False`) is left alone.
 
 - **`find_unresolved_resources()`** on `EnvironmentAwareConfig` — every
   unresolvable reference in the tree in one pass, as
@@ -48,6 +55,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `resolve_for_build(strict_resources=True)` remains the first-failure form,
   and is safe to run at boot purely to prove every binding exists.
 
+  It runs the **same walk** as the build, differing only in what it does when
+  a resource is absent: record it and continue down the lenient path, rather
+  than raise or warn. A survey with a traversal of its own is a second opinion
+  about the build rather than a prediction of it, and the two disagree in both
+  directions — descending into inline defaults the build discards, and
+  stopping short of ones it reaches. Every failure that is *not* about
+  presence (a malformed reference, a reference cycle, a resource that does not
+  declare a capability its reference `$requires`) raises here rather than
+  being listed, so an empty list means a build reaches no unresolvable
+  reference.
+
 - **`EnvironmentConfig.get_resource(..., required=)`** separates data from
   policy. `defaults` has carried both meanings at once — the values to merge,
   and, by being non-`None`, the decision not to raise. That coupling made one
@@ -55,10 +73,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   set, but still fail if the resource itself is absent*. `required=None`
   (default) preserves the historical behaviour exactly.
 
-- **`RESOURCE_MARKER_KEYS`, `STRICT_RESOURCES_SETTING` and
-  `UnresolvedResourceRef`** are exported from `dataknobs_config`, so a second
-  reader of the `$resource` format has the vocabulary without copying the
-  literals.
+- **`resolve_resource_references(config, environment, ...)`** is exported from
+  `dataknobs_config` — the shared primitive behind both resolvers, so a
+  consumer holding a config tree and an environment does not have to become a
+  third reader of the format. Reading it independently is what produced the
+  divergences this release closes: a hand-written walk recognises `$resource`
+  and `type`, and thereby discards every inline default, ignores `$required`
+  and `$requires`, lets a misspelled marker through as data, and leaves a
+  reference nested inside a resolved resource as a literal dict.
+
+  `RESOURCE_MARKER_KEYS`, `STRICT_RESOURCES_SETTING` and
+  `UnresolvedResourceRef` are exported alongside it, for the reader that
+  genuinely cannot delegate — a schema validator, an editor — so neither
+  copies the literals.
+
+- **A reference cycle is reported rather than followed.** A resource that
+  reaches itself (`a` → `b` → `a`) raises `ConfigError` naming the chain, in
+  both the build and the survey.
+
+- **Failure messages name the dotted config path** of the reference that
+  failed, so three references to `default` stay distinguishable in a log.
 
 ### Changed
 
@@ -81,19 +115,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   therefore have meant *not required*, silently, at the exact site meant to
   close that class of failure.
 
-- **`ConfigBindingResolver`'s raise on a missing resource is now documented as
-  the strict policy** rather than left looking incidental. Behaviour is
-  unchanged. That API takes a `(type, name)` pair with no reference to read a
-  policy off, so strictness is the only coherent answer; the declarable
-  behaviour belongs to the reference syntax. Both resolvers raise
+  Two more spellings of the same mistake are closed with it. **`$requires`
+  must be a list of names**: a bare `$requires: persistence` is truthy and
+  iterates character by character, so it produced a check against letters.
+  And **`$required` or `$requires` on a block with no `$resource` is
+  rejected** — the guard above fires on a block that already *is* a
+  reference, so a typo in the selector key itself (`$resorce:`) produced an
+  ordinary dict that resolved to itself and reached the factory with its
+  markers attached. A leftover policy marker is what gives that away.
+
+- **`ConfigBindingResolver` now resolves references nested inside the resource
+  it looks up.** It fetched a resource and handed it straight to the factory,
+  so a resource carrying its own `$resource` block passed one on as a literal
+  `{"$resource": ...}` keyword argument — the same silent degrade the marker
+  guard closes, one layer down. Both resolvers now run the same resolution
+  below the entry point: same marker validation, same precedence chain, same
+  cycle guard, and a nested reference can declare `$required: false` for
+  itself. Caller-supplied `**overrides` are resolved the same way.
+
+  Its raise on a missing resource at the *top* is unchanged, and is now
+  documented as the strict policy rather than left looking incidental. That
+  API takes a `(type, name)` pair with no reference to read a policy off, so
+  strictness is the only coherent answer there; the declarable behaviour
+  belongs to the reference syntax. Both resolvers raise
   `ResourceNotFoundError` for a missing resource, `ConfigError` for a
-  malformed reference or an under-capable one.
+  malformed reference, an under-capable one, or a cycle.
 
   ⚠️ **`ResourceNotFoundError` subclasses both `EnvironmentConfigError` and
   `KeyError`.** `resolve_for_build()` could not previously raise a `KeyError`;
   under a strict policy it can. Code wrapping resolution in `except KeyError`
   for unrelated reasons will swallow it. The hierarchy is unchanged — narrowing
   it is a breaking change to an exported type, and is not worth making here.
+  Its `__str__` is restored, though: `KeyError.__str__` returns
+  `repr(args[0])`, which wrapped the message in quotes and escaped every name
+  inside it. The bases are what consumers depend on; the rendering is what a
+  person reads.
+
+- **`resolve_for_build(strict_resources=..., resolve_resources=False)` now
+  raises `ValueError`.** The policy is read where references are resolved, so
+  the pair validated nothing and returned a config anyway — from the method
+  documented as *the* startup preflight. The instance-level policy is
+  unaffected: it is a standing default rather than an assertion about one
+  call. `find_unresolved_resources`'s `strict_resources` is keyword-only, for
+  parity with `resolve_for_build`.
 
 ### Security
 
