@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable, Mapping
-from importlib import import_module
 from typing import Any, Type
 
 from dataknobs_common.exceptions import ConfigurationError
@@ -28,13 +27,43 @@ from .base import VectorStore
 logger = logging.getLogger(__name__)
 
 
-def _load(module: str, attr: str) -> Callable[[], Any]:
-    """Defer ``from <module> import <attr>`` until the driver is known present."""
+# --- Deferred loaders ------------------------------------------------
+#
+# Each imports its store class on first call rather than at module scope,
+# so a store whose optional driver is absent fails its own registration
+# instead of the package import.
+#
+# Spelled as an import *statement* rather than ``import_module(name)``
+# because the module and the attribute are literals in this source, not a
+# dotted path arriving from configuration: there is no separator to pick,
+# no typo that a user could make, and nothing for
+# ``dataknobs_common.imports`` to own. Written statically the class stays
+# a symbol -- mypy checks it, a rename updates it, and a misspelling fails
+# at authoring time rather than at registration.
 
-    def load() -> Any:
-        return getattr(import_module(module, __name__), attr)
 
-    return load
+def _memory_vector_store() -> type[VectorStore]:
+    from .memory import MemoryVectorStore
+
+    return MemoryVectorStore
+
+
+def _faiss_vector_store() -> type[VectorStore]:
+    from .faiss import FaissVectorStore
+
+    return FaissVectorStore
+
+
+def _chroma_vector_store() -> type[VectorStore]:
+    from .chroma import ChromaVectorStore
+
+    return ChromaVectorStore
+
+
+def _pgvector_store() -> type[VectorStore]:
+    from .pgvector import PgVectorStore
+
+    return PgVectorStore
 
 
 def _register_vector_backends(
@@ -59,7 +88,7 @@ def _register_vector_backends(
     register_backend(
         registry,
         "memory",
-        _load(".memory", "MemoryVectorStore"),
+        _memory_vector_store,
         metadata={
             "description": "In-memory vector storage for testing",
             "persistent": False,
@@ -75,7 +104,7 @@ def _register_vector_backends(
     register_backend(
         registry,
         "faiss",
-        _load(".faiss", "FaissVectorStore"),
+        _faiss_vector_store,
         metadata={
             "description": "Facebook AI Similarity Search - efficient vector search",
             "persistent": True,
@@ -96,7 +125,7 @@ def _register_vector_backends(
     register_backend(
         registry,
         "chroma",
-        _load(".chroma", "ChromaVectorStore"),
+        _chroma_vector_store,
         metadata={
             "description": "ChromaDB - AI-native vector database",
             "persistent": True,
@@ -116,7 +145,7 @@ def _register_vector_backends(
     register_backend(
         registry,
         "pgvector",
-        _load(".pgvector", "PgVectorStore"),
+        _pgvector_store,
         metadata={
             "description": "PostgreSQL with pgvector extension - production vector database",
             "persistent": True,

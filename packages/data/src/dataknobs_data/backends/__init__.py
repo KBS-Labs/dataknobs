@@ -10,8 +10,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable
-from importlib import import_module
-from typing import Any, Type
+from typing import Type
 
 from dataknobs_common.registry import PluginRegistry
 
@@ -21,22 +20,108 @@ from ..database import AsyncDatabase, SyncDatabase
 logger = logging.getLogger(__name__)
 
 
-def _load(module: str, attr: str) -> Callable[[], Any]:
-    """Defer ``from <module> import <attr>`` until the driver is known present.
+# --- Deferred loaders ------------------------------------------------
+#
+# Each imports its backend class on first call rather than at module
+# scope. Registration used to be a ``try: import ... except ImportError:
+# pass`` per backend, which conflated two questions: whether the driver is
+# installed, and whether the module happens to raise on import. Backends
+# answered the first differently depending on where they put their driver
+# import, so ``registered`` meant "installed" for some and "importable"
+# for others. Handing the import over as a thunk lets
+# :func:`register_backend` ask the first question on its own terms.
+#
+# Spelled as an import *statement* rather than ``import_module(name)``
+# because the module and the attribute are literals in this source, not a
+# dotted path arriving from configuration: there is no separator to pick,
+# no typo that a user could make, and nothing for
+# ``dataknobs_common.imports`` to own. Written statically the class stays
+# a symbol -- mypy checks it, a rename updates it, and a misspelling fails
+# at authoring time rather than at registration.
 
-    Registration used to be a ``try: import ... except ImportError: pass``
-    per backend, which conflated two questions: whether the driver is
-    installed, and whether the module happens to raise on import. Backends
-    answered the first differently depending on where they put their driver
-    import, so ``registered`` meant "installed" for some and "importable"
-    for others. Handing the import over as a thunk lets
-    :func:`register_backend` ask the first question on its own terms.
-    """
 
-    def load() -> Any:
-        return getattr(import_module(module, __name__), attr)
+def _sync_memory() -> type[SyncDatabase]:
+    from .memory import SyncMemoryDatabase
 
-    return load
+    return SyncMemoryDatabase
+
+
+def _sync_file() -> type[SyncDatabase]:
+    from .file import SyncFileDatabase
+
+    return SyncFileDatabase
+
+
+def _sync_sqlite() -> type[SyncDatabase]:
+    from .sqlite import SyncSQLiteDatabase
+
+    return SyncSQLiteDatabase
+
+
+def _sync_postgres() -> type[SyncDatabase]:
+    from .postgres import SyncPostgresDatabase
+
+    return SyncPostgresDatabase
+
+
+def _sync_elasticsearch() -> type[SyncDatabase]:
+    from .elasticsearch import SyncElasticsearchDatabase
+
+    return SyncElasticsearchDatabase
+
+
+def _sync_s3() -> type[SyncDatabase]:
+    from .s3 import SyncS3Database
+
+    return SyncS3Database
+
+
+def _sync_duckdb() -> type[SyncDatabase]:
+    from .duckdb import SyncDuckDBDatabase
+
+    return SyncDuckDBDatabase
+
+
+def _async_memory() -> type[AsyncDatabase]:
+    from .memory import AsyncMemoryDatabase
+
+    return AsyncMemoryDatabase
+
+
+def _async_file() -> type[AsyncDatabase]:
+    from .file import AsyncFileDatabase
+
+    return AsyncFileDatabase
+
+
+def _async_sqlite() -> type[AsyncDatabase]:
+    from .sqlite_async import AsyncSQLiteDatabase
+
+    return AsyncSQLiteDatabase
+
+
+def _async_postgres() -> type[AsyncDatabase]:
+    from .postgres import AsyncPostgresDatabase
+
+    return AsyncPostgresDatabase
+
+
+def _async_elasticsearch() -> type[AsyncDatabase]:
+    from .elasticsearch_async import AsyncElasticsearchDatabase
+
+    return AsyncElasticsearchDatabase
+
+
+def _async_s3() -> type[AsyncDatabase]:
+    from .s3_async import AsyncS3Database
+
+    return AsyncS3Database
+
+
+def _async_duckdb() -> type[AsyncDatabase]:
+    from .duckdb import AsyncDuckDBDatabase
+
+    return AsyncDuckDBDatabase
 
 
 # Import memory backends for backward compatibility
@@ -68,7 +153,7 @@ def _register_sync_backends(
     register_backend(
         registry,
         "memory",
-        _load(".memory", "SyncMemoryDatabase"),
+        _sync_memory,
         metadata={
             "description": "In-memory storage for testing and caching",
             "persistent": False,
@@ -84,7 +169,7 @@ def _register_sync_backends(
     register_backend(
         registry,
         "file",
-        _load(".file", "SyncFileDatabase"),
+        _sync_file,
         metadata={
             "description": "File-based storage (JSON, CSV, Parquet)",
             "persistent": True,
@@ -102,7 +187,7 @@ def _register_sync_backends(
     register_backend(
         registry,
         "sqlite",
-        _load(".sqlite", "SyncSQLiteDatabase"),
+        _sync_sqlite,
         metadata={
             "description": "SQLite database backend with Python-based vector support",
             "persistent": True,
@@ -124,7 +209,7 @@ def _register_sync_backends(
     register_backend(
         registry,
         "postgres",
-        _load(".postgres", "SyncPostgresDatabase"),
+        _sync_postgres,
         metadata={
             "description": "PostgreSQL database backend with native vector support (pgvector)",
             "persistent": True,
@@ -151,7 +236,7 @@ def _register_sync_backends(
     register_backend(
         registry,
         "elasticsearch",
-        _load(".elasticsearch", "SyncElasticsearchDatabase"),
+        _sync_elasticsearch,
         metadata={
             "description": "Elasticsearch search engine backend with native KNN vector support",
             "persistent": True,
@@ -175,7 +260,7 @@ def _register_sync_backends(
     register_backend(
         registry,
         "s3",
-        _load(".s3", "SyncS3Database"),
+        _sync_s3,
         metadata={
             "description": "AWS S3 object storage backend",
             "persistent": True,
@@ -200,7 +285,7 @@ def _register_sync_backends(
     register_backend(
         registry,
         "duckdb",
-        _load(".duckdb", "SyncDuckDBDatabase"),
+        _sync_duckdb,
         metadata={
             "description": "DuckDB database backend for analytical workloads with columnar storage",
             "persistent": True,
@@ -239,7 +324,7 @@ def _register_async_backends(
     register_backend(
         registry,
         "memory",
-        _load(".memory", "AsyncMemoryDatabase"),
+        _async_memory,
         metadata={
             "description": "In-memory storage for testing and caching",
             "persistent": False,
@@ -255,7 +340,7 @@ def _register_async_backends(
     register_backend(
         registry,
         "file",
-        _load(".file", "AsyncFileDatabase"),
+        _async_file,
         metadata={
             "description": "File-based storage (JSON, CSV, Parquet)",
             "persistent": True,
@@ -273,7 +358,7 @@ def _register_async_backends(
     register_backend(
         registry,
         "sqlite",
-        _load(".sqlite_async", "AsyncSQLiteDatabase"),
+        _async_sqlite,
         metadata={
             "description": "SQLite database backend with Python-based vector support",
             "persistent": True,
@@ -297,7 +382,7 @@ def _register_async_backends(
     register_backend(
         registry,
         "postgres",
-        _load(".postgres", "AsyncPostgresDatabase"),
+        _async_postgres,
         metadata={
             "description": "PostgreSQL database backend with native vector support (pgvector)",
             "persistent": True,
@@ -322,7 +407,7 @@ def _register_async_backends(
     register_backend(
         registry,
         "elasticsearch",
-        _load(".elasticsearch_async", "AsyncElasticsearchDatabase"),
+        _async_elasticsearch,
         metadata={
             "description": "Elasticsearch search engine backend with native KNN vector support",
             "persistent": True,
@@ -348,7 +433,7 @@ def _register_async_backends(
     register_backend(
         registry,
         "s3",
-        _load(".s3_async", "AsyncS3Database"),
+        _async_s3,
         metadata={
             "description": "AWS S3 object storage backend",
             "persistent": True,
@@ -370,7 +455,7 @@ def _register_async_backends(
     register_backend(
         registry,
         "duckdb",
-        _load(".duckdb", "AsyncDuckDBDatabase"),
+        _async_duckdb,
         metadata={
             "description": "DuckDB database backend for analytical workloads with columnar storage",
             "persistent": True,
