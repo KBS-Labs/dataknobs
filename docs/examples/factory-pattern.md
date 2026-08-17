@@ -224,11 +224,31 @@ class CustomBackendExample:
             def clear(self) -> None:
                 self.data.clear()
         
-        # Register the custom backend
-        factory = DatabaseFactory()
-        factory.register_backend("redis", RedisDatabase)
-        
+        # Register the custom backend.
+        #
+        # Registration is not a factory method — the factory reads a
+        # registry, it does not own one. `register_backend` populates that
+        # registry and probes the driver named by `requires_module`, so
+        # `is_backend_available("redis")` answers honestly on a machine
+        # without the redis client instead of reporting the backend as
+        # ready and failing at construction.
+        from dataknobs_data import register_backend
+        from dataknobs_data.backends import sync_backends
+
+        register_backend(
+            sync_backends,
+            "redis",
+            lambda: RedisDatabase,
+            metadata={
+                "description": "Redis-backed storage",
+                "persistent": True,
+                "requires_install": "pip install redis",
+                "requires_module": "redis",
+            },
+        )
+
         # Now it can be used like any other backend
+        factory = DatabaseFactory()
         redis_db = factory.create(backend="redis", host="localhost", port=6379)
         return redis_db
 

@@ -311,30 +311,62 @@ class CustomDatabase(Database):
         # Implement clear
         pass
 
-# Register with factory
-factory = DatabaseFactory()
-factory.register_backend("custom", CustomDatabase)
+# Register with the registry the factory reads.
+#
+# Registration is not a factory method: the factory reads a registry, it
+# does not own one. `register_backend` populates that registry and probes
+# the driver named by `requires_module` before registering, which is what
+# keeps `is_backend_available()` an answer about this machine rather than
+# about the name.
+from dataknobs_data import register_backend
+from dataknobs_data.backends import sync_backends
+
+register_backend(
+    sync_backends,
+    "custom",
+    lambda: CustomDatabase,
+    metadata={
+        "description": "A custom backend",
+        "persistent": True,
+        # Omit both when the backend needs no optional dependency; a
+        # backend without `requires_module` always registers.
+        "requires_install": "pip install my-driver",
+        "requires_module": "my_driver",
+    },
+)
 
 # Now you can create instances
+factory = DatabaseFactory()
 custom_db = factory.create(backend="custom", **config)
 ```
 
 ## Error Handling
 
-The factory provides helpful error messages:
+A missing driver raises `ValueError`, not `ImportError` — the backend is
+refused before construction, by the registry lookup rather than by the
+backend's own import:
 
 ```python
 try:
-    # Try to create backend with missing dependency
+    # A backend whose optional driver is not installed here
     db = factory.create(backend="postgres", host="localhost")
-except ImportError as e:
-    print(f"Missing dependency: {e}")
-    print("Install with: pip install dataknobs-data[postgres]")
 except ValueError as e:
-    print(f"Invalid configuration: {e}")
-except Exception as e:
-    print(f"Failed to create backend: {e}")
+    print(e)
+    # Backend 'postgres' is known but not available here.
+    # Install with: pip install dataknobs-data[postgres]
 ```
+
+The message already carries the install command, so there is nothing to
+reconstruct from the exception type. A name the registry does not know at
+all reads differently, and deliberately so:
+
+```python
+factory.create(backend="postgrez")
+# ValueError: Unknown backend type: postgrez.
+# Available backends: duckdb, elasticsearch, file, memory, postgres, s3, sqlite
+```
+
+Catching `ImportError` around `create()` catches nothing.
 
 ## Testing with Factory
 
