@@ -204,6 +204,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`ConfigCachingManager` resolves `$resource` references through
+  `dataknobs-config` instead of walking the config itself.** It carried a
+  third reader of the reference format, and a format with three readers has
+  three definitions. This one recognised `$resource` and `type` and nothing
+  else, so it discarded every inline default a reference declared, ignored
+  `$required` and `$requires`, passed a misspelled marker on as ordinary
+  config data, and left a reference nested inside a resolved resource as a
+  literal `{"$resource": ...}` dict for whatever read the config next.
+
+  It also required both `$resource` *and* `type` before it recognised a block
+  at all, so a reference relying on the documented `type: default` fallback
+  was passed through as a literal dict. Both are now read as the format
+  defines them.
+
+  It also carried a fallback for a resource the environment does not define —
+  log a warning, return the reference unchanged — that had never run, because
+  the lookup it guarded raises rather than returning `None`. Raising is
+  therefore the behaviour this has always had and it is preserved; what
+  changes is that a reference can now ask for the other one, with
+  `$required: false` and inline defaults to degrade to. Inline defaults are
+  merged, nested references are followed, and a malformed marker raises
+  `ConfigError` rather than reaching a consumer as data.
+
+  A manager with no `environment` still returns the config untouched.
+
+- **`ConfigValidator` reports a misspelled marker in a `$resource` section.**
+  Schema validation skipped every `$`-prefixed key, since a component section
+  may be a reference whose keys are markers rather than schema fields. But a
+  reference's marker vocabulary is closed, so the blanket skip let `$requred:
+  true` — which reads as *not required* — past the one check that runs before
+  resolution, leaving it to fail in whichever deployment lacked the resource.
+  The check now consults `RESOURCE_MARKER_KEYS` rather than the `$` prefix, so
+  it cannot drift from the resolver that enforces the set. A `$`-prefixed key
+  on a section that is *not* a reference is still left alone.
+
 - **An S3 content key is now normalised, so a non-canonically-spelled object
   written by an earlier release is unreachable.** `_s3_key` returns the
   contained, normalised path, so `sub/../guide.md` composes

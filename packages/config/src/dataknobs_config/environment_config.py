@@ -67,7 +67,71 @@ from dataknobs_common.config_loading import (
     load_yaml_or_json,
 )
 
+from .exceptions import ConfigError
+
 logger = logging.getLogger(__name__)
+
+#: The environment-level spelling of the missing-resource policy, read through
+#: :meth:`EnvironmentConfig.get_setting`. It is the only level of the
+#: precedence chain a deployment can reach when its references are generated at
+#: runtime: there is no authored reference to annotate, and every other level
+#: lives in code the operator does not deploy.
+#:
+#: It lives here, beside the class that holds the setting, rather than with the
+#: resolver that reads it -- otherwise this class cannot validate its own
+#: setting, and a malformed one surfaces on whichever deployment first goes
+#: looking for a resource that is absent.
+STRICT_RESOURCES_SETTING = "strict_resources"
+
+
+def parse_strictness_flag(value: Any, *, where: str) -> bool:
+    """Read a strictness flag as a bool, or as exactly ``true`` / ``false``.
+
+    Shared by the two spellings of the same policy -- a reference's
+    ``$required`` marker and an environment's ``strict_resources`` setting --
+    so the two cannot disagree about what ``"yes"`` means.
+
+    Strings are accepted because both spellings can arrive through ``${VAR}``
+    expansion, which does not coerce types: ``$required: ${STRICT_BINDINGS}``
+    and ``strict_resources: ${STRICT_BINDINGS}`` both reach here as text.
+
+    Anything else raises rather than falling back to ``False``. A value that
+    silently reads as "off" is the same silent-degrade defect this vocabulary
+    exists to close, so the match is explicit and never truthiness: ``1``,
+    ``"yes"`` and ``"on"`` are errors, not strict-mode-off.
+
+    Args:
+        value: The flag as written
+        where: A phrase naming the site, for the failure message
+
+    Returns:
+        The parsed flag
+
+    Raises:
+        ConfigError: If the value is neither a bool nor ``"true"``/``"false"``
+            in any case, with or without surrounding whitespace
+    """
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str) and value.strip().lower() in ("true", "false"):
+        return value.strip().lower() == "true"
+    raise ConfigError(
+        f"{where} must be a boolean or the string 'true'/'false' (any case, "
+        f"surrounding whitespace ignored), got {value!r}. It is parsed "
+        f"explicitly rather than by truthiness, because a value that silently "
+        f"read as 'false' would turn the policy off without saying so."
+    )
+
+
+def _is_unexpanded_template(value: Any) -> bool:
+    """Whether a value is still ``${VAR}`` text rather than a value.
+
+    A config held raw -- loaded with ``substitute_vars=False`` -- carries
+    templates where its values will be. Parsing one is not a rejection of a
+    malformed flag; it is a rejection of every deployment that spells the flag
+    as a variable, which is a supported thing to do.
+    """
+    return isinstance(value, str) and "${" in value
 
 
 def _copy_structure(value: Any, _seen: dict[int, Any] | None = None) -> Any:
@@ -123,9 +187,26 @@ class EnvironmentConfigError(Exception):
 
 
 class ResourceNotFoundError(EnvironmentConfigError, KeyError):
-    """Resource not found in environment configuration."""
+    """Resource not found in environment configuration.
 
-    pass
+    Deliberately both: callers written against ``EnvironmentConfigError`` and
+    callers written against ``KeyError`` both keep working, and narrowing an
+    exported type is a breaking change worth more than it buys.
+
+    The cost of the ``KeyError`` base lands on the message.
+    :meth:`KeyError.__str__` returns ``repr(args[0])``, so a sentence built to
+    name the resource, the environment and the lever that made the reference
+    strict is handed to an operator wrapped in quotes with every inner quote
+    escaped. :meth:`__str__` is restored here rather than the base dropped:
+    the hierarchy is the part consumers depend on, and the rendering is the
+    part a person reads.
+    """
+
+    def __str__(self) -> str:
+        """The message as written, not ``repr`` of it."""
+        if len(self.args) == 1 and isinstance(self.args[0], str):
+            return self.args[0]
+        return super().__str__()
 
 
 @dataclass
@@ -195,6 +276,34 @@ class EnvironmentConfig:
     enforced -- amending a constructed config is out of contract, not merely
     discouraged.
     """
+
+    def __post_init__(self) -> None:
+        """Reject a malformed policy setting where it is written.
+
+        Every construction path lands here -- :meth:`load`, :meth:`from_dict`,
+        and the direct dataclass call an application assembling an environment
+        field by field uses -- which is the point. The setting used to be
+        parsed by the resolver, on the branch it takes only when a resource is
+        *absent*, so ``strict_resources: yes`` built green everywhere until one
+        deployment went looking for a resource it did not have and got an error
+        about a setting instead. That is the same argument the reference's
+        ``$required`` marker already carries: a malformed value is malformed in
+        every environment.
+
+        A value still spelled as a template is left alone -- see
+        :func:`_is_unexpanded_template`.
+
+        Raises:
+            ConfigError: If ``settings['strict_resources']`` is present,
+                already expanded, and neither a bool nor ``"true"``/``"false"``
+        """
+        setting = self.settings.get(STRICT_RESOURCES_SETTING)
+        if setting is None or _is_unexpanded_template(setting):
+            return
+        parse_strictness_flag(
+            setting,
+            where=f"Setting '{STRICT_RESOURCES_SETTING}' in environment '{self.name}'",
+        )
 
     @classmethod
     def detect_environment(cls) -> str:
@@ -404,19 +513,47 @@ class EnvironmentConfig:
         resource_type: str,
         logical_name: str,
         defaults: dict[str, Any] | None = None,
+        *,
+        required: bool | None = None,
     ) -> dict[str, Any]:
         """Get concrete config for a logical resource.
+
+        ``defaults`` has historically carried two meanings at once: it is the
+        **data** to merge, and -- by being ``not None`` -- it is also the
+        **policy** for an absent resource. That coupling makes one combination
+        unreachable: *"use these values for keys the resource does not set,
+        but still fail if the resource itself is absent."* ``required``
+        separates the two, leaving ``defaults`` as data alone.
+
+        Two callers inside this package inherited opposite answers from the
+        overload without either of them choosing -- which is the reason the
+        ``$resource`` reference syntax now names its own policy explicitly
+        (``$required``, and ``strict_resources`` at the resolver and
+        environment levels) rather than expressing it through this parameter.
+        A reference resolved by
+        :meth:`EnvironmentAwareConfig.resolve_for_build` does not reach this
+        method's policy branch at all.
 
         Args:
             resource_type: Type of resource ("databases", "vector_stores", etc.)
             logical_name: Logical name referenced in app config
-            defaults: Default config values if resource not found
+            defaults: Default config values, merged into a found resource for
+                keys it does not set, and returned alone when it is absent and
+                the policy is lenient
+            required: Policy for an absent resource, independent of
+                ``defaults``. ``True`` raises even when ``defaults`` are
+                supplied; ``False`` returns ``defaults`` (or ``{}``) even when
+                none are; ``None`` (default) preserves the historical
+                behaviour, in which supplying ``defaults`` is itself the
+                request not to raise.
 
         Returns:
             Concrete configuration for the resource
 
         Raises:
-            ResourceNotFoundError: If resource not found and no defaults provided
+            ResourceNotFoundError: If the resource is not found and the
+                effective policy is strict -- ``required=True``, or
+                ``required=None`` with no ``defaults`` supplied
         """
         type_resources = self.resources.get(resource_type, {})
 
@@ -449,8 +586,12 @@ class EnvironmentConfig:
 
             return config
 
-        if defaults is not None:
-            copied_defaults: dict[str, Any] = _copy_structure(defaults)
+        # Absent. `required` decides when it is given; when it is not, the
+        # historical rule stands -- supplying defaults *is* the request not to
+        # raise.
+        lenient = not required if required is not None else defaults is not None
+        if lenient:
+            copied_defaults: dict[str, Any] = _copy_structure(defaults or {})
             return copied_defaults
 
         raise ResourceNotFoundError(

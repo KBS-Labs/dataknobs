@@ -212,6 +212,51 @@ class TestResourceAccess:
         with pytest.raises(ResourceNotFoundError, match="not found"):
             env_config.get_resource("databases", "missing")
 
+    def test_required_none_preserves_both_historical_branches(self, env_config):
+        """``required=None`` is the default, so it must decide exactly as before.
+
+        Guard against the separation of data from policy changing either
+        branch it was separated out of.
+        """
+        assert env_config.get_resource(
+            "caches", "redis", defaults={"backend": "redis"}, required=None
+        ) == {"backend": "redis"}
+        with pytest.raises(ResourceNotFoundError):
+            env_config.get_resource("databases", "missing", required=None)
+
+    def test_required_true_raises_despite_defaults(self, env_config):
+        """The combination the overload made unreachable.
+
+        "Use these values for keys the resource does not set, but still fail
+        if the resource itself is absent" had no spelling: passing defaults
+        was itself the request not to raise.
+        """
+        with pytest.raises(ResourceNotFoundError, match="not found"):
+            env_config.get_resource("databases", "missing", defaults={"port": 5432}, required=True)
+
+    def test_required_false_returns_empty_despite_no_defaults(self, env_config):
+        """The other unreachable combination: lenient with nothing to fall back on."""
+        assert env_config.get_resource("databases", "missing", required=False) == {}
+
+    def test_required_does_not_affect_a_found_resource(self, env_config):
+        """Found is found -- the policy only governs absence."""
+        db = env_config.get_resource("databases", "default", required=True)
+        assert db["host"] == "localhost"
+
+    def test_required_false_still_merges_defaults_for_a_found_resource(self, env_config):
+        db = env_config.get_resource(
+            "databases", "default", defaults={"port": 5432}, required=False
+        )
+        assert db["port"] == 5432
+        assert db["host"] == "localhost"
+
+    def test_lenient_defaults_are_copied_not_aliased(self, env_config):
+        """Same isolation guarantee as every other path out of this method."""
+        defaults = {"pool": {"size": 5}}
+        returned = env_config.get_resource("databases", "missing", defaults, required=False)
+        returned["pool"]["size"] = 99
+        assert defaults["pool"]["size"] == 5
+
     def test_has_resource(self, env_config):
         """Test checking resource existence."""
         assert env_config.has_resource("databases", "default") is True

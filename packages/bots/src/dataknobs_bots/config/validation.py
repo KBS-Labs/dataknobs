@@ -24,6 +24,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Protocol
 
 from dataknobs_bots.registry.portability import PortabilityError, validate_portability
+from dataknobs_config import RESOURCE_MARKER_KEYS
 
 if TYPE_CHECKING:
     from .schema import DynaBotConfigSchema
@@ -362,8 +363,29 @@ def _validate_against_schema(
                 )
             )
 
+    # A section may be a `$resource` reference rather than a literal config,
+    # whose keys are markers and not schema fields. The skip is for those --
+    # but a reference's marker vocabulary is closed, so skipping every
+    # `$`-prefixed key let a misspelling through the one check that runs
+    # before resolution. `$requred: true` reads as *not required*, and
+    # deferring it means it first appears in whichever deployment lacks the
+    # resource. The set is imported rather than transcribed so this cannot
+    # drift from the resolver that enforces it.
+    is_reference = "$resource" in config
     for key, value in config.items():
         if key.startswith("$"):
+            if is_reference and key not in RESOURCE_MARKER_KEYS:
+                markers = ", ".join(
+                    sorted(marker for marker in RESOURCE_MARKER_KEYS if marker.startswith("$"))
+                )
+                result = result.merge(
+                    ValidationResult.error(
+                        f"Component '{component}': unknown marker key '{key}' in a "
+                        f"$resource reference. A $-prefixed key must be one of: "
+                        f"{markers}. Anything else is treated as an inline default "
+                        f"and passed to a factory as a keyword argument."
+                    )
+                )
             continue
         if key in properties:
             prop_schema = properties[key]

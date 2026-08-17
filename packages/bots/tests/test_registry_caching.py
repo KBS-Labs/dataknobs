@@ -523,3 +523,141 @@ class TestConfigCachingManagerDistributed:
             await manager.close()
             await backend.close()
             await event_bus.close()
+
+
+class TestConfigCachingManagerResourceResolution:
+    """``$resource`` resolution, which had no behavioural coverage at all.
+
+    The manager read the reference format itself -- a third reader beside the
+    two in ``dataknobs-config`` -- and agreed with neither. It ignored every
+    marker except ``$resource`` and ``type``, dropped inline defaults, and
+    ended in a fallback branch for a missing resource that could not be
+    reached: the lookup it guarded raises rather than returning ``None``, so
+    the warning it logged had never once been emitted.
+
+    Nothing here was caught because nothing here was tested. Every test in
+    this class drives the manager with a real ``EnvironmentConfig``.
+    """
+
+    @pytest.fixture
+    def environment(self):
+        from dataknobs_config import EnvironmentConfig
+
+        return EnvironmentConfig(
+            name="test",
+            resources={
+                "databases": {
+                    "conversations": {"backend": "postgres", "table": "conversations"},
+                },
+                "llm_providers": {
+                    "default": {
+                        "provider": "ollama",
+                        "embedder": {"$resource": "embed", "type": "embedders"},
+                    },
+                },
+                "embedders": {"embed": {"model": "nomic"}},
+            },
+        )
+
+    @pytest.fixture
+    async def backend(self):
+        backend = InMemoryBackend()
+        await backend.initialize()
+        yield backend
+        await backend.close()
+
+    @pytest.fixture
+    async def manager(self, backend, environment):
+        manager = ConfigCachingManager(backend=backend, environment=environment, cache_ttl=10)
+        await manager.initialize()
+        yield manager
+        await manager.close()
+
+    @pytest.mark.asyncio
+    async def test_a_reference_resolves_to_its_resource(self, manager, backend):
+        await backend.register(
+            "bot-1", {"storage": {"$resource": "conversations", "type": "databases"}}
+        )
+        resolved = await manager.get_or_create("bot-1")
+        assert resolved["storage"] == {"backend": "postgres", "table": "conversations"}
+
+    @pytest.mark.asyncio
+    async def test_inline_defaults_are_merged_rather_than_discarded(self, manager, backend):
+        """They are half the reference format, and were being thrown away."""
+        await backend.register(
+            "bot-1",
+            {
+                "storage": {
+                    "$resource": "conversations",
+                    "type": "databases",
+                    "pool_size": 5,
+                    "table": "ignored -- the environment sets this one",
+                },
+            },
+        )
+        resolved = await manager.get_or_create("bot-1")
+        assert resolved["storage"]["pool_size"] == 5
+        assert resolved["storage"]["table"] == "conversations"
+
+    @pytest.mark.asyncio
+    async def test_a_reference_nested_in_a_resource_is_resolved(self, manager, backend):
+        """A resource may carry a reference, and a literal one reaches a factory."""
+        await backend.register("bot-1", {"llm": {"$resource": "default", "type": "llm_providers"}})
+        resolved = await manager.get_or_create("bot-1")
+        assert resolved["llm"]["embedder"] == {"model": "nomic"}
+
+    @pytest.mark.asyncio
+    async def test_a_missing_resource_raises(self, manager, backend):
+        """Unchanged, and now by decision rather than by accident.
+
+        The unreachable fallback said the author wanted a warning and a
+        degrade. What shipped was a raise. Preserving the behaviour and making
+        the *other* one declarable is what closes the gap without moving the
+        default under anyone.
+        """
+        from dataknobs_config import ResourceNotFoundError
+
+        await backend.register("bot-1", {"storage": {"$resource": "gone", "type": "databases"}})
+        with pytest.raises(ResourceNotFoundError, match="gone"):
+            await manager.get_or_create("bot-1")
+
+    @pytest.mark.asyncio
+    async def test_a_reference_may_declare_that_it_may_be_absent(self, manager, backend):
+        """The degrade the dead branch wanted, reachable by saying so."""
+        await backend.register(
+            "bot-1",
+            {
+                "storage": {
+                    "$resource": "gone",
+                    "type": "databases",
+                    "$required": False,
+                    "backend": "memory",
+                },
+            },
+        )
+        resolved = await manager.get_or_create("bot-1")
+        assert resolved["storage"] == {"backend": "memory"}
+
+    @pytest.mark.asyncio
+    async def test_a_misspelled_marker_is_rejected(self, manager, backend):
+        """``$requred`` was promoted to config and passed on as data."""
+        from dataknobs_config import ConfigError
+
+        await backend.register(
+            "bot-1",
+            {"storage": {"$resource": "conversations", "type": "databases", "$requred": True}},
+        )
+        with pytest.raises(ConfigError, match=r"\$requred"):
+            await manager.get_or_create("bot-1")
+
+    @pytest.mark.asyncio
+    async def test_no_environment_leaves_references_alone(self, backend):
+        """The manager is usable without one, and must not invent a policy."""
+        manager = ConfigCachingManager(backend=backend, cache_ttl=10)
+        await manager.initialize()
+        try:
+            await backend.register("bot-1", {"storage": {"$resource": "gone", "type": "x"}})
+            resolved = await manager.get_or_create("bot-1")
+            assert resolved["storage"] == {"$resource": "gone", "type": "x"}
+        finally:
+            await manager.close()

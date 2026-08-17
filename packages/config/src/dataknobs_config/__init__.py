@@ -31,10 +31,14 @@ from .binding_resolver import (
 from .builders import ConfigurableBase, FactoryBase
 from .config import Config
 from .environment_aware import (
+    RESOURCE_MARKER_KEYS,
     EnvironmentAwareConfig,
     EnvironmentAwareConfigError,
+    UnresolvedResourceRef,
+    resolve_resource_references,
 )
 from .environment_config import (
+    STRICT_RESOURCES_SETTING,
     EnvironmentConfig,
     EnvironmentConfigError,
     ResourceBinding,
@@ -83,6 +87,17 @@ __all__ = [
     "ResourceNotFoundError",
     "EnvironmentAwareConfig",
     "EnvironmentAwareConfigError",
+    # Resource reference vocabulary. `resolve_resource_references` is the
+    # first of these to reach for: a consumer holding a config tree and an
+    # environment should resolve with it rather than write a third reader of
+    # the format, which is how one arrived with its markers unvalidated, its
+    # inline defaults dropped and a fallback branch that could not be reached.
+    # The marker set and the settings key are for the reader that genuinely
+    # cannot -- a validator, an editor -- so neither copies the literals.
+    "resolve_resource_references",
+    "RESOURCE_MARKER_KEYS",
+    "STRICT_RESOURCES_SETTING",
+    "UnresolvedResourceRef",
     # Binding resolver
     "ConfigBindingResolver",
     "BindingResolverError",

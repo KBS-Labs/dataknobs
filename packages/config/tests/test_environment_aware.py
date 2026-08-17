@@ -568,14 +568,14 @@ class TestResourcesInLists:
 class TestMissingResourceIsObservable:
     """A ``$resource`` name that matches nothing must say so.
 
-    ``_resolve_resource_refs`` degrades to the reference's inline defaults
-    when a resource is missing, which is deliberate. What was not deliberate
-    is that the degrade was **silent**: the warning lived in an
-    ``except KeyError`` branch that could never run, because
-    ``_resolve_resource_refs`` always passes a (possibly empty) defaults dict
-    and ``get_resource`` returns those defaults rather than raising whenever
-    one is supplied. A typo'd binding name therefore produced an empty config
-    and no log line anywhere.
+    Resolution degrades to the reference's inline defaults when a resource is
+    missing and no policy says otherwise, which is deliberate. What was not
+    deliberate is that the degrade was **silent**: the warning lived in an
+    ``except KeyError`` branch that could never run, because the resolver
+    always passed a (possibly empty) defaults dict and ``get_resource``
+    returns those defaults rather than raising whenever one is supplied. A
+    typo'd binding name therefore produced an empty config and no log line
+    anywhere.
     """
 
     @pytest.fixture
@@ -853,7 +853,15 @@ class TestMissingResourceStillResolvesItsDefaults:
         assert "type" not in resolved["db"]["spare"]
 
     def test_requires_is_validated_against_inline_defaults(self, env):
-        """``$requires`` was checked on the degraded config before, too."""
+        """``$requires`` is checked on the degraded config, where one is built.
+
+        A reference declaring ``$requires`` against an absent resource now
+        fails outright — a resource that is not there satisfies no capability.
+        Reaching the degraded config at all therefore takes an explicit
+        ``$required: false``, which says "if it is there it must do X; it may
+        be absent". That is not "and anything will do", so the capabilities
+        the inline defaults declare are still held to the requirement.
+        """
         from dataknobs_config.exceptions import ConfigError
 
         app = EnvironmentAwareConfig(
@@ -862,6 +870,7 @@ class TestMissingResourceStillResolvesItsDefaults:
                     "$resource": "typo",
                     "type": "databases",
                     "$requires": ["transactions"],
+                    "$required": False,
                     "capabilities": ["reads"],
                 }
             },
