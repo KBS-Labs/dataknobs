@@ -1,5 +1,6 @@
 """Extended tests for backend factory functionality including all backends."""
 
+import logging
 import pytest
 from unittest.mock import patch, MagicMock
 import tempfile
@@ -15,9 +16,14 @@ from dataknobs_data.factory import (
 class TestDatabaseFactoryPostgres:
     """Test backend creation via factory using memory backend (no mocks needed)."""
 
-    @patch("dataknobs_data.factory.logger")
-    def test_create_postgres_backend_success(self, mock_logger):
-        """Test successful backend creation and config passing."""
+    def test_create_postgres_backend_success(self, caplog):
+        """Test successful backend creation and config passing.
+
+        The log assertion reads the emitted record rather than a patched
+        module-level logger, so it pins that the requested backend is
+        announced rather than which module announces it.
+        """
+        caplog.set_level(logging.DEBUG)
         factory = DatabaseFactory()
 
         # Use real memory backend instead of mocking - tests same factory logic
@@ -27,7 +33,11 @@ class TestDatabaseFactoryPostgres:
         from dataknobs_data.backends.memory import SyncMemoryDatabase
 
         assert isinstance(db, SyncMemoryDatabase)
-        mock_logger.info.assert_called_with("Creating database with backend: %s", "memory")
+        assert any(
+            record.levelno == logging.INFO
+            and record.getMessage() == "Creating database with backend: memory"
+            for record in caplog.records
+        )
 
     def test_postgres_aliases(self):
         """Test that backend aliases work (using memory backend as example)."""

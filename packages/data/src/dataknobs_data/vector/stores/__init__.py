@@ -7,6 +7,8 @@ from collections.abc import Mapping
 from typing import Any, Type
 
 from dataknobs_common.registry import PluginRegistry
+
+from dataknobs_data.backend_selection import DEFAULT_BACKEND
 from dataknobs_common.structured_config import (
     SKIP_VALIDATION,
     ConfigClassResolution,
@@ -149,9 +151,11 @@ def _resolve_vector_store_config_cls(
 
     Delegates to ``vector_backends`` — the same registry the construction
     path uses — by reading ``CONFIG_CLS`` off the registered store class
-    for the ``"backend"`` discriminator (defaulting to ``"memory"``, the
-    factory's own default). Holding no independent backend→config-class
-    table is the no-drift guarantee. Returns ``None`` for an unknown
+    for the ``"backend"`` discriminator (defaulting to
+    :data:`~dataknobs_data.backend_selection.DEFAULT_BACKEND`, the constant
+    the factory itself falls back to). Holding no independent
+    backend→config-class table, and no second spelling of the default, is
+    the no-drift guarantee. Returns ``None`` for an unknown
     backend, which ``validate`` surfaces as a ``ConfigurationError``.
 
     A backend that is *registered* but exposes no ``StructuredConfig``
@@ -164,7 +168,7 @@ def _resolve_vector_store_config_cls(
     keeps it so); the branch covers a custom bare-callable backend
     registered out of band.
     """
-    backend = raw.get("backend", "memory")
+    backend = raw.get("backend", DEFAULT_BACKEND)
     store_cls = vector_backends.get_factory(backend)
     if store_cls is None:
         # Unknown discriminator — the legitimate typo path; validate()

@@ -9,6 +9,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`get_available_backends()` and `is_backend_available()`** on
+  `DatabaseFactory`, `AsyncDatabaseFactory` and `VectorStoreFactory`. Three
+  documents described both as factory methods, so following any of them
+  raised `AttributeError`; the reference page's own "Backend Information API"
+  section showed all three calls while only `get_backend_info` existed.
+
+  Registration is guarded by each backend's own import, so *registered* means
+  *installed*: `is_backend_available("postgres")` is the check to make before
+  offering a backend, and `get_backend_info(...)["requires_install"]` is what
+  to print when it is absent.
+
+  `get_available_backends()` reports canonical names with registration
+  aliases collapsed — `postgres` once rather than `postgres`, `postgresql`
+  and `pg` — so it is a list of backends rather than a list of spellings.
+  The unknown-backend `ValueError` prints that same list, from the same call,
+  so the two cannot drift apart.
+
+- **`get_backend_info()` on `AsyncDatabaseFactory`**, which had none. The
+  other two factories carried it, so the async one answered two of the three
+  questions its siblings answer.
+
+- **`dataknobs_data.backend_selection`** — `DEFAULT_BACKEND`,
+  `select_backend()`, `available_backends()` and `backend_info()`, the four
+  answers the three factories previously each held their own copy of. A
+  consumer with a `PluginRegistry` of their own backends gets the same
+  provenance logging and the same alias collapsing without reimplementing
+  either. The module imports nothing from its own package, so it is safe to
+  import from anywhere in it.
+
 - **`dataknobs_data.testing`** — deterministic vector draws, for this package's
   tests and for consumers testing their own `VectorStore` implementations.
   `vectors(count, dim, seed=0)` returns a `(count, dim)` float32 array,
@@ -18,6 +47,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Each call builds its own `numpy.random.Generator`. None of them reads or
   seeds the process-global RNG, so a draw in one test cannot shift what any
   later test draws.
+
+### Changed
+
+- **A config with no `backend` key now logs at WARNING.** It was INFO — the
+  same line, naming the same backend, as an explicit `backend: memory` — and
+  on `AsyncDatabaseFactory` there was no line at all. The two are not the
+  same event. One is a deployment choosing an in-process store; the other is
+  what is left when a config arrives empty, and an empty config handed to a
+  factory does not fail. It produces a store that answers every query with
+  zero results and loses everything when the process restarts.
+
+  An explicit `backend: memory` is still INFO, which is what keeps the
+  WARNING meaning something. The object built is identical either way — that
+  identity is what made the difference invisible.
+
+- **`get_backend_info()` answers for an alias.** An alias carries no registry
+  metadata of its own, so asking about `pg` returned `{}` while every other
+  question about it answered for postgres. It resolves to the key describing
+  the same backend.
+
+- **The unknown-backend `ValueError` lists canonical names**, where it
+  previously listed every registered spelling. The three lead sentences are
+  unchanged, including `AsyncDatabaseFactory`'s deliberately distinct one —
+  an unrecognised name there usually means the backend exists without an
+  async variant, which is worth saying differently from "you typed it wrong".
 
 ### Fixed
 
