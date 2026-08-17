@@ -109,11 +109,24 @@ Factory for creating database instances.
 
 ```python
 class DatabaseFactory(FactoryBase):
-    def create(self, **config) -> Database
-    def get_available_backends(self) -> List[str]
-    def get_backend_info(self, backend: str) -> Dict[str, Any]
-    def is_backend_available(self, backend: str) -> bool
-    def register_backend(self, name: str, backend_class: Type[Database]) -> None
+    def create(self, **config) -> SyncDatabase
+    def get_available_backends(self) -> list[str]
+    def get_backend_info(self, backend_type: str) -> dict[str, Any]
+    def is_backend_available(self, backend_type: str) -> bool
+```
+
+Registration is not a factory method — backends live in the registry the
+factory reads, so a custom one is added there and every factory method
+picks it up:
+
+```python
+from dataknobs_data.backends import sync_backends
+
+sync_backends.register("my_backend", MyDatabase, metadata={
+    "description": "Custom backend",
+    "persistent": True,
+    "requires_install": False,
+})
 ```
 
 **Example:**

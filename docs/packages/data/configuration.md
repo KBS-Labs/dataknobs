@@ -303,20 +303,33 @@ from dataknobs_data import DatabaseFactory
 def validate_database_config(config: dict) -> bool:
     """Validate database configuration."""
     factory = DatabaseFactory()
-    
-    # Check backend is valid
+
+    # An absent key is not the same as an explicit "memory": the factory
+    # would fall back and log a WARNING, which is rarely what a validated
+    # config wants.
     backend = config.get("backend")
-    if backend not in factory.get_available_backends():
-        raise ValueError(f"Invalid backend: {backend}")
-    
-    # Check required parameters
-    info = factory.get_backend_info(backend)
-    required = info.get("required_params", [])
-    
-    for param in required:
-        if param not in config:
-            raise ValueError(f"Missing required parameter: {param}")
-    
+    if backend is None:
+        raise ValueError("No 'backend' key; the factory would fall back to memory")
+
+    if not factory.is_backend_available(backend):
+        info = factory.get_backend_info(backend)
+        install = info.get("requires_install")
+        if install:
+            # Known backend, driver not installed — say what to install.
+            raise ValueError(f"Backend {backend!r} is not installed: {install}")
+        raise ValueError(
+            f"Invalid backend: {backend}. "
+            f"Available: {factory.get_available_backends()}"
+        )
+
+    # config_options documents every key the backend accepts, with the
+    # required ones marked in their descriptions. It is documentation, not a
+    # schema — the typed check is StructuredConfig.validate().
+    documented = factory.get_backend_info(backend)["config_options"]
+    unknown = [key for key in config if key != "backend" and key not in documented]
+    if unknown:
+        raise ValueError(f"Unrecognized options for {backend}: {unknown}")
+
     return True
 
 # Usage

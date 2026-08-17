@@ -131,6 +131,7 @@ print(info)
 #     'description': 'AWS S3 object storage backend',
 #     'persistent': True,
 #     'requires_install': 'pip install dataknobs-data[s3]',
+#     'requires_module': 'boto3',
 #     'vector_support': False,
 #     'config_options': {
 #         'bucket': 'S3 bucket name (required)',
@@ -144,14 +145,40 @@ if factory.is_backend_available("postgres"):
     db = factory.create(backend="postgres", **config)
 else:
     print("PostgreSQL backend not available")
-    print("Install with: pip install dataknobs-data[postgres]")
+    print(factory.get_backend_info("postgres")["requires_install"])
+    # Install with: pip install dataknobs-data[postgres]
 ```
 
-**Available means installed.** Each backend registers itself behind its own
-import, so a name is registered exactly when its optional dependency is
-present. `is_backend_available("postgres")` is therefore the check to make
-before offering it, and `get_backend_info(...)['requires_install']` is what
-to print when it is missing.
+**Available means installed.** Registration probes the driver a backend
+declares in `requires_module`, so a registered name is one whose optional
+dependency is actually present. `is_backend_available("postgres")` is
+therefore the check to make before offering it.
+
+That probe is what makes the answer trustworthy, because the backends do
+not agree among themselves about when to fail. Some import their driver at
+module top level, so a missing driver fails the import; others catch their
+own `ImportError` and raise only when you construct one. Asking whether the
+module loaded would answer honestly for the first group and optimistically
+for the second — `is_backend_available("faiss")` would return `True` on a
+machine without `faiss-cpu`, and `create()` would then raise.
+
+**A backend that is missing still describes itself.** `requires_install` is
+only ever read by someone who does not have the backend installed, so a
+backend whose driver is absent stays *known* rather than disappearing:
+`get_backend_info(...)` answers for it, and `create()` reports the missing
+driver rather than an unrecognised name.
+
+```python
+# On a machine without psycopg2:
+factory.is_backend_available("postgres")           # False
+"postgres" in factory.get_available_backends()     # False
+factory.get_backend_info("postgres")["requires_install"]
+# 'pip install dataknobs-data[postgres]'
+
+factory.create(backend="postgres", host="localhost")
+# ValueError: Backend 'postgres' is known but not available here.
+#             Install with: pip install dataknobs-data[postgres]
+```
 
 **The reported list names each backend once.** `create()` accepts
 registration aliases — `pg` and `postgresql` for postgres, `es` for
