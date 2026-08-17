@@ -308,6 +308,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   unconditionally, so `{"backend_config": {"backend": "postgres"}}` silently
   got `memory`.
 
+- **Four more sites spelled the default backend a second time.** The wizard's
+  bank creation and restore, its artifact registry, and
+  `ArtifactBank.from_dict` each asked "does this config want something other
+  than the in-process store?" as `cfg.get("backend", "memory") != "memory"` —
+  the constant twice per site, in three phrasings, none of which normalised
+  the value. `backend: MEMORY` therefore read as a non-default choice and was
+  sent to a factory, and `backend: null` read as one too, reaching the
+  factory as `None`. They now share `is_default_backend()`, which reads the
+  key the way the factory does and rejects a present-but-unusable value where
+  it is written rather than one layer down.
+
+  These deliberately do *not* report an absent key, unlike the three above. A
+  bank config naming no backend is asking for conversation-scoped storage —
+  the documented default and the recommended answer — and nothing on that
+  branch reaches a factory, so there is no provenance to lose. The
+  distinction is what separates a laundered default from an ordinary one, and
+  it is now pinned by tests rather than left to a reader's inference.
+
 - **A wizard skipped extraction after an auto-advance under `advance()` and
   never under a conversation.** `skip_extraction` is set while the landing
   stage's response is generated and read at the start of the *next* turn, so
