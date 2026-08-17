@@ -186,11 +186,24 @@ resources:
       capabilities: [chat, streaming]
 ```
 
-The `capabilities` field is stripped during resolution — it's validation metadata, not passed to the provider constructor.
+The `$requires` field is stripped during resolution — it's validation
+metadata, not passed to the provider constructor. `capabilities` is **not**
+stripped: it is read to validate `$requires` and then passed through with the
+rest of the resource config, so a provider that receives one must tolerate
+the keyword.
+
+A `$requires` naming a resource this environment does not define raises
+`ResourceNotFoundError` — an absent resource satisfies no capability. See
+[Missing Resources](../../config/environment-aware.md#4-missing-resources)
+for the full policy and how to opt out with `$required: false`.
 
 ### Config Merging
 
-Additional fields in a resource reference (except `$resource`, `type`, and `$requires`) are merged with the resolved config:
+Additional fields in a resource reference are merged with the resolved
+config. The exceptions are the marker keys — `$resource`, `type`,
+`$requires` and `$required` — which are the reference's own syntax. That set
+is closed: any other `$`-prefixed key is rejected as a malformed reference
+rather than merged.
 
 ```yaml
 # In bot config

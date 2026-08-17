@@ -488,6 +488,7 @@ llm:
   $resource: default
   type: llm_providers
   $requires: [function_calling]   # Optional: required capabilities
+  $required: true                 # Optional: absent resource raises, not degrades
   temperature: 0.7                # Override/default value
 
 # Supported resource types
@@ -497,7 +498,9 @@ llm:
 # - embedding_providers
 ```
 
-**`$requires`** declares capabilities the bot needs from the resource. If the resolved resource declares `capabilities` metadata, the system validates that all requirements are met at config resolution time. Requirements are also **inferred** from bot config structure (e.g., `react` strategy + `tools` implies `function_calling`).
+**`$requires`** declares capabilities the bot needs from the resource. If the resolved resource declares `capabilities` metadata, the system validates that all requirements are met at config resolution time. Requirements are also **inferred** from bot config structure (e.g., `react` strategy + `tools` implies `function_calling`). A `$requires` against a resource the environment does not define raises — an absent resource satisfies no capability.
+
+**`$required`** declares that the resource must exist. Without it, a reference naming a resource the environment does not define warns and degrades to the reference's inline defaults (or to an empty config, which usually means the factory's own default — an in-memory database, for instance, that holds state until the process restarts). `$required: false` opts a reference out of the strictness `$requires` and a resolver-wide setting would otherwise impose.
 
 Additional fields in a resource reference are merged with the resolved config:
 
