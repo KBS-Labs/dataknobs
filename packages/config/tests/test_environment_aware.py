@@ -853,7 +853,15 @@ class TestMissingResourceStillResolvesItsDefaults:
         assert "type" not in resolved["db"]["spare"]
 
     def test_requires_is_validated_against_inline_defaults(self, env):
-        """``$requires`` was checked on the degraded config before, too."""
+        """``$requires`` is checked on the degraded config, where one is built.
+
+        A reference declaring ``$requires`` against an absent resource now
+        fails outright — a resource that is not there satisfies no capability.
+        Reaching the degraded config at all therefore takes an explicit
+        ``$required: false``, which says "if it is there it must do X; it may
+        be absent". That is not "and anything will do", so the capabilities
+        the inline defaults declare are still held to the requirement.
+        """
         from dataknobs_config.exceptions import ConfigError
 
         app = EnvironmentAwareConfig(
@@ -862,6 +870,7 @@ class TestMissingResourceStillResolvesItsDefaults:
                     "$resource": "typo",
                     "type": "databases",
                     "$requires": ["transactions"],
+                    "$required": False,
                     "capabilities": ["reads"],
                 }
             },

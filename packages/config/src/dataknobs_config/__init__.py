@@ -31,8 +31,11 @@ from .binding_resolver import (
 from .builders import ConfigurableBase, FactoryBase
 from .config import Config
 from .environment_aware import (
+    RESOURCE_MARKER_KEYS,
+    STRICT_RESOURCES_SETTING,
     EnvironmentAwareConfig,
     EnvironmentAwareConfigError,
+    UnresolvedResourceRef,
 )
 from .environment_config import (
     EnvironmentConfig,
@@ -83,6 +86,12 @@ __all__ = [
     "ResourceNotFoundError",
     "EnvironmentAwareConfig",
     "EnvironmentAwareConfigError",
+    # Resource reference vocabulary -- exported so a second reader of the
+    # `$resource` format has the marker set and the settings key without
+    # copying either literal.
+    "RESOURCE_MARKER_KEYS",
+    "STRICT_RESOURCES_SETTING",
+    "UnresolvedResourceRef",
     # Binding resolver
     "ConfigBindingResolver",
     "BindingResolverError",

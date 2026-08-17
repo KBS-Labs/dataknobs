@@ -404,19 +404,47 @@ class EnvironmentConfig:
         resource_type: str,
         logical_name: str,
         defaults: dict[str, Any] | None = None,
+        *,
+        required: bool | None = None,
     ) -> dict[str, Any]:
         """Get concrete config for a logical resource.
+
+        ``defaults`` has historically carried two meanings at once: it is the
+        **data** to merge, and -- by being ``not None`` -- it is also the
+        **policy** for an absent resource. That coupling makes one combination
+        unreachable: *"use these values for keys the resource does not set,
+        but still fail if the resource itself is absent."* ``required``
+        separates the two, leaving ``defaults`` as data alone.
+
+        Two callers inside this package inherited opposite answers from the
+        overload without either of them choosing -- which is the reason the
+        ``$resource`` reference syntax now names its own policy explicitly
+        (``$required``, and ``strict_resources`` at the resolver and
+        environment levels) rather than expressing it through this parameter.
+        A reference resolved by
+        :meth:`EnvironmentAwareConfig.resolve_for_build` does not reach this
+        method's policy branch at all.
 
         Args:
             resource_type: Type of resource ("databases", "vector_stores", etc.)
             logical_name: Logical name referenced in app config
-            defaults: Default config values if resource not found
+            defaults: Default config values, merged into a found resource for
+                keys it does not set, and returned alone when it is absent and
+                the policy is lenient
+            required: Policy for an absent resource, independent of
+                ``defaults``. ``True`` raises even when ``defaults`` are
+                supplied; ``False`` returns ``defaults`` (or ``{}``) even when
+                none are; ``None`` (default) preserves the historical
+                behaviour, in which supplying ``defaults`` is itself the
+                request not to raise.
 
         Returns:
             Concrete configuration for the resource
 
         Raises:
-            ResourceNotFoundError: If resource not found and no defaults provided
+            ResourceNotFoundError: If the resource is not found and the
+                effective policy is strict -- ``required=True``, or
+                ``required=None`` with no ``defaults`` supplied
         """
         type_resources = self.resources.get(resource_type, {})
 
@@ -449,8 +477,12 @@ class EnvironmentConfig:
 
             return config
 
-        if defaults is not None:
-            copied_defaults: dict[str, Any] = _copy_structure(defaults)
+        # Absent. `required` decides when it is given; when it is not, the
+        # historical rule stands -- supplying defaults *is* the request not to
+        # raise.
+        lenient = not required if required is not None else defaults is not None
+        if lenient:
+            copied_defaults: dict[str, Any] = _copy_structure(defaults or {})
             return copied_defaults
 
         raise ResourceNotFoundError(

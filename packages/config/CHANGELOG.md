@@ -7,6 +7,94 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Added
+
+- **A `$resource` reference can now declare that its resource must exist.**
+  A reference naming a resource the current environment does not define warns
+  and resolves to the reference's inline defaults — or to `{}` when it
+  declares none. That is rarely what a production deployment wants, because an
+  empty config handed to a factory usually does not fail: it produces the
+  factory's default. A degraded `conversation_storage` binding becomes an
+  in-memory database, which holds state perfectly until the process restarts.
+
+  The policy is now declarable at four levels, most specific first, each
+  unset-means-defer so an explicit `false` and an unspecified value stay
+  distinguishable:
+
+  | Level | Spelling | Reachable by |
+  |---|---|---|
+  | The reference | `$required: true` | the config author |
+  | The reference | a non-empty `$requires` | the config author |
+  | Code | `resolve_for_build(strict_resources=True)`, `EnvironmentAwareConfig(..., strict_resources=True)` | the calling code, the embedding application |
+  | The environment | `settings: {strict_resources: true}` | the operator |
+
+  The default is unchanged: with nothing declared, a missing resource still
+  warns and degrades. The environment level exists because it is the only one
+  a deployment whose references are *generated at runtime* can reach — there
+  is no authored reference to annotate, and every other level lives in code
+  the operator does not deploy.
+
+  Both `$required` and the environment setting accept a boolean or exactly
+  the strings `"true"` / `"false"`, so either works through `${VAR}`
+  expansion. Any other value raises rather than reading as lenient.
+
+- **`find_unresolved_resources()`** on `EnvironmentAwareConfig` — every
+  unresolvable reference in the tree in one pass, as
+  `UnresolvedResourceRef(path, resource_type, resource_name, required,
+  has_inline_defaults)`. Raise-on-first is right for a build and wrong for a
+  preflight: an operator auditing a config wants the whole list, not the first
+  entry. It constructs nothing and raises nothing for a missing resource, and
+  reports a variable-selected `$resource: ${VAR}` under its resolved name.
+  `resolve_for_build(strict_resources=True)` remains the first-failure form,
+  and is safe to run at boot purely to prove every binding exists.
+
+- **`EnvironmentConfig.get_resource(..., required=)`** separates data from
+  policy. `defaults` has carried both meanings at once — the values to merge,
+  and, by being non-`None`, the decision not to raise. That coupling made one
+  combination unreachable: *use these values for keys the resource does not
+  set, but still fail if the resource itself is absent*. `required=None`
+  (default) preserves the historical behaviour exactly.
+
+- **`RESOURCE_MARKER_KEYS`, `STRICT_RESOURCES_SETTING` and
+  `UnresolvedResourceRef`** are exported from `dataknobs_config`, so a second
+  reader of the `$resource` format has the vocabulary without copying the
+  literals.
+
+### Changed
+
+- **`$requires` on an absent resource now raises.** The severity was
+  inverted: a resource that existed but lacked a declared capability aborted
+  the build, while a resource that did not exist at all resolved to its inline
+  defaults and was handed to a factory. A resource that is absent satisfies no
+  capability, so the weaker claim can no longer be the only one enforced.
+
+  Declare `$required: false` alongside `$requires` to keep the previous
+  behaviour for a reference where it was intended — "if it is there it must do
+  X; it may be absent" is coherent, and the capability check still runs
+  against the degraded config in that case.
+
+- **A `$`-prefixed key that is not a marker is now an error.** The marker set
+  (`$resource`, `type`, `$requires`, `$required`) is closed, and the
+  comprehension that builds a reference's inline defaults takes everything
+  else — so a misspelled marker was not rejected, it was promoted to a default
+  and passed to the factory as a keyword argument. `$requred: true` would
+  therefore have meant *not required*, silently, at the exact site meant to
+  close that class of failure.
+
+- **`ConfigBindingResolver`'s raise on a missing resource is now documented as
+  the strict policy** rather than left looking incidental. Behaviour is
+  unchanged. That API takes a `(type, name)` pair with no reference to read a
+  policy off, so strictness is the only coherent answer; the declarable
+  behaviour belongs to the reference syntax. Both resolvers raise
+  `ResourceNotFoundError` for a missing resource, `ConfigError` for a
+  malformed reference or an under-capable one.
+
+  ⚠️ **`ResourceNotFoundError` subclasses both `EnvironmentConfigError` and
+  `KeyError`.** `resolve_for_build()` could not previously raise a `KeyError`;
+  under a strict policy it can. Code wrapping resolution in `except KeyError`
+  for unrelated reasons will swallow it. The hierarchy is unchanged — narrowing
+  it is a breaking change to an exported type, and is not worth making here.
+
 ### Security
 
 - **An `@`-reference could read any file on the volume.**

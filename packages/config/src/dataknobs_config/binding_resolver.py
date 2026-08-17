@@ -96,6 +96,19 @@ class ConfigBindingResolver:
     3. Instantiate resources using registered factories
     4. Cache instances for reuse
 
+    **Missing resources raise, deliberately.** This API takes a ``(type,
+    name)`` pair and nothing else, so there is no reference to read a policy
+    off and no inline defaults to degrade to -- resolving a name this
+    environment does not define can only fail. That makes this **the strict
+    policy**, not an accident of implementation.
+
+    The lenient, declarable behaviour belongs to the ``$resource`` reference
+    syntax, where a reference can carry ``$required`` and inline defaults; see
+    :meth:`EnvironmentAwareConfig.resolve_for_build`. The two APIs agree on
+    the exception type -- a missing resource is
+    :class:`~dataknobs_config.ResourceNotFoundError` at both -- and differ
+    only in whether a reference exists to say otherwise.
+
     Attributes:
         environment: The EnvironmentConfig for resource lookup
     """
@@ -199,6 +212,8 @@ class ConfigBindingResolver:
             Instantiated resource
 
         Raises:
+            ResourceNotFoundError: If this environment does not define the
+                resource. Strict by design -- see the class docstring
             FactoryNotFoundError: If no factory registered for resource type
             BindingResolverError: If resource creation fails
         """
@@ -254,6 +269,8 @@ class ConfigBindingResolver:
             Instantiated resource
 
         Raises:
+            ResourceNotFoundError: If this environment does not define the
+                resource. Strict by design -- see the class docstring
             FactoryNotFoundError: If no factory registered for resource type
             BindingResolverError: If resource creation fails
         """
@@ -300,6 +317,13 @@ class ConfigBindingResolver:
 
         Returns:
             Resolved configuration
+
+        Raises:
+            ResourceNotFoundError: If the resource is absent. No ``defaults``
+                are passed, which under
+                :meth:`EnvironmentConfig.get_resource` is the strict policy --
+                and it is the right one here, because this API is reached
+                without a reference that could have declared otherwise.
         """
         config = self._environment.get_resource(resource_type, logical_name)
 
