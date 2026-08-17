@@ -1239,14 +1239,32 @@ class AsyncDatabase(RecordStorageMixin, CapabilityMixin, ABC):
 
         Returns:
             Connected AsyncDatabase instance
+
+        Raises:
+            ValueError: The backend is not one this registry knows, or is
+                known and not installed here -- in which case the message
+                says what to install rather than reporting the name as
+                unrecognised.
         """
+        from .backend_selection import build_backend, select_backend
         from .backends import async_backends
 
-        backend_class = async_backends.get_factory(backend)
-        if not backend_class:
-            raise ValueError(f"Unknown backend: {backend}. Available: {async_backends.list_keys()}")
-
-        instance = backend_class(config)
+        # Through the same resolution the factories use. Written inline
+        # here, this was the one path left saying "Unknown backend" for a
+        # correctly spelled backend whose driver is absent, and listing
+        # every alias where the factories list one name per backend.
+        backend_class, backend_type, options = select_backend(
+            {**(config or {}), "backend": backend},
+            async_backends,
+            kind="async database",
+        )
+        # Annotated because ``build_backend`` narrows a registry's
+        # ``type[T] | Callable[..., T]`` union and returns ``Any``; the
+        # registry is parameterised by the backend class rather than by an
+        # instance of it, so the instance type is asserted here.
+        instance: AsyncDatabase = build_backend(
+            backend_class, options, kind="async database", backend_type=backend_type
+        )
         await instance.connect()
         return instance
 
@@ -1874,14 +1892,27 @@ class SyncDatabase(RecordStorageMixin, CapabilityMixin, ABC):
 
         Returns:
             Connected SyncDatabase instance
+
+        Raises:
+            ValueError: The backend is not one this registry knows, or is
+                known and not installed here -- in which case the message
+                says what to install rather than reporting the name as
+                unrecognised.
         """
+        from .backend_selection import build_backend, select_backend
         from .backends import sync_backends
 
-        backend_class = sync_backends.get_factory(backend)
-        if not backend_class:
-            raise ValueError(f"Unknown backend: {backend}. Available: {sync_backends.list_keys()}")
-
-        instance = backend_class(config)
+        # The async twin's comment applies here too: one resolution, shared
+        # with the factories, so a fix to it reaches every way in.
+        backend_class, backend_type, options = select_backend(
+            {**(config or {}), "backend": backend},
+            sync_backends,
+            kind="database",
+        )
+        # See the async twin: ``build_backend`` returns ``Any``.
+        instance: SyncDatabase = build_backend(
+            backend_class, options, kind="database", backend_type=backend_type
+        )
         instance.connect()
         return instance
 

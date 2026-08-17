@@ -39,7 +39,12 @@ from typing import Any
 
 import pytest
 
-from dataknobs_data import AsyncDatabaseFactory, DatabaseFactory
+from dataknobs_data import (
+    DEFAULT_BACKEND,
+    AsyncDatabaseFactory,
+    DatabaseFactory,
+    is_default_backend,
+)
 from dataknobs_data.backends import async_backends, sync_backends
 from dataknobs_data.vector.stores import vector_backends
 from dataknobs_data.vector.stores.factory import VectorStoreFactory
@@ -236,6 +241,45 @@ class TestUnknownBackendMessages:
     def test_a_backend_name_is_stripped_before_lookup(self) -> None:
         """Whitespace around a name is a config artefact, not a new backend."""
         assert DatabaseFactory().create(backend="  MEMORY  ") is not None
+
+
+class TestAskingWhetherAConfigWantsTheDefault:
+    """For the caller that branches before any factory is involved.
+
+    Four sites decided "in-process store, or build one?" by writing
+    ``cfg.get("backend", "memory") == "memory"`` -- the default's name
+    twice per site, eight copies of a constant that
+    :data:`DEFAULT_BACKEND` already holds, in three different spellings
+    that no longer had to agree.
+
+    They are not laundering an absent key into an explicit choice, which is
+    the defect the factory callers had: nothing is built through a factory
+    on the branch they take, so there is no provenance to lose. They are
+    asking one question in four ways.
+    """
+
+    def test_a_config_naming_nothing_wants_it(self) -> None:
+        assert is_default_backend({}) is True
+
+    def test_a_config_naming_it_wants_it(self) -> None:
+        assert is_default_backend({"backend": DEFAULT_BACKEND}) is True
+
+    def test_a_config_naming_something_else_does_not(self) -> None:
+        assert is_default_backend({"backend": "postgres"}) is False
+
+    @pytest.mark.parametrize("spelling", ["MEMORY", "  memory  ", "Memory"])
+    def test_it_reads_the_name_the_way_the_factory_does(self, spelling: str) -> None:
+        """A comparison against a literal missed every one of these."""
+        assert is_default_backend({"backend": spelling}) is True
+
+    @pytest.mark.parametrize("value", [None, "", "   ", 3])
+    def test_a_present_but_unusable_key_is_an_error_not_the_default(self, value: object) -> None:
+        """``.get(key, "memory")`` returned the value, so ``None`` compared
+        unequal to ``"memory"`` and the config went to a factory that could
+        not use it either.
+        """
+        with pytest.raises(ValueError):
+            is_default_backend({"backend": value})
 
 
 class TestABackendThatCannotBeBuiltFromAConfig:

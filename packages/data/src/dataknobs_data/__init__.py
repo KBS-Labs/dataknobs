@@ -114,6 +114,10 @@ from .backend_selection import (
     available_backends,
     backend_available,
     backend_info,
+    build_backend,
+    is_default_backend,
+    module_installed,
+    normalize_backend,
     register_backend,
     select_backend,
 )
@@ -225,6 +229,10 @@ __all__ = [
     "available_backends",
     "backend_available",
     "backend_info",
+    "build_backend",
+    "is_default_backend",
+    "module_installed",
+    "normalize_backend",
     "register_backend",
     "select_backend",
     # Validation and Migration modules

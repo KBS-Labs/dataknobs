@@ -11,7 +11,7 @@ import pytest
 
 from dataknobs_common.testing import is_chromadb_available, is_faiss_available
 from dataknobs_data.testing import vector as _vector, vectors as _vectors
-from dataknobs_data.vector.stores import VectorStoreFactory
+from dataknobs_data.vector.stores import VectorStoreFactory, vector_backends
 from dataknobs_data.vector.stores.memory import MemoryVectorStore
 from dataknobs_data.vector.types import DistanceMetric
 
@@ -754,34 +754,54 @@ class TestVectorStoreFactory:
         assert isinstance(store, MemoryVectorStore)
         assert store.dimensions == 128
 
+    @pytest.mark.skipif(not FAISS_AVAILABLE_FOR_FACTORY, reason="faiss-cpu is not installed")
     def test_create_faiss_store(self):
         """Test creating Faiss vector store."""
+        from dataknobs_data.vector.stores.faiss import FaissVectorStore
+
         factory = VectorStoreFactory()
-        if not FAISS_AVAILABLE_FOR_FACTORY:
-            # Test that it raises the appropriate error when not installed
-            with pytest.raises(ValueError, match="Faiss backend requires faiss-cpu"):
-                factory.create(backend="faiss", dimensions=256, index_type="flat")
-        else:
-            # Test normal creation when installed
-            from dataknobs_data.vector.stores.faiss import FaissVectorStore
+        store = factory.create(backend="faiss", dimensions=256, index_type="flat")
+        assert isinstance(store, FaissVectorStore)
+        assert store.dimensions == 256
 
-            store = factory.create(backend="faiss", dimensions=256, index_type="flat")
-            assert isinstance(store, FaissVectorStore)
-            assert store.dimensions == 256
-
+    @pytest.mark.skipif(not CHROMA_AVAILABLE_FOR_FACTORY, reason="chromadb is not installed")
     def test_create_chroma_store(self):
         """Test creating Chroma vector store."""
-        factory = VectorStoreFactory()
-        if not CHROMA_AVAILABLE_FOR_FACTORY:
-            # Test that it raises the appropriate error when not installed
-            with pytest.raises(ValueError, match="Chroma backend requires chromadb"):
-                factory.create(backend="chroma", collection_name="test")
-        else:
-            # Test normal creation when installed
-            from dataknobs_data.vector.stores.chroma import ChromaVectorStore
+        from dataknobs_data.vector.stores.chroma import ChromaVectorStore
 
-            store = factory.create(backend="chroma", collection_name="test")
-            assert isinstance(store, ChromaVectorStore)
+        factory = VectorStoreFactory()
+        store = factory.create(backend="chroma", collection_name="test")
+        assert isinstance(store, ChromaVectorStore)
+
+    def test_creating_an_uninstalled_backend_says_what_to_install(self):
+        """Where the driver-absent half of the two tests above went.
+
+        Each used to carry an ``if not AVAILABLE:`` branch asserting the
+        store's own "Faiss backend requires faiss-cpu" text, raised from
+        ``_setup`` at construction. That branch never ran in CI, where
+        both drivers are installed -- so when registration began gating on
+        the driver, and the raise moved earlier to a message naming the
+        registration, nothing failed. The assertion was simply wrong
+        everywhere it could run.
+
+        Written against a withdrawn backend instead, so the driver-absent
+        path is exercised in *every* environment rather than only in the
+        ones nobody runs the suite in.
+        """
+        backend = "faiss"
+        store_cls = vector_backends.get_factory(backend)
+        assert store_cls is not None, "faiss is not installed in this env"
+        metadata = vector_backends.get_metadata(backend)
+        vector_backends.declare_unavailable(
+            backend,
+            metadata=metadata,
+            reason="faiss is not installed. Install with: pip install faiss-cpu",
+        )
+        try:
+            with pytest.raises(ValueError, match="pip install faiss-cpu"):
+                VectorStoreFactory().create(backend="faiss", dimensions=256)
+        finally:
+            vector_backends.register(backend, store_cls, metadata=metadata, override=True)
 
     def test_unknown_backend(self):
         """Test creating store with unknown backend."""

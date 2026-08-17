@@ -199,6 +199,219 @@ class TestTheDocumentedFlow:
         assert backend_info(registry, "memory")["requires_install"] is False
 
 
+class TestTheOtherWayIn:
+    """``from_backend`` reads the same registries and must answer alike.
+
+    ``AsyncDatabase.from_backend`` / ``SyncDatabase.from_backend`` are the
+    same four steps the factories take -- read a name, look it up, raise if
+    it is missing, build -- written a second time. They were not migrated
+    with the factories, so a correctly spelled backend whose driver is
+    absent came back as ``Unknown backend: postgres``: the "go and look for
+    a typo in a name that is spelled right" answer this whole change exists
+    to remove, still reachable through a public classmethod that a
+    resource adapter in another package calls.
+    """
+
+    @staticmethod
+    def _withdrawn(registry: Any, backend: str) -> tuple[Any, dict[str, Any]]:
+        """Declare a real backend unavailable, as a driverless machine would."""
+        backend_class = registry.get_factory(backend)
+        assert backend_class is not None, f"{backend} is not installed in this env"
+        metadata = registry.get_metadata(backend)
+        registry.declare_unavailable(
+            backend,
+            metadata=metadata,
+            reason="psycopg2 is not installed. Install with: pip install dataknobs-data[postgres]",
+        )
+        return backend_class, metadata
+
+    @staticmethod
+    def _restore(registry: Any, backend: str, backend_class: Any, metadata: Any) -> None:
+        registry.register(backend, backend_class, metadata=metadata, override=True)
+
+    @pytest.mark.asyncio
+    async def test_async_says_what_to_install_rather_than_reporting_a_typo(self) -> None:
+        from dataknobs_data.database import AsyncDatabase
+
+        backend_class, metadata = self._withdrawn(async_backends, "postgres")
+        try:
+            with pytest.raises(ValueError) as excinfo:
+                await AsyncDatabase.from_backend("postgres", {})
+        finally:
+            self._restore(async_backends, "postgres", backend_class, metadata)
+
+        message = str(excinfo.value)
+        assert "pip install dataknobs-data[postgres]" in message
+        assert "Unknown" not in message
+
+    def test_sync_says_what_to_install_rather_than_reporting_a_typo(self) -> None:
+        from dataknobs_data.database import SyncDatabase
+
+        backend_class, metadata = self._withdrawn(sync_backends, "postgres")
+        try:
+            with pytest.raises(ValueError) as excinfo:
+                SyncDatabase.from_backend("postgres", {})
+        finally:
+            self._restore(sync_backends, "postgres", backend_class, metadata)
+
+        message = str(excinfo.value)
+        assert "pip install dataknobs-data[postgres]" in message
+        assert "Unknown" not in message
+
+    @pytest.mark.asyncio
+    async def test_a_real_typo_lists_canonical_names_not_every_spelling(self) -> None:
+        """It printed ``list_keys()``, so aliases read as separate backends."""
+        from dataknobs_data.database import AsyncDatabase
+
+        with pytest.raises(ValueError) as excinfo:
+            await AsyncDatabase.from_backend("postgrez", {})
+
+        message = str(excinfo.value)
+        assert "postgres" in message
+        assert "pg," not in message and "postgresql" not in message
+
+    @pytest.mark.asyncio
+    async def test_it_still_builds_a_usable_connected_database(self) -> None:
+        """The behaviour every existing caller depends on.
+
+        Asserted through a round-trip rather than a connection flag,
+        because moving construction onto ``from_config`` is the part of
+        this change that could plausibly build something different.
+        """
+        from dataknobs_data import Record
+        from dataknobs_data.database import AsyncDatabase
+
+        db = await AsyncDatabase.from_backend("memory", {})
+
+        await db.upsert("k", Record({"v": 1}))
+        stored = await db.read("k")
+
+        assert stored is not None
+        assert stored.data["v"] == 1
+
+
+# ---------------------------------------------------------------------------
+# What each deferred loader actually loads
+# ---------------------------------------------------------------------------
+
+
+#: Canonical backend name -> ``(module suffix, class name)``, one row per
+#: deferred loader. Spelled out rather than derived, because deriving it from
+#: the loaders would agree with them by construction and check nothing.
+EXPECTED_SYNC = {
+    "memory": ("backends.memory", "SyncMemoryDatabase"),
+    "file": ("backends.file", "SyncFileDatabase"),
+    "sqlite": ("backends.sqlite", "SyncSQLiteDatabase"),
+    "postgres": ("backends.postgres", "SyncPostgresDatabase"),
+    "elasticsearch": ("backends.elasticsearch", "SyncElasticsearchDatabase"),
+    "s3": ("backends.s3", "SyncS3Database"),
+    "duckdb": ("backends.duckdb", "SyncDuckDBDatabase"),
+}
+
+EXPECTED_ASYNC = {
+    "memory": ("backends.memory", "AsyncMemoryDatabase"),
+    "file": ("backends.file", "AsyncFileDatabase"),
+    "sqlite": ("backends.sqlite_async", "AsyncSQLiteDatabase"),
+    "postgres": ("backends.postgres", "AsyncPostgresDatabase"),
+    "elasticsearch": ("backends.elasticsearch_async", "AsyncElasticsearchDatabase"),
+    "s3": ("backends.s3_async", "AsyncS3Database"),
+    "duckdb": ("backends.duckdb", "AsyncDuckDBDatabase"),
+}
+
+EXPECTED_VECTOR = {
+    "memory": ("vector.stores.memory", "MemoryVectorStore"),
+    "faiss": ("vector.stores.faiss", "FaissVectorStore"),
+    "chroma": ("vector.stores.chroma", "ChromaVectorStore"),
+    "pgvector": ("vector.stores.pgvector", "PgVectorStore"),
+}
+
+EXPECTATIONS = [
+    ("sync", sync_backends, EXPECTED_SYNC),
+    ("async", async_backends, EXPECTED_ASYNC),
+    ("vector", vector_backends, EXPECTED_VECTOR),
+]
+
+
+class TestEachLoaderLoadsWhatItSays:
+    """A deferred loader that names the wrong thing fails quietly.
+
+    Registration cannot import its backend classes at module scope -- one
+    missing optional driver would take down the package import -- so each
+    is deferred behind a loader called after the driver probe passes.
+    Whether that loader is written as ``import_module(name)`` or as an
+    import statement, a wrong module or a wrong class name raises
+    ``ImportError``, which ``register_backend`` treats exactly as it treats
+    an absent driver: the backend is declared unavailable and the process
+    carries on.
+
+    That is the right handling of a genuinely missing dependency and the
+    wrong handling of a typo, and nothing distinguishes them at runtime.
+    The failure is silent in the worst way -- the backend simply is not
+    there, and the message says to install something that is already
+    installed.
+
+    ``sqlite`` is the row most exposed: the sync class lives in
+    ``sqlite.py`` and the async one in ``sqlite_async.py``, so the two
+    loaders differ by a suffix and each would raise ``ImportError`` against
+    the other's module rather than returning the wrong class.
+    """
+
+    @pytest.mark.parametrize(
+        ("label", "registry", "expected"),
+        EXPECTATIONS,
+        ids=[label for label, _, _ in EXPECTATIONS],
+    )
+    def test_every_expected_backend_is_registered(
+        self, label: str, registry: Any, expected: dict[str, tuple[str, str]]
+    ) -> None:
+        missing = sorted(set(expected) - set(registry.list_canonical_keys()))
+
+        assert missing == [], (
+            f"{label}: registered nothing for {missing} -- a loader naming a "
+            "module or class that does not exist raises ImportError, which "
+            "registration reports as a missing driver"
+        )
+
+    @pytest.mark.parametrize(
+        ("label", "registry", "expected"),
+        EXPECTATIONS,
+        ids=[label for label, _, _ in EXPECTATIONS],
+    )
+    def test_each_one_resolves_to_the_named_class(
+        self, label: str, registry: Any, expected: dict[str, tuple[str, str]]
+    ) -> None:
+        for key, (module_suffix, class_name) in expected.items():
+            loaded = registry.get_factory(key)
+            assert loaded is not None, f"{label}: {key} is not registered"
+            assert loaded.__name__ == class_name, f"{label}: {key}"
+            assert loaded.__module__ == f"dataknobs_data.{module_suffix}", (
+                f"{label}: {key} resolved to a class from the wrong module"
+            )
+
+    @pytest.mark.parametrize(
+        ("label", "registry", "expected"),
+        EXPECTATIONS,
+        ids=[label for label, _, _ in EXPECTATIONS],
+    )
+    def test_no_two_backends_share_a_class(
+        self, label: str, registry: Any, expected: dict[str, tuple[str, str]]
+    ) -> None:
+        """A copy-paste slip between two loaders reads as an alias.
+
+        Two canonical keys resolving to one class is how
+        ``list_canonical_keys`` decides they are the same backend, so the
+        symptom of the slip is a backend quietly vanishing from the list
+        rather than an error.
+        """
+        loaded = {key: registry.get_factory(key) for key in expected}
+        by_class: dict[int, list[str]] = {}
+        for key, cls in loaded.items():
+            by_class.setdefault(id(cls), []).append(key)
+
+        shared = {tuple(keys) for keys in by_class.values() if len(keys) > 1}
+        assert shared == set(), f"{label}: these backends resolved to one class: {shared}"
+
+
 # ---------------------------------------------------------------------------
 # The shipped registries, against the environment actually running
 # ---------------------------------------------------------------------------

@@ -1,6 +1,5 @@
 """Factory for creating vector store backends."""
 
-import re
 from typing import Any
 
 from dataknobs_config import FactoryBase
@@ -61,20 +60,29 @@ class VectorStoreFactory(FactoryBase):
             config, vector_backends, kind="vector store"
         )
 
-        # Create and return backend instance
         try:
             store: VectorStore = backend_class(options)
             return store
         except ImportError as e:
-            # Convert ImportError to ValueError with expected format
-            # Extract package name from "pip install X" in error message
-            match = re.search(r"pip install ([\w-]+)", str(e))
-            if match:
-                package = match.group(1)
-                raise ValueError(f"{backend_type.capitalize()} backend requires {package}") from e
-            else:
-                # Fallback if pattern doesn't match
-                raise ValueError(f"Backend '{backend_type}' has missing dependencies") from e
+            # Unreachable for a built-in store: registration probes the
+            # declared driver, so a store missing its driver is refused by
+            # `select_backend` above with a message naming what to install.
+            # Kept for a backend registered out of band, which nothing
+            # probed -- the ValueError contract is what this factory
+            # promises, and an ImportError escaping it would break a caller
+            # catching what the docstring says.
+            #
+            # The reason travels on `__cause__` rather than being scraped
+            # out of the text. This used to regex the store's own message
+            # for "pip install X" and rebuild it as "Faiss backend requires
+            # faiss-cpu", which is a second phrasing of what
+            # `select_backend` now says for the same condition -- and one
+            # that silently degraded to "has missing dependencies" whenever
+            # the pattern did not match.
+            raise ValueError(
+                f"The vector store registered as '{backend_type}' could not be "
+                f"constructed: a module it needs is not installed ({type(e).__name__})."
+            ) from e
 
     def get_available_backends(self) -> list[str]:
         """List the vector store backends this factory can create.

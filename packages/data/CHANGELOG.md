@@ -46,13 +46,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **`dataknobs_data.backend_selection`** — `DEFAULT_BACKEND`,
   `select_backend()`, `available_backends()`, `backend_available()`,
-  `backend_info()`, `normalize_backend()`, `register_backend()` and
-  `build_backend()`, the answers the three factories previously each held
-  their own copy of. Re-exported from `dataknobs_data`, so a consumer with a
-  `PluginRegistry` of their own backends gets the same provenance logging,
-  the same alias collapsing and the same availability probing without
-  reimplementing any of it. The module imports nothing from its own package,
-  so it is safe to import from anywhere in it.
+  `backend_info()`, `normalize_backend()`, `register_backend()`,
+  `build_backend()` and `module_installed()`, the answers the three
+  factories previously each held their own copy of. All nine are re-exported
+  from `dataknobs_data`, so a consumer with a `PluginRegistry` of their own
+  backends gets the same provenance logging, the same alias collapsing and
+  the same availability probing without reimplementing any of it —
+  `module_installed` included, since `register_backend(installed=...)` takes
+  the probe as a parameter and wrapping the default one should not mean
+  reaching into a submodule. The module imports nothing from its own
+  package, so it is safe to import from anywhere in it.
+
+- **`AsyncDatabase.from_backend()` and `SyncDatabase.from_backend()` resolve
+  the way the factories do.** They held a fourth copy of the same four steps
+  and were not migrated with the other three, so a correctly spelled backend
+  whose driver is absent came back as `Unknown backend: postgres` — the
+  answer that sends the reader hunting for a typo in a name that is right.
+  They now report what to install, list canonical names rather than every
+  alias, and construct through `from_config()` like every other path.
 
 - **`dataknobs_data.testing`** — deterministic vector draws, for this package's
   tests and for consumers testing their own `VectorStore` implementations.
@@ -93,6 +104,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `dataknobs_data.backend_selection`.** They were emitted by
   `dataknobs_data.factory` and `dataknobs_data.vector.stores.factory`, so a
   consumer routing or filtering by logger name needs to add the new one.
+
+- **`VectorStoreFactory.create()` reports a missing driver differently.** It
+  used to build the store, catch the `ImportError` the store raised from
+  `_setup`, regex the text for a `pip install X` and re-emit it as
+  `Faiss backend requires faiss-cpu` — degrading to `Backend 'faiss' has
+  missing dependencies` whenever that pattern did not match. A store whose
+  driver is absent is now refused before construction, with the same
+  `ValueError` the database factories raise:
+  `Backend 'faiss' is known but not available here. Install with: pip
+  install faiss-cpu`. Code matching the old text needs updating; code
+  catching `ValueError` does not.
+
+- **A `vector_store` section naming an uninstalled backend still validates.**
+  `StructuredConfig.validate()` resolves the section's config class through
+  the same registry `create()` uses, so gating registration on the driver
+  made a valid `backend: faiss` section resolve to nothing on a machine
+  without `faiss-cpu` — reported as matching no known variant, which reads
+  as a misspelled discriminator. Whether a config is well-formed does not
+  depend on which optional drivers the machine reading it happens to have.
+  A known backend that cannot be built here now skips validation of its
+  section; only an unregistered name is still an error.
 
 - **A `backend` key that is present but unusable says which way it is
   unusable.** `backend: null`, `backend: ""` and a non-string all rendered

@@ -205,15 +205,36 @@ def _resolve_vector_store_config_cls(
     the no-drift guarantee. Returns ``None`` for an unknown
     backend, which ``validate`` surfaces as a ``ConfigurationError``.
 
+    Three outcomes, because the discriminator has three states and only two
+    of them are the same event:
+
+    - **A creatable backend** resolves to its ``CONFIG_CLS``.
+    - **A backend this installation cannot build** — known to the registry,
+      driver absent — returns :data:`SKIP_VALIDATION`. Whether a config is
+      well-formed is a property of the config, not of the machine reading
+      it, so an uninstalled driver must not fail a valid section; and it is
+      not a typo, so it must not be reported as one. There is simply no
+      store class here to read a schema off. ``create()`` is the call that
+      cares whether the driver is present, and it says so by name.
+    - **A backend nobody registered** returns ``None``, which ``validate``
+      surfaces as a ``ConfigurationError``. This is the genuine typo.
+
     A backend that is *registered* but exposes no ``StructuredConfig``
-    ``CONFIG_CLS`` returns :data:`SKIP_VALIDATION` (logged at WARNING):
-    there is no typed schema to dry-run against, but the backend is valid
-    and constructible, so ``validate`` skips the section rather than
-    raising — distinct from the ``None`` return for a genuine typo'd
-    discriminator. No built-in backend is in this state today (the parity
-    guard ``test_resolver_agrees_with_construction_registry_for_all_backends``
+    ``CONFIG_CLS`` also returns :data:`SKIP_VALIDATION`, logged at WARNING
+    rather than DEBUG: unlike a missing driver, that one is a gap someone
+    can close. No built-in backend is in this state today (the parity guard
+    ``test_resolver_agrees_with_construction_registry_for_all_backends``
     keeps it so); the branch covers a custom bare-callable backend
     registered out of band.
+
+    The cost of the middle case is that a malformed section for a backend
+    this machine lacks is not caught here — it is caught wherever the
+    backend can actually be built. Reading the typed schema without the
+    driver is possible for the stores that defer their ``ImportError``, but
+    not for one whose module fails to import at all, so it would make the
+    guarantee depend on which of the two idioms a backend happens to use.
+    A uniform skip is the honest version of a guarantee that cannot be
+    uniform.
     """
     if "backend" in raw:
         # Normalised by the same function the construction path uses. The
@@ -233,6 +254,21 @@ def _resolve_vector_store_config_cls(
         backend = DEFAULT_BACKEND
     store_cls = vector_backends.get_factory(backend)
     if store_cls is None:
+        if vector_backends.get_metadata(backend, follow_alias=True):
+            # Known, but not creatable on this machine. Whether a config is
+            # well-formed does not depend on which optional drivers happen
+            # to be installed where it is being checked, so reporting the
+            # section as matching no variant is wrong twice over: it fails a
+            # valid config, and it sends the reader to look for a typo in a
+            # name that is spelled correctly. `create()` is the call that
+            # cares about the driver, and it names it.
+            logger.debug(
+                "Vector-store backend %r is known but not installed here, so "
+                "there is no store class to read a typed schema off; skipping "
+                "validation of this section.",
+                backend,
+            )
+            return SKIP_VALIDATION
         # Unknown discriminator — the legitimate typo path; validate()
         # raises ConfigurationError. Silent here so a real typo is reported
         # by validate(), not pre-empted by a misleading WARNING.

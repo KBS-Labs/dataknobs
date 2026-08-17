@@ -34,7 +34,7 @@ from __future__ import annotations
 
 import importlib.util
 import logging
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from typing import Any
 
 from dataknobs_common.registry import PluginRegistry
@@ -49,6 +49,7 @@ __all__ = [
     "backend_available",
     "backend_info",
     "build_backend",
+    "is_default_backend",
     "module_installed",
     "normalize_backend",
     "register_backend",
@@ -131,6 +132,38 @@ def normalize_backend(raw: Any) -> str:
     return name
 
 
+def is_default_backend(config: Mapping[str, Any]) -> bool:
+    """Whether this config asks for the default backend.
+
+    True both when the config names it and when it names nothing, because
+    the caller this serves is about to do the same thing either way: skip
+    the factory and construct the in-process store directly, or decide not
+    to build a store at all.
+
+    Callers that *build* through a factory should not use this -- pass the
+    config to :func:`select_backend`, which distinguishes the two cases and
+    reports the difference. This is for the caller that branches before any
+    factory is involved, where the distinction has no consequence to
+    report.
+
+    Args:
+        config: A config that may carry a ``backend`` key.
+
+    Returns:
+        True when the key is absent, or present and naming
+        :data:`DEFAULT_BACKEND`.
+
+    Raises:
+        ValueError: The key is present but names nothing usable, per
+            :func:`normalize_backend`. Treating that as the default would
+            silently give an in-process store to a config that did try to
+            choose.
+    """
+    if "backend" not in config:
+        return True
+    return normalize_backend(config["backend"]) == DEFAULT_BACKEND
+
+
 def register_backend(
     registry: PluginRegistry[Any],
     key: str,
@@ -139,6 +172,7 @@ def register_backend(
     metadata: dict[str, Any],
     aliases: Sequence[str] = (),
     installed: Callable[[str], bool] = module_installed,
+    override: bool = False,
 ) -> None:
     """Register a backend, or record why it cannot be created here.
 
@@ -164,6 +198,12 @@ def register_backend(
             makes them collapse in :meth:`PluginRegistry.list_canonical_keys`.
         installed: The "is this module importable?" predicate. Injectable
             so a test can describe an environment this one cannot be.
+        override: Replace an existing registration under the same name.
+            Forwarded to :meth:`PluginRegistry.register`, which otherwise
+            raises on a second registration -- so a consumer swapping a
+            built-in backend for its own had no way through this function
+            and had to drop to the registry, losing the driver probe that
+            makes ``registered == installed`` hold.
     """
     required = metadata.get("requires_module") or ()
     if isinstance(required, str):
@@ -185,16 +225,13 @@ def register_backend(
             reason = str(exc)
 
     if reason is not None:
-        # Declared under every spelling, so a question asked by alias gets
-        # the same answer as one asked by canonical name.
-        for name in (key, *aliases):
-            registry.declare_unavailable(name, metadata=metadata, reason=reason)
+        registry.declare_unavailable(key, metadata=metadata, reason=reason, aliases=aliases)
         logger.debug("Backend '%s' is unavailable: %s", key, reason)
         return
 
-    registry.register(key, backend_class, metadata=metadata)
+    registry.register(key, backend_class, metadata=metadata, override=override)
     for alias in aliases:
-        registry.register(alias, backend_class)
+        registry.register(alias, backend_class, override=override)
 
 
 def available_backends(registry: PluginRegistry[Any]) -> list[str]:
