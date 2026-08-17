@@ -164,10 +164,24 @@ claim about one reference in particular, while `strict_resources` speaks for
 references that said nothing. Only the same author's `$required: false`
 overrides it.
 
-Both `$required` and the `strict_resources` setting accept a boolean or
-exactly the strings `"true"` / `"false"`, so they work through `${VAR}`
-expansion. Any other value raises rather than reading as lenient — a flag
-that silently means "off" is the defect this vocabulary exists to close.
+Both `$required` and the `strict_resources` setting accept a boolean, or the
+strings `"true"` / `"false"` in any case and with surrounding whitespace
+ignored, so they work through `${VAR}` expansion. Any other value raises
+rather than reading as lenient — a flag that silently means "off" is the
+defect this vocabulary exists to close.
+
+The environment setting is checked **when the environment is constructed**,
+not when a resource turns out to be missing: `EnvironmentConfig(...)`,
+`.load()` and `.from_dict()` all reject `strict_resources: "yes"` on the
+spot. A malformed flag is malformed in every environment, and deferring the
+check would surface it first in whichever deployment happened to lack a
+resource — as an error about a *setting*. A value still spelled as a template
+(`${STRICT}`, under `substitute_vars=False`) is left alone; it is not a value
+yet.
+
+(Unquoted `yes` in a YAML file is a *boolean* to the YAML parser, and arrives
+here as `True` — accepted, and meaning strict. The rejected spelling is the
+quoted string, which is also what `${VAR}` expansion produces.)
 
 #### Marker keys are a closed set
 
@@ -178,21 +192,45 @@ that guard `$requred: true` would silently mean *not required* — a typo one
 character from the marker, reintroducing the silent degrade at the exact site
 meant to close it.
 
+Two corollaries, because a closed set is only as good as where it is checked:
+
+- **`$requires` must be a list of names.** Its sibling `$required` takes a
+  scalar, which makes `$requires: persistence` the natural slip. A bare
+  string iterates character by character, so unvalidated it produced a check
+  against letters — `missing required capabilities: ['c','e','i','n',...]`.
+- **`$required` or `$requires` on a block with no `$resource` is rejected.**
+  The guard above fires on a block that *is* a reference, and what makes one
+  is the `$resource` key — so a typo in that key (`$resorce: conversations`)
+  produced an ordinary dict that resolved to itself and reached the factory
+  with its markers attached. A leftover policy marker is what gives it away.
+
 `RESOURCE_MARKER_KEYS` is exported from `dataknobs_config` so a second reader
-of this format has the vocabulary without copying the literal.
+of this format has the vocabulary without copying the literal — and
+`resolve_resource_references(config, environment, ...)` is exported so that a
+consumer with a config tree and an environment does not have to *be* a second
+reader in the first place.
 
 #### Which exception
+
+Every message names the dotted config path of the reference that failed, so
+three references to `default` stay distinguishable in a log.
 
 | Condition | Exception |
 |---|---|
 | Resource missing, policy strict | `ResourceNotFoundError` |
-| Reference malformed (unknown `$` marker, unparseable `$required`) | `ConfigError` |
+| Reference malformed — unknown `$` marker, unparseable `$required`, `$requires` that is not a list of names, or a policy marker with no `$resource` | `ConfigError` |
 | Resource found but under-capable for `$requires` | `ConfigError` |
+| A resource reaches itself (`a` → `b` → `a`) | `ConfigError` naming the cycle |
 
 `ConfigBindingResolver.resolve()` raises `ResourceNotFoundError` for a
 missing resource too. That API takes a `(type, name)` pair with no reference
-to read a policy off, so it *is* the strict policy — the two resolvers agree
-on the type, and differ only in whether a reference exists to say otherwise.
+to read a policy off, so it *is* the strict policy. Below the entry point the
+two are the same code — `ConfigBindingResolver` resolves the config it looks
+up with `resolve_resource_references`, so a reference *nested* inside a
+resource gets the same marker validation, the same precedence chain and the
+same cycle guard there as anywhere else, and can still declare
+`$required: false` for itself. The two differ only at the top, where one has
+a reference to read and the other does not.
 
 !!! warning "`ResourceNotFoundError` is also a `KeyError`"
 
@@ -201,11 +239,22 @@ on the type, and differ only in whether a reference exists to say otherwise.
     strict policy it can. Code that wraps resolution in `except KeyError` for
     unrelated reasons will swallow it.
 
+    `str(e)` returns the message as written. `KeyError.__str__` would
+    otherwise return `repr(args[0])`, wrapping the sentence in quotes and
+    escaping every name inside it; the type keeps both bases and overrides
+    the rendering.
+
 #### Preflight
 
 `resolve_for_build(strict_resources=True)` resolves without constructing
 anything, so it is safe to run at boot purely to prove every binding a config
 names exists in this environment. It raises on the first failure.
+
+Passing `strict_resources` with `resolve_resources=False` raises `ValueError`
+rather than returning: the policy is read where references are resolved, so
+that pair would check nothing and still hand back a config. (The *instance*
+policy is a standing default rather than an assertion about one call, so
+`EnvironmentAwareConfig(..., strict_resources=True)` is unaffected.)
 
 To get *every* unresolvable reference in one pass — which is what an operator
 auditing a config tree wants — use `find_unresolved_resources()`:
@@ -236,14 +285,24 @@ reported under the **resolved** name, at any depth. Each entry is an
 `required`, and `has_inline_defaults` — the last distinguishing the two
 degradations, since falling back to declared defaults is a config that still
 builds while falling back to nothing is a factory about to be called with no
-arguments.
+arguments. A reference at the root of the surveyed tree has `path == ""`, a
+dotted path of zero segments.
 
-An empty list means no reference names an absent resource — **not** that the
-build will succeed. A resource that is present but does not declare a
-capability its reference `$requires` still fails at build time and is not
-reported here; this surveys presence, which is the one question answerable
-without resolving anything. `resolve_for_build(strict_resources=True)` is the
-complete check.
+It runs the **same walk** as `resolve_for_build`, differing only in what it
+does when a resource is absent: record it and carry on down the lenient path,
+rather than raise or warn. That is what makes it a prediction of the build
+rather than a second opinion about it — a reference nested inside a resolved
+resource is surveyed because a build reaches it, and one nested inside an
+inline default the environment overrides is not, because a build discards it.
+
+**An empty list means a build reaches no unresolvable reference.** Every
+other way a reference can fail raises here instead of being listed: a
+malformed reference, a resource that reaches itself, or a present resource
+that does not declare a capability its reference `$requires`. Listing is for
+the failure an operator fixes by adding bindings; for the rest there is no
+complete list to give, because a config a build cannot walk cannot be walked
+to the end here either. A survey that reported a tree sound while the build
+raises on it would be worse than no survey.
 
 ### 5. Environment Detection
 
@@ -728,7 +787,7 @@ llm_providers:
 | `load_app(name, app_dir, env_dir, environment, *, allow_outside=False, strict_resources=None)` | Load app with environment |
 | `from_dict(config, environment, env_dir, *, strict_resources=None)` | Create from dictionary |
 | `resolve_for_build(key, resolve_resources, resolve_env_vars, *, strict_resources=None)` | Late-bind config |
-| `find_unresolved_resources(config_key, strict_resources)` | Survey every unresolvable reference; builds nothing |
+| `find_unresolved_resources(config_key, *, strict_resources=None)` | Survey every unresolvable reference; builds nothing |
 | `strict_resources` (property) | The instance-level missing-resource policy, or `None` to defer |
 | `get_portable_config()` | Get unresolved config |
 | `get(key, default)` | Get config value |
@@ -750,6 +809,22 @@ llm_providers:
 | `is_cached(type, name)` | Check if cached |
 | `clear_cache(type)` | Clear cache |
 | `cache_instance(type, name, instance)` | Manually cache |
+
+### Module-level
+
+| Function | Description |
+|----------|-------------|
+| `resolve_resource_references(config, environment, *, substitute=False, strict_resources=None)` | Resolve every `$resource` reference in a config tree |
+| `RESOURCE_MARKER_KEYS` | The closed marker set — `$resource`, `type`, `$requires`, `$required` |
+| `STRICT_RESOURCES_SETTING` | The environment settings key holding the policy |
+| `UnresolvedResourceRef` | A survey finding: `path`, `resource_type`, `resource_name`, `required`, `has_inline_defaults` |
+
+`resolve_resource_references` is the shared primitive behind both resolvers.
+Reach for it rather than walking a config for `$resource` blocks yourself: a
+hand-written reader is how one arrived that recognised only `$resource` and
+`type`, so it discarded every inline default, ignored `$required`, let a
+misspelled marker through as data, and left a reference nested inside a
+resolved resource as a literal dict for whatever read the config next.
 
 ## See Also
 
