@@ -292,6 +292,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Three call sites turned an unchosen database backend into a chosen one.**
+  `ArtifactBankCatalog.from_config`, `DataKnobsRegistryAdapter` and the
+  `database` grounded-source factory each read the `backend` key with their
+  own `"memory"` default and wrote the result into the config they passed
+  down, so the factory saw an explicit choice and logged INFO. The absence
+  was consumed one frame above the only code positioned to report it — and a
+  config arrives empty most often because a `$resource` reference named a
+  resource the environment does not define, which is exactly what
+  `dataknobs-data`'s WARNING tells the reader to check. The key is now
+  forwarded only when the config names one; the object built is unchanged.
+
+- **`ArtifactBankCatalog.from_config` overwrote a backend named inside
+  `backend_config`.** The outer default was written into the inner dict
+  unconditionally, so `{"backend_config": {"backend": "postgres"}}` silently
+  got `memory`.
+
 - **A wizard skipped extraction after an auto-advance under `advance()` and
   never under a conversation.** `skip_extraction` is set while the landing
   stage's response is generated and read at the start of the *next* turn, so

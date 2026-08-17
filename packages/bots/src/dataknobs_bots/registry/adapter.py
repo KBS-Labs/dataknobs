@@ -135,11 +135,13 @@ class DataKnobsRegistryAdapter:
 
         Args:
             database: Pre-configured AsyncDatabase instance
-            backend_type: Backend type for factory creation
+            backend_type: Backend type for factory creation. ``None`` leaves
+                the choice to the factory, which applies its own default and
+                reports having done so.
             backend_config: Backend configuration for factory creation
         """
         self._db: AsyncDatabase | None = database
-        self._backend_type = backend_type or "memory"
+        self._backend_type = backend_type
         self._backend_config = backend_config or {}
         self._initialized = False
         self._owns_database = database is None
@@ -172,7 +174,9 @@ class DataKnobsRegistryAdapter:
             ```
         """
         config = dict(config)
-        backend_type = config.pop("backend", "memory")
+        # Popped without a default, so a config that names no backend stays
+        # distinguishable all the way to the factory, which reports it.
+        backend_type = config.pop("backend", None)
         return cls(backend_type=backend_type, backend_config=config)
 
     async def initialize(self) -> None:
@@ -187,12 +191,15 @@ class DataKnobsRegistryAdapter:
         if self._db is None:
             logger.debug(
                 "Creating %s database for registry",
-                self._backend_type,
+                self._backend_type or "default",
             )
-            self._db = async_database_factory.create(
-                backend=self._backend_type,
-                **self._backend_config,
-            )
+            # ``backend`` passed only when one was named, so an unnamed
+            # backend reaches the factory as an absent key rather than as
+            # this adapter's guess at what it should have been.
+            options = dict(self._backend_config)
+            if self._backend_type is not None:
+                options["backend"] = self._backend_type
+            self._db = async_database_factory.create(**options)
 
         await self._db.connect()
         self._store = AsyncKeyedRecordStore[Registration](
@@ -203,7 +210,7 @@ class DataKnobsRegistryAdapter:
         self._initialized = True
         logger.info(
             "Registry adapter initialized with %s backend",
-            self._backend_type,
+            self._backend_type or "default",
         )
 
     async def close(self) -> None:

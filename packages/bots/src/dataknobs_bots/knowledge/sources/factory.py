@@ -395,9 +395,12 @@ async def _create_database_source(
 
     opts = config.options
 
-    # Build the database backend
-    backend = opts.get("backend", "memory")
-    db_config: dict[str, Any] = {"backend": backend}
+    # Build the database backend. The key is forwarded only when these
+    # options name one: defaulting here would hand the factory an explicit
+    # choice and hide that nothing chose it.
+    db_config: dict[str, Any] = {}
+    if "backend" in opts:
+        db_config["backend"] = opts["backend"]
 
     connection = opts.get("connection")
     if connection:

@@ -288,9 +288,15 @@ class ArtifactBankCatalog:
         """
         from dataknobs_data import database_factory
 
-        backend = config.get("backend", "memory")
         backend_config = dict(config.get("backend_config", {}))
-        backend_config["backend"] = backend
+        # Forwarded only when this config actually names one. Supplying a
+        # default here consumed the distinction between "no backend was
+        # chosen" and "memory was chosen" before the factory -- the only
+        # place positioned to report it -- ever saw the config. It also
+        # overwrote a backend named inside ``backend_config``, since the
+        # outer default was written unconditionally.
+        if "backend" in config:
+            backend_config["backend"] = config["backend"]
         db = database_factory.create(**backend_config)
         db.connect()
         artifact_config = config.get("artifact_config")
