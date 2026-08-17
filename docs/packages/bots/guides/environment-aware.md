@@ -199,21 +199,27 @@ for the full policy and how to opt out with `$required: false`.
 
 ### Config Merging
 
-Additional fields in a resource reference are merged with the resolved
-config. The exceptions are the marker keys — `$resource`, `type`,
-`$requires` and `$required` — which are the reference's own syntax. That set
-is closed: any other `$`-prefixed key is rejected as a malformed reference
-rather than merged.
+Additional fields in a resource reference are **inline defaults**: they fill
+keys the environment's resource does not set, and are discarded wherever it
+does. The environment wins — a binding is the deployment's to decide.
+
+The exceptions are the marker keys — `$resource`, `type`, `$requires` and
+`$required` — which are the reference's own syntax and never reach a factory.
+That set is closed: any other `$`-prefixed key is rejected as a malformed
+reference rather than merged, and so is a `$required` / `$requires` on a
+block with no `$resource`, which is how a misspelled `$resource` gives itself
+away.
 
 ```yaml
 # In bot config
 llm:
   $resource: default
   type: llm_providers
-  temperature: 0.9          # Overrides environment default
+  temperature: 0.9          # discarded if the environment sets it
+  timeout: 30               # kept if the environment does not
 
 # If environment defines temperature: 0.7
-# Resolved config will have temperature: 0.9
+# Resolved config has temperature: 0.7 and timeout: 30
 ```
 
 ## BotResourceResolver

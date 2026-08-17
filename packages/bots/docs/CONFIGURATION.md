@@ -502,7 +502,11 @@ llm:
 
 **`$required`** declares that the resource must exist. Without it, a reference naming a resource the environment does not define warns and degrades to the reference's inline defaults (or to an empty config, which usually means the factory's own default — an in-memory database, for instance, that holds state until the process restarts). `$required: false` opts a reference out of the strictness `$requires` and a resolver-wide setting would otherwise impose.
 
-Additional fields in a resource reference are merged with the resolved config:
+Additional fields in a resource reference are **inline defaults**: they fill
+keys the environment's resource does not set, and are discarded wherever it
+does. The environment wins — a binding is the deployment's to decide, and a
+config that could override it would be able to point production at something
+the operator did not choose.
 
 ```yaml
 # In bot config
@@ -510,7 +514,8 @@ llm:
   $resource: default
   type: llm_providers
   $requires: [function_calling]
-  temperature: 0.9  # Override the environment's default
+  temperature: 0.9   # discarded: the environment sets `temperature`
+  timeout: 30        # kept: the environment does not
 
 # If environment defines:
 # llm_providers:
@@ -520,10 +525,12 @@ llm:
 #     temperature: 0.7
 #     capabilities: [chat, function_calling, streaming]
 
-# Resolved config (markers and metadata stripped):
+# Resolved config (markers stripped):
 # provider: openai
 # model: gpt-4
-# temperature: 0.9  # Overridden!
+# temperature: 0.7                                    # the environment's, not 0.9
+# capabilities: [chat, function_calling, streaming]   # passed through, see below
+# timeout: 30                                         # the default that survived
 ```
 
 ### Capability Metadata on Resources
@@ -543,7 +550,7 @@ resources:
       capabilities: [chat, streaming]
 ```
 
-The `capabilities` field is validation metadata — it is stripped during resolution and not passed to the provider constructor. Available capability names: `text_generation`, `chat`, `embeddings`, `function_calling`, `vision`, `code`, `json_mode`, `streaming`.
+`capabilities` is validation metadata, but it is **not** stripped: it is read to validate `$requires` and then passed through with the rest of the resource config, so a factory that receives one must tolerate the keyword. `$requires` is the field that is stripped — it is a marker, and markers never reach the factory. Available capability names: `text_generation`, `chat`, `embeddings`, `function_calling`, `vision`, `code`, `json_mode`, `streaming`.
 
 ### Standard Resource Naming Convention
 
