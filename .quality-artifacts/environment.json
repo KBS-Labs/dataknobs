@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-08-16T13:23:42Z",
+  "timestamp": "2026-08-17T16:41:07Z",
   "python_version": "Python 3.12.12",
   "uv_version": "uv 0.12.5 (Homebrew 2026-08-14 aarch64-apple-darwin)",
   "os": "Darwin",
   "os_version": "24.6.0",
-  "git_branch": "sbk/data-tests-lint",
-  "git_commit": "5533f8c3404156009577bdbe03dab2aa40c43a7f",
+  "git_branch": "dependabot/github_actions/github-actions-2514a98571",
+  "git_commit": "57701de54e267847f6320757daec84cea6277fc8",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }
