@@ -7,6 +7,7 @@ import logging
 from typing import TYPE_CHECKING, Any
 
 from dataknobs_common.events import EventBus
+from dataknobs_config import resolve_resource_references
 
 from .backend import RegistryBackend
 from .caching import CachingRegistryManager
@@ -214,42 +215,50 @@ class ConfigCachingManager(CachingRegistryManager[ResolvedConfig]):
     def _resolve_resources(self, config: dict[str, Any]) -> dict[str, Any]:
         """Resolve $resource references in a configuration.
 
-        Recursively walks the config and resolves any $resource references
-        using the configured environment.
+        Delegates to :func:`dataknobs_config.resolve_resource_references`,
+        which owns the reference format. This used to walk the tree itself,
+        and a third reader of a format is a format with three definitions:
+        this one recognised only ``$resource`` and ``type``, so it discarded
+        every inline default, ignored ``$required`` and ``$requires``, let a
+        misspelled marker through as data, and left a nested reference inside
+        a resolved resource as a literal ``{"$resource": ...}`` for whatever
+        read the config next.
+
+        It also carried a fallback for a resource the environment does not
+        define -- warn, return the reference unchanged -- that had never run:
+        the lookup it guarded raises rather than returning ``None``. Raising
+        is therefore the behaviour this has always had, and it is preserved by
+        resolving strictly. What changes is that a reference can now say
+        otherwise for itself, with ``$required: false`` and inline defaults to
+        degrade to, which is what the unreachable branch was reaching for.
 
         Args:
             config: Configuration with potential $resource references
 
         Returns:
             Configuration with $resource references resolved
+
+        Raises:
+            ResourceNotFoundError: If a reference names a resource the
+                environment does not define and does not declare
+                ``$required: false``
+            ConfigError: If a reference is malformed, names a resource that
+                does not declare a capability it ``$requires``, or reaches
+                itself
         """
         if self._environment is None:
             return copy.deepcopy(config)
 
-        def resolve_value(value: Any) -> Any:
-            if isinstance(value, dict):
-                # Check for $resource reference
-                if "$resource" in value and "type" in value:
-                    resource_id = value["$resource"]
-                    resource_type = value["type"]
-                    resolved = self._environment.get_resource(resource_type, resource_id)
-                    if resolved is not None:
-                        return resolved
-                    # If resource not found, return original
-                    logger.warning(
-                        "Resource not found: %s/%s",
-                        resource_type,
-                        resource_id,
-                    )
-                    return value
-                # Recursively resolve nested dicts
-                return {k: resolve_value(v) for k, v in value.items()}
-            elif isinstance(value, list):
-                return [resolve_value(item) for item in value]
-            else:
-                return value
-
-        return resolve_value(config)
+        resolved: dict[str, Any] = resolve_resource_references(
+            copy.deepcopy(config),
+            self._environment,
+            # The stored config is held raw; ${VAR} expansion belongs to
+            # whoever builds objects from it, as it does for every other
+            # config this registry serves.
+            substitute=False,
+            strict_resources=True,
+        )
+        return resolved
 
     async def get_resolved_config(self, config_id: str) -> dict[str, Any]:
         """Get the resolved configuration as a dictionary.

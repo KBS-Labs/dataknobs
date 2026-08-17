@@ -183,3 +183,63 @@ class TestConfigValidator:
         result = validator.validate(config)
         assert result.valid is False
         assert any("bad" in e for e in result.errors)
+
+
+class TestResourceReferenceMarkers:
+    """A ``$resource`` reference reaches schema validation before it resolves.
+
+    A component section may be a reference rather than a literal config, so
+    the validator skipped every ``$``-prefixed key wholesale. That let a
+    misspelled marker past the one check that runs at config-lint time --
+    ``$requred: true`` reads as *not required*, and it was left to fail at
+    resolution, in whichever deployment happened to lack the resource.
+
+    The marker set is exported by ``dataknobs-config`` precisely so a second
+    reader can ask rather than copy the literals.
+    """
+
+    def test_a_reference_section_still_validates(self) -> None:
+        """The skip exists for this: the keys are markers, not schema fields."""
+        schema = DynaBotConfigSchema()
+        validator = ConfigValidator(schema=schema)
+        result = validator.validate_component(
+            "llm", {"$resource": "default", "type": "llm_providers"}
+        )
+        assert result.valid is True
+
+    def test_every_marker_is_accepted(self) -> None:
+        schema = DynaBotConfigSchema()
+        validator = ConfigValidator(schema=schema)
+        result = validator.validate_component(
+            "llm",
+            {
+                "$resource": "default",
+                "type": "llm_providers",
+                "$required": True,
+                "$requires": ["streaming"],
+            },
+        )
+        assert result.valid is True
+
+    def test_a_misspelled_marker_is_reported(self) -> None:
+        """It was skipped as a ``$``-key and deferred to resolution."""
+        schema = DynaBotConfigSchema()
+        validator = ConfigValidator(schema=schema)
+        result = validator.validate_component(
+            "llm", {"$resource": "default", "type": "llm_providers", "$requred": True}
+        )
+        assert result.valid is False
+        assert any("$requred" in e for e in result.errors)
+
+    def test_a_dollar_key_outside_a_reference_is_left_alone(self) -> None:
+        """Only a reference block has a closed vocabulary.
+
+        An ordinary section is not a reference, and this validator is not the
+        place to decide what ``$``-prefixed keys mean elsewhere in a config.
+        """
+        schema = DynaBotConfigSchema()
+        validator = ConfigValidator(schema=schema)
+        result = validator.validate_component(
+            "llm", {"provider": "ollama", "$custom": "passed through"}
+        )
+        assert result.valid is True
