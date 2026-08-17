@@ -45,8 +45,18 @@ class _Plugin:
         self.config = config
 
     @classmethod
-    def from_config(cls, config: dict[str, Any], **kwargs: Any) -> "_Plugin":
+    def from_config(cls, config: dict[str, Any], **kwargs: Any) -> _Plugin:
         return cls(config)
+
+
+class _OtherPlugin(_Plugin):
+    """A second, distinct factory.
+
+    Grouping is by factory identity, so a registration meant to form its own
+    group has to be a different object -- registering ``_Plugin`` twice
+    would make one group under two names, which is the case
+    :meth:`list_canonical_keys` is designed to collapse.
+    """
 
 
 def _registry_with_default() -> PluginRegistry[Any]:
@@ -80,7 +90,7 @@ def _registry_with_aliases() -> PluginRegistry[Any]:
     )
     registry.register("postgresql", _Plugin)
     registry.register("pg", _Plugin)
-    registry.register("memory", lambda config: _Plugin(config), metadata={"description": "Memory"})
+    registry.register("memory", _OtherPlugin, metadata={"description": "Memory"})
     return registry
 
 
@@ -99,7 +109,9 @@ class TestADefaultedKeyIsReported:
             registry.create(config={})
 
         warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
-        assert len(warnings) == 1, f"expected one WARNING, got {[r.message for r in caplog.records]}"
+        assert len(warnings) == 1, (
+            f"expected one WARNING, got {[r.message for r in caplog.records]}"
+        )
         assert "memory" in warnings[0].getMessage()
         assert "backend" in warnings[0].getMessage()
 
@@ -148,9 +160,7 @@ class TestADefaultedKeyIsReported:
         assert "coordinates nothing between processes" in warnings[0].getMessage()
         assert "'memory'" in warnings[0].getMessage()
 
-    def test_create_async_reports_the_default_too(
-        self, caplog: pytest.LogCaptureFixture
-    ) -> None:
+    def test_create_async_reports_the_default_too(self, caplog: pytest.LogCaptureFixture) -> None:
         """The sync and async paths share ``_resolve_factory``; so must this."""
         import asyncio
 
@@ -331,9 +341,7 @@ class TestTheDefaultsThatCostSomething:
         assert len(warnings) == 1
         assert "all of them believe they hold it" in warnings[0].getMessage()
 
-    def test_an_explicit_memory_lock_is_silent(
-        self, caplog: pytest.LogCaptureFixture
-    ) -> None:
+    def test_an_explicit_memory_lock_is_silent(self, caplog: pytest.LogCaptureFixture) -> None:
         from dataknobs_common.locks import create_lock
 
         with caplog.at_level(logging.DEBUG, logger=REGISTRY_LOGGER):

@@ -39,9 +39,7 @@ def _warnings(caplog: pytest.LogCaptureFixture) -> list[str]:
 
 
 class TestArtifactBankCatalog:
-    def test_an_empty_config_reports_the_fallback(
-        self, caplog: pytest.LogCaptureFixture
-    ) -> None:
+    def test_an_empty_config_reports_the_fallback(self, caplog: pytest.LogCaptureFixture) -> None:
         from dataknobs_bots.memory.catalog import ArtifactBankCatalog
 
         with caplog.at_level(logging.DEBUG, logger=SELECTION_LOGGER):
@@ -50,9 +48,7 @@ class TestArtifactBankCatalog:
         assert len(_warnings(caplog)) == 1
         assert "falling back to 'memory'" in _warnings(caplog)[0]
 
-    def test_an_explicit_backend_does_not(
-        self, caplog: pytest.LogCaptureFixture
-    ) -> None:
+    def test_an_explicit_backend_does_not(self, caplog: pytest.LogCaptureFixture) -> None:
         from dataknobs_bots.memory.catalog import ArtifactBankCatalog
 
         with caplog.at_level(logging.DEBUG, logger=SELECTION_LOGGER):
@@ -73,9 +69,7 @@ class TestArtifactBankCatalog:
         from dataknobs_bots.memory.catalog import ArtifactBankCatalog
 
         with caplog.at_level(logging.DEBUG, logger=SELECTION_LOGGER):
-            ArtifactBankCatalog.from_config(
-                {"backend_config": {"backend": "memory"}}
-            )
+            ArtifactBankCatalog.from_config({"backend_config": {"backend": "memory"}})
 
         assert _warnings(caplog) == []
 
@@ -94,9 +88,7 @@ class TestRegistryAdapter:
         assert len(_warnings(caplog)) == 1
 
     @pytest.mark.asyncio
-    async def test_an_explicit_backend_does_not(
-        self, caplog: pytest.LogCaptureFixture
-    ) -> None:
+    async def test_an_explicit_backend_does_not(self, caplog: pytest.LogCaptureFixture) -> None:
         from dataknobs_bots.registry.adapter import DataKnobsRegistryAdapter
 
         adapter = DataKnobsRegistryAdapter.from_config({"backend": "memory"})
@@ -126,9 +118,7 @@ class TestDatabaseGroundedSource:
         assert len(_warnings(caplog)) == 1
 
     @pytest.mark.asyncio
-    async def test_options_naming_a_backend_do_not(
-        self, caplog: pytest.LogCaptureFixture
-    ) -> None:
+    async def test_options_naming_a_backend_do_not(self, caplog: pytest.LogCaptureFixture) -> None:
         from dataknobs_bots.knowledge.sources.factory import _create_database_source
         from dataknobs_bots.reasoning.grounded_config import GroundedSourceConfig
 

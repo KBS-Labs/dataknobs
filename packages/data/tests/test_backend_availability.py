@@ -238,7 +238,8 @@ class TestTheShippedRegistries:
         self, label: str, factory: Any, registry: Any
     ) -> None:
         """``requires_install`` says what to type; ``requires_module`` is
-        what makes availability answerable without typing it."""
+        what makes availability answerable without typing it.
+        """
         for name in factory.get_available_backends():
             info = factory.get_backend_info(name)
             if info.get("requires_install"):
