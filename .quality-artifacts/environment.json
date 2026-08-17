@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-08-17T17:23:03Z",
+  "timestamp": "2026-08-17T18:12:17Z",
   "python_version": "Python 3.12.12",
   "uv_version": "uv 0.12.5 (Homebrew 2026-08-14 aarch64-apple-darwin)",
   "os": "Darwin",
   "os_version": "24.6.0",
   "git_branch": "sbk/resource-reference-failure-policy",
-  "git_commit": "2ca644c5e960c419b500ee97951f452e3f211461",
+  "git_commit": "286b4546225d0ff884ff364670ea7cb5ea7dfe92",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }
