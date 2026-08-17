@@ -22,7 +22,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   nothing that asks what it can build sees a plugin it cannot. `create()`
   raises the declared reason rather than reporting the name as unknown.
   `register()` on the same key clears the mark, so the order of the two
-  calls does not decide the outcome.
+  calls does not decide the outcome, and `unregister()` drops a declared
+  key as readily as a registered one — both are things the registry knows,
+  so both are things it can be told to forget.
+
+  `aliases=` withdraws a plugin's other spellings with it and points them
+  at its metadata. `get_metadata(follow_alias=True)` groups by shared
+  factory, and an unavailable plugin has none — so without this the one
+  state in which `requires_install` is ever read was the one state in which
+  an alias could not reach it, and a caller had to copy the metadata dict
+  under every spelling to compensate.
 
 - **`PluginRegistry.list_canonical_keys()`** — registered keys with aliases
   collapsed, one name per plugin. `list_keys()` reports every accepted
@@ -39,10 +48,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   returned `{}` while every other question about it answered for the
   canonical name. Opt-in; the default keeps the historical shape.
 
-- **`PluginRegistry(default_warning=...)`** — text logged at WARNING when
-  the routing key was absent from config and `config_key_default` supplied
-  it. A registry whose default has consequences should say what they are,
-  because the generic sentence cannot.
+- **`PluginRegistry(default_warning=...)`** — what a registry's fallback
+  costs, logged at WARNING when the routing key was absent from config and
+  `config_key_default` supplied it. A registry whose default has
+  consequences should say what they are, because a generic sentence cannot:
+  the three that ship with one — a lock every process holds at once, a bus
+  whose events reach nobody, a rate limit enforced N times over — each say
+  their own.
+
+  Leaving it unset is the other half of the decision, not the absence of
+  one. Six registries here and in the packages above default to the
+  *recommended* answer — `simple` reasoning, `buffer` memory, `rag`
+  knowledge, `markdown_tree` chunking, `mapping` and `null` resolution —
+  and every documented config for those omits the key on purpose. Their
+  fallback is recorded at DEBUG, so the provenance is still there without
+  a warning fired on correct usage, per turn, drowning the three that mean
+  something.
 
 - **`requires_real_postgres`, `requires_real_postgres_sync`,
   `requires_real_elasticsearch`, `requires_real_s3` — a service gate that tests

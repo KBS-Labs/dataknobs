@@ -60,12 +60,23 @@ class _OtherPlugin(_Plugin):
 
 
 def _registry_with_default() -> PluginRegistry[Any]:
+    """A registry whose default costs something, so it says so.
+
+    Passing ``default_warning`` is what makes the fallback a WARNING;
+    a registry that declares none is reporting a default it does not
+    consider consequential, and :class:`TestADefaultNobodyCalledCostly`
+    covers that half.
+    """
     registry: PluginRegistry[Any] = PluginRegistry(
         "defaulting",
         config_key="backend",
         config_key_default="memory",
         not_found_kind="test backend",
         not_found_exception=ValueError,
+        default_warning=(
+            "No '%(config_key)s' key in this %(registry)s config; falling back "
+            "to '%(key)s', which keeps nothing once this process exits."
+        ),
     )
     registry.register("memory", _Plugin)
     registry.register("postgres", _Plugin)
@@ -172,6 +183,74 @@ class TestADefaultedKeyIsReported:
         warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
         assert len(warnings) == 1
         assert "memory" in warnings[0].getMessage()
+
+
+class TestADefaultNobodyCalledCostly:
+    """A registry that declares no warning text does not raise its voice.
+
+    ``default_warning`` is a registry saying what its own fallback costs.
+    Most defaults cost nothing worth interrupting anyone for -- ``simple``
+    reasoning, ``buffer`` memory, ``rag`` knowledge, ``null`` partitioning
+    -- and the documented config for each of those omits the key on
+    purpose, because the default is the recommended answer.
+
+    Reporting those at WARNING inverts the level's meaning. It fires on
+    configurations this repository's own documentation prints, it fires
+    per turn where the resolve is per turn, and it buries the three
+    registries whose default really does cost something: a lock that
+    coordinates nothing, a bus whose events reach nobody, a limiter that
+    multiplies the rate by the number of processes.
+
+    So the provenance is still recorded -- an absent key and an explicit
+    one are still different events, which is the whole point -- but at
+    DEBUG until a registry claims otherwise.
+    """
+
+    @staticmethod
+    def _quiet() -> PluginRegistry[Any]:
+        registry: PluginRegistry[Any] = PluginRegistry(
+            "quiet",
+            config_key="backend",
+            config_key_default="memory",
+        )
+        registry.register("memory", _Plugin)
+        return registry
+
+    def test_it_does_not_warn(self, caplog: pytest.LogCaptureFixture) -> None:
+        registry = self._quiet()
+
+        with caplog.at_level(logging.DEBUG, logger=REGISTRY_LOGGER):
+            registry.create(config={})
+
+        warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+        assert warnings == [], (
+            "a registry that declared no consequence should not report one: "
+            f"{[r.getMessage() for r in warnings]}"
+        )
+
+    def test_the_provenance_is_still_recorded_at_debug(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Quieter, not silent -- the distinction is still findable."""
+        registry = self._quiet()
+
+        with caplog.at_level(logging.DEBUG, logger=REGISTRY_LOGGER):
+            registry.create(config={})
+
+        debug = [r for r in caplog.records if r.levelno == logging.DEBUG]
+        assert any("memory" in r.getMessage() and "backend" in r.getMessage() for r in debug), (
+            f"expected the fallback recorded at DEBUG, got {[r.getMessage() for r in debug]}"
+        )
+
+    def test_create_async_is_quiet_too(self, caplog: pytest.LogCaptureFixture) -> None:
+        import asyncio
+
+        registry = self._quiet()
+
+        with caplog.at_level(logging.DEBUG, logger=REGISTRY_LOGGER):
+            asyncio.run(registry.create_async(config={}))
+
+        assert [r for r in caplog.records if r.levelno == logging.WARNING] == []
 
 
 # ---------------------------------------------------------------------------
@@ -313,6 +392,150 @@ class TestKnownButUnavailable:
 
         with pytest.raises(NotFoundError, match="not installed"):
             registry.create("gone", config={})
+
+    def test_a_failed_lazy_init_leaves_no_mark_behind(self) -> None:
+        """The rollback has to cover every dict a populator can write to.
+
+        ``_ensure_initialized`` snapshots the registry before running the
+        populator so a partial failure cannot leave half a registration
+        behind -- ``_initialized`` is reset, the next access re-runs from
+        the top, and anything left over from the abandoned run is now
+        indistinguishable from something the new run put there.
+
+        ``_unavailable`` was added to the class without being added to that
+        snapshot. So a populator that declared a backend unavailable and
+        then failed left the mark, while the metadata that came with it was
+        rolled back -- leaving a key ``list_known_keys`` reports,
+        ``get_metadata`` knows nothing about, and ``create`` refuses as
+        "not available here" with a reason nobody can look up.
+
+        Reproduced with a populator that fails once and then succeeds along
+        a path that never mentions ``postgres``, which is the shape that
+        makes the leftover visible: a driver probe is an environment read,
+        and an environment can differ between two runs.
+        """
+        attempts: list[int] = []
+
+        def populate(registry: PluginRegistry[Any]) -> None:
+            attempts.append(1)
+            if len(attempts) == 1:
+                registry.declare_unavailable(
+                    "postgres",
+                    metadata={"description": "PostgreSQL"},
+                    reason="psycopg2 is not installed",
+                )
+                raise RuntimeError("the populator's own failure")
+            registry.register("memory", _Plugin, metadata={"description": "Memory"})
+
+        registry: PluginRegistry[Any] = PluginRegistry("lazy", on_first_access=populate)
+
+        with pytest.raises(RuntimeError, match="the populator's own failure"):
+            registry.list_known_keys()
+
+        assert registry.list_known_keys() == ["memory"], (
+            "the abandoned run's unavailable mark survived the rollback"
+        )
+        assert attempts == [1, 1]
+
+    def test_an_alias_of_it_answers_for_the_canonical_key(self) -> None:
+        """``follow_alias`` was dead for anything not creatable.
+
+        It groups by shared factory, and an unavailable key has no factory
+        -- so the one state in which ``requires_install`` is ever read was
+        the one state in which an alias could not reach it. The only
+        consumer of this API worked around it by writing the same metadata
+        dict under every spelling, which is a fix in the wrong place: it
+        makes alias metadata asymmetric between the two states, and every
+        later consumer has to rediscover the need for it.
+        """
+        registry: PluginRegistry[Any] = PluginRegistry("aliased-unavailable")
+        registry.declare_unavailable(
+            "postgres",
+            metadata={"requires_install": "pip install dataknobs-data[postgres]"},
+            reason="psycopg2 is not installed",
+            aliases=("pg", "postgresql"),
+        )
+
+        for spelling in ("pg", "postgresql"):
+            assert registry.get_metadata(spelling, follow_alias=True) == registry.get_metadata(
+                "postgres", follow_alias=True
+            ), spelling
+
+    def test_an_alias_of_it_is_not_creatable_either(self) -> None:
+        registry: PluginRegistry[Any] = PluginRegistry(
+            "aliased-unavailable", not_found_exception=ValueError
+        )
+        registry.declare_unavailable(
+            "postgres",
+            metadata={},
+            reason="psycopg2 is not installed",
+            aliases=("pg",),
+        )
+
+        assert registry.is_registered("pg") is False
+        with pytest.raises(ValueError, match="psycopg2 is not installed"):
+            registry.create("pg", config={})
+
+    def test_declaring_it_unavailable_withdraws_its_aliases_too(self) -> None:
+        """An alias registered earlier must not outlive the withdrawal."""
+        registry: PluginRegistry[Any] = PluginRegistry("withdrawing")
+        registry.register("postgres", _Plugin)
+        registry.register("pg", _Plugin)
+
+        registry.declare_unavailable("postgres", metadata={}, reason="withdrawn", aliases=("pg",))
+
+        assert registry.is_registered("pg") is False
+
+    def test_it_can_be_unregistered(self) -> None:
+        """``unregister`` looked only at ``_factories``.
+
+        So a declared-unavailable key could not be removed at all: the
+        method raised ``NotFoundError`` for a key the registry was
+        simultaneously reporting through ``list_known_keys``, and
+        ``register`` was the only way to clear a mark.
+        """
+        registry: PluginRegistry[Any] = PluginRegistry("removable")
+        registry.declare_unavailable(
+            "postgres", metadata={"description": "PostgreSQL"}, reason="absent"
+        )
+
+        registry.unregister("postgres")
+
+        assert registry.list_known_keys() == []
+        assert registry.get_metadata("postgres") == {}
+
+    def test_unregistering_something_it_never_knew_still_raises(self) -> None:
+        registry: PluginRegistry[Any] = PluginRegistry("removable")
+
+        with pytest.raises(NotFoundError):
+            registry.unregister("never-heard-of-it")
+
+    def test_a_leftover_mark_cannot_outlive_its_metadata(self) -> None:
+        """The inconsistency the rollback exists to prevent, stated directly.
+
+        Every key this registry admits to knowing has to be one it can say
+        something about -- either a factory or a reason.
+        """
+        attempts: list[int] = []
+
+        def populate(registry: PluginRegistry[Any]) -> None:
+            attempts.append(1)
+            if len(attempts) == 1:
+                registry.declare_unavailable(
+                    "postgres", metadata={"description": "PostgreSQL"}, reason="absent"
+                )
+                raise RuntimeError("boom")
+            registry.register("memory", _Plugin, metadata={"description": "Memory"})
+
+        registry: PluginRegistry[Any] = PluginRegistry("lazy", on_first_access=populate)
+
+        with pytest.raises(RuntimeError, match="boom"):
+            registry.list_known_keys()
+
+        for key in registry.list_known_keys():
+            assert registry.is_registered(key) or registry.get_metadata(key), (
+                f"{key!r} is reported as known but has neither a factory nor metadata"
+            )
 
 
 # ---------------------------------------------------------------------------
