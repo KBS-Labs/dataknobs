@@ -26,6 +26,30 @@ pg_db = factory.create(backend="postgres", host="localhost", database="myapp")
 s3_db = factory.create(backend="s3", bucket="my-bucket")
 ```
 
+### When no backend is named
+
+Every example above names a backend. A config that does not is still valid —
+it falls back to `memory` — but the factory says so at **WARNING** rather than
+letting the fallback pass unremarked:
+
+```
+No 'backend' key in this database config; falling back to 'memory'. That
+default is in-process and unpersisted -- it answers every query with zero
+results until something writes to it, and loses everything when the process
+restarts. If this config came from resolving a resource reference, check that
+the named resource is defined in this environment.
+```
+
+An explicit `backend="memory"` is logged at INFO instead. The two build the
+same object, and the level is the only thing that distinguishes a store
+somebody chose from one left over from a config that arrived empty — most
+often a `$resource` reference to a resource the environment does not define,
+which resolves to `{}` unless it is
+[declared required](../config/environment-aware.md#4-missing-resources).
+
+The same applies to `AsyncDatabaseFactory` and `VectorStoreFactory`, which
+share one selector.
+
 ## Configuration-Based Creation
 
 ### Using Config Files
@@ -88,7 +112,9 @@ db = config.get_instance("databases", "main")
 
 ## Backend Information API
 
-Query available backends and their requirements:
+Query available backends and their requirements. All three factories —
+`DatabaseFactory`, `AsyncDatabaseFactory` and `VectorStoreFactory` — answer
+the same three questions about their own registry:
 
 ```python
 factory = DatabaseFactory()
@@ -96,7 +122,7 @@ factory = DatabaseFactory()
 # Get all available backends
 backends = factory.get_available_backends()
 print(f"Available backends: {backends}")
-# Output: ['memory', 'file', 'postgres', 'elasticsearch', 's3']
+# Output: ['duckdb', 'elasticsearch', 'file', 'memory', 'postgres', 's3', 'sqlite']
 
 # Get information about a specific backend
 info = factory.get_backend_info("s3")
@@ -105,8 +131,12 @@ print(info)
 #     'description': 'AWS S3 object storage backend',
 #     'persistent': True,
 #     'requires_install': 'pip install dataknobs-data[s3]',
-#     'required_params': ['bucket'],
-#     'optional_params': ['prefix', 'region', 'endpoint_url', ...]
+#     'vector_support': False,
+#     'config_options': {
+#         'bucket': 'S3 bucket name (required)',
+#         'prefix': 'Object key prefix (default: records/)',
+#         ...
+#     },
 # }
 
 # Check if backend is available
@@ -115,6 +145,27 @@ if factory.is_backend_available("postgres"):
 else:
     print("PostgreSQL backend not available")
     print("Install with: pip install dataknobs-data[postgres]")
+```
+
+**Available means installed.** Each backend registers itself behind its own
+import, so a name is registered exactly when its optional dependency is
+present. `is_backend_available("postgres")` is therefore the check to make
+before offering it, and `get_backend_info(...)['requires_install']` is what
+to print when it is missing.
+
+**The reported list names each backend once.** `create()` accepts
+registration aliases — `pg` and `postgresql` for postgres, `es` for
+elasticsearch, `mem` for memory, `chromadb` for chroma — but
+`get_available_backends()` reports the canonical name alone, so it is a list
+of backends rather than a list of spellings. `is_backend_available()` and
+`get_backend_info()` still answer for an alias, so every question about `pg`
+agrees with the same question about `postgres`.
+
+An unknown name is reported rather than raised:
+
+```python
+factory.get_backend_info("no-such-backend")
+# {'description': 'Unknown backend', 'error': "Backend 'no-such-backend' not recognized"}
 ```
 
 ## Dynamic Backend Selection
