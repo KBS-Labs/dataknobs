@@ -91,7 +91,18 @@ llm:
   $requires: [function_calling]   # Validated against resource capabilities
 ```
 
-If the resolved resource declares `capabilities` metadata, the system validates that all requirements are met. Missing capabilities raise a `ConfigError` at resolution time.
+`$requires` makes two claims at once, and both are enforced:
+
+- **The resource must exist.** A reference declaring `$requires` against a
+  resource this environment does not define raises `ResourceNotFoundError` —
+  a resource that is absent satisfies no capability at all. Declare
+  `$required: false` alongside it to say "if it is there it must do X; it may
+  be absent", which degrades to the reference's inline defaults instead.
+- **If it declares `capabilities` metadata, they must cover the
+  requirement.** A found resource missing a required capability raises
+  `ConfigError` at resolution time. This check also runs on the degraded
+  config when `$required: false` opted out of the first claim — "it may be
+  absent" is not "and anything will do".
 
 Environment configs declare resource capabilities as metadata:
 
@@ -111,7 +122,130 @@ metadata and never reaches the factory.
 then passed through with the rest of the resource config, so a factory that
 receives one must tolerate the keyword.
 
-### 3. Environment Detection
+### 4. Missing Resources
+
+A reference naming a resource the current environment does not define
+resolves to the reference's inline defaults, with a warning — or to `{}` when
+it declares none. That is frequently what you want in development and rarely
+what you want in production: an empty config handed to a factory generally
+does not fail, it produces the factory's default. A degraded
+`conversation_storage` binding becomes an in-memory database, which holds
+state perfectly until the process restarts.
+
+A reference can therefore declare that its resource must exist:
+
+```yaml
+conversation_storage:
+  $resource: conversations
+  type: databases
+  $required: true      # absent in this environment -> raise, do not degrade
+```
+
+#### Precedence
+
+Four levels, each owned by someone different, most specific first. Every
+level is *unset-means-defer*, so "explicitly false" and "unspecified" stay
+distinguishable:
+
+| # | Level | Spelling | Owner |
+|---|---|---|---|
+| 1 | The reference | `$required: true` on the reference block | the config author |
+| 2 | The reference | a non-empty `$requires` (see above) | the config author |
+| 3 | Code | `resolve_for_build(strict_resources=True)`, or `EnvironmentAwareConfig(..., strict_resources=True)` | the calling code / embedding app |
+| 4 | The environment | `settings: {strict_resources: true}` | the operator |
+| — | Default | lenient — warn and degrade | unchanged |
+
+Level 4 is the only one reachable by a deployment whose references are
+**generated at runtime**: there is no authored reference to annotate, and
+every other level lives in code the operator does not deploy.
+
+Level 2 sits above the code levels rather than below them because it is a
+claim about one reference in particular, while `strict_resources` speaks for
+references that said nothing. Only the same author's `$required: false`
+overrides it.
+
+Both `$required` and the `strict_resources` setting accept a boolean or
+exactly the strings `"true"` / `"false"`, so they work through `${VAR}`
+expansion. Any other value raises rather than reading as lenient — a flag
+that silently means "off" is the defect this vocabulary exists to close.
+
+#### Marker keys are a closed set
+
+The markers are `$resource`, `type`, `$requires` and `$required`. Everything
+else in a reference block is an inline default, so a `$`-prefixed key outside
+that set is rejected as a malformed reference rather than merged. Without
+that guard `$requred: true` would silently mean *not required* — a typo one
+character from the marker, reintroducing the silent degrade at the exact site
+meant to close it.
+
+`RESOURCE_MARKER_KEYS` is exported from `dataknobs_config` so a second reader
+of this format has the vocabulary without copying the literal.
+
+#### Which exception
+
+| Condition | Exception |
+|---|---|
+| Resource missing, policy strict | `ResourceNotFoundError` |
+| Reference malformed (unknown `$` marker, unparseable `$required`) | `ConfigError` |
+| Resource found but under-capable for `$requires` | `ConfigError` |
+
+`ConfigBindingResolver.resolve()` raises `ResourceNotFoundError` for a
+missing resource too. That API takes a `(type, name)` pair with no reference
+to read a policy off, so it *is* the strict policy — the two resolvers agree
+on the type, and differ only in whether a reference exists to say otherwise.
+
+!!! warning "`ResourceNotFoundError` is also a `KeyError`"
+
+    It subclasses both `EnvironmentConfigError` and `KeyError`.
+    `resolve_for_build()` could not previously raise a `KeyError`; under a
+    strict policy it can. Code that wraps resolution in `except KeyError` for
+    unrelated reasons will swallow it.
+
+#### Preflight
+
+`resolve_for_build(strict_resources=True)` resolves without constructing
+anything, so it is safe to run at boot purely to prove every binding a config
+names exists in this environment. It raises on the first failure.
+
+To get *every* unresolvable reference in one pass — which is what an operator
+auditing a config tree wants — use `find_unresolved_resources()`:
+
+```yaml
+# config/apps/my-bot.yaml — the reference declares its own policy
+bot:
+  knowledge_base:
+    vector_store:
+      $resource: knowledge
+      type: vector_stores
+      $required: true
+```
+
+```python
+config = EnvironmentAwareConfig.load_app("my-bot")
+
+for ref in config.find_unresolved_resources():
+    print(f"{ref.path}: {ref.resource_type}/{ref.resource_name} "
+          f"(required={ref.required}, defaults={ref.has_inline_defaults})")
+# bot.knowledge_base.vector_store: vector_stores/knowledge (required=True, defaults=False)
+```
+
+It constructs nothing and raises nothing for a missing resource. A reference
+that selects its resource by variable (`$resource: ${LLM_BINDING}`) is
+reported under the **resolved** name, at any depth. Each entry is an
+`UnresolvedResourceRef` with `path`, `resource_type`, `resource_name`,
+`required`, and `has_inline_defaults` — the last distinguishing the two
+degradations, since falling back to declared defaults is a config that still
+builds while falling back to nothing is a factory about to be called with no
+arguments.
+
+An empty list means no reference names an absent resource — **not** that the
+build will succeed. A resource that is present but does not declare a
+capability its reference `$requires` still fails at build time and is not
+reported here; this surveys presence, which is the one question answerable
+without resolving anything. `resolve_for_build(strict_resources=True)` is the
+complete check.
+
+### 5. Environment Detection
 
 The system automatically detects the current environment via:
 
@@ -168,6 +302,8 @@ description: AWS production environment
 settings:
   log_level: INFO
   enable_metrics: true
+  strict_resources: true   # a reference to a resource this file does not
+                           # define raises instead of degrading
 
 resources:
   databases:
@@ -577,7 +713,7 @@ llm_providers:
 | `substituted` (attribute) | Whether `${VAR}` refs in these values have been expanded |
 | `substituted_view()` | An expanded copy of an unexpanded config |
 | `detect_environment()` | Detect current environment |
-| `get_resource(type, name, defaults)` | Get resource config |
+| `get_resource(type, name, defaults, *, required=None)` | Get resource config. `required` decides the absent case independently of `defaults` |
 | `has_resource(type, name)` | Check if resource exists |
 | `get_setting(key, default)` | Get environment setting |
 | `get_resource_types()` | List all resource types |
@@ -589,13 +725,15 @@ llm_providers:
 
 | Method | Description |
 |--------|-------------|
-| `load_app(name, app_dir, env_dir, environment)` | Load app with environment |
-| `from_dict(config, environment, env_dir)` | Create from dictionary |
-| `resolve_for_build(key, resolve_resources, resolve_env_vars)` | Late-bind config |
+| `load_app(name, app_dir, env_dir, environment, *, allow_outside=False, strict_resources=None)` | Load app with environment |
+| `from_dict(config, environment, env_dir, *, strict_resources=None)` | Create from dictionary |
+| `resolve_for_build(key, resolve_resources, resolve_env_vars, *, strict_resources=None)` | Late-bind config |
+| `find_unresolved_resources(config_key, strict_resources)` | Survey every unresolvable reference; builds nothing |
+| `strict_resources` (property) | The instance-level missing-resource policy, or `None` to defer |
 | `get_portable_config()` | Get unresolved config |
 | `get(key, default)` | Get config value |
-| `with_environment(environment, env_dir)` | Create with different env |
-| `get_resource(type, name, defaults)` | Direct resource access |
+| `with_environment(environment, env_dir)` | Create with different env; carries `strict_resources` |
+| `get_resource(type, name, defaults, *, required=None)` | Direct resource access |
 | `get_setting(key, default)` | Direct setting access |
 
 ### ConfigBindingResolver
