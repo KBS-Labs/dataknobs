@@ -826,6 +826,34 @@ class PgVectorStore(VectorStore):
         id_cast = "::uuid" if self.id_type == "uuid" else ""
 
         async with self._pool.acquire() as conn:
+            # A scoped store may not write an id another domain owns.
+            # The ``ON CONFLICT`` clause below assigns ``domain_id``
+            # from the incoming row, so an unguarded write to a foreign
+            # id does not insert alongside it or edit it — it takes it.
+            # One query for the whole batch, before the first insert,
+            # so a rejected batch leaves nothing behind.
+            #
+            # ``domain_id`` is a column here rather than a metadata key,
+            # so the stored value is lifted into the shape
+            # ``_reject_out_of_scope_ids`` compares — one predicate
+            # decides for every backend.
+            if self._is_scoped:
+                owners = await self._exec_with_id_type_guard(
+                    conn,
+                    "fetch",
+                    f"""
+                    SELECT {self._col("id")}::text AS id,
+                           {self._col("domain_id")} AS domain_id
+                    FROM {self._q_qualified}
+                    WHERE {self._col("id")} = ANY($1::{"uuid" if self.id_type == "uuid" else "text"}[])
+                    """,
+                    list(ids),
+                    vec_id=list(ids),
+                )
+                self._reject_out_of_scope_ids(
+                    {row["id"]: {"domain_id": row["domain_id"]} for row in owners}
+                )
+
             # Batch insert
             for i, (vec, vec_id, meta) in enumerate(zip(vectors, ids, metadata)):
                 # Extract document info from metadata if available

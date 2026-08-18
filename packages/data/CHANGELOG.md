@@ -116,10 +116,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   available failure mode.
 
 - **A configured `domain_id` now scopes the id-keyed operations too.**
-  `get_vectors()`, `delete_vectors()`, `update_metadata()` and
-  `metadata_fields()` address rows by id (or not at all) and so built no
-  filter, which left the tenant scope binding only the surfaces that
-  take one. A scoped store answered for any id in the collection, and
+  `get_vectors()`, `delete_vectors()`, `update_metadata()`,
+  `add_vectors()`, `add_documents()` and `metadata_fields()` address
+  rows by id (or not at all) and so built no filter, which left the
+  tenant scope binding only the surfaces that take one. The write verbs
+  answer differently from the reads and are described under *Fixed*. A scoped store answered for any id in the collection, and
   `metadata_fields()` returned the union of every tenant's key names.
   All four are now confined to the configured domain on every backend,
   and an out-of-domain id is answered exactly as an absent one — so a
@@ -299,6 +300,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   answering filters. Both write paths now name the departing keys with
   a `None` value to delete them, the same mechanism `update_metadata()`
   already used.
+
+- **A scoped store can no longer capture another domain's row by
+  writing its id.** `add_vectors()` and `add_documents()` are id-keyed
+  like the read verbs, but were not scoped: because the row they write
+  carries the configured `domain_id`, writing an id another domain owned
+  destroyed the original and relabelled the replacement into the
+  caller's domain — the victim's `count()` dropped by one and nothing
+  recorded that it happened. On pgvector the capture was explicit in the
+  SQL, whose `ON CONFLICT` clause assigns `domain_id` from the incoming
+  row; on Chroma and Memory the stolen row also inherited the victim's
+  `created_at`.
+
+  All four backends now raise `VectorDomainScopeError` (new, exported
+  from `dataknobs_data.vector`; subclasses `ValueError`) before writing
+  anything, so a rejected batch leaves no partial state. A row carrying
+  no domain at all is refused on the same grounds — every scoped read
+  already treats it as absent. Unscoped stores are unaffected and remain
+  the way to address a whole collection deliberately.
+
+  **This is a behaviour change** for a scoped store that was writing
+  ids outside its domain; that write is now an error rather than a
+  silent capture.
 
 - **A row belonging to several domains is no longer visible to half its
   own store.** Scope membership follows the same four-quadrant rule as

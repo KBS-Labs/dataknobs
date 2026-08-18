@@ -221,6 +221,14 @@ class MemoryVectorStore(VectorStore):
         if ids is None:
             ids = [str(uuid4()) for _ in range(len(vectors))]
 
+        # A scoped store may not write an id another domain owns: this
+        # path upserts, so that write would capture the row rather than
+        # add one. Whole batch checked before the first assignment —
+        # there is no transaction here to roll a partial write back.
+        self._reject_out_of_scope_ids(
+            {i: self.metadata_store.get(i) for i in ids if i in self.vectors}
+        )
+
         # Store vectors, metadata, and timestamps. Upsert semantics:
         # preserve created_at across re-adds of the same id; refresh
         # updated_at every time. ``_apply_domain_default`` returns

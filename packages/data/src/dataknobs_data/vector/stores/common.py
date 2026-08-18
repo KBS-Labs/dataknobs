@@ -14,11 +14,13 @@ from typing import TYPE_CHECKING, Any, ClassVar, cast
 from dataknobs_common.exceptions import ConcurrencyError
 from dataknobs_common.structured_config import StructuredConfigConsumer
 
+from ..exceptions import VectorDomainScopeError
+
 from ..types import DistanceMetric
 from .config import VectorStoreConfig, VectorStoreTimestampConfig
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Iterable, Iterator
+    from collections.abc import Callable, Iterable, Iterator, Mapping
 
     import numpy as np
 
@@ -436,6 +438,41 @@ class VectorStoreBase(StructuredConfigConsumer[VectorStoreConfig]):
         if not self._is_scoped:
             return True
         return self._match_metadata_filter(meta, {"domain_id": self.domain_id})
+
+    def _reject_out_of_scope_ids(
+        self, stored: Mapping[str, dict[str, Any] | None]
+    ) -> None:
+        """Fail closed when a write would capture out-of-domain rows.
+
+        The write-side counterpart of :meth:`_in_configured_domain`.
+        ``add_vectors`` and ``add_documents`` are id-keyed like the read
+        verbs — this store upserts on id conflict — but they cannot
+        answer "absent" the way a read does. The row they would write
+        carries the configured scope (``_apply_domain_default`` puts it
+        there), so writing an id another domain owns does not insert
+        alongside it or edit it: it takes it. On pgvector the capture is
+        explicit in the SQL, whose ``ON CONFLICT`` clause assigns
+        ``domain_id`` from the incoming row.
+
+        *stored* maps id to the metadata already held, for the subset of
+        the batch that already exists — an id with no stored row is a
+        genuine insert and is not the caller's to lose. Backends whose
+        ``domain_id`` is a column pass a synthesized ``{"domain_id":
+        ...}`` so one predicate decides for every backend.
+
+        Raises before anything is written, so a rejected batch leaves no
+        partial state on the backends that have no transaction to roll
+        back.
+        """
+        if not self._is_scoped:
+            return
+        foreign = sorted(
+            rid for rid, meta in stored.items() if not self._in_configured_domain(meta)
+        )
+        if foreign:
+            # ``_is_scoped`` is exactly "domain_id is not None", but it
+            # is a property, so the narrowing does not carry here.
+            raise VectorDomainScopeError(foreign, cast("str", self.domain_id))
 
     # ------------------------------------------------------------------
     # Single-file persistence: dirty tracking, identity, atomic publish.

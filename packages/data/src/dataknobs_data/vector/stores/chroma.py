@@ -486,6 +486,17 @@ class ChromaVectorStore(VectorStore):
             for i, rid in enumerate(existing_ids)
         }
 
+        # A scoped store may not write an id another domain owns: this
+        # path upserts, so that write would capture the row rather than
+        # add one. It lives here rather than in each caller because both
+        # write paths reach it, and the ``get`` above has already paid
+        # for the stored metadata the check needs. Raising before the
+        # ``upsert`` is what keeps a rejected batch from landing
+        # partially — chromadb has no transaction to roll back.
+        self._reject_out_of_scope_ids(
+            {rid: self._decode_metadata(raw) for rid, raw in stored_by_id.items()}
+        )
+
         now = datetime.now(UTC)
         rows = metadata if metadata is not None else [{} for _ in ids]
         return [

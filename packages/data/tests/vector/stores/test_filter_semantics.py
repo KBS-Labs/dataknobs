@@ -28,6 +28,7 @@ backend.
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import uuid
 from collections.abc import AsyncIterator, Iterator
@@ -43,6 +44,7 @@ from dataknobs_common.testing import (
     requires_real_postgres,
 )
 
+from dataknobs_data.vector.exceptions import VectorDomainScopeError
 from dataknobs_data.vector.stores.common import POST_FILTER_OVERFETCH
 from dataknobs_data.vector.stores.memory import MemoryVectorStore
 
@@ -566,6 +568,150 @@ async def test_metadata_fields_does_not_disclose_another_domain(
     fields = await domain_scoped_store.metadata_fields()
     assert "k" in fields
     assert "secret" not in fields
+
+
+@contextlib.contextmanager
+def _unscoped(store: Any) -> Iterator[Any]:
+    """The same store, with its configured scope lifted for the block.
+
+    A second store object is not an option for all four backends —
+    Memory and FAISS hold their rows in instance state, so a fresh
+    instance shares no data with this one. Lifting ``domain_id`` on the
+    object under test is the one way to look at the same backing rows
+    from outside the scope on every backend, which is what proving "the
+    victim row is still there, still owned by t2" requires.
+    """
+    saved = store.domain_id
+    store.domain_id = None
+    try:
+        yield store
+    finally:
+        store.domain_id = saved
+
+
+@pytest.mark.asyncio
+async def test_add_vectors_does_not_capture_another_domain_s_row(
+    domain_scoped_store: Any,
+) -> None:
+    """A scoped store cannot take a row by writing its id.
+
+    The destructive half of the id-keyed hole the read verbs closed.
+    ``add_vectors`` upserts on id conflict and the row it writes carries
+    the configured scope, so an unguarded write to an id another domain
+    owns does not insert alongside it and does not merely edit it — it
+    destroys the original and relabels the replacement into the writer's
+    own domain. The victim's ``count()`` drops by one and nothing
+    anywhere records that it happened.
+
+    pgvector states the capture in its own SQL: the ``ON CONFLICT``
+    clause assigns ``domain_id`` from the incoming row.
+
+    Refusing is the only answer that is neither a capture nor a silent
+    drop. Ids here are shared across domains by construction — they are
+    routinely derived from content — so a collision is a real event
+    rather than caller error, and returning ids that were not written
+    would be worse than raising.
+    """
+    with pytest.raises(VectorDomainScopeError) as excinfo:
+        await domain_scoped_store.add_vectors(
+            _seed_vectors()[:1], ids=["o1"], metadata=[{"k": "mine"}]
+        )
+    assert "o1" in str(excinfo.value)
+
+    # The victim row is untouched: still owned by t2, still carrying its
+    # own metadata rather than the caller's.
+    with _unscoped(domain_scoped_store) as store:
+        meta = (await store.get_vectors(["o1"]))[0][1] or {}
+        assert meta.get("k") == "v"
+        assert meta.get("secret") == 1
+        assert await store.count() == 3
+
+
+@pytest.mark.asyncio
+async def test_a_rejected_batch_writes_nothing(
+    domain_scoped_store: Any,
+) -> None:
+    """One out-of-domain id rejects the whole batch, before any write.
+
+    Memory, FAISS and Chroma have no transaction to roll back, so a
+    guard applied per row as it is written would leave the rows before
+    the offending one committed. The check therefore runs over the whole
+    batch first: a caller who catches the error and retries is not
+    retrying on top of a half-applied write.
+    """
+    with pytest.raises(VectorDomainScopeError):
+        await domain_scoped_store.add_vectors(
+            _seed_vectors()[:2],
+            ids=["fresh", "o1"],
+            metadata=[{"k": "new"}, {"k": "mine"}],
+        )
+
+    # ``fresh`` precedes the rejected id in the batch and must not exist.
+    assert await domain_scoped_store.get_vectors(["fresh"]) == [(None, None)]
+    assert await domain_scoped_store.count() == 2
+
+
+@pytest.mark.asyncio
+async def test_a_scoped_store_still_writes_its_own_ids(
+    domain_scoped_store: Any,
+) -> None:
+    """The guard refuses foreign ids only — in-domain writes are unchanged.
+
+    Both halves matter: re-writing an id the store already owns is an
+    ordinary upsert, and a brand-new id is a genuine insert that no
+    stored row can object to.
+    """
+    assert await domain_scoped_store.add_vectors(
+        _seed_vectors()[:1], ids=["s1"], metadata=[{"k": "revised"}]
+    ) == ["s1"]
+    assert await domain_scoped_store.add_vectors(
+        _seed_vectors()[:1], ids=["brand-new"], metadata=[{"k": "new"}]
+    ) == ["brand-new"]
+    assert await domain_scoped_store.count() == 3
+
+
+@pytest.mark.asyncio
+async def test_an_ownerless_row_is_not_the_scoped_store_s_to_take(
+    domain_scoped_store: Any,
+) -> None:
+    """A row with no domain at all is out of scope, not up for grabs.
+
+    Rows written before a scope was configured — or by an unscoped
+    admin path — carry no ``domain_id`` (NULL in pgvector's column).
+    Every scoped read already treats them as absent, because an absent
+    key never satisfies a filter and NULL never equals a value. The
+    write side has to agree: silently claiming an ownerless row is the
+    same capture as claiming an owned one, just with no victim to
+    notice. So the scoped store refuses, and an unscoped store remains
+    the way to adopt such rows deliberately.
+    """
+    with _unscoped(domain_scoped_store) as store:
+        await store.add_vectors(_seed_vectors()[:1], ids=["orphan"], metadata=[{"k": "v"}])
+
+    assert await domain_scoped_store.get_vectors(["orphan"]) == [(None, None)]
+    with pytest.raises(VectorDomainScopeError):
+        await domain_scoped_store.add_vectors(
+            _seed_vectors()[:1], ids=["orphan"], metadata=[{"k": "claimed"}]
+        )
+
+
+@pytest.mark.asyncio
+async def test_an_unscoped_store_still_writes_any_id(
+    domain_scoped_store: Any,
+) -> None:
+    """The guard is scope-conditional, not a new restriction on ids.
+
+    A store with no configured ``domain_id`` has no scope to violate, so
+    every id stays writable — including one carrying another domain's
+    tag, which is how a migration or an admin tool addresses the whole
+    collection.
+    """
+    with _unscoped(domain_scoped_store) as store:
+        written = await store.add_vectors(
+            _seed_vectors()[:1], ids=["o1"], metadata=[{"domain_id": "t2", "k": "rewritten"}]
+        )
+        assert written == ["o1"]
+        assert ((await store.get_vectors(["o1"]))[0][1] or {}).get("k") == "rewritten"
 
 
 # ---------------------------------------------------------------------------

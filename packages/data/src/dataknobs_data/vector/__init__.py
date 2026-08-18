@@ -8,6 +8,7 @@ from ..fields import VectorField
 from .exceptions import (
     VectorBackendError,
     VectorDimensionError,
+    VectorDomainScopeError,
     VectorError,
     VectorIndexError,
     VectorNotSupportedError,
@@ -77,6 +78,7 @@ __all__ = [
     # Exceptions
     "VectorBackendError",
     "VectorDimensionError",
+    "VectorDomainScopeError",
     "VectorError",
     "VectorIndexError",
     "VectorNotSupportedError",

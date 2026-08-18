@@ -296,6 +296,20 @@ class FaissVectorStore(VectorStore):
         # defaulted in (caller's dicts never aliased — Items #8 / 131).
         rows = self._apply_domain_default(metadata, len(ids))
 
+        # A scoped store may not write an id another domain owns: this
+        # path upserts, so that write would capture the row rather than
+        # add one. Checked before the eviction below, which is
+        # destructive and has no transaction to roll back. Metadata is
+        # keyed by internal id, so the external id resolves through
+        # ``id_map`` first.
+        self._reject_out_of_scope_ids(
+            {
+                ext_id: self.metadata_store.get(self.id_map[ext_id])
+                for ext_id in ids
+                if ext_id in self.id_map
+            }
+        )
+
         # No inline training: the live index is always immediately
         # addable — flat / hnsw, or the temporary flat standing in for
         # a deferred IVF, or an already-migrated trained IVF. IVF

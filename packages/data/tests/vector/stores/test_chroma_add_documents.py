@@ -24,6 +24,7 @@ import pytest
 from dataknobs_common.testing import is_chromadb_available
 
 from dataknobs_data.testing import chroma_embedding_function
+from dataknobs_data.vector.exceptions import VectorDomainScopeError
 
 if is_chromadb_available():
     from dataknobs_data.vector.stores.chroma import ChromaVectorStore
@@ -120,6 +121,34 @@ async def test_add_documents_does_not_cross_domains():  # type: ignore[no-untype
             await other.close()
     finally:
         await _drop(store)
+
+
+async def test_add_documents_does_not_capture_another_domain_s_row():  # type: ignore[no-untyped-def]
+    """The document path is guarded like the vector path.
+
+    ``add_documents`` upserts on id conflict exactly as ``add_vectors``
+    does, so writing an id another tenant owns would destroy their row
+    and relabel the replacement — the same capture, reached through the
+    other write verb. Both paths share ``_stamped_payloads``, which is
+    where the guard lives, so neither can be fixed without the other.
+    """
+    collection = f"test_add_docs_{uuid.uuid4().hex[:8]}"
+    owner = await _store(domain_id="tenant-b", collection_name=collection)
+    try:
+        await owner.add_documents(["theirs"], ids=["d1"], metadata=[{"secret": "kept"}])
+
+        intruder = await _store(domain_id="tenant-a", collection_name=collection)
+        try:
+            with pytest.raises(VectorDomainScopeError):
+                await intruder.add_documents(["mine"], ids=["d1"], metadata=[{"k": "taken"}])
+        finally:
+            await intruder.close()
+
+        # Untouched, and still tenant-b's.
+        assert await owner.count() == 1
+        assert ((await owner.get_vectors(["d1"]))[0][1] or {}).get("secret") == "kept"
+    finally:
+        await _drop(owner)
 
 
 async def test_add_documents_tracks_timestamps():  # type: ignore[no-untyped-def]
