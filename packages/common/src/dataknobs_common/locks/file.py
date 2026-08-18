@@ -91,10 +91,14 @@ reconstruction rather than a workaround.
   cannot write — so a read path should degrade to an unlocked read
   rather than fail. A write path must not: there the write is the very
   thing that needs excluding.
-* **:meth:`acquire` blocks without bound.** Correct on a worker thread,
-  fatal on an event loop — never call it from a coroutine. Constructing
-  the lock there is fine: ``__init__`` touches no filesystem, so the
-  usual shape — build the lock on the loop, offload ``acquire`` — holds.
+* **``acquire`` blocks without bound by default.** Correct on a worker
+  thread, fatal on an event loop — never call it from a coroutine.
+  Constructing the lock there is fine: ``__init__`` touches no
+  filesystem, so the usual shape — build the lock on the loop, offload
+  ``acquire`` — holds. Pass ``timeout`` to bound the wait; the default
+  parks a worker thread indefinitely, which on the shared
+  ``asyncio.to_thread`` executor starves every unrelated offload behind
+  it.
 * **Not reentrant.** One thread acquiring twice deadlocks. This differs
   from the pre-``2.1`` lock, which appeared reentrant only because
   ``fcntl`` grants the owning process a lock it already holds — i.e. by
@@ -106,7 +110,10 @@ from __future__ import annotations
 import os
 import sys
 import threading
+import time
 from typing import IO, TYPE_CHECKING, Self
+
+from ..exceptions import TimeoutError as DataknobsTimeoutError
 
 if TYPE_CHECKING:
     from types import TracebackType
@@ -127,6 +134,13 @@ is unreconstructable rather than merely stale; see ``_reset_after_fork``.
 
 _registry_guard = threading.Lock()
 """Serializes construction of the entries above, not their acquisition."""
+
+_POLL_INTERVAL = 0.01
+"""Seconds between attempts when a bounded ``acquire`` has to retry.
+
+Only reached on the timeout path: an unbounded acquire blocks in the
+kernel rather than spinning.
+"""
 
 
 def _mutex_for(key: _LockKey) -> threading.Lock:
@@ -165,6 +179,11 @@ class FileLock:
         filepath: The file being guarded. The lock itself is taken on a
             sibling ``<filepath>.lock`` beside the *resolved* target, so
             the target need not exist but its directory must.
+        timeout: Seconds to wait before giving up, or ``None`` (the
+            default) to wait without bound. A bounded wait is what an
+            ``asyncio.to_thread`` caller wants: the default parks a
+            worker of the loop's shared executor for as long as the
+            current holder runs.
 
     Example:
         ```python
@@ -173,10 +192,22 @@ class FileLock:
         with FileLock("/var/lib/app/index.pkl"):
             ...  # read-modify-write, serialized against every holder
         ```
+
+        Bounded, for a caller that must not park a pooled thread:
+
+        ```python
+        lock = FileLock("/var/lib/app/index.pkl", timeout=30)
+        if lock.acquire():
+            try:
+                ...
+            finally:
+                lock.release()
+        ```
     """
 
-    def __init__(self, filepath: str):
+    def __init__(self, filepath: str, *, timeout: float | None = None):
         self.filepath = filepath
+        self.timeout = timeout
         # The unresolved sibling. ``acquire`` replaces this with the
         # sibling of the *resolved* target, which is the file actually
         # locked; resolving needs the filesystem, and ``__init__`` is
@@ -188,8 +219,14 @@ class FileLock:
         # is nothing to hand on.
         self._mutex: threading.Lock | None = None
 
-    def acquire(self) -> None:
+    def acquire(self) -> bool:
         """Block until this is the only holder, in this process and beyond.
+
+        Returns ``True`` when the lock is held and ``False`` when
+        ``timeout`` elapsed first — the same shape as
+        :meth:`~dataknobs_common.locks.lock.DistributedLock.acquire`, so
+        the two concurrency primitives read alike. Without a ``timeout``
+        the return is always ``True``.
 
         Resolving the path and opening the lockfile are filesystem I/O,
         so they happen here rather than in ``__init__``. An async caller
@@ -205,6 +242,7 @@ class FileLock:
         immediately, so the mutex is the only thing standing between it
         and a handle this instance still holds.
         """
+        deadline = None if self.timeout is None else time.monotonic() + self.timeout
         # Resolve the *target*, then append the suffix. Appending first
         # and resolving after leaves the ``.lock`` component unresolved,
         # which is how a symlink and its target end up with two lockfiles.
@@ -214,13 +252,18 @@ class FileLock:
         try:
             stat = os.fstat(handle.fileno())
             mutex = _mutex_for((stat.st_dev, stat.st_ino))
-            mutex.acquire()
+            if not _acquire_mutex(mutex, deadline):
+                handle.close()
+                return False
         except BaseException:
             handle.close()
             raise
 
         try:
-            self._lock_file(handle)
+            if not self._lock_file(handle, deadline):
+                mutex.release()
+                handle.close()
+                return False
         except BaseException:
             mutex.release()
             handle.close()
@@ -228,6 +271,7 @@ class FileLock:
 
         self.lock_handle = handle
         self._mutex = mutex
+        return True
 
     def _open_lockfile(self) -> IO[bytes]:
         """Open the sibling lockfile, creating it if it is not there.
@@ -249,27 +293,39 @@ class FileLock:
             os.close(fd)
             raise
 
-    def _lock_file(self, handle: IO[bytes]) -> None:
-        """Take the OS-level lock on the sibling lockfile."""
+    def _lock_file(self, handle: IO[bytes], deadline: float | None) -> bool:
+        """Take the OS-level lock. ``False`` if ``deadline`` passed first."""
         # ``sys.platform`` rather than ``platform.system()``: a type
         # checker narrows the former, so the branch it cannot verify on
         # this host is skipped instead of being reported as a module
         # without the attributes it only has on Windows.
         if sys.platform == "win32":
             import msvcrt
-            import time
 
             while True:
                 try:
                     msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
                 except OSError:
-                    time.sleep(0.01)
+                    if not _wait_to_retry(deadline):
+                        return False
                     continue
-                return
+                return True
         else:
             import fcntl
 
-            fcntl.lockf(handle, fcntl.LOCK_EX)
+            if deadline is None:
+                # Blocks in the kernel rather than spinning, which is
+                # what an unbounded wait should do.
+                fcntl.lockf(handle, fcntl.LOCK_EX)
+                return True
+            while True:
+                try:
+                    fcntl.lockf(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                except OSError:
+                    if not _wait_to_retry(deadline):
+                        return False
+                    continue
+                return True
 
     def release(self) -> None:
         """Hand the lock to the next holder. A no-op if not held.
@@ -297,7 +353,15 @@ class FileLock:
             mutex.release()
 
     def __enter__(self) -> Self:
-        self.acquire()
+        if not self.acquire():
+            raise DataknobsTimeoutError(
+                f"FileLock: waited {self.timeout}s for {self.filepath} and "
+                "the lock was still held. A single-file store serializes its "
+                "whole state under this lock, so a save can hold it for as "
+                "long as that takes; raise timeout, or give each writer its "
+                "own path.",
+                context={"filepath": self.filepath, "timeout": self.timeout},
+            )
         return self
 
     def __exit__(
@@ -307,3 +371,25 @@ class FileLock:
         exc_tb: TracebackType | None,
     ) -> None:
         self.release()
+
+
+def _acquire_mutex(mutex: threading.Lock, deadline: float | None) -> bool:
+    """Take ``mutex``, bounded by ``deadline`` when there is one."""
+    if deadline is None:
+        mutex.acquire()
+        return True
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        # ``Lock.acquire(timeout=0)`` blocks; a non-blocking try is the
+        # only way to spend no time at all here.
+        return mutex.acquire(blocking=False)
+    return mutex.acquire(timeout=remaining)
+
+
+def _wait_to_retry(deadline: float | None) -> bool:
+    """Sleep before the next attempt. ``False`` once ``deadline`` passed."""
+    remaining = float("inf") if deadline is None else deadline - time.monotonic()
+    if remaining <= 0:
+        return False
+    time.sleep(min(_POLL_INTERVAL, remaining))
+    return True

@@ -36,8 +36,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   truncated, and it is created `0o666` before umask so one uid's
   lockfile stays openable by another that can write the directory.
 
-  `acquire()` blocks without bound — correct on a worker thread, fatal
-  on an event loop.
+  `acquire()` blocks without bound by default and returns `True`;
+  `FileLock(path, timeout=...)` bounds the wait, returning `False`
+  instead, and the context-manager form raises `TimeoutError` rather
+  than running its body unlocked. A bound is worth setting on the
+  shared `asyncio.to_thread` executor, where an unbounded wait parks a
+  pooled worker for as long as the holder runs.
 
   The mutex registry is reset in a forked child, where an inherited
   mutex is locked by a thread that no longer exists.

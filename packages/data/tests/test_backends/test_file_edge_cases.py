@@ -94,7 +94,7 @@ class TestFileLock:
             with patch.dict("sys.modules", {"msvcrt": msvcrt_mock}):
                 with patch("time.sleep") as sleep_mock:
                     lock = FileLock(filepath)
-                    lock.acquire()
+                    assert lock.acquire() is True
                     # Should retry on OSError
                     assert sleep_mock.call_count == 2
                     lock.release()

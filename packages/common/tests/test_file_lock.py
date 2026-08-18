@@ -34,6 +34,11 @@ below:
   not exist in the child, and blocked on it forever.
 * **Acquiring truncated the lockfile**, which stopped being harmless
   once the file became permanent.
+
+The remaining two cover ``timeout``, which is a new knob rather than a
+fixed defect: every caller reaches ``acquire`` through
+``asyncio.to_thread``, where an unbounded wait parks a thread of the
+loop's shared executor.
 """
 
 from __future__ import annotations
@@ -48,6 +53,7 @@ from pathlib import Path
 
 import pytest
 
+from dataknobs_common.exceptions import TimeoutError as DataknobsTimeoutError
 from dataknobs_common.locks import FileLock
 from dataknobs_common.testing import assert_no_blocking, requires_blockbuster
 
@@ -298,6 +304,56 @@ def test_acquiring_does_not_truncate_the_lockfile(tmp_path: Path) -> None:
         pass
 
     assert lockfile.read_bytes() == b"owner=1234\n", "acquire truncated the lockfile"
+
+
+def test_a_bounded_acquire_gives_up_instead_of_parking_the_thread(tmp_path: Path) -> None:
+    """``timeout`` returns ``False`` rather than waiting out the holder.
+
+    Not a pre-existing bug but the absence of a knob: every caller
+    reaches this through ``asyncio.to_thread``, so an unbounded wait
+    parks a worker of the loop's *shared* executor for as long as the
+    current holder runs, and every unrelated offload queues behind it.
+    """
+    target = tmp_path / "state.bin"
+    target.write_bytes(b"")
+
+    holder = FileLock(str(target))
+    assert holder.acquire() is True
+    try:
+        waiter = FileLock(str(target), timeout=0.2)
+        started = time.monotonic()
+        assert waiter.acquire() is False, "a bounded acquire reported success"
+        assert time.monotonic() - started < 5, "it waited well past its timeout"
+    finally:
+        holder.release()
+
+    # The timeout did not leave the lock unusable for the next holder.
+    with FileLock(str(target), timeout=5):
+        pass
+
+
+def test_entering_a_bounded_lock_raises_rather_than_running_unlocked(
+    tmp_path: Path,
+) -> None:
+    """A ``with`` block whose lock timed out must not execute its body.
+
+    The one outcome worse than waiting is proceeding: the body of every
+    caller is a whole-state rewrite, so running it unlocked is the silent
+    clobber this module exists to prevent.
+    """
+    target = tmp_path / "state.bin"
+    target.write_bytes(b"")
+
+    holder = FileLock(str(target))
+    holder.acquire()
+    try:
+        entered = False
+        with pytest.raises(DataknobsTimeoutError):
+            with FileLock(str(target), timeout=0.1):
+                entered = True
+        assert not entered, "the body ran without the lock"
+    finally:
+        holder.release()
 
 
 @pytest.mark.skipif(not hasattr(os, "fork"), reason="fork is POSIX-only")

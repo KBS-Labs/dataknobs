@@ -448,7 +448,7 @@ not implement `DistributedLock`:
 | Call style | `async` | synchronous |
 | Keyed by | an opaque string | a filesystem path |
 | Scope | whoever shares the backing store | whoever can see the path |
-| Contention | `acquire()` returns `False` on timeout | blocks without bound |
+| Contention | `acquire()` returns `False` on timeout | the same, but unbounded by default |
 | Where it runs | on the event loop | inside a worker thread |
 
 The last row is the one that decides which you want. `FileLock` guards
@@ -483,13 +483,36 @@ a symlink and its target share one; and the intra-process mutex is
 keyed by that lockfile's `(st_dev, st_ino)` rather than by its path, so
 hard links and case-insensitive volumes collapse too.
 
+### Bounding the wait
+
+`acquire()` blocks without bound by default. Every caller reaches it
+from a worker thread, and on the shared `asyncio.to_thread` executor an
+unbounded wait parks one of a small number of workers for as long as
+the current holder runs — every unrelated offload on that loop queues
+behind it. Pass `timeout` where that matters:
+
+```python
+lock = FileLock("/var/lib/app/index.pkl", timeout=30)
+
+if lock.acquire():        # False if the timeout elapsed
+    try:
+        ...
+    finally:
+        lock.release()
+
+with FileLock(path, timeout=30):   # raises TimeoutError instead
+    ...
+```
+
+The context manager raises rather than yielding an unheld lock: the
+body of every caller is a whole-state rewrite, so running it unlocked
+is the silent clobber the lock exists to prevent.
+
 ### What it does not
 
 - **Advisory, and local-filesystem only.** A writer that never takes
   the lock is not stopped by it, and `fcntl` semantics over NFS and
   similar network mounts are unreliable.
-- **`acquire()` blocks without bound.** Correct on a worker thread,
-  fatal on an event loop.
 - **It needs to write, even to read.** The lockfile is opened `O_RDWR`,
   so holding the lock requires create-or-write permission on the
   target's directory. A caller on a read-only mount has no writer to
