@@ -22,6 +22,16 @@ A third test guards the boundary the two fixes had to respect: an async
 caller constructs the lock on its event loop and offloads only
 ``acquire`` to a worker thread, so construction has to stay off the
 filesystem however the exclusion above is implemented.
+
+Two more failures of the same kind — exclusion reported but not
+delivered — were found reviewing the two fixes above, and are covered
+below:
+
+* **A symlink and its target took two locks.** The lockfile was
+  ``realpath(filepath + ".lock")``, and only the target is a symlink, so
+  the suffix stopped ``realpath`` from resolving anything.
+* **Acquiring truncated the lockfile**, which stopped being harmless
+  once the file became permanent.
 """
 
 from __future__ import annotations
@@ -225,3 +235,62 @@ async def test_constructing_a_lock_does_not_block_the_loop(tmp_path: Path) -> No
     """
     with assert_no_blocking():
         FileLock(str(tmp_path / "state.bin"))
+
+
+def test_a_symlink_and_its_target_take_one_lock(tmp_path: Path) -> None:
+    """A stable name pointing at versioned storage is still one file.
+
+    Pre-fix the lockfile was ``realpath(filepath + ".lock")``. Only the
+    *target* is a symlink — ``current.bin.lock`` is not — so ``realpath``
+    left the final component alone and the two spellings locked two
+    different files, giving zero exclusion in the layout most likely to
+    have a second writer: a rollover job holding the versioned path while
+    a store holds the stable one.
+    """
+    versioned = tmp_path / "v2"
+    versioned.mkdir()
+    target = versioned / "index.bin"
+    target.write_bytes(b"")
+    stable = tmp_path / "current.bin"
+    stable.symlink_to(target)
+
+    peak = 0
+    inside = 0
+    bookkeeping = threading.Lock()
+
+    def hold(path: str) -> None:
+        nonlocal peak, inside
+        with FileLock(path):
+            with bookkeeping:
+                inside += 1
+                peak = max(peak, inside)
+            time.sleep(HOLD)
+            with bookkeeping:
+                inside -= 1
+
+    threads = [threading.Thread(target=hold, args=(s,)) for s in (str(stable), str(target))]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=10)
+
+    assert peak == 1, "a symlink and its target took two different locks"
+
+
+def test_acquiring_does_not_truncate_the_lockfile(tmp_path: Path) -> None:
+    """The lockfile survives an acquire with its contents intact.
+
+    Pre-fix, ``open(lockfile, "wb")`` truncated on every acquire. That
+    was harmless while the file was recreated each time, and stopped
+    being harmless when it became permanent: a lockfile nothing can
+    write to durably is one no future version can record an owner in.
+    """
+    target = tmp_path / "state.bin"
+    target.write_bytes(b"")
+    lockfile = Path(str(target) + ".lock")
+    lockfile.write_bytes(b"owner=1234\n")
+
+    with FileLock(str(target)):
+        pass
+
+    assert lockfile.read_bytes() == b"owner=1234\n", "acquire truncated the lockfile"

@@ -19,18 +19,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Exclusion covers every overlapping holder, which needs two mechanisms
   rather than one. Across processes it is `fcntl.lockf` (POSIX) or
   `msvcrt.locking` (Windows) on a sibling `<path>.lock`. Within one
-  process it is a `threading.Lock` per canonical path — POSIX record
-  locks are owned by the *process*, so without that half a second thread
-  of the same interpreter is granted a lock the first already holds, and
-  two instances in one process get no exclusion at all. Two spellings of
-  one path resolve to the same lock.
+  process it is a `threading.Lock` per lockfile — POSIX record locks are
+  owned by the *process*, so without that half a second thread of the
+  same interpreter is granted a lock the first already holds, and two
+  instances in one process get no exclusion at all.
+
+  Both halves key off the file rather than the string naming it. The
+  lockfile is a sibling of the *resolved* target, so a symlink and its
+  target share one lock; the mutex is keyed by that lockfile's
+  `(st_dev, st_ino)`, so hard links and case-insensitive volumes do too.
 
   The `.lock` file is left in place on release, deliberately: closing
   the handle hands the lock to a blocked waiter holding a now-nameless
   inode, and unlinking there lets the next `acquire` create a fresh
-  inode and lock that instead. Advisory and local-filesystem only, and
+  inode and lock that instead. Because it is permanent it is never
+  truncated, and it is created `0o666` before umask so one uid's
+  lockfile stays openable by another that can write the directory.
+
   `acquire()` blocks without bound — correct on a worker thread, fatal
   on an event loop.
+
+  Advisory and local-filesystem only. Holding the lock needs
+  create-or-write permission on the target's directory even to read
+  under it, so a read path on a read-only mount should degrade to an
+  unlocked read — there is no writer to exclude where nothing can be
+  published. Not reentrant: one thread acquiring twice deadlocks, which
+  differs from a bare `fcntl` lock only because `fcntl` grants the
+  owning process a lock it already holds.
 
 - **`PluginRegistry.is_known()`** — whether the registry recognises a name
   at all, which is the larger set once `declare_unavailable` is in use.

@@ -5,7 +5,7 @@ import os
 import tempfile
 import platform
 import threading
-from unittest.mock import MagicMock, patch, mock_open
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -74,6 +74,12 @@ class TestFileLock:
         runs on Windows, where this test runs for real. The branch is
         selected by ``sys.platform``, which is already ``win32`` here —
         so nothing patches the platform check itself.
+
+        The lockfile is left real. ``acquire`` keys its intra-process
+        mutex on the lockfile's inode, so a substituted open would hand
+        it a handle with no ``fileno`` to stat; and the retry loop now
+        holds one handle across attempts rather than reopening per
+        attempt, which is the behaviour worth pinning here.
         """
         with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as f:
             filepath = f.name
@@ -88,10 +94,9 @@ class TestFileLock:
             with patch.dict("sys.modules", {"msvcrt": msvcrt_mock}):
                 with patch("time.sleep") as sleep_mock:
                     lock = FileLock(filepath)
-                    with patch("builtins.open", mock_open()):
-                        lock.acquire()
-                        # Should retry on OSError
-                        assert sleep_mock.call_count == 2
+                    lock.acquire()
+                    # Should retry on OSError
+                    assert sleep_mock.call_count == 2
                     lock.release()
         finally:
             if os.path.exists(filepath):

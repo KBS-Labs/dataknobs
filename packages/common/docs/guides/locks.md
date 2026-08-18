@@ -469,7 +469,7 @@ with FileLock("/var/lib/app/index.pkl"):
 Mutual exclusion against **every** overlapping holder, which takes two
 mechanisms rather than one:
 
-- **Within one process**, a `threading.Lock` per canonical path. POSIX
+- **Within one process**, a `threading.Lock` per lockfile. POSIX
   record locks (`fcntl.lockf`) are owned by the *process*, so without
   this a second thread of the same interpreter is granted a lock the
   first already holds — two instances of a store in one process would
@@ -477,8 +477,11 @@ mechanisms rather than one:
 - **Across processes**, `fcntl.lockf` on POSIX and `msvcrt.locking` on
   Windows, taken on a sibling `<path>.lock` file.
 
-Two spellings of one path — relative and absolute, a symlink and its
-target — resolve to the same lock.
+Two spellings of one file take the same lock, whichever half is doing
+the excluding. The lockfile is a sibling of the **resolved** target, so
+a symlink and its target share one; and the intra-process mutex is
+keyed by that lockfile's `(st_dev, st_ino)` rather than by its path, so
+hard links and case-insensitive volumes collapse too.
 
 ### What it does not
 
@@ -487,7 +490,17 @@ target — resolve to the same lock.
   similar network mounts are unreliable.
 - **`acquire()` blocks without bound.** Correct on a worker thread,
   fatal on an event loop.
-- **Not reentrant.** One thread acquiring twice deadlocks.
+- **It needs to write, even to read.** The lockfile is opened `O_RDWR`,
+  so holding the lock requires create-or-write permission on the
+  target's directory. A caller on a read-only mount has no writer to
+  exclude — nothing can be published into a directory it cannot write —
+  so a read path should degrade to an unlocked read rather than fail;
+  `VectorStoreBase._persisted_load` is the worked example.
+- **Not reentrant.** One thread acquiring twice deadlocks. This is a
+  change in behaviour rather than a limitation of the new lock: the
+  previous one appeared reentrant only because `fcntl` grants the
+  owning process a lock it already holds, which is the defect the
+  intra-process mutex above exists to fix.
 
 ### The `.lock` file stays
 
@@ -497,6 +510,14 @@ closing the handle hands the lock to a blocked waiter, which then holds
 an inode with no name, and unlinking at that moment lets the next
 `acquire` create a *fresh* inode and lock that instead — two holders,
 no error.
+
+Two consequences of that permanence. The file is never truncated, so it
+can carry contents; and it is created `0o666` before umask, so a
+lockfile one uid creates stays openable by every other uid that can
+write the directory. umask still applies — a lockfile written by root
+under the usual `022` is `0o644` and locks out an unprivileged writer
+for good, which a deployment sharing a directory across uids has to
+solve with a permissive umask.
 
 ## Usage Across DataKnobs
 
