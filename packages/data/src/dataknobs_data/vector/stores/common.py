@@ -14,11 +14,13 @@ from typing import TYPE_CHECKING, Any, ClassVar, cast
 from dataknobs_common.exceptions import ConcurrencyError
 from dataknobs_common.structured_config import StructuredConfigConsumer
 
+from ..exceptions import VectorDomainScopeError
+
 from ..types import DistanceMetric
 from .config import VectorStoreConfig, VectorStoreTimestampConfig
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Iterable, Iterator
+    from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 
     import numpy as np
 
@@ -92,9 +94,12 @@ class VectorStoreBase(StructuredConfigConsumer[VectorStoreConfig]):
         self.metadata = cfg.metadata
 
         # Config-level multi-tenant scoping. When set, every
-        # read/count/clear/update_metadata_where is implicitly scoped
-        # to this domain (via _effective_filter) and add_vectors
-        # defaults a row's "domain_id" to it. This mirrors
+        # read/count/clear/update is implicitly scoped to this domain
+        # and add_vectors defaults a row's "domain_id" to it. Scoping
+        # applies however a row is addressed: the filter-keyed surfaces
+        # get it from _effective_filter, the id-keyed ones
+        # (get_vectors, delete_vectors, update_metadata) and
+        # metadata_fields from _in_configured_domain. This mirrors
         # PgVectorStore's long-standing config-level domain_id
         # behavior; Memory/FAISS/Chroma honor it through the shared
         # helpers so a runtime backend swap preserves isolation
@@ -103,11 +108,13 @@ class VectorStoreBase(StructuredConfigConsumer[VectorStoreConfig]):
 
         # Timestamp exposure config. All vector stores expose
         # created_at / updated_at metadata via include_timestamps=True
-        # on get_vectors() and search(). Backends that don't natively
-        # persist timestamps (MVS, FAISS) track them in-process. Format
-        # and key names are configurable; defaults are consistent
-        # across backends so runtime-swap produces identical metadata
-        # surfaces. The format is validated in
+        # on get_vectors() and search(). Where the values live is the
+        # backend's business: pgvector has real columns, MVS and FAISS
+        # keep a side-car keyed by row, and Chroma — whose only per-row
+        # storage is the metadata dict the consumer also owns — keeps
+        # them in-band under reserved keys stripped from every read. Format and key names are configurable; defaults are
+        # consistent across backends so runtime-swap produces identical
+        # metadata surfaces. The format is validated in
         # VectorStoreTimestampConfig.__post_init__.
         ts = cfg.timestamps or VectorStoreTimestampConfig()
         self.timestamps_format: str = ts.format
@@ -298,17 +305,33 @@ class VectorStoreBase(StructuredConfigConsumer[VectorStoreConfig]):
         * caller asked for a *different* domain (scalar or a list not
           containing the configured scope) → an **empty-list** filter
           value, which ``_match_metadata_filter`` can never satisfy, so
-          the result set is empty. This matches ``PgVectorStore``,
-          where the column predicate ``domain_id = $scope`` is ANDed
-          with the caller filter and a cross-domain request yields no
-          rows.
+          the result set is empty.
+
+        The in-scope case *collapses* rather than intersecting, which is
+        visible only for a row belonging to several domains: a store
+        scoped to ``t1`` hands back a row reading ``["t1", "t2"]`` and
+        then answers ``0`` for ``{"domain_id": "t2"}``. Recorded as a
+        follow-up rather than settled here, because the two readings —
+        the scope as a ceiling on what a filter may ask for, or as one
+        more constraint ANDed with it — are a semantics choice and not a
+        defect in either direction.
+
+        What is *not* an argument for the collapse is parity with
+        ``PgVectorStore``, which this docstring used to claim. That
+        backend keeps ``domain_id`` in a column and stores caller
+        metadata JSONB verbatim, so an explicit ``domain_id`` filter is
+        a containment probe against a key the column consumed: it
+        answers ``0`` for the configured scope too, not merely for a
+        cross-domain one. The behaviours differ in both directions, and
+        the note above ``domain_scoped_store`` in the filter-semantics
+        suite is where that divergence is described.
 
         Callers pass the result straight to ``_match_metadata_filter`` /
         the filtered count/clear/update paths; a returned dict is never
         ``None`` when scoping is active, so ``filter is None`` fast
         paths must consult this first.
         """
-        if self.domain_id is None:
+        if not self._is_scoped:
             return filter
 
         eff: dict[str, Any] = dict(filter) if filter else {}
@@ -327,7 +350,12 @@ class VectorStoreBase(StructuredConfigConsumer[VectorStoreConfig]):
         return eff
 
     def _apply_domain_default(
-        self, metadata: list[dict[str, Any]] | None, count: int
+        self,
+        metadata: list[dict[str, Any]] | None,
+        count: int,
+        *,
+        ids: Sequence[str] | None = None,
+        stored: Mapping[str, dict[str, Any] | None] | None = None,
     ) -> list[dict[str, Any]]:
         """Return per-row metadata with ``domain_id`` defaulted.
 
@@ -343,6 +371,24 @@ class VectorStoreBase(StructuredConfigConsumer[VectorStoreConfig]):
         already promised the result does not alias the caller's, and a
         ``dict(...)`` made that true of the outer dict alone. Every value
         inside stayed shared with whatever the caller went on holding.
+
+        *ids* and *stored* let the default preserve the row's **own**
+        scope rather than re-stamping the configured one. The rule being
+        implemented is "a caller who does not mention ``domain_id`` must
+        not change it", and re-stamping the configured scalar implements
+        that only where the stored scope already *is* that scalar. A row
+        tagged ``["t1", "t2"]`` belongs to both domains under the
+        four-quadrant rule, so a ``t1`` store's write is admitted — and
+        re-stamping ``"t1"`` over it silently evicted ``t2``.
+
+        Passing them is what makes the write path agree with the guard
+        that admitted it: anything still in *stored* has already been
+        checked by :meth:`_reject_out_of_scope_ids`, so carrying its
+        value forward cannot widen the row into a domain the caller does
+        not hold. Omit them and the prior scalar behaviour stands, which
+        is correct wherever a stored list cannot arise — ``PgVectorStore``
+        keeps ``domain_id`` in a scalar column and does its own default
+        inline.
         """
         rows = (
             [
@@ -352,10 +398,152 @@ class VectorStoreBase(StructuredConfigConsumer[VectorStoreConfig]):
             if metadata is not None
             else [{} for _ in range(count)]
         )
-        if self.domain_id is not None:
-            for row in rows:
-                row.setdefault("domain_id", self.domain_id)
+        if self._is_scoped:
+            for i, row in enumerate(rows):
+                if "domain_id" not in row:
+                    row["domain_id"] = self._preserved_domain(ids, stored, i)
         return rows
+
+    def _preserved_domain(
+        self,
+        ids: Sequence[str] | None,
+        stored: Mapping[str, dict[str, Any] | None] | None,
+        index: int,
+    ) -> Any:
+        """The ``domain_id`` a silent row should keep, or the config default.
+
+        Returns the value already stored for the row when there is one,
+        so a write that never mentions ``domain_id`` leaves it alone.
+        Falls back to the configured scope for a genuine insert, for a
+        stored row that carries no scope of its own, and for callers
+        that do not supply the stored map at all.
+        """
+        if ids is None or stored is None or index >= len(ids):
+            return self.domain_id
+        prior = stored.get(ids[index])
+        if not prior:
+            return self.domain_id
+        existing = prior.get("domain_id")
+        return self.domain_id if existing is None else existing
+
+    @staticmethod
+    def _is_empty_batch(vectors: Any) -> bool:
+        """Whether an ``add_vectors`` batch carries no rows.
+
+        An empty batch is something a caller *produces* rather than
+        intends — a comprehension that filtered everything out, a
+        chunker handed a blank document — so it is a no-op, not an
+        error. Each backend guards with this and returns ``[]``.
+
+        Both spellings count: ``[]`` and ``np.array([])`` are the same
+        intent, and a caller assembling a batch numerically produces the
+        latter. ``len`` answers for both, and for a well-formed 2-D
+        batch it is the row count, so a single un-nested vector
+        (``ndim == 1``, ``len == dimensions``) is correctly *not* empty.
+
+        A 0-d input — ``np.array(5.0)``, ``np.float32(1.0)`` — has no
+        length and is not a batch in any reading, empty or otherwise.
+        It answers ``False`` rather than raising, so that the caller
+        sees the backend's dimension error, which can say what shape was
+        expected, instead of a bare ``len() of unsized object`` coming
+        out of an emptiness check. A predicate that raises on part of
+        its input domain is not one a guard can be built from.
+
+        Left to each backend rather than hoisted into a concrete
+        ``add_vectors`` on the base: that method is abstract, and giving
+        it a body would rename the abstract half out from under every
+        out-of-tree store.
+        """
+        try:
+            return len(vectors) == 0
+        except TypeError:
+            return False
+
+    @property
+    def _is_scoped(self) -> bool:
+        """Whether a configured domain scope is in force.
+
+        One test, because ``domain_id`` is optional rather than
+        truthy-optional and the two spellings disagree on ``""``.
+        ``PgVectorStore`` guarded its column predicates with
+        ``if not self.domain_id`` while the metadata-carrying backends
+        used ``is None``, so a store configured with an empty-string
+        domain isolated on three backends and ran unscoped on the
+        fourth — a tenant boundary that disappeared on a config-selected
+        backend swap, which is the one thing this scope exists to
+        survive.
+        """
+        return self.domain_id is not None
+
+    def _in_configured_domain(self, meta: dict[str, Any] | None) -> bool:
+        """Whether a stored row falls inside the configured scope.
+
+        The id-keyed half of what :meth:`_effective_filter` does for the
+        filter-keyed half. ``get_vectors``, ``delete_vectors`` and
+        ``update_metadata`` address rows by id, so no filter is built and
+        that helper never runs — which left the configured scope binding
+        only the surfaces that happen to take a ``filter``. Isolation
+        that depends on *how* a caller asks is not isolation: ids are
+        routinely derived from content and are guessable.
+
+        ``metadata_fields`` uses it too. Field names are data — the union
+        over every stored row discloses the shape of a neighbouring
+        domain's metadata without returning any of its rows.
+
+        Identity when no scope is configured, so an unscoped store keeps
+        its prior behaviour exactly. Backends whose ``domain_id`` is a
+        real column (``PgVectorStore``) express the same predicate in
+        SQL instead of calling this.
+
+        Delegates to :meth:`_match_metadata_filter` rather than
+        comparing with ``==``: ``domain_id`` is an ordinary metadata key
+        on the backends that carry it in metadata, so the four-quadrant
+        rule applies to it like any other, and a scalar scope against a
+        list value is *membership*. Comparing directly read a row tagged
+        ``["t1", "t2"]`` as belonging to neither domain, while the
+        filter-keyed half — which resolves the same scope through that
+        method — read it as belonging to both. One evaluator is what
+        keeps the two halves from answering differently about the same
+        row; the split had ``count()`` reporting a row that
+        ``get_vectors`` called absent and ``delete_vectors`` refused,
+        which ``clear()`` then removed anyway.
+        """
+        if not self._is_scoped:
+            return True
+        return self._match_metadata_filter(meta, {"domain_id": self.domain_id})
+
+    def _reject_out_of_scope_ids(self, stored: Mapping[str, dict[str, Any] | None]) -> None:
+        """Fail closed when a write would capture out-of-domain rows.
+
+        The write-side counterpart of :meth:`_in_configured_domain`.
+        ``add_vectors`` and ``add_documents`` are id-keyed like the read
+        verbs — this store upserts on id conflict — but they cannot
+        answer "absent" the way a read does. The row they would write
+        carries the configured scope (``_apply_domain_default`` puts it
+        there), so writing an id another domain owns does not insert
+        alongside it or edit it: it takes it. On pgvector the capture is
+        explicit in the SQL, whose ``ON CONFLICT`` clause assigns
+        ``domain_id`` from the incoming row.
+
+        *stored* maps id to the metadata already held, for the subset of
+        the batch that already exists — an id with no stored row is a
+        genuine insert and is not the caller's to lose. Backends whose
+        ``domain_id`` is a column pass a synthesized ``{"domain_id":
+        ...}`` so one predicate decides for every backend.
+
+        Raises before anything is written, so a rejected batch leaves no
+        partial state on the backends that have no transaction to roll
+        back.
+        """
+        if not self._is_scoped:
+            return
+        foreign = sorted(
+            rid for rid, meta in stored.items() if not self._in_configured_domain(meta)
+        )
+        if foreign:
+            # ``_is_scoped`` is exactly "domain_id is not None", but it
+            # is a property, so the narrowing does not carry here.
+            raise VectorDomainScopeError(foreign, cast("str", self.domain_id))
 
     # ------------------------------------------------------------------
     # Single-file persistence: dirty tracking, identity, atomic publish.

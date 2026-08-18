@@ -9,6 +9,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`ChromaVectorStore` tracks `created_at` / `updated_at`**, exposed via
+  `include_timestamps=True` on `get_vectors()` and `search()` — the same
+  surface `MemoryVectorStore`, `FaissVectorStore` and `PgVectorStore`
+  already carry. A `timestamps:` config block now takes effect on this
+  backend; previously it was parsed onto the store and never read.
+
+  A Chroma collection is the only per-row storage this backend has, so the
+  values live in the collection metadata under reserved keys, stripped from
+  every read path — `get_vectors()`, `search()`, `search_documents()`,
+  `metadata_fields()`, and the residual metadata filter behind `count()` and
+  `clear()`. The stored form is an epoch float regardless of the configured
+  `format`, so a store whose format config changes still reads rows written
+  under the old one. Rows in a collection written by an earlier version
+  report `None` for both until their next write; nothing is backfilled.
+
+  One consequence to plan for: a collection written by this version and read
+  by an earlier one surfaces those reserved keys as ordinary metadata,
+  because the earlier version has no strip. Read a collection with the
+  version that wrote it, or later.
+
 - **`get_available_backends()` and `is_backend_available()`** on
   `DatabaseFactory`, `AsyncDatabaseFactory` and `VectorStoreFactory`. Three
   documents described both as factory methods, so following any of them
@@ -76,7 +96,82 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   seeds the process-global RNG, so a draw in one test cannot shift what any
   later test draws.
 
+  `chroma_embedding_function(dim=8)` returns a chromadb embedding function
+  backed by `text_embedding`, for the document paths that embed text rather
+  than accepting vectors. It exists so a test never falls through to
+  chromadb's default, which downloads ~166 MB of model weights on first
+  use — a cold runner fails on that rather than skipping, and no `skipif`
+  can see a download coming. It must be passed on every open: measured on
+  chromadb 1.5.9, a persistent collection reopened without it comes back
+  holding the default embedding function, silently, whether or not the
+  class is registered with chromadb's function table.
+
 ### Changed
+
+- **`ChromaVectorStore.update_metadata()` and `update_metadata_where()`
+  return rows *matched*, not rows written.** Both previously returned
+  the number of rows actually sent to chromadb, which now differs: a
+  matched row whose requested state already holds produces an empty
+  update payload, which chromadb rejects and which has nothing to send
+  anyway, so it is counted but not written. `matched` is what the
+  abstract contract asks for and what the other backends report.
+
+- **`domain_id=""` scopes on every backend.** `PgVectorStore` guarded
+  its column predicates on truthiness while the metadata-carrying
+  backends tested `is None`, so a store configured with an empty-string
+  domain isolated on three backends and ran completely unscoped on the
+  fourth. `VectorStoreConfig.domain_id` is `str | None` and never
+  required a non-empty value, so the config was reachable. One shared
+  predicate now decides for all four — a tenant boundary that
+  disappeared on the backend swap it exists to survive was the worst
+  available failure mode.
+
+- **A configured `domain_id` now scopes the id-keyed operations too.**
+  `get_vectors()`, `delete_vectors()`, `update_metadata()`,
+  `add_vectors()`, `add_documents()` and `metadata_fields()` address
+  rows by id (or not at all) and so built no filter, which left the
+  tenant scope binding only the surfaces that take one. The write verbs
+  answer differently from the reads and are described under *Fixed*. A scoped store answered for any id in the collection, and
+  `metadata_fields()` returned the union of every tenant's key names.
+  All four are now confined to the configured domain on every backend,
+  and an out-of-domain id is answered exactly as an absent one — so a
+  caller cannot distinguish "not here" from "not yours".
+
+  **This is a behaviour change.** Code that used a scoped store to reach
+  rows outside its domain — knowingly or not — now gets `(None, None)`
+  from `get_vectors()` and no effect from the other two. Use an
+  unscoped store, or one scoped to the row's own domain, where that
+  reach was intended. Unscoped stores are unaffected.
+
+- **An empty `add_vectors()` batch is a no-op on every backend.** It
+  writes nothing and returns `[]`. Previously the four disagreed, and
+  one of them corrupted the store: `MemoryVectorStore` minted an id for
+  a zero-dimension vector and grew by a row, `FaissVectorStore` raised a
+  bare `AssertionError` with no message, and `ChromaVectorStore` raised
+  `ValueError` or `IndexError` depending on whether the caller passed
+  `[]` or `np.array([])`. An empty batch is something a caller produces
+  rather than intends — a comprehension that filtered everything out —
+  so the guard belongs here rather than at every call site.
+
+- **`VectorStore.update_metadata()` documents its replace contract on
+  the ABC.** It said only "New metadata for each vector", and that
+  ambiguity is why one backend read it as a merge. The base class now
+  states that the supplied dict becomes the row's metadata outright,
+  that a configured `domain_id` survives the replacement, and that an
+  out-of-scope id is not updated.
+
+- **`ChromaVectorStore.update_metadata()` now replaces a row's metadata
+  instead of merging into it.** A key omitted from the supplied dict is
+  removed, matching `MemoryVectorStore`, `FaissVectorStore` and
+  `PgVectorStore` and the "new metadata for each vector" the base class
+  documents. chromadb's own `update` merges, and nothing compensated — so
+  a consumer clearing a key by omitting it got the key removed on three
+  backends and silently retained on the fourth, from identical code
+  against a config-selectable store.
+
+  Code relying on the merge to perform a partial update needs to supply
+  the full replacement dict, or use `update_metadata_where()`, whose
+  contract is a merge and is unchanged.
 
 - **A file `persist_path` written by two overlapping instances now
   raises instead of silently discarding one of them.** `save()` — and
@@ -203,6 +298,167 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`update_vectors()` no longer resets a row's `created_at`, or destroys
+  rows on a refused batch.** It was implemented as `delete_vectors()`
+  followed by `add_vectors()`. The delete bought nothing — `add_vectors()`
+  already replaces a row's metadata outright on every backend, which is
+  the only thing the delete guaranteed — and it cost two things.
+
+  It took the row's timestamp tracking with the row, so the re-add had
+  nothing to preserve and stamped a fresh creation date. That breaks the
+  documented rule that `created_at` survives every write to a tracked id,
+  in the way the null-timestamp rationale warns about: a re-ingest sweep
+  built on `update_vectors()` rewrote every row's creation date to the
+  moment of the sweep, after which nothing could tell a fabricated date
+  from a real one.
+
+  And under a configured `domain_id` it lost data. A scoped
+  `delete_vectors()` skips an out-of-domain id and deletes the rest,
+  while `add_vectors()` refuses the batch outright — so a batch mixing
+  the caller's own ids with one it does not own deleted the caller's rows
+  and then declined to put them back, reporting an id the caller had not
+  asked to lose. `update_vectors()` is now an alias for `add_vectors()`.
+
+- **A scoped write no longer narrows a row that belongs to several
+  domains.** Scope membership follows the four-quadrant rule, so a row
+  tagged `["t1", "t2"]` belongs to both — and the write guard, which
+  resolves membership the same way, admits a `t1`-scoped store's write to
+  it. But the write-path default re-applied the configured scope as a
+  *scalar*, so the admitted write replaced `["t1", "t2"]` with `"t1"` and
+  the co-owner silently lost the row. Reachable through `add_vectors()`,
+  `add_documents()` and `update_metadata()` on Memory, FAISS and Chroma;
+  `PgVectorStore` keeps `domain_id` in a scalar column and cannot hold
+  the shape. A write that does not mention `domain_id` now preserves the
+  row's own value rather than re-stamping the configured one.
+
+- **Declaring the configured scope key in `scalar_metadata_keys` no
+  longer splits `ChromaVectorStore` against itself.** `scalar_metadata_keys`
+  is a promise about stored values that the write path cannot keep for
+  `domain_id`: the configured scope is a default rather than an override,
+  so a caller can store a list there through the ordinary API. A list is
+  stored sentinel-encoded, so the native `$eq` the declaration enables
+  matched nothing — `count()` and `search()` went blind to a row that
+  `get_vectors()` still returned and `clear()` could not remove. The
+  scope key now stays in the post-filter however it is declared.
+
+- **A `PgVectorStore` batch write is now atomic.** `add_vectors()` inserts
+  row-by-row over a pooled connection, and asyncpg gives a bare `execute`
+  its own implicit transaction — so any mid-batch failure (a bad
+  `chunk_index`, a dimension mismatch, a serialization error) committed
+  every row before it and left the caller retrying on top of a
+  half-applied write. The loop now runs inside one transaction.
+
+- **A malformed UUID id names itself on a scoped `PgVectorStore`.** The
+  ownership probe a scoped store runs before its inserts binds the whole
+  id array, and Postgres answers a malformed element with a message the
+  guided-error wrapper rendered by interpolating that entire array. Only
+  scoped stores were affected; `delete_vectors()` had validated
+  client-side for exactly this reason, and `add_vectors()` now does too.
+
+- **A consumer value under a reserved timestamp key can no longer become
+  a `ChromaVectorStore` row's creation date.** Reserved keys were kept out
+  of storage only by the stamping step overwriting them, and stamping
+  returns early for a row the store does not yet track — so on a
+  collection written before this backend tracked timestamps, a numeric
+  value under the reserved key was stored and read back as that row's
+  real `created_at`. The keys are now dropped where every write path
+  already funnels, at the encoding boundary.
+
+- **Re-adding an id on `ChromaVectorStore` now replaces that row's
+  metadata instead of merging into it.** `add_vectors()` and
+  `add_documents()` upsert on id conflict, and chromadb's `upsert`
+  merges the metadata it is given into what is already stored — a key
+  the caller omits survives. So re-adding `id="x"` with `{"rev": 2}`
+  over a stored `{"tenant": "A", "rev": 1}` left `tenant` behind on this
+  backend while Memory, FAISS and pgvector replaced the row outright,
+  and re-adding with no metadata at all kept the entire prior dict. A
+  consumer correcting a row's metadata got the correction on three
+  backends and a silent merge on the fourth, with the stale keys still
+  answering filters. Both write paths now name the departing keys with
+  a `None` value to delete them, the same mechanism `update_metadata()`
+  already used.
+
+- **A scoped store can no longer capture another domain's row by
+  writing its id.** `add_vectors()` and `add_documents()` are id-keyed
+  like the read verbs, but were not scoped: because the row they write
+  carries the configured `domain_id`, writing an id another domain owned
+  destroyed the original and relabelled the replacement into the
+  caller's domain — the victim's `count()` dropped by one and nothing
+  recorded that it happened. On pgvector the capture was explicit in the
+  SQL, whose `ON CONFLICT` clause assigns `domain_id` from the incoming
+  row; on Chroma and Memory the stolen row also inherited the victim's
+  `created_at`.
+
+  All four backends now raise `VectorDomainScopeError` (new, exported
+  from `dataknobs_data.vector`; subclasses `ValueError`) before writing
+  anything, so a rejected batch leaves no partial state. A row carrying
+  no domain at all is refused on the same grounds — every scoped read
+  already treats it as absent. Unscoped stores are unaffected and remain
+  the way to address a whole collection deliberately.
+
+  **This is a behaviour change** for a scoped store that was writing
+  ids outside its domain; that write is now an error rather than a
+  silent capture.
+
+- **A row belonging to several domains is no longer visible to half its
+  own store.** Scope membership follows the same four-quadrant rule as
+  any other metadata key, so a row whose `domain_id` is a list belongs
+  to every domain in it — which the filter-keyed surfaces always
+  honoured. The id-keyed check compared with `==` instead, so `count()`
+  reported a row that `get_vectors()` called absent, `delete_vectors()`
+  refused, and `clear()` then removed anyway. Both halves now resolve
+  the scope through one evaluator. pgvector is unaffected: its
+  `domain_id` is a scalar column and cannot hold the shape.
+
+- **`add_documents([])` is a no-op on `ChromaVectorStore`, and the
+  id-keyed verbs accept an empty id list.** `add_documents` never got
+  the empty-batch guard its `add_vectors` sibling has, and
+  `get_vectors([])`, `delete_vectors([])` and `update_metadata([], [])`
+  reached chromadb's id validator, which rejects an empty list. All four
+  raised `ValueError` on Chroma alone while the other three backends
+  returned the empty answer, so a consumer whose code was correct
+  everywhere else crashed after a backend swap.
+
+- **`update_metadata()` no longer pushes a row out of its own domain.**
+  On Memory, FAISS and Chroma the configured `domain_id` lives *in* the
+  metadata dict, and `update_metadata()` replaces that dict wholesale —
+  so a caller updating one field, without restating a scope key it has
+  no reason to know about, silently unscoped the row. The row then
+  vanished from `count()`, `search()` and `update_metadata_where()`, and
+  could not even be deleted: a scoped `clear()` resolves to
+  `{"domain_id": <configured>}`, and an absent key never matches a
+  filter. It became an orphan that only an unscoped store could still
+  see. The write-path default that `add_vectors()` applies is now
+  applied here too. pgvector was never affected — its `domain_id` is a
+  column the metadata write does not touch.
+
+- **`ChromaVectorStore` no longer invents a `created_at` for a row that
+  predates timestamp tracking.** An update stamped the current time into
+  `created_at` whenever the row had none, so a single
+  `update_metadata_where(None, ...)` migration sweep would record every
+  legacy row as created at the moment of the sweep, with nothing left to
+  distinguish a fabricated date from a real one. A write establishes
+  tracking; an update no longer does — matching Memory and FAISS, which
+  guard on the row having a side-car entry, and pgvector, which leaves a
+  `NULL` `created_at` alone.
+
+- **`ChromaVectorStore.add_vectors()` no longer discards a write to an id
+  the store already holds.** It reached chromadb's `add`, which drops a
+  duplicate id silently — no exception, no warning, the original vector
+  and metadata retained. Re-adding an existing id is an upsert on every
+  other backend, so a consumer correcting an embedding got the correction
+  on three backends and kept the stale vector on the fourth, with nothing
+  to indicate which had happened. `add_documents()` had the same defect
+  and is fixed with it.
+
+- **`ChromaVectorStore.add_documents()` now applies the configured
+  `domain_id` to the rows it writes.** Its sibling `add_vectors()`
+  defaults the configured domain into every row; this path did not, so a
+  store scoped by `domain_id` wrote rows carrying none — and every scoped
+  read then filtered them back out. `count()` omitted a document the store
+  had just written, and `search_documents()` for that document's own text
+  returned some other row.
+
 - **`ChromaVectorStore.search(filter=...)` under-returned for the same
   reason, at a wider window.** A filter that cannot be pushed down is
   applied in Python *after* Chroma has truncated to `n_results`, and
@@ -228,10 +484,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   on `include_timestamps`.** The argument is on the `VectorStore` ABC
   and every other backend accepted it, so passing it broke exactly the
   runtime backend swap the filter-semantics doc promises. Both accept it
-  now; because Chroma tracks no timestamps, the injected values are
-  `None` — the same answer the contract already defines for a pgvector
-  row from before the timestamp migration or a pickle written before
-  tracking existed.
+  now, and answer from values this backend really tracks — see the
+  timestamp-tracking entry under *Added*.
 
 - **Consumer metadata is no longer shared between a store and its
   caller, in either direction.** On Memory and FAISS a caller could edit

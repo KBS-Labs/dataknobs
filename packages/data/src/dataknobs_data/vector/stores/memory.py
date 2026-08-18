@@ -202,6 +202,11 @@ class MemoryVectorStore(VectorStore):
         if not self._initialized:
             await self.initialize()
 
+        # An empty batch is a no-op, not an error: see
+        # ``VectorStoreBase._is_empty_batch``.
+        if self._is_empty_batch(vectors):
+            return []
+
         # Convert to numpy array
         if isinstance(vectors, list):
             vectors = np.array(vectors, dtype=np.float32)
@@ -216,12 +221,19 @@ class MemoryVectorStore(VectorStore):
         if ids is None:
             ids = [str(uuid4()) for _ in range(len(vectors))]
 
+        # A scoped store may not write an id another domain owns: this
+        # path upserts, so that write would capture the row rather than
+        # add one. Whole batch checked before the first assignment —
+        # there is no transaction here to roll a partial write back.
+        stored = {i: self.metadata_store.get(i) for i in ids if i in self.vectors}
+        self._reject_out_of_scope_ids(stored)
+
         # Store vectors, metadata, and timestamps. Upsert semantics:
         # preserve created_at across re-adds of the same id; refresh
         # updated_at every time. ``_apply_domain_default`` returns
         # fresh per-row dicts (config-level domain_id defaulted in,
         # caller's dicts never aliased — see Items #8 / 131).
-        rows = self._apply_domain_default(metadata, len(ids))
+        rows = self._apply_domain_default(metadata, len(ids), ids=ids, stored=stored)
         now = datetime.now(UTC)
         for i, vector_id in enumerate(ids):
             self.vectors[vector_id] = vectors[i]
@@ -249,7 +261,11 @@ class MemoryVectorStore(VectorStore):
         results: list[tuple[np.ndarray | None, dict[str, Any] | None]] = []
         inject = include_timestamps and include_metadata
         for vector_id in ids:
-            if vector_id in self.vectors:
+            # Out-of-domain rows answer exactly as absent ones do, so a
+            # caller cannot distinguish "not here" from "not yours".
+            if vector_id in self.vectors and self._in_configured_domain(
+                self.metadata_store.get(vector_id)
+            ):
                 vector = self.vectors[vector_id]
                 results.append((vector, self._out_metadata(vector_id, include_metadata, inject)))
             else:
@@ -283,7 +299,9 @@ class MemoryVectorStore(VectorStore):
 
         deleted = 0
         for vector_id in ids:
-            if vector_id in self.vectors:
+            if vector_id in self.vectors and self._in_configured_domain(
+                self.metadata_store.get(vector_id)
+            ):
                 del self.vectors[vector_id]
                 self.metadata_store.pop(vector_id, None)
                 self.timestamps.pop(vector_id, None)
@@ -359,14 +377,29 @@ class MemoryVectorStore(VectorStore):
             await self.initialize()
 
         now = datetime.now(UTC)
+        # The same write-path preparation ``add_vectors`` does, for the
+        # same two reasons. The row is stored as a copy, so the caller
+        # keeps no handle on it through the dict it passed. And the
+        # configured ``domain_id`` is defaulted back in, because this
+        # path *replaces* the metadata dict outright and on this backend
+        # the scope lives inside that dict — a caller updating one field
+        # has no reason to restate it, and without the default the row
+        # would survive the update having left its own domain.
+        #
+        # Sized by ``metadata`` rather than ``ids`` so a short list still
+        # truncates the pairing below, as ``zip`` alone used to.
+        rows = self._apply_domain_default(
+            metadata,
+            len(metadata),
+            ids=ids,
+            stored={i: self.metadata_store.get(i) for i in ids},
+        )
         updated = 0
-        for vector_id, meta in zip(ids, metadata, strict=False):
-            if vector_id in self.vectors:
-                # Stored as a copy: the caller keeps its own dict and
-                # must not keep a handle on the row through it. The
-                # ``add_vectors`` path gets this from
-                # ``_apply_domain_default``; this one has no equivalent.
-                self.metadata_store[vector_id] = self._copy_metadata(meta) or {}
+        for vector_id, row in zip(ids, rows, strict=False):
+            if vector_id in self.vectors and self._in_configured_domain(
+                self.metadata_store.get(vector_id)
+            ):
+                self.metadata_store[vector_id] = row
                 # Legacy pickles: IDs written before timestamp
                 # tracking was introduced exist in ``self.vectors`` but
                 # not in ``self.timestamps``. Leave ``updated_at`` as
@@ -426,7 +459,8 @@ class MemoryVectorStore(VectorStore):
 
         fields: set[str] = set()
         for meta in self.metadata_store.values():
-            fields.update(meta.keys())
+            if self._in_configured_domain(meta):
+                fields.update(meta.keys())
         return fields
 
     async def clear(self, filter: dict[str, Any] | None = None) -> None:

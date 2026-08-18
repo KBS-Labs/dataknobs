@@ -43,6 +43,44 @@ class VectorDimensionError(ValidationError):
         super().__init__(message, context=context)
 
 
+class VectorDomainScopeError(OperationError, ValueError):
+    """Raised when a scoped write would capture a row it cannot see.
+
+    A vector store configured with a ``domain_id`` confines every
+    surface to that scope, so a row belonging to another domain reads as
+    absent: ``get_vectors`` returns a placeholder, ``delete_vectors``
+    refuses it, ``update_metadata`` skips it. The write verbs cannot
+    answer "absent" the same way. ``add_vectors`` and ``add_documents``
+    upsert on id conflict, and the row they would write carries the
+    configured scope — so writing an id another domain owns neither
+    inserts alongside it nor edits it, but *takes* it, silently and
+    without trace.
+
+    Failing closed is the only answer that is neither a capture nor a
+    silent drop: the ids are shared across domains by construction (they
+    are routinely derived from content), so a collision is a real
+    possibility rather than a caller error, and a store that returned
+    ids it had not written would be worse than one that raised. Nothing
+    in the batch is written — the check runs before the first write, so
+    a partial batch cannot be left behind on the backends that have no
+    transaction to roll back.
+
+    Also subclasses ``ValueError`` so a caller with generic write-error
+    handling catches it, matching ``DuplicateRecordError``.
+    """
+
+    def __init__(self, ids: list[str], domain_id: str):
+        self.ids = ids
+        self.domain_id = domain_id
+        shown = ", ".join(repr(i) for i in ids[:5])
+        if len(ids) > 5:
+            shown += f", … ({len(ids)} total)"
+        super().__init__(
+            f"Cannot write {shown}: outside the configured domain {domain_id!r}",
+            context={"ids": ids, "domain_id": domain_id},
+        )
+
+
 class VectorBackendError(ResourceError):
     """Raised when vector backend operations fail."""
 

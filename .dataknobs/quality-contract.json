@@ -192,7 +192,7 @@
         {
           "path": "packages/bots/src",
           "tier": "transitional",
-          "ceiling": 168,
+          "ceiling": 166,
           "reason": "ratchet group"
         },
         {
@@ -216,7 +216,7 @@
         {
           "path": "packages/data/src",
           "tier": "transitional",
-          "ceiling": 570,
+          "ceiling": 559,
           "reason": "ratchet group"
         },
         {

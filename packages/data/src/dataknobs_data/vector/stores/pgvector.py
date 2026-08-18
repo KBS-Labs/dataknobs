@@ -806,6 +806,11 @@ class PgVectorStore(VectorStore):
         if not self._initialized:
             await self.initialize()
 
+        # An empty batch is a no-op, not an error: see
+        # ``VectorStoreBase._is_empty_batch``.
+        if self._is_empty_batch(vectors):
+            return []
+
         # Prepare vectors
         vectors = self._prepare_vector(vectors, normalize=(self.metric == DistanceMetric.COSINE))
 
@@ -820,7 +825,50 @@ class PgVectorStore(VectorStore):
         # Build ID type cast
         id_cast = "::uuid" if self.id_type == "uuid" else ""
 
-        async with self._pool.acquire() as conn:
+        # Validate client-side so a malformed id names itself, exactly as
+        # ``delete_vectors`` does before its own ``ANY($1::uuid[])`` bind.
+        # The ownership probe below is a second bulk bind on this path,
+        # and Postgres answers a bad element with "invalid input for
+        # array element at index N" — which the guided-error wrapper then
+        # renders by interpolating the whole array. Hoisted above the
+        # pool acquisition so it covers the probe and the insert loop
+        # both, and costs no connection when it fails.
+        if self.id_type == "uuid":
+            self._validate_uuid_ids(ids)
+
+        async with self._pool.acquire() as conn, conn.transaction():
+            # A scoped store may not write an id another domain owns.
+            # The ``ON CONFLICT`` clause below assigns ``domain_id``
+            # from the incoming row, so an unguarded write to a foreign
+            # id does not insert alongside it or edit it — it takes it.
+            # One query for the whole batch, before the first insert,
+            # so a rejected batch leaves nothing behind. The enclosing
+            # transaction covers the rest: asyncpg gives a bare
+            # ``execute`` its own implicit transaction, so without one
+            # every row committed as it went and any mid-batch failure
+            # left the leading rows behind.
+            #
+            # ``domain_id`` is a column here rather than a metadata key,
+            # so the stored value is lifted into the shape
+            # ``_reject_out_of_scope_ids`` compares — one predicate
+            # decides for every backend.
+            if self._is_scoped:
+                owners = await self._exec_with_id_type_guard(
+                    conn,
+                    "fetch",
+                    f"""
+                    SELECT {self._col("id")}::text AS id,
+                           {self._col("domain_id")} AS domain_id
+                    FROM {self._q_qualified}
+                    WHERE {self._col("id")} = ANY($1::{"uuid" if self.id_type == "uuid" else "text"}[])
+                    """,
+                    list(ids),
+                    vec_id=list(ids),
+                )
+                self._reject_out_of_scope_ids(
+                    {row["id"]: {"domain_id": row["domain_id"]} for row in owners}
+                )
+
             # Batch insert
             for i, (vec, vec_id, meta) in enumerate(zip(vectors, ids, metadata)):
                 # Extract document info from metadata if available
@@ -866,6 +914,24 @@ class PgVectorStore(VectorStore):
         logger.debug("Added %d vectors to pgvector", len(ids))
         return ids
 
+    def _domain_scope_sql(self, next_param: int) -> tuple[str, list[Any]]:
+        """The configured-scope predicate as a SQL fragment plus params.
+
+        The id-keyed counterpart of the ``domain_id`` clause the
+        filter-keyed paths already build inline. Addressing a row by id
+        skipped that clause entirely, which made the configured scope
+        bind only the surfaces that happen to take a filter — see
+        ``VectorStoreBase._in_configured_domain`` for why that is not an
+        isolation boundary. Here the scope is a real column, so it is a
+        predicate rather than a metadata comparison.
+
+        Returns ``("", [])`` when unscoped, so the caller can always
+        interpolate and splat unconditionally.
+        """
+        if not self._is_scoped:
+            return "", []
+        return f" AND {self._col('domain_id')} = ${next_param}", [self.domain_id]
+
     async def get_vectors(
         self,
         ids: list[str],
@@ -905,6 +971,10 @@ class PgVectorStore(VectorStore):
                 f"{col_updated_at} as _ts_updated"
             )
 
+        # Out-of-domain rows answer exactly as absent ones do, so a
+        # caller cannot distinguish "not here" from "not yours".
+        domain_sql, domain_params = self._domain_scope_sql(2)
+
         results: list[tuple[np.ndarray | None, dict[str, Any] | None]] = []
         async with self._pool.acquire() as conn:
             for vec_id in ids:
@@ -915,9 +985,10 @@ class PgVectorStore(VectorStore):
                     SELECT {col_embedding}::text as embedding,
                            {col_metadata} as metadata{ts_select}
                     FROM {self._q_qualified}
-                    WHERE {col_id} = $1{id_cast}
+                    WHERE {col_id} = $1{id_cast}{domain_sql}
                     """,
                     vec_id,
+                    *domain_params,
                     vec_id=vec_id,
                 )
 
@@ -967,15 +1038,19 @@ class PgVectorStore(VectorStore):
         if self.id_type == "uuid":
             self._validate_uuid_ids(ids)
 
+        # A scoped store may not delete another domain's row.
+        domain_sql, domain_params = self._domain_scope_sql(2)
+
         async with self._pool.acquire() as conn:
             result = await self._exec_with_id_type_guard(
                 conn,
                 "execute",
                 f"""
                 DELETE FROM {self._q_qualified}
-                WHERE {col_id} = ANY($1{id_array_cast})
+                WHERE {col_id} = ANY($1{id_array_cast}){domain_sql}
                 """,
                 ids,
+                *domain_params,
                 vec_id=ids,
             )
             # Parse "DELETE n" to get count
@@ -1082,7 +1157,7 @@ class PgVectorStore(VectorStore):
         param_idx = 2
 
         # Add domain filter if configured
-        if self.domain_id:
+        if self._is_scoped:
             where_clauses.append(f"{col_domain_id} = ${param_idx}")
             params.append(self.domain_id)
             param_idx += 1
@@ -1159,6 +1234,10 @@ class PgVectorStore(VectorStore):
         col_metadata = self._col("metadata")
         col_updated_at = self._col("updated_at")
 
+        # A scoped store may not rewrite another domain's row. Third
+        # parameter: ``$1`` is the id and ``$2`` the metadata payload.
+        domain_sql, domain_params = self._domain_scope_sql(3)
+
         updated = 0
         async with self._pool.acquire() as conn:
             for vec_id, meta in zip(ids, metadata):
@@ -1169,10 +1248,11 @@ class PgVectorStore(VectorStore):
                     UPDATE {self._q_qualified}
                     SET {col_metadata} = $2::jsonb,
                         {col_updated_at} = NOW()
-                    WHERE {col_id} = $1{id_cast}
+                    WHERE {col_id} = $1{id_cast}{domain_sql}
                     """,
                     vec_id,
                     json.dumps(meta),
+                    *domain_params,
                     vec_id=vec_id,
                 )
                 if result == "UPDATE 1":
@@ -1208,7 +1288,7 @@ class PgVectorStore(VectorStore):
         where_clauses: list[str] = []
         param_idx = 2
 
-        if self.domain_id:
+        if self._is_scoped:
             where_clauses.append(f"{col_domain_id} = ${param_idx}")
             params.append(self.domain_id)
             param_idx += 1
@@ -1253,7 +1333,7 @@ class PgVectorStore(VectorStore):
         params: list[Any] = []
         param_idx = 1
 
-        if self.domain_id:
+        if self._is_scoped:
             where_clauses.append(f"{col_domain_id} = ${param_idx}")
             params.append(self.domain_id)
             param_idx += 1
@@ -1288,13 +1368,22 @@ class PgVectorStore(VectorStore):
 
         col_metadata = self._col("metadata")
 
+        # Field *names* are data: the union over every stored row would
+        # disclose the shape of a neighbouring domain's metadata without
+        # returning any of its rows. ``_domain_scope_sql`` emits a
+        # leading ``AND``, so it needs a predicate to hang from.
+        domain_sql, domain_params = self._domain_scope_sql(1)
+        where_sql = f"WHERE TRUE{domain_sql}" if domain_sql else ""
+
         async with self._pool.acquire() as conn:
             rows = await conn.fetch(
                 f"""
                 SELECT DISTINCT key
                 FROM {self._q_qualified},
                      jsonb_object_keys({col_metadata}) AS key
+                {where_sql}
                 """,
+                *domain_params,
             )
 
         return {row["key"] for row in rows}
@@ -1319,7 +1408,7 @@ class PgVectorStore(VectorStore):
         params: list[Any] = []
         param_idx = 1
 
-        if self.domain_id:
+        if self._is_scoped:
             where_clauses.append(f"{col_domain_id} = ${param_idx}")
             params.append(self.domain_id)
             param_idx += 1

@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-08-18T04:41:32Z",
+  "timestamp": "2026-08-18T19:48:15Z",
   "python_version": "Python 3.12.12",
   "uv_version": "uv 0.12.5 (Homebrew 2026-08-14 aarch64-apple-darwin)",
   "os": "Darwin",
   "os_version": "24.6.0",
-  "git_branch": "sbk/faiss-filtered-search",
-  "git_commit": "7a6f5cd5491fde5c8baaada14eac909a103e4f3d",
+  "git_branch": "sbk/chroma-timestamps",
+  "git_commit": "9f5380f034103bad172872717c98f5b2e4d1e921",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }

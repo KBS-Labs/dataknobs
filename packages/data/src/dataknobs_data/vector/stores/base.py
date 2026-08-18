@@ -80,7 +80,18 @@ class VectorStore(ABC, VectorStoreBase):
         ids: list[str] | None = None,
         metadata: list[dict[str, Any]] | None = None,
     ) -> list[str]:
-        """Add vectors to the store.
+        """Add vectors to the store, upserting on id conflict.
+
+        An **empty batch is a no-op**, not an error: it writes nothing
+        and returns ``[]``. An empty batch is something a caller
+        produces rather than intends — a comprehension that filtered
+        everything out, a chunker handed a blank document — so requiring
+        an ``if items:`` guard at every call site only moves the check.
+        Both ``[]`` and ``np.array([])`` count as empty. Implementations
+        get this from ``VectorStoreBase._is_empty_batch``.
+
+        A configured ``domain_id`` is defaulted into every row written
+        that does not carry one of its own.
 
         Args:
             vectors: Vector(s) to add
@@ -88,7 +99,7 @@ class VectorStore(ABC, VectorStoreBase):
             metadata: Optional metadata for each vector
 
         Returns:
-            List of IDs for the added vectors
+            List of IDs for the added vectors, empty for an empty batch
         """
         pass
 
@@ -164,11 +175,37 @@ class VectorStore(ABC, VectorStoreBase):
         ids: list[str],
         metadata: list[dict[str, Any]],
     ) -> int:
-        """Update metadata for existing vectors.
+        """Replace metadata for existing vectors, by id.
+
+        The supplied dict becomes the row's metadata **outright**: a key
+        the row holds and the caller omits is *removed*, not retained.
+        This is the opposite of :meth:`update_metadata_where`, whose
+        contract is a merge, and the distinction is stated here rather
+        than left to each backend because leaving it implicit is what
+        allowed a shipped backend to read it as a merge — a key omitted
+        from the same consumer code disappeared on three backends and
+        survived on the fourth.
+
+        Under a configured ``domain_id`` the row's **own** scope is
+        preserved across the replacement rather than being one of the
+        keys dropped, so a caller updating an unrelated field does not
+        push the row out of its own scope. Preserved, not re-stamped:
+        a row belonging to several domains keeps all of them, where
+        writing the configured scope over it would have evicted the
+        co-owners on a write that never mentioned ``domain_id``. An id
+        outside the configured scope is not updated and does not count
+        toward the return value.
+
+        Backends carrying metadata in a store with a narrower value
+        domain than Python's may not round-trip every value; where that
+        is so it is documented on the backend. ``ChromaVectorStore``
+        cannot store a ``None`` value, because deleting a key and
+        setting it to ``None`` are the same operation in chromadb's
+        update API.
 
         Args:
             ids: Vector IDs to update
-            metadata: New metadata for each vector
+            metadata: The complete replacement metadata for each vector
 
         Returns:
             Number of vectors updated
@@ -268,8 +305,25 @@ class VectorStore(ABC, VectorStoreBase):
     ) -> list[str]:
         """Update existing vectors by ID.
 
-        This is a convenience method that deletes and re-adds vectors.
-        Some vector stores may override this with a more efficient implementation.
+        A thin alias for :meth:`add_vectors`, which upserts: on every
+        shipping backend a same-id write replaces the row's metadata
+        outright rather than merging into it, so re-adding *is* the
+        update.
+
+        This used to delete first. The delete was there to guarantee
+        the replacement, which ``add_vectors`` already guarantees, and
+        it cost two things to buy nothing:
+
+        * **It discarded the row's ``created_at``.** Deleting takes the
+          timestamp tracking with the row, so the re-add had nothing to
+          preserve and stamped a fresh creation date — breaking the
+          documented rule that ``created_at`` survives every write to a
+          tracked id, and turning a re-ingest sweep into a rewrite of
+          every row's creation date.
+        * **It destroyed in-scope rows on a refused batch.** A scoped
+          ``delete_vectors`` skips an out-of-domain id and deletes the
+          rest; ``add_vectors`` raises on one. A mixed batch therefore
+          deleted the caller's own row and then declined to restore it.
 
         Args:
             vectors: New vector values
@@ -279,10 +333,6 @@ class VectorStore(ABC, VectorStoreBase):
         Returns:
             List of updated IDs
         """
-        # Delete existing vectors
-        await self.delete_vectors(ids)
-
-        # Add new vectors with same IDs
         return await self.add_vectors(vectors, ids, metadata)
 
     # Higher-level convenience methods

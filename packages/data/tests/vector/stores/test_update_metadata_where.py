@@ -1,13 +1,20 @@
-"""``VectorStore.update_metadata_where(filter, set_)`` cross-backend tests.
+"""Cross-backend tests for the metadata write contract.
 
-The filter-keyed sibling of ``update_metadata`` underpins the
-``TOMBSTONE`` zero-downtime swap (mark a domain's old chunks
-``_stale`` without an id list). The contract pinned here — *merge,
-don't replace; only filter-matched rows; return the affected count* —
-must hold identically on every in-tree backend, since the vector
-store is consumer-selectable by config. There is deliberately no
-"FAISS fallback" variant: FAISS passes the same assertions as every
-other backend.
+``update_metadata_where(filter, set_)`` is the origin of the file and
+still its bulk: the filter-keyed sibling of ``update_metadata``
+underpins the ``TOMBSTONE`` zero-downtime swap (mark a domain's old
+chunks ``_stale`` without an id list). The contract pinned there —
+*merge, don't replace; only filter-matched rows; return the affected
+count* — must hold identically on every in-tree backend, since the
+vector store is consumer-selectable by config. There is deliberately
+no "FAISS fallback" variant: FAISS passes the same assertions as
+every other backend.
+
+The two sibling write paths are pinned here as well, against the same
+parametrized fixture, because both diverged on one backend and a
+config-selectable store makes that a portability defect rather than a
+backend quirk: ``update_metadata`` *replaces* where its filter-keyed
+sibling merges, and re-adding an existing id is an *upsert*.
 """
 
 from __future__ import annotations
@@ -112,7 +119,7 @@ def _seed_vectors() -> np.ndarray:
 
 def _make_store(
     backend: str,
-    pgvector_config: dict[str, Any],
+    request: pytest.FixtureRequest,
     *,
     extra_config: dict[str, Any] | None = None,
 ) -> Any:
@@ -121,6 +128,14 @@ def _make_store(
     Shared by every parametrized store fixture so backend wiring lives
     in one place. ``extra_config`` is merged into the store config
     (used by the timestamp tests to request ``datetime`` format).
+
+    Takes the *request* rather than a resolved ``pgvector_config`` so
+    the pgvector fixture is reached only on the pgvector param. As an
+    ordinary fixture parameter it bound every param to a live
+    PostgreSQL — pytest resolves parameters before the body chooses a
+    branch — and ``wait_for_postgres`` raises after its retry window
+    instead of skipping, so the three service-free backends stalled and
+    then ERRORed at setup wherever no server was running.
     """
     extra = extra_config or {}
     if backend == "memory":
@@ -136,7 +151,7 @@ def _make_store(
             }
         )
     if backend == "pgvector":
-        return PgVectorStore({**pgvector_config, **extra})
+        return PgVectorStore({**request.getfixturevalue("pgvector_config"), **extra})
     pytest.fail(f"Unknown backend param: {backend}")
 
 
@@ -157,11 +172,11 @@ def _make_store(
     ]
 )
 async def any_vector_store(
-    request: pytest.FixtureRequest, pgvector_config: dict[str, Any]
+    request: pytest.FixtureRequest,
 ) -> AsyncIterator[Any]:
     """Yield a freshly-seeded VectorStore for each backend param."""
     backend = request.param
-    store = _make_store(backend, pgvector_config)
+    store = _make_store(backend, request)
     await store.initialize()
     try:
         await store.add_vectors(_seed_vectors(), ids=list(SEED_IDS), metadata=_seed_metadata())
@@ -179,24 +194,29 @@ async def any_vector_store(
             id="faiss",
             marks=pytest.mark.skipif(not is_faiss_available(), reason="faiss not installed"),
         ),
+        pytest.param(
+            "chroma",
+            id="chroma",
+            marks=pytest.mark.skipif(not is_chromadb_available(), reason="chromadb not installed"),
+        ),
         pytest.param("pgvector", id="pgvector", marks=_pgvector_marks),
     ]
 )
 async def ts_vector_store(
-    request: pytest.FixtureRequest, pgvector_config: dict[str, Any]
+    request: pytest.FixtureRequest,
 ) -> AsyncIterator[Any]:
-    """Freshly-seeded store for timestamp-capable backends only.
+    """Freshly-seeded store, in ``datetime`` timestamp format.
 
-    Chroma is deliberately excluded — it has no timestamp side-car
-    (documented as deferred in ``vector-timestamps.md``). Memory,
-    FAISS, and PgVector expose ``_created_at`` / ``_updated_at`` via
-    ``include_timestamps=True``. ``datetime`` format so before/after
-    comparisons are real ``datetime`` objects, not ISO strings.
+    Every backend exposes ``_created_at`` / ``_updated_at`` via
+    ``include_timestamps=True``, so the param list matches
+    ``any_vector_store`` above. ``datetime`` format so before/after
+    comparisons are real ``datetime`` objects rather than ISO strings
+    compared lexicographically.
     """
     backend = request.param
     store = _make_store(
         backend,
-        pgvector_config,
+        request,
         extra_config={"timestamps": {"format": "datetime"}},
     )
     await store.initialize()
@@ -232,6 +252,119 @@ async def test_update_metadata_where_merges_not_replaces(
     # Original ``tenant`` key still selects the same two rows.
     assert await any_vector_store.count(filter={"tenant": "A"}) == 2
     assert await any_vector_store.count(filter={"tenant": "A", "_stale": True}) == 2
+
+
+@pytest.mark.asyncio
+async def test_update_metadata_replaces_not_merges(
+    any_vector_store: Any,
+) -> None:
+    """``update_metadata`` replaces a row's metadata; a key the caller
+    omits is gone afterwards.
+
+    The deliberate contrast with its filter-keyed sibling above:
+    ``update_metadata_where`` merges ``set_`` into what is already
+    there, while ``update_metadata`` supplies the row's new metadata
+    outright. The ABC documents the argument as the complete
+    replacement metadata, and three of the four backends behaved that
+    way — Chroma merged, because chromadb's own ``update`` merges and
+    nothing compensated. A consumer clearing a key by omitting it
+    therefore got different storage depending on which backend the
+    config selected.
+    """
+    replaced = await any_vector_store.update_metadata(["a-1"], [{"replacement": "yes"}])
+    assert replaced == 1
+
+    rows = await any_vector_store.get_vectors(["a-1"], include_metadata=True)
+    meta = rows[0][1]
+    assert meta is not None
+    assert meta.get("replacement") == "yes"
+    assert "tenant" not in meta, f"omitted key survived the update: {meta}"
+
+    # The store agrees with itself: the dropped key no longer selects
+    # this row, and the untouched sibling still carries it.
+    assert await any_vector_store.count(filter={"tenant": "A"}) == 1
+
+
+@pytest.mark.asyncio
+async def test_update_metadata_with_an_empty_dict_clears_the_row(
+    any_vector_store: Any,
+) -> None:
+    """The degenerate replacement is still a replacement.
+
+    ``{}`` says the row should end up with no metadata, so every stored
+    key departs. Worth pinning on its own because it is the single input
+    for which "replace" and "no-op" are indistinguishable from outside,
+    and because a backend that expresses removal as a per-key tombstone
+    has to build a payload its own store will accept — chromadb rejects
+    an empty update dict outright, so the all-keys-removed case is
+    exactly where such a backend can fail.
+    """
+    assert await any_vector_store.update_metadata(["a-1"], [{}]) == 1
+
+    meta = (await any_vector_store.get_vectors(["a-1"], include_metadata=True))[0][1]
+    assert meta is not None
+    assert "tenant" not in meta, f"omitted key survived an empty replacement: {meta}"
+    # The store agrees with itself.
+    assert await any_vector_store.count(filter={"tenant": "A"}) == 1
+
+
+@pytest.mark.asyncio
+async def test_update_metadata_with_an_empty_dict_on_a_bare_row(
+    any_vector_store: Any,
+) -> None:
+    """Nothing to remove and nothing to add is still not an error.
+
+    A row written with no metadata, replaced by no metadata. Every key
+    set involved is empty, so a backend building its payload from
+    tombstones has nothing to put in it — and must not send an empty
+    write that its store will reject.
+    """
+    await any_vector_store.add_vectors(_seed_vectors()[:1], ids=["bare"], metadata=None)
+
+    assert await any_vector_store.update_metadata(["bare"], [{}]) == 1
+
+    meta = (await any_vector_store.get_vectors(["bare"], include_metadata=True))[0][1]
+    assert meta is not None
+    assert meta == {} or "tenant" not in meta
+
+
+@pytest.mark.asyncio
+async def test_readd_existing_id_is_an_upsert(
+    any_vector_store: Any,
+) -> None:
+    """Re-adding an existing id replaces that row's vector and metadata.
+
+    Adding an id a store already holds is an upsert everywhere, and the
+    row count does not grow. Chroma reached chromadb's ``add``, which
+    silently discards a duplicate id — no exception, no warning, the
+    original vector and metadata simply retained. A consumer correcting
+    an embedding got the correction on three backends and the stale
+    vector on the fourth, with nothing to indicate which had happened.
+
+    The replacement metadata is deliberately **not** a superset of the
+    seed: chromadb's ``upsert`` merges the dict it is given into what is
+    already stored, so a replacement that restates every seeded key
+    produces the same row either way and cannot tell replacement from
+    merge. ``tenant`` is seeded and omitted here for exactly that
+    reason — its absence afterwards is the whole assertion.
+    """
+    replacement = np.array([0.0, 0.0, 0.0, 1.0], dtype=np.float32)
+    await any_vector_store.add_vectors([replacement], ids=["a-1"], metadata=[{"revised": True}])
+
+    # An upsert, not an insert.
+    assert await any_vector_store.count() == len(SEED_IDS)
+
+    vector, meta = (await any_vector_store.get_vectors(["a-1"]))[0]
+    assert meta is not None
+    assert meta.get("revised") is True, f"re-add did not land: {meta}"
+    assert "tenant" not in meta, f"re-add merged instead of replacing: {meta}"
+    # And from a filter-keyed surface, so the row is really gone from
+    # the old tenant rather than merely reading clean by id.
+    assert await any_vector_store.count(filter={"tenant": "A"}) == 1
+    assert vector is not None
+    assert float(vector[3]) == pytest.approx(1.0), (
+        f"re-add kept the original vector: {vector.tolist()}"
+    )
 
 
 @pytest.mark.asyncio
@@ -474,13 +607,13 @@ async def test_faiss_timestamps_survive_save_load(tmp_path: Any) -> None:
     ]
 )
 async def empty_vector_store(
-    request: pytest.FixtureRequest, pgvector_config: dict[str, Any]
+    request: pytest.FixtureRequest,
 ) -> AsyncIterator[Any]:
     """Initialized-but-unseeded store, so the test owns the exact
     metadata dict passed to ``add_vectors`` (the aliasing subject).
     """
     backend = request.param
-    store = _make_store(backend, pgvector_config)
+    store = _make_store(backend, request)
     await store.initialize()
     try:
         yield store
