@@ -176,12 +176,23 @@ class ChromaVectorStore(VectorStore):
         form chromadb accepts). JSON-encode every list/dict value behind
         :attr:`_NONSCALAR_PREFIX` so chromadb only ever stores scalars
         (lists corrupt across collections otherwise). Scalars pass
-        through. Inverse of :meth:`_decode_metadata`.
+        through. Inverse of :meth:`_decode_metadata`, which strips the
+        same reserved keys on the way back.
+
+        The reserved timestamp keys are dropped here rather than left to
+        :meth:`_stamp` to overwrite. ``_stamp`` returns early for a row
+        the store does not yet track, so on a pre-tracking row nothing
+        displaced a consumer value and a numeric one was read back as
+        that row's real creation date. Every write path encodes, so this
+        is the one place the exclusion holds structurally instead of as
+        a side effect of stamping having something to do.
         """
         if not meta:
             return None
         encoded: dict[str, Any] = {}
         for key, value in meta.items():
+            if key in cls._RESERVED_KEYS:
+                continue
             if isinstance(value, (list, dict)):
                 encoded[key] = cls._NONSCALAR_PREFIX + json.dumps(
                     value, sort_keys=True, separators=(",", ":")

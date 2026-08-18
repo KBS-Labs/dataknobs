@@ -289,6 +289,50 @@ async def _write_legacy_row(store: Any, row_id: str = "legacy") -> None:
 
 
 @pytest.mark.parametrize("via", ["update_metadata", "update_metadata_where"])
+async def test_a_reserved_key_cannot_be_forged_onto_an_untracked_row(via: str):  # type: ignore[no-untyped-def]
+    """The stamp is not what keeps a consumer value out of storage.
+
+    Tracking is established by a write, so ``_stamp`` returns early on a
+    row that has none — and that early return was the only thing
+    removing a consumer-supplied reserved key from the payload. On a
+    pre-tracking row it never ran, so the value went to storage as the
+    row's real ``created_at`` and every later read believed it.
+
+    The neighbouring case passes for a reason that does not generalise:
+    a *string* forgery is inert because the decoder rejects a
+    non-numeric value, and a tracked row's stamp overwrites the key
+    anyway. A numeric value on an untracked row meets neither defence.
+    So the key is dropped where every write path already funnels —
+    encoding to chromadb's contract — rather than left to a downstream
+    step that is allowed to do nothing.
+    """
+    store = await _store()
+    try:
+        await _write_legacy_row(store)
+        forged = {"g": "y", ChromaVectorStore._TS_CREATED_KEY: 0.0}
+        if via == "update_metadata":
+            await store.update_metadata(["legacy"], [forged])
+        else:
+            await store.update_metadata_where({"g": "x"}, forged)
+
+        meta = (await store.get_vectors(["legacy"], include_timestamps=True))[0][1]
+        assert meta is not None
+        assert meta["_created_at"] is None, (
+            f"a consumer value became the row's creation date: {meta['_created_at']}"
+        )
+        assert _reserved_in(meta) == [], meta
+
+        raw = (await asyncio.to_thread(store.collection.get, ids=["legacy"], include=["metadatas"]))[
+            "metadatas"
+        ][0]
+        assert ChromaVectorStore._TS_CREATED_KEY not in raw, (
+            f"the forged key reached storage: {raw}"
+        )
+    finally:
+        await _drop(store)
+
+
+@pytest.mark.parametrize("via", ["update_metadata", "update_metadata_where"])
 async def test_updating_a_legacy_row_does_not_invent_a_created_at(via: str):  # type: ignore[no-untyped-def]
     """An update must not begin tracking a row that was never tracked.
 

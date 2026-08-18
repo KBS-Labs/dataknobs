@@ -341,6 +341,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `get_vectors()` still returned and `clear()` could not remove. The
   scope key now stays in the post-filter however it is declared.
 
+- **A consumer value under a reserved timestamp key can no longer become
+  a `ChromaVectorStore` row's creation date.** Reserved keys were kept out
+  of storage only by the stamping step overwriting them, and stamping
+  returns early for a row the store does not yet track — so on a
+  collection written before this backend tracked timestamps, a numeric
+  value under the reserved key was stored and read back as that row's
+  real `created_at`. The keys are now dropped where every write path
+  already funnels, at the encoding boundary.
+
 - **Re-adding an id on `ChromaVectorStore` now replaces that row's
   metadata instead of merging into it.** `add_vectors()` and
   `add_documents()` upsert on id conflict, and chromadb's `upsert`
