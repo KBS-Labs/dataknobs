@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, TypeVar
 from uuid import uuid4
 
 from ..types import DistanceMetric
@@ -12,9 +12,13 @@ from .base import VectorStore
 from .config import ChromaVectorStoreConfig
 
 if TYPE_CHECKING:
+    from collections.abc import Awaitable, Callable
     from typing import ClassVar
 
     import numpy as np
+
+_RowT = TypeVar("_RowT")
+"""One assembled result row — a shape each search method decides."""
 
 try:
     import chromadb
@@ -274,12 +278,26 @@ class ChromaVectorStore(VectorStore):
         self,
         ids: list[str],
         include_metadata: bool = True,
+        include_timestamps: bool = False,
     ) -> list[tuple[np.ndarray | None, dict[str, Any] | None]]:
-        """Retrieve vectors by ID."""
+        """Retrieve vectors by ID.
+
+        ``include_timestamps`` injects the configured timestamp keys with
+        ``None`` values: Chroma does not track row timestamps, and this
+        store does not synthesize them into its metadata. That is the
+        same answer the contract already defines for a row with no
+        tracked timestamp — a pgvector row from before the timestamp
+        migration, or a Memory/FAISS pickle written before tracking
+        existed. Accepting the argument is what keeps a runtime backend
+        swap working; before, it raised ``TypeError`` here and in
+        :meth:`search` while every other backend accepted it.
+        """
         if not self._initialized:
             await self.initialize()
 
         import numpy as np
+
+        inject = include_timestamps and include_metadata
 
         # Get from collection
         include = ["embeddings", "metadatas"] if include_metadata else ["embeddings"]
@@ -305,6 +323,8 @@ class ChromaVectorStore(VectorStore):
                 if include_metadata and idx < len(metadatas)
                 else None
             )
+            if inject:
+                meta = self._inject_timestamps(meta, created=None, updated=None)
             vectors.append((emb, meta))
 
         return vectors
@@ -403,16 +423,88 @@ class ChromaVectorStore(VectorStore):
                     post[key] = value
         return (native or None), post
 
+    def _score_from_distance(self, distance: float) -> float:
+        """Convert a Chroma distance into the score callers see.
+
+        The collection is created with ``hnsw:space`` set from the
+        configured metric, so the distances it returns are cosine, L2 or
+        inner-product accordingly — and the conversion has to follow.
+        Shared by :meth:`search` and :meth:`search_documents`, which
+        previously each decided this for themselves and disagreed:
+        ``search_documents`` applied the cosine conversion unconditionally
+        and so reported wrong scores on any store configured
+        ``euclidean``, ``l2``, ``dot_product`` or ``inner_product``.
+        """
+        if self.metric == DistanceMetric.COSINE:
+            return 1.0 - distance
+        if self.metric in (DistanceMetric.EUCLIDEAN, DistanceMetric.L2):
+            return 1.0 / (1.0 + distance)
+        return float(distance)
+
+    async def _search_with_escalation(
+        self,
+        k: int,
+        post_filter: dict[str, Any],
+        run_query: Callable[[int], Awaitable[Any]],
+        build_rows: Callable[[Any], list[_RowT]],
+    ) -> list[_RowT]:
+        """Query with a widening ``n_results`` until ``k`` rows survive.
+
+        Chroma truncates to ``n_results`` before this store's residual
+        Python filter runs, so every candidate that filter drops is a row
+        the caller asked for and does not get. Asking for ``k *
+        POST_FILTER_OVERFETCH`` compensates for the common case and no
+        more: a filter matching fewer than one candidate in
+        ``POST_FILTER_OVERFETCH`` still under-returns, and can return
+        nothing at all from a collection holding many matches — the same
+        "count says N, search says zero" shape the FAISS filtered path
+        was fixed for, at a wider window.
+
+        So the fetch escalates instead of settling. ``collection.count()``
+        is native and O(1), which makes it a usable ceiling: the sequence
+        doubles up to the whole collection, at which point Chroma has
+        returned every row and the post-filter's answer is exact rather
+        than merely over-fetched. The count is only taken when there *is*
+        a residual filter — a fully pushed-down one needs no compensation
+        and pays nothing for this.
+        """
+        if k <= 0:
+            return []
+
+        ceiling: int | None = None
+        if post_filter:
+            ceiling = int(await asyncio.to_thread(self.collection.count))
+            if ceiling <= 0:
+                return []
+
+        rows: list[_RowT] = []
+        for n_results in self._overfetch_sizes(
+            k, has_post_filter=bool(post_filter), ceiling=ceiling
+        ):
+            if n_results <= 0:
+                break
+            rows = build_rows(await run_query(n_results))
+            if len(rows) >= k:
+                break
+        return rows[:k]
+
     async def search(
         self,
         query_vector: np.ndarray,
         k: int = 10,
         filter: dict[str, Any] | None = None,
         include_metadata: bool = True,
+        include_timestamps: bool = False,
     ) -> list[tuple[str, float, dict[str, Any] | None]]:
-        """Search for similar vectors."""
+        """Search for similar vectors.
+
+        See :meth:`get_vectors` for what ``include_timestamps`` means on
+        a backend that does not track them.
+        """
         if not self._initialized:
             await self.initialize()
+
+        inject = include_timestamps and include_metadata
 
         # Apply config-level domain_id scoping (no-op when unset).
         filter = self._effective_filter(filter)
@@ -426,59 +518,51 @@ class ChromaVectorStore(VectorStore):
 
         where, post_filter = self._partition_filter_for_chroma(filter or {})
 
-        # Over-fetch when post-filtering: the native ``where`` is looser
-        # than the effective filter, so naive ``n_results=k`` may return
-        # zero post-filter matches. 4x is a pragmatic default; not made
-        # configurable in this item.
-        over_k = k * 4 if post_filter else k
-
         # Always fetch metadata when post-filtering (we need it for the
         # Python-side check) even if the caller didn't ask for it.
         need_metadata = include_metadata or bool(post_filter)
         include = ["metadatas", "distances"] if need_metadata else ["distances"]
 
-        results = await asyncio.to_thread(
-            self.collection.query,
-            query_embeddings=[query_vector],
-            n_results=over_k,
-            where=where,
-            include=include,
-        )
+        async def run_query(n_results: int) -> Any:
+            return await asyncio.to_thread(
+                self.collection.query,
+                query_embeddings=[query_vector],
+                n_results=n_results,
+                where=where,
+                include=include,
+            )
 
-        # chromadb 1.x returns nested ndarrays — coerce before any
-        # truthiness/index, then decode metadata for parity with
-        # Memory/FAISS (sentinel → [], no-metadata → {}).
-        ids_groups = self._as_list(results.get("ids"))
-        if not ids_groups:
-            return []
-        ids = self._as_list(ids_groups[0])
-        if not ids:
-            return []
-        dist_groups = self._as_list(results.get("distances"))
-        distances = self._as_list(dist_groups[0]) if dist_groups else [0.0] * len(ids)
-        meta_groups = self._as_list(results.get("metadatas"))
-        metadatas = (
-            self._as_list(meta_groups[0]) if need_metadata and meta_groups else [None] * len(ids)
-        )
+        def build_rows(results: Any) -> list[tuple[str, float, dict[str, Any] | None]]:
+            # chromadb 1.x returns nested ndarrays — coerce before any
+            # truthiness/index, then decode metadata for parity with
+            # Memory/FAISS (sentinel → [], no-metadata → {}).
+            ids_groups = self._as_list(results.get("ids"))
+            if not ids_groups:
+                return []
+            ids = self._as_list(ids_groups[0])
+            if not ids:
+                return []
+            dist_groups = self._as_list(results.get("distances"))
+            distances = self._as_list(dist_groups[0]) if dist_groups else [0.0] * len(ids)
+            meta_groups = self._as_list(results.get("metadatas"))
+            metadatas = (
+                self._as_list(meta_groups[0])
+                if need_metadata and meta_groups
+                else [None] * len(ids)
+            )
 
-        search_results: list[tuple[str, float, dict[str, Any] | None]] = []
-        for id_val, distance, raw_meta in zip(ids, distances, metadatas, strict=False):
-            metadata = self._decode_metadata(raw_meta)
-            if post_filter and not self._match_metadata_filter(metadata, post_filter):
-                continue
+            rows: list[tuple[str, float, dict[str, Any] | None]] = []
+            for id_val, distance, raw_meta in zip(ids, distances, metadatas, strict=False):
+                metadata = self._decode_metadata(raw_meta)
+                if post_filter and not self._match_metadata_filter(metadata, post_filter):
+                    continue
+                out_meta = metadata if include_metadata else None
+                if inject:
+                    out_meta = self._inject_timestamps(out_meta, created=None, updated=None)
+                rows.append((id_val, self._score_from_distance(distance), out_meta))
+            return rows
 
-            if self.metric == DistanceMetric.COSINE:
-                score = 1.0 - distance
-            elif self.metric in (DistanceMetric.EUCLIDEAN, DistanceMetric.L2):
-                score = 1.0 / (1.0 + distance)
-            else:
-                score = float(distance)
-
-            search_results.append((id_val, score, metadata if include_metadata else None))
-            if len(search_results) >= k:
-                break
-
-        return search_results
+        return await self._search_with_escalation(k, post_filter, run_query, build_rows)
 
     async def update_metadata(
         self,
@@ -723,41 +807,47 @@ class ChromaVectorStore(VectorStore):
 
         where, post_filter = self._partition_filter_for_chroma(filter or {})
 
-        over_k = k * 4 if post_filter else k
-
         # Always need metadata when post-filtering — caller-visible
         # surface still respects include_metadata.
-        results = await asyncio.to_thread(
-            self.collection.query,
-            query_texts=[query_text],
-            n_results=over_k,
-            where=where,
-            include=["documents", "metadatas", "distances"],
-        )
+        async def run_query(n_results: int) -> Any:
+            return await asyncio.to_thread(
+                self.collection.query,
+                query_texts=[query_text],
+                n_results=n_results,
+                where=where,
+                include=["documents", "metadatas", "distances"],
+            )
 
-        search_results: list[tuple[str, float, str, dict[str, Any] | None]] = []
-        ids_groups = self._as_list(results.get("ids"))
-        if not ids_groups:
-            return []
-        ids = self._as_list(ids_groups[0])
-        if not ids:
-            return []
-        dist_groups = self._as_list(results.get("distances"))
-        distances = self._as_list(dist_groups[0]) if dist_groups else [0.0] * len(ids)
-        doc_groups = self._as_list(results.get("documents"))
-        documents = self._as_list(doc_groups[0]) if doc_groups else [None] * len(ids)
-        meta_groups = self._as_list(results.get("metadatas"))
-        metadatas = self._as_list(meta_groups[0]) if meta_groups else [None] * len(ids)
+        def build_rows(results: Any) -> list[tuple[str, float, str, dict[str, Any] | None]]:
+            ids_groups = self._as_list(results.get("ids"))
+            if not ids_groups:
+                return []
+            ids = self._as_list(ids_groups[0])
+            if not ids:
+                return []
+            dist_groups = self._as_list(results.get("distances"))
+            distances = self._as_list(dist_groups[0]) if dist_groups else [0.0] * len(ids)
+            doc_groups = self._as_list(results.get("documents"))
+            documents = self._as_list(doc_groups[0]) if doc_groups else [None] * len(ids)
+            meta_groups = self._as_list(results.get("metadatas"))
+            metadatas = self._as_list(meta_groups[0]) if meta_groups else [None] * len(ids)
 
-        for id_val, distance, doc, raw_meta in zip(
-            ids, distances, documents, metadatas, strict=False
-        ):
-            metadata = self._decode_metadata(raw_meta)
-            if post_filter and not self._match_metadata_filter(metadata, post_filter):
-                continue
-            score = 1.0 - distance  # Cosine distance to similarity
-            search_results.append((id_val, score, doc, metadata if include_metadata else None))
-            if len(search_results) >= k:
-                break
+            rows: list[tuple[str, float, str, dict[str, Any] | None]] = []
+            for id_val, distance, doc, raw_meta in zip(
+                ids, distances, documents, metadatas, strict=False
+            ):
+                metadata = self._decode_metadata(raw_meta)
+                if post_filter and not self._match_metadata_filter(metadata, post_filter):
+                    continue
+                rows.append(
+                    (
+                        id_val,
+                        self._score_from_distance(distance),
+                        doc,
+                        metadata if include_metadata else None,
+                    )
+                )
+            return rows
 
-        return search_results
+        # Same escalation as ``search`` above, for the same reason.
+        return await self._search_with_escalation(k, post_filter, run_query, build_rows)

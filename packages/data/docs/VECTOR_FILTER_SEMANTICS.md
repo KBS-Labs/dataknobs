@@ -4,7 +4,17 @@
 `PgVectorStore` all accept a `filter: dict[str, Any] | None` argument
 on `search()`, `count()`, `clear()`, and `update_metadata_where()`.
 Per-key match semantics are identical across backends — consumers can
-runtime-swap the backing store without behavioral surprises.
+runtime-swap the backing store without behavioral surprises. That
+covers the result *count* as well as which rows match: a filtered
+`search(k=...)` returns `k` rows on every backend whenever `k` rows
+match, however far outside the unfiltered top-`k` they sit. All four
+backends now hold that unconditionally; what each *pays* to hold it
+differs, and is described under [Constraints](#constraints).
+
+The one case where a backend can still under-return is a FAISS store
+whose vector side-car is incomplete — a `.meta` pickle written before
+that side-car existed. It is reported at `WARNING` and fixed by
+re-ingesting; see the FAISS constraint below.
 
 `update_metadata_where(filter, set_)` is the filter-keyed mutator
 sibling of the id-keyed `update_metadata(ids, metadata)`. It selects
@@ -51,7 +61,16 @@ This makes the **runtime-swap promise hold for config-level
 scoping**: a tenant-scoped store behaves identically under
 unscoped `count()` / `search()` / `clear()` /
 `update_metadata_where()` regardless of backend — each touches
-only the configured tenant's rows.
+only the configured tenant's rows, and `search()` returns as many
+of them as it was asked for.
+
+A scoped store is the case that exercises this hardest: the scope
+is AND-composed into *every* call, so every search on such a store
+is a filtered search. A backend that narrows only after its index
+has truncated to `k` therefore under-returns on every query, and
+the smaller the configured tenant is relative to its co-tenants,
+the less it retrieves — while `count()` keeps reporting the full
+number of rows it holds.
 
 #### One residual divergence: explicit `domain_id` filters on PgVector
 
@@ -176,8 +195,9 @@ await store.search(q, k=10, filter={"missing_key": "value"})
 
 | Backend | Implementation |
 |---|---|
-| `MemoryVectorStore` / `FaissVectorStore` | Post-hoc Python filter via `VectorStoreBase._match_metadata_filter`. Applied after similarity ranking. `update_metadata_where` walks the in-process `metadata_store` (FAISS: the same side-car `search`/`clear` already post-filter — no FAISS index involvement) and `dict.update`s `set_` into each match. |
-| `ChromaVectorStore` | Post-hoc Python filter via `VectorStoreBase._match_metadata_filter` by default. Chroma's where-engine returns zero rows for *any* predicate against list-valued metadata, so neither scalar nor list filter values are pushed down unless the key is declared in `scalar_metadata_keys` (then `$eq`/`$in` is pushed for that key). `count()` uses `collection.get(where=..., include=["metadatas"])` and post-filters. `update_metadata_where` fetches matched rows, merges `set_` in Python (Chroma `update` replaces a row's metadata wholesale), and writes them back. Metadata is encoded at the Chroma boundary since chromadb's store is scalar-only (empty dict → no-metadata; every list/dict value, including `[]`, → reversible JSON sentinel — chromadb otherwise silently corrupts non-scalar values, bleeding them across collections); reads decode back so the round-trip matches Memory/FAISS. |
+| `MemoryVectorStore` | Python filter via `VectorStoreBase._match_metadata_filter`, applied to candidates **before** similarity ranking: every stored row is matched, the survivors are scored, sorted, and truncated to `k`. `update_metadata_where` walks the in-process `metadata_store` and `dict.update`s `set_` into each match. |
+| `FaissVectorStore` | Same `_match_metadata_filter`, and likewise **not** applied after ranking. An unfiltered search is answered by the FAISS index. A filtered one selects the matching rows from `metadata_store`, scores just those against the query from the vector side-car, sorts, and truncates to `k` — exact on every index type, and the same rows the index would have ranked, in the same order. (Rows scoring *equal* are ordered by insertion rather than by whatever internal order the index would have used; the ranking agrees, the tie-break need not.) `update_metadata_where` walks the same `metadata_store`, with no FAISS index involvement. |
+| `ChromaVectorStore` | Post-hoc Python filter via `VectorStoreBase._match_metadata_filter` by default. Chroma's where-engine returns zero rows for *any* predicate against list-valued metadata, so neither scalar nor list filter values are pushed down unless the key is declared in `scalar_metadata_keys` (then `$eq`/`$in` is pushed for that key). Because that residual filter runs *after* Chroma has truncated to `n_results`, the query escalates — `k * POST_FILTER_OVERFETCH`, then doubling, bounded by `collection.count()` — until `k` rows survive the filter or the whole collection has been returned, at which point the answer is exact. `count()` uses `collection.get(where=..., include=["metadatas"])` and post-filters. `update_metadata_where` fetches matched rows, merges `set_` in Python (Chroma `update` replaces a row's metadata wholesale), and writes them back. Metadata is encoded at the Chroma boundary since chromadb's store is scalar-only (empty dict → no-metadata; every list/dict value, including `[]`, → reversible JSON sentinel — chromadb otherwise silently corrupts non-scalar values, bleeding them across collections); reads decode back so the round-trip matches Memory/FAISS. |
 | `PgVectorStore` | JSONB-native via `jsonb_build_object` and the `@>` containment operator. For each filter element, two `@>` checks are emitted ORed together — one with the value as a scalar and one wrapped in an array — to cover both scalar-metadata and list-metadata in one SQL shape. Type-preserving (booleans stay booleans, numbers stay numbers); replaces the older text-cast `metadata->>'key' = '...'` translation, which silently returned zero rows for booleans, numbers, and lists. `update_metadata_where` reuses this translation in a single `UPDATE ... SET metadata = metadata || $::jsonb` (JSONB merge, `updated_at` refreshed). |
 
 ## Type safety (PgVector)
@@ -194,6 +214,47 @@ await store.count(filter={"active": False})   # → 0
 await store.count(filter={"count": 5})        # → 1
 await store.count(filter={"count": "5"})      # → 0  (type-preserving)
 ```
+
+## Metadata ownership
+
+A store and its caller never share a metadata object, in either
+direction. Every backend takes a copy of what is written to it and
+returns a copy of what is read from it, so:
+
+```python
+meta = {"type": "note", "tags": ["urgent"]}
+await store.add_vectors(vectors, ids=["a"], metadata=[meta])
+
+meta["tags"].append("later")        # does not reach the stored row
+
+(_, stored), = await store.get_vectors(["a"])
+stored["tags"].append("later")      # does not reach it either
+```
+
+The copies are **deep**. A shallow copy would leave the nested `tags`
+list shared, which is where this is actually reached — the outer dict
+is usually replaced wholesale rather than edited. Memory and FAISS copy
+with `copy.deepcopy` rather than through a JSON round-trip, because they
+persist by pickle and so accept values JSON cannot express: a tuple in
+metadata survives the copy as a tuple. That is a property of the copy on
+those two backends, not a portable one — Chroma and pgvector store
+through JSON, where a tuple reads back as a list.
+
+This applies to `add_vectors`, `update_metadata`,
+`update_metadata_where`, `search` and `get_vectors`. The
+`update_metadata_where` case is the one worth calling out: a single
+`set_` is merged into every row the filter selects, and each row gets
+its own copy, so the rows can diverge afterwards and a later edit to
+`set_` reaches none of them.
+
+Chroma and pgvector satisfy this by construction — both serialize
+metadata at their boundary, so what they store and what they return are
+already reconstructions. Memory and FAISS copy explicitly. The cost is
+paid per stored row and per *returned* row, never per scored candidate,
+so a filtered search over a large corpus does not copy the rows it
+discards.
+
+The only way to change a stored row is to call a mutator.
 
 ## Constraints
 
@@ -213,11 +274,95 @@ await store.count(filter={"count": "5"})      # → 0  (type-preserving)
   follow-ups requiring a signature change. Until then, compose
   multiple `GroundedSource` implementations or pre-narrow at the
   knowledge layer.
-- **Chroma post-filter over-fetch.** When a scalar filter is partially
-  post-filtered, `ChromaVectorStore.search()` over-fetches `k * 4`
-  candidates from Chroma, then narrows. High-cardinality tag filters
-  with strict scalar gates may need a higher multiplier — currently a
-  constant; configurability is a follow-up if a consumer hits it.
+- **Chroma post-filters cost repeated queries.** When part of a filter
+  cannot be pushed down, `ChromaVectorStore.search()` (and
+  `search_documents()`) must narrow in Python *after* Chroma has already
+  truncated to `n_results`. It compensates by escalating the fetch —
+  `k * POST_FILTER_OVERFETCH`, then doubling, bounded by
+  `collection.count()` — so a sparse filter costs several round-trips to
+  Chroma plus one `count()`, rather than under-returning. The count is
+  native and O(1); the extra queries are not free, and a filter matching
+  very few rows in a large collection will walk most of the way to the
+  full collection size before it is satisfied. Declaring the key in
+  `scalar_metadata_keys` pushes the predicate down and avoids all of it.
+  `POST_FILTER_OVERFETCH` is a module-level constant in
+  `dataknobs_data.vector.stores.common`, shared by every backend that
+  post-filters, and is not yet configurable per store.
+- **Chroma does not track timestamps.** `include_timestamps=True` is
+  accepted on `ChromaVectorStore.search()` and `get_vectors()` — so a
+  runtime swap does not break on the argument — but the injected
+  `_created_at` / `_updated_at` are always `None`. That is the same
+  answer the contract gives for any row with no tracked timestamp: a
+  pgvector row from before the timestamp migration, or a Memory/FAISS
+  pickle written before tracking existed.
+- **FAISS filtered search leaves the index.** An unfiltered
+  `FaissVectorStore.search()` uses the FAISS index and is as fast as
+  the configured index type makes it. A filtered one does not: no FAISS
+  index can express the filter, so the matching rows are scored
+  directly instead — an O(N) walk of `metadata_store` plus O(M)
+  similarity computations for the M rows that match. In **CPU** that is
+  less work than `MemoryVectorStore` does for the same query, which
+  scores every survivor of a full scan one row at a time in Python. In
+  **peak memory** it is the other way round: the M matching vectors are
+  stacked into one contiguous float32 array and the metric computed over
+  it, so a filtered query transiently holds `M × dimensions × 4` bytes —
+  doubled on the L2/euclidean path, which materializes the difference
+  array as well — where `MemoryVectorStore` holds `O(dimensions)`. At
+  500k matching rows and 768 dimensions that is 1.5 GB, or 3 GB under
+  L2, on top of the index the store is no longer using. Size for it, or
+  filter to a narrower M.
+
+  A store configured with a `domain_id` filters on every call and
+  therefore never uses the index at all; scope-heavy workloads at scale
+  should prefer `pgvector`, where the scope is a native SQL predicate
+  the index search runs under.
+- **An incomplete FAISS side-car under-returns.** `_load_from_disk`
+  reads the vector side-car with a default, so a `.meta` pickle written
+  before it existed loads empty against a fully populated index. Rows
+  with no stored vector are ranked from the index instead of scored
+  directly, and merged with the exactly-scored ones — the two are on the
+  same scale. An approximate index does not route to every row, so a
+  filtered search on such a store can still return fewer than `k`. It is
+  reported once per store at `WARNING`, and re-ingesting fixes it.
+- **A file `persist_path` is single-writer.** This covers
+  `FaissVectorStore` and `MemoryVectorStore` — both persist by
+  serializing the instance's whole in-memory state over one file, which
+  is what makes the hazard theirs and not the file format's. Two
+  instances holding one path with overlapping lifetimes would each write
+  a snapshot that never saw the other's rows, so a store raises
+  `dataknobs_common.exceptions.ConcurrencyError` rather than overwrite a
+  file that changed since it read it.
+
+  Three consequences worth knowing:
+
+  * `close()` persists only a store that was **mutated**. An instance
+    opened to read writes nothing on teardown — necessarily, since that
+    write would move the file's identity and make the real writer's save
+    refuse.
+  * The check is best-effort, not a lock: it compares modification time,
+    size and inode, and two writes inside one filesystem timestamp tick
+    that happen to produce the same size are indistinguishable. It
+    catches the overwhelmingly common accident, not a determined race.
+  * A refusal is recoverable with `save(force=True)`, which overwrites
+    deliberately and accepts the loss of whatever the other writer
+    persisted. Without it the refusal repeats forever, because what it
+    compares against has not moved. It is only ever the right call
+    against a *genuine* conflict — a refusal the store caused itself is
+    a defect, not a case for `force`.
+
+  Sequential lifetimes are unaffected and keep appending, since
+  `initialize()` loads the file first. For genuinely concurrent writers,
+  use `pgvector`.
+
+  FAISS writes two files — the index and its `.meta` side-car — to
+  scratch siblings and renames them into place only once both have been
+  written, so a failed write leaves the previous state intact. Renaming
+  is atomic per file but not across the pair, so a failure *between* the
+  two renames can still leave a new index beside an old side-car; making
+  that impossible needs a single-file format or a write-ahead log.
+  Retrying is not blocked by it, though: the store re-reads the file's
+  identity and stays dirty, so the next `save()` or `close()` writes the
+  rows it still holds.
 - **Chroma `count` materializes metadata.** Chroma has no first-class
   filtered-count API. The `count(filter=...)` path uses
   `collection.get(where=..., include=["metadatas"])` and post-filters

@@ -17,6 +17,13 @@ same on every shipping backend (``MemoryVectorStore``,
 PgVector additionally must preserve metadata types (booleans stay
 booleans, numbers stay numbers) — covered by a small set of
 pgvector-only cases.
+
+Result *count* is part of the contract too, not only the matching id
+set: a filtered ``search`` returns ``k`` rows whenever ``k`` rows match,
+however far outside the unfiltered top-``k`` they fall. The
+four-quadrant cases below cannot see that — they run a 5-row corpus at
+``k=10`` — so the last section runs a corpus larger than ``k`` on every
+backend.
 """
 
 from __future__ import annotations
@@ -36,6 +43,7 @@ from dataknobs_common.testing import (
     requires_real_postgres,
 )
 
+from dataknobs_data.vector.stores.common import POST_FILTER_OVERFETCH
 from dataknobs_data.vector.stores.memory import MemoryVectorStore
 
 if is_faiss_available():
@@ -436,3 +444,278 @@ async def test_config_domain_id_scopes_update_metadata_where(
     assert cross == 0
     # The scoped store still sees exactly its two in-domain rows.
     assert await domain_scoped_store.count() == 2
+
+
+@pytest.mark.asyncio
+async def test_mutating_returned_metadata_does_not_rewrite_the_store(
+    any_vector_store: Any,
+) -> None:
+    """A result's metadata dict is the caller's, on every backend.
+
+    Chroma and pgvector build a fresh dict per row on the way out;
+    Memory and FAISS returned the stored one, so mutating a search result
+    silently rewrote the store on two backends of four. That is both a
+    swap-visible difference and a way to corrupt a store without ever
+    calling a mutator, so it is pinned here rather than per backend.
+    """
+    results = await any_vector_store.search(_query_vector(), k=1)
+    vector_id, _, metadata = results[0]
+    assert metadata is not None
+
+    metadata["injected_by_caller"] = "should not persist"
+
+    again = await any_vector_store.search(_query_vector(), k=1)
+    assert "injected_by_caller" not in (again[0][2] or {})
+    assert await any_vector_store.count(filter={"injected_by_caller": "should not persist"}) == 0
+
+    # Same contract on the id-keyed read.
+    fetched = await any_vector_store.get_vectors([vector_id])
+    assert fetched[0][1] is not None
+    fetched[0][1]["injected_by_caller"] = "should not persist"
+    refetched = await any_vector_store.get_vectors([vector_id])
+    assert "injected_by_caller" not in (refetched[0][1] or {})
+
+
+def _alias_vector() -> np.ndarray:
+    """One row to write in the aliasing tests, kept off the seed corpus."""
+    return np.array([[0.0, 0.0, 0.0, 1.0]], dtype=np.float32)
+
+
+async def _seed_alias_row(store: Any, vector_id: str, metadata: dict[str, Any]) -> None:
+    """Add one row carrying ``metadata``, for an aliasing test to poke at.
+
+    Written per test rather than taken from ``SEED_METADATA``, whose
+    dicts are module-level constants — a test that reached a nested value
+    through the store would edit them for every test that follows.
+    """
+    await store.add_vectors(_alias_vector(), ids=[vector_id], metadata=[metadata])
+
+
+@pytest.mark.asyncio
+async def test_mutating_a_nested_value_in_a_result_does_not_rewrite_the_store(
+    any_vector_store: Any,
+) -> None:
+    """The dict handed back is independent at depth, not only at the top.
+
+    Chroma and pgvector reconstruct nested values from JSON on the way
+    out, so a list inside a result was already theirs alone. Memory and
+    FAISS copied only the outer dict, so ``result["tags"].append(...)``
+    still reached the stored row — the same swap-visible difference as
+    the test above, one level down, and not covered by it.
+    """
+    await _seed_alias_row(any_vector_store, "NESTED", {"type": "aliasing", "tags": ["one"]})
+
+    fetched = await any_vector_store.get_vectors(["NESTED"])
+    assert fetched[0][1] is not None
+    fetched[0][1]["tags"].append("injected by caller")
+
+    refetched = await any_vector_store.get_vectors(["NESTED"])
+    assert (refetched[0][1] or {})["tags"] == ["one"]
+
+    # Same contract through the ranked read.
+    hits = await any_vector_store.search(_query_vector(), k=5, filter={"type": "aliasing"})
+    assert hits and hits[0][2] is not None
+    hits[0][2]["tags"].append("injected by caller")
+
+    again = await any_vector_store.search(_query_vector(), k=5, filter={"type": "aliasing"})
+    assert (again[0][2] or {})["tags"] == ["one"]
+
+
+@pytest.mark.asyncio
+async def test_mutating_metadata_after_add_vectors_does_not_reach_the_store(
+    any_vector_store: Any,
+) -> None:
+    """A writer keeps no live handle on what it wrote.
+
+    The mirror of the read-side contract: Chroma and pgvector serialize
+    on the way in, so the dict the caller passed stopped being the
+    store's the moment ``add_vectors`` returned. Memory and FAISS copied
+    the outer dict but kept the caller's nested values, so a list the
+    caller went on using was the store's list too.
+    """
+    written: dict[str, Any] = {"type": "inbound_add", "tags": ["one"]}
+    await _seed_alias_row(any_vector_store, "INBOUND_ADD", written)
+
+    written["type"] = "rewritten by caller"
+    written["tags"].append("injected by caller")
+
+    fetched = await any_vector_store.get_vectors(["INBOUND_ADD"])
+    stored = fetched[0][1]
+    assert stored is not None
+    assert stored["type"] == "inbound_add"
+    assert stored["tags"] == ["one"]
+
+
+@pytest.mark.asyncio
+async def test_mutating_metadata_after_update_metadata_does_not_reach_the_store(
+    any_vector_store: Any,
+) -> None:
+    """``update_metadata`` takes a copy too, at every depth.
+
+    Worse than the ``add_vectors`` path on Memory and FAISS, which at
+    least copied the outer dict: this one stored the caller's dict
+    itself, so even a top-level assignment afterwards rewrote the row.
+    """
+    await _seed_alias_row(any_vector_store, "INBOUND_UPDATE", {"type": "inbound_update"})
+
+    replacement: dict[str, Any] = {"type": "inbound_update", "tags": ["two"]}
+    await any_vector_store.update_metadata(["INBOUND_UPDATE"], [replacement])
+
+    replacement["type"] = "rewritten by caller"
+    replacement["tags"].append("injected by caller")
+
+    fetched = await any_vector_store.get_vectors(["INBOUND_UPDATE"])
+    stored = fetched[0][1]
+    assert stored is not None
+    assert stored["type"] == "inbound_update"
+    assert stored["tags"] == ["two"]
+
+
+@pytest.mark.asyncio
+async def test_mutating_set_after_update_metadata_where_does_not_reach_the_store(
+    any_vector_store: Any,
+) -> None:
+    """``set_`` is merged as a copy, per row.
+
+    The filter-keyed mutator merges one ``set_`` into every match, so a
+    nested value inside it was shared by the caller *and* by every row
+    the filter selected — one ``append`` reaching an unbounded number of
+    rows at once.
+    """
+    await _seed_alias_row(any_vector_store, "INBOUND_WHERE_1", {"type": "inbound_where"})
+    await _seed_alias_row(any_vector_store, "INBOUND_WHERE_2", {"type": "inbound_where"})
+
+    set_: dict[str, Any] = {"tags": ["three"]}
+    assert await any_vector_store.update_metadata_where({"type": "inbound_where"}, set_) == 2
+
+    set_["tags"].append("injected by caller")
+
+    fetched = await any_vector_store.get_vectors(["INBOUND_WHERE_1", "INBOUND_WHERE_2"])
+    for _, stored in fetched:
+        assert stored is not None
+        assert stored["tags"] == ["three"]
+
+
+# ---------------------------------------------------------------------------
+# Result *count* when the filter's matches fall outside the global top-k.
+#
+# Every case above runs a 5-row corpus at ``k=10``, so ``k >= ntotal``
+# always and each backend returns every matching row whatever order it
+# searched in. Those cases prove *which* rows match; they cannot prove
+# *how many* are returned. A backend that truncates to ``k`` first and
+# drops the non-matching rows afterwards passes all of them and still
+# returns fewer than ``k`` — frequently zero — as soon as the corpus is
+# larger than ``k`` and rows carrying another filter value sit nearer the
+# probe.
+#
+# The decoy count is load-bearing and is not a round number by
+# accident. ``"group"`` is not declared in Chroma's
+# ``scalar_metadata_keys`` (which defaults to empty), so on that backend
+# the filter is a *residual Python post-filter*, not a pushed-down
+# ``where`` — and a post-filter is compensated for by over-fetching
+# ``k * POST_FILTER_OVERFETCH`` candidates. A corpus at or below that
+# window is one Chroma fetches entirely, so its post-filter never
+# dilutes and the case cannot fail there however the backend behaves.
+#
+# That is the same flaw as the one this section exists to fix, one level
+# up: a corpus small enough that the truncation under test is
+# unreachable. ``_TOPK_DECOYS`` therefore exceeds ``_TOPK_K *
+# POST_FILTER_OVERFETCH`` so that every backend has to look past its
+# first fetch to answer, and all four legs can fail.
+# ---------------------------------------------------------------------------
+
+_TOPK_K = 3
+_TOPK_DECOYS = _TOPK_K * POST_FILTER_OVERFETCH + 8
+_TOPK_TARGETS = 9
+
+
+def _topk_corpus() -> tuple[np.ndarray, list[str], list[dict[str, Any]]]:
+    """A corpus whose every matching row sits outside the global top-k.
+
+    Row ``i`` is ``[1, t, 0, 0]`` for an increasing ``t``, so similarity
+    to the probe ``[1, 0, 0, 0]`` falls monotonically under every metric
+    these backends default to. The ``group="other"`` rows take the
+    smallest ``t`` and so own the whole leading window — including the
+    over-fetched one — and the ``group="target"`` rows follow in order.
+    """
+    offsets = [0.001 * (i + 1) for i in range(_TOPK_DECOYS)]
+    offsets += [0.1 * (i + 1) for i in range(_TOPK_TARGETS)]
+    vectors = np.array([[1.0, t, 0.0, 0.0] for t in offsets], dtype=np.float32)
+    ids = [f"other{i}" for i in range(_TOPK_DECOYS)]
+    ids += [f"target{i}" for i in range(_TOPK_TARGETS)]
+    metadata: list[dict[str, Any]] = [{"group": "other"} for _ in range(_TOPK_DECOYS)]
+    metadata += [{"group": "target"} for _ in range(_TOPK_TARGETS)]
+    return vectors, ids, metadata
+
+
+def _topk_query() -> np.ndarray:
+    """Probe the axis the corpus fans out from."""
+    return np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float32)
+
+
+@pytest_asyncio.fixture(
+    params=[
+        pytest.param("memory", id="memory"),
+        pytest.param(
+            "faiss",
+            id="faiss",
+            marks=pytest.mark.skipif(not is_faiss_available(), reason="faiss not installed"),
+        ),
+        pytest.param(
+            "chroma",
+            id="chroma",
+            marks=pytest.mark.skipif(not is_chromadb_available(), reason="chromadb not installed"),
+        ),
+        pytest.param("pgvector", id="pgvector", marks=_pgvector_marks),
+    ]
+)
+async def topk_store(
+    request: pytest.FixtureRequest, pgvector_config: dict[str, Any]
+) -> AsyncIterator[Any]:
+    """Store seeded with a corpus larger than the ``k`` used below."""
+    backend = request.param
+    store: Any
+    if backend == "memory":
+        store = MemoryVectorStore({"dimensions": 4})
+    elif backend == "faiss":
+        store = FaissVectorStore({"dimensions": 4, "metric": "cosine"})
+    elif backend == "chroma":
+        store = ChromaVectorStore(
+            {
+                "dimensions": 4,
+                "collection_name": f"test_topk_{uuid.uuid4().hex[:8]}",
+            }
+        )
+    elif backend == "pgvector":
+        store = PgVectorStore(pgvector_config)
+    else:
+        pytest.fail(f"Unknown backend param: {backend}")
+
+    await store.initialize()
+    try:
+        vectors, ids, metadata = _topk_corpus()
+        await store.add_vectors(vectors, ids=ids, metadata=metadata)
+        yield store
+    finally:
+        await _teardown_backend(backend, store)
+        await store.close()
+
+
+@pytest.mark.asyncio
+async def test_filtered_search_returns_k_when_k_rows_match(topk_store: Any) -> None:
+    """``search`` returns a full ``k`` whenever ``k`` rows match.
+
+    All nine matching rows sit outside the unfiltered top-3, so a
+    backend applying the filter after truncating to ``k`` returns
+    nothing at all here while ``count`` reports the nine it holds.
+    """
+    available = await topk_store.count(filter={"group": "target"})
+    assert available == _TOPK_TARGETS
+
+    results = await topk_store.search(_topk_query(), k=_TOPK_K, filter={"group": "target"})
+
+    assert len(results) == _TOPK_K, (
+        f"store holds {available} matching rows; search(k={_TOPK_K}) returned "
+        f"{len(results)}: {[r[0] for r in results]}"
+    )
+    assert [r[0] for r in results] == ["target0", "target1", "target2"]

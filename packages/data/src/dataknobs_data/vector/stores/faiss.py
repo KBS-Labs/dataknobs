@@ -63,7 +63,10 @@ class FaissVectorStore(VectorStore):
         self.ef_search = self.index_params.get("ef_search", 50)  # For HNSW search
         self.nprobe = self.search_params.get("nprobe", 10)  # For IVF search
 
-        self.index = None
+        # ``faiss`` ships no type information, so the live index is typed
+        # the way every helper that builds one already is: the concrete
+        # class varies by index type and swaps under ``_build_deferred_ivf``.
+        self.index: Any = None
         self.id_map = {}  # Map from our IDs to Faiss internal indices
         self.metadata_store = {}  # Store metadata separately
         # internal_id -> (created_at, updated_at). Aware UTC datetimes.
@@ -95,6 +98,14 @@ class FaissVectorStore(VectorStore):
         # load ``False`` (a persisted IVF index is necessarily trained,
         # since pre-fix a sub-``nlist`` first batch could not be added).
         self._deferred_ivf: bool = False
+        # Whether the "this store's vector side-car is short" warning has
+        # already been emitted. The condition is a property of the loaded
+        # file, not of a query, so it holds for every filtered search
+        # this instance serves — warning per call would put one line per
+        # user turn in the log of a RAG read path, all of them naming the
+        # same one-off remedy. Same per-instance shape, and the same
+        # reason for it, as ``_timestamp_collision_warned``.
+        self._sidecar_shortfall_warned: bool = False
 
     async def initialize(self) -> None:
         """Initialize Faiss index."""
@@ -232,10 +243,26 @@ class FaissVectorStore(VectorStore):
         )
 
     async def close(self) -> None:
-        """Save and close the index."""
-        if self.persist_path and self._initialized:
-            await self.save()
-        self._initialized = False
+        """Persist any unsaved changes, then release the store.
+
+        Only a store that was *mutated* is persisted. An instance opened
+        to read and closed again writes nothing — which is not merely an
+        optimization: its write would move the file's identity, and the
+        instance actually holding new rows would then find the file
+        changed underneath it and refuse to save them.
+
+        Releasing the store and persisting it are separate obligations,
+        and a failure of the second must not skip the first. The save
+        runs under ``try``/``finally`` so a refusal (see
+        :meth:`save`) still leaves a closed store rather than one stuck
+        re-raising on every further attempt — the exception propagates,
+        as it must, because rows are on the floor.
+        """
+        try:
+            if self.persist_path and self._initialized and self._dirty:
+                await self.save()
+        finally:
+            self._initialized = False
 
     async def add_vectors(
         self,
@@ -329,6 +356,8 @@ class FaissVectorStore(VectorStore):
         if self._deferred_ivf and len(self.vectors) >= self.nlist:
             self._build_deferred_ivf()
 
+        if ids:
+            self._mark_dirty()
         return ids
 
     async def get_vectors(
@@ -365,13 +394,22 @@ class FaissVectorStore(VectorStore):
                 results.append((None, None))
                 continue
 
-            # Copy so the caller cannot mutate the stored array.
+            # Copy so the caller cannot mutate the stored array — and the
+            # same for the metadata dict beside it, which was handed out
+            # live whenever timestamps were not being injected.
             vector = stored.copy()
-            metadata = self.metadata_store.get(internal_id) if include_metadata else None
-            if inject:
-                created, updated = self.timestamps.get(internal_id, (None, None))
-                metadata = self._inject_timestamps(metadata, created=created, updated=updated)
-            results.append((vector, metadata))
+            created, updated = self.timestamps.get(internal_id, (None, None))
+            results.append(
+                (
+                    vector,
+                    self._outbound_metadata(
+                        self.metadata_store.get(internal_id) if include_metadata else None,
+                        inject=inject,
+                        created=created,
+                        updated=updated,
+                    ),
+                )
+            )
 
         return results
 
@@ -398,6 +436,7 @@ class FaissVectorStore(VectorStore):
             # Remove from index
             internal_ids_array = np.array(internal_ids, dtype=np.int64)
             removed = self.index.remove_ids(internal_ids_array)
+            self._mark_dirty()
             return removed
 
         return 0
@@ -410,9 +449,26 @@ class FaissVectorStore(VectorStore):
         include_metadata: bool = True,
         include_timestamps: bool = False,
     ) -> list[tuple[str, float, dict[str, Any] | None]]:
-        """Search for similar vectors."""
+        """Search for similar vectors.
+
+        An unfiltered search is answered by the FAISS index. A filtered
+        one is not, and cannot be: the index has no way to express the
+        filter, so it returns a top-``k`` window that the filter then
+        empties — a small co-tenant occupying the window is enough to
+        return nothing at all from a store holding hundreds of matching
+        rows. The matching rows are selected from ``metadata_store`` and
+        scored directly instead, which is exact on every index type and
+        is the answer ``MemoryVectorStore`` gives for the same corpus.
+        """
         if not self._initialized:
             await self.initialize()
+
+        # Asking for no rows is answered the same way whichever path
+        # would have served it. Normalized here rather than in each
+        # branch: the filtered path used to return ``[]`` for a negative
+        # ``k`` while the unfiltered one passed it to ``index.search``.
+        if k <= 0:
+            return []
 
         inject = include_timestamps and include_metadata
 
@@ -430,6 +486,11 @@ class FaissVectorStore(VectorStore):
         if hasattr(inner, "nprobe"):
             inner.nprobe = self.nprobe
 
+        # An empty filter drops nothing, so it takes the index path with
+        # everything else that is unfiltered.
+        if filter:
+            return self._search_filtered(query, k, filter, include_metadata, inject)
+
         # Search
         k = min(k, self.index.ntotal)  # Don't search for more than we have
         if k == 0:
@@ -438,41 +499,279 @@ class FaissVectorStore(VectorStore):
         scores, indices = self.index.search(query, k)
 
         # Convert results
-        results = []
         reverse_id_map = {v: k for k, v in self.id_map.items()}
+        results = []
 
         for i in range(len(indices[0])):
-            internal_id = indices[0][i]
+            internal_id = int(indices[0][i])
             if internal_id == -1:  # No result
                 continue
-
-            score = float(scores[0][i])
-
-            # Convert score based on metric
-            if self.metric == DistanceMetric.COSINE:
-                # Inner product of normalized vectors = cosine similarity
-                score = score  # noqa: PLW0127 - Keep for clarity
-            elif self.metric in (DistanceMetric.EUCLIDEAN, DistanceMetric.L2):
-                # Convert distance to similarity score
-                score = 1.0 / (1.0 + score)
-
-            # Get external ID
-            ext_id = reverse_id_map.get(internal_id, str(internal_id))
-
-            # Apply metadata filter if provided. Fetch metadata even
-            # when not returning it to the caller so the filter can be
-            # evaluated post-top-k.
-            metadata = self.metadata_store.get(internal_id)
-            if filter and not self._match_metadata_filter(metadata, filter):
-                continue
-
-            out_meta = metadata if include_metadata else None
-            if inject:
-                created, updated = self.timestamps.get(internal_id, (None, None))
-                out_meta = self._inject_timestamps(out_meta, created=created, updated=updated)
-            results.append((ext_id, score, out_meta))
+            results.append(
+                self._result_row(
+                    internal_id,
+                    float(scores[0][i]),
+                    reverse_id_map,
+                    include_metadata,
+                    inject,
+                )
+            )
 
         return results
+
+    def _score_from_raw(self, raw: float) -> float:
+        """Convert a raw FAISS metric value into the score callers see.
+
+        Cosine is an inner product of normalized vectors, which already
+        *is* the similarity. L2 arrives as a distance and is inverted.
+        Every other configured metric maps onto one of those two FAISS
+        metrics (:meth:`_faiss_metric`) and its raw value is reported
+        unchanged, which is what callers have always received.
+
+        Both search paths convert here, so a filtered search and an
+        unfiltered one report the same number for the same row.
+        """
+        if self.metric == DistanceMetric.COSINE:
+            # Inner product of normalized vectors = cosine similarity
+            return raw
+        if self.metric in (DistanceMetric.EUCLIDEAN, DistanceMetric.L2):
+            return 1.0 / (1.0 + raw)
+        return raw
+
+    def _result_row(
+        self,
+        internal_id: int,
+        raw: float,
+        reverse_id_map: dict[int, str],
+        include_metadata: bool,
+        inject: bool,
+    ) -> tuple[str, float, dict[str, Any] | None]:
+        """Assemble one result tuple. Shared by both search paths."""
+        ext_id = reverse_id_map.get(internal_id, str(internal_id))
+        created, updated = self.timestamps.get(internal_id, (None, None))
+        # Copied, not handed out live — and only for the ``k`` rows that
+        # are actually returned, since this runs per result row rather
+        # than per scored candidate.
+        out_meta = self._outbound_metadata(
+            self.metadata_store.get(internal_id) if include_metadata else None,
+            inject=inject,
+            created=created,
+            updated=updated,
+        )
+        return (ext_id, self._score_from_raw(raw), out_meta)
+
+    def _raw_index_scores(self, query: np.ndarray, matrix: np.ndarray) -> np.ndarray:
+        """Reproduce over ``matrix`` the values ``index.search`` returns.
+
+        Because :meth:`_score_from_raw` converts for both paths, this
+        has to produce what FAISS itself produces: an inner product
+        under ``METRIC_INNER_PRODUCT``, a **squared** L2 distance under
+        ``METRIC_L2``. Computing an unsquared distance here would give a
+        filtered search different scores from an unfiltered one over the
+        same rows.
+        """
+        import numpy as np
+
+        row = query.reshape(-1)
+        if self._faiss_metric() == faiss.METRIC_INNER_PRODUCT:
+            return np.asarray(matrix @ row, dtype=np.float64)
+        diff = matrix - row
+        return np.asarray(np.einsum("ij,ij->i", diff, diff), dtype=np.float64)
+
+    def _search_filtered(
+        self,
+        query: np.ndarray,
+        k: int,
+        filter: dict[str, Any],
+        include_metadata: bool,
+        inject: bool,
+    ) -> list[tuple[str, float, dict[str, Any] | None]]:
+        """Score the rows matching ``filter`` and return the best ``k``.
+
+        Walks ``metadata_store`` for the matches — the same walk
+        ``count(filter=...)`` already performs — then scores only those
+        rows from the ``self.vectors`` side-car. A filtered search
+        therefore leaves the approximate index and becomes exact over
+        the matching subset. Unfiltered search keeps the index and is
+        untouched.
+
+        ``k`` is already positive: :meth:`search` normalizes it for both
+        paths before dispatching here.
+        """
+        matching = [
+            internal_id
+            for internal_id, metadata in self.metadata_store.items()
+            if self._match_metadata_filter(metadata, filter)
+        ]
+        if not matching:
+            return []
+
+        scorable = [internal_id for internal_id in matching if internal_id in self.vectors]
+        if len(scorable) == len(matching):
+            return self._score_stored(query, matching, k, include_metadata, inject)
+
+        # Some matching rows have no stored vector — see
+        # :meth:`_warn_sidecar_shortfall` for how a store gets that way.
+        self._warn_sidecar_shortfall(matched=len(matching), scorable=len(scorable))
+        return self._score_partial(query, matching, scorable, k, include_metadata, inject)
+
+    def _score_stored(
+        self,
+        query: np.ndarray,
+        internal_ids: list[int],
+        k: int,
+        include_metadata: bool,
+        inject: bool,
+    ) -> list[tuple[str, float, dict[str, Any] | None]]:
+        """Rank ``internal_ids`` against ``query`` from the side-car.
+
+        The exact path, used when every matching row has a stored vector.
+        Kept array-shaped end to end — the ids stay a list and the scores
+        an ndarray, zipped only for the surviving ``k`` — because this is
+        the path a large scoped store takes on every call.
+        """
+        import numpy as np
+
+        if not internal_ids:
+            return []
+
+        raw = self._raw_index_scores(
+            query, np.vstack([self.vectors[internal_id] for internal_id in internal_ids])
+        )
+        # Inner product ranks high-to-low, L2 distance low-to-high;
+        # ``stable`` keeps ties in insertion order so repeated searches
+        # over one corpus agree with each other.
+        nearest_first = -raw if self._faiss_metric() == faiss.METRIC_INNER_PRODUCT else raw
+        order = np.argsort(nearest_first, kind="stable")
+
+        reverse_id_map = {internal: ext for ext, internal in self.id_map.items()}
+        return [
+            self._result_row(
+                internal_ids[position],
+                float(raw[position]),
+                reverse_id_map,
+                include_metadata,
+                inject,
+            )
+            for position in order[:k]
+        ]
+
+    def _warn_sidecar_shortfall(self, *, matched: int, scorable: int) -> None:
+        """Report, once per instance, that the vector side-car is short.
+
+        ``_load_from_disk`` reads the side-car with a default, so a
+        ``.meta`` pickle written before the side-car existed loads empty
+        against a fully populated index. Recoverable by re-ingesting,
+        which is why this is a WARNING and not silence: a shortfall is
+        indistinguishable to a caller from a store that genuinely holds
+        no more matches.
+
+        Once, because the condition belongs to the loaded file rather
+        than to any one query — every filtered search this instance
+        serves meets it, and repeating a message whose remedy is a
+        one-off re-ingest just fills the log of a read path.
+        """
+        if self._sidecar_shortfall_warned:
+            return
+        self._sidecar_shortfall_warned = True
+        logger.warning(
+            "FAISS search: %d of the %d rows matching this filter have no "
+            "stored vector (index holds %d). Those rows are ranked from the "
+            "index instead of scored directly, which can miss the ones an "
+            "approximate index does not route to — so a filtered search may "
+            "return fewer than k rows. Re-ingest the store to restore exact "
+            "filtered search. Reported once per store.",
+            matched - scorable,
+            matched,
+            self.index.ntotal,
+        )
+
+    def _score_partial(
+        self,
+        query: np.ndarray,
+        matching: list[int],
+        scorable: list[int],
+        k: int,
+        include_metadata: bool,
+        inject: bool,
+    ) -> list[tuple[str, float, dict[str, Any] | None]]:
+        """Rank a filter's matches when only some have stored vectors.
+
+        Neither source alone is the right answer. Scoring only the
+        side-car silently omits a row that has no stored vector but would
+        have outranked everything returned; scanning only the index
+        answers approximately for rows the side-car could have scored
+        exactly. So both are used and merged.
+
+        The merge is sound because :meth:`_raw_index_scores` reproduces
+        the values ``index.search`` itself returns — the two halves are
+        on one scale, not two, which is the same property that makes a
+        filtered search's scores match an unfiltered one's.
+
+        This still under-returns where the *index* cannot reach an
+        unscorable row: an HNSW graph does not route to every node, and
+        an IVF probe covers only its own lists. That residue is why the
+        caller reports the shortfall rather than treating this as a
+        repair.
+        """
+        import numpy as np
+
+        scored: list[tuple[int, float]] = []
+        if scorable:
+            raw = self._raw_index_scores(
+                query, np.vstack([self.vectors[internal_id] for internal_id in scorable])
+            )
+            scored.extend((internal_id, float(raw[i])) for i, internal_id in enumerate(scorable))
+
+        scored.extend(self._raw_scores_via_index(query, k, set(matching) - set(scorable)))
+        if not scored:
+            return []
+
+        values = np.fromiter((value for _, value in scored), dtype=np.float64, count=len(scored))
+        nearest_first = -values if self._faiss_metric() == faiss.METRIC_INNER_PRODUCT else values
+        order = np.argsort(nearest_first, kind="stable")
+
+        reverse_id_map = {internal: ext for ext, internal in self.id_map.items()}
+        return [
+            self._result_row(
+                scored[position][0],
+                scored[position][1],
+                reverse_id_map,
+                include_metadata,
+                inject,
+            )
+            for position in order[:k]
+        ]
+
+    def _raw_scores_via_index(
+        self,
+        query: np.ndarray,
+        k: int,
+        wanted: set[int],
+    ) -> list[tuple[int, float]]:
+        """Ask the index for the ``wanted`` rows it can reach.
+
+        The only way to score a row whose vector the side-car does not
+        hold. Over-fetches and escalates to the whole index, so it falls
+        short only where the index genuinely cannot route to a row rather
+        than because the window was too small.
+        """
+        if not wanted:
+            return []
+
+        found: dict[int, float] = {}
+        for fetch in self._overfetch_sizes(k, has_post_filter=True, ceiling=self.index.ntotal):
+            if fetch <= 0:
+                break
+            scores, indices = self.index.search(query, fetch)
+            found = {}
+            for i in range(len(indices[0])):
+                internal_id = int(indices[0][i])
+                if internal_id in wanted:
+                    found[internal_id] = float(scores[0][i])
+            if len(found) >= k:
+                break
+
+        return list(found.items())
 
     async def update_metadata(
         self,
@@ -488,12 +787,18 @@ class FaissVectorStore(VectorStore):
         for ext_id, meta in zip(ids, metadata, strict=False):
             if ext_id in self.id_map:
                 internal_id = self.id_map[ext_id]
-                self.metadata_store[internal_id] = meta
+                # Stored as a copy: the caller keeps its own dict and
+                # must not keep a handle on the row through it. The
+                # ``add_vectors`` path gets this from
+                # ``_apply_domain_default``; this one has no equivalent.
+                self.metadata_store[internal_id] = self._copy_metadata(meta) or {}
                 if internal_id in self.timestamps:
                     created, _ = self.timestamps[internal_id]
                     self.timestamps[internal_id] = (created, now)
                 updated += 1
 
+        if updated:
+            self._mark_dirty()
         return updated
 
     async def update_metadata_where(
@@ -504,20 +809,23 @@ class FaissVectorStore(VectorStore):
         """Merge ``set_`` into metadata of every filter-matched vector.
 
         Operates purely on the ``metadata_store`` side-car (keyed by
-        internal id) that :meth:`search` already post-filters against
-        (``faiss.py`` filtering is post-retrieval; the FAISS index is
-        pure-vector and has nothing to invalidate), so this is the same
-        mechanism as ``clear(filter=)`` / ``count(filter=)``.
+        internal id) that :meth:`search` selects its matches from — the
+        FAISS index is pure-vector, knows nothing about metadata, and
+        so has nothing to invalidate here. Same mechanism as
+        ``clear(filter=)`` / ``count(filter=)``.
         """
         if not self._initialized:
             await self.initialize()
 
-        return self._update_metadata_where_filtered(
+        updated = self._update_metadata_where_filtered(
             self.metadata_store.items(),
             self.timestamps,
             self._effective_filter(filter),
             set_,
         )
+        if updated:
+            self._mark_dirty()
+        return updated
 
     async def count(self, filter: dict[str, Any] | None = None) -> int:
         """Count vectors in the store."""
@@ -567,6 +875,9 @@ class FaissVectorStore(VectorStore):
             self.timestamps.clear()
             self.vectors.clear()
             self.next_idx = 0
+            self._mark_dirty()
+            # Nothing is left for the side-car to be short of.
+            self._sidecar_shortfall_warned = False
             return
 
         # ``metadata_store`` is keyed by internal id; ``id_map`` maps
@@ -583,7 +894,7 @@ class FaissVectorStore(VectorStore):
         if matching_ext_ids:
             await self.delete_vectors(matching_ext_ids)
 
-    async def save(self) -> None:
+    async def save(self, *, force: bool = False) -> None:
         """Save index and metadata to disk.
 
         Offloads the entire disk body (``os.makedirs``,
@@ -593,6 +904,20 @@ class FaissVectorStore(VectorStore):
         In-memory ``add`` / ``search`` are CPU-bound C++ (the GIL is
         released inside FAISS) and remain on the loop — only the disk
         I/O is offloaded.
+
+        Raises :class:`~dataknobs_common.exceptions.ConcurrencyError`
+        when the file changed since this instance read or wrote it,
+        rather than replacing another writer's rows with this instance's
+        snapshot.
+
+        Args:
+            force: Write regardless of what is on disk. This is the way
+                out of a refusal — the store keeps its rows in memory
+                after one, but every further save raises too, because
+                what it compares against has not moved. Passing ``True``
+                accepts the loss of whatever the other writer persisted;
+                the alternative that loses nothing is to open a second
+                store on the file and re-add these rows to it.
         """
         if not self.persist_path:
             return
@@ -615,45 +940,68 @@ class FaissVectorStore(VectorStore):
         # Both snapshots are taken synchronously with no ``await`` between
         # them, so no mutation can interleave — the persisted index and
         # ``.meta`` side-car are mutually consistent.
-        index_snapshot = faiss.clone_index(self.index)
-        meta_snapshot = {
-            "id_map": dict(self.id_map),
-            "metadata_store": dict(self.metadata_store),
-            "timestamps": dict(self.timestamps),
-            "vectors": dict(self.vectors),
-            "deferred_ivf": self._deferred_ivf,
-            "next_idx": self.next_idx,
-            "config": {
-                "dimensions": self.dimensions,
-                "metric": self.metric.value,
-                "index_type": self.index_type,
-            },
-        }
-        await asyncio.to_thread(self._save_to_disk, index_snapshot, meta_snapshot)
+        #
+        # The lock covers snapshot *and* write together. Taking it later
+        # would leave the staleness check and the write it guards on
+        # opposite sides of a scheduling point, which is how one
+        # instance's two overlapping saves end up racing each other.
+        async with self._save_lock:
+            index_snapshot = faiss.clone_index(self.index)
+            meta_snapshot = {
+                "id_map": dict(self.id_map),
+                "metadata_store": dict(self.metadata_store),
+                "timestamps": dict(self.timestamps),
+                "vectors": dict(self.vectors),
+                "deferred_ivf": self._deferred_ivf,
+                "next_idx": self.next_idx,
+                "config": {
+                    "dimensions": self.dimensions,
+                    "metric": self.metric.value,
+                    "index_type": self.index_type,
+                },
+            }
+            await asyncio.to_thread(self._save_to_disk, index_snapshot, meta_snapshot, force)
 
-    def _save_to_disk(self, index: Any, meta: dict[str, Any]) -> None:
+    def _save_to_disk(self, index: Any, meta: dict[str, Any], force: bool = False) -> None:
         """Synchronous disk write — run via ``to_thread`` from :meth:`save`.
 
         Receives a loop-side snapshot (a cloned index and a dict of
         shallow-copied mappings); reads only those, never the live
         ``self.*`` state, so a concurrent mutation cannot corrupt the
-        write.
+        write. That protects against this instance's own event loop; the
+        staleness check protects against a different instance, which the
+        snapshot cannot see at all.
         """
         # Convert Path to string for FAISS
         persist_path_str = str(self.persist_path)
+        metadata_path = persist_path_str + ".meta"
+
+        self._guard_persisted_identity(persist_path_str, force=force)
 
         # Create directory if needed
         parent_dir = os.path.dirname(persist_path_str)
         if parent_dir:
             os.makedirs(parent_dir, exist_ok=True)
 
-        # Save index
-        faiss.write_index(index, persist_path_str)
+        def write_index(path: str) -> None:
+            faiss.write_index(index, path)
 
-        # Save metadata and mappings
-        metadata_path = persist_path_str + ".meta"
-        with open(metadata_path, "wb") as f:
-            pickle.dump(meta, f)
+        def write_meta(path: str) -> None:
+            with open(path, "wb") as f:
+                pickle.dump(meta, f)
+
+        # The index and its ``.meta`` side-car describe one corpus, so
+        # neither is written directly over its target: a ``.meta`` that
+        # fails to serialize would otherwise leave a *new* index beside a
+        # *stale* side-car, and leave this instance's identity stamp
+        # pointing at a file it had already replaced — after which every
+        # later save of its own raises.
+        self._write_then_publish([(persist_path_str, write_index), (metadata_path, write_meta)])
+
+        # This instance is now the file's last writer, and is in step
+        # with what is on disk: a further save of its own must not trip
+        # the check above, and ``close()`` has nothing left to persist.
+        self._stamp_persisted_identity(persist_path_str)
 
     async def load(self) -> None:
         """Load index and metadata from disk.
@@ -709,3 +1057,11 @@ class FaissVectorStore(VectorStore):
                 self._deferred_ivf = data.get("deferred_ivf", False)
                 self.next_idx = data["next_idx"]
             logger.info("FAISS: Loaded metadata with %d entries", len(self.id_map))
+
+        # Stamped only once the whole read has succeeded: this is both
+        # what a later save() compares against to tell its own writes
+        # from another instance's, and the flag saying memory and disk
+        # agree. A partial load agrees with nothing.
+        self._stamp_persisted_identity(persist_path_str)
+        # A reload can only have replaced the side-car this warns about.
+        self._sidecar_shortfall_warned = False

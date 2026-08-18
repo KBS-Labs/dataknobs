@@ -78,6 +78,54 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **A file `persist_path` written by two overlapping instances now
+  raises instead of silently discarding one of them.** `save()` — and
+  the implicit one inside `close()` — serializes the instance's whole
+  in-memory state over the file, so two stores holding one path with
+  overlapping lifetimes each wrote a snapshot that had never seen the
+  other's rows, and the earlier writer's rows were gone from disk
+  entirely. A store now records the file's identity when it reads or
+  writes it and raises
+  `dataknobs_common.exceptions.ConcurrencyError` rather than overwrite
+  a file that changed underneath it. Sequential lifetimes are
+  unaffected and keep appending, and a single writer saving repeatedly
+  is unaffected. Concurrent writers need a backend that supports them,
+  such as `pgvector`.
+
+  This covers **`FaissVectorStore` and `MemoryVectorStore` alike** —
+  both persist the same way, so both had the same defect, and the guard
+  lives on `VectorStoreBase` rather than in either of them. Three
+  things follow that consumers will notice:
+
+  * `close()` now persists only a store that was **mutated**. An
+    instance opened to read writes nothing on teardown. This is load
+    bearing rather than an optimization: such a write moves the file's
+    identity, which would make the instance actually holding new rows
+    refuse to save them.
+  * `save(force=True)` overwrites deliberately, accepting the loss of
+    whatever the other writer persisted. It is the way out of a
+    refusal, which otherwise repeats on every subsequent save because
+    what it compares against has not moved.
+  * The check is explicitly **best-effort** — modification time, size
+    and inode. Two writes inside one filesystem timestamp tick that
+    produce the same size are indistinguishable, so this catches the
+    common accident and is not a lock.
+
+- **A post-filtered Chroma search escalates its fetch instead of
+  settling for one over-fetch.** The multiplier is also now one shared
+  policy: `ChromaVectorStore` held two hard-coded copies of `k * 4`, and
+  both come from `VectorStoreBase._overfetch_sizes`. Where the caller
+  can bound the search — Chroma's `collection.count()` is native and
+  O(1) — the sequence doubles up to the whole collection rather than
+  stopping at the first size, so the answer becomes exact rather than
+  merely over-fetched. A sparse filter therefore costs several
+  round-trips plus one `count()`; declaring the key in
+  `scalar_metadata_keys` pushes the predicate down and avoids both.
+  `dataknobs_bots`' knowledge-layer over-fetch is deliberately *not*
+  merged into it — that one compensates for tombstone visibility rather
+  than for scope, and coupling them would tie the knowledge layer's swap
+  semantics to a store constant.
+
 - **`UserStateStoreConfig.backend` now defaults to `None`, not `"memory"`.**
   The typed default was forwarded unconditionally, so a config that named
   no backend reached the factory as an explicit choice and the absence was
@@ -154,6 +202,121 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   registration. It now raises a `ValueError` naming both.
 
 ### Fixed
+
+- **`ChromaVectorStore.search(filter=...)` under-returned for the same
+  reason, at a wider window.** A filter that cannot be pushed down is
+  applied in Python *after* Chroma has truncated to `n_results`, and
+  over-fetching a fixed `k * 4` only moves the threshold: a filter
+  matching fewer than one candidate in four still lost rows, and a
+  sparse one returned nothing at all while `count(filter=...)` reported
+  many matches. The fetch now escalates to the collection size, so a
+  filtered search returns a full `k` whenever `k` rows match. Note that
+  a filter is post-filtered *unless* its key is declared in
+  `scalar_metadata_keys`, which defaults to empty — so this was the
+  default path, not an unusual one.
+
+- **`ChromaVectorStore.search_documents()` scored every store as though
+  it were cosine.** The collection is created with `hnsw:space` from the
+  configured metric, so a store configured `euclidean`, `l2`,
+  `dot_product` or `inner_product` receives distances in that metric —
+  but this method applied `1 - distance` unconditionally, reporting
+  *negative* scores for any L2 distance above 1. `search()` had the
+  correct per-metric conversion all along; the two now share one, so
+  they cannot disagree again.
+
+- **`ChromaVectorStore.search()` and `get_vectors()` raised `TypeError`
+  on `include_timestamps`.** The argument is on the `VectorStore` ABC
+  and every other backend accepted it, so passing it broke exactly the
+  runtime backend swap the filter-semantics doc promises. Both accept it
+  now; because Chroma tracks no timestamps, the injected values are
+  `None` — the same answer the contract already defines for a pgvector
+  row from before the timestamp migration or a pickle written before
+  tracking existed.
+
+- **Consumer metadata is no longer shared between a store and its
+  caller, in either direction.** On Memory and FAISS a caller could edit
+  a stored row without calling a mutator — `search()` and `get_vectors()`
+  handed back the live `metadata_store` entry, and `update_metadata()`
+  kept the dict it was given — while Chroma and pgvector, which
+  serialize at their boundary, were unaffected by identical calling
+  code. Both directions are now copied, and the copy is **deep**: a
+  shallow one leaves `result["tags"].append(...)` reaching the store,
+  which is the same defect one level down and the level at which it is
+  actually hit. This covers the ranked read, the id-keyed read,
+  `add_vectors()`, `update_metadata()` and `update_metadata_where()` —
+  the last of which merged one `set_` into every matched row, so a
+  nested value inside it was shared by the caller *and* by every row the
+  filter selected.
+
+  Two things worth knowing. Copies are taken per stored row and per
+  *returned* row, never per scored candidate, so a filtered search over
+  a large corpus does not pay for the rows it discards. And a caller
+  that was relying on the old aliasing to mutate a store in place must
+  now call a mutator — that path was never the contract on all four
+  backends, but it did work on two of them.
+
+- **`VectorStore.get_vectors()` is annotated to return what it returns.**
+  The ABC declared `list[tuple[np.ndarray, dict | None]]`, but every
+  backend yields `(None, None)` for an id it does not hold — that is the
+  documented behaviour, and it is what keeps the result positionally
+  aligned with `ids`. `FaissVectorStore` and `PgVectorStore` had each
+  widened it locally; the ABC and `MemoryVectorStore` now agree with
+  them. Type-checked consumers unpacking the vector may need a `None`
+  branch they always needed at runtime.
+
+- **A failed `.meta` write left a FAISS store unloadable.** The index
+  file and its side-car were each written directly over their targets,
+  so a `.meta` that failed to serialize — an unpicklable value in
+  consumer metadata, a full disk — had already consumed the index write,
+  and left behind a truncated side-car that the next reader could not
+  load at all (`EOFError`). It also stranded the instance's identity
+  stamp on a file it had itself replaced, so every later `save()` raised
+  `ConcurrencyError` about a conflict that never happened. Both files
+  are now written to scratch siblings and renamed into place only once
+  every write has succeeded, so a failure leaves the previous state
+  intact. `MemoryVectorStore` writes the same way, for the same reason.
+
+  Renaming is atomic per file but not across the pair, so the second
+  rename can still fail once the first has landed — leaving this
+  instance as the file's last writer with no stamp to show for it, and
+  every later `save()` refusing over its own write. A store now
+  re-reads the file's identity on the way out of a failed publish while
+  staying dirty, so the next `save()` or `close()` retries instead of
+  demanding `save(force=True)` — a call that exists to discard another
+  writer's rows, and no way to recover from a failure you caused
+  yourself.
+
+- **Overlapping `save()` calls on a *single* store could raise
+  `ConcurrencyError` against themselves.** The staleness check and the
+  write it guards are two operations on a worker thread, so an autosave
+  overlapping `close()` — or a bare `asyncio.gather` — could have one
+  save stat the other's half-written file. Saves are now serialized per
+  instance; cross-instance conflict, which is what the check exists to
+  detect, is unaffected.
+
+- **`FaissVectorStore.search(filter=...)` applied the filter after the
+  index had already truncated to `k`.** A filtered search returned only
+  the matching rows that happened to fall inside the global top-`k`
+  window — frequently none of them — while `count(filter=...)` reported
+  the full number the store held, so a populated store simply retrieved
+  nothing and said nothing about it. It now selects the matching rows
+  from `metadata_store` and scores them directly from the vector
+  side-car, returning a full `k` whenever `k` rows match, in the order
+  and with the scores an unfiltered search would have given them. This
+  matches `MemoryVectorStore` and `PgVectorStore`, which is what the
+  cross-backend semantics doc already promised.
+
+  Most visible on a store configured with a `domain_id`, where the
+  scope is composed into every call and so every search was a filtered
+  one, and worst where the configured tenant is small relative to its
+  co-tenants. But no scoping was needed to reach it: any
+  caller-supplied `filter=` whose matches sat outside the unfiltered
+  top-`k` was affected.
+
+  Filtered search is exact on every index type as a result, including
+  `hnsw` and `ivfflat`, and no longer uses the index — see
+  `VECTOR_FILTER_SEMANTICS.md` for what that costs and when to prefer
+  `pgvector`. Unfiltered search is unchanged.
 
 - **`is_default_backend()` reads the default's aliases when given a
   registry.** Without one it compares names, so a config spelling the
