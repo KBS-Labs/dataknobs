@@ -379,12 +379,23 @@ class VectorStoreBase(StructuredConfigConsumer[VectorStoreConfig]):
         batch it is the row count, so a single un-nested vector
         (``ndim == 1``, ``len == dimensions``) is correctly *not* empty.
 
+        A 0-d input — ``np.array(5.0)``, ``np.float32(1.0)`` — has no
+        length and is not a batch in any reading, empty or otherwise.
+        It answers ``False`` rather than raising, so that the caller
+        sees the backend's dimension error, which can say what shape was
+        expected, instead of a bare ``len() of unsized object`` coming
+        out of an emptiness check. A predicate that raises on part of
+        its input domain is not one a guard can be built from.
+
         Left to each backend rather than hoisted into a concrete
         ``add_vectors`` on the base: that method is abstract, and giving
         it a body would rename the abstract half out from under every
         out-of-tree store.
         """
-        return len(vectors) == 0
+        try:
+            return len(vectors) == 0
+        except TypeError:
+            return False
 
     @property
     def _is_scoped(self) -> bool:

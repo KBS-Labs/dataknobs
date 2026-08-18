@@ -134,3 +134,62 @@ async def test_an_empty_batch_does_not_disturb_existing_rows(empty_store: Any) -
     assert await empty_store.add_vectors([]) == []
     assert await empty_store.count() == 1
     assert (await empty_store.get_vectors(["r1"]))[0][0] is not None
+
+
+@pytest.mark.asyncio
+async def test_the_id_keyed_verbs_accept_an_empty_id_list(empty_store: Any) -> None:
+    """An empty id list is the empty answer, not an error.
+
+    The same "a comprehension filtered everything out" case
+    ``add_vectors`` handles, reached through the id-keyed verbs instead:
+    a caller that assembled a list of ids to fetch or delete and found
+    none is asking a well-formed question with an empty answer.
+
+    Chroma alone raised here, because chromadb's ``validate_ids``
+    rejects an empty list before the query runs — so a consumer whose
+    code was correct on three backends crashed on the fourth after a
+    config change.
+    """
+    await empty_store.add_vectors(np.array([[1.0, 0.0, 0.0, 0.0]], dtype=np.float32), ids=["r1"])
+
+    assert await empty_store.get_vectors([]) == []
+    assert await empty_store.delete_vectors([]) == 0
+    assert await empty_store.update_metadata([], []) == 0
+
+    # The store is untouched by any of them.
+    assert await empty_store.count() == 1
+
+
+@pytest.mark.asyncio
+async def test_adding_no_documents_writes_nothing(empty_store: Any) -> None:
+    """``add_documents`` is the sibling write path and answers the same.
+
+    Chroma-only surface, so the other backends have nothing to compare
+    against — but the contract is the store's, not the backend's, and a
+    chunker handed a blank document produces this call on whichever
+    backend is configured.
+    """
+    if not hasattr(empty_store, "add_documents"):
+        pytest.skip("add_documents is a Chroma-only surface")
+
+    assert await empty_store.add_documents([]) == []
+    assert await empty_store.count() == 0
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        pytest.param(np.array(5.0), id="zero-d-array"),
+        pytest.param(np.float32(1.0), id="numpy-scalar"),
+    ],
+)
+def test_a_zero_d_input_is_not_an_empty_batch(value: Any) -> None:
+    """The emptiness predicate is total over what a caller can pass.
+
+    A 0-d array has no length, so the check raised ``TypeError: len() of
+    unsized object`` from inside itself — an error about lengths,
+    surfacing from a question about emptiness, before any backend got
+    the chance to say what shape it wanted. Answering ``False`` hands
+    the input on to the dimension validation that can describe it.
+    """
+    assert MemoryVectorStore({"dimensions": 4})._is_empty_batch(value) is False

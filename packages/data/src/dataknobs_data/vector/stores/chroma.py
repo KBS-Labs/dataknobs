@@ -529,6 +529,15 @@ class ChromaVectorStore(VectorStore):
         if not self._initialized:
             await self.initialize()
 
+        # chromadb's ``validate_ids`` rejects an empty list before the
+        # query runs, so this has to be answered here rather than by
+        # the backend. An empty id list is a well-formed question with
+        # an empty answer — the id-keyed counterpart of
+        # ``_is_empty_batch``, and the same contract the other three
+        # backends have always had.
+        if not ids:
+            return []
+
         import numpy as np
 
         inject = include_timestamps and include_metadata
@@ -578,6 +587,15 @@ class ChromaVectorStore(VectorStore):
         """Delete vectors by ID."""
         if not self._initialized:
             await self.initialize()
+
+        # chromadb's ``validate_ids`` rejects an empty list before the
+        # query runs, so this has to be answered here rather than by
+        # the backend. An empty id list is a well-formed question with
+        # an empty answer — the id-keyed counterpart of
+        # ``_is_empty_batch``, and the same contract the other three
+        # backends have always had.
+        if not ids:
+            return 0
 
         # Metadata, not just ids: it carries the scope each candidate
         # has to be checked against before it can be deleted.
@@ -855,6 +873,15 @@ class ChromaVectorStore(VectorStore):
         if not self._initialized:
             await self.initialize()
 
+        # chromadb's ``validate_ids`` rejects an empty list before the
+        # query runs, so this has to be answered here rather than by
+        # the backend. An empty id list is a well-formed question with
+        # an empty answer — the id-keyed counterpart of
+        # ``_is_empty_batch``, and the same contract the other three
+        # backends have always had.
+        if not ids:
+            return 0
+
         # Metadata, not just ids: the tombstone set is derived from the
         # keys the row currently holds.
         existing = await asyncio.to_thread(self.collection.get, ids=ids, include=["metadatas"])
@@ -1116,14 +1143,22 @@ class ChromaVectorStore(VectorStore):
 
         The rows land in the same collection :meth:`add_vectors` writes
         to, and every read path treats them identically — so this path
-        prepares them identically too: the configured ``domain_id`` is
-        defaulted in, the row is timestamped, and an id already present
-        is replaced rather than silently discarded. Diverging on any of
-        the three produced rows the store itself could not see or could
-        not date.
+        prepares them identically too: an empty batch is a no-op, the
+        configured ``domain_id`` is defaulted in, the row is timestamped,
+        and an id already present is replaced rather than silently
+        discarded. Diverging on any of the four produced rows the store
+        itself could not see, could not date, or could not write.
         """
         if not self._initialized:
             await self.initialize()
+
+        # An empty batch is a no-op, not an error: see
+        # ``VectorStoreBase._is_empty_batch``. A chunker handed a blank
+        # document describes this path more literally than the vector
+        # one, and without the guard the empty list reached
+        # ``_stamped_payloads`` and died inside chromadb's id validator.
+        if self._is_empty_batch(documents):
+            return []
 
         # Generate IDs if not provided
         if ids is None:

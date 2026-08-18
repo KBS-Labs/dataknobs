@@ -333,6 +333,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the scope through one evaluator. pgvector is unaffected: its
   `domain_id` is a scalar column and cannot hold the shape.
 
+- **`add_documents([])` is a no-op on `ChromaVectorStore`, and the
+  id-keyed verbs accept an empty id list.** `add_documents` never got
+  the empty-batch guard its `add_vectors` sibling has, and
+  `get_vectors([])`, `delete_vectors([])` and `update_metadata([], [])`
+  reached chromadb's id validator, which rejects an empty list. All four
+  raised `ValueError` on Chroma alone while the other three backends
+  returned the empty answer, so a consumer whose code was correct
+  everywhere else crashed after a backend swap.
+
 - **`update_metadata()` no longer pushes a row out of its own domain.**
   On Memory, FAISS and Chroma the configured `domain_id` lives *in* the
   metadata dict, and `update_metadata()` replaces that dict wholesale —
