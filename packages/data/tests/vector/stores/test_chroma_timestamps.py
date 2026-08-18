@@ -97,6 +97,18 @@ async def test_no_read_path_exposes_a_reserved_key():  # type: ignore[no-untyped
         assert await store.count(filter={"g": "x"}) == 1
         await store.clear(filter={"g": "y"})
         assert await store.count() == 1
+
+        # The "matched against" half, which the sentence above claimed
+        # and nothing checked. A filter naming a reserved key finds
+        # nothing, whatever value it asks for — the key is not in the
+        # decoded metadata the filter runs against, and a missing key
+        # fails a filter. It must not accidentally match on the stored
+        # epoch float either.
+        stored_created = (
+            await asyncio.to_thread(store.collection.get, ids=["a"], include=["metadatas"])
+        )["metadatas"][0][ChromaVectorStore._TS_CREATED_KEY]
+        assert await store.count(filter={ChromaVectorStore._TS_CREATED_KEY: stored_created}) == 0
+        assert await store.count(filter={ChromaVectorStore._TS_UPDATED_KEY: "anything"}) == 0
     finally:
         await _drop(store)
 
@@ -197,6 +209,67 @@ async def test_a_row_written_without_tracking_reports_none():  # type: ignore[no
         refreshed = (await store.get_vectors(["legacy"], include_timestamps=True))[0][1]
         assert refreshed is not None
         assert refreshed["_created_at"] is not None
+    finally:
+        await _drop(store)
+
+
+async def test_a_batch_mixing_new_and_existing_ids_stamps_each_correctly():  # type: ignore[no-untyped-def]
+    """One write, two different answers, decided per row.
+
+    ``add_vectors`` reads the batch's stored ``created_at`` values in a
+    single ``collection.get``, then stamps row by row. A partially
+    overlapping batch is where that per-row lookup earns its keep: the
+    existing id must keep its original creation date while the new one
+    starts now, and a stamp derived from the batch rather than the row
+    would give both the same answer.
+    """
+    store = await _store()
+    try:
+        await store.add_vectors([_vec(0)], ids=["old"], metadata=[{"g": "x"}])
+        first = (await store.get_vectors(["old"], include_timestamps=True))[0][1]
+        assert first is not None
+        original_created = first["_created_at"]
+
+        await store.add_vectors(
+            [_vec(1), _vec(2)], ids=["old", "fresh"], metadata=[{"g": "y"}, {"g": "z"}]
+        )
+
+        rows = await store.get_vectors(["old", "fresh"], include_timestamps=True)
+        old_meta, fresh_meta = rows[0][1], rows[1][1]
+        assert old_meta is not None and fresh_meta is not None
+        assert old_meta["_created_at"] == original_created, "upsert lost the original date"
+        assert old_meta["g"] == "y", "the upsert itself must still have applied"
+        assert fresh_meta["_created_at"] is not None
+    finally:
+        await _drop(store)
+
+
+async def test_consumer_metadata_carrying_a_reserved_key_cannot_corrupt_tracking():  # type: ignore[no-untyped-def]
+    """A reserved key supplied by a consumer is overwritten, not honoured.
+
+    Practically unreachable — the keys are NUL-delimited — but the
+    failure mode if it were reachable is that a consumer could forge a
+    row's creation date, or write a non-numeric value where the decoder
+    expects a float. The stored value must be the store's own, and the
+    key must not reach any read.
+    """
+    store = await _store()
+    try:
+        await store.add_vectors(
+            [_vec(0)],
+            ids=["a"],
+            metadata=[{"g": "x", ChromaVectorStore._TS_CREATED_KEY: "forged"}],
+        )
+
+        meta = (await store.get_vectors(["a"], include_timestamps=True))[0][1]
+        assert meta is not None
+        assert _reserved_in(meta) == [], meta
+        assert meta["_created_at"] is not None, "a forged value displaced the real one"
+
+        raw = (await asyncio.to_thread(store.collection.get, ids=["a"], include=["metadatas"]))[
+            "metadatas"
+        ][0]
+        assert isinstance(raw[ChromaVectorStore._TS_CREATED_KEY], int | float)
     finally:
         await _drop(store)
 
