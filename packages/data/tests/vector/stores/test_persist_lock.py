@@ -36,7 +36,10 @@ Reviewing those fixes found more, covered below:
 * ``force=True`` reported a discarded write for a file that was merely
   gone,
 * a save through a symlinked ``persist_path`` replaced the symlink,
-  which moved the lockfile out from under the agreement above.
+  which moved the lockfile out from under the agreement above,
+* a publish that half-landed left the store refusing every later save,
+  because the recovery asked instance state which file was the tracked
+  one and got back a path the publish had never used.
 """
 
 from __future__ import annotations
@@ -271,7 +274,7 @@ async def test_two_stagers_do_not_collide_on_one_scratch_file(backend: str, tmp_
         return write
 
     def publish(payload: bytes) -> None:
-        store._write_then_publish([(final, writer(payload))])
+        store._write_then_publish([(final, writer(payload))], final)
 
     await asyncio.gather(
         asyncio.to_thread(publish, b"a" * 16),
@@ -370,7 +373,7 @@ async def test_a_write_that_raises_leaves_no_scratch_file_behind(
         raise RuntimeError("cannot serialize")
 
     with pytest.raises(RuntimeError, match="cannot serialize"):
-        await asyncio.to_thread(store._write_then_publish, [(final, write_that_fails)])
+        await asyncio.to_thread(store._write_then_publish, [(final, write_that_fails)], final)
 
     leftovers = await asyncio.to_thread(lambda: list(tmp_path.glob("artifact.bin.*.tmp")))
     assert leftovers == [], f"a failed write left its scratch file behind: {leftovers}"
@@ -589,4 +592,60 @@ async def test_saving_through_a_symlink_writes_to_what_it_points_at(
     # still describe one corpus rather than having diverged.
     reopened = await _open(_base(backend), target)
     assert await reopened.count() == 5
+    await _shutdown(reopened)
+
+
+@requires_faiss
+async def test_a_partial_publish_through_a_symlink_leaves_the_store_usable(
+    tmp_path: Path,
+) -> None:
+    """A rename that fails after an earlier one landed must stay recoverable.
+
+    ``_write_then_publish`` refreshes this store's identity stamp when a
+    publish half-lands, because otherwise the stamp goes on describing a
+    file this instance has itself replaced and every later save raises,
+    naming a conflicting writer that does not exist. The only escape
+    would be ``save(force=True)``, whose purpose is discarding somebody
+    else's rows — not a recovery from a self-inflicted failure.
+
+    The recovery asked instance state which file was the tracked one,
+    and got a different answer than the publish had used: the paths
+    published are canonical, while ``persist_path`` is only
+    ``expanduser``-ed. Through a symlink the two never matched, so the
+    branch that exists for this never ran — in exactly the layout
+    canonicalizing was introduced for, a stable name pointing at
+    versioned storage.
+
+    Not reachable through ``tmp_path`` alone, which pytest resolves, so
+    the symlink is what makes the mismatch observable.
+    """
+    versioned = tmp_path / "v2"
+    await asyncio.to_thread(versioned.mkdir)
+    target = versioned / "index.idx"
+    stable = tmp_path / "current.idx"
+    await asyncio.to_thread(stable.symlink_to, target)
+
+    store = await _open(FaissVectorStore, stable)
+    await _ingest(store, "first", 2, seed=1)
+    await store.save()
+
+    # Obstruct the side-car's target so its rename fails *after* the
+    # index rename has landed: a directory cannot be replaced by a file.
+    side_car = Path(str(target) + ".meta")
+    await asyncio.to_thread(side_car.unlink)
+    await asyncio.to_thread(side_car.mkdir)
+
+    await _ingest(store, "second", 2, seed=2)
+    with pytest.raises(OSError):
+        await store.save()
+
+    await asyncio.to_thread(side_car.rmdir)
+
+    # The store replaced the index during that half-publish, so its
+    # stamp has to have moved with it. If it did not, this raises.
+    await store.save()
+    await _shutdown(store)
+
+    reopened = await _open(FaissVectorStore, target)
+    assert await reopened.count() == 4
     await _shutdown(reopened)

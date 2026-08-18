@@ -1041,7 +1041,10 @@ class FaissVectorStore(VectorStore):
         # pointing at a file it had already replaced — after which every
         # later save of its own raises.
         with self._persisted_save(persist_path_str, force=force):
-            self._write_then_publish([(persist_path_str, write_index), (metadata_path, write_meta)])
+            self._write_then_publish(
+                [(persist_path_str, write_index), (metadata_path, write_meta)],
+                persist_path_str,
+            )
 
     async def load(self) -> None:
         """Load index and metadata from disk.

@@ -331,6 +331,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A half-landed publish left a symlinked store refusing every save.**
+  `FaissVectorStore` writes an index and a `.meta` side-car; if the
+  second rename fails after the first has landed, the store has
+  replaced the tracked file without reaching its identity stamp, so it
+  refreshes the stamp on the way out — otherwise every later save
+  raises `ConcurrencyError` naming a conflicting writer that does not
+  exist, with `save(force=True)` the only escape.
+
+  That recovery re-derived the tracked path from `persist_path`, which
+  is not resolved, and compared it against the paths it had published,
+  which are canonical. Through a symlink the two never matched, so the
+  branch never ran — in exactly the layout resolving was introduced
+  for, a stable name pointing at versioned storage. The publish is now
+  told which path carries the stamp instead of deducing it.
+
 - **A compressed file database locked a path nothing read or wrote.**
   `SyncFileDatabase` / `AsyncFileDatabase` built their `FileLock` before
   applying the `.gz` suffix a configured `compression` implies, so

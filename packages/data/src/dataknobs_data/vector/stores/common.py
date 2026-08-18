@@ -844,6 +844,7 @@ class VectorStoreBase(StructuredConfigConsumer[VectorStoreConfig]):
     def _write_then_publish(
         self,
         writes: list[tuple[str, Callable[[str], None]]],
+        tracked: str,
     ) -> None:
         """Write each file to a scratch sibling, then rename them into place.
 
@@ -897,6 +898,17 @@ class VectorStoreBase(StructuredConfigConsumer[VectorStoreConfig]):
         three the paragraph above names, and the one a list built from
         *successful* writes cannot clean up. Blocking I/O; callers run on
         a worker thread.
+
+        Args:
+            writes: Each final path and the callable that writes it to a
+                scratch sibling, in publish order.
+            tracked: Which of those paths carries the identity stamp —
+                the canonical ``persist_path``. Passed rather than read
+                back off the instance because the two are not the same
+                string: paths here are canonical, while ``persist_path``
+                is not resolved, so through a symlink a re-derivation
+                would not match anything published and the refresh above
+                would silently never run.
         """
         # Appended before ``write`` rather than after it, because the
         # write is what fails. A published scratch no longer exists, so
@@ -929,8 +941,8 @@ class VectorStoreBase(StructuredConfigConsumer[VectorStoreConfig]):
             for tmp in created:
                 with contextlib.suppress(OSError):
                     os.unlink(tmp)
-            if failed and self.persist_path is not None and str(self.persist_path) in published:
-                self._refresh_persisted_identity(str(self.persist_path))
+            if failed and tracked in published:
+                self._refresh_persisted_identity(tracked)
 
     @staticmethod
     def _canonical_persist_path(path: str | os.PathLike[str]) -> str:

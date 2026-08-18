@@ -146,7 +146,7 @@ class MemoryVectorStore(VectorStore):
         # leaves the previous state intact rather than a truncated file
         # that no longer loads.
         with self._persisted_save(persist_path_str, force=force):
-            self._write_then_publish([(persist_path_str, write_pickle)])
+            self._write_then_publish([(persist_path_str, write_pickle)], persist_path_str)
 
     async def load(self) -> None:
         """Load vectors and metadata from disk (offloaded off the event loop).
