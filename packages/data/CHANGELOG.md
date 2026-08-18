@@ -359,6 +359,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   mid-save is swept by the next save of that target, under the lock that
   guarantees no live writer owns it.
 
+- **A symlinked `persist_path` is written through, not replaced.**
+  Publishing is `os.replace`, which replaces the *symlink* rather than
+  following it: the first save turned a stable name pointing at
+  versioned storage into a regular file holding that store's snapshot,
+  while the versioned file it had pointed at kept the old one — two
+  files silently disagreeing, with nothing to say which was live. The
+  store now resolves `persist_path` once and derives everything from
+  the result, so the index, FAISS's `.meta` side-car and the lockfile
+  all land beside the resolved target rather than splitting across two
+  directories.
+
+  This is also what makes the lock hold. `FileLock` takes its lockfile
+  beside the resolved target so two spellings of one file contend for
+  it; a save that destroyed the symlink moved the lockfile with it, so
+  two writers were serialized until the first write and not after.
+
 - **A published file is flushed before the rename that publishes it.**
   `os.replace` is atomic against a concurrent reader but not against
   power loss: on a journalled filesystem the rename metadata can reach

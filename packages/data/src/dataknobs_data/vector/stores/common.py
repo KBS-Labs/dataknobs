@@ -933,6 +933,35 @@ class VectorStoreBase(StructuredConfigConsumer[VectorStoreConfig]):
                 self._refresh_persisted_identity(str(self.persist_path))
 
     @staticmethod
+    def _canonical_persist_path(path: str | os.PathLike[str]) -> str:
+        """Resolve ``path`` to the file it actually names.
+
+        A ``persist_path`` is often a stable name pointing at versioned
+        storage, and publishing is ``os.replace`` — which replaces the
+        *symlink* rather than writing through it. The first save then
+        turns the alias into a regular file holding this store's
+        snapshot, while the versioned file it used to point at keeps the
+        old one, and nothing says so.
+
+        Resolving here fixes that and keeps the lock honest. ``FileLock``
+        takes its lockfile beside the resolved target so two spellings of
+        one file contend; a save that destroys the symlink would move the
+        lockfile out from under that agreement after exactly one write,
+        leaving two writers serialized until the moment it stopped
+        mattering.
+
+        Every derived path follows from the result, which is why the
+        stores resolve once at the top rather than each consumer
+        resolving its own: FAISS's ``.meta`` side-car is not itself a
+        symlink, so deriving it from an unresolved path would strand it
+        in a different directory from the index it describes.
+
+        Non-strict: a path whose directory does not exist yet resolves to
+        itself, which is the ordinary first-run shape.
+        """
+        return os.path.realpath(path)
+
+    @staticmethod
     def _sweep_orphaned_scratch(final_path: str) -> None:
         """Remove scratch siblings of ``final_path`` left by a dead writer.
 

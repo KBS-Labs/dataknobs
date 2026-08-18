@@ -1020,7 +1020,7 @@ class FaissVectorStore(VectorStore):
         snapshot cannot see at all.
         """
         # Convert Path to string for FAISS
-        persist_path_str = str(self.persist_path)
+        persist_path_str = self._canonical_persist_path(str(self.persist_path))
         metadata_path = persist_path_str + ".meta"
 
         def write_index(path: str) -> None:
@@ -1060,7 +1060,7 @@ class FaissVectorStore(VectorStore):
     def _load_from_disk(self) -> None:
         """Synchronous disk read — run via ``to_thread`` from :meth:`load`."""
         # Convert Path to string for FAISS
-        persist_path_str = str(self.persist_path)
+        persist_path_str = self._canonical_persist_path(str(self.persist_path))
 
         # The bracket holds the file lock across the read and the stamp
         # that follows it. Both files below are published under that same

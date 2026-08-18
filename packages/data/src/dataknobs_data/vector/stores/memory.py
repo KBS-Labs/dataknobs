@@ -123,7 +123,7 @@ class MemoryVectorStore(VectorStore):
         That covers this instance's own event loop; the staleness check
         covers a second instance, which the snapshot cannot see at all.
         """
-        persist_path_str = str(self.persist_path)
+        persist_path_str = self._canonical_persist_path(str(self.persist_path))
 
         payload = {
             "vectors": {k: v.tolist() for k, v in vectors.items()},
@@ -165,7 +165,7 @@ class MemoryVectorStore(VectorStore):
         """Synchronous disk read — run via ``to_thread`` from :meth:`load`."""
         # ``load()`` guards on ``persist_path`` before dispatching here;
         # naming it locally is what lets the rest of the body be typed.
-        persist_path_str = str(self.persist_path)
+        persist_path_str = self._canonical_persist_path(str(self.persist_path))
 
         # The bracket holds the file lock across the read and the stamp
         # that follows it, and stamps only when there was a file to read

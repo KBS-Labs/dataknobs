@@ -34,7 +34,9 @@ Reviewing those fixes found more, covered below:
 * taking the lock made a *read* require write access to the directory,
   which refuses an index on a read-only mount,
 * ``force=True`` reported a discarded write for a file that was merely
-  gone.
+  gone,
+* a save through a symlinked ``persist_path`` replaced the symlink,
+  which moved the lockfile out from under the agreement above.
 """
 
 from __future__ import annotations
@@ -544,3 +546,47 @@ async def test_forcing_over_a_file_that_is_gone_does_not_claim_a_loss(
     )
 
     await _shutdown(store)
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+async def test_saving_through_a_symlink_writes_to_what_it_points_at(
+    backend: str, tmp_path: Path
+) -> None:
+    """A stable name pointing at versioned storage survives a save.
+
+    Publishing is ``os.replace``, which replaces the *symlink* rather
+    than writing through it: the first save turned the alias into a
+    regular file holding this store's snapshot while the versioned file
+    kept the old one, and nothing said so.
+
+    It also quietly undid the lock. ``FileLock`` takes its lockfile
+    beside the *resolved* target so two spellings of one file contend —
+    an agreement that lasts exactly until a save destroys the symlink
+    and moves the lockfile with it.
+    """
+    versioned = tmp_path / "v2"
+    await asyncio.to_thread(versioned.mkdir)
+    target = versioned / "index.idx"
+    stable = tmp_path / "current.idx"
+
+    seed = await _open(_base(backend), target)
+    await _ingest(seed, "seed", 2, seed=1)
+    await seed.save()
+    await _shutdown(seed)
+
+    await asyncio.to_thread(stable.symlink_to, target)
+
+    through_the_alias = await _open(_base(backend), stable)
+    await _ingest(through_the_alias, "added", 3, seed=2)
+    await through_the_alias.save()
+    await _shutdown(through_the_alias)
+
+    assert await asyncio.to_thread(stable.is_symlink), (
+        "the save replaced the symlink with a regular file"
+    )
+
+    # The rows landed in the versioned file, so the alias and its target
+    # still describe one corpus rather than having diverged.
+    reopened = await _open(_base(backend), target)
+    assert await reopened.count() == 5
+    await _shutdown(reopened)
