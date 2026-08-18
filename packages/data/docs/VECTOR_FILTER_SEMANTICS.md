@@ -249,16 +249,33 @@ await store.count(filter={"count": "5"})      # → 0  (type-preserving)
   at all; scope-heavy workloads at scale should prefer `pgvector`,
   where the scope is a native SQL predicate the index search runs
   under.
-- **A FAISS `persist_path` is single-writer.** `save()` — including the
-  implicit one in `close()` — serializes the instance's whole in-memory
-  index over the file. Two instances holding one path with overlapping
-  lifetimes will each write a snapshot that never saw the other's rows,
-  so a store now raises
-  `dataknobs_common.exceptions.ConcurrencyError` rather than
-  overwriting a file that changed since it read it. Sequential
-  lifetimes are unaffected and keep appending, since `initialize()`
-  loads the file first. For genuinely concurrent writers, use
-  `pgvector`.
+- **A file `persist_path` is single-writer.** This covers
+  `FaissVectorStore` and `MemoryVectorStore` — both persist by
+  serializing the instance's whole in-memory state over one file, which
+  is what makes the hazard theirs and not the file format's. Two
+  instances holding one path with overlapping lifetimes would each write
+  a snapshot that never saw the other's rows, so a store raises
+  `dataknobs_common.exceptions.ConcurrencyError` rather than overwrite a
+  file that changed since it read it.
+
+  Three consequences worth knowing:
+
+  * `close()` persists only a store that was **mutated**. An instance
+    opened to read writes nothing on teardown — necessarily, since that
+    write would move the file's identity and make the real writer's save
+    refuse.
+  * The check is best-effort, not a lock: it compares modification time,
+    size and inode, and two writes inside one filesystem timestamp tick
+    that happen to produce the same size are indistinguishable. It
+    catches the overwhelmingly common accident, not a determined race.
+  * A refusal is recoverable with `save(force=True)`, which overwrites
+    deliberately and accepts the loss of whatever the other writer
+    persisted. Without it the refusal repeats forever, because what it
+    compares against has not moved.
+
+  Sequential lifetimes are unaffected and keep appending, since
+  `initialize()` loads the file first. For genuinely concurrent writers,
+  use `pgvector`.
 - **Chroma `count` materializes metadata.** Chroma has no first-class
   filtered-count API. The `count(filter=...)` path uses
   `collection.get(where=..., include=["metadatas"])` and post-filters

@@ -52,13 +52,40 @@ class MemoryVectorStore(VectorStore):
         self._initialized = True
 
     async def close(self) -> None:
-        """Save and close the store."""
-        if self.persist_path and self._initialized:
-            await self.save()
-        self._initialized = False
+        """Persist any unsaved changes, then release the store.
 
-    async def save(self) -> None:
-        """Save vectors and metadata to disk (offloaded off the event loop)."""
+        Only a store that was *mutated* is persisted. An instance opened
+        to read and closed again writes nothing — which is not merely an
+        optimization: its write would move the file's identity, and the
+        instance actually holding new rows would then find the file
+        changed underneath it and refuse to save them.
+
+        The save runs under ``try``/``finally`` so a refusal still leaves
+        a closed store; the exception propagates, as it must, because
+        rows are on the floor.
+        """
+        try:
+            if self.persist_path and self._initialized and self._dirty:
+                await self.save()
+        finally:
+            self._initialized = False
+
+    async def save(self, *, force: bool = False) -> None:
+        """Save vectors and metadata to disk (offloaded off the event loop).
+
+        Raises :class:`~dataknobs_common.exceptions.ConcurrencyError`
+        when the file changed since this instance read or wrote it: a
+        save serializes this store's whole state over the file, so
+        writing over another instance's rows would lose every one of
+        them silently.
+
+        Args:
+            force: Write regardless of what is on disk, accepting the
+                loss of whatever the other writer persisted. This is the
+                way out of a refusal, which otherwise repeats on every
+                further save because what it compares against has not
+                moved.
+        """
         if not self.persist_path:
             return
         # Snapshot the mutable in-memory state on the event loop BEFORE
@@ -70,48 +97,67 @@ class MemoryVectorStore(VectorStore):
         # — the values (ndarrays, metadata dicts, timestamp tuples) are
         # replaced by reference on mutation, never mutated in place, so the
         # worker can read them safely. Mirrors ``FaissVectorStore.save``.
-        await asyncio.to_thread(
-            self._save_to_disk,
-            dict(self.vectors),
-            dict(self.metadata_store),
-            dict(self.timestamps),
-        )
+        #
+        # The lock spans snapshot and write so this instance's own
+        # overlapping saves cannot straddle the staleness check.
+        async with self._save_lock:
+            await asyncio.to_thread(
+                self._save_to_disk,
+                dict(self.vectors),
+                dict(self.metadata_store),
+                dict(self.timestamps),
+                force,
+            )
 
     def _save_to_disk(
         self,
         vectors: dict[str, np.ndarray],
         metadata_store: dict[str, dict[str, Any]],
         timestamps: dict[str, tuple[datetime, datetime]],
+        force: bool = False,
     ) -> None:
         """Synchronous disk write — run via ``to_thread`` from :meth:`save`.
 
         Receives a loop-side snapshot of the store's mutable dicts; reads
         only that snapshot plus immutable config (``persist_path``,
         ``dimensions``, ``metric``), never the live ``self.*`` dicts.
+        That covers this instance's own event loop; the staleness check
+        covers a second instance, which the snapshot cannot see at all.
         """
+        persist_path_str = str(self.persist_path)
+
+        self._guard_persisted_identity(persist_path_str, force=force)
+
         # Create directory if needed. ``os.path.dirname`` is "" for a
         # bare filename (no directory component); ``makedirs("")`` raises
         # FileNotFoundError, so guard it (parity with FaissVectorStore).
-        parent_dir = os.path.dirname(self.persist_path)
+        parent_dir = os.path.dirname(persist_path_str)
         if parent_dir:
             os.makedirs(parent_dir, exist_ok=True)
 
-        # Save all data
-        with open(self.persist_path, "wb") as f:
-            pickle.dump(
-                {
-                    "vectors": {k: v.tolist() for k, v in vectors.items()},
-                    "metadata_store": metadata_store,
-                    "timestamps": timestamps,
-                    "config": {
-                        "dimensions": self.dimensions,
-                        "metric": self.metric.value
-                        if hasattr(self.metric, "value")
-                        else str(self.metric),
-                    },
-                },
-                f,
-            )
+        payload = {
+            "vectors": {k: v.tolist() for k, v in vectors.items()},
+            "metadata_store": metadata_store,
+            "timestamps": timestamps,
+            "config": {
+                "dimensions": self.dimensions,
+                "metric": self.metric.value if hasattr(self.metric, "value") else str(self.metric),
+            },
+        }
+
+        def write_pickle(path: str) -> None:
+            with open(path, "wb") as f:
+                pickle.dump(payload, f)
+
+        # Written to a scratch sibling and renamed, so a pickle that
+        # fails midway leaves the previous state intact rather than a
+        # truncated file that no longer loads.
+        self._write_then_publish([(persist_path_str, write_pickle)])
+
+        # In step with disk: a further save of this instance's own must
+        # not trip the check above, and ``close()`` has nothing left to
+        # persist.
+        self._stamp_persisted_identity(persist_path_str)
 
     async def load(self) -> None:
         """Load vectors and metadata from disk (offloaded off the event loop)."""
@@ -121,10 +167,14 @@ class MemoryVectorStore(VectorStore):
 
     def _load_from_disk(self) -> None:
         """Synchronous disk read — run via ``to_thread`` from :meth:`load`."""
-        if not os.path.exists(self.persist_path):
+        # ``load()`` guards on ``persist_path`` before dispatching here;
+        # naming it locally is what lets the rest of the body be typed.
+        persist_path_str = str(self.persist_path)
+
+        if not os.path.exists(persist_path_str):
             return
 
-        with open(self.persist_path, "rb") as f:
+        with open(persist_path_str, "rb") as f:
             data = pickle.load(f)
             # Convert lists back to numpy arrays
             self.vectors = {k: np.array(v, dtype=np.float32) for k, v in data["vectors"].items()}
@@ -135,6 +185,12 @@ class MemoryVectorStore(VectorStore):
             # return None/None on include_timestamps=True (analogous to
             # pgvector's pre-migration NULL rows).
             self.timestamps = data.get("timestamps", {})
+
+        # Stamped only once the whole read has succeeded: this is both
+        # what a later save() compares against to tell its own writes
+        # from another instance's, and the flag saying memory and disk
+        # agree. A partial load agrees with nothing.
+        self._stamp_persisted_identity(persist_path_str)
 
     async def add_vectors(
         self,
@@ -176,6 +232,8 @@ class MemoryVectorStore(VectorStore):
             else:
                 self.timestamps[vector_id] = (now, now)
 
+        if ids:
+            self._mark_dirty()
         return ids
 
     async def get_vectors(
@@ -216,6 +274,8 @@ class MemoryVectorStore(VectorStore):
                 self.timestamps.pop(vector_id, None)
                 deleted += 1
 
+        if deleted:
+            self._mark_dirty()
         return deleted
 
     async def search(
@@ -301,6 +361,8 @@ class MemoryVectorStore(VectorStore):
                     self.timestamps[vector_id] = (created, now)
                 updated += 1
 
+        if updated:
+            self._mark_dirty()
         return updated
 
     async def update_metadata_where(
@@ -312,12 +374,15 @@ class MemoryVectorStore(VectorStore):
         if not self._initialized:
             await self.initialize()
 
-        return self._update_metadata_where_filtered(
+        updated = self._update_metadata_where_filtered(
             self.metadata_store.items(),
             self.timestamps,
             self._effective_filter(filter),
             set_,
         )
+        if updated:
+            self._mark_dirty()
+        return updated
 
     async def count(self, filter: dict[str, Any] | None = None) -> int:
         """Count vectors."""
@@ -357,6 +422,7 @@ class MemoryVectorStore(VectorStore):
             self.vectors.clear()
             self.metadata_store.clear()
             self.timestamps.clear()
+            self._mark_dirty()
             return
 
         matching_ids = [
@@ -368,3 +434,5 @@ class MemoryVectorStore(VectorStore):
             self.vectors.pop(vid, None)
             self.metadata_store.pop(vid, None)
             self.timestamps.pop(vid, None)
+        if matching_ids:
+            self._mark_dirty()

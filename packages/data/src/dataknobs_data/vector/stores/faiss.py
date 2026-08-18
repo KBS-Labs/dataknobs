@@ -7,11 +7,8 @@ import logging
 import os
 import pickle
 from datetime import UTC, datetime
-from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
-
-from dataknobs_common.exceptions import ConcurrencyError
 
 from ..types import DistanceMetric
 from .base import VectorStore
@@ -101,14 +98,6 @@ class FaissVectorStore(VectorStore):
         # load ``False`` (a persisted IVF index is necessarily trained,
         # since pre-fix a sub-``nlist`` first batch could not be added).
         self._deferred_ivf: bool = False
-        # Identity of the persisted index file as this instance last saw
-        # it — from ``load()``, or from its own most recent ``save()``.
-        # ``save()`` refuses to write over a file that no longer matches,
-        # because it serializes this instance's whole in-memory index and
-        # would drop every row another instance added meanwhile. None
-        # until a file has been read or written. See
-        # :meth:`_file_identity`.
-        self._persisted_identity: tuple[int, int, int] | None = None
 
     async def initialize(self) -> None:
         """Initialize Faiss index."""
@@ -246,10 +235,26 @@ class FaissVectorStore(VectorStore):
         )
 
     async def close(self) -> None:
-        """Save and close the index."""
-        if self.persist_path and self._initialized:
-            await self.save()
-        self._initialized = False
+        """Persist any unsaved changes, then release the store.
+
+        Only a store that was *mutated* is persisted. An instance opened
+        to read and closed again writes nothing — which is not merely an
+        optimization: its write would move the file's identity, and the
+        instance actually holding new rows would then find the file
+        changed underneath it and refuse to save them.
+
+        Releasing the store and persisting it are separate obligations,
+        and a failure of the second must not skip the first. The save
+        runs under ``try``/``finally`` so a refusal (see
+        :meth:`save`) still leaves a closed store rather than one stuck
+        re-raising on every further attempt — the exception propagates,
+        as it must, because rows are on the floor.
+        """
+        try:
+            if self.persist_path and self._initialized and self._dirty:
+                await self.save()
+        finally:
+            self._initialized = False
 
     async def add_vectors(
         self,
@@ -343,6 +348,8 @@ class FaissVectorStore(VectorStore):
         if self._deferred_ivf and len(self.vectors) >= self.nlist:
             self._build_deferred_ivf()
 
+        if ids:
+            self._mark_dirty()
         return ids
 
     async def get_vectors(
@@ -412,6 +419,7 @@ class FaissVectorStore(VectorStore):
             # Remove from index
             internal_ids_array = np.array(internal_ids, dtype=np.int64)
             removed = self.index.remove_ids(internal_ids_array)
+            self._mark_dirty()
             return removed
 
         return 0
@@ -687,6 +695,8 @@ class FaissVectorStore(VectorStore):
                     self.timestamps[internal_id] = (created, now)
                 updated += 1
 
+        if updated:
+            self._mark_dirty()
         return updated
 
     async def update_metadata_where(
@@ -705,12 +715,15 @@ class FaissVectorStore(VectorStore):
         if not self._initialized:
             await self.initialize()
 
-        return self._update_metadata_where_filtered(
+        updated = self._update_metadata_where_filtered(
             self.metadata_store.items(),
             self.timestamps,
             self._effective_filter(filter),
             set_,
         )
+        if updated:
+            self._mark_dirty()
+        return updated
 
     async def count(self, filter: dict[str, Any] | None = None) -> int:
         """Count vectors in the store."""
@@ -760,6 +773,7 @@ class FaissVectorStore(VectorStore):
             self.timestamps.clear()
             self.vectors.clear()
             self.next_idx = 0
+            self._mark_dirty()
             return
 
         # ``metadata_store`` is keyed by internal id; ``id_map`` maps
@@ -776,7 +790,7 @@ class FaissVectorStore(VectorStore):
         if matching_ext_ids:
             await self.delete_vectors(matching_ext_ids)
 
-    async def save(self) -> None:
+    async def save(self, *, force: bool = False) -> None:
         """Save index and metadata to disk.
 
         Offloads the entire disk body (``os.makedirs``,
@@ -786,6 +800,20 @@ class FaissVectorStore(VectorStore):
         In-memory ``add`` / ``search`` are CPU-bound C++ (the GIL is
         released inside FAISS) and remain on the loop — only the disk
         I/O is offloaded.
+
+        Raises :class:`~dataknobs_common.exceptions.ConcurrencyError`
+        when the file changed since this instance read or wrote it,
+        rather than replacing another writer's rows with this instance's
+        snapshot.
+
+        Args:
+            force: Write regardless of what is on disk. This is the way
+                out of a refusal — the store keeps its rows in memory
+                after one, but every further save raises too, because
+                what it compares against has not moved. Passing ``True``
+                accepts the loss of whatever the other writer persisted;
+                the alternative that loses nothing is to open a second
+                store on the file and re-add these rows to it.
         """
         if not self.persist_path:
             return
@@ -808,91 +836,68 @@ class FaissVectorStore(VectorStore):
         # Both snapshots are taken synchronously with no ``await`` between
         # them, so no mutation can interleave — the persisted index and
         # ``.meta`` side-car are mutually consistent.
-        index_snapshot = faiss.clone_index(self.index)
-        meta_snapshot = {
-            "id_map": dict(self.id_map),
-            "metadata_store": dict(self.metadata_store),
-            "timestamps": dict(self.timestamps),
-            "vectors": dict(self.vectors),
-            "deferred_ivf": self._deferred_ivf,
-            "next_idx": self.next_idx,
-            "config": {
-                "dimensions": self.dimensions,
-                "metric": self.metric.value,
-                "index_type": self.index_type,
-            },
-        }
-        await asyncio.to_thread(self._save_to_disk, index_snapshot, meta_snapshot)
+        #
+        # The lock covers snapshot *and* write together. Taking it later
+        # would leave the staleness check and the write it guards on
+        # opposite sides of a scheduling point, which is how one
+        # instance's two overlapping saves end up racing each other.
+        async with self._save_lock:
+            index_snapshot = faiss.clone_index(self.index)
+            meta_snapshot = {
+                "id_map": dict(self.id_map),
+                "metadata_store": dict(self.metadata_store),
+                "timestamps": dict(self.timestamps),
+                "vectors": dict(self.vectors),
+                "deferred_ivf": self._deferred_ivf,
+                "next_idx": self.next_idx,
+                "config": {
+                    "dimensions": self.dimensions,
+                    "metric": self.metric.value,
+                    "index_type": self.index_type,
+                },
+            }
+            await asyncio.to_thread(self._save_to_disk, index_snapshot, meta_snapshot, force)
 
-    @staticmethod
-    def _file_identity(path: str) -> tuple[int, int, int] | None:
-        """Identify the file at ``path``, or ``None`` if there is none.
-
-        Modification time, size and inode together: any single one of
-        them can repeat across two different writes (coarse timestamp
-        resolution, an equal-sized index, a reused inode), and the three
-        together do not. Deliberately not a content hash — this runs
-        before every save, and an index large enough to matter is an
-        index too large to re-read for the check.
-
-        Blocking ``stat``; both callers already run on a worker thread.
-        """
-        try:
-            stat = Path(path).stat()
-        except FileNotFoundError:
-            return None
-        return (stat.st_mtime_ns, stat.st_size, stat.st_ino)
-
-    def _save_to_disk(self, index: Any, meta: dict[str, Any]) -> None:
+    def _save_to_disk(self, index: Any, meta: dict[str, Any], force: bool = False) -> None:
         """Synchronous disk write — run via ``to_thread`` from :meth:`save`.
 
         Receives a loop-side snapshot (a cloned index and a dict of
         shallow-copied mappings); reads only those, never the live
         ``self.*`` state, so a concurrent mutation cannot corrupt the
         write. That protects against this instance's own event loop; the
-        staleness check below protects against a different instance,
-        which the snapshot cannot see at all.
+        staleness check protects against a different instance, which the
+        snapshot cannot see at all.
         """
         # Convert Path to string for FAISS
         persist_path_str = str(self.persist_path)
+        metadata_path = persist_path_str + ".meta"
 
-        # Refuse to overwrite a file that changed since this instance
-        # read or wrote it. ``write_index`` replaces the file wholesale
-        # with this instance's snapshot, so proceeding would discard
-        # every row another instance persisted in the meantime — total,
-        # silent loss for the earlier writer.
-        current = self._file_identity(persist_path_str)
-        if current != self._persisted_identity:
-            raise ConcurrencyError(
-                "The FAISS index file changed since this store read it, so "
-                "saving would replace another writer's rows with this "
-                "instance's snapshot. A persist_path is single-writer: give "
-                "each store instance its own path, keep their lifetimes "
-                "sequential, or use a backend that supports concurrent "
-                "writers, such as pgvector.",
-                context={
-                    "persist_path": persist_path_str,
-                    "loaded": self._persisted_identity is not None,
-                    "exists_now": current is not None,
-                },
-            )
+        self._guard_persisted_identity(persist_path_str, force=force)
 
         # Create directory if needed
         parent_dir = os.path.dirname(persist_path_str)
         if parent_dir:
             os.makedirs(parent_dir, exist_ok=True)
 
-        # Save index
-        faiss.write_index(index, persist_path_str)
+        def write_index(path: str) -> None:
+            faiss.write_index(index, path)
 
-        # Save metadata and mappings
-        metadata_path = persist_path_str + ".meta"
-        with open(metadata_path, "wb") as f:
-            pickle.dump(meta, f)
+        def write_meta(path: str) -> None:
+            with open(path, "wb") as f:
+                pickle.dump(meta, f)
 
-        # This instance is now the file's last writer; a further save of
-        # its own must not trip the check above.
-        self._persisted_identity = self._file_identity(persist_path_str)
+        # The index and its ``.meta`` side-car describe one corpus, so
+        # neither is written directly over its target: a ``.meta`` that
+        # fails to serialize would otherwise leave a *new* index beside a
+        # *stale* side-car, and leave this instance's identity stamp
+        # pointing at a file it had already replaced — after which every
+        # later save of its own raises.
+        self._write_then_publish([(persist_path_str, write_index), (metadata_path, write_meta)])
+
+        # This instance is now the file's last writer, and is in step
+        # with what is on disk: a further save of its own must not trip
+        # the check above, and ``close()`` has nothing left to persist.
+        self._stamp_persisted_identity(persist_path_str)
 
     async def load(self) -> None:
         """Load index and metadata from disk.
@@ -921,9 +926,6 @@ class FaissVectorStore(VectorStore):
 
         # Load index
         self.index = faiss.read_index(persist_path_str)
-        # What a later save() compares against to tell its own writes
-        # from another instance's.
-        self._persisted_identity = self._file_identity(persist_path_str)
         logger.info(
             "FAISS: Loaded index from %s with %d vectors",
             persist_path_str,
@@ -951,3 +953,9 @@ class FaissVectorStore(VectorStore):
                 self._deferred_ivf = data.get("deferred_ivf", False)
                 self.next_idx = data["next_idx"]
             logger.info("FAISS: Loaded metadata with %d entries", len(self.id_map))
+
+        # Stamped only once the whole read has succeeded: this is both
+        # what a later save() compares against to tell its own writes
+        # from another instance's, and the flag saying memory and disk
+        # agree. A partial load agrees with nothing.
+        self._stamp_persisted_identity(persist_path_str)

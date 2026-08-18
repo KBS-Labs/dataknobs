@@ -78,10 +78,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **A FAISS `persist_path` written by two overlapping instances now
+- **A file `persist_path` written by two overlapping instances now
   raises instead of silently discarding one of them.** `save()` — and
   the implicit one inside `close()` — serializes the instance's whole
-  in-memory index over the file, so two stores holding one path with
+  in-memory state over the file, so two stores holding one path with
   overlapping lifetimes each wrote a snapshot that had never seen the
   other's rows, and the earlier writer's rows were gone from disk
   entirely. A store now records the file's identity when it reads or
@@ -91,6 +91,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   unaffected and keep appending, and a single writer saving repeatedly
   is unaffected. Concurrent writers need a backend that supports them,
   such as `pgvector`.
+
+  This covers **`FaissVectorStore` and `MemoryVectorStore` alike** —
+  both persist the same way, so both had the same defect, and the guard
+  lives on `VectorStoreBase` rather than in either of them. Three
+  things follow that consumers will notice:
+
+  * `close()` now persists only a store that was **mutated**. An
+    instance opened to read writes nothing on teardown. This is load
+    bearing rather than an optimization: such a write moves the file's
+    identity, which would make the instance actually holding new rows
+    refuse to save them.
+  * `save(force=True)` overwrites deliberately, accepting the loss of
+    whatever the other writer persisted. It is the way out of a
+    refusal, which otherwise repeats on every subsequent save because
+    what it compares against has not moved.
+  * The check is explicitly **best-effort** — modification time, size
+    and inode. Two writes inside one filesystem timestamp tick that
+    produce the same size are indistinguishable, so this catches the
+    common accident and is not a lock.
 
 - **The post-filter over-fetch multiplier is one shared policy.**
   `ChromaVectorStore` held two hard-coded copies of `k * 4`; both now
@@ -176,6 +195,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   registration. It now raises a `ValueError` naming both.
 
 ### Fixed
+
+- **A failed `.meta` write left a FAISS store unloadable.** The index
+  file and its side-car were each written directly over their targets,
+  so a `.meta` that failed to serialize — an unpicklable value in
+  consumer metadata, a full disk — had already consumed the index write,
+  and left behind a truncated side-car that the next reader could not
+  load at all (`EOFError`). It also stranded the instance's identity
+  stamp on a file it had itself replaced, so every later `save()` raised
+  `ConcurrencyError` about a conflict that never happened. Both files
+  are now written to scratch siblings and renamed into place only once
+  every write has succeeded, so a failure leaves the previous state
+  intact. `MemoryVectorStore` writes the same way, for the same reason.
+
+- **Overlapping `save()` calls on a *single* store could raise
+  `ConcurrencyError` against themselves.** The staleness check and the
+  write it guards are two operations on a worker thread, so an autosave
+  overlapping `close()` — or a bare `asyncio.gather` — could have one
+  save stat the other's half-written file. Saves are now serialized per
+  instance; cross-instance conflict, which is what the check exists to
+  detect, is unaffected.
 
 - **`FaissVectorStore.search(filter=...)` applied the filter after the
   index had already truncated to `k`.** A filtered search returned only
