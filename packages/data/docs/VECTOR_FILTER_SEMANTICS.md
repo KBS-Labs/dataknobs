@@ -11,6 +11,11 @@ match, however far outside the unfiltered top-`k` they sit. The one
 bounded exception is Chroma's residual post-filter, described under
 [Constraints](#constraints).
 
+The one case where a backend can still under-return is a FAISS store
+whose vector side-car is incomplete — a `.meta` pickle written before
+that side-car existed. It is reported at `WARNING` and fixed by
+re-ingesting; see the FAISS constraint below.
+
 `update_metadata_where(filter, set_)` is the filter-keyed mutator
 sibling of the id-keyed `update_metadata(ids, metadata)`. It selects
 rows with the **same** four-quadrant `filter` shape as `clear` /
@@ -191,7 +196,7 @@ await store.search(q, k=10, filter={"missing_key": "value"})
 | Backend | Implementation |
 |---|---|
 | `MemoryVectorStore` | Python filter via `VectorStoreBase._match_metadata_filter`, applied to candidates **before** similarity ranking: every stored row is matched, the survivors are scored, sorted, and truncated to `k`. `update_metadata_where` walks the in-process `metadata_store` and `dict.update`s `set_` into each match. |
-| `FaissVectorStore` | Same `_match_metadata_filter`, and likewise **not** applied after ranking. An unfiltered search is answered by the FAISS index. A filtered one selects the matching rows from `metadata_store`, scores just those against the query from the vector side-car, sorts, and truncates to `k` — exact on every index type, and the same rows in the same order the index would have ranked them. `update_metadata_where` walks the same `metadata_store`, with no FAISS index involvement. |
+| `FaissVectorStore` | Same `_match_metadata_filter`, and likewise **not** applied after ranking. An unfiltered search is answered by the FAISS index. A filtered one selects the matching rows from `metadata_store`, scores just those against the query from the vector side-car, sorts, and truncates to `k` — exact on every index type, and the same rows the index would have ranked, in the same order. (Rows scoring *equal* are ordered by insertion rather than by whatever internal order the index would have used; the ranking agrees, the tie-break need not.) `update_metadata_where` walks the same `metadata_store`, with no FAISS index involvement. |
 | `ChromaVectorStore` | Post-hoc Python filter via `VectorStoreBase._match_metadata_filter` by default. Chroma's where-engine returns zero rows for *any* predicate against list-valued metadata, so neither scalar nor list filter values are pushed down unless the key is declared in `scalar_metadata_keys` (then `$eq`/`$in` is pushed for that key). `count()` uses `collection.get(where=..., include=["metadatas"])` and post-filters. `update_metadata_where` fetches matched rows, merges `set_` in Python (Chroma `update` replaces a row's metadata wholesale), and writes them back. Metadata is encoded at the Chroma boundary since chromadb's store is scalar-only (empty dict → no-metadata; every list/dict value, including `[]`, → reversible JSON sentinel — chromadb otherwise silently corrupts non-scalar values, bleeding them across collections); reads decode back so the round-trip matches Memory/FAISS. |
 | `PgVectorStore` | JSONB-native via `jsonb_build_object` and the `@>` containment operator. For each filter element, two `@>` checks are emitted ORed together — one with the value as a scalar and one wrapped in an array — to cover both scalar-metadata and list-metadata in one SQL shape. Type-preserving (booleans stay booleans, numbers stay numbers); replaces the older text-cast `metadata->>'key' = '...'` translation, which silently returned zero rows for booleans, numbers, and lists. `update_metadata_where` reuses this translation in a single `UPDATE ... SET metadata = metadata || $::jsonb` (JSONB merge, `updated_at` refreshed). |
 
@@ -241,14 +246,30 @@ await store.count(filter={"count": "5"})      # → 0  (type-preserving)
   the configured index type makes it. A filtered one does not: no FAISS
   index can express the filter, so the matching rows are scored
   directly instead — an O(N) walk of `metadata_store` plus O(M)
-  similarity computations for the M rows that match. That is strictly
+  similarity computations for the M rows that match. In **CPU** that is
   less work than `MemoryVectorStore` does for the same query, which
-  scores every survivor of a full scan, so no corpus that is workable
-  on `memory` becomes unworkable here. But a store configured with a
-  `domain_id` filters on every call and therefore never uses the index
-  at all; scope-heavy workloads at scale should prefer `pgvector`,
-  where the scope is a native SQL predicate the index search runs
-  under.
+  scores every survivor of a full scan one row at a time in Python. In
+  **peak memory** it is the other way round: the M matching vectors are
+  stacked into one contiguous float32 array and the metric computed over
+  it, so a filtered query transiently holds `M × dimensions × 4` bytes —
+  doubled on the L2/euclidean path, which materializes the difference
+  array as well — where `MemoryVectorStore` holds `O(dimensions)`. At
+  500k matching rows and 768 dimensions that is 1.5 GB, or 3 GB under
+  L2, on top of the index the store is no longer using. Size for it, or
+  filter to a narrower M.
+
+  A store configured with a `domain_id` filters on every call and
+  therefore never uses the index at all; scope-heavy workloads at scale
+  should prefer `pgvector`, where the scope is a native SQL predicate
+  the index search runs under.
+- **An incomplete FAISS side-car under-returns.** `_load_from_disk`
+  reads the vector side-car with a default, so a `.meta` pickle written
+  before it existed loads empty against a fully populated index. Rows
+  with no stored vector are ranked from the index instead of scored
+  directly, and merged with the exactly-scored ones — the two are on the
+  same scale. An approximate index does not route to every row, so a
+  filtered search on such a store can still return fewer than `k`. It is
+  reported once per store at `WARNING`, and re-ingesting fixes it.
 - **A file `persist_path` is single-writer.** This covers
   `FaissVectorStore` and `MemoryVectorStore` — both persist by
   serializing the instance's whole in-memory state over one file, which

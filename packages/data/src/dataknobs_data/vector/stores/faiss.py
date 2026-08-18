@@ -98,6 +98,14 @@ class FaissVectorStore(VectorStore):
         # load ``False`` (a persisted IVF index is necessarily trained,
         # since pre-fix a sub-``nlist`` first batch could not be added).
         self._deferred_ivf: bool = False
+        # Whether the "this store's vector side-car is short" warning has
+        # already been emitted. The condition is a property of the loaded
+        # file, not of a query, so it holds for every filtered search
+        # this instance serves — warning per call would put one line per
+        # user turn in the log of a RAG read path, all of them naming the
+        # same one-off remedy. Same per-instance shape, and the same
+        # reason for it, as ``_timestamp_collision_warned``.
+        self._sidecar_shortfall_warned: bool = False
 
     async def initialize(self) -> None:
         """Initialize Faiss index."""
@@ -446,6 +454,13 @@ class FaissVectorStore(VectorStore):
         if not self._initialized:
             await self.initialize()
 
+        # Asking for no rows is answered the same way whichever path
+        # would have served it. Normalized here rather than in each
+        # branch: the filtered path used to return ``[]`` for a negative
+        # ``k`` while the unfiltered one passed it to ``index.search``.
+        if k <= 0:
+            return []
+
         inject = include_timestamps and include_metadata
 
         # Apply config-level domain_id scoping (no-op when unset).
@@ -561,16 +576,12 @@ class FaissVectorStore(VectorStore):
         ``count(filter=...)`` already performs — then scores only those
         rows from the ``self.vectors`` side-car. A filtered search
         therefore leaves the approximate index and becomes exact over
-        the matching subset: strictly less work than
-        ``MemoryVectorStore`` does for the same query, since that scans
-        every row and scores the survivors. Unfiltered search keeps the
-        index and is untouched.
+        the matching subset. Unfiltered search keeps the index and is
+        untouched.
+
+        ``k`` is already positive: :meth:`search` normalizes it for both
+        paths before dispatching here.
         """
-        import numpy as np
-
-        if k <= 0:
-            return []
-
         matching = [
             internal_id
             for internal_id, metadata in self.metadata_store.items()
@@ -579,31 +590,48 @@ class FaissVectorStore(VectorStore):
         if not matching:
             return []
 
-        stored = [
-            self.vectors[internal_id] for internal_id in matching if internal_id in self.vectors
-        ]
-        if len(stored) != len(matching):
-            return self._search_filtered_via_index(
-                query,
-                k,
-                filter,
-                include_metadata,
-                inject,
-                matched=len(matching),
-                scorable=len(stored),
-            )
+        scorable = [internal_id for internal_id in matching if internal_id in self.vectors]
+        if len(scorable) == len(matching):
+            return self._score_stored(query, matching, k, include_metadata, inject)
 
-        raw = self._raw_index_scores(query, np.vstack(stored))
+        # Some matching rows have no stored vector — see
+        # :meth:`_warn_sidecar_shortfall` for how a store gets that way.
+        self._warn_sidecar_shortfall(matched=len(matching), scorable=len(scorable))
+        return self._score_partial(query, matching, scorable, k, include_metadata, inject)
+
+    def _score_stored(
+        self,
+        query: np.ndarray,
+        internal_ids: list[int],
+        k: int,
+        include_metadata: bool,
+        inject: bool,
+    ) -> list[tuple[str, float, dict[str, Any] | None]]:
+        """Rank ``internal_ids`` against ``query`` from the side-car.
+
+        The exact path, used when every matching row has a stored vector.
+        Kept array-shaped end to end — the ids stay a list and the scores
+        an ndarray, zipped only for the surviving ``k`` — because this is
+        the path a large scoped store takes on every call.
+        """
+        import numpy as np
+
+        if not internal_ids:
+            return []
+
+        raw = self._raw_index_scores(
+            query, np.vstack([self.vectors[internal_id] for internal_id in internal_ids])
+        )
         # Inner product ranks high-to-low, L2 distance low-to-high;
         # ``stable`` keeps ties in insertion order so repeated searches
         # over one corpus agree with each other.
         nearest_first = -raw if self._faiss_metric() == faiss.METRIC_INNER_PRODUCT else raw
         order = np.argsort(nearest_first, kind="stable")
 
-        reverse_id_map = {v: k for k, v in self.id_map.items()}
+        reverse_id_map = {internal: ext for ext, internal in self.id_map.items()}
         return [
             self._result_row(
-                matching[position],
+                internal_ids[position],
                 float(raw[position]),
                 reverse_id_map,
                 include_metadata,
@@ -612,68 +640,123 @@ class FaissVectorStore(VectorStore):
             for position in order[:k]
         ]
 
-    def _search_filtered_via_index(
-        self,
-        query: np.ndarray,
-        k: int,
-        filter: dict[str, Any],
-        include_metadata: bool,
-        inject: bool,
-        *,
-        matched: int,
-        scorable: int,
-    ) -> list[tuple[str, float, dict[str, Any] | None]]:
-        """Filter over-fetched index results when the side-car is short.
+    def _warn_sidecar_shortfall(self, *, matched: int, scorable: int) -> None:
+        """Report, once per instance, that the vector side-car is short.
 
-        ``_load_from_disk`` reads the vector side-car with a default, so
-        a ``.meta`` pickle written before the side-car existed loads
-        empty against a fully populated index — scoring the matching
-        subset would return nothing for such a store. The filter is
-        applied to index results instead, over-fetching and escalating
-        so that it under-returns only where the index itself cannot
-        reach the rows.
+        ``_load_from_disk`` reads the side-car with a default, so a
+        ``.meta`` pickle written before the side-car existed loads empty
+        against a fully populated index. Recoverable by re-ingesting,
+        which is why this is a WARNING and not silence: a shortfall is
+        indistinguishable to a caller from a store that genuinely holds
+        no more matches.
 
-        Recoverable by re-ingesting, which is why this is a WARNING and
-        not silence: a shortfall here is indistinguishable to a caller
-        from a store that genuinely holds no more matches.
+        Once, because the condition belongs to the loaded file rather
+        than to any one query — every filtered search this instance
+        serves meets it, and repeating a message whose remedy is a
+        one-off re-ingest just fills the log of a read path.
         """
+        if self._sidecar_shortfall_warned:
+            return
+        self._sidecar_shortfall_warned = True
         logger.warning(
-            "FAISS search: %d of the %d rows matching the filter have no "
-            "stored vector (index holds %d); falling back to a filtered index "
-            "scan, which can return fewer than k rows. Re-ingest the store to "
-            "restore exact filtered search.",
+            "FAISS search: %d of the %d rows matching this filter have no "
+            "stored vector (index holds %d). Those rows are ranked from the "
+            "index instead of scored directly, which can miss the ones an "
+            "approximate index does not route to — so a filtered search may "
+            "return fewer than k rows. Re-ingest the store to restore exact "
+            "filtered search. Reported once per store.",
             matched - scorable,
             matched,
             self.index.ntotal,
         )
 
-        reverse_id_map = {v: k for k, v in self.id_map.items()}
-        results: list[tuple[str, float, dict[str, Any] | None]] = []
+    def _score_partial(
+        self,
+        query: np.ndarray,
+        matching: list[int],
+        scorable: list[int],
+        k: int,
+        include_metadata: bool,
+        inject: bool,
+    ) -> list[tuple[str, float, dict[str, Any] | None]]:
+        """Rank a filter's matches when only some have stored vectors.
 
+        Neither source alone is the right answer. Scoring only the
+        side-car silently omits a row that has no stored vector but would
+        have outranked everything returned; scanning only the index
+        answers approximately for rows the side-car could have scored
+        exactly. So both are used and merged.
+
+        The merge is sound because :meth:`_raw_index_scores` reproduces
+        the values ``index.search`` itself returns — the two halves are
+        on one scale, not two, which is the same property that makes a
+        filtered search's scores match an unfiltered one's.
+
+        This still under-returns where the *index* cannot reach an
+        unscorable row: an HNSW graph does not route to every node, and
+        an IVF probe covers only its own lists. That residue is why the
+        caller reports the shortfall rather than treating this as a
+        repair.
+        """
+        import numpy as np
+
+        scored: list[tuple[int, float]] = []
+        if scorable:
+            raw = self._raw_index_scores(
+                query, np.vstack([self.vectors[internal_id] for internal_id in scorable])
+            )
+            scored.extend((internal_id, float(raw[i])) for i, internal_id in enumerate(scorable))
+
+        scored.extend(self._raw_scores_via_index(query, k, set(matching) - set(scorable)))
+        if not scored:
+            return []
+
+        values = np.fromiter((value for _, value in scored), dtype=np.float64, count=len(scored))
+        nearest_first = -values if self._faiss_metric() == faiss.METRIC_INNER_PRODUCT else values
+        order = np.argsort(nearest_first, kind="stable")
+
+        reverse_id_map = {internal: ext for ext, internal in self.id_map.items()}
+        return [
+            self._result_row(
+                scored[position][0],
+                scored[position][1],
+                reverse_id_map,
+                include_metadata,
+                inject,
+            )
+            for position in order[:k]
+        ]
+
+    def _raw_scores_via_index(
+        self,
+        query: np.ndarray,
+        k: int,
+        wanted: set[int],
+    ) -> list[tuple[int, float]]:
+        """Ask the index for the ``wanted`` rows it can reach.
+
+        The only way to score a row whose vector the side-car does not
+        hold. Over-fetches and escalates to the whole index, so it falls
+        short only where the index genuinely cannot route to a row rather
+        than because the window was too small.
+        """
+        if not wanted:
+            return []
+
+        found: dict[int, float] = {}
         for fetch in self._overfetch_sizes(k, has_post_filter=True, ceiling=self.index.ntotal):
             if fetch <= 0:
                 break
             scores, indices = self.index.search(query, fetch)
-            results = []
+            found = {}
             for i in range(len(indices[0])):
                 internal_id = int(indices[0][i])
-                if internal_id == -1:  # No result
-                    continue
-                if not self._match_metadata_filter(self.metadata_store.get(internal_id), filter):
-                    continue
-                results.append(
-                    self._result_row(
-                        internal_id,
-                        float(scores[0][i]),
-                        reverse_id_map,
-                        include_metadata,
-                        inject,
-                    )
-                )
-            if len(results) >= k:
+                if internal_id in wanted:
+                    found[internal_id] = float(scores[0][i])
+            if len(found) >= k:
                 break
 
-        return results[:k]
+        return list(found.items())
 
     async def update_metadata(
         self,
@@ -774,6 +857,8 @@ class FaissVectorStore(VectorStore):
             self.vectors.clear()
             self.next_idx = 0
             self._mark_dirty()
+            # Nothing is left for the side-car to be short of.
+            self._sidecar_shortfall_warned = False
             return
 
         # ``metadata_store`` is keyed by internal id; ``id_map`` maps
@@ -959,3 +1044,5 @@ class FaissVectorStore(VectorStore):
         # from another instance's, and the flag saying memory and disk
         # agree. A partial load agrees with nothing.
         self._stamp_persisted_identity(persist_path_str)
+        # A reload can only have replaced the side-car this warns about.
+        self._sidecar_shortfall_warned = False

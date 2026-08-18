@@ -245,6 +245,75 @@ async def test_empty_vector_sidecar_falls_back_and_warns(
         await reopened.close()
 
 
+async def test_partial_sidecar_still_ranks_the_rows_it_cannot_score() -> None:
+    """A row missing from the side-car is ranked from the index, not dropped.
+
+    Answering only from the rows the side-car holds would silently omit
+    ``a0`` and ``a1`` here — the two best matches — and return ``a2``
+    onward as though they were the top of the corpus. Answering only from
+    the index would give up the exact scoring of the 198 rows that need
+    no help. Both sources are used, merged on the raw metric value each
+    produces, which is the same scale precisely because
+    ``_raw_index_scores`` reproduces what the index returns.
+    """
+    store = await _seeded({"index_type": "flat"})
+    try:
+        exact = await store.search(_probe(), k=3, filter={"domain_id": "a"})
+
+        # Drop the two best matches from the side-car, leaving them in
+        # the index — the desync shape a partial side-car produces.
+        for ext_id in ("a0", "a1"):
+            del store.vectors[store.id_map[ext_id]]
+
+        partial = await store.search(_probe(), k=3, filter={"domain_id": "a"})
+
+        assert [r[0] for r in partial] == ["a0", "a1", "a2"]
+        assert [r[0] for r in partial] == [r[0] for r in exact]
+        assert [r[1] for r in partial] == pytest.approx([r[1] for r in exact], rel=1e-5)
+    finally:
+        await store.close()
+
+
+async def test_sidecar_shortfall_is_reported_once_not_per_query(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The shortfall belongs to the store, so it is said once.
+
+    The condition is a property of the loaded file: every filtered search
+    this instance serves meets it. Warning per call puts one line per
+    user turn into the log of a RAG read path, all of them naming the
+    same one-off remedy.
+    """
+    store = await _seeded({"index_type": "flat"})
+    try:
+        store.vectors.clear()
+
+        with caplog.at_level(logging.WARNING, logger=FAISS_LOGGER):
+            for _ in range(5):
+                await store.search(_probe(), k=3, filter={"domain_id": "a"})
+
+        warnings = [r for r in caplog.records if r.name == FAISS_LOGGER]
+        assert len(warnings) == 1
+        assert "re-ingest" in warnings[0].getMessage().lower()
+    finally:
+        await store.close()
+
+
+@pytest.mark.parametrize("k", [0, -1])
+async def test_non_positive_k_returns_empty_on_both_paths(k: int) -> None:
+    """``k <= 0`` is answered the same way whether or not a filter is set.
+
+    The filtered path returned ``[]`` for a negative ``k`` while the
+    unfiltered one handed it to ``index.search``.
+    """
+    store = await _seeded({"index_type": "flat"})
+    try:
+        assert await store.search(_probe(), k=k) == []
+        assert await store.search(_probe(), k=k, filter={"domain_id": "a"}) == []
+    finally:
+        await store.close()
+
+
 async def test_unfiltered_search_path_unchanged(caplog: pytest.LogCaptureFixture) -> None:
     """An unfiltered search still answers from the index alone.
 
