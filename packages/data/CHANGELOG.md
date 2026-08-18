@@ -108,6 +108,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`SyncFileDatabase` and `AsyncFileDatabase` leave a `<path>.lock`
+  file beside their data file.** It is no longer removed when the lock
+  is released, because removing it is what let two holders in: closing
+  the handle hands the lock to a blocked waiter holding a now-nameless
+  inode, and unlinking there lets the next acquirer create a fresh inode
+  and lock that instead. Two instances of either backend in one process
+  are also genuinely serialized now, which they were not before —
+  `fcntl` record locks are owned by the process, so the second acquire
+  used to be granted immediately.
+
+- **A persisted vector-store file keeps the permissions it had.** The
+  scratch-then-rename publish used to reset the mode to the umask
+  default on every save, discarding any `chmod` a consumer had applied.
+  It now carries the replaced file's mode across. A file the store
+  creates for the first time is owner-only.
+
 - **`ChromaVectorStore.update_metadata()` and `update_metadata_where()`
   return rows *matched*, not rows written.** Both previously returned
   the number of rows actually sent to chromadb, which now differs: a
@@ -297,6 +313,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   registration. It now raises a `ValueError` naming both.
 
 ### Fixed
+
+- **Two single-file vector stores over one `persist_path` could both
+  write, with neither raising.** `FaissVectorStore` and
+  `MemoryVectorStore` refuse to overwrite a file that changed since
+  they read it — but the check and the write it guards ran on a worker
+  thread with a whole serialization between them, so two instances both
+  passed the check before either wrote. The second replaced the first's
+  file with a snapshot that had never seen its rows, and the refusal
+  that exists to prevent exactly that never fired.
+
+  The check, the write and the stamp that follows are now held under
+  `dataknobs_common.locks.FileLock` on a sibling `<persist_path>.lock`,
+  so the second writer meets a file that has already moved and raises
+  `ConcurrencyError` as documented. This closes the same-process case
+  as well as the cross-process one: the per-instance `asyncio.Lock`
+  could never see a second instance, and POSIX record locks alone do
+  not exclude two threads of one interpreter.
+
+  The `.lock` file is created on the first save or load and left in
+  place; the lock is advisory and local-filesystem only, so a networked
+  mount carries the same caveat the identity check already did.
+
+- **`load()` could run inside the store's own `save()`.** The read ends
+  by stamping two fields the save path owns, so a load landing mid-save
+  declared the store in step with a file the save had not written yet —
+  after which `close()` skipped persisting a mutation nobody wrote. For
+  FAISS it was also a torn read: the index and its `.meta` side-car are
+  published by two renames, and a reader between them paired a new
+  index with a stale side-car. `load()` now takes the same locks the
+  save does.
+
+- **Concurrent publishes collided on one scratch file.** Every writer of
+  a path staged to the same `<file>.tmp`, so one wrote over the other's
+  bytes and the loser's cleanup could unlink a file the winner was about
+  to rename — turning a silent clobber into a spurious
+  `FileNotFoundError`. Each write now stages to a uniquely named scratch
+  file in the target's own directory. A process killed mid-save leaves
+  one stray `*.tmp` behind rather than having it overwritten by the next
+  save.
+
+- **`save(force=True)` returned silently.** It is a deliberate
+  destructive bypass of the staleness check, and it is now logged at
+  `WARNING` every time, saying whether anything was actually discarded
+  — the line an operator wants when asking where the rows went.
 
 - **`update_vectors()` no longer resets a row's `created_at`, or destroys
   rows on a refused batch.** It was implemented as `delete_vectors()`

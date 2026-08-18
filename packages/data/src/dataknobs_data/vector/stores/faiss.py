@@ -1023,9 +1023,8 @@ class FaissVectorStore(VectorStore):
         persist_path_str = str(self.persist_path)
         metadata_path = persist_path_str + ".meta"
 
-        self._guard_persisted_identity(persist_path_str, force=force)
-
-        # Create directory if needed
+        # Create directory if needed, before the lock: the lockfile is a
+        # sibling of the target, so its directory has to exist first.
         parent_dir = os.path.dirname(persist_path_str)
         if parent_dir:
             os.makedirs(parent_dir, exist_ok=True)
@@ -1037,18 +1036,18 @@ class FaissVectorStore(VectorStore):
             with open(path, "wb") as f:
                 pickle.dump(meta, f)
 
+        # The bracket holds the file lock across staleness check, write
+        # and stamp — one lock on ``persist_path`` covering both files,
+        # so a reader never lands between the two renames below.
+        #
         # The index and its ``.meta`` side-car describe one corpus, so
         # neither is written directly over its target: a ``.meta`` that
         # fails to serialize would otherwise leave a *new* index beside a
         # *stale* side-car, and leave this instance's identity stamp
         # pointing at a file it had already replaced — after which every
         # later save of its own raises.
-        self._write_then_publish([(persist_path_str, write_index), (metadata_path, write_meta)])
-
-        # This instance is now the file's last writer, and is in step
-        # with what is on disk: a further save of its own must not trip
-        # the check above, and ``close()`` has nothing left to persist.
-        self._stamp_persisted_identity(persist_path_str)
+        with self._persisted_save(persist_path_str, force=force):
+            self._write_then_publish([(persist_path_str, write_index), (metadata_path, write_meta)])
 
     async def load(self) -> None:
         """Load index and metadata from disk.
@@ -1061,54 +1060,55 @@ class FaissVectorStore(VectorStore):
         """
         if not self.persist_path:
             return
-        await asyncio.to_thread(self._load_from_disk)
+        async with self._save_lock:
+            await asyncio.to_thread(self._load_from_disk)
 
     def _load_from_disk(self) -> None:
         """Synchronous disk read — run via ``to_thread`` from :meth:`load`."""
         # Convert Path to string for FAISS
         persist_path_str = str(self.persist_path)
 
-        if not os.path.exists(persist_path_str):
-            logger.debug(
-                "FAISS: No persist path or file not found: %s",
-                self.persist_path,
+        # The bracket holds the file lock across the read and the stamp
+        # that follows it. Both files below are published under that same
+        # lock, so this read cannot land between the index rename and the
+        # side-car rename and pair a new index with a stale side-car.
+        with self._persisted_load(persist_path_str) as exists:
+            if not exists:
+                logger.debug(
+                    "FAISS: No persist path or file not found: %s",
+                    self.persist_path,
+                )
+                return
+
+            # Load index
+            self.index = faiss.read_index(persist_path_str)
+            logger.info(
+                "FAISS: Loaded index from %s with %d vectors",
+                persist_path_str,
+                self.index.ntotal,
             )
-            return
 
-        # Load index
-        self.index = faiss.read_index(persist_path_str)
-        logger.info(
-            "FAISS: Loaded index from %s with %d vectors",
-            persist_path_str,
-            self.index.ntotal,
-        )
+            # Load metadata and mappings
+            metadata_path = persist_path_str + ".meta"
+            if os.path.exists(metadata_path):
+                with open(metadata_path, "rb") as f:
+                    data = pickle.load(f)
+                    self.id_map = data["id_map"]
+                    self.metadata_store = data["metadata_store"]
+                    # .get() for backward-compat with older .meta pickles
+                    # that predate a key: timestamps return None/None on
+                    # include_timestamps; a missing ``vectors`` side-car
+                    # means get_vectors returns None until the index is
+                    # re-ingested (parity with memory.py and pgvector
+                    # pre-migration NULL rows).
+                    self.timestamps = data.get("timestamps", {})
+                    self.vectors = data.get("vectors", {})
+                    # Legacy IVF pickles have no flag but are necessarily
+                    # a trained IVF (a sub-nlist first batch could not
+                    # have been persisted pre-fix), so False is correct.
+                    self._deferred_ivf = data.get("deferred_ivf", False)
+                    self.next_idx = data["next_idx"]
+                logger.info("FAISS: Loaded metadata with %d entries", len(self.id_map))
 
-        # Load metadata and mappings
-        metadata_path = persist_path_str + ".meta"
-        if os.path.exists(metadata_path):
-            with open(metadata_path, "rb") as f:
-                data = pickle.load(f)
-                self.id_map = data["id_map"]
-                self.metadata_store = data["metadata_store"]
-                # .get() for backward-compat with older .meta pickles
-                # that predate a key: timestamps return None/None on
-                # include_timestamps; a missing ``vectors`` side-car
-                # means get_vectors returns None until the index is
-                # re-ingested (parity with memory.py and pgvector
-                # pre-migration NULL rows).
-                self.timestamps = data.get("timestamps", {})
-                self.vectors = data.get("vectors", {})
-                # Legacy IVF pickles have no flag but are necessarily a
-                # trained IVF (a sub-nlist first batch could not have
-                # been persisted pre-fix), so False is correct.
-                self._deferred_ivf = data.get("deferred_ivf", False)
-                self.next_idx = data["next_idx"]
-            logger.info("FAISS: Loaded metadata with %d entries", len(self.id_map))
-
-        # Stamped only once the whole read has succeeded: this is both
-        # what a later save() compares against to tell its own writes
-        # from another instance's, and the flag saying memory and disk
-        # agree. A partial load agrees with nothing.
-        self._stamp_persisted_identity(persist_path_str)
-        # A reload can only have replaced the side-car this warns about.
-        self._sidecar_shortfall_warned = False
+            # A reload can only have replaced the side-car this warns about.
+            self._sidecar_shortfall_warned = False

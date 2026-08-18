@@ -126,11 +126,11 @@ class MemoryVectorStore(VectorStore):
         """
         persist_path_str = str(self.persist_path)
 
-        self._guard_persisted_identity(persist_path_str, force=force)
-
-        # Create directory if needed. ``os.path.dirname`` is "" for a
-        # bare filename (no directory component); ``makedirs("")`` raises
-        # FileNotFoundError, so guard it (parity with FaissVectorStore).
+        # Create directory if needed, before the lock: the lockfile is a
+        # sibling of the target, so its directory has to exist first.
+        # ``os.path.dirname`` is "" for a bare filename (no directory
+        # component); ``makedirs("")`` raises FileNotFoundError, so guard
+        # it (parity with FaissVectorStore).
         parent_dir = os.path.dirname(persist_path_str)
         if parent_dir:
             os.makedirs(parent_dir, exist_ok=True)
@@ -149,21 +149,27 @@ class MemoryVectorStore(VectorStore):
             with open(path, "wb") as f:
                 pickle.dump(payload, f)
 
-        # Written to a scratch sibling and renamed, so a pickle that
-        # fails midway leaves the previous state intact rather than a
-        # truncated file that no longer loads.
-        self._write_then_publish([(persist_path_str, write_pickle)])
-
-        # In step with disk: a further save of this instance's own must
-        # not trip the check above, and ``close()`` has nothing left to
-        # persist.
-        self._stamp_persisted_identity(persist_path_str)
+        # The bracket holds the file lock across staleness check, write
+        # and stamp, so a second instance cannot pass the check in the
+        # window this one takes to serialize. Written to a scratch
+        # sibling and renamed inside it, so a pickle that fails midway
+        # leaves the previous state intact rather than a truncated file
+        # that no longer loads.
+        with self._persisted_save(persist_path_str, force=force):
+            self._write_then_publish([(persist_path_str, write_pickle)])
 
     async def load(self) -> None:
-        """Load vectors and metadata from disk (offloaded off the event loop)."""
+        """Load vectors and metadata from disk (offloaded off the event loop).
+
+        Takes ``_save_lock``, so a load cannot run inside this instance's
+        own save: the read ends by stamping two fields the save path
+        owns, and doing that mid-save declares the store in step with a
+        file the save has not written yet.
+        """
         if not self.persist_path:
             return
-        await asyncio.to_thread(self._load_from_disk)
+        async with self._save_lock:
+            await asyncio.to_thread(self._load_from_disk)
 
     def _load_from_disk(self) -> None:
         """Synchronous disk read — run via ``to_thread`` from :meth:`load`."""
@@ -171,26 +177,26 @@ class MemoryVectorStore(VectorStore):
         # naming it locally is what lets the rest of the body be typed.
         persist_path_str = str(self.persist_path)
 
-        if not os.path.exists(persist_path_str):
-            return
+        # The bracket holds the file lock across the read and the stamp
+        # that follows it, and stamps only when there was a file to read
+        # — a store that read nothing is in step with nothing.
+        with self._persisted_load(persist_path_str) as exists:
+            if not exists:
+                return
 
-        with open(persist_path_str, "rb") as f:
-            data = pickle.load(f)
-            # Convert lists back to numpy arrays
-            self.vectors = {k: np.array(v, dtype=np.float32) for k, v in data["vectors"].items()}
-            self.metadata_store = data["metadata_store"]
-            # .get() for backward-compat with pickle files written before
-            # timestamp tracking existed — those files have no tracked
-            # timestamps, so existing rows
-            # return None/None on include_timestamps=True (analogous to
-            # pgvector's pre-migration NULL rows).
-            self.timestamps = data.get("timestamps", {})
-
-        # Stamped only once the whole read has succeeded: this is both
-        # what a later save() compares against to tell its own writes
-        # from another instance's, and the flag saying memory and disk
-        # agree. A partial load agrees with nothing.
-        self._stamp_persisted_identity(persist_path_str)
+            with open(persist_path_str, "rb") as f:
+                data = pickle.load(f)
+                # Convert lists back to numpy arrays
+                self.vectors = {
+                    k: np.array(v, dtype=np.float32) for k, v in data["vectors"].items()
+                }
+                self.metadata_store = data["metadata_store"]
+                # .get() for backward-compat with pickle files written
+                # before timestamp tracking existed — those files have no
+                # tracked timestamps, so existing rows return None/None on
+                # include_timestamps=True (analogous to pgvector's
+                # pre-migration NULL rows).
+                self.timestamps = data.get("timestamps", {})
 
     async def add_vectors(
         self,

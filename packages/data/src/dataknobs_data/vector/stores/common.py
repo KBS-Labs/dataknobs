@@ -7,11 +7,13 @@ import contextlib
 import copy
 import logging
 import os
+import tempfile
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar, cast
 
 from dataknobs_common.exceptions import ConcurrencyError
+from dataknobs_common.locks import FileLock
 from dataknobs_common.structured_config import StructuredConfigConsumer
 
 from ..exceptions import VectorDomainScopeError
@@ -613,11 +615,27 @@ class VectorStoreBase(StructuredConfigConsumer[VectorStoreConfig]):
         writer that got there first.
 
         ``force`` skips the check. It is the deliberate way out of a
-        refusal, and it accepts the loss.
+        refusal, and it accepts the loss — so it is logged at WARNING
+        every time it is used, per ``rules/security.md`` §8 and because
+        it is the line an operator wants when asking where the rows
+        went. The identity is read even under ``force``, at the cost of
+        one ``stat`` before a whole-state serialization, so the log can
+        say whether anything was actually discarded.
         """
-        if force:
-            return
         current = self._file_identity(path)
+        if force:
+            logger.warning(
+                "%s: save(force=True) bypassed the staleness check on %s. %s",
+                type(self).__name__,
+                path,
+                (
+                    "The file changed since this store read or wrote it, so "
+                    "another writer's rows are being discarded."
+                    if current != self._persisted_identity
+                    else "The file is unchanged, so nothing was discarded."
+                ),
+            )
+            return
         if current == self._persisted_identity:
             return
         raise ConcurrencyError(
@@ -660,15 +678,74 @@ class VectorStoreBase(StructuredConfigConsumer[VectorStoreConfig]):
         self._refresh_persisted_identity(path)
         self._dirty = False
 
+    @contextlib.contextmanager
+    def _persisted_save(self, path: str, *, force: bool) -> Iterator[None]:
+        """Hold ``path``'s file lock across staleness check → write → stamp.
+
+        The check and the write it guards are two operations with a
+        scheduling point between them: both run on a worker thread, with
+        a whole serialization in between. Without a lock spanning them,
+        two instances over one path both pass the check before either
+        writes, and the second replaces the first's file with a snapshot
+        that never saw its rows — **and neither raises**, because the
+        refusal that exists to prevent exactly that was passed by both
+        while the file still looked untouched.
+
+        ``_save_lock`` cannot close this. It is an ``asyncio.Lock`` on
+        one instance, and the conflicting writer is a *different*
+        instance, in this process or another. :class:`FileLock` covers
+        both — it is the same lock ``AsyncFileDatabase`` already takes
+        for the same hazard on the same kind of single-file store.
+
+        The bracket lives here rather than in each store because the
+        sequence is identical in both, and a third store adopting
+        ``persist_path`` should inherit it rather than rediscover it.
+        """
+        with FileLock(path):
+            self._guard_persisted_identity(path, force=force)
+            yield
+            self._stamp_persisted_identity(path)
+
+    @contextlib.contextmanager
+    def _persisted_load(self, path: str) -> Iterator[bool]:
+        """Hold ``path``'s file lock across the read and the stamp after it.
+
+        Yields whether the file exists. A body told ``False`` must not
+        read, and nothing is stamped in that case — a store that read
+        nothing is in step with nothing.
+
+        The lock is not only about this instance's own save.
+        :meth:`_stamp_persisted_identity` writes two fields the save path
+        owns, so a load running inside a save can declare the store in
+        step with a file the save has not written yet, after which
+        ``close()`` skips persisting a mutation nobody wrote. And a store
+        that publishes two files — an index beside its side-car — renames
+        them one after the other, so an unlocked reader landing between
+        the two renames gets a new index with a stale side-car.
+        """
+        if not Path(path).parent.is_dir():
+            # A ``persist_path`` under a directory that does not exist
+            # yet is the ordinary first-run shape: ``save()`` creates the
+            # directory, ``load()`` finds nothing. Taking the lock first
+            # would mean opening a lockfile in a directory that is not
+            # there and failing the load outright.
+            yield False
+            return
+        with FileLock(path):
+            exists = Path(path).exists()
+            yield exists
+            if exists:
+                self._stamp_persisted_identity(path)
+
     def _write_then_publish(
         self,
         writes: list[tuple[str, Callable[[str], None]]],
     ) -> None:
         """Write each file to a scratch sibling, then rename them into place.
 
-        Each ``(final_path, write)`` pair is written to ``final_path +
-        ".tmp"``; only once *every* write has succeeded are the renames
-        performed. A write that fails — out of space, permissions, a
+        Each ``(final_path, write)`` pair is written to a uniquely named
+        scratch file in ``final_path``'s own directory; only once *every*
+        write has succeeded are the renames performed. A write that fails — out of space, permissions, a
         pickle that will not serialize — therefore leaves the existing
         files untouched, instead of replacing one of them and abandoning
         the caller with a half-updated pair whose two halves describe
@@ -676,7 +753,9 @@ class VectorStoreBase(StructuredConfigConsumer[VectorStoreConfig]):
 
         This is not a transaction across several files. ``os.replace`` is
         atomic per file, so a crash *between* two renames still leaves a
-        new file beside an old sibling. Making that impossible needs a
+        new file beside an old sibling — a concurrent *reader* is covered
+        by :meth:`_persisted_load` taking the same lock the publish is
+        under, but a crash is not. Making that impossible needs a
         single-file format or a write-ahead log, neither of which this
         change introduces. What it does remove is the far likelier
         failure: an error raised on the second write after the first has
@@ -694,6 +773,21 @@ class VectorStoreBase(StructuredConfigConsumer[VectorStoreConfig]):
         therefore refreshed on the way out, while ``_dirty`` stays set
         because nothing was persisted.
 
+        Each scratch file gets a name of its own. A fixed
+        ``<final>.tmp`` sibling is shared by every writer of that path,
+        so two of them stage over each other's bytes and the loser's
+        cleanup can unlink a file the winner is about to rename —
+        turning a silent clobber into a spurious ``FileNotFoundError``.
+        The cost of unique names is that a process killed mid-save
+        leaves its scratch file behind instead of having it overwritten
+        by the next save; one stray file is the better failure.
+
+        Permissions follow the file being replaced, where there is one.
+        ``mkstemp`` creates owner-only, and publishing that over an
+        existing file would silently narrow whatever mode the consumer
+        had set — as the previous fixed-name scratch silently *widened*
+        it to the umask default on every save.
+
         Scratch files are removed on any failure. Blocking I/O; callers
         run on a worker thread.
         """
@@ -701,8 +795,9 @@ class VectorStoreBase(StructuredConfigConsumer[VectorStoreConfig]):
         published: list[str] = []
         try:
             for final_path, write in writes:
-                tmp = f"{final_path}.tmp"
+                tmp = self._scratch_sibling(final_path)
                 write(tmp)
+                self._carry_mode(tmp, final_path)
                 staged.append((tmp, final_path))
             for tmp, final_path in staged:
                 os.replace(tmp, final_path)
@@ -717,6 +812,38 @@ class VectorStoreBase(StructuredConfigConsumer[VectorStoreConfig]):
                     os.unlink(tmp)
             if failed and self.persist_path is not None and str(self.persist_path) in published:
                 self._refresh_persisted_identity(str(self.persist_path))
+
+    @staticmethod
+    def _scratch_sibling(final_path: str) -> str:
+        """An empty, uniquely named file beside ``final_path``.
+
+        Beside it rather than in a temp directory so the publishing
+        ``os.replace`` stays within one filesystem, which is what makes
+        it atomic.
+        """
+        target = Path(final_path)
+        fd, tmp = tempfile.mkstemp(
+            dir=target.parent,
+            prefix=target.name + ".",
+            suffix=".tmp",
+        )
+        os.close(fd)
+        return tmp
+
+    @staticmethod
+    def _carry_mode(scratch: str, final_path: str) -> None:
+        """Give ``scratch`` the permissions of the file it will replace.
+
+        A no-op when there is nothing to replace: a file created here
+        keeps ``mkstemp``'s owner-only mode, which is the right default
+        for a store's own data and the one thing this cannot inherit.
+        """
+        try:
+            mode = Path(final_path).stat().st_mode & 0o777
+        except OSError:
+            return
+        with contextlib.suppress(OSError):
+            Path(scratch).chmod(mode)
 
     def _overfetch_sizes(
         self,
