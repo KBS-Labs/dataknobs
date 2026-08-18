@@ -102,19 +102,40 @@ class ChromaVectorStore(VectorStore):
         self.client: Any = None
         self.collection: Any = None
 
-    # chromadb's metadata contract is scalar-only (str/int/float/bool).
-    # It rejects an empty/``None`` metadata dict outright, and — worse —
-    # chromadb 1.x *silently accepts* a list-valued metadata value and
-    # then corrupts it: the value bleeds positionally across unrelated
-    # collections sharing chromadb's process-wide in-memory System
-    # (reproduced as cross-test ``metadata_fields`` contamination).
+    # chromadb rejects an empty/``None`` metadata dict outright, and its
+    # value domain is narrower than Python's. Every non-scalar value
+    # (any list — including ``[]`` — and any dict) is therefore encoded
+    # to a reversible scalar string on write and restored on read,
+    # preserving the cross-backend round-trip contract (Memory/FAISS
+    # preserve ``{"k": []}`` and ``{"k": [...]}`` as real values). The
+    # NUL-delimited prefixes make a real-value collision infeasible.
     #
-    # So every non-scalar value (any list — including ``[]`` — and any
-    # dict) is encoded to a reversible scalar string on write and
-    # restored on read, keeping chromadb scalar-only while preserving the
-    # cross-backend round-trip contract (Memory/FAISS preserve
-    # ``{"k": []}`` and ``{"k": [...]}`` as real values). The NUL-
-    # delimited prefixes make a real-value collision infeasible.
+    # Two things justified the blanket rule, and only one still does.
+    #
+    # Early chromadb 1.x *silently accepted* a list-valued metadata
+    # value and then corrupted it — the value bled positionally across
+    # unrelated collections sharing chromadb's process-wide in-memory
+    # System (reproduced as cross-test ``metadata_fields``
+    # contamination). That is fixed as of 1.5.9, which has first-class
+    # list metadata: a homogeneous non-empty list of str/int/float/bool
+    # round-trips intact, does not bleed, and supports a native
+    # ``$contains`` predicate. The declared floor is ``chromadb>=1.0.0``,
+    # so the hazard is still reachable for a consumer on an older 1.x.
+    #
+    # What no version accepts is an empty list, a heterogeneous list, or
+    # a dict — so the encoding cannot retire, only narrow.
+    #
+    # Narrowing it is worth doing: a natively-stored list would let the
+    # scalar-filter-against-list-metadata quadrant push down as
+    # ``$contains`` instead of driving the post-filter escalation that
+    # dominates this backend's query cost. It cannot be done as a code
+    # change alone. chromadb's operator set
+    # (``$gt $gte $lt $lte $ne $eq $in $nin $contains $not_contains``)
+    # has no prefix or pattern match, so an encoded value is invisible
+    # to every filter — pushing ``$contains`` down against a collection
+    # that still holds sentinel-encoded rows would silently miss them.
+    # It therefore needs a collection-level format marker gating the
+    # pushdown, plus a migration for existing collections.
     #
     # ``_EMPTY_LIST_SENTINEL`` is retained for backward-compatible decode
     # of data written by earlier versions (which sentinelled only ``[]``);
