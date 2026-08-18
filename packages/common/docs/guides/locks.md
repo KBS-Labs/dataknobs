@@ -19,6 +19,12 @@ The lock abstraction lets you:
 - **Scale from single-process** (in-memory) **to multi-replica** (a
   registry-pluggable distributed backend)
 
+Everything on this page up to [`FileLock`](#filelock-a-different-primitive)
+describes that abstraction. `FileLock` also lives in
+`dataknobs_common.locks` and is **not** an implementation of it — read
+that section before reaching for either, because the two are not
+interchangeable.
+
 ## Installation
 
 The in-process lock is included in `dataknobs-common`:
@@ -431,6 +437,67 @@ shape: `connection_string`, individual `host`/`port`/`database`/
 fallbacks. Requires the `postgres` extra
 (`pip install 'dataknobs-common[postgres]'`).
 
+## `FileLock` — a different primitive
+
+`FileLock` shares the module and shares nothing else. It is a
+synchronous, path-keyed, advisory lock on a single file, and it does
+not implement `DistributedLock`:
+
+| | `DistributedLock` | `FileLock` |
+|---|---|---|
+| Call style | `async` | synchronous |
+| Keyed by | an opaque string | a filesystem path |
+| Scope | whoever shares the backing store | whoever can see the path |
+| Contention | `acquire()` returns `False` on timeout | blocks without bound |
+| Where it runs | on the event loop | inside a worker thread |
+
+The last row is the one that decides which you want. `FileLock` guards
+blocking disk I/O that has already been pushed off the loop — there is
+no loop there to `await` on, so the async protocol cannot be used even
+where it would otherwise fit.
+
+```python
+from dataknobs_common.locks import FileLock
+
+# Inside a worker thread — never on the event loop.
+with FileLock("/var/lib/app/index.pkl"):
+    ...  # read-modify-write, serialized against every other holder
+```
+
+### What it guarantees
+
+Mutual exclusion against **every** overlapping holder, which takes two
+mechanisms rather than one:
+
+- **Within one process**, a `threading.Lock` per canonical path. POSIX
+  record locks (`fcntl.lockf`) are owned by the *process*, so without
+  this a second thread of the same interpreter is granted a lock the
+  first already holds — two instances of a store in one process would
+  get no exclusion at all.
+- **Across processes**, `fcntl.lockf` on POSIX and `msvcrt.locking` on
+  Windows, taken on a sibling `<path>.lock` file.
+
+Two spellings of one path — relative and absolute, a symlink and its
+target — resolve to the same lock.
+
+### What it does not
+
+- **Advisory, and local-filesystem only.** A writer that never takes
+  the lock is not stopped by it, and `fcntl` semantics over NFS and
+  similar network mounts are unreliable.
+- **`acquire()` blocks without bound.** Correct on a worker thread,
+  fatal on an event loop.
+- **Not reentrant.** One thread acquiring twice deadlocks.
+
+### The `.lock` file stays
+
+Releasing does not unlink `<path>.lock`, so a zero-byte file is left
+beside the target permanently. That is deliberate and load-bearing:
+closing the handle hands the lock to a blocked waiter, which then holds
+an inode with no name, and unlinking at that moment lets the next
+`acquire` create a *fresh* inode and lock that instead — two holders,
+no error.
+
 ## Usage Across DataKnobs
 
 | Package | Component | How It Uses the Lock |
@@ -455,6 +522,8 @@ from dataknobs_common.locks import (
     PostgresAdvisoryLock,
     # Typed config for the Postgres backend
     PostgresLockConfig,
+    # Separate primitive — see the section above
+    FileLock,
 )
 
 # Also re-exported from the top-level namespace:
@@ -463,5 +532,6 @@ from dataknobs_common import (
     create_lock,
     create_lock_async,
     InProcessLock,
+    FileLock,
 )
 ```

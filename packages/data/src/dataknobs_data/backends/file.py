@@ -7,12 +7,16 @@ import csv
 import gzip
 import json
 import os
-import platform
 import tempfile
 import threading
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+# Used here and re-exported by being bound here: ``FileLock`` moved to
+# ``dataknobs_common.locks`` once the vector stores needed it too, and
+# ``from dataknobs_data.backends.file import FileLock`` is the shape
+# callers already had.
+from dataknobs_common.locks import FileLock
 from dataknobs_common.structured_config import StructuredConfigConsumer
 
 from ..database import (
@@ -42,60 +46,6 @@ from .vector_config_mixin import VectorConfigMixin
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Iterator
     from typing import ClassVar
-
-
-class FileLock:
-    """Cross-platform file locking."""
-
-    def __init__(self, filepath: str):
-        self.filepath = filepath
-        self.lockfile = filepath + ".lock"
-        self.lock_handle = None
-
-    def acquire(self):
-        """Acquire the file lock."""
-        if platform.system() == "Windows":
-            import msvcrt
-
-            while True:
-                try:
-                    self.lock_handle = open(self.lockfile, "wb")
-                    msvcrt.locking(self.lock_handle.fileno(), msvcrt.LK_NBLCK, 1)
-                    break
-                except OSError:
-                    if self.lock_handle:
-                        self.lock_handle.close()  # type: ignore[unreachable]
-                    import time
-
-                    time.sleep(0.01)
-        else:
-            import fcntl
-
-            self.lock_handle = open(self.lockfile, "wb")
-            fcntl.lockf(self.lock_handle, fcntl.LOCK_EX)
-
-    def release(self):
-        """Release the file lock."""
-        if self.lock_handle:
-            if platform.system() == "Windows":  # type: ignore[unreachable]
-                import msvcrt
-
-                try:
-                    msvcrt.locking(self.lock_handle.fileno(), msvcrt.LK_UNLCK, 1)
-                except OSError:
-                    pass
-            self.lock_handle.close()
-            try:
-                os.remove(self.lockfile)
-            except (OSError, FileNotFoundError):
-                pass
-
-    def __enter__(self):
-        self.acquire()
-        return self
-
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        self.release()
 
 
 class FileFormat:

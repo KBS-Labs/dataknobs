@@ -31,6 +31,7 @@ from __future__ import annotations
 
 from .config import PostgresLockConfig
 from .factory import LockFactory, create_lock, create_lock_async, lock_backends
+from .file import FileLock
 from .lock import DistributedLock
 from .memory import InProcessLock
 from .postgres import PostgresAdvisoryLock
@@ -46,6 +47,7 @@ __all__ = [
     "LockFactory",
     # Default / testing implementation
     "InProcessLock",
+    "FileLock",
     # Cross-replica implementation
     "PostgresAdvisoryLock",
     # Typed config

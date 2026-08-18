@@ -9,6 +9,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`FileLock`** (`dataknobs_common.locks`) — a synchronous, path-keyed
+  advisory lock on a single file, for guarding blocking disk I/O that
+  has already been pushed off the event loop. It is **not** an
+  implementation of `DistributedLock`, which is async and keyed by an
+  opaque name; the two are not interchangeable, and the guide says which
+  to reach for.
+
+  Exclusion covers every overlapping holder, which needs two mechanisms
+  rather than one. Across processes it is `fcntl.lockf` (POSIX) or
+  `msvcrt.locking` (Windows) on a sibling `<path>.lock`. Within one
+  process it is a `threading.Lock` per canonical path — POSIX record
+  locks are owned by the *process*, so without that half a second thread
+  of the same interpreter is granted a lock the first already holds, and
+  two instances in one process get no exclusion at all. Two spellings of
+  one path resolve to the same lock.
+
+  The `.lock` file is left in place on release, deliberately: closing
+  the handle hands the lock to a blocked waiter holding a now-nameless
+  inode, and unlinking there lets the next `acquire` create a fresh
+  inode and lock that instead. Advisory and local-filesystem only, and
+  `acquire()` blocks without bound — correct on a worker thread, fatal
+  on an event loop.
+
 - **`PluginRegistry.is_known()`** — whether the registry recognises a name
   at all, which is the larger set once `declare_unavailable` is in use.
   `is_registered()` answers "can I build this?"; the two differ exactly
