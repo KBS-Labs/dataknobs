@@ -428,9 +428,11 @@ class ChromaVectorStore(VectorStore):
 
         # Over-fetch when post-filtering: the native ``where`` is looser
         # than the effective filter, so naive ``n_results=k`` may return
-        # zero post-filter matches. 4x is a pragmatic default; not made
-        # configurable in this item.
-        over_k = k * 4 if post_filter else k
+        # zero post-filter matches. The multiplier is the shared
+        # over-fetch policy, not a Chroma constant — Chroma takes the
+        # first size and stops, having no cheap count of the rows a
+        # wider fetch would reach.
+        over_k = next(self._overfetch_sizes(k, has_post_filter=bool(post_filter)))
 
         # Always fetch metadata when post-filtering (we need it for the
         # Python-side check) even if the caller didn't ask for it.
@@ -723,7 +725,8 @@ class ChromaVectorStore(VectorStore):
 
         where, post_filter = self._partition_filter_for_chroma(filter or {})
 
-        over_k = k * 4 if post_filter else k
+        # Same shared over-fetch policy as ``search`` above.
+        over_k = next(self._overfetch_sizes(k, has_post_filter=bool(post_filter)))
 
         # Always need metadata when post-filtering — caller-visible
         # surface still respects include_metadata.

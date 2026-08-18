@@ -14,12 +14,27 @@ from ..types import DistanceMetric
 from .config import VectorStoreConfig, VectorStoreTimestampConfig
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable
+    from collections.abc import Iterable, Iterator
 
     import numpy as np
 
 
 logger = logging.getLogger(__name__)
+
+
+POST_FILTER_OVERFETCH = 4
+"""Candidates fetched per requested row when a post-filter follows.
+
+A backend whose index cannot express the whole filter drops some of
+what it fetched, so asking the index for exactly ``k`` guarantees
+fewer than ``k`` survivors whenever anything is dropped. Over-fetching
+is the compensation, and this is how much of it there is.
+
+The value is a heuristic, not a bound: a filter matching fewer than
+one candidate in four still under-returns. Where the number of rows
+available to search is known, :meth:`VectorStoreBase._overfetch_sizes`
+escalates from here instead of settling for it.
+"""
 
 
 class VectorStoreBase(StructuredConfigConsumer[VectorStoreConfig]):
@@ -302,6 +317,60 @@ class VectorStoreBase(StructuredConfigConsumer[VectorStoreConfig]):
             for row in rows:
                 row.setdefault("domain_id", self.domain_id)
         return rows
+
+    def _overfetch_sizes(
+        self,
+        k: int,
+        *,
+        has_post_filter: bool,
+        ceiling: int | None = None,
+    ) -> Iterator[int]:
+        """Yield the sizes a search should fetch to still return ``k`` rows.
+
+        Every candidate a post-filter drops is a row the caller asked
+        for and does not get, so a backend that filters after its index
+        has already truncated to ``k`` must ask for more than ``k``.
+        This is the single place that decides how much more.
+
+        Without a post-filter the sequence is just ``k``: the index's
+        own truncation is already exact and over-fetching is waste.
+
+        With one, the first size is ``k * POST_FILTER_OVERFETCH``. A
+        caller that knows how many rows exist to search passes
+        ``ceiling``; the sequence then doubles from there, capped at
+        ``ceiling`` and ending on it, so the caller can keep asking
+        until enough rows match or the corpus is exhausted. A caller
+        with no such bound — a store whose index is queried remotely,
+        and which cannot cheaply say how many rows a wider fetch would
+        even reach — gets the single over-fetched size and stops.
+
+        Args:
+            k: Rows the caller asked for.
+            has_post_filter: Whether candidates are dropped after the
+                index returns them.
+            ceiling: Rows available to fetch, when the caller knows.
+
+        Yields:
+            Fetch sizes in increasing order. Callers stop as soon as
+            enough rows survive their filter.
+        """
+        if not has_post_filter:
+            yield k if ceiling is None else min(k, ceiling)
+            return
+
+        fetch = k * POST_FILTER_OVERFETCH
+        if ceiling is None:
+            yield fetch
+            return
+
+        while True:
+            capped = min(fetch, ceiling)
+            yield capped
+            if capped >= ceiling:
+                return
+            # ``capped + 1`` keeps a non-positive ``k`` from stalling the
+            # escalation at zero forever.
+            fetch = max(capped * 2, capped + 1)
 
     def _match_metadata_filter(
         self,
