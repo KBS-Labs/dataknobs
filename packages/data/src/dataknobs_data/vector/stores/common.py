@@ -793,7 +793,33 @@ class VectorStoreBase(StructuredConfigConsumer[VectorStoreConfig]):
             # there and failing the load outright.
             yield False
             return
-        with FileLock(path):
+
+        with contextlib.ExitStack() as stack:
+            try:
+                stack.enter_context(FileLock(path))
+            except OSError as exc:
+                # Taking the lock means creating or opening
+                # ``<path>.lock``, so a directory this process cannot
+                # write is a directory it cannot lock — an index baked
+                # into a read-only image layer, or served from a
+                # read-only mount. Failing here would refuse a load that
+                # worked before the lock existed.
+                #
+                # Degrading is sound rather than merely convenient, and
+                # only on this side: publishing is ``os.replace`` into
+                # this same directory, so a writer to exclude cannot
+                # exist here either. ``_persisted_save`` keeps the hard
+                # lock, because there the write *is* the thing that
+                # needs excluding.
+                logger.warning(
+                    "%s: could not take the persist lock on %s (%s). Reading "
+                    "without it: nothing can be published into a directory "
+                    "this process cannot write, so there is no concurrent "
+                    "writer to exclude.",
+                    type(self).__name__,
+                    path,
+                    exc,
+                )
             exists = Path(path).exists()
             yield exists
             if exists:

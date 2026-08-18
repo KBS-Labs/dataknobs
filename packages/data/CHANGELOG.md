@@ -367,6 +367,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   entry are now both `fsync`ed, so staging protects against a power cut
   and not only against a crashed process.
 
+- **A read-only `persist_path` directory no longer refuses to load.**
+  Holding the file lock means creating or opening `<path>.lock`, so
+  taking it on the read path made a *load* require write access that a
+  load never needed — an index baked into a read-only image layer, or
+  served from a read-only mount, stopped opening. `load()` now falls
+  back to an unlocked read and logs at `WARNING`. Only the read path
+  does: nothing can be published into a directory this process cannot
+  write, so there is no concurrent writer to exclude, while `save()`
+  keeps the hard lock because there the write *is* what needs excluding.
+
 - **`save(force=True)` returned silently.** It is a deliberate
   destructive bypass of the staleness check, and it is now logged at
   `WARNING` every time, saying whether anything was actually discarded

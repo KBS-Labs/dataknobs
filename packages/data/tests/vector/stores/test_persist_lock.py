@@ -30,7 +30,9 @@ Reviewing those fixes found more, covered below:
 * a published file was not ``fsync``ed before the rename that publishes
   it, so staging survived a crashed process but not a power cut,
 * the ``makedirs`` the lock depends on stayed duplicated in each store
-  instead of moving into the bracket with it.
+  instead of moving into the bracket with it,
+* taking the lock made a *read* require write access to the directory,
+  which refuses an index on a read-only mount.
 """
 
 from __future__ import annotations
@@ -466,3 +468,42 @@ async def test_the_shared_bracket_creates_the_directory_it_locks_in(
     assert await asyncio.to_thread(target.exists), "the bracket did not create its directory"
 
     await _shutdown(store)
+
+
+@pytest.mark.skipif(hasattr(os, "geteuid") and os.geteuid() == 0, reason="root ignores file modes")
+@pytest.mark.parametrize("backend", BACKENDS)
+async def test_a_read_only_directory_still_loads(backend: str, tmp_path: Path) -> None:
+    """Taking the lock must not become a requirement to *read*.
+
+    ``FileLock`` opens ``<path>.lock`` ``O_RDWR``, so a directory this
+    process cannot write is a directory it cannot lock — an index baked
+    into a read-only image layer, or served from a read-only mount. Both
+    loaded before the lock existed and failed outright after it.
+
+    Degrading is sound rather than lenient, and only here: publishing is
+    an ``os.replace`` into this same directory, so a writer to exclude
+    cannot exist. ``_persisted_save`` keeps the hard lock.
+    """
+    served = tmp_path / "served"
+    await asyncio.to_thread(served.mkdir)
+    persist = served / "shared.idx"
+
+    writer = await _open(_base(backend), persist)
+    await _ingest(writer, "row", 3, seed=1)
+    await writer.save()
+    await _shutdown(writer)
+
+    def make_read_only() -> None:
+        # Drop the lockfile first: an existing one is openable without
+        # creating anything, so leaving it would hide the failure.
+        for lock in served.glob("*.lock"):
+            lock.unlink()
+        served.chmod(0o555)
+
+    await asyncio.to_thread(make_read_only)
+    try:
+        reopened = await _open(_base(backend), persist)
+        assert await reopened.count() == 3, "a read-only directory refused a load"
+        await _shutdown(reopened)
+    finally:
+        await asyncio.to_thread(served.chmod, 0o755)
