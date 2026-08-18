@@ -23,19 +23,23 @@ caller constructs the lock on its event loop and offloads only
 ``acquire`` to a worker thread, so construction has to stay off the
 filesystem however the exclusion above is implemented.
 
-Two more failures of the same kind — exclusion reported but not
+Three more failures of the same kind — exclusion reported but not
 delivered — were found reviewing the two fixes above, and are covered
 below:
 
 * **A symlink and its target took two locks.** The lockfile was
   ``realpath(filepath + ".lock")``, and only the target is a symlink, so
   the suffix stopped ``realpath`` from resolving anything.
+* **A forked child inherited a locked mutex** held by a thread that does
+  not exist in the child, and blocked on it forever.
 * **Acquiring truncated the lockfile**, which stopped being harmless
   once the file became permanent.
 """
 
 from __future__ import annotations
 
+import os
+import signal
 import subprocess
 import sys
 import threading
@@ -294,3 +298,62 @@ def test_acquiring_does_not_truncate_the_lockfile(tmp_path: Path) -> None:
         pass
 
     assert lockfile.read_bytes() == b"owner=1234\n", "acquire truncated the lockfile"
+
+
+@pytest.mark.skipif(not hasattr(os, "fork"), reason="fork is POSIX-only")
+# Forking a threaded parent is the hazard under test, not an accident, so
+# the interpreter's warning about it is expected output here.
+@pytest.mark.filterwarnings("ignore:This process .* is multi-threaded:DeprecationWarning")
+def test_a_forked_child_is_not_wedged_by_an_inherited_mutex(tmp_path: Path) -> None:
+    """A child forked while another thread held the lock can still acquire.
+
+    Only the forking thread survives a fork, so a mutex held by any other
+    thread is locked in the child with no owner left to release it. Pre-
+    fix the child blocked on that inherited mutex forever — and
+    ``acquire`` had no timeout to escape through, so the child was wedged
+    rather than slow.
+
+    ``fork`` from a threaded parent is exactly the hazard under test, so
+    the child does the minimum and leaves via ``os._exit``: no cleanup
+    handlers, no imports, nothing that could take a second inherited
+    lock and confuse the result.
+    """
+    target = tmp_path / "state.bin"
+    target.write_bytes(b"")
+
+    holder_inside = threading.Event()
+    may_release = threading.Event()
+
+    def hold() -> None:
+        with FileLock(str(target)):
+            holder_inside.set()
+            may_release.wait(timeout=10)
+
+    thread = threading.Thread(target=hold)
+    thread.start()
+    assert holder_inside.wait(timeout=10), "the holder thread never got the lock"
+
+    pid = os.fork()
+    if pid == 0:  # pragma: no cover — the child never reports coverage
+        # SIGALRM kills the child outright if the acquire never returns,
+        # which the parent reads as "did not exit normally".
+        signal.alarm(10)
+        try:
+            with FileLock(str(target)):
+                pass
+        except BaseException:
+            os._exit(1)
+        os._exit(0)
+
+    # Let the child reach its acquire while the lock is genuinely held,
+    # so it is the fork — not a free lock — that decides the outcome.
+    time.sleep(0.2)
+    may_release.set()
+    thread.join(timeout=10)
+
+    _, status = os.waitpid(pid, 0)
+    assert os.WIFEXITED(status), (
+        "the forked child never returned from acquire — it inherited a mutex "
+        "locked by a thread that does not exist in the child"
+    )
+    assert os.WEXITSTATUS(status) == 0, "the forked child failed to acquire"

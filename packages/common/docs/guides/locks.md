@@ -519,6 +519,16 @@ under the usual `022` is `0o644` and locks out an unprivileged writer
 for good, which a deployment sharing a directory across uids has to
 solve with a permissive umask.
 
+### Across a fork
+
+The intra-process mutex registry is reset in the child after
+`os.fork()`. Only the forking thread survives, so a mutex any other
+thread held is locked in the child with no owner left to release it,
+and the child's first `acquire()` on that path would block on a holder
+that does not exist. The registry is process-local bookkeeping — the OS
+lock is not inherited across a fork either — so rebuilding it is the
+correct reconstruction, not a workaround.
+
 ## Usage Across DataKnobs
 
 | Package | Component | How It Uses the Lock |

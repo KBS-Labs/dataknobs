@@ -39,6 +39,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `acquire()` blocks without bound — correct on a worker thread, fatal
   on an event loop.
 
+  The mutex registry is reset in a forked child, where an inherited
+  mutex is locked by a thread that no longer exists.
+
   Advisory and local-filesystem only. Holding the lock needs
   create-or-write permission on the target's directory even to read
   under it, so a read path on a read-only mount should degrade to an

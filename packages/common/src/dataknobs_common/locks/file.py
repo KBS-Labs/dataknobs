@@ -68,6 +68,16 @@ the usual ``022`` is ``0o644`` and locks out an unprivileged writer for
 good. A deployment sharing a directory across uids needs a permissive
 umask; there is no mode this module can pass that substitutes for one.
 
+## Across a fork
+
+The mutex registry is reset in the child after ``os.fork``. Only the
+forking thread survives, so a mutex another thread held at the moment of
+the fork stays locked forever in the child, and the child's first
+acquire on that path would block on a holder that does not exist. The
+registry entries are process-local bookkeeping — the OS lock is not
+inherited across a fork either — so discarding them is the correct
+reconstruction rather than a workaround.
+
 ## What it does not promise
 
 * **Advisory, and local-filesystem only.** A writer that never takes the
@@ -107,10 +117,12 @@ _LockKey = tuple[int, int]
 _intra_process_locks: dict[_LockKey, threading.Lock] = {}
 """One mutex per lockfile inode, shared by every instance.
 
-Never pruned. An entry costs a few dozen bytes and the set is bounded by
-how many distinct files the process locks, whereas dropping one while a
-holder still had it would silently reopen the defect this exists to
-close — a later acquirer would build a second mutex and walk in.
+Never pruned while the process lives. An entry costs a few dozen bytes
+and the set is bounded by how many distinct files the process locks,
+whereas dropping one while a holder still had it would silently reopen
+the defect this exists to close — a later acquirer would build a second
+mutex and walk in. Reset wholesale in a forked child, where every entry
+is unreconstructable rather than merely stale; see ``_reset_after_fork``.
 """
 
 _registry_guard = threading.Lock()
@@ -125,6 +137,25 @@ def _mutex_for(key: _LockKey) -> threading.Lock:
             mutex = threading.Lock()
             _intra_process_locks[key] = mutex
         return mutex
+
+
+def _reset_after_fork() -> None:
+    """Discard inherited mutex state in a forked child.
+
+    Every entry is unrecoverable rather than merely stale: only the
+    forking thread exists here, so a mutex any other thread held is
+    locked with no owner left to release it, and ``_registry_guard``
+    itself is in that set — a fork landing inside ``_mutex_for`` would
+    otherwise wedge every path in the child, not just one file's.
+    """
+    global _registry_guard  # noqa: PLW0603 — rebuilding process-global state
+
+    _intra_process_locks.clear()
+    _registry_guard = threading.Lock()
+
+
+if hasattr(os, "register_at_fork"):  # POSIX only; no fork on Windows.
+    os.register_at_fork(after_in_child=_reset_after_fork)
 
 
 class FileLock:
