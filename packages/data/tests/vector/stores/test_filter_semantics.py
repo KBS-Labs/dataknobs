@@ -17,6 +17,13 @@ same on every shipping backend (``MemoryVectorStore``,
 PgVector additionally must preserve metadata types (booleans stay
 booleans, numbers stay numbers) — covered by a small set of
 pgvector-only cases.
+
+Result *count* is part of the contract too, not only the matching id
+set: a filtered ``search`` returns ``k`` rows whenever ``k`` rows match,
+however far outside the unfiltered top-``k`` they fall. The
+four-quadrant cases below cannot see that — they run a 5-row corpus at
+``k=10`` — so the last section runs a corpus larger than ``k`` on every
+backend.
 """
 
 from __future__ import annotations
@@ -436,3 +443,117 @@ async def test_config_domain_id_scopes_update_metadata_where(
     assert cross == 0
     # The scoped store still sees exactly its two in-domain rows.
     assert await domain_scoped_store.count() == 2
+
+
+# ---------------------------------------------------------------------------
+# Result *count* when the filter's matches fall outside the global top-k.
+#
+# Every case above runs a 5-row corpus at ``k=10``, so ``k >= ntotal``
+# always and each backend returns every matching row whatever order it
+# searched in. Those cases prove *which* rows match; they cannot prove
+# *how many* are returned. A backend that truncates to ``k`` first and
+# drops the non-matching rows afterwards passes all of them and still
+# returns fewer than ``k`` — frequently zero — as soon as the corpus is
+# larger than ``k`` and rows carrying another filter value sit nearer the
+# probe.
+#
+# The filter below is a scalar over scalar metadata, which Chroma
+# translates into its native ``where`` rather than a residual Python
+# post-filter. A shortfall here is therefore the truncate-then-filter
+# ordering and not the dilution bound of an over-fetched post-filter.
+# ---------------------------------------------------------------------------
+
+_TOPK_DECOYS = 3
+_TOPK_TARGETS = 9
+_TOPK_K = 3
+
+
+def _topk_corpus() -> tuple[np.ndarray, list[str], list[dict[str, Any]]]:
+    """Twelve rows in which the three nearest the probe are excluded.
+
+    Row ``i`` is ``[1, t, 0, 0]`` for an increasing ``t``, so similarity
+    to the probe ``[1, 0, 0, 0]`` falls monotonically under every metric
+    these backends default to. The three ``group="other"`` rows take the
+    smallest ``t`` and so own the global top-3; the nine
+    ``group="target"`` rows follow in order.
+    """
+    offsets = [0.01, 0.02, 0.03] + [0.1 * (i + 1) for i in range(_TOPK_TARGETS)]
+    vectors = np.array([[1.0, t, 0.0, 0.0] for t in offsets], dtype=np.float32)
+    ids = [f"other{i}" for i in range(_TOPK_DECOYS)]
+    ids += [f"target{i}" for i in range(_TOPK_TARGETS)]
+    metadata: list[dict[str, Any]] = [{"group": "other"} for _ in range(_TOPK_DECOYS)]
+    metadata += [{"group": "target"} for _ in range(_TOPK_TARGETS)]
+    return vectors, ids, metadata
+
+
+def _topk_query() -> np.ndarray:
+    """Probe the axis the corpus fans out from."""
+    return np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float32)
+
+
+@pytest_asyncio.fixture(
+    params=[
+        pytest.param("memory", id="memory"),
+        pytest.param(
+            "faiss",
+            id="faiss",
+            marks=pytest.mark.skipif(not is_faiss_available(), reason="faiss not installed"),
+        ),
+        pytest.param(
+            "chroma",
+            id="chroma",
+            marks=pytest.mark.skipif(not is_chromadb_available(), reason="chromadb not installed"),
+        ),
+        pytest.param("pgvector", id="pgvector", marks=_pgvector_marks),
+    ]
+)
+async def topk_store(
+    request: pytest.FixtureRequest, pgvector_config: dict[str, Any]
+) -> AsyncIterator[Any]:
+    """Store seeded with a corpus larger than the ``k`` used below."""
+    backend = request.param
+    store: Any
+    if backend == "memory":
+        store = MemoryVectorStore({"dimensions": 4})
+    elif backend == "faiss":
+        store = FaissVectorStore({"dimensions": 4, "metric": "cosine"})
+    elif backend == "chroma":
+        store = ChromaVectorStore(
+            {
+                "dimensions": 4,
+                "collection_name": f"test_topk_{uuid.uuid4().hex[:8]}",
+            }
+        )
+    elif backend == "pgvector":
+        store = PgVectorStore(pgvector_config)
+    else:
+        pytest.fail(f"Unknown backend param: {backend}")
+
+    await store.initialize()
+    try:
+        vectors, ids, metadata = _topk_corpus()
+        await store.add_vectors(vectors, ids=ids, metadata=metadata)
+        yield store
+    finally:
+        await _teardown_backend(backend, store)
+        await store.close()
+
+
+@pytest.mark.asyncio
+async def test_filtered_search_returns_k_when_k_rows_match(topk_store: Any) -> None:
+    """``search`` returns a full ``k`` whenever ``k`` rows match.
+
+    All nine matching rows sit outside the unfiltered top-3, so a
+    backend applying the filter after truncating to ``k`` returns
+    nothing at all here while ``count`` reports the nine it holds.
+    """
+    available = await topk_store.count(filter={"group": "target"})
+    assert available == _TOPK_TARGETS
+
+    results = await topk_store.search(_topk_query(), k=_TOPK_K, filter={"group": "target"})
+
+    assert len(results) == _TOPK_K, (
+        f"store holds {available} matching rows; search(k={_TOPK_K}) returned "
+        f"{len(results)}: {[r[0] for r in results]}"
+    )
+    assert [r[0] for r in results] == ["target0", "target1", "target2"]

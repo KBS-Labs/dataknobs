@@ -78,6 +78,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **A FAISS `persist_path` written by two overlapping instances now
+  raises instead of silently discarding one of them.** `save()` — and
+  the implicit one inside `close()` — serializes the instance's whole
+  in-memory index over the file, so two stores holding one path with
+  overlapping lifetimes each wrote a snapshot that had never seen the
+  other's rows, and the earlier writer's rows were gone from disk
+  entirely. A store now records the file's identity when it reads or
+  writes it and raises
+  `dataknobs_common.exceptions.ConcurrencyError` rather than overwrite
+  a file that changed underneath it. Sequential lifetimes are
+  unaffected and keep appending, and a single writer saving repeatedly
+  is unaffected. Concurrent writers need a backend that supports them,
+  such as `pgvector`.
+
+- **The post-filter over-fetch multiplier is one shared policy.**
+  `ChromaVectorStore` held two hard-coded copies of `k * 4`; both now
+  come from `VectorStoreBase._overfetch_sizes`, with the same value and
+  the same behavior. `dataknobs_bots`' knowledge-layer over-fetch is
+  deliberately *not* merged into it — that one compensates for
+  tombstone visibility rather than for scope, and coupling them would
+  tie the knowledge layer's swap semantics to a store constant.
+
 - **`UserStateStoreConfig.backend` now defaults to `None`, not `"memory"`.**
   The typed default was forwarded unconditionally, so a config that named
   no backend reached the factory as an explicit choice and the absence was
@@ -154,6 +176,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   registration. It now raises a `ValueError` naming both.
 
 ### Fixed
+
+- **`FaissVectorStore.search(filter=...)` applied the filter after the
+  index had already truncated to `k`.** A filtered search returned only
+  the matching rows that happened to fall inside the global top-`k`
+  window — frequently none of them — while `count(filter=...)` reported
+  the full number the store held, so a populated store simply retrieved
+  nothing and said nothing about it. It now selects the matching rows
+  from `metadata_store` and scores them directly from the vector
+  side-car, returning a full `k` whenever `k` rows match, in the order
+  and with the scores an unfiltered search would have given them. This
+  matches `MemoryVectorStore` and `PgVectorStore`, which is what the
+  cross-backend semantics doc already promised.
+
+  Most visible on a store configured with a `domain_id`, where the
+  scope is composed into every call and so every search was a filtered
+  one, and worst where the configured tenant is small relative to its
+  co-tenants. But no scoping was needed to reach it: any
+  caller-supplied `filter=` whose matches sat outside the unfiltered
+  top-`k` was affected.
+
+  Filtered search is exact on every index type as a result, including
+  `hnsw` and `ivfflat`, and no longer uses the index — see
+  `VECTOR_FILTER_SEMANTICS.md` for what that costs and when to prefer
+  `pgvector`. Unfiltered search is unchanged.
 
 - **`is_default_backend()` reads the default's aliases when given a
   registry.** Without one it compares names, so a config spelling the

@@ -622,6 +622,7 @@ dummy-variable-rgx = "^(_+|(_+[a-zA-Z0-9_]*[a-zA-Z0-9]+?))$"
 "packages/data/tests/test_file_temp_default.py" = ["ASYNC240"]  # four existence assertions — the temp-file lifecycle is what this suite asserts, so the stats are the test's subject-matter, not I/O it performs incidentally
 "packages/data/tests/test_vector_stores.py" = ["ASYNC230"]  # one pickle write constructing a legacy-format store to load
 "packages/data/tests/vector/stores/test_update_metadata_where.py" = ["ASYNC230"]  # a pickle read/write pair that downgrades a fixture to the legacy shape under test
+"packages/data/tests/vector/stores/test_faiss_filtered_search.py" = ["ASYNC230"]  # a pickle read/write pair rewriting a saved .meta into the pre-side-car shape the fallback path exists for. Scaffolding, not the subject: the store's own persistence is driven inside assert_no_blocking() by test_faiss_async_offload.py, and search is what this file asserts on. Function-scoped loop (no widening in packages/data), no concurrency scheduled
 "packages/data/tests/examples/test_vector_multi_backend.py" = ["ASYNC240"]  # one `finally:` unlink
 "packages/bots/tests/test_knowledge.py" = ["ASYNC230", "ASYNC240"]  # two fixture writes plus three assertions that the KB persisted to disk
 "packages/bots/tests/test_knowledge_service.py" = ["ASYNC240"]  # two write_text calls creating the documents to be ingested

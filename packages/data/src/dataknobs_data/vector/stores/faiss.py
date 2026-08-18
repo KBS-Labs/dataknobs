@@ -7,8 +7,11 @@ import logging
 import os
 import pickle
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
+
+from dataknobs_common.exceptions import ConcurrencyError
 
 from ..types import DistanceMetric
 from .base import VectorStore
@@ -63,7 +66,10 @@ class FaissVectorStore(VectorStore):
         self.ef_search = self.index_params.get("ef_search", 50)  # For HNSW search
         self.nprobe = self.search_params.get("nprobe", 10)  # For IVF search
 
-        self.index = None
+        # ``faiss`` ships no type information, so the live index is typed
+        # the way every helper that builds one already is: the concrete
+        # class varies by index type and swaps under ``_build_deferred_ivf``.
+        self.index: Any = None
         self.id_map = {}  # Map from our IDs to Faiss internal indices
         self.metadata_store = {}  # Store metadata separately
         # internal_id -> (created_at, updated_at). Aware UTC datetimes.
@@ -95,6 +101,14 @@ class FaissVectorStore(VectorStore):
         # load ``False`` (a persisted IVF index is necessarily trained,
         # since pre-fix a sub-``nlist`` first batch could not be added).
         self._deferred_ivf: bool = False
+        # Identity of the persisted index file as this instance last saw
+        # it — from ``load()``, or from its own most recent ``save()``.
+        # ``save()`` refuses to write over a file that no longer matches,
+        # because it serializes this instance's whole in-memory index and
+        # would drop every row another instance added meanwhile. None
+        # until a file has been read or written. See
+        # :meth:`_file_identity`.
+        self._persisted_identity: tuple[int, int, int] | None = None
 
     async def initialize(self) -> None:
         """Initialize Faiss index."""
@@ -410,7 +424,17 @@ class FaissVectorStore(VectorStore):
         include_metadata: bool = True,
         include_timestamps: bool = False,
     ) -> list[tuple[str, float, dict[str, Any] | None]]:
-        """Search for similar vectors."""
+        """Search for similar vectors.
+
+        An unfiltered search is answered by the FAISS index. A filtered
+        one is not, and cannot be: the index has no way to express the
+        filter, so it returns a top-``k`` window that the filter then
+        empties — a small co-tenant occupying the window is enough to
+        return nothing at all from a store holding hundreds of matching
+        rows. The matching rows are selected from ``metadata_store`` and
+        scored directly instead, which is exact on every index type and
+        is the answer ``MemoryVectorStore`` gives for the same corpus.
+        """
         if not self._initialized:
             await self.initialize()
 
@@ -430,6 +454,11 @@ class FaissVectorStore(VectorStore):
         if hasattr(inner, "nprobe"):
             inner.nprobe = self.nprobe
 
+        # An empty filter drops nothing, so it takes the index path with
+        # everything else that is unfiltered.
+        if filter:
+            return self._search_filtered(query, k, filter, include_metadata, inject)
+
         # Search
         k = min(k, self.index.ntotal)  # Don't search for more than we have
         if k == 0:
@@ -438,41 +467,205 @@ class FaissVectorStore(VectorStore):
         scores, indices = self.index.search(query, k)
 
         # Convert results
-        results = []
         reverse_id_map = {v: k for k, v in self.id_map.items()}
+        results = []
 
         for i in range(len(indices[0])):
-            internal_id = indices[0][i]
+            internal_id = int(indices[0][i])
             if internal_id == -1:  # No result
                 continue
-
-            score = float(scores[0][i])
-
-            # Convert score based on metric
-            if self.metric == DistanceMetric.COSINE:
-                # Inner product of normalized vectors = cosine similarity
-                score = score  # noqa: PLW0127 - Keep for clarity
-            elif self.metric in (DistanceMetric.EUCLIDEAN, DistanceMetric.L2):
-                # Convert distance to similarity score
-                score = 1.0 / (1.0 + score)
-
-            # Get external ID
-            ext_id = reverse_id_map.get(internal_id, str(internal_id))
-
-            # Apply metadata filter if provided. Fetch metadata even
-            # when not returning it to the caller so the filter can be
-            # evaluated post-top-k.
-            metadata = self.metadata_store.get(internal_id)
-            if filter and not self._match_metadata_filter(metadata, filter):
-                continue
-
-            out_meta = metadata if include_metadata else None
-            if inject:
-                created, updated = self.timestamps.get(internal_id, (None, None))
-                out_meta = self._inject_timestamps(out_meta, created=created, updated=updated)
-            results.append((ext_id, score, out_meta))
+            results.append(
+                self._result_row(
+                    internal_id,
+                    float(scores[0][i]),
+                    reverse_id_map,
+                    include_metadata,
+                    inject,
+                )
+            )
 
         return results
+
+    def _score_from_raw(self, raw: float) -> float:
+        """Convert a raw FAISS metric value into the score callers see.
+
+        Cosine is an inner product of normalized vectors, which already
+        *is* the similarity. L2 arrives as a distance and is inverted.
+        Every other configured metric maps onto one of those two FAISS
+        metrics (:meth:`_faiss_metric`) and its raw value is reported
+        unchanged, which is what callers have always received.
+
+        Both search paths convert here, so a filtered search and an
+        unfiltered one report the same number for the same row.
+        """
+        if self.metric == DistanceMetric.COSINE:
+            # Inner product of normalized vectors = cosine similarity
+            return raw
+        if self.metric in (DistanceMetric.EUCLIDEAN, DistanceMetric.L2):
+            return 1.0 / (1.0 + raw)
+        return raw
+
+    def _result_row(
+        self,
+        internal_id: int,
+        raw: float,
+        reverse_id_map: dict[int, str],
+        include_metadata: bool,
+        inject: bool,
+    ) -> tuple[str, float, dict[str, Any] | None]:
+        """Assemble one result tuple. Shared by both search paths."""
+        ext_id = reverse_id_map.get(internal_id, str(internal_id))
+        out_meta = self.metadata_store.get(internal_id) if include_metadata else None
+        if inject:
+            created, updated = self.timestamps.get(internal_id, (None, None))
+            out_meta = self._inject_timestamps(out_meta, created=created, updated=updated)
+        return (ext_id, self._score_from_raw(raw), out_meta)
+
+    def _raw_index_scores(self, query: np.ndarray, matrix: np.ndarray) -> np.ndarray:
+        """Reproduce over ``matrix`` the values ``index.search`` returns.
+
+        Because :meth:`_score_from_raw` converts for both paths, this
+        has to produce what FAISS itself produces: an inner product
+        under ``METRIC_INNER_PRODUCT``, a **squared** L2 distance under
+        ``METRIC_L2``. Computing an unsquared distance here would give a
+        filtered search different scores from an unfiltered one over the
+        same rows.
+        """
+        import numpy as np
+
+        row = query.reshape(-1)
+        if self._faiss_metric() == faiss.METRIC_INNER_PRODUCT:
+            return np.asarray(matrix @ row, dtype=np.float64)
+        diff = matrix - row
+        return np.asarray(np.einsum("ij,ij->i", diff, diff), dtype=np.float64)
+
+    def _search_filtered(
+        self,
+        query: np.ndarray,
+        k: int,
+        filter: dict[str, Any],
+        include_metadata: bool,
+        inject: bool,
+    ) -> list[tuple[str, float, dict[str, Any] | None]]:
+        """Score the rows matching ``filter`` and return the best ``k``.
+
+        Walks ``metadata_store`` for the matches — the same walk
+        ``count(filter=...)`` already performs — then scores only those
+        rows from the ``self.vectors`` side-car. A filtered search
+        therefore leaves the approximate index and becomes exact over
+        the matching subset: strictly less work than
+        ``MemoryVectorStore`` does for the same query, since that scans
+        every row and scores the survivors. Unfiltered search keeps the
+        index and is untouched.
+        """
+        import numpy as np
+
+        if k <= 0:
+            return []
+
+        matching = [
+            internal_id
+            for internal_id, metadata in self.metadata_store.items()
+            if self._match_metadata_filter(metadata, filter)
+        ]
+        if not matching:
+            return []
+
+        stored = [
+            self.vectors[internal_id] for internal_id in matching if internal_id in self.vectors
+        ]
+        if len(stored) != len(matching):
+            return self._search_filtered_via_index(
+                query,
+                k,
+                filter,
+                include_metadata,
+                inject,
+                matched=len(matching),
+                scorable=len(stored),
+            )
+
+        raw = self._raw_index_scores(query, np.vstack(stored))
+        # Inner product ranks high-to-low, L2 distance low-to-high;
+        # ``stable`` keeps ties in insertion order so repeated searches
+        # over one corpus agree with each other.
+        nearest_first = -raw if self._faiss_metric() == faiss.METRIC_INNER_PRODUCT else raw
+        order = np.argsort(nearest_first, kind="stable")
+
+        reverse_id_map = {v: k for k, v in self.id_map.items()}
+        return [
+            self._result_row(
+                matching[position],
+                float(raw[position]),
+                reverse_id_map,
+                include_metadata,
+                inject,
+            )
+            for position in order[:k]
+        ]
+
+    def _search_filtered_via_index(
+        self,
+        query: np.ndarray,
+        k: int,
+        filter: dict[str, Any],
+        include_metadata: bool,
+        inject: bool,
+        *,
+        matched: int,
+        scorable: int,
+    ) -> list[tuple[str, float, dict[str, Any] | None]]:
+        """Filter over-fetched index results when the side-car is short.
+
+        ``_load_from_disk`` reads the vector side-car with a default, so
+        a ``.meta`` pickle written before the side-car existed loads
+        empty against a fully populated index — scoring the matching
+        subset would return nothing for such a store. The filter is
+        applied to index results instead, over-fetching and escalating
+        so that it under-returns only where the index itself cannot
+        reach the rows.
+
+        Recoverable by re-ingesting, which is why this is a WARNING and
+        not silence: a shortfall here is indistinguishable to a caller
+        from a store that genuinely holds no more matches.
+        """
+        logger.warning(
+            "FAISS search: %d of the %d rows matching the filter have no "
+            "stored vector (index holds %d); falling back to a filtered index "
+            "scan, which can return fewer than k rows. Re-ingest the store to "
+            "restore exact filtered search.",
+            matched - scorable,
+            matched,
+            self.index.ntotal,
+        )
+
+        reverse_id_map = {v: k for k, v in self.id_map.items()}
+        results: list[tuple[str, float, dict[str, Any] | None]] = []
+
+        for fetch in self._overfetch_sizes(k, has_post_filter=True, ceiling=self.index.ntotal):
+            if fetch <= 0:
+                break
+            scores, indices = self.index.search(query, fetch)
+            results = []
+            for i in range(len(indices[0])):
+                internal_id = int(indices[0][i])
+                if internal_id == -1:  # No result
+                    continue
+                if not self._match_metadata_filter(self.metadata_store.get(internal_id), filter):
+                    continue
+                results.append(
+                    self._result_row(
+                        internal_id,
+                        float(scores[0][i]),
+                        reverse_id_map,
+                        include_metadata,
+                        inject,
+                    )
+                )
+            if len(results) >= k:
+                break
+
+        return results[:k]
 
     async def update_metadata(
         self,
@@ -504,10 +697,10 @@ class FaissVectorStore(VectorStore):
         """Merge ``set_`` into metadata of every filter-matched vector.
 
         Operates purely on the ``metadata_store`` side-car (keyed by
-        internal id) that :meth:`search` already post-filters against
-        (``faiss.py`` filtering is post-retrieval; the FAISS index is
-        pure-vector and has nothing to invalidate), so this is the same
-        mechanism as ``clear(filter=)`` / ``count(filter=)``.
+        internal id) that :meth:`search` selects its matches from — the
+        FAISS index is pure-vector, knows nothing about metadata, and
+        so has nothing to invalidate here. Same mechanism as
+        ``clear(filter=)`` / ``count(filter=)``.
         """
         if not self._initialized:
             await self.initialize()
@@ -631,16 +824,58 @@ class FaissVectorStore(VectorStore):
         }
         await asyncio.to_thread(self._save_to_disk, index_snapshot, meta_snapshot)
 
+    @staticmethod
+    def _file_identity(path: str) -> tuple[int, int, int] | None:
+        """Identify the file at ``path``, or ``None`` if there is none.
+
+        Modification time, size and inode together: any single one of
+        them can repeat across two different writes (coarse timestamp
+        resolution, an equal-sized index, a reused inode), and the three
+        together do not. Deliberately not a content hash — this runs
+        before every save, and an index large enough to matter is an
+        index too large to re-read for the check.
+
+        Blocking ``stat``; both callers already run on a worker thread.
+        """
+        try:
+            stat = Path(path).stat()
+        except FileNotFoundError:
+            return None
+        return (stat.st_mtime_ns, stat.st_size, stat.st_ino)
+
     def _save_to_disk(self, index: Any, meta: dict[str, Any]) -> None:
         """Synchronous disk write — run via ``to_thread`` from :meth:`save`.
 
         Receives a loop-side snapshot (a cloned index and a dict of
         shallow-copied mappings); reads only those, never the live
         ``self.*`` state, so a concurrent mutation cannot corrupt the
-        write.
+        write. That protects against this instance's own event loop; the
+        staleness check below protects against a different instance,
+        which the snapshot cannot see at all.
         """
         # Convert Path to string for FAISS
         persist_path_str = str(self.persist_path)
+
+        # Refuse to overwrite a file that changed since this instance
+        # read or wrote it. ``write_index`` replaces the file wholesale
+        # with this instance's snapshot, so proceeding would discard
+        # every row another instance persisted in the meantime — total,
+        # silent loss for the earlier writer.
+        current = self._file_identity(persist_path_str)
+        if current != self._persisted_identity:
+            raise ConcurrencyError(
+                "The FAISS index file changed since this store read it, so "
+                "saving would replace another writer's rows with this "
+                "instance's snapshot. A persist_path is single-writer: give "
+                "each store instance its own path, keep their lifetimes "
+                "sequential, or use a backend that supports concurrent "
+                "writers, such as pgvector.",
+                context={
+                    "persist_path": persist_path_str,
+                    "loaded": self._persisted_identity is not None,
+                    "exists_now": current is not None,
+                },
+            )
 
         # Create directory if needed
         parent_dir = os.path.dirname(persist_path_str)
@@ -654,6 +889,10 @@ class FaissVectorStore(VectorStore):
         metadata_path = persist_path_str + ".meta"
         with open(metadata_path, "wb") as f:
             pickle.dump(meta, f)
+
+        # This instance is now the file's last writer; a further save of
+        # its own must not trip the check above.
+        self._persisted_identity = self._file_identity(persist_path_str)
 
     async def load(self) -> None:
         """Load index and metadata from disk.
@@ -682,6 +921,9 @@ class FaissVectorStore(VectorStore):
 
         # Load index
         self.index = faiss.read_index(persist_path_str)
+        # What a later save() compares against to tell its own writes
+        # from another instance's.
+        self._persisted_identity = self._file_identity(persist_path_str)
         logger.info(
             "FAISS: Loaded index from %s with %d vectors",
             persist_path_str,
