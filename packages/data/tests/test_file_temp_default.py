@@ -184,3 +184,84 @@ class TestTempCleanupWaitsForInFlightWork:
         assert closed.is_set()
         assert not os.path.exists(filepath)
         assert not os.path.exists(filepath + ".lock")
+
+
+class TestCompressedDatabaseLocking:
+    """A compressed database must lock the file it actually writes.
+
+    ``FileLock`` goes to some length to give one file one lock however it
+    is spelled — the lockfile is a sibling of the *resolved* target, and
+    the intra-process mutex is keyed by its inode. All of that is
+    defeated one layer up if the caller hands it the wrong path, which
+    is what building the lock before the ``.gz`` suffix is applied did:
+    ``{"path": "data.json", "compression": "gzip"}`` wrote
+    ``data.json.gz`` while locking ``data.json.lock``, so the same data
+    file reached through the two spellings got no exclusion at all.
+    """
+
+    def test_a_compressed_sync_database_locks_the_file_it_writes(self, tmp_path):
+        """The lockfile is a sibling of the compressed data file."""
+        db = SyncFileDatabase({"path": str(tmp_path / "data.json"), "compression": "gzip"})
+        db.create(Record({"test": "value"}))
+
+        assert (tmp_path / "data.json.gz").exists(), "the data file is compressed"
+        assert (tmp_path / "data.json.gz.lock").exists(), (
+            "the lock was taken on the data file's own sibling"
+        )
+        assert not (tmp_path / "data.json.lock").exists(), (
+            "the lock was taken on a path nothing writes — a second instance "
+            "reaching the same file as 'data.json.gz' locks a different file "
+            "and both proceed"
+        )
+
+    @pytest.mark.asyncio
+    async def test_a_compressed_async_database_locks_the_file_it_writes(self, tmp_path):
+        """Same defect, same fix, in the async backend."""
+        db = AsyncFileDatabase({"path": str(tmp_path / "data.json"), "compression": "gzip"})
+        await db.create(Record({"test": "value"}))
+
+        assert (tmp_path / "data.json.gz").exists(), "the data file is compressed"
+        assert (tmp_path / "data.json.gz.lock").exists(), (
+            "the lock was taken on the data file's own sibling"
+        )
+        assert not (tmp_path / "data.json.lock").exists(), (
+            "the lock was taken on a path nothing writes"
+        )
+
+    def test_the_two_spellings_of_one_compressed_file_share_a_lock(self, tmp_path):
+        """``path=x.json`` + gzip and ``path=x.json.gz`` are one file.
+
+        The lock has to agree. Asserting on the lockfile each instance
+        resolves is what makes this a statement about exclusion rather
+        than about string handling — two different lockfiles is exactly
+        what "both writers proceed" looks like from here.
+        """
+        implicit = SyncFileDatabase({"path": str(tmp_path / "data.json"), "compression": "gzip"})
+        explicit = SyncFileDatabase({"path": str(tmp_path / "data.json.gz")})
+
+        assert implicit.filepath == explicit.filepath
+        assert implicit._file_lock.filepath == explicit._file_lock.filepath, (
+            "two spellings of one data file took two different lockfiles"
+        )
+
+    def test_closing_a_compressed_temp_database_leaves_nothing_behind(self):
+        """A temp database with compression cleans up both of its files.
+
+        ``tempfile`` reserves ``<stem>.json``; a configured compression
+        then moves the data to ``<stem>.json.gz``, so the reservation is
+        a second artifact rather than the same one under another name.
+        An unconfigured file database is created per process, so
+        whichever one ``close()`` misses leaks a ``/tmp`` entry per run.
+        """
+        db = SyncFileDatabase({"compression": "gzip"})
+        db.create(Record({"test": "value"}))
+        stub = db.filepath.removesuffix(".gz")
+
+        assert os.path.exists(db.filepath), "precondition: the data file is there"
+        db.close()
+
+        assert not os.path.exists(db.filepath), "the data file outlived close()"
+        assert not os.path.exists(db.filepath + ".lock"), "the lockfile outlived close()"
+        assert not os.path.exists(stub), (
+            "the pre-compression temp file outlived close() — one leaked /tmp entry per process"
+        )

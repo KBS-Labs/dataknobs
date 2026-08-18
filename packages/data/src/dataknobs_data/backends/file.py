@@ -293,8 +293,8 @@ class ParquetFormat(FileFormat):
             raise ImportError("Parquet support requires pandas and pyarrow packages") from e
 
 
-def _remove_temp_artifacts(filepath: str) -> None:
-    """Remove a temp database's own file and lockfile. Best effort.
+def _remove_temp_artifacts(filepath: str, reservation: str | None = None) -> None:
+    """Remove a temp database's own files and lockfile. Best effort.
 
     Unlinking a lockfile is the defect ``FileLock`` was fixed to stop
     doing: release hands the lock to a blocked waiter, and removing the
@@ -311,16 +311,63 @@ def _remove_temp_artifacts(filepath: str) -> None:
       Without that, a ``close()`` concurrent with an in-flight write
       unlinks the lockfile that write is holding.
 
-    Leaving the file behind is not the safer default: an unconfigured
-    file database is created per process, so a lockfile that outlives it
-    leaks one ``/tmp`` entry per run forever.
+    Leaving a file behind is not the safer default: an unconfigured file
+    database is created per process, so anything that outlives it leaks
+    one ``/tmp`` entry per run forever.
+
+    Args:
+        filepath: The data file, whose ``.lock`` sibling goes with it.
+        reservation: The name ``tempfile`` reserved, when a configured
+            compression renamed the data file away from it. It is a
+            second artifact rather than the same one spelled
+            differently, and it is what keeps the compressed name
+            unique, so it is held until here rather than dropped at
+            setup.
     """
     with contextlib.suppress(OSError):
-        if os.path.exists(filepath):
-            Path(filepath).unlink()
-        lock_file = filepath + ".lock"
-        if os.path.exists(lock_file):
-            Path(lock_file).unlink()
+        for path in (filepath, filepath + ".lock", reservation):
+            if path is not None and os.path.exists(path):
+                Path(path).unlink()
+
+
+def _resolve_file_target(
+    filepath: str,
+    fmt: str | None,
+    compression: str | None,
+    handlers: dict[str, type[FileFormat]],
+) -> tuple[str, str, str | None, type[FileFormat]]:
+    """Settle path, format, compression and handler as one answer.
+
+    The four are interdependent — a ``.gz`` suffix names the
+    compression, the stem beneath it names the format, and a configured
+    compression *renames the file* — so deriving them apart is what let
+    the path one of them was taken from drift from the path the data is
+    written to. Returning them together is what makes the drift
+    impossible rather than merely fixed: there is one ``filepath``, and
+    it is the final one.
+
+    Shared by both backends for the same reason ``_load_file_data`` is.
+    The two ``_setup`` bodies had this block verbatim, so a defect in it
+    was a defect in both.
+
+    Returns:
+        The path actually read and written, the resolved format name,
+        the resolved compression, and the handler for the format.
+    """
+    # Detect format from the file extension when it was not configured.
+    if not fmt:
+        path = Path(filepath)
+        if path.suffix == ".gz":
+            compression = "gzip"
+            path = Path(path.stem)
+        ext = path.suffix.lower()
+        fmt = ext.lstrip(".") if ext in handlers else "json"
+
+    # Apply compression to the path, which is what makes it the final one.
+    if compression == "gzip" and not filepath.endswith(".gz"):
+        filepath += ".gz"
+
+    return filepath, fmt, compression, handlers.get(f".{fmt}", JSONFormat)
 
 
 def _load_file_data(
@@ -429,32 +476,21 @@ class AsyncFileDatabase(  # type: ignore[misc]
             self.filepath = cfg.path
             self._is_temp_file = False
 
-        self.format = cfg.format
-        self.compression = cfg.compression
+        reserved = self.filepath
+        self.filepath, self.format, self.compression, self.handler = _resolve_file_target(
+            self.filepath, cfg.format, cfg.compression, self.FORMAT_HANDLERS
+        )
+        # Set only when compression renamed the data file away from the
+        # name ``tempfile`` reserved, leaving two files to clean up.
+        self._temp_reservation = (
+            reserved if self._is_temp_file and reserved != self.filepath else None
+        )
         self._lock = asyncio.Lock()
+        # Built from the *resolved* path, which is the whole reason the
+        # line sits here rather than above: a configured compression
+        # renames the data file, and a lock on the pre-rename name is a
+        # lock on a file nothing reads or writes.
         self._file_lock = FileLock(self.filepath)
-
-        # Detect format from file extension if not specified
-        if not self.format:
-            path = Path(self.filepath)
-            # Check for compression
-            if path.suffix == ".gz":
-                self.compression = "gzip"
-                path = Path(path.stem)
-
-            ext = path.suffix.lower()
-            if ext in self.FORMAT_HANDLERS:
-                self.format = ext.lstrip(".")
-            else:
-                self.format = "json"  # Default to JSON
-
-        # Apply compression to filepath if specified
-        if self.compression == "gzip" and not self.filepath.endswith(".gz"):
-            self.filepath += ".gz"
-
-        # Get the appropriate format handler
-        ext = f".{self.format}"
-        self.handler = self.FORMAT_HANDLERS.get(ext, JSONFormat)
 
         # Initialize vector support
         self._apply_vector_config(cfg.vector_enabled, cfg.vector_metric)
@@ -760,7 +796,11 @@ class AsyncFileDatabase(  # type: ignore[misc]
             # Under the instance lock, which is what makes removing the
             # lockfile safe here — see ``_remove_temp_artifacts``.
             async with self._lock:
-                await asyncio.to_thread(_remove_temp_artifacts, self.filepath)
+                await asyncio.to_thread(
+                    _remove_temp_artifacts,
+                    self.filepath,
+                    getattr(self, "_temp_reservation", None),
+                )
 
 
 class SyncFileDatabase(  # type: ignore[misc]
@@ -812,32 +852,21 @@ class SyncFileDatabase(  # type: ignore[misc]
             self.filepath = cfg.path
             self._is_temp_file = False
 
-        self.format = cfg.format
-        self.compression = cfg.compression
+        reserved = self.filepath
+        self.filepath, self.format, self.compression, self.handler = _resolve_file_target(
+            self.filepath, cfg.format, cfg.compression, self.FORMAT_HANDLERS
+        )
+        # Set only when compression renamed the data file away from the
+        # name ``tempfile`` reserved, leaving two files to clean up.
+        self._temp_reservation = (
+            reserved if self._is_temp_file and reserved != self.filepath else None
+        )
         self._lock = threading.RLock()
+        # Built from the *resolved* path, which is the whole reason the
+        # line sits here rather than above: a configured compression
+        # renames the data file, and a lock on the pre-rename name is a
+        # lock on a file nothing reads or writes.
         self._file_lock = FileLock(self.filepath)
-
-        # Detect format from file extension if not specified
-        if not self.format:
-            path = Path(self.filepath)
-            # Check for compression
-            if path.suffix == ".gz":
-                self.compression = "gzip"
-                path = Path(path.stem)
-
-            ext = path.suffix.lower()
-            if ext in self.FORMAT_HANDLERS:
-                self.format = ext.lstrip(".")
-            else:
-                self.format = "json"  # Default to JSON
-
-        # Apply compression to filepath if specified
-        if self.compression == "gzip" and not self.filepath.endswith(".gz"):
-            self.filepath += ".gz"
-
-        # Get the appropriate format handler
-        ext = f".{self.format}"
-        self.handler = self.FORMAT_HANDLERS.get(ext, JSONFormat)
 
         # Initialize vector support
         self._apply_vector_config(cfg.vector_enabled, cfg.vector_metric)
@@ -1147,4 +1176,4 @@ class SyncFileDatabase(  # type: ignore[misc]
             # Under the instance lock, for the reason the async sibling
             # takes it — see ``_remove_temp_artifacts``.
             with self._lock:
-                _remove_temp_artifacts(self.filepath)
+                _remove_temp_artifacts(self.filepath, getattr(self, "_temp_reservation", None))

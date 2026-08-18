@@ -331,6 +331,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A compressed file database locked a path nothing read or wrote.**
+  `SyncFileDatabase` / `AsyncFileDatabase` built their `FileLock` before
+  applying the `.gz` suffix a configured `compression` implies, so
+  `{"path": "data.json", "compression": "gzip"}` wrote `data.json.gz`
+  while locking `data.json.lock`. The same data file reached the other
+  way — `{"path": "data.json.gz"}`, gzip auto-detected — locked
+  `data.json.gz.lock`, so two instances over one file were serialized
+  by nothing. `FileLock` resolves symlinks and keys its mutex by inode
+  to guarantee one file gets one lock however it is spelled; this
+  defeated all of it from the caller's side by naming the wrong file.
+
+  Path, format, compression and handler are now resolved together, by
+  one function both backends call, and the lock is built from the
+  result. They are interdependent — a `.gz` suffix names the
+  compression, the stem beneath it names the format, and a configured
+  compression renames the file — and the two `_setup` bodies had
+  derived them apart, identically, which is why the defect was in both.
+
+  A temp database with `compression` set also leaked the name
+  `tempfile` reserved: `close()` removed the compressed file and its
+  lockfile but not the `.json` stub beneath, one `/tmp` entry per
+  process. The stub is what keeps the compressed name unique, so it is
+  held until `close()` rather than dropped at setup.
+
 - **Two single-file vector stores over one `persist_path` could both
   write, with neither raising.** `FaissVectorStore` and
   `MemoryVectorStore` refuse to overwrite a file that changed since
