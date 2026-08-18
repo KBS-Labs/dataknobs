@@ -110,10 +110,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **`SyncFileDatabase` and `AsyncFileDatabase` leave a `<path>.lock`
   file beside their data file.** It is no longer removed when the lock
-  is released, because removing it is what let two holders in: closing
-  the handle hands the lock to a blocked waiter holding a now-nameless
-  inode, and unlinking there lets the next acquirer create a fresh inode
-  and lock that instead. Two instances of either backend in one process
+  is released, because removing it is what let two holders in: release
+  hands the lock to a blocked waiter holding a now-nameless inode, and
+  unlinking there lets the next acquirer create a fresh inode and lock
+  that instead. Two instances of either backend in one process
   are also genuinely serialized now, which they were not before —
   `fcntl` record locks are owned by the process, so the second acquire
   used to be granted immediately.

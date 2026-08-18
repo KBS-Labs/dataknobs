@@ -29,12 +29,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   target share one lock; the mutex is keyed by that lockfile's
   `(st_dev, st_ino)`, so hard links and case-insensitive volumes do too.
 
-  The `.lock` file is left in place on release, deliberately: closing
-  the handle hands the lock to a blocked waiter holding a now-nameless
-  inode, and unlinking there lets the next `acquire` create a fresh
-  inode and lock that instead. Because it is permanent it is never
-  truncated, and it is created `0o666` before umask so one uid's
-  lockfile stays openable by another that can write the directory.
+  The `.lock` file is left in place on release, deliberately: release
+  hands the lock to a blocked waiter holding a now-nameless inode, and
+  unlinking there lets the next `acquire` create a fresh inode and lock
+  that instead. Because it is permanent it is never truncated, and it
+  is created `0o666` before umask so one uid's lockfile stays openable
+  by another that can write the directory.
+
+  The descriptor is left open too, and for a sharper reason: closing
+  any descriptor referring to a file releases every record lock the
+  process holds on it, whatever descriptor took them. One descriptor
+  per lockfile inode is therefore owned by a process-wide registry
+  rather than by a `FileLock`, opened once and never closed, and
+  release is `LOCK_UN` on it. A handle per instance would mean a
+  *refused* acquire released a lock another thread was holding.
 
   `acquire()` blocks without bound by default and returns `True`;
   `FileLock(path, timeout=...)` bounds the wait, returning `False`
@@ -43,8 +51,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   shared `asyncio.to_thread` executor, where an unbounded wait parks a
   pooled worker for as long as the holder runs.
 
-  The mutex registry is reset in a forked child, where an inherited
-  mutex is locked by a thread that no longer exists.
+  The registry is reset in a forked child, where an inherited mutex is
+  locked by a thread that no longer exists; the inherited descriptors
+  are closed there too, which is safe exactly because a fork inherits
+  no record locks, and necessary so that one of them cannot later
+  release a lock the child takes.
 
   Advisory and local-filesystem only. Holding the lock needs
   create-or-write permission on the target's directory even to read

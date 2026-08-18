@@ -35,10 +35,18 @@ below:
 * **Acquiring truncated the lockfile**, which stopped being harmless
   once the file became permanent.
 
-The remaining two cover ``timeout``, which is a new knob rather than a
-fixed defect: every caller reaches ``acquire`` through
-``asyncio.to_thread``, where an unbounded wait parks a thread of the
-loop's shared executor.
+Two cover ``timeout``, which is a new knob rather than a fixed defect:
+every caller reaches ``acquire`` through ``asyncio.to_thread``, where an
+unbounded wait parks a thread of the loop's shared executor.
+
+The last two are one defect in two settings, found reviewing the knob
+against the fixes. Closing *any* descriptor on a file releases every
+record lock the process holds on it, so a per-instance handle meant a
+thread that was correctly *refused* the lock released the holder's on
+its way out, and a descriptor inherited across a fork released the
+child's. Both are invisible from inside the process — the mutex refused
+the second thread, the holder still believes it holds the lock — so
+both read the verdict from an external observer.
 """
 
 from __future__ import annotations
@@ -413,3 +421,141 @@ def test_a_forked_child_is_not_wedged_by_an_inherited_mutex(tmp_path: Path) -> N
         "locked by a thread that does not exist in the child"
     )
     assert os.WEXITSTATUS(status) == 0, "the forked child failed to acquire"
+
+
+_PROBE = """
+import fcntl, os, sys
+
+fd = os.open(sys.argv[1], os.O_CREAT | os.O_RDWR, 0o666)
+try:
+    fcntl.lockf(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+except OSError:
+    print("BLOCKED")
+else:
+    print("GRANTED")
+"""
+"""Ask, from outside this process, whether the lock is currently free.
+
+An external observer is the only one that can see the failure below: the
+intra-process mutex still excludes the second thread, so every assertion
+available inside this interpreter passes while the lock is gone.
+"""
+
+
+def _lock_is_held_externally(lockfile: str) -> bool:
+    """Whether a separate process is refused the lock on ``lockfile``."""
+    result = subprocess.run(
+        [sys.executable, "-c", _PROBE, lockfile],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return result.stdout.strip() == "BLOCKED"
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX record-lock semantics")
+def test_a_refused_acquire_does_not_release_the_holder(tmp_path: Path) -> None:
+    """A second thread giving up must not drop the lock the first holds.
+
+    ``fcntl(2)``: closing *any* descriptor referring to a file releases
+    every lock the process holds on it, whichever descriptor took them.
+    So a second thread that opens the lockfile, fails to get the mutex,
+    and closes its handle on the way out releases a lock it never took
+    and does not know about — the first thread's.
+
+    The give-up path is what a bounded ``acquire`` runs, and a bounded
+    acquire is what the docs recommend to every ``asyncio.to_thread``
+    caller, so the two features compose into the defect. Nothing inside
+    this interpreter can see it: the mutex correctly refuses the second
+    thread, and the first still believes it holds the lock. Only a
+    separate process can observe that the lock is now free.
+    """
+    target = tmp_path / "index.pkl"
+    target.write_bytes(b"")
+    lockfile = str(target) + ".lock"
+
+    holder = FileLock(str(target))
+    assert holder.acquire() is True
+    try:
+        assert _lock_is_held_externally(lockfile), (
+            "precondition: an outside process must be refused while the lock is held"
+        )
+
+        refused: list[bool] = []
+
+        def give_up() -> None:
+            refused.append(FileLock(str(target), timeout=0.05).acquire())
+
+        thread = threading.Thread(target=give_up)
+        thread.start()
+        thread.join()
+        assert refused == [False], "the second thread should have been refused"
+
+        assert _lock_is_held_externally(lockfile), (
+            "a refused acquire released the lock the first thread still "
+            "holds — two writers can now be inside the section"
+        )
+    finally:
+        holder.release()
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX fork and record locks")
+def test_a_forked_child_does_not_lose_its_lock_to_an_inherited_descriptor(
+    tmp_path: Path,
+) -> None:
+    """A descriptor inherited across a fork must not release the child's lock.
+
+    The child inherits every open descriptor, including the one this
+    process holds the lockfile open on, but inherits none of the record
+    locks. So the inherited descriptor is a live second reference to a
+    file the child is about to lock through a *different* one — and by
+    the same POSIX rule as above, closing it releases what the child
+    holds.
+
+    Fixed by closing the inherited descriptors in the fork handler
+    rather than merely dropping them. That is the one moment at which
+    closing is safe, precisely because the child holds no lock yet.
+
+    Reads the outcome from an external process for the same reason as
+    the refused-acquire test: inside the child, a released lock and a
+    held one look identical.
+    """
+    target = tmp_path / "state.bin"
+    target.write_bytes(b"")
+    lockfile = str(target) + ".lock"
+
+    # Hold the lock across the fork, so the child inherits a descriptor
+    # on a lockfile this process has genuinely locked.
+    holder = FileLock(str(target))
+    assert holder.acquire() is True
+
+    read_fd, write_fd = os.pipe()
+    pid = os.fork()
+    if pid == 0:  # pragma: no cover — the child never reports coverage
+        signal.alarm(10)
+        os.close(read_fd)
+        try:
+            child_lock = FileLock(str(target))
+            child_lock.acquire()  # Waits for the parent below to release.
+            # Anything that would close an inherited descriptor: the
+            # parent's lock object is still reachable here.
+            holder.release()
+            held = _lock_is_held_externally(lockfile)
+            os.write(write_fd, b"held" if held else b"lost")
+        except BaseException:
+            os.write(write_fd, b"errd")
+        os._exit(0)
+
+    os.close(write_fd)
+    # Let the child reach its acquire before the lock becomes free, so
+    # it takes the lock through a descriptor of its own.
+    time.sleep(0.2)
+    holder.release()
+
+    verdict = os.read(read_fd, 4)
+    os.close(read_fd)
+    os.waitpid(pid, 0)
+    assert verdict == b"held", (
+        "the child's lock was released by a descriptor it inherited across "
+        "the fork — a second process can now enter the section with it"
+    )

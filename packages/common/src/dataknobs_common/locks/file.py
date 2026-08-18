@@ -47,15 +47,30 @@ a lock that two spellings of one path can both hold excludes nothing:
   volumes where ``realpath`` preserves the case it was handed and
   ``/d/Index.pkl`` and ``/d/index.pkl`` are one file spelled two ways.
 
-## The lockfile outlives its holder
+## Both the name and the descriptor outlive every holder
 
-Releasing does **not** unlink ``<path>.lock``, and that is the whole of
-why a handover is safe. Closing the handle grants the lock to a blocked
-waiter, which now holds an inode with no name; unlinking at that moment
-would let the next ``acquire`` create a *fresh* inode and lock that
-instead, putting two holders inside the section. So a zero-byte
-``.lock`` file is left beside the target permanently — the conventional
-shape for exactly this reason, and cheap next to what removing it costs.
+Releasing unlocks; it does **not** unlink ``<path>.lock`` and does not
+close the descriptor. The two are one point, and it is the subtlest
+thing here.
+
+*The name*, because release hands the lock to a blocked waiter, which
+now holds an inode with no name; unlinking at that moment would let the
+next ``acquire`` create a *fresh* inode and lock that instead, putting
+two holders inside the section. So a zero-byte ``.lock`` file is left
+beside the target permanently — the conventional shape for exactly this
+reason, and cheap next to what removing it costs.
+
+*The descriptor*, because of a POSIX rule with no analogue elsewhere in
+the standard: closing **any** descriptor referring to a file releases
+every record lock the process holds on that file, whatever descriptor
+took them. A per-instance handle therefore makes a second thread's
+cleanup lethal — it opens the lockfile, finds the mutex taken, closes
+its handle on the way out, and releases a lock it never held and does
+not know about. Nothing inside the process can observe that: the mutex
+correctly refused the second thread, and the holder still believes it
+holds the lock. So there is exactly one descriptor per lockfile inode,
+owned by the registry rather than by any instance, opened once and
+closed never — see ``_LockEntry``. Release is ``LOCK_UN`` on it.
 
 The lockfile is opened and **never truncated**, which matters only
 because it is now permanent: the previous ``open(path, "wb")`` discarded
@@ -70,13 +85,18 @@ umask; there is no mode this module can pass that substitutes for one.
 
 ## Across a fork
 
-The mutex registry is reset in the child after ``os.fork``. Only the
-forking thread survives, so a mutex another thread held at the moment of
-the fork stays locked forever in the child, and the child's first
-acquire on that path would block on a holder that does not exist. The
-registry entries are process-local bookkeeping — the OS lock is not
-inherited across a fork either — so discarding them is the correct
-reconstruction rather than a workaround.
+The registry is reset in the child after ``os.fork``, both halves of it.
+Only the forking thread survives, so a mutex another thread held at the
+moment of the fork stays locked forever in the child, and the child's
+first acquire on that path would block on a holder that does not exist.
+The inherited descriptors are closed in the same handler, which is the
+one instant at which that is safe *and* the only one at which it is
+sufficient: record locks are not inherited across a fork, so the child
+provably holds none to lose, and closing before it can acquire anything
+is what stops an inherited descriptor from later releasing a lock the
+child does hold. The entries are process-local bookkeeping either way,
+so discarding them is the correct reconstruction rather than a
+workaround.
 
 ## What it does not promise
 
@@ -107,11 +127,13 @@ reconstruction rather than a workaround.
 
 from __future__ import annotations
 
+import contextlib
 import os
 import sys
 import threading
 import time
-from typing import IO, TYPE_CHECKING, Self
+from pathlib import Path
+from typing import TYPE_CHECKING, Self
 
 from ..exceptions import TimeoutError as DataknobsTimeoutError
 
@@ -121,15 +143,40 @@ if TYPE_CHECKING:
 _LockKey = tuple[int, int]
 """``(st_dev, st_ino)`` of a lockfile — see the module docstring."""
 
-_intra_process_locks: dict[_LockKey, threading.Lock] = {}
-"""One mutex per lockfile inode, shared by every instance.
 
-Never pruned while the process lives. An entry costs a few dozen bytes
-and the set is bounded by how many distinct files the process locks,
-whereas dropping one while a holder still had it would silently reopen
-the defect this exists to close — a later acquirer would build a second
-mutex and walk in. Reset wholesale in a forked child, where every entry
-is unreconstructable rather than merely stale; see ``_reset_after_fork``.
+class _LockEntry:
+    """The process-wide state for one lockfile inode.
+
+    Pairs the intra-process mutex with the descriptor the OS lock is
+    taken on, because the two have to share a lifetime: the descriptor
+    must outlive every holder, and the mutex is what makes that safe.
+
+    ``fd`` is the *only* descriptor this process ever opens on the
+    inode. Opened once and closed never, because closing any descriptor
+    on a file releases every record lock the process holds on it — so a
+    descriptor per :class:`FileLock` would let one instance's cleanup
+    release another's lock. ``-1`` once a fork has invalidated it, which
+    is the one time the descriptor is closed; see ``_reset_after_fork``.
+    """
+
+    __slots__ = ("fd", "mutex")
+
+    def __init__(self, mutex: threading.Lock, fd: int) -> None:
+        self.mutex = mutex
+        self.fd = fd
+
+
+_intra_process_locks: dict[_LockKey, _LockEntry] = {}
+"""One entry per lockfile inode, shared by every instance.
+
+Never pruned while the process lives. An entry costs a mutex, a
+descriptor and a dict slot, and the set is bounded by how many distinct
+files the process locks, whereas dropping one while a holder still had
+it would silently reopen the defect this exists to close — a later
+acquirer would build a second mutex and walk in, and closing the
+descriptor would release the holder's lock outright. Reset wholesale in
+a forked child, where every entry is unreconstructable rather than
+merely stale; see ``_reset_after_fork``.
 """
 
 _registry_guard = threading.Lock()
@@ -142,28 +189,115 @@ Only reached on the timeout path: an unbounded acquire blocks in the
 kernel rather than spinning.
 """
 
+_IDENTITY_ATTEMPTS = 3
+"""Times to re-look-up a lockfile that was replaced mid-registration.
 
-def _mutex_for(key: _LockKey) -> threading.Lock:
-    """The process-wide mutex for ``key``, created on first request."""
-    with _registry_guard:
-        mutex = _intra_process_locks.get(key)
-        if mutex is None:
-            mutex = threading.Lock()
-            _intra_process_locks[key] = mutex
-        return mutex
+Only a foreign actor unlinking the lockfile can cause one retry, and
+that is the interference the module already declares unsupported; the
+bound is here so a pathological loop terminates rather than spins.
+"""
+
+
+def _entry_for(lockfile: str) -> _LockEntry:
+    """The process-wide entry for ``lockfile``, created on first request.
+
+    The inode is read with a **path** stat rather than by opening the
+    file, and that is load-bearing rather than incidental. A descriptor
+    is what makes the identity exact, but opening one to ask the
+    question is what this function exists to avoid: if the inode turns
+    out to be registered already, the descriptor is a second one on a
+    file this process may hold a lock on, and closing it would release
+    that lock. So the descriptor is opened only on the branch that
+    commits to keeping it forever.
+    """
+    for _ in range(_IDENTITY_ATTEMPTS):
+        try:
+            # A stat on the *path*, which is the whole point: it reads
+            # the inode without opening a descriptor on it.
+            stat = Path(lockfile).stat()
+        except FileNotFoundError:
+            _create_lockfile(lockfile)
+            continue
+        key = (stat.st_dev, stat.st_ino)
+        with _registry_guard:
+            entry = _intra_process_locks.get(key)
+            if entry is not None:
+                # Registered, so no descriptor is opened at all: this
+                # process may hold a record lock on the inode, and a
+                # second descriptor is exactly what must not exist.
+                return entry
+            # Unregistered, so this process holds no lock on the inode —
+            # every lock it takes goes through an entry — which is what
+            # makes opening, and closing again below, safe here.
+            try:
+                fd = os.open(lockfile, os.O_RDWR)
+            except FileNotFoundError:
+                # Unlinked between the stat and the open; recreate and
+                # look it up again.
+                continue
+            opened = os.fstat(fd)
+            if (opened.st_dev, opened.st_ino) == key:
+                entry = _LockEntry(threading.Lock(), fd)
+                _intra_process_locks[key] = entry
+                return entry
+            # Replaced between the stat and the open, so the descriptor
+            # is on some other inode. If that one is registered, this
+            # descriptor is deliberately leaked rather than closed: the
+            # entry may be locked through its own, and closing any
+            # descriptor would release that lock. One leaked descriptor
+            # per foreign unlink, against dropping a live lock.
+            replaced = _intra_process_locks.get((opened.st_dev, opened.st_ino))
+            if replaced is not None:
+                return replaced
+            os.close(fd)
+    raise OSError(
+        f"FileLock: {lockfile} was replaced on every attempt to identify "
+        "it. Something outside this process is unlinking lockfiles, which "
+        "defeats the lock — see the dataknobs_common.locks.file docstring."
+    )
+
+
+def _create_lockfile(lockfile: str) -> None:
+    """Create ``lockfile`` if it is not there, leaving no lock behind.
+
+    ``O_EXCL`` so the descriptor closed here is provably one nobody can
+    hold a lock through: it is a file that did not exist a moment ago.
+    A concurrent creator winning the race is the ordinary outcome, not
+    an error — the caller re-stats either way.
+    """
+    try:
+        fd = os.open(lockfile, os.O_CREAT | os.O_EXCL | os.O_RDWR, 0o666)
+    except FileExistsError:
+        return
+    os.close(fd)
 
 
 def _reset_after_fork() -> None:
-    """Discard inherited mutex state in a forked child.
+    """Discard inherited lock state in a forked child.
 
-    Every entry is unrecoverable rather than merely stale: only the
-    forking thread exists here, so a mutex any other thread held is
-    locked with no owner left to release it, and ``_registry_guard``
-    itself is in that set — a fork landing inside ``_mutex_for`` would
-    otherwise wedge every path in the child, not just one file's.
+    Every entry is unrecoverable rather than merely stale, on both
+    halves. Only the forking thread exists here, so a mutex any other
+    thread held is locked with no owner left to release it, and
+    ``_registry_guard`` itself is in that set — a fork landing inside
+    ``_entry_for`` would otherwise wedge every path in the child, not
+    just one file's.
+
+    The inherited descriptors are closed rather than merely dropped,
+    and this is the one moment at which that is safe: POSIX record
+    locks are not inherited across a fork, so the child provably holds
+    none, and closing before it can acquire anything is what stops an
+    inherited descriptor from releasing a lock the child later takes.
+    Leaving them open would leak one descriptor per lockfile per fork.
     """
     global _registry_guard  # noqa: PLW0603 — rebuilding process-global state
 
+    for entry in _intra_process_locks.values():
+        fd, entry.fd = entry.fd, -1
+        if fd >= 0:
+            try:
+                os.close(fd)
+            except OSError:  # pragma: no cover - already closed
+                pass
     _intra_process_locks.clear()
     _registry_guard = threading.Lock()
 
@@ -213,11 +347,12 @@ class FileLock:
         # locked; resolving needs the filesystem, and ``__init__`` is
         # called on the event loop. See the module docstring.
         self.lockfile = filepath + ".lock"
-        self.lock_handle: IO[bytes] | None = None
         # Set between a successful ``acquire`` and its ``release``, and
         # ``None`` otherwise — which is also how ``release`` knows there
-        # is nothing to hand on.
-        self._mutex: threading.Lock | None = None
+        # is nothing to hand on. The entry is process-wide state this
+        # instance borrows, never state it owns: the descriptor inside
+        # outlives every holder.
+        self._entry: _LockEntry | None = None
 
     def acquire(self) -> bool:
         """Block until this is the only holder, in this process and beyond.
@@ -228,19 +363,20 @@ class FileLock:
         the two concurrency primitives read alike. Without a ``timeout``
         the return is always ``True``.
 
-        Resolving the path and opening the lockfile are filesystem I/O,
+        Resolving the path and reaching the lockfile are filesystem I/O,
         so they happen here rather than in ``__init__``. An async caller
         builds the lock on its event loop and offloads only this call to
         a worker thread; a stat in the constructor would stall that loop
         just before the offload meant to keep it free.
 
-        Ordering is load-bearing in both directions. The handle is opened
-        first because the mutex is keyed by the inode it reports. The
-        mutex is then taken *before* the OS lock, and released *after*
-        it, because a POSIX record lock is owned by the process: a second
-        thread of this interpreter would be granted ``fcntl``
-        immediately, so the mutex is the only thing standing between it
-        and a handle this instance still holds.
+        Ordering is load-bearing. The mutex is taken *before* the OS
+        lock and released *after* it, because a POSIX record lock is
+        owned by the process: a second thread of this interpreter would
+        be granted ``fcntl`` immediately, so the mutex is the only thing
+        standing between it and a lock this instance still holds. Note
+        what does **not** happen on the way out of a refused acquire —
+        no descriptor is closed, because there is no descriptor of this
+        instance's own to close. See ``_LockEntry``.
         """
         deadline = None if self.timeout is None else time.monotonic() + self.timeout
         # Resolve the *target*, then append the suffix. Appending first
@@ -248,52 +384,22 @@ class FileLock:
         # which is how a symlink and its target end up with two lockfiles.
         self.lockfile = os.path.realpath(self.filepath) + ".lock"
 
-        handle = self._open_lockfile()
-        try:
-            stat = os.fstat(handle.fileno())
-            mutex = _mutex_for((stat.st_dev, stat.st_ino))
-            if not _acquire_mutex(mutex, deadline):
-                handle.close()
-                return False
-        except BaseException:
-            handle.close()
-            raise
+        entry = _entry_for(self.lockfile)
+        if not _acquire_mutex(entry.mutex, deadline):
+            return False
 
         try:
-            if not self._lock_file(handle, deadline):
-                mutex.release()
-                handle.close()
+            if not self._lock_file(entry.fd, deadline):
+                entry.mutex.release()
                 return False
         except BaseException:
-            mutex.release()
-            handle.close()
+            entry.mutex.release()
             raise
 
-        self.lock_handle = handle
-        self._mutex = mutex
+        self._entry = entry
         return True
 
-    def _open_lockfile(self) -> IO[bytes]:
-        """Open the sibling lockfile, creating it if it is not there.
-
-        ``O_CREAT | O_RDWR`` without ``O_TRUNC``: an exclusive record
-        lock needs a writable descriptor, and truncating would discard
-        the contents of a file that now outlives every holder.
-
-        ``0o666`` is what ``open(path, "wb")`` passed before, restated
-        because it is now load-bearing rather than incidental — a
-        permanent lockfile has to stay openable by every uid that can
-        write the directory. umask still applies, so this is a floor and
-        not a guarantee; see the module docstring.
-        """
-        fd = os.open(self.lockfile, os.O_CREAT | os.O_RDWR, 0o666)
-        try:
-            return os.fdopen(fd, "rb+")
-        except BaseException:
-            os.close(fd)
-            raise
-
-    def _lock_file(self, handle: IO[bytes], deadline: float | None) -> bool:
+    def _lock_file(self, fd: int, deadline: float | None) -> bool:
         """Take the OS-level lock. ``False`` if ``deadline`` passed first."""
         # ``sys.platform`` rather than ``platform.system()``: a type
         # checker narrows the former, so the branch it cannot verify on
@@ -304,7 +410,7 @@ class FileLock:
 
             while True:
                 try:
-                    msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+                    msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
                 except OSError:
                     if not _wait_to_retry(deadline):
                         return False
@@ -316,11 +422,11 @@ class FileLock:
             if deadline is None:
                 # Blocks in the kernel rather than spinning, which is
                 # what an unbounded wait should do.
-                fcntl.lockf(handle, fcntl.LOCK_EX)
+                fcntl.lockf(fd, fcntl.LOCK_EX)
                 return True
             while True:
                 try:
-                    fcntl.lockf(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    fcntl.lockf(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
                 except OSError:
                     if not _wait_to_retry(deadline):
                         return False
@@ -330,27 +436,35 @@ class FileLock:
     def release(self) -> None:
         """Hand the lock to the next holder. A no-op if not held.
 
-        The lockfile is deliberately left in place — see the module
-        docstring for why removing it is what lets two holders in.
+        Unlocks the descriptor rather than closing it, and leaves the
+        lockfile in place. Both are the same point: a descriptor and a
+        name that outlive their holder are what make a handover safe.
+        Closing would release every lock this *process* holds on the
+        file, not just this one's, and unlinking would let the next
+        acquire lock a fresh inode. See the module docstring.
         """
-        mutex = self._mutex
-        if mutex is None:
+        entry = self._entry
+        if entry is None:
             return
-        self._mutex = None
+        self._entry = None
         try:
-            handle = self.lock_handle
-            self.lock_handle = None
-            if handle is not None:
-                if sys.platform == "win32":
-                    import msvcrt
-
-                    try:
-                        msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
-                    except OSError:
-                        pass
-                handle.close()
+            if entry.fd >= 0:
+                self._unlock_file(entry.fd)
         finally:
-            mutex.release()
+            entry.mutex.release()
+
+    @staticmethod
+    def _unlock_file(fd: int) -> None:
+        """Drop the OS-level lock, keeping the descriptor open."""
+        if sys.platform == "win32":
+            import msvcrt
+
+            with contextlib.suppress(OSError):
+                msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+        else:
+            import fcntl
+
+            fcntl.lockf(fd, fcntl.LOCK_UN)
 
     def __enter__(self) -> Self:
         if not self.acquire():

@@ -525,14 +525,29 @@ is the silent clobber the lock exists to prevent.
   owning process a lock it already holds, which is the defect the
   intra-process mutex above exists to fix.
 
-### The `.lock` file stays
+### The `.lock` file stays, and so does the descriptor on it
 
-Releasing does not unlink `<path>.lock`, so a zero-byte file is left
-beside the target permanently. That is deliberate and load-bearing:
-closing the handle hands the lock to a blocked waiter, which then holds
-an inode with no name, and unlinking at that moment lets the next
-`acquire` create a *fresh* inode and lock that instead — two holders,
-no error.
+Releasing unlocks. It does not unlink `<path>.lock`, so a zero-byte
+file is left beside the target permanently, and it does not close the
+descriptor the lock was taken on. Both are deliberate and load-bearing,
+for reasons that turn out to be the same one seen twice.
+
+*The name*, because release hands the lock to a blocked waiter, which
+then holds an inode with no name; unlinking at that moment lets the
+next `acquire` create a *fresh* inode and lock that instead — two
+holders, no error.
+
+*The descriptor*, because of a POSIX rule that catches most people out:
+closing **any** descriptor referring to a file releases every record
+lock the process holds on it, whatever descriptor took them. A handle
+per lock instance therefore makes an *unsuccessful* acquire dangerous —
+it opens the lockfile, finds the mutex taken, and closes its handle on
+the way out, releasing a lock another thread holds and neither of them
+knows about. So there is exactly one descriptor per lockfile inode,
+owned by the process-wide registry rather than by any `FileLock`, and
+release is `LOCK_UN` on it. Nothing observable inside the process
+depends on this; it is why the bounded-`acquire` path below is safe to
+use next to an unbounded one.
 
 Two consequences of that permanence. The file is never truncated, so it
 can carry contents; and it is created `0o666` before umask, so a
@@ -544,13 +559,20 @@ solve with a permissive umask.
 
 ### Across a fork
 
-The intra-process mutex registry is reset in the child after
-`os.fork()`. Only the forking thread survives, so a mutex any other
-thread held is locked in the child with no owner left to release it,
-and the child's first `acquire()` on that path would block on a holder
-that does not exist. The registry is process-local bookkeeping — the OS
-lock is not inherited across a fork either — so rebuilding it is the
-correct reconstruction, not a workaround.
+The registry is reset in the child after `os.fork()`, both halves of
+it. Only the forking thread survives, so a mutex any other thread held
+is locked in the child with no owner left to release it, and the
+child's first `acquire()` on that path would block on a holder that
+does not exist.
+
+The inherited descriptors are closed in the same handler, and the
+timing is the point: record locks are not inherited across a fork, so
+the child provably holds none at that instant, which is what makes
+closing safe — and doing it before the child can acquire anything is
+what stops an inherited descriptor from later releasing a lock the
+child does hold, by the POSIX rule above. The registry is process-local
+bookkeeping either way, so rebuilding it is the correct
+reconstruction, not a workaround.
 
 ## Usage Across DataKnobs
 
