@@ -279,3 +279,65 @@ class TestDatabaseGroundedSource:
             await _create_database_source(config)
 
         assert _warnings(caplog) == []
+
+
+class TestEverySpellingOfTheDefault:
+    """``mem`` is ``memory``; a caller branching on the answer must agree.
+
+    ``_create_bank_db`` routes the default to an inline ``SyncMemoryDatabase``
+    and everything else through a factory, which also connects the database
+    and gives the bank a table -- a different storage mode. Comparing the
+    config's value against the literal ``"memory"`` made that choice depend
+    on which spelling the author used for a backend the factory resolves to
+    one class either way.
+    """
+
+    @pytest.mark.parametrize("spelling", ["memory", "mem", "MEM", "  Mem  "])
+    def test_it_routes_to_inline_storage(self, spelling: str) -> None:
+        from dataknobs_data.backends.memory import SyncMemoryDatabase
+
+        db, mode = _wizard()._create_bank_db("notes", {"backend": spelling})
+
+        assert isinstance(db, SyncMemoryDatabase)
+        assert mode == "inline", f"{spelling!r} took the factory branch"
+
+    def test_a_genuinely_different_backend_still_does_not(self, tmp_path) -> None:
+        _db, mode = _wizard()._create_bank_db(
+            "notes",
+            {"backend": "file", "backend_config": {"path": str(tmp_path / "n.json")}},
+        )
+
+        assert mode == "external"
+
+
+class TestAVectorMemoryThatNamedNoBackend:
+    """The same laundering, in the typed-dataclass spelling.
+
+    ``VectorMemoryConfig.backend`` defaulted to ``"memory"`` and was written
+    into the dict handed to ``VectorStoreFactory``, so a config that named
+    nothing reached the factory as a choice. An unpersisted vector store
+    loses every embedding on restart, which is exactly the consequence the
+    factory's report exists to name.
+    """
+
+    @pytest.mark.asyncio
+    async def test_an_absent_backend_is_reported(self, caplog: pytest.LogCaptureFixture) -> None:
+        from dataknobs_bots.memory.config import VectorMemoryConfig
+        from dataknobs_bots.memory.vector import VectorMemory
+
+        config = VectorMemoryConfig.from_dict({"dimension": 8})
+        with caplog.at_level(logging.DEBUG, logger=SELECTION_LOGGER):
+            await VectorMemory.from_config_async(config)
+
+        assert len(_warnings(caplog)) == 1
+
+    @pytest.mark.asyncio
+    async def test_a_named_backend_is_not(self, caplog: pytest.LogCaptureFixture) -> None:
+        from dataknobs_bots.memory.config import VectorMemoryConfig
+        from dataknobs_bots.memory.vector import VectorMemory
+
+        config = VectorMemoryConfig.from_dict({"dimension": 8, "backend": "memory"})
+        with caplog.at_level(logging.DEBUG, logger=SELECTION_LOGGER):
+            await VectorMemory.from_config_async(config)
+
+        assert _warnings(caplog) == []

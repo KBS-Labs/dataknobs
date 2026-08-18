@@ -909,6 +909,7 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
             Tuple of ``(database, storage_mode)``.
         """
         from dataknobs_data import is_default_backend
+        from dataknobs_data.backends import sync_backends
 
         # Asked as one question rather than compared against a second
         # spelling of the default. The absence is deliberately *not*
@@ -918,7 +919,7 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
         # empty" case the factory's WARNING exists for. Nothing is built
         # through a factory on this branch, so there is no provenance to
         # report either.
-        if is_default_backend(cfg):
+        if is_default_backend(cfg, sync_backends):
             from dataknobs_data.backends.memory import SyncMemoryDatabase
 
             return SyncMemoryDatabase(), "inline"
@@ -979,13 +980,14 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
         from ..memory.bank import MemoryBank
 
         from dataknobs_data import is_default_backend
+        from dataknobs_data.backends import sync_backends
 
         for name, bank_dict in banks_data.items():
             cfg = self._bank_configs.get(name, {})
             # Whether to build a db at all, which is the same question
             # ``_create_bank_db`` asks on entry -- asked the same way, so
             # the two cannot disagree about what counts as the default.
-            if not is_default_backend(cfg):
+            if not is_default_backend(cfg, sync_backends):
                 db, _mode = self._create_bank_db(name, cfg)
                 # The db is built by this wizard for the bank — owned.
                 self._banks[name] = MemoryBank.from_dict(bank_dict, db=db, owns_db=True)
@@ -1965,8 +1967,9 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
                 # reason given in ``_create_bank_db``: conversation-scoped
                 # storage is what this config means by saying nothing.
                 from dataknobs_data import is_default_backend
+                from dataknobs_data.backends import async_backends
 
-                if is_default_backend(artifacts_config):
+                if is_default_backend(artifacts_config, async_backends):
                     artifact_db = AsyncMemoryDatabase()
                 else:
                     from dataknobs_data import async_database_factory

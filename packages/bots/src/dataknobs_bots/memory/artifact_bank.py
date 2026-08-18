@@ -299,6 +299,7 @@ class ArtifactBank:
                 sections default to ``SyncMemoryDatabase`` (inline restore).
         """
         from dataknobs_data import is_default_backend
+        from dataknobs_data.backends import sync_backends
 
         section_configs = data.get("section_configs", {})
         sections: dict[str, MemoryBank] = {}
@@ -308,7 +309,7 @@ class ArtifactBank:
             # the in-process default", shared with the wizard's own
             # restore path so a section is not routed one way there and
             # the other way here.
-            if db_factory and not is_default_backend(cfg):
+            if db_factory and not is_default_backend(cfg, sync_backends):
                 db, _mode = db_factory(name, cfg)
                 # The db is built per-section for the bank's exclusive use.
                 sections[name] = MemoryBank.from_dict(bank_dict, db=db, owns_db=True)
