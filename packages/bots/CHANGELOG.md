@@ -292,6 +292,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`VectorMemoryConfig.backend` now defaults to `None`, not `"memory"`.**
+  Same laundering as the four `.get(key, default)` sites above, in the
+  typed-dataclass spelling: the default was written into the dict handed to
+  `VectorStoreFactory`, so a config naming nothing arrived as a choice and
+  the factory never reported having guessed. An unpersisted vector store
+  loses every embedding on restart, which is exactly the consequence that
+  report names. Code reading `config.backend` must handle `None`.
+
+- **A bank config spelling the default backend as an alias took the wrong
+  branch.** `mem` resolves to the same class as `memory`, but the four
+  sites compared against the literal, so `backend: mem` went through the
+  factory and came back in *external* storage mode where `backend: memory`
+  came back inline — a different storage mode chosen by spelling. All four
+  now resolve aliases through the registry they would have built with.
+
+
 - **Three call sites turned an unchosen database backend into a chosen one.**
   `ArtifactBankCatalog.from_config`, `DataKnobsRegistryAdapter` and the
   `database` grounded-source factory each read the `backend` key with their

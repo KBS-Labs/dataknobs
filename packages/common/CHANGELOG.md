@@ -9,6 +9,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`PluginRegistry.is_known()`** — whether the registry recognises a name
+  at all, which is the larger set once `declare_unavailable` is in use.
+  `is_registered()` answers "can I build this?"; the two differ exactly
+  over the plugins whose driver is missing. Callers distinguishing a typo
+  from an uninstalled backend were reaching for `get_metadata()` and
+  testing it for truth, which answers a different question and gets it
+  wrong for a plugin declared without any metadata — reporting it as a
+  misspelling, the one thing the declaration exists to prevent.
+
+- **`PluginRegistry.load_declared_type()`** and
+  **`declare_unavailable(type_loader=...)`** — the class of a plugin that
+  cannot be created here, imported on demand, for a caller that wants to
+  *read* something off it rather than build it. Deliberately not a
+  factory: `is_registered()` has to keep meaning "creatable". Whether the
+  class is reachable is discovered rather than assumed — a plugin guarding
+  its optional driver behind a module-level flag imports without it, one
+  importing the driver at top level does not, and the second case returns
+  `None` instead of propagating. Without this, a validator wanting a typed
+  schema off an uninstallable backend had to keep its own second
+  name-to-class table, which is the drift the registry exists to prevent.
+
 - **`PluginRegistry.declare_unavailable()`** — record a plugin the registry
   knows of but cannot create. A plugin behind an optional dependency has
   three states, not two: creatable, absent because the dependency is
@@ -203,6 +224,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   aimed at the wrong host does not read as "Ollama is down".
 
 ### Fixed
+
+- **A populator that replaced the default factory before failing kept the
+  replacement.** `_ensure_initialized` rolls back so a retry starts clean,
+  but its snapshot was written as "every dict" and `_default_factory` is
+  not one — `set_default_factory()` is public and a populator holds the
+  registry. An abandoned run's default therefore survived, and the next
+  `create()` for an unregistered key silently succeeded off it. The
+  invariant is now stated as *state* rather than as dicts, which is what
+  had already been got wrong once when `_unavailable` was added.
+
+- **`unregister()` stranded the aliases of a withdrawn plugin.** An
+  unavailable alias carries no metadata of its own — it answers through
+  the canonical key, whose metadata `unregister()` removes. Dropping only
+  the named spelling left the aliases in `list_known_keys()`, answering
+  `{}` to the `requires_install` question that is the whole reason a
+  withdrawn plugin stays visible. They are now withdrawn with it; an alias
+  unregistered on its own still drops only itself.
+
+- **A literal `%` in `default_warning` raised inside `logging`.** The text
+  is interpolated lazily against a dict, so `"costs 50% of throughput"` is
+  a malformed format spec — failing at the first fallback, on the branch
+  nobody exercises, in a traceback naming neither the registry nor the
+  text. It is now rejected when the registry is constructed, with a
+  message naming the registry, the placeholders and the `%%` escape.
 
 - **The Ollama probes ask the service, not this machine.**
   `is_ollama_available()` and `is_ollama_model_available()` shelled out to the

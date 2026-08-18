@@ -47,8 +47,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`dataknobs_data.backend_selection`** — `DEFAULT_BACKEND`,
   `select_backend()`, `available_backends()`, `backend_available()`,
   `backend_info()`, `normalize_backend()`, `register_backend()`,
-  `build_backend()` and `module_installed()`, the answers the three
-  factories previously each held their own copy of. All nine are re-exported
+  `build_backend()`, `module_installed()` and `is_default_backend()`, the
+  answers the three factories previously each held their own copy of.
+  All ten are re-exported
   from `dataknobs_data`, so a consumer with a `PluginRegistry` of their own
   backends gets the same provenance logging, the same alias collapsing and
   the same availability probing without reimplementing any of it —
@@ -76,6 +77,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   later test draws.
 
 ### Changed
+
+- **`UserStateStoreConfig.backend` now defaults to `None`, not `"memory"`.**
+  The typed default was forwarded unconditionally, so a config that named
+  no backend reached the factory as an explicit choice and the absence was
+  consumed one frame above the only code positioned to report it — an
+  unpersisted store, silently, for a config whose author may only have
+  meant to leave the choice to the deployment. The key is now forwarded
+  only when the config names one. Code reading `config.backend` and
+  expecting a string must handle `None`, which means "not chosen here".
+
 
 - **A config with no `backend` key now logs at WARNING.** It was INFO — the
   same line, naming the same backend, as an explicit `backend: memory` — and
@@ -143,6 +154,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   registration. It now raises a `ValueError` naming both.
 
 ### Fixed
+
+- **`is_default_backend()` reads the default's aliases when given a
+  registry.** Without one it compares names, so a config spelling the
+  default as `mem` read as naming something else and its caller took the
+  non-default branch — for a backend the factory resolves to the same
+  class. Pass the registry you would have built through wherever the
+  answer selects between code paths rather than between log lines; alias
+  identity is then the registry's answer rather than a second list here.
+
+- **`backend_info()` called a metadata-less backend unrecognised.** It read
+  metadata and treated a falsy result as "never heard of it", which is the
+  wrong answer for a backend declared unavailable without any —
+  `declare_unavailable` accepts `metadata=None`. The one state this
+  function exists to describe was reported as a typo. It now asks the
+  registry whether the name is known.
+
+- **A `vector_store` section for an uninstalled backend is checked against
+  its real schema where that schema is reachable.** The resolver returned
+  `SKIP_VALIDATION` for every backend whose driver was absent, which made
+  *which checks a config gets* a property of the machine reading it. Every
+  optional store here guards its driver behind a module-level flag and so
+  imports without it; the schema is read off that class, through the same
+  loader the construction path uses. `SKIP_VALIDATION` is now reserved for
+  a backend whose module genuinely cannot be imported. (No config changes
+  verdict today — `from_dict` is permissive enough that both answers accept
+  the same sections — so this pins the answer rather than tightening it.)
+
 
 - **The async `sqlite` backend recorded `requires_install: False`.** It is on
   `aiosqlite`, which ships in the `sqlite` extra; only the sync variant is on

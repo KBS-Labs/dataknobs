@@ -120,14 +120,33 @@ factory reads, so a custom one is added there and every factory method
 picks it up:
 
 ```python
+from dataknobs_data import register_backend
 from dataknobs_data.backends import sync_backends
 
-sync_backends.register("my_backend", MyDatabase, metadata={
-    "description": "Custom backend",
-    "persistent": True,
-    "requires_install": False,
-})
+register_backend(
+    sync_backends,
+    "my_backend",
+    lambda: MyDatabase,          # imported on first use, not at registration
+    metadata={
+        "description": "Custom backend",
+        "persistent": True,
+        "requires_module": "my_driver",          # probed at registration
+        "requires_install": "pip install my-driver",
+    },
+    aliases=("mine",),
+)
 ```
+
+`register_backend` probes the driver named by `requires_module` and, when
+it is absent, records the backend as *known but not creatable* instead of
+registering it. That is what keeps `is_backend_available()` an answer
+about this machine rather than about the name, and what lets `create()`
+say which driver to install rather than reporting the name as unknown.
+
+`sync_backends.register(...)` is the lower-level call underneath it. It
+skips the probe, so a backend registered that way reports as available
+whether or not its driver is installed — use it only for a backend with no
+optional dependency.
 
 **Example:**
 ```python
