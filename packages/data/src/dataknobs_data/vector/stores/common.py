@@ -747,7 +747,21 @@ class VectorStoreBase(StructuredConfigConsumer[VectorStoreConfig]):
         The bracket lives here rather than in each store because the
         sequence is identical in both, and a third store adopting
         ``persist_path`` should inherit it rather than rediscover it.
+        That is also why the directory is created here. It was written
+        out in each store, and it is a *precondition of the lock* — the
+        lockfile is a sibling of the target, so its directory has to
+        exist before ``FileLock`` can open it. A third store inheriting
+        the bracket without it would get ``FileNotFoundError`` out of the
+        lock on its first save.
         """
+        # ``os.path.dirname`` is "" for a bare filename (no directory
+        # component), and ``makedirs("")`` raises FileNotFoundError.
+        # The guard is why each store had this line; it survives the
+        # move rather than being rediscovered a third time.
+        parent_dir = os.path.dirname(path)
+        if parent_dir:
+            os.makedirs(parent_dir, exist_ok=True)
+
         with FileLock(path):
             self._sweep_orphaned_scratch(path)
             self._guard_persisted_identity(path, force=force)

@@ -28,7 +28,9 @@ Reviewing those fixes found more, covered below:
   created, which unique names turned from self-healing into unbounded,
 * a scratch file left by a killed process was never swept,
 * a published file was not ``fsync``ed before the rename that publishes
-  it, so staging survived a crashed process but not a power cut.
+  it, so staging survived a crashed process but not a power cut,
+* the ``makedirs`` the lock depends on stayed duplicated in each store
+  instead of moving into the bracket with it.
 """
 
 from __future__ import annotations
@@ -435,5 +437,32 @@ async def test_a_publish_flushes_the_file_and_the_rename(
     )
     assert file_ino in flushed, "the published file was never flushed to disk"
     assert dir_ino in flushed, "the rename that published it was never flushed"
+
+    await _shutdown(store)
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+async def test_the_shared_bracket_creates_the_directory_it_locks_in(
+    backend: str, tmp_path: Path
+) -> None:
+    """The lock's precondition lives with the lock, not in each store.
+
+    ``_persisted_save`` opens a lockfile beside the target, so the
+    target's directory has to exist first. Both stores carried that
+    ``makedirs`` verbatim, which left it out of the bracket a third store
+    would inherit — such a store would get ``FileNotFoundError`` out of
+    the lock on its first save. Asserted against the base method rather
+    than through a store, because the base method is where it has to be.
+    """
+    store = await _open(_base(backend), tmp_path / "unused.idx")
+    target = tmp_path / "made" / "on" / "demand" / "state.bin"
+
+    def save_through_the_bracket() -> None:
+        with store._persisted_save(str(target), force=False):
+            Path(target).write_bytes(b"payload")
+
+    await asyncio.to_thread(save_through_the_bracket)
+
+    assert await asyncio.to_thread(target.exists), "the bracket did not create its directory"
 
     await _shutdown(store)

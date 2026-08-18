@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import os
 import pickle
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
@@ -125,15 +124,6 @@ class MemoryVectorStore(VectorStore):
         covers a second instance, which the snapshot cannot see at all.
         """
         persist_path_str = str(self.persist_path)
-
-        # Create directory if needed, before the lock: the lockfile is a
-        # sibling of the target, so its directory has to exist first.
-        # ``os.path.dirname`` is "" for a bare filename (no directory
-        # component); ``makedirs("")`` raises FileNotFoundError, so guard
-        # it (parity with FaissVectorStore).
-        parent_dir = os.path.dirname(persist_path_str)
-        if parent_dir:
-            os.makedirs(parent_dir, exist_ok=True)
 
         payload = {
             "vectors": {k: v.tolist() for k, v in vectors.items()},

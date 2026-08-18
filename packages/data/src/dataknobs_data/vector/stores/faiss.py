@@ -1023,12 +1023,6 @@ class FaissVectorStore(VectorStore):
         persist_path_str = str(self.persist_path)
         metadata_path = persist_path_str + ".meta"
 
-        # Create directory if needed, before the lock: the lockfile is a
-        # sibling of the target, so its directory has to exist first.
-        parent_dir = os.path.dirname(persist_path_str)
-        if parent_dir:
-            os.makedirs(parent_dir, exist_ok=True)
-
         def write_index(path: str) -> None:
             faiss.write_index(index, path)
 
