@@ -286,6 +286,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Re-adding an id on `ChromaVectorStore` now replaces that row's
+  metadata instead of merging into it.** `add_vectors()` and
+  `add_documents()` upsert on id conflict, and chromadb's `upsert`
+  merges the metadata it is given into what is already stored — a key
+  the caller omits survives. So re-adding `id="x"` with `{"rev": 2}`
+  over a stored `{"tenant": "A", "rev": 1}` left `tenant` behind on this
+  backend while Memory, FAISS and pgvector replaced the row outright,
+  and re-adding with no metadata at all kept the entire prior dict. A
+  consumer correcting a row's metadata got the correction on three
+  backends and a silent merge on the fourth, with the stale keys still
+  answering filters. Both write paths now name the departing keys with
+  a `None` value to delete them, the same mechanism `update_metadata()`
+  already used.
+
 - **A row belonging to several domains is no longer visible to half its
   own store.** Scope membership follows the same four-quadrant rule as
   any other metadata key, so a row whose `domain_id` is a list belongs

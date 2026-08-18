@@ -449,12 +449,31 @@ class ChromaVectorStore(VectorStore):
     ) -> list[dict[str, Any]]:
         """Encoded metadata for a write, carrying the reserved timestamps.
 
-        One ``collection.get`` for the whole batch, not one per row,
-        and only to answer a single question: which of these ids already
-        exist, and when were they created. Re-adding an existing id is
-        an upsert on every backend, and an upsert preserves
-        ``created_at`` while advancing ``updated_at`` — so the prior
-        value has to be read before it is overwritten.
+        One ``collection.get`` for the whole batch, not one per row, and
+        it answers two questions at once: which of these ids already
+        exist and when they were created, and which keys each of them
+        currently holds. Re-adding an existing id is an upsert on every
+        backend, and an upsert preserves ``created_at`` while advancing
+        ``updated_at`` — so the prior value has to be read before it is
+        overwritten.
+
+        The second question is why the whole stored dict is kept rather
+        than just the timestamp. chromadb's ``upsert`` **merges** its
+        metadata into what is already stored, exactly as ``update``
+        does — a key the caller omits survives. Re-adding an id with
+        ``{"rev": 2}`` over a stored ``{"tenant": "A", "rev": 1}``
+        therefore left ``tenant`` behind here while Memory, FAISS and
+        pgvector all replaced the row outright, and re-adding with no
+        metadata at all kept the entire prior dict. So the payload goes
+        through :meth:`_replacement_payload`, which names the departing
+        keys with ``None`` to delete them — the same mechanism
+        ``update_metadata`` uses, for the same reason.
+
+        The reserved keys are stored keys the caller never supplies, so
+        that tombstoning covers them too; ``_stamp`` re-sets both
+        immediately afterwards, and with ``start_tracking=True`` it
+        always returns a non-empty payload, so no row here can reach
+        the empty-update form chromadb rejects.
 
         One ``now`` for the batch, so rows written together carry the
         same instant rather than drifting across the loop.
@@ -462,17 +481,17 @@ class ChromaVectorStore(VectorStore):
         existing = await asyncio.to_thread(self.collection.get, ids=ids, include=["metadatas"])
         existing_ids = self._as_list(existing.get("ids"))
         existing_metas = self._as_list(existing.get("metadatas"))
-        created_by_id: dict[str, datetime | None] = {}
-        for i, rid in enumerate(existing_ids):
-            raw = existing_metas[i] if i < len(existing_metas) else None
-            created_by_id[rid] = self._reserved_timestamps(raw)[0]
+        stored_by_id: dict[str, dict[str, Any] | None] = {
+            rid: (existing_metas[i] if i < len(existing_metas) else None)
+            for i, rid in enumerate(existing_ids)
+        }
 
         now = datetime.now(UTC)
         rows = metadata if metadata is not None else [{} for _ in ids]
         return [
             self._stamp(
-                self._encode_metadata(meta),
-                created=created_by_id.get(id_val),
+                self._replacement_payload(stored_by_id.get(id_val), meta),
+                created=self._reserved_timestamps(stored_by_id.get(id_val))[0],
                 updated=now,
                 # A write establishes tracking: a genuinely new id has no
                 # stored ``created`` and starts its life now.

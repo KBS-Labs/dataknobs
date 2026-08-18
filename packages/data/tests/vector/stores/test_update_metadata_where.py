@@ -332,11 +332,16 @@ async def test_readd_existing_id_is_an_upsert(
     original vector and metadata simply retained. A consumer correcting
     an embedding got the correction on three backends and the stale
     vector on the fourth, with nothing to indicate which had happened.
+
+    The replacement metadata is deliberately **not** a superset of the
+    seed: chromadb's ``upsert`` merges the dict it is given into what is
+    already stored, so a replacement that restates every seeded key
+    produces the same row either way and cannot tell replacement from
+    merge. ``tenant`` is seeded and omitted here for exactly that
+    reason — its absence afterwards is the whole assertion.
     """
     replacement = np.array([0.0, 0.0, 0.0, 1.0], dtype=np.float32)
-    await any_vector_store.add_vectors(
-        [replacement], ids=["a-1"], metadata=[{"tenant": "A", "revised": True}]
-    )
+    await any_vector_store.add_vectors([replacement], ids=["a-1"], metadata=[{"revised": True}])
 
     # An upsert, not an insert.
     assert await any_vector_store.count() == len(SEED_IDS)
@@ -344,6 +349,10 @@ async def test_readd_existing_id_is_an_upsert(
     vector, meta = (await any_vector_store.get_vectors(["a-1"]))[0]
     assert meta is not None
     assert meta.get("revised") is True, f"re-add did not land: {meta}"
+    assert "tenant" not in meta, f"re-add merged instead of replacing: {meta}"
+    # And from a filter-keyed surface, so the row is really gone from
+    # the old tenant rather than merely reading clean by id.
+    assert await any_vector_store.count(filter={"tenant": "A"}) == 1
     assert vector is not None
     assert float(vector[3]) == pytest.approx(1.0), (
         f"re-add kept the original vector: {vector.tolist()}"

@@ -144,14 +144,47 @@ async def test_add_documents_tracks_timestamps():  # type: ignore[no-untyped-def
 
 
 async def test_readd_document_id_is_an_upsert():  # type: ignore[no-untyped-def]
-    """Re-writing a document id replaces it, matching ``add_vectors``."""
+    """Re-writing a document id replaces it, matching ``add_vectors``.
+
+    The second write drops ``tenant`` rather than restating it. chromadb
+    merges an upsert's metadata into the stored dict, so a replacement
+    that mentions every prior key reads identically whether the backend
+    replaced or merged — which is what let the merge go unnoticed on
+    this path. The absent key is the assertion.
+    """
     store = await _store()
     try:
-        await store.add_documents(["first text"], ids=["d1"], metadata=[{"v": 1}])
+        await store.add_documents(["first text"], ids=["d1"], metadata=[{"v": 1, "tenant": "A"}])
         await store.add_documents(["second text"], ids=["d1"], metadata=[{"v": 2}])
 
         assert await store.count() == 1
         rows = await store.get_vectors(["d1"])
-        assert (rows[0][1] or {}).get("v") == 2
+        meta = rows[0][1] or {}
+        assert meta.get("v") == 2
+        assert "tenant" not in meta, f"re-add merged instead of replacing: {meta}"
+        assert await store.count(filter={"tenant": "A"}) == 0
+    finally:
+        await _drop(store)
+
+
+async def test_readd_document_id_without_metadata_clears_it():  # type: ignore[no-untyped-def]
+    """The degenerate replacement: no metadata means no metadata.
+
+    ``metadata=None`` is the strongest form of the merge defect — with
+    nothing to merge *into* the payload, the entire prior dict survived
+    rather than being cleared, so a re-add meant to blank a row left it
+    exactly as it was.
+    """
+    store = await _store()
+    try:
+        await store.add_documents(["first text"], ids=["d1"], metadata=[{"v": 1, "tenant": "A"}])
+        await store.add_documents(["second text"], ids=["d1"])
+
+        rows = await store.get_vectors(["d1"])
+        meta = rows[0][1] or {}
+        assert meta == {}, f"re-add without metadata kept the prior dict: {meta}"
+        # Timestamps still tracked — the row was replaced, not orphaned.
+        stamped = await store.get_vectors(["d1"], include_timestamps=True)
+        assert (stamped[0][1] or {})["_updated_at"] is not None
     finally:
         await _drop(store)
