@@ -512,9 +512,7 @@ class VectorStoreBase(StructuredConfigConsumer[VectorStoreConfig]):
             return True
         return self._match_metadata_filter(meta, {"domain_id": self.domain_id})
 
-    def _reject_out_of_scope_ids(
-        self, stored: Mapping[str, dict[str, Any] | None]
-    ) -> None:
+    def _reject_out_of_scope_ids(self, stored: Mapping[str, dict[str, Any] | None]) -> None:
         """Fail closed when a write would capture out-of-domain rows.
 
         The write-side counterpart of :meth:`_in_configured_domain`.

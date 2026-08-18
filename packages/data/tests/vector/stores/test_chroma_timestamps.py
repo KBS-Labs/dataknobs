@@ -322,9 +322,9 @@ async def test_a_reserved_key_cannot_be_forged_onto_an_untracked_row(via: str): 
         )
         assert _reserved_in(meta) == [], meta
 
-        raw = (await asyncio.to_thread(store.collection.get, ids=["legacy"], include=["metadatas"]))[
-            "metadatas"
-        ][0]
+        raw = (
+            await asyncio.to_thread(store.collection.get, ids=["legacy"], include=["metadatas"])
+        )["metadatas"][0]
         assert ChromaVectorStore._TS_CREATED_KEY not in raw, (
             f"the forged key reached storage: {raw}"
         )

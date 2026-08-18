@@ -375,9 +375,7 @@ async def domain_scoped_store(
             }
         )
     elif backend == "pgvector":
-        store = PgVectorStore(
-            {**request.getfixturevalue("pgvector_config"), "domain_id": "t1"}
-        )
+        store = PgVectorStore({**request.getfixturevalue("pgvector_config"), "domain_id": "t1"})
     else:
         pytest.fail(f"Unknown backend param: {backend}")
 
