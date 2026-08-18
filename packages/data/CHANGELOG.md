@@ -401,6 +401,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   both fail the identity comparison, but only one of them had another
   writer's rows in it.
 
+- **A temporary file database no longer removes its lockfile while an
+  operation holds it.** `close()` unlinks the generated file and its
+  `<path>.lock`, which is correct for a path belonging to one instance,
+  but it ran outside the instance lock — so a `close()` concurrent with
+  an in-flight write removed the lockfile that write was holding, which
+  is the handover defect `FileLock` was fixed to stop causing. Both the
+  sync and async backends now clean up under the lock every other
+  operation takes, through one shared helper rather than two copies.
+
 - **`update_vectors()` no longer resets a row's `created_at`, or destroys
   rows on a refused batch.** It was implemented as `delete_vectors()`
   followed by `add_vectors()`. The delete bought nothing — `add_vectors()`

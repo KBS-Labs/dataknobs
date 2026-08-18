@@ -1,7 +1,10 @@
 """Test that FileDatabase uses temporary files by default."""
 
+import asyncio
 import os
 import tempfile
+import threading
+
 import pytest
 
 from dataknobs_data.backends.file import AsyncFileDatabase, SyncFileDatabase
@@ -114,3 +117,70 @@ class TestFileDatabaseTempDefault:
             # Manual cleanup
             if os.path.exists(tmp_path):
                 os.unlink(tmp_path)
+
+
+class TestTempCleanupWaitsForInFlightWork:
+    """``close()`` must not unlink the lockfile out from under an operation.
+
+    Removing ``<path>.lock`` is the defect ``FileLock`` was fixed to stop
+    doing — a waiter handed the lock ends up holding a nameless inode
+    while the next acquirer creates and locks a fresh one. Cleanup here
+    is still correct, because the path belongs to exactly one instance,
+    but only once it is serialized against that instance's own work: the
+    cleanup ran outside the instance lock, so a ``close()`` concurrent
+    with an in-flight write removed the lockfile that write was holding.
+    """
+
+    @pytest.mark.asyncio
+    async def test_async_close_waits_for_the_instance_lock(self):
+        """A close racing an in-flight operation waits instead of deleting."""
+        db = AsyncFileDatabase({})
+        await db.create(Record({"test": "value"}))
+
+        # Holding ``_lock`` is what an in-flight operation does; every
+        # public method takes it. Pre-fix ``close()`` ignored it and went
+        # straight to the unlink.
+        async with db._lock:
+            with pytest.raises(asyncio.TimeoutError):
+                await asyncio.wait_for(db.close(), timeout=0.5)
+            assert os.path.exists(db.filepath), "close() removed the file mid-operation"
+
+        # Released: the same close now completes and cleans up.
+        await db.close()
+        assert not os.path.exists(db.filepath)
+        assert not os.path.exists(db.filepath + ".lock")
+
+    def test_sync_close_waits_for_the_instance_lock(self):
+        """The sync sibling holds its ``RLock`` for the same reason."""
+        db = SyncFileDatabase({})
+        db.create(Record({"test": "value"}))
+        filepath = db.filepath
+
+        holding = threading.Event()
+        may_release = threading.Event()
+        closed = threading.Event()
+
+        def hold_the_instance_lock() -> None:
+            with db._lock:
+                holding.set()
+                may_release.wait(timeout=10)
+
+        def close_it() -> None:
+            db.close()
+            closed.set()
+
+        holder = threading.Thread(target=hold_the_instance_lock)
+        holder.start()
+        assert holding.wait(timeout=10)
+
+        closer = threading.Thread(target=close_it)
+        closer.start()
+        assert not closed.wait(timeout=0.5), "close() cleaned up while the lock was held"
+        assert os.path.exists(filepath), "close() removed the file mid-operation"
+
+        may_release.set()
+        holder.join(timeout=10)
+        closer.join(timeout=10)
+        assert closed.is_set()
+        assert not os.path.exists(filepath)
+        assert not os.path.exists(filepath + ".lock")
