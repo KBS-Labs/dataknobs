@@ -448,6 +448,19 @@ class VectorStoreBase(StructuredConfigConsumer[VectorStoreConfig]):
             },
         )
 
+    def _refresh_persisted_identity(self, path: str | os.PathLike[str]) -> None:
+        """Record ``path``'s identity without declaring the store saved.
+
+        Split out from :meth:`_stamp_persisted_identity` because the two
+        facts that method maintains come apart on exactly one path. A
+        publish that fails partway can still have replaced the tracked
+        file, which makes this instance its last writer — but nothing was
+        persisted, so the store is still dirty. Stamping there would tell
+        ``close()`` it had nothing left to write, which is how a failed
+        save turns into a silent one.
+        """
+        self._persisted_identity = self._file_identity(path)
+
     def _stamp_persisted_identity(self, path: str | os.PathLike[str]) -> None:
         """Record ``path`` as the state this instance is now in step with.
 
@@ -456,7 +469,7 @@ class VectorStoreBase(StructuredConfigConsumer[VectorStoreConfig]):
         ``_dirty`` here rather than at each call site is what keeps the
         two facts from drifting apart.
         """
-        self._persisted_identity = self._file_identity(path)
+        self._refresh_persisted_identity(path)
         self._dirty = False
 
     def _write_then_publish(
@@ -481,10 +494,23 @@ class VectorStoreBase(StructuredConfigConsumer[VectorStoreConfig]):
         failure: an error raised on the second write after the first has
         already overwritten its target.
 
+        What it must not do is leave the store unable to try again. A
+        rename that fails after an earlier one landed makes this instance
+        the tracked file's last writer, while the caller never reaches
+        its stamp — so the identity check would go on comparing against
+        the file this store had itself replaced and refuse every later
+        save, naming a conflicting writer that does not exist. The only
+        way out of that would be ``save(force=True)``, whose whole
+        purpose is discarding somebody else's rows; using it to recover
+        from a self-inflicted failure is not a recovery. The identity is
+        therefore refreshed on the way out, while ``_dirty`` stays set
+        because nothing was persisted.
+
         Scratch files are removed on any failure. Blocking I/O; callers
         run on a worker thread.
         """
         staged: list[tuple[str, str]] = []
+        published: list[str] = []
         try:
             for final_path, write in writes:
                 tmp = f"{final_path}.tmp"
@@ -492,11 +518,17 @@ class VectorStoreBase(StructuredConfigConsumer[VectorStoreConfig]):
                 staged.append((tmp, final_path))
             for tmp, final_path in staged:
                 os.replace(tmp, final_path)
+                published.append(final_path)
             staged.clear()
         finally:
+            # Emptied above exactly when every rename landed, so a
+            # non-empty ``staged`` here *is* the failure signal.
+            failed = bool(staged)
             for tmp, _ in staged:
                 with contextlib.suppress(OSError):
                     os.unlink(tmp)
+            if failed and self.persist_path is not None and str(self.persist_path) in published:
+                self._refresh_persisted_identity(str(self.persist_path))
 
     def _overfetch_sizes(
         self,

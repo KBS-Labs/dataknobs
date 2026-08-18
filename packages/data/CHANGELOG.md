@@ -276,6 +276,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   every write has succeeded, so a failure leaves the previous state
   intact. `MemoryVectorStore` writes the same way, for the same reason.
 
+  Renaming is atomic per file but not across the pair, so the second
+  rename can still fail once the first has landed — leaving this
+  instance as the file's last writer with no stamp to show for it, and
+  every later `save()` refusing over its own write. A store now
+  re-reads the file's identity on the way out of a failed publish while
+  staying dirty, so the next `save()` or `close()` retries instead of
+  demanding `save(force=True)` — a call that exists to discard another
+  writer's rows, and no way to recover from a failure you caused
+  yourself.
+
 - **Overlapping `save()` calls on a *single* store could raise
   `ConcurrencyError` against themselves.** The staleness check and the
   write it guards are two operations on a worker thread, so an autosave

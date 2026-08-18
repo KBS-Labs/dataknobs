@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import pickle
+import shutil
 from pathlib import Path
 from typing import Any
 
@@ -292,6 +293,69 @@ async def test_metadata_write_failure_leaves_the_index_and_the_stamp_intact(
     await store.save()
     assert await _count_on_disk(persist) == 1
     await store.close()
+
+
+async def test_a_failed_rename_does_not_lock_the_store_out_of_its_own_file(
+    tmp_path: Path,
+) -> None:
+    """The *publish* phase can fail partway too, not only the write phase.
+
+    Staging both files before renaming either one closes the failure the
+    test above covers: a write that fails now leaves both targets alone.
+    It does not close the narrower one, because ``os.replace`` is atomic
+    per file and there are two of them — the index can be renamed into
+    place and the side-car's rename then fail. The identity stamp is
+    taken only after *both* renames succeed, so it went on naming the
+    file this instance had itself just replaced, and every later save
+    raised ``ConcurrencyError`` against a writer that did not exist.
+
+    That left the store holding rows with no way to persist them short of
+    ``save(force=True)`` — the one call that exists to discard somebody
+    else's. Recovering from a self-inflicted failure by invoking the
+    lose-data escape hatch is not a recovery.
+
+    The failure is a real filesystem refusal rather than an injected one:
+    ``os.replace`` will not put a file over a non-empty directory.
+    """
+    persist = tmp_path / "rename_fail.index"
+    store = await _open(persist)
+    await _ingest(store, "first", 2, seed=1)
+    await store.save()
+
+    side_car = Path(f"{persist}.meta")
+
+    def _obstruct() -> None:
+        """Replace the side-car with a directory ``os.replace`` cannot clobber."""
+        side_car.unlink()
+        side_car.mkdir()
+        (side_car / "occupant").write_text("a non-empty directory cannot be replaced")
+
+    # Obstruct only the side-car, so the index rename ahead of it lands.
+    # Genuinely offloaded, not relocated into a sync helper to quiet
+    # ASYNC240: `to_thread` keeps it off the loop, where a plain call to
+    # `_obstruct()` would block exactly as the inline version did. A
+    # per-file waiver is the wrong trade here — this file's subject is
+    # the persisted file, so it would unflag the calls most likely to be
+    # added to it later.
+    await asyncio.to_thread(_obstruct)
+
+    await _ingest(store, "second", 2, seed=2)
+    with pytest.raises(OSError):
+        await store.save()
+
+    # Nothing else has touched this path, so clearing the obstruction has
+    # to be enough. Pre-fix this raised ConcurrencyError.
+    await asyncio.to_thread(shutil.rmtree, side_car)
+
+    # ``close()`` rather than ``save()`` on purpose: it persists only a
+    # *dirty* store, so reaching the file at all also proves the failed
+    # attempt left this store still knowing it had rows to write. The
+    # obvious way to stop the phantom conflict — stamping the file as
+    # saved on the way out of the failure — passes a ``save()`` here and
+    # fails this, by turning the failed save into a silent one.
+    await store.close()
+
+    assert await _count_on_disk(persist) == 4
 
 
 async def test_overlapping_saves_on_one_instance_do_not_conflict(tmp_path: Path) -> None:

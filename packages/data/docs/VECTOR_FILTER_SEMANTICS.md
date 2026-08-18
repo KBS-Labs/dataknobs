@@ -346,11 +346,23 @@ The only way to change a stored row is to call a mutator.
   * A refusal is recoverable with `save(force=True)`, which overwrites
     deliberately and accepts the loss of whatever the other writer
     persisted. Without it the refusal repeats forever, because what it
-    compares against has not moved.
+    compares against has not moved. It is only ever the right call
+    against a *genuine* conflict — a refusal the store caused itself is
+    a defect, not a case for `force`.
 
   Sequential lifetimes are unaffected and keep appending, since
   `initialize()` loads the file first. For genuinely concurrent writers,
   use `pgvector`.
+
+  FAISS writes two files — the index and its `.meta` side-car — to
+  scratch siblings and renames them into place only once both have been
+  written, so a failed write leaves the previous state intact. Renaming
+  is atomic per file but not across the pair, so a failure *between* the
+  two renames can still leave a new index beside an old side-car; making
+  that impossible needs a single-file format or a write-ahead log.
+  Retrying is not blocked by it, though: the store re-reads the file's
+  identity and stays dirty, so the next `save()` or `close()` writes the
+  rows it still holds.
 - **Chroma `count` materializes metadata.** Chroma has no first-class
   filtered-count API. The `count(filter=...)` path uses
   `collection.get(where=..., include=["metadatas"])` and post-filters
