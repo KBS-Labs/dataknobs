@@ -596,3 +596,242 @@ class TestTheDefaultsThatCostSomething:
         warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
         assert len(warnings) == 1
         assert "N times the configured rate" in warnings[0].getMessage()
+
+
+class TestAPopulatorThatAbandonsItsRun:
+    """Rollback covers *state*, not the dicts someone remembered.
+
+    ``_ensure_initialized`` snapshots so a populator that fails partway
+    leaves nothing behind for the retry to trip over. The list it snapshots
+    was written as "every dict", and has twice been wrong: ``_unavailable``
+    was added to the class without being added to it, and
+    ``_default_factory`` is not a dict at all, so a populator calling the
+    public :meth:`set_default_factory` escaped the rollback entirely.
+    """
+
+    def test_a_default_factory_set_before_the_failure_is_rolled_back(self) -> None:
+        def populate(registry: PluginRegistry[Any]) -> None:
+            registry.set_default_factory(_Plugin)
+            raise RuntimeError("populator failed")
+
+        registry = PluginRegistry[Any]("t", on_first_access=populate)
+
+        with pytest.raises(RuntimeError, match="populator failed"):
+            registry.list_keys()
+
+        # Observable rather than asserted on the attribute: with the
+        # default left behind, a second run's create() for an unregistered
+        # key silently succeeds off the abandoned run's factory.
+        def populate_again(registry: PluginRegistry[Any]) -> None:
+            registry.register("real", _Plugin)
+
+        registry._initializer = populate_again
+        with pytest.raises(NotFoundError):
+            registry.create("never-registered")
+
+    def test_a_registered_key_from_the_failed_run_is_rolled_back(self) -> None:
+        """The case the snapshot was written for, kept covered."""
+
+        def populate(registry: PluginRegistry[Any]) -> None:
+            registry.register("half", _Plugin)
+            raise RuntimeError("populator failed")
+
+        registry = PluginRegistry[Any]("t", on_first_access=populate)
+        with pytest.raises(RuntimeError):
+            registry.list_keys()
+
+        def populate_again(registry: PluginRegistry[Any]) -> None:
+            registry.register("half", _Plugin)
+
+        registry._initializer = populate_again
+        assert registry.list_keys() == ["half"]
+
+
+class TestConsumerSuppliedWarningText:
+    """``default_warning`` is interpolated by ``logging``, against a dict.
+
+    A literal ``%`` in it is a format spec to the handler, so the failure
+    lands inside ``logging`` at the first fallback -- on the branch nobody
+    exercises, long after the registry was built, in a traceback that names
+    neither the registry nor the text. Proved where the text is authored
+    instead.
+    """
+
+    def test_a_literal_percent_is_refused_where_it_is_written(self) -> None:
+        with pytest.raises(ValueError, match="must be written"):
+            PluginRegistry[Any](
+                "t",
+                config_key="kind",
+                config_key_default="d",
+                default_warning="the default costs 50% of throughput",
+            )
+
+    def test_the_error_names_the_registry_and_the_placeholders(self) -> None:
+        with pytest.raises(ValueError) as excinfo:
+            PluginRegistry[Any](
+                "locks",
+                config_key="kind",
+                config_key_default="d",
+                default_warning="100% in-process",
+            )
+        message = str(excinfo.value)
+        assert "'locks'" in message
+        assert "%(config_key)s" in message
+
+    def test_an_escaped_percent_is_accepted_and_renders(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        registry = PluginRegistry[Any](
+            "t",
+            config_key="kind",
+            config_key_default="d",
+            default_warning="%(key)s coordinates 0%% of processes",
+        )
+        registry.register("d", _Plugin)
+
+        with caplog.at_level(logging.WARNING, logger=REGISTRY_LOGGER):
+            registry.create(config={})
+
+        assert "d coordinates 0% of processes" in caplog.records[0].getMessage()
+
+
+class TestAskingWhetherAKeyIsKnown:
+    """``is_known`` asks the registry; truthy metadata only guesses.
+
+    Every caller distinguishing "misspelled" from "not installed here" was
+    reaching for :meth:`get_metadata` and testing it for truth, because
+    that was the only public surface that answered at all. It answers a
+    different question: :meth:`declare_unavailable` accepts ``metadata=None``,
+    and a plugin declared without any then reads as unknown -- reported as a
+    typo, which is the one thing the declaration existed to prevent.
+    """
+
+    def test_a_key_declared_without_metadata_is_still_known(self) -> None:
+        registry = PluginRegistry[Any]("t")
+        registry.declare_unavailable("acme", reason="acme-sdk is not installed")
+
+        assert registry.get_metadata("acme") == {}, "precondition: no metadata to read"
+        assert registry.is_known("acme") is True
+        assert registry.is_registered("acme") is False
+
+    def test_a_name_nobody_declared_is_not_known(self) -> None:
+        registry = PluginRegistry[Any]("t")
+        registry.declare_unavailable("acme", reason="acme-sdk is not installed")
+
+        assert registry.is_known("acme-typo") is False
+
+    def test_a_creatable_key_is_known_too(self) -> None:
+        registry = PluginRegistry[Any]("t")
+        registry.register("real", _Plugin)
+
+        assert registry.is_known("real") is True
+
+    def test_an_alias_of_a_declared_key_is_known(self) -> None:
+        registry = PluginRegistry[Any]("t")
+        registry.declare_unavailable(
+            "postgres", reason="psycopg2 is not installed", aliases=("pg",)
+        )
+
+        assert registry.is_known("pg") is True
+
+
+class TestReadingTheClassOfAPluginThatCannotBeBuilt:
+    """``load_declared_type`` serves the caller that wants to *read*.
+
+    A plugin whose optional driver is missing has no factory -- and must
+    not, since ``is_registered`` means "creatable". Its class may still be
+    importable, though, and something on it (a typed config schema, here)
+    may be exactly what a caller needs. Without this the caller keeps its
+    own second key-to-class table, which is the drift the registry exists
+    to prevent.
+    """
+
+    def test_it_returns_the_class_when_the_module_imports(self) -> None:
+        registry = PluginRegistry[Any]("t")
+        registry.declare_unavailable(
+            "acme", reason="acme-sdk is not installed", type_loader=lambda: _Plugin
+        )
+
+        assert registry.load_declared_type("acme") is _Plugin
+        assert registry.get_factory("acme") is None, "still not creatable"
+
+    def test_it_returns_none_when_the_module_cannot_import(self) -> None:
+        """The other idiom: a driver imported at module top level."""
+
+        def explode() -> type:
+            raise ImportError("No module named 'acme_sdk'")
+
+        registry = PluginRegistry[Any]("t")
+        registry.declare_unavailable(
+            "acme", reason="acme-sdk is not installed", type_loader=explode
+        )
+
+        assert registry.load_declared_type("acme") is None
+
+    def test_it_returns_none_when_no_loader_was_declared(self) -> None:
+        registry = PluginRegistry[Any]("t")
+        registry.declare_unavailable("acme", reason="acme-sdk is not installed")
+
+        assert registry.load_declared_type("acme") is None
+
+    def test_an_alias_reaches_the_same_class(self) -> None:
+        registry = PluginRegistry[Any]("t")
+        registry.declare_unavailable(
+            "postgres",
+            reason="psycopg2 is not installed",
+            aliases=("pg",),
+            type_loader=lambda: _Plugin,
+        )
+
+        assert registry.load_declared_type("pg") is _Plugin
+
+
+class TestUnregisteringAKeyOtherSpellingsDependOn:
+    """An unavailable alias answers through the key being dropped.
+
+    It carries no metadata of its own -- ``describes_key`` points at the
+    canonical key, whose metadata ``unregister`` removes. Dropping only the
+    one spelling therefore strands the aliases: still reported by
+    :meth:`list_known_keys`, and now answering ``{}`` to the
+    ``requires_install`` question that is the whole reason a withdrawn
+    plugin stays visible.
+    """
+
+    def test_its_aliases_go_with_it(self) -> None:
+        registry = PluginRegistry[Any]("t")
+        registry.declare_unavailable(
+            "postgres",
+            metadata={"requires_install": "pip install x[postgres]"},
+            reason="psycopg2 is not installed",
+            aliases=("pg", "postgresql"),
+        )
+
+        registry.unregister("postgres")
+
+        assert registry.list_known_keys() == []
+        assert registry.is_known("pg") is False
+
+    def test_an_alias_dropped_on_its_own_leaves_the_canonical_key(self) -> None:
+        registry = PluginRegistry[Any]("t")
+        registry.declare_unavailable(
+            "postgres",
+            metadata={"requires_install": "pip install x[postgres]"},
+            reason="psycopg2 is not installed",
+            aliases=("pg",),
+        )
+
+        registry.unregister("pg")
+
+        assert registry.is_known("pg") is False
+        assert registry.is_known("postgres") is True
+        assert registry.get_metadata("postgres")["requires_install"]
+
+    def test_unregistering_a_creatable_key_leaves_no_marks(self) -> None:
+        """The canonical key's own metadata still goes, as it always did."""
+        registry = PluginRegistry[Any]("t")
+        registry.register("real", _Plugin, metadata={"a": 1})
+
+        registry.unregister("real")
+
+        assert registry.list_known_keys() == []
+        assert registry.get_metadata("real") == {}
