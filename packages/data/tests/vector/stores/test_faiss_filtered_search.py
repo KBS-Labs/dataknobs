@@ -245,7 +245,8 @@ async def test_empty_vector_sidecar_falls_back_and_warns(
         await reopened.close()
 
 
-async def test_partial_sidecar_still_ranks_the_rows_it_cannot_score() -> None:
+@pytest.mark.parametrize("metric", ["cosine", "euclidean"])
+async def test_partial_sidecar_still_ranks_the_rows_it_cannot_score(metric: str) -> None:
     """A row missing from the side-car is ranked from the index, not dropped.
 
     Answering only from the rows the side-car holds would silently omit
@@ -255,8 +256,15 @@ async def test_partial_sidecar_still_ranks_the_rows_it_cannot_score() -> None:
     no help. Both sources are used, merged on the raw metric value each
     produces, which is the same scale precisely because
     ``_raw_index_scores`` reproduces what the index returns.
+
+    Parametrized over the two sort *directions*, not for extra coverage
+    of one behavior: the merge negates before sorting under inner
+    product (high wins) and does not under L2 (low wins). A test on one
+    metric leaves the other branch of that decision unexecuted, and
+    ``_fan`` orders the corpus the same way under both, so a broken
+    direction shows up as a reversed result rather than as noise.
     """
-    store = await _seeded({"index_type": "flat"})
+    store = await _seeded({"index_type": "flat", "metric": metric})
     try:
         exact = await store.search(_probe(), k=3, filter={"domain_id": "a"})
 
