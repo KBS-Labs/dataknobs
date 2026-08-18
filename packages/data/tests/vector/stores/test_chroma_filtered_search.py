@@ -135,30 +135,32 @@ async def test_unsatisfiable_and_empty_filters_are_unchanged() -> None:
         await _drop(store)
 
 
-async def test_include_timestamps_is_accepted_and_answers_none() -> None:
+async def test_include_timestamps_reports_tracked_values() -> None:
     """The argument is on the ABC, so a swap must not break on it.
 
-    Chroma tracks no timestamps, so both keys come back ``None`` — the
-    answer the contract already defines for a row with none tracked.
-    Before, both methods raised ``TypeError`` on the keyword while every
-    other backend accepted it, which broke exactly the runtime backend
-    swap the semantics doc promises.
+    It once raised ``TypeError`` on both methods while every other
+    backend accepted it, breaking the runtime backend swap the
+    semantics doc promises; accepting it and answering ``None`` closed
+    that, but left a store that reported every row as untracked. Both
+    read paths now carry the values this backend records per row.
     """
     store = await _seeded()
     try:
         results = await store.search(_probe(), k=1, include_timestamps=True)
         _, _, meta = results[0]
         assert meta is not None
-        assert meta["_created_at"] is None
-        assert meta["_updated_at"] is None
+        assert meta["_created_at"] is not None
+        assert meta["_updated_at"] is not None
         # Consumer metadata survives alongside the injected keys.
         assert meta["group"] == "other"
 
         vectors = await store.get_vectors(["other0"], include_timestamps=True)
         _, fetched = vectors[0]
         assert fetched is not None
-        assert fetched["_created_at"] is None
-        assert fetched["_updated_at"] is None
+        assert fetched["_created_at"] is not None
+        assert fetched["_updated_at"] is not None
+        # The two read paths agree about the same row.
+        assert fetched["_created_at"] == meta["_created_at"]
 
         # Off by default, and never injected without metadata.
         plain = await store.get_vectors(["other0"])

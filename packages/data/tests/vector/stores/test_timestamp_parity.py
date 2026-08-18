@@ -9,27 +9,37 @@ identical timestamp semantics:
   ``include_timestamps=True`` and absent by default.
 - Upsert preserves ``_created_at`` and advances ``_updated_at``.
 
-Only **memory** and **pgvector** run today. FAISS and Chroma are
-deferred — when they land,
-each is added as a single ``pytest.param`` line; the test bodies do
-not change.
+Every in-tree backend runs: memory, faiss and chroma need no
+services, and pgvector joins them when one is reachable. That is the
+point of the suite — a backend that implements the feature without
+appearing here is a divergence nothing would catch.
 """
 
 from __future__ import annotations
 
 import asyncio
+import logging
+import uuid
 from collections.abc import AsyncIterator, Iterator
 from typing import Any
 
 import pytest
 import pytest_asyncio
 from dataknobs_common.testing import (
+    is_chromadb_available,
+    is_faiss_available,
     is_package_available,
     requires_real_postgres,
 )
 
 from dataknobs_data.testing import vector as _vector
 from dataknobs_data.vector.stores.memory import MemoryVectorStore
+
+if is_faiss_available():
+    from dataknobs_data.vector.stores.faiss import FaissVectorStore
+
+if is_chromadb_available():
+    from dataknobs_data.vector.stores.chroma import ChromaVectorStore
 
 if is_package_available("asyncpg"):
     from dataknobs_data.vector.stores.pgvector import PgVectorStore
@@ -59,17 +69,23 @@ def pgvector_config(make_pgvector_test_table: Any) -> Iterator[dict[str, Any]]:
 @pytest_asyncio.fixture(
     params=[
         pytest.param("memory", id="memory"),
+        pytest.param(
+            "faiss",
+            id="faiss",
+            marks=pytest.mark.skipif(not is_faiss_available(), reason="faiss not installed"),
+        ),
+        pytest.param(
+            "chroma",
+            id="chroma",
+            marks=pytest.mark.skipif(not is_chromadb_available(), reason="chromadb not installed"),
+        ),
         pytest.param("pgvector", id="pgvector", marks=_pgvector_marks),
     ]
 )
 async def any_vector_store(
     request: pytest.FixtureRequest, pgvector_config: dict[str, Any]
 ) -> AsyncIterator[Any]:
-    """Yield a freshly-initialized VectorStore for each backend param.
-
-    FAISS and Chroma will be added to ``params`` when their
-    timestamp support lands.
-    """
+    """Yield a freshly-initialized VectorStore for each backend param."""
     backend = request.param
     store: Any
     if backend == "memory":
@@ -78,6 +94,33 @@ async def any_vector_store(
         try:
             yield store
         finally:
+            await store.close()
+    elif backend == "faiss":
+        store = FaissVectorStore({"dimensions": 4, "metric": "cosine"})
+        await store.initialize()
+        try:
+            yield store
+        finally:
+            await store.close()
+    elif backend == "chroma":
+        store = ChromaVectorStore(
+            {
+                "dimensions": 4,
+                "collection_name": f"test_parity_{uuid.uuid4().hex[:8]}",
+            }
+        )
+        await store.initialize()
+        try:
+            yield store
+        finally:
+            try:
+                store.client.delete_collection(name=store.collection_name)
+            except Exception as exc:  # pragma: no cover - teardown best effort
+                logging.getLogger(__name__).warning(
+                    "Chroma teardown failed for collection %r: %s",
+                    store.collection_name,
+                    exc,
+                )
             await store.close()
     elif backend == "pgvector":
         store = PgVectorStore(pgvector_config)

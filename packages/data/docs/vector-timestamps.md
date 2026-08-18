@@ -1,15 +1,9 @@
 # Vector Store Timestamp Exposure
 
-`MemoryVectorStore`, `FaissVectorStore`, and `PgVectorStore` track
-`created_at` and `updated_at` timestamps per vector and expose them on
-demand via `include_timestamps=True` on `get_vectors()` and
-`search()`.
-
-**Deferred backend:** `ChromaVectorStore` does **not** yet accept the
-`include_timestamps` kwarg — calling it on that backend raises
-`TypeError`. The `VectorStoreBase` helpers (`_format_timestamp`,
-`_inject_timestamps`) are in place so adding support is purely
-additive; it will ship when a consumer needs it.
+`MemoryVectorStore`, `FaissVectorStore`, `ChromaVectorStore`, and
+`PgVectorStore` track `created_at` and `updated_at` timestamps per
+vector and expose them on demand via `include_timestamps=True` on
+`get_vectors()` and `search()`.
 
 ## Configuration
 
@@ -18,7 +12,7 @@ any `VectorStoreBase` subclass:
 
 ```yaml
 vector_store:
-  provider: memory  # or faiss, pgvector
+  provider: memory  # or faiss, chroma, pgvector
   dimensions: 768
   timestamps:
     format: iso        # "iso" | "epoch" | "datetime" (default: "iso")
@@ -59,6 +53,41 @@ When `include_metadata=False`, timestamp injection is silently skipped
 - `updated_at` is **refreshed** on every upsert and on
   `update_metadata`.
 
+## Where the values are stored
+
+Per-backend, and it only matters in one case:
+
+| Backend | Storage |
+|---------|---------|
+| `PgVectorStore` | real `created_at` / `updated_at` columns |
+| `MemoryVectorStore`, `FaissVectorStore` | an in-process side-car keyed by row |
+| `ChromaVectorStore` | **in-band**, in the collection's own metadata |
+
+A Chroma collection is the only per-row storage that backend has, so
+its timestamps live in the same metadata dict a consumer owns, under
+two reserved NUL-delimited keys (the convention this store already
+uses to keep non-scalar values inside chromadb's scalar-only
+contract). They are stripped from every read — `get_vectors()`,
+`search()`, `search_documents()`, `metadata_fields()`, and the
+residual metadata filter behind `count()` / `clear()` — so nothing a
+consumer can reach through the store surfaces them, and a filter
+cannot match on them.
+
+Two consequences worth knowing:
+
+- **Inspecting a Chroma collection directly** — outside this store,
+  through chromadb — will show the reserved keys. They are ours, not
+  the row's.
+- **Version skew on one collection.** A collection written by this
+  version and read by an earlier one surfaces the reserved keys as
+  ordinary metadata, because the earlier version has no strip. Read a
+  collection with the version that wrote it, or later.
+
+The stored value is an epoch float regardless of the configured
+`format`; `format` applies on the way out. That is deliberate — a
+store whose `timestamps.format` config changes can still read rows
+written under the old one.
+
 ## Output formats
 
 `_format_timestamp` maps the backend's stored timestamp to the
@@ -81,11 +110,13 @@ Timestamps are **backend-local** — compare within a store, not across:
 |---------|--------------|
 | `MemoryVectorStore` | Python `datetime.now(UTC)` (aware UTC) |
 | `FaissVectorStore` | Python `datetime.now(UTC)` (aware UTC) |
+| `ChromaVectorStore` | Python `datetime.now(UTC)` (aware UTC) |
 | `PgVectorStore` | Postgres server `NOW()` (naive `TIMESTAMP`) |
 
 In the `epoch` format, naive datetimes (pgvector) are converted using
 the system's local-time interpretation, while aware datetimes
-(`MemoryVectorStore`, `FaissVectorStore`) use their embedded timezone.
+(`MemoryVectorStore`, `FaissVectorStore`, `ChromaVectorStore`) use
+their embedded timezone.
 Cross-backend epoch comparisons are therefore not meaningful — this is
 by design, since the two clocks are already unsynchronised.
 
@@ -112,6 +143,11 @@ by design, since the two clocks are already unsynchronised.
   so `get_vectors()` returns `None` for its ids until the vectors are
   re-added (or the corpus re-ingested) once; similarity `search` is
   unaffected because the FAISS index itself is restored normally.
+- **ChromaVectorStore collections written before tracking.** Rows in a
+  collection written by an earlier version carry no reserved timestamp
+  keys and return `None` for both until their next `add_vectors`,
+  `add_documents`, `update_metadata`, or `update_metadata_where`
+  repopulates them. Nothing is backfilled on read.
 
 ## Consumer metadata key collision
 

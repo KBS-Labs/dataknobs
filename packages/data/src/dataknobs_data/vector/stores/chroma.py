@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, TypeVar
 from uuid import uuid4
 
@@ -121,6 +122,31 @@ class ChromaVectorStore(VectorStore):
     _EMPTY_LIST_SENTINEL = "\x00dk\x00empty_list\x00"
     _NONSCALAR_PREFIX = "\x00dk\x00json\x00"
 
+    # Row timestamps live in the metadata dict itself, because a Chroma
+    # collection is the only per-row storage this backend has — the
+    # other backends keep a side-car keyed by row and never face this.
+    # In-band storage means the keys share a namespace the consumer
+    # owns, so they take the same NUL-delimited form as the encoding
+    # prefixes above and for the same reason: a real-value collision is
+    # infeasible.
+    #
+    # The storage keys are deliberately NOT the configured output keys
+    # (``timestamps.created_key`` / ``updated_key``). Keeping them
+    # distinct is what preserves the documented collision policy — a
+    # consumer's own ``_created_at`` stays ordinary metadata, and
+    # ``_inject_timestamps`` arbitrates between the two exactly as it
+    # does on every other backend. Were they the same key, a stored
+    # value and a consumer-supplied one would be indistinguishable and
+    # the policy could not be honoured here at all.
+    #
+    # The stored value is an epoch float regardless of the configured
+    # ``timestamps.format``: format is an output concern, and a store
+    # whose format changes must still be able to read rows written
+    # under the old one.
+    _TS_CREATED_KEY = "\x00dk\x00created\x00"
+    _TS_UPDATED_KEY = "\x00dk\x00updated\x00"
+    _RESERVED_KEYS = frozenset({_TS_CREATED_KEY, _TS_UPDATED_KEY})
+
     @classmethod
     def _encode_metadata(cls, meta: dict[str, Any] | None) -> dict[str, Any] | None:
         """Adapt one row's metadata to chromadb's scalar-only contract.
@@ -151,11 +177,22 @@ class ChromaVectorStore(VectorStore):
         surface ``{}`` to match the Memory/FAISS contract. JSON-prefixed
         values are parsed back to their list/dict form; the legacy
         empty-list sentinel still decodes to ``[]``.
+
+        Reserved timestamp keys are dropped here rather than at each
+        caller. Every public read path decodes, so one strip at the
+        boundary is what keeps them out of ``get_vectors``, ``search``,
+        ``search_documents``, ``metadata_fields``, the residual
+        post-filter, and the merge round trip in
+        :meth:`update_metadata_where` — seven sites that would
+        otherwise each have to remember. Read the values with
+        :meth:`_reserved_timestamps`, which takes the raw dict.
         """
         if not meta:
             return {}
         decoded: dict[str, Any] = {}
         for key, value in meta.items():
+            if key in cls._RESERVED_KEYS:
+                continue
             if isinstance(value, str) and value.startswith(cls._NONSCALAR_PREFIX):
                 decoded[key] = json.loads(value[len(cls._NONSCALAR_PREFIX) :])
             elif value == cls._EMPTY_LIST_SENTINEL:
@@ -163,6 +200,83 @@ class ChromaVectorStore(VectorStore):
             else:
                 decoded[key] = value
         return decoded
+
+    @classmethod
+    def _reserved_timestamps(
+        cls, raw: dict[str, Any] | None
+    ) -> tuple[datetime | None, datetime | None]:
+        """The row's tracked timestamps, read from *raw* chromadb metadata.
+
+        Takes the undecoded dict on purpose: :meth:`_decode_metadata`
+        strips these keys, so a decoded row no longer has them.
+
+        Returns ``(None, None)`` for a row written before this backend
+        tracked timestamps. No backfill — that is the same answer the
+        other backends give for their own pre-tracking rows (a pgvector
+        row from before the migration, a Memory/FAISS pickle written
+        without a side-car), and the value repopulates on the row's
+        next write.
+        """
+
+        def _at(key: str) -> datetime | None:
+            value = (raw or {}).get(key)
+            if isinstance(value, int | float) and not isinstance(value, bool):
+                return datetime.fromtimestamp(float(value), UTC)
+            return None
+
+        return _at(cls._TS_CREATED_KEY), _at(cls._TS_UPDATED_KEY)
+
+    @classmethod
+    def _stamp(
+        cls,
+        encoded: dict[str, Any] | None,
+        *,
+        created: datetime | None,
+        updated: datetime,
+    ) -> dict[str, Any]:
+        """Attach the reserved timestamp keys to an encoded payload.
+
+        ``created`` of ``None`` means this row is new and starts its
+        life now, which is what makes an upsert preserve the original:
+        the caller passes the value it read back, or ``None`` if there
+        was none to read.
+
+        Returns a dict even when *encoded* is ``None``. A row the
+        consumer gave no metadata still has timestamps, and chromadb's
+        "no metadata" form cannot carry them.
+        """
+        payload = dict(encoded or {})
+        payload[cls._TS_CREATED_KEY] = (created or updated).timestamp()
+        payload[cls._TS_UPDATED_KEY] = updated.timestamp()
+        return payload
+
+    @classmethod
+    def _replacement_payload(
+        cls,
+        stored: dict[str, Any] | None,
+        new_meta: dict[str, Any] | None,
+    ) -> dict[str, Any] | None:
+        """The ``update`` payload that makes ``new_meta`` the whole row.
+
+        chromadb's ``update`` merges the dict it is given into what is
+        already stored, and a key it does not mention survives. So
+        replacement is expressed by naming the departing keys with a
+        ``None`` value, which deletes them.
+
+        ``stored`` is the raw chromadb metadata, not a decoded one:
+        only its key set is used, and encoding does not change that.
+
+        Returns ``None`` when there is nothing to write. That is the
+        no-op form chromadb accepts — an empty dict is rejected
+        outright ("non-empty dict" in update), and ``None`` leaves the
+        row alone, which is the right answer when neither the stored
+        row nor the replacement has any keys.
+        """
+        payload: dict[str, Any] = dict(cls._encode_metadata(new_meta) or {})
+        for key in stored or {}:
+            if key not in payload:
+                payload[key] = None
+        return payload or None
 
     @staticmethod
     def _as_list(value: Any) -> list[Any]:
@@ -264,15 +378,58 @@ class ChromaVectorStore(VectorStore):
 
         # Add to collection. chromadb 1.x rejects empty dict / empty-list
         # metadata; encode per row (decoded back on read). Offloaded:
-        # chromadb's add is a synchronous native call.
+        # chromadb's upsert is a synchronous native call.
+        #
+        # ``upsert``, not ``add``: re-adding an id a store already holds
+        # replaces that row on every other backend, and chromadb's
+        # ``add`` instead discards the write silently — no exception,
+        # no warning, the original vector and metadata retained. A
+        # consumer correcting an embedding kept the stale one here and
+        # had no way to tell.
         await asyncio.to_thread(
-            self.collection.add,
+            self.collection.upsert,
             embeddings=vectors,
             ids=ids,
-            metadatas=[self._encode_metadata(m) for m in metadata],
+            metadatas=await self._stamped_payloads(ids, metadata),
         )
 
         return ids
+
+    async def _stamped_payloads(
+        self,
+        ids: list[str],
+        metadata: list[dict[str, Any]] | None,
+    ) -> list[dict[str, Any]]:
+        """Encoded metadata for a write, carrying the reserved timestamps.
+
+        One ``collection.get`` for the whole batch, not one per row,
+        and only to answer a single question: which of these ids already
+        exist, and when were they created. Re-adding an existing id is
+        an upsert on every backend, and an upsert preserves
+        ``created_at`` while advancing ``updated_at`` — so the prior
+        value has to be read before it is overwritten.
+
+        One ``now`` for the batch, so rows written together carry the
+        same instant rather than drifting across the loop.
+        """
+        existing = await asyncio.to_thread(self.collection.get, ids=ids, include=["metadatas"])
+        existing_ids = self._as_list(existing.get("ids"))
+        existing_metas = self._as_list(existing.get("metadatas"))
+        created_by_id: dict[str, datetime | None] = {}
+        for i, rid in enumerate(existing_ids):
+            raw = existing_metas[i] if i < len(existing_metas) else None
+            created_by_id[rid] = self._reserved_timestamps(raw)[0]
+
+        now = datetime.now(UTC)
+        rows = metadata if metadata is not None else [{} for _ in ids]
+        return [
+            self._stamp(
+                self._encode_metadata(meta),
+                created=created_by_id.get(id_val),
+                updated=now,
+            )
+            for id_val, meta in zip(ids, rows, strict=False)
+        ]
 
     async def get_vectors(
         self,
@@ -282,15 +439,12 @@ class ChromaVectorStore(VectorStore):
     ) -> list[tuple[np.ndarray | None, dict[str, Any] | None]]:
         """Retrieve vectors by ID.
 
-        ``include_timestamps`` injects the configured timestamp keys with
-        ``None`` values: Chroma does not track row timestamps, and this
-        store does not synthesize them into its metadata. That is the
-        same answer the contract already defines for a row with no
-        tracked timestamp — a pgvector row from before the timestamp
-        migration, or a Memory/FAISS pickle written before tracking
-        existed. Accepting the argument is what keeps a runtime backend
-        swap working; before, it raised ``TypeError`` here and in
-        :meth:`search` while every other backend accepted it.
+        ``include_timestamps`` injects the configured timestamp keys
+        from the values this store tracks per row. A row written before
+        this backend tracked them reports ``None`` for both until its
+        next write — the same answer the contract defines for a
+        pgvector row from before the migration or a Memory/FAISS pickle
+        written without a side-car.
         """
         if not self._initialized:
             await self.initialize()
@@ -318,13 +472,11 @@ class ChromaVectorStore(VectorStore):
             emb = embeddings[idx] if idx < len(embeddings) else None
             if emb is not None:
                 emb = np.array(emb, dtype=np.float32)
-            meta = (
-                self._decode_metadata(metadatas[idx])
-                if include_metadata and idx < len(metadatas)
-                else None
-            )
+            raw_meta = metadatas[idx] if idx < len(metadatas) else None
+            meta = self._decode_metadata(raw_meta) if include_metadata else None
             if inject:
-                meta = self._inject_timestamps(meta, created=None, updated=None)
+                created, updated = self._reserved_timestamps(raw_meta)
+                meta = self._inject_timestamps(meta, created=created, updated=updated)
             vectors.append((emb, meta))
 
         return vectors
@@ -498,8 +650,8 @@ class ChromaVectorStore(VectorStore):
     ) -> list[tuple[str, float, dict[str, Any] | None]]:
         """Search for similar vectors.
 
-        See :meth:`get_vectors` for what ``include_timestamps`` means on
-        a backend that does not track them.
+        See :meth:`get_vectors` for what ``include_timestamps`` exposes
+        and what a row written before tracking reports.
         """
         if not self._initialized:
             await self.initialize()
@@ -558,7 +710,8 @@ class ChromaVectorStore(VectorStore):
                     continue
                 out_meta = metadata if include_metadata else None
                 if inject:
-                    out_meta = self._inject_timestamps(out_meta, created=None, updated=None)
+                    created, updated = self._reserved_timestamps(raw_meta)
+                    out_meta = self._inject_timestamps(out_meta, created=created, updated=updated)
                 rows.append((id_val, self._score_from_distance(distance), out_meta))
             return rows
 
@@ -569,32 +722,63 @@ class ChromaVectorStore(VectorStore):
         ids: list[str],
         metadata: list[dict[str, Any]],
     ) -> int:
-        """Update metadata for existing vectors."""
+        """Replace metadata for existing vectors.
+
+        The supplied dict becomes the row's metadata outright: a key
+        the caller omits is removed, matching every other backend and
+        the "new metadata for each vector" the base class documents.
+
+        chromadb's own ``update`` merges rather than replaces, so a
+        removed key has to be named to be dropped — ``None`` as a
+        value deletes that key. The stored metadata is fetched first
+        for exactly that reason: the keys to tombstone are the ones
+        the row has and the caller's dict does not.
+
+        Replacing the consumer's keys does not disturb the row's
+        timestamps: ``created_at`` is preserved and ``updated_at``
+        advances, as on every other backend.
+        """
         if not self._initialized:
             await self.initialize()
 
-        # Check which IDs exist
-        existing = await asyncio.to_thread(self.collection.get, ids=ids, include=[])
-        existing_ids = set(self._as_list(existing.get("ids")))
+        # Metadata, not just ids: the tombstone set is derived from the
+        # keys the row currently holds.
+        existing = await asyncio.to_thread(self.collection.get, ids=ids, include=["metadatas"])
+        existing_ids = self._as_list(existing.get("ids"))
+        existing_metas = self._as_list(existing.get("metadatas"))
+        stored_by_id = {
+            rid: (existing_metas[i] if i < len(existing_metas) else None)
+            for i, rid in enumerate(existing_ids)
+        }
 
-        if existing_ids:
-            # Filter metadata to only update existing vectors
-            filtered_ids = []
-            filtered_metadata = []
-            for id_val, meta in zip(ids, metadata, strict=False):
-                if id_val in existing_ids:
-                    filtered_ids.append(id_val)
-                    filtered_metadata.append(self._encode_metadata(meta))
-
-            if filtered_ids:
-                await asyncio.to_thread(
-                    self.collection.update,
-                    ids=filtered_ids,
-                    metadatas=filtered_metadata,
+        now = datetime.now(UTC)
+        filtered_ids: list[str] = []
+        filtered_metadata: list[dict[str, Any]] = []
+        for id_val, meta in zip(ids, metadata, strict=False):
+            if id_val not in stored_by_id:
+                continue
+            stored = stored_by_id[id_val]
+            filtered_ids.append(id_val)
+            # Stamp after the replacement payload, not before: that
+            # payload tombstones every stored key the caller omitted,
+            # and the reserved keys are stored keys the caller never
+            # supplies. Re-setting them here is what keeps a metadata
+            # replacement from also erasing the row's timestamps.
+            filtered_metadata.append(
+                self._stamp(
+                    self._replacement_payload(stored, meta),
+                    created=self._reserved_timestamps(stored)[0],
+                    updated=now,
                 )
-                return len(filtered_ids)
+            )
 
-        return 0
+        if filtered_ids:
+            await asyncio.to_thread(
+                self.collection.update,
+                ids=filtered_ids,
+                metadatas=filtered_metadata,
+            )
+        return len(filtered_ids)
 
     async def update_metadata_where(
         self,
@@ -605,9 +789,17 @@ class ChromaVectorStore(VectorStore):
 
         Mirrors the filtered :meth:`clear` path: partition the filter
         into a Chroma-native ``where`` plus a Python post-filter, fetch
-        matching rows with their metadata, merge ``set_`` into each
-        (Chroma ``update`` replaces a row's metadata wholesale, so the
-        merge is done here), then write back via ``collection.update``.
+        matching rows with their metadata, merge ``set_`` into each,
+        then write back via ``collection.update``.
+
+        Merging here rather than leaning on chromadb is deliberate on
+        two counts. The rows have to be fetched and decoded regardless,
+        because the residual post-filter decides which of them match;
+        and doing the merge locally keeps this method's result
+        independent of what chromadb's ``update`` does with the keys it
+        is not given. It merges them today, but that is its choice, not
+        this contract — and the sibling :meth:`update_metadata`
+        deliberately overrides it to replace.
         """
         if not self._initialized:
             await self.initialize()
@@ -627,15 +819,27 @@ class ChromaVectorStore(VectorStore):
         ids = self._as_list(result.get("ids"))
         metadatas = self._as_list(result.get("metadatas"))
 
+        now = datetime.now(UTC)
         update_ids: list[str] = []
-        update_metadatas: list[dict[str, Any] | None] = []
+        update_metadatas: list[dict[str, Any]] = []
         for cid, raw_meta in zip(ids, metadatas, strict=False):
             existing = self._decode_metadata(raw_meta)
             if post_filter and not self._match_metadata_filter(existing, post_filter):
                 continue
             existing.update(set_)
             update_ids.append(cid)
-            update_metadatas.append(self._encode_metadata(existing))
+            # ``existing`` came back from a decode, which strips the
+            # reserved keys — so the re-encoded payload carries none,
+            # and a merge-update would leave the stored ones untouched.
+            # ``updated_at`` has to advance on a matched row, so both
+            # are written back explicitly.
+            update_metadatas.append(
+                self._stamp(
+                    self._encode_metadata(existing),
+                    created=self._reserved_timestamps(raw_meta)[0],
+                    updated=now,
+                )
+            )
 
         if update_ids:
             await asyncio.to_thread(
@@ -766,7 +970,16 @@ class ChromaVectorStore(VectorStore):
         ids: list[str] | None = None,
         metadata: list[dict[str, Any]] | None = None,
     ) -> list[str]:
-        """Add documents to the collection (uses Chroma's embedding)."""
+        """Add documents to the collection (uses Chroma's embedding).
+
+        The rows land in the same collection :meth:`add_vectors` writes
+        to, and every read path treats them identically — so this path
+        prepares them identically too: the configured ``domain_id`` is
+        defaulted in, the row is timestamped, and an id already present
+        is replaced rather than silently discarded. Diverging on any of
+        the three produced rows the store itself could not see or could
+        not date.
+        """
         if not self._initialized:
             await self.initialize()
 
@@ -774,16 +987,18 @@ class ChromaVectorStore(VectorStore):
         if ids is None:
             ids = [str(uuid4()) for _ in range(len(documents))]
 
-        # Ensure metadata is provided
-        if metadata is None:
-            metadata = [{} for _ in range(len(documents))]
+        # Per-row metadata: fresh dicts with config-level domain_id
+        # defaulted in, exactly as the vector write path does. Without
+        # it a scoped store wrote rows carrying no domain_id, which
+        # every scoped read then filtered back out.
+        metadata = self._apply_domain_default(metadata, len(ids))
 
         # Add documents (Chroma will embed them if embedding_function is set)
         await asyncio.to_thread(
-            self.collection.add,
+            self.collection.upsert,
             documents=documents,
             ids=ids,
-            metadatas=[self._encode_metadata(m) for m in metadata],
+            metadatas=await self._stamped_payloads(ids, metadata),
         )
 
         return ids

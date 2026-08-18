@@ -9,6 +9,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`ChromaVectorStore` tracks `created_at` / `updated_at`**, exposed via
+  `include_timestamps=True` on `get_vectors()` and `search()` — the same
+  surface `MemoryVectorStore`, `FaissVectorStore` and `PgVectorStore`
+  already carry. A `timestamps:` config block now takes effect on this
+  backend; previously it was parsed onto the store and never read.
+
+  A Chroma collection is the only per-row storage this backend has, so the
+  values live in the collection metadata under reserved keys, stripped from
+  every read path — `get_vectors()`, `search()`, `search_documents()`,
+  `metadata_fields()`, and the residual metadata filter behind `count()` and
+  `clear()`. The stored form is an epoch float regardless of the configured
+  `format`, so a store whose format config changes still reads rows written
+  under the old one. Rows in a collection written by an earlier version
+  report `None` for both until their next write; nothing is backfilled.
+
+  One consequence to plan for: a collection written by this version and read
+  by an earlier one surfaces those reserved keys as ordinary metadata,
+  because the earlier version has no strip. Read a collection with the
+  version that wrote it, or later.
+
 - **`get_available_backends()` and `is_backend_available()`** on
   `DatabaseFactory`, `AsyncDatabaseFactory` and `VectorStoreFactory`. Three
   documents described both as factory methods, so following any of them
@@ -77,6 +97,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   later test draws.
 
 ### Changed
+
+- **`ChromaVectorStore.update_metadata()` now replaces a row's metadata
+  instead of merging into it.** A key omitted from the supplied dict is
+  removed, matching `MemoryVectorStore`, `FaissVectorStore` and
+  `PgVectorStore` and the "new metadata for each vector" the base class
+  documents. chromadb's own `update` merges, and nothing compensated — so
+  a consumer clearing a key by omitting it got the key removed on three
+  backends and silently retained on the fourth, from identical code
+  against a config-selectable store.
+
+  Code relying on the merge to perform a partial update needs to supply
+  the full replacement dict, or use `update_metadata_where()`, whose
+  contract is a merge and is unchanged.
 
 - **A file `persist_path` written by two overlapping instances now
   raises instead of silently discarding one of them.** `save()` — and
@@ -202,6 +235,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   registration. It now raises a `ValueError` naming both.
 
 ### Fixed
+
+- **`ChromaVectorStore.add_vectors()` no longer discards a write to an id
+  the store already holds.** It reached chromadb's `add`, which drops a
+  duplicate id silently — no exception, no warning, the original vector
+  and metadata retained. Re-adding an existing id is an upsert on every
+  other backend, so a consumer correcting an embedding got the correction
+  on three backends and kept the stale vector on the fourth, with nothing
+  to indicate which had happened. `add_documents()` had the same defect
+  and is fixed with it.
+
+- **`ChromaVectorStore.add_documents()` now applies the configured
+  `domain_id` to the rows it writes.** Its sibling `add_vectors()`
+  defaults the configured domain into every row; this path did not, so a
+  store scoped by `domain_id` wrote rows carrying none — and every scoped
+  read then filtered them back out. `count()` omitted a document the store
+  had just written, and `search_documents()` for that document's own text
+  returned some other row.
 
 - **`ChromaVectorStore.search(filter=...)` under-returned for the same
   reason, at a wider window.** A filter that cannot be pushed down is

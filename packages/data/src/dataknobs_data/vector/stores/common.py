@@ -103,11 +103,13 @@ class VectorStoreBase(StructuredConfigConsumer[VectorStoreConfig]):
 
         # Timestamp exposure config. All vector stores expose
         # created_at / updated_at metadata via include_timestamps=True
-        # on get_vectors() and search(). Backends that don't natively
-        # persist timestamps (MVS, FAISS) track them in-process. Format
-        # and key names are configurable; defaults are consistent
-        # across backends so runtime-swap produces identical metadata
-        # surfaces. The format is validated in
+        # on get_vectors() and search(). Where the values live is the
+        # backend's business: pgvector has real columns, MVS and FAISS
+        # keep a side-car keyed by row, and Chroma — whose only per-row
+        # storage is the metadata dict the consumer also owns — keeps
+        # them in-band under reserved keys stripped from every read. Format and key names are configurable; defaults are
+        # consistent across backends so runtime-swap produces identical
+        # metadata surfaces. The format is validated in
         # VectorStoreTimestampConfig.__post_init__.
         ts = cfg.timestamps or VectorStoreTimestampConfig()
         self.timestamps_format: str = ts.format
