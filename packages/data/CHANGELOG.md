@@ -118,6 +118,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `fcntl` record locks are owned by the process, so the second acquire
   used to be granted immediately.
 
+- **`FileLock` is no longer reentrant.** One thread acquiring the same
+  path twice now deadlocks where it previously succeeded. The old
+  behaviour was not a feature: it worked only because `fcntl` grants the
+  owning process a lock it already holds, which is precisely the defect
+  the intra-process mutex above fixes — there was no way to keep it
+  without keeping the hole. In-tree callers never nest, but the class is
+  importable, and `from dataknobs_data.backends.file import FileLock`
+  still resolves (to `dataknobs_common.locks.FileLock`, where it now
+  lives so the vector stores can reach it too).
+
+  Two other differences on that same surface. Holding the lock needs
+  create-or-write permission on the directory even to read under it, so
+  a caller on a read-only mount must degrade rather than fail. And
+  `FileLock(path, timeout=...)` now bounds the wait — worth setting from
+  a worker of the shared `asyncio.to_thread` executor, where an
+  unbounded wait parks a pooled thread for as long as the holder runs.
+
 - **A persisted vector-store file keeps the permissions it had.** The
   scratch-then-rename publish used to reset the mode to the umask
   default on every save, discarding any `chmod` a consumer had applied.
