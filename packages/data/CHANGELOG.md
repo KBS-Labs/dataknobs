@@ -233,6 +233,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   row from before the timestamp migration or a pickle written before
   tracking existed.
 
+- **Mutating a returned metadata dict rewrote the store on Memory and
+  FAISS.** `search()` and `get_vectors()` handed back the *live*
+  `metadata_store` entry whenever timestamps were not being injected, so
+  a caller adding a key to a result silently edited the store — no
+  mutator called, and nothing to see at the call site. Chroma and
+  pgvector build a fresh dict per row, so the same code was safe on two
+  backends of four and corrupting on the other two. All four now return
+  a copy. Only the returned rows are copied, not every scored candidate.
+
+- **`VectorStore.get_vectors()` is annotated to return what it returns.**
+  The ABC declared `list[tuple[np.ndarray, dict | None]]`, but every
+  backend yields `(None, None)` for an id it does not hold — that is the
+  documented behaviour, and it is what keeps the result positionally
+  aligned with `ids`. `FaissVectorStore` and `PgVectorStore` had each
+  widened it locally; the ABC and `MemoryVectorStore` now agree with
+  them. Type-checked consumers unpacking the vector may need a `None`
+  branch they always needed at runtime.
+
 - **A failed `.meta` write left a FAISS store unloadable.** The index
   file and its side-car were each written directly over their targets,
   so a `.meta` that failed to serialize — an unpicklable value in

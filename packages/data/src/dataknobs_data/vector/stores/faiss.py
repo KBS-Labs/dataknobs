@@ -394,12 +394,17 @@ class FaissVectorStore(VectorStore):
                 results.append((None, None))
                 continue
 
-            # Copy so the caller cannot mutate the stored array.
+            # Copy so the caller cannot mutate the stored array — and the
+            # same for the metadata dict beside it, which was handed out
+            # live whenever timestamps were not being injected.
             vector = stored.copy()
-            metadata = self.metadata_store.get(internal_id) if include_metadata else None
+            stored_meta = self.metadata_store.get(internal_id) if include_metadata else None
+            metadata: dict[str, Any] | None
             if inject:
                 created, updated = self.timestamps.get(internal_id, (None, None))
-                metadata = self._inject_timestamps(metadata, created=created, updated=updated)
+                metadata = self._inject_timestamps(stored_meta, created=created, updated=updated)
+            else:
+                metadata = dict(stored_meta) if stored_meta is not None else None
             results.append((vector, metadata))
 
         return results
@@ -538,10 +543,19 @@ class FaissVectorStore(VectorStore):
     ) -> tuple[str, float, dict[str, Any] | None]:
         """Assemble one result tuple. Shared by both search paths."""
         ext_id = reverse_id_map.get(internal_id, str(internal_id))
-        out_meta = self.metadata_store.get(internal_id) if include_metadata else None
+        stored = self.metadata_store.get(internal_id) if include_metadata else None
+        out_meta: dict[str, Any] | None
         if inject:
             created, updated = self.timestamps.get(internal_id, (None, None))
-            out_meta = self._inject_timestamps(out_meta, created=created, updated=updated)
+            out_meta = self._inject_timestamps(stored, created=created, updated=updated)
+        else:
+            # Copied, not handed out live. Chroma and pgvector build a
+            # fresh dict per row on the way out, so returning the stored
+            # one here made "mutate a result" quietly rewrite the store
+            # on two backends of four — a swap-visible difference, and a
+            # way to corrupt a store without calling a mutator. Only the
+            # ``k`` returned rows are copied, not the M scored ones.
+            out_meta = dict(stored) if stored is not None else None
         return (ext_id, self._score_from_raw(raw), out_meta)
 
     def _raw_index_scores(self, query: np.ndarray, matrix: np.ndarray) -> np.ndarray:

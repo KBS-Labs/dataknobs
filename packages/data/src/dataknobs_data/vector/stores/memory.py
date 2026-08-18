@@ -241,25 +241,39 @@ class MemoryVectorStore(VectorStore):
         ids: list[str],
         include_metadata: bool = True,
         include_timestamps: bool = False,
-    ) -> list[tuple[np.ndarray, dict[str, Any] | None]]:
+    ) -> list[tuple[np.ndarray | None, dict[str, Any] | None]]:
         """Get vectors by ID."""
         if not self._initialized:
             await self.initialize()
 
-        results = []
+        results: list[tuple[np.ndarray | None, dict[str, Any] | None]] = []
         inject = include_timestamps and include_metadata
         for vector_id in ids:
             if vector_id in self.vectors:
                 vector = self.vectors[vector_id]
-                meta = self.metadata_store.get(vector_id) if include_metadata else None
-                if inject:
-                    created, updated = self.timestamps.get(vector_id, (None, None))
-                    meta = self._inject_timestamps(meta, created=created, updated=updated)
-                results.append((vector, meta))
+                results.append((vector, self._out_metadata(vector_id, include_metadata, inject)))
             else:
                 results.append((None, None))
 
         return results
+
+    def _out_metadata(
+        self, vector_id: str, include_metadata: bool, inject: bool
+    ) -> dict[str, Any] | None:
+        """The metadata dict a result carries — never the stored one.
+
+        Copied on the way out. Chroma and pgvector build a fresh dict per
+        row anyway, so returning the stored one here made "mutate a
+        result" quietly rewrite the store on two backends of four — a
+        swap-visible difference, and a way to corrupt a store without
+        calling a mutator. ``_inject_timestamps`` already returns a new
+        dict, so only the non-injecting path needed the copy.
+        """
+        stored = self.metadata_store.get(vector_id) if include_metadata else None
+        if inject:
+            created, updated = self.timestamps.get(vector_id, (None, None))
+            return self._inject_timestamps(stored, created=created, updated=updated)
+        return dict(stored) if stored is not None else None
 
     async def delete_vectors(self, ids: list[str]) -> int:
         """Delete vectors by ID."""
@@ -328,11 +342,9 @@ class MemoryVectorStore(VectorStore):
         results = []
         inject = include_timestamps and include_metadata
         for vector_id, score in scores[:k]:
-            meta = self.metadata_store.get(vector_id) if include_metadata else None
-            if inject:
-                created, updated = self.timestamps.get(vector_id, (None, None))
-                meta = self._inject_timestamps(meta, created=created, updated=updated)
-            results.append((vector_id, score, meta))
+            results.append(
+                (vector_id, score, self._out_metadata(vector_id, include_metadata, inject))
+            )
 
         return results
 

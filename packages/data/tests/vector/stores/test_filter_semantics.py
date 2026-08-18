@@ -446,6 +446,36 @@ async def test_config_domain_id_scopes_update_metadata_where(
     assert await domain_scoped_store.count() == 2
 
 
+@pytest.mark.asyncio
+async def test_mutating_returned_metadata_does_not_rewrite_the_store(
+    any_vector_store: Any,
+) -> None:
+    """A result's metadata dict is the caller's, on every backend.
+
+    Chroma and pgvector build a fresh dict per row on the way out;
+    Memory and FAISS returned the stored one, so mutating a search result
+    silently rewrote the store on two backends of four. That is both a
+    swap-visible difference and a way to corrupt a store without ever
+    calling a mutator, so it is pinned here rather than per backend.
+    """
+    results = await any_vector_store.search(_query_vector(), k=1)
+    vector_id, _, metadata = results[0]
+    assert metadata is not None
+
+    metadata["injected_by_caller"] = "should not persist"
+
+    again = await any_vector_store.search(_query_vector(), k=1)
+    assert "injected_by_caller" not in (again[0][2] or {})
+    assert await any_vector_store.count(filter={"injected_by_caller": "should not persist"}) == 0
+
+    # Same contract on the id-keyed read.
+    fetched = await any_vector_store.get_vectors([vector_id])
+    assert fetched[0][1] is not None
+    fetched[0][1]["injected_by_caller"] = "should not persist"
+    refetched = await any_vector_store.get_vectors([vector_id])
+    assert "injected_by_caller" not in (refetched[0][1] or {})
+
+
 # ---------------------------------------------------------------------------
 # Result *count* when the filter's matches fall outside the global top-k.
 #

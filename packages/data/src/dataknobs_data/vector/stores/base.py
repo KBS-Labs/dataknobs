@@ -98,7 +98,7 @@ class VectorStore(ABC, VectorStoreBase):
         ids: list[str],
         include_metadata: bool = True,
         include_timestamps: bool = False,
-    ) -> list[tuple[np.ndarray, dict[str, Any] | None]]:
+    ) -> list[tuple[np.ndarray | None, dict[str, Any] | None]]:
         """Retrieve vectors by ID.
 
         Args:
@@ -110,7 +110,13 @@ class VectorStore(ABC, VectorStoreBase):
                 config. Silently no-op when ``include_metadata=False``.
 
         Returns:
-            List of (vector, metadata) tuples
+            One ``(vector, metadata)`` tuple per requested id, in the
+            order asked for. An id the store does not hold yields
+            ``(None, None)`` rather than being omitted, so the result
+            stays positionally aligned with ``ids`` — which is why the
+            vector is optional. Every backend already did this; the
+            annotation said otherwise, and two of the four had widened it
+            on their own.
         """
         pass
 
