@@ -2,7 +2,6 @@
 
 import logging
 import pytest
-from unittest.mock import patch, MagicMock
 import tempfile
 
 from dataknobs_data.factory import (
@@ -50,31 +49,6 @@ class TestDatabaseFactoryPostgres:
 
             assert isinstance(db, SyncMemoryDatabase)
 
-    def test_postgres_import_error(self):
-        """Test error when psycopg2 is not installed."""
-        factory = DatabaseFactory()
-
-        # Simulate ImportError when trying to import postgres backend
-        with patch("dataknobs_data.factory.DatabaseFactory.create") as mock_create:
-
-            def side_effect(**kwargs):
-                backend = kwargs.get("backend", "memory")
-                if backend in ("postgres", "postgresql", "pg"):
-                    # Simulate the actual code path
-                    try:
-                        raise ImportError("No module named 'psycopg2'")
-                    except ImportError as e:
-                        raise ValueError(
-                            "PostgreSQL backend requires psycopg2. "
-                            "Install with: pip install dataknobs-data[postgres]"
-                        ) from e
-                return MagicMock()
-
-            mock_create.side_effect = side_effect
-
-            with pytest.raises(ValueError, match="PostgreSQL backend requires psycopg2"):
-                factory.create(backend="postgres")
-
 
 class TestDatabaseFactoryElasticsearch:
     """Test backend creation via factory using file backend (no mocks needed)."""
@@ -120,55 +94,14 @@ class TestDatabaseFactoryElasticsearch:
                 if os.path.exists(db_path):
                     os.unlink(db_path)
 
-    def test_elasticsearch_import_error(self):
-        """Test error when elasticsearch package is not installed."""
-        factory = DatabaseFactory()
 
-        with patch("dataknobs_data.factory.DatabaseFactory.create") as mock_create:
-
-            def side_effect(**kwargs):
-                backend = kwargs.get("backend", "memory")
-                if backend in ("elasticsearch", "es"):
-                    try:
-                        raise ImportError("No module named 'elasticsearch'")
-                    except ImportError as e:
-                        raise ValueError(
-                            "Elasticsearch backend requires elasticsearch package. "
-                            "Install with: pip install dataknobs-data[elasticsearch]"
-                        ) from e
-                return MagicMock()
-
-            mock_create.side_effect = side_effect
-
-            with pytest.raises(ValueError, match="Elasticsearch backend requires elasticsearch"):
-                factory.create(backend="elasticsearch")
-
-
-class TestDatabaseFactoryS3ImportError:
-    """Test S3 backend import error handling."""
-
-    def test_s3_import_error(self):
-        """Test error when boto3 is not installed."""
-        factory = DatabaseFactory()
-
-        with patch("dataknobs_data.factory.DatabaseFactory.create") as mock_create:
-
-            def side_effect(**kwargs):
-                backend = kwargs.get("backend", "memory")
-                if backend == "s3":
-                    try:
-                        raise ImportError("No module named 'boto3'")
-                    except ImportError as e:
-                        raise ValueError(
-                            "S3 backend requires boto3. "
-                            "Install with: pip install dataknobs-data[s3]"
-                        ) from e
-                return MagicMock()
-
-            mock_create.side_effect = side_effect
-
-            with pytest.raises(ValueError, match="S3 backend requires boto3"):
-                factory.create(backend="s3")
+# The postgres/elasticsearch/s3 "driver is missing" errors were covered here
+# by three tests that patched `DatabaseFactory.create` -- the callable under
+# test -- handed the patch a message, and asserted the patch had raised it.
+# Two of those messages existed nowhere in any package source; all three would
+# have passed against an empty implementation. The real path, with the real
+# message and the driver genuinely absent, is covered in
+# test_backend_availability.py.
 
 
 class TestBackendInfo:
