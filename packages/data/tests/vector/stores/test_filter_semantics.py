@@ -568,6 +568,98 @@ async def test_metadata_fields_does_not_disclose_another_domain(
     assert "secret" not in fields
 
 
+# ---------------------------------------------------------------------------
+# A row belonging to more than one domain.
+#
+# ``domain_id`` is an ordinary metadata key on the three backends that
+# carry it in metadata, so the four-quadrant rule at the top of this
+# file applies to it like any other: a scalar filter against a list
+# value is *membership*. A row tagged ``["t1", "t2"]`` is therefore in
+# both domains, and the filter-keyed surfaces have always agreed.
+#
+# pgvector is absent from the parametrization rather than expected to
+# differ: its ``domain_id`` is a scalar column, so the shape cannot be
+# stored there at all. That is the same schema divergence the NOTE
+# above records for an explicit ``domain_id`` filter.
+# ---------------------------------------------------------------------------
+
+
+@pytest_asyncio.fixture(
+    params=[
+        pytest.param("memory", id="memory"),
+        pytest.param(
+            "faiss",
+            id="faiss",
+            marks=pytest.mark.skipif(not is_faiss_available(), reason="faiss not installed"),
+        ),
+        pytest.param(
+            "chroma",
+            id="chroma",
+            marks=pytest.mark.skipif(not is_chromadb_available(), reason="chromadb not installed"),
+        ),
+    ]
+)
+async def multi_domain_store(request: pytest.FixtureRequest) -> AsyncIterator[Any]:
+    """Scoped to ``t1``, holding one row that belongs to ``t1`` and ``t2``."""
+    backend = request.param
+    store: Any
+    if backend == "memory":
+        store = MemoryVectorStore({"dimensions": 4, "domain_id": "t1"})
+    elif backend == "faiss":
+        store = FaissVectorStore({"dimensions": 4, "metric": "cosine", "domain_id": "t1"})
+    else:
+        store = ChromaVectorStore(
+            {
+                "dimensions": 4,
+                "domain_id": "t1",
+                "collection_name": f"test_multidomain_{uuid.uuid4().hex[:8]}",
+            }
+        )
+
+    await store.initialize()
+    try:
+        await store.add_vectors(
+            _seed_vectors()[:1],
+            ids=["shared"],
+            metadata=[{"domain_id": ["t1", "t2"], "k": "v"}],
+        )
+        yield store
+    finally:
+        await _teardown_backend(backend, store)
+        await store.close()
+
+
+@pytest.mark.asyncio
+async def test_a_multi_domain_row_is_visible_to_every_scoped_surface(
+    multi_domain_store: Any,
+) -> None:
+    """One scope, one answer — whichever surface asks.
+
+    The filter-keyed surfaces resolve the configured scope through
+    ``_match_metadata_filter``, whose scalar-filter/list-metadata
+    quadrant is membership. The id-keyed ones went through
+    ``_in_configured_domain``, which compared with ``==`` and so read a
+    multi-domain row as belonging to neither of its domains.
+
+    The split is the defect, not either answer on its own: ``count()``
+    reported the row, ``get_vectors`` reported it absent,
+    ``delete_vectors`` refused it, and ``clear()`` removed it anyway —
+    so the store disagreed with itself about whether the row existed.
+    """
+    # Filter-keyed: membership, and this half was always right.
+    assert await multi_domain_store.count() == 1
+    assert {r[0] for r in await multi_domain_store.search(_query_vector(), k=10)} == {"shared"}
+
+    # Id-keyed: the same scope, so the same answer.
+    rows = await multi_domain_store.get_vectors(["shared"])
+    assert rows[0][0] is not None
+    assert (rows[0][1] or {})["k"] == "v"
+    assert "k" in await multi_domain_store.metadata_fields()
+    assert await multi_domain_store.update_metadata(["shared"], [{"k": "w"}]) == 1
+    assert await multi_domain_store.delete_vectors(["shared"]) == 1
+    assert await multi_domain_store.count() == 0
+
+
 @pytest.mark.asyncio
 async def test_mutating_returned_metadata_does_not_rewrite_the_store(
     any_vector_store: Any,

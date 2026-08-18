@@ -81,6 +81,15 @@ constructed with `domain_id="x"`:
   the scope key and leaving a row its own store can no longer see,
   count, or even `clear()`.
 
+  Scope membership follows the four-quadrant rule like any other
+  key, so a row whose `domain_id` is a *list* belongs to every
+  domain in it. The id-keyed half compared with `==` and so read
+  such a row as belonging to neither, while the filter-keyed half
+  read it as belonging to both — `count()` reported a row that
+  `get_vectors()` called absent. Both halves now resolve the scope
+  through the same evaluator. pgvector cannot express the shape at
+  all, since its `domain_id` is a scalar column.
+
 This makes the **runtime-swap promise hold for config-level
 scoping**: a tenant-scoped store behaves identically under
 unscoped `count()` / `search()` / `clear()` /

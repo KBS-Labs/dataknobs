@@ -403,10 +403,23 @@ class VectorStoreBase(StructuredConfigConsumer[VectorStoreConfig]):
         its prior behaviour exactly. Backends whose ``domain_id`` is a
         real column (``PgVectorStore``) express the same predicate in
         SQL instead of calling this.
+
+        Delegates to :meth:`_match_metadata_filter` rather than
+        comparing with ``==``: ``domain_id`` is an ordinary metadata key
+        on the backends that carry it in metadata, so the four-quadrant
+        rule applies to it like any other, and a scalar scope against a
+        list value is *membership*. Comparing directly read a row tagged
+        ``["t1", "t2"]`` as belonging to neither domain, while the
+        filter-keyed half — which resolves the same scope through that
+        method — read it as belonging to both. One evaluator is what
+        keeps the two halves from answering differently about the same
+        row; the split had ``count()`` reporting a row that
+        ``get_vectors`` called absent and ``delete_vectors`` refused,
+        which ``clear()`` then removed anyway.
         """
         if self.domain_id is None:
             return True
-        return (meta or {}).get("domain_id") == self.domain_id
+        return self._match_metadata_filter(meta, {"domain_id": self.domain_id})
 
     # ------------------------------------------------------------------
     # Single-file persistence: dirty tracking, identity, atomic publish.

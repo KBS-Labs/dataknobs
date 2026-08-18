@@ -276,6 +276,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A row belonging to several domains is no longer visible to half its
+  own store.** Scope membership follows the same four-quadrant rule as
+  any other metadata key, so a row whose `domain_id` is a list belongs
+  to every domain in it — which the filter-keyed surfaces always
+  honoured. The id-keyed check compared with `==` instead, so `count()`
+  reported a row that `get_vectors()` called absent, `delete_vectors()`
+  refused, and `clear()` then removed anyway. Both halves now resolve
+  the scope through one evaluator. pgvector is unaffected: its
+  `domain_id` is a scalar column and cannot hold the shape.
+
 - **`update_metadata()` no longer pushes a row out of its own domain.**
   On Memory, FAISS and Chroma the configured `domain_id` lives *in* the
   metadata dict, and `update_metadata()` replaces that dict wholesale —

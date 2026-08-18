@@ -527,12 +527,16 @@ class ChromaVectorStore(VectorStore):
             if emb is not None:
                 emb = np.array(emb, dtype=np.float32)
             raw_meta = metadatas[idx] if idx < len(metadatas) else None
+            # Decoded once and reused: the scope check and the returned
+            # value want the same dict, and decoding parses every
+            # sentinel-encoded value in the row.
+            decoded = self._decode_metadata(raw_meta)
             # Out-of-domain rows answer exactly as absent ones do, so a
             # caller cannot distinguish "not here" from "not yours".
-            if not self._in_configured_domain(self._decode_metadata(raw_meta)):
+            if not self._in_configured_domain(decoded):
                 vectors.append((None, None))
                 continue
-            meta = self._decode_metadata(raw_meta) if include_metadata else None
+            meta = decoded if include_metadata else None
             if inject:
                 created, updated = self._reserved_timestamps(raw_meta)
                 meta = self._inject_timestamps(meta, created=created, updated=updated)
