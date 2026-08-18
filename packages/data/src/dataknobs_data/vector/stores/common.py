@@ -305,10 +305,26 @@ class VectorStoreBase(StructuredConfigConsumer[VectorStoreConfig]):
         * caller asked for a *different* domain (scalar or a list not
           containing the configured scope) → an **empty-list** filter
           value, which ``_match_metadata_filter`` can never satisfy, so
-          the result set is empty. This matches ``PgVectorStore``,
-          where the column predicate ``domain_id = $scope`` is ANDed
-          with the caller filter and a cross-domain request yields no
-          rows.
+          the result set is empty.
+
+        The in-scope case *collapses* rather than intersecting, which is
+        visible only for a row belonging to several domains: a store
+        scoped to ``t1`` hands back a row reading ``["t1", "t2"]`` and
+        then answers ``0`` for ``{"domain_id": "t2"}``. Recorded as a
+        follow-up rather than settled here, because the two readings —
+        the scope as a ceiling on what a filter may ask for, or as one
+        more constraint ANDed with it — are a semantics choice and not a
+        defect in either direction.
+
+        What is *not* an argument for the collapse is parity with
+        ``PgVectorStore``, which this docstring used to claim. That
+        backend keeps ``domain_id`` in a column and stores caller
+        metadata JSONB verbatim, so an explicit ``domain_id`` filter is
+        a containment probe against a key the column consumed: it
+        answers ``0`` for the configured scope too, not merely for a
+        cross-domain one. The behaviours differ in both directions, and
+        the note above ``domain_scoped_store`` in the filter-semantics
+        suite is where that divergence is described.
 
         Callers pass the result straight to ``_match_metadata_filter`` /
         the filtered count/clear/update paths; a returned dict is never
