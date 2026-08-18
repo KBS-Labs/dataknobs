@@ -21,6 +21,12 @@ Covered here, all at the ``VectorStoreBase`` layer both stores share:
   concurrently and stamp fields the save path owns,
 * the scratch file two stagers used to collide on,
 * the WARNING a destructive ``force=True`` bypass has to leave behind.
+
+Reviewing those fixes found more, covered below:
+
+* a ``write`` that raises leaked the scratch file it had already
+  created, which unique names turned from self-healing into unbounded,
+* a scratch file left by a killed process was never swept.
 """
 
 from __future__ import annotations
@@ -327,3 +333,62 @@ async def test_a_persist_path_under_a_missing_directory_still_opens(
     reopened = await _open(_base(backend), persist)
     assert await reopened.count() == 3
     await _shutdown(store, reopened)
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+async def test_a_write_that_raises_leaves_no_scratch_file_behind(
+    backend: str, tmp_path: Path
+) -> None:
+    """The likeliest failure is the one that used to leak.
+
+    The scratch path was recorded only *after* its ``write`` returned, so
+    the cleanup ran over a list that never contained the file the failed
+    write had already created. Unique scratch names made that unbounded:
+    the previous fixed ``<final>.tmp`` was overwritten by the next save,
+    while a fresh name leaks once per failure — an autosave loop over one
+    unpicklable value fills the disk with partial snapshots.
+    """
+    persist = tmp_path / "shared.idx"
+    store = await _open(_base(backend), persist)
+    final = str(tmp_path / "artifact.bin")
+
+    def write_that_fails(path: str) -> None:
+        # The file exists by now: ``mkstemp`` created it before the
+        # writer was called, which is exactly why a failure here leaks.
+        Path(path).write_bytes(b"partial")
+        raise RuntimeError("cannot serialize")
+
+    with pytest.raises(RuntimeError, match="cannot serialize"):
+        await asyncio.to_thread(store._write_then_publish, [(final, write_that_fails)])
+
+    leftovers = await asyncio.to_thread(lambda: list(tmp_path.glob("artifact.bin.*.tmp")))
+    assert leftovers == [], f"a failed write left its scratch file behind: {leftovers}"
+
+    await _shutdown(store)
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+async def test_a_dead_writer_s_scratch_file_is_swept_on_the_next_save(
+    backend: str, tmp_path: Path
+) -> None:
+    """A process killed mid-save costs one stray file, not one per kill.
+
+    Nothing else removes them: ``load`` ignores them and the unique names
+    that stopped two stagers colliding also stopped the next save from
+    overwriting the last one's leftovers. The sweep runs under the file
+    lock, which is what makes it safe — a live writer of this target
+    holds that lock, so anything visible here is orphaned.
+    """
+    persist = tmp_path / "shared.idx"
+    store = await _open(_base(backend), persist)
+    await _ingest(store, "row", 3, seed=1)
+
+    orphan = tmp_path / "shared.idx.deadbeef.tmp"
+    await asyncio.to_thread(orphan.write_bytes, b"half a snapshot")
+
+    await store.save()
+
+    assert not await asyncio.to_thread(orphan.exists), "an orphaned scratch file survived a save"
+    assert await asyncio.to_thread(persist.exists), "the save itself did not land"
+
+    await _shutdown(store)

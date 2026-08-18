@@ -702,6 +702,7 @@ class VectorStoreBase(StructuredConfigConsumer[VectorStoreConfig]):
         ``persist_path`` should inherit it rather than rediscover it.
         """
         with FileLock(path):
+            self._sweep_orphaned_scratch(path)
             self._guard_persisted_identity(path, force=force)
             yield
             self._stamp_persisted_identity(path)
@@ -788,14 +789,23 @@ class VectorStoreBase(StructuredConfigConsumer[VectorStoreConfig]):
         had set — as the previous fixed-name scratch silently *widened*
         it to the umask default on every save.
 
-        Scratch files are removed on any failure. Blocking I/O; callers
-        run on a worker thread.
+        Every scratch file is removed on any failure, including one
+        whose ``write`` raised — which is the likeliest failure of the
+        three the paragraph above names, and the one a list built from
+        *successful* writes cannot clean up. Blocking I/O; callers run on
+        a worker thread.
         """
+        # Appended before ``write`` rather than after it, because the
+        # write is what fails. A published scratch no longer exists, so
+        # the unlink below finds nothing and suppresses the ENOENT;
+        # tracking the two cases apart would buy nothing.
+        created: list[str] = []
         staged: list[tuple[str, str]] = []
         published: list[str] = []
         try:
             for final_path, write in writes:
                 tmp = self._scratch_sibling(final_path)
+                created.append(tmp)
                 write(tmp)
                 self._carry_mode(tmp, final_path)
                 staged.append((tmp, final_path))
@@ -807,11 +817,35 @@ class VectorStoreBase(StructuredConfigConsumer[VectorStoreConfig]):
             # Emptied above exactly when every rename landed, so a
             # non-empty ``staged`` here *is* the failure signal.
             failed = bool(staged)
-            for tmp, _ in staged:
+            for tmp in created:
                 with contextlib.suppress(OSError):
                     os.unlink(tmp)
             if failed and self.persist_path is not None and str(self.persist_path) in published:
                 self._refresh_persisted_identity(str(self.persist_path))
+
+    @staticmethod
+    def _sweep_orphaned_scratch(final_path: str) -> None:
+        """Remove scratch siblings of ``final_path`` left by a dead writer.
+
+        Called with the file lock held, which is what makes it safe: a
+        live writer publishing this target holds that lock, so every
+        ``<name>.*.tmp`` visible here belongs to a process that died
+        between creating one and renaming it.
+
+        Unique scratch names made this necessary. The previous fixed
+        ``<name>.tmp`` was overwritten by the next save, so a hard kill
+        cost one stray file forever; unique names cost one *per kill*,
+        which is unbounded over a process that is restarted.
+        """
+        target = Path(final_path)
+        try:
+            orphans = list(target.parent.glob(target.name + ".*.tmp"))
+        except OSError:
+            return
+        for orphan in orphans:
+            with contextlib.suppress(OSError):
+                orphan.unlink()
+            logger.debug("Removed an orphaned scratch file: %s", orphan)
 
     @staticmethod
     def _scratch_sibling(final_path: str) -> str:
@@ -837,6 +871,14 @@ class VectorStoreBase(StructuredConfigConsumer[VectorStoreConfig]):
         A no-op when there is nothing to replace: a file created here
         keeps ``mkstemp``'s owner-only mode, which is the right default
         for a store's own data and the one thing this cannot inherit.
+
+        Only the permission bits carry. ``setgid`` and the sticky bit are
+        masked off deliberately: they are rarely meaningful on a regular
+        file, and reproducing ``setgid`` from a file this process may not
+        own is the kind of thing a save should not be doing silently. A
+        directory relying on ``setgid`` for group inheritance is
+        unaffected — that bit lives on the directory, not on the file
+        being replaced.
         """
         try:
             mode = Path(final_path).stat().st_mode & 0o777

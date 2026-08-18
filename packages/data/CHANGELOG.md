@@ -349,9 +349,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   bytes and the loser's cleanup could unlink a file the winner was about
   to rename — turning a silent clobber into a spurious
   `FileNotFoundError`. Each write now stages to a uniquely named scratch
-  file in the target's own directory. A process killed mid-save leaves
-  one stray `*.tmp` behind rather than having it overwritten by the next
-  save.
+  file in the target's own directory.
+
+  Unique names have to be cleaned up rather than overwritten, so two
+  things do that. A write that raises — an unpicklable value, a full
+  disk — has its scratch file removed, where the cleanup previously ran
+  over a list built only from writes that *succeeded* and left the
+  partial snapshot behind. And a scratch file left by a process killed
+  mid-save is swept by the next save of that target, under the lock that
+  guarantees no live writer owns it.
 
 - **`save(force=True)` returned silently.** It is a deliberate
   destructive bypass of the staleness check, and it is now logged at
