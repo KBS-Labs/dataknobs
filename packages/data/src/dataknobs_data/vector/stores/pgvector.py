@@ -806,6 +806,11 @@ class PgVectorStore(VectorStore):
         if not self._initialized:
             await self.initialize()
 
+        # An empty batch is a no-op, not an error: see
+        # ``VectorStoreBase._is_empty_batch``.
+        if self._is_empty_batch(vectors):
+            return []
+
         # Prepare vectors
         vectors = self._prepare_vector(vectors, normalize=(self.metric == DistanceMetric.COSINE))
 

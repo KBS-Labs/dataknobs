@@ -359,6 +359,28 @@ class VectorStoreBase(StructuredConfigConsumer[VectorStoreConfig]):
                 row.setdefault("domain_id", self.domain_id)
         return rows
 
+    @staticmethod
+    def _is_empty_batch(vectors: Any) -> bool:
+        """Whether an ``add_vectors`` batch carries no rows.
+
+        An empty batch is something a caller *produces* rather than
+        intends — a comprehension that filtered everything out, a
+        chunker handed a blank document — so it is a no-op, not an
+        error. Each backend guards with this and returns ``[]``.
+
+        Both spellings count: ``[]`` and ``np.array([])`` are the same
+        intent, and a caller assembling a batch numerically produces the
+        latter. ``len`` answers for both, and for a well-formed 2-D
+        batch it is the row count, so a single un-nested vector
+        (``ndim == 1``, ``len == dimensions``) is correctly *not* empty.
+
+        Left to each backend rather than hoisted into a concrete
+        ``add_vectors`` on the base: that method is abstract, and giving
+        it a body would rename the abstract half out from under every
+        out-of-tree store.
+        """
+        return len(vectors) == 0
+
     # ------------------------------------------------------------------
     # Single-file persistence: dirty tracking, identity, atomic publish.
     #

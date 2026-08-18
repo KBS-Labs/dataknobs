@@ -202,6 +202,11 @@ class MemoryVectorStore(VectorStore):
         if not self._initialized:
             await self.initialize()
 
+        # An empty batch is a no-op, not an error: see
+        # ``VectorStoreBase._is_empty_batch``.
+        if self._is_empty_batch(vectors):
+            return []
+
         # Convert to numpy array
         if isinstance(vectors, list):
             vectors = np.array(vectors, dtype=np.float32)

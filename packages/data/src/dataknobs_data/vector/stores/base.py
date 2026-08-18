@@ -80,7 +80,18 @@ class VectorStore(ABC, VectorStoreBase):
         ids: list[str] | None = None,
         metadata: list[dict[str, Any]] | None = None,
     ) -> list[str]:
-        """Add vectors to the store.
+        """Add vectors to the store, upserting on id conflict.
+
+        An **empty batch is a no-op**, not an error: it writes nothing
+        and returns ``[]``. An empty batch is something a caller
+        produces rather than intends — a comprehension that filtered
+        everything out, a chunker handed a blank document — so requiring
+        an ``if items:`` guard at every call site only moves the check.
+        Both ``[]`` and ``np.array([])`` count as empty. Implementations
+        get this from ``VectorStoreBase._is_empty_batch``.
+
+        A configured ``domain_id`` is defaulted into every row written
+        that does not carry one of its own.
 
         Args:
             vectors: Vector(s) to add
@@ -88,7 +99,7 @@ class VectorStore(ABC, VectorStoreBase):
             metadata: Optional metadata for each vector
 
         Returns:
-            List of IDs for the added vectors
+            List of IDs for the added vectors, empty for an empty batch
         """
         pass
 

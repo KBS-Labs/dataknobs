@@ -105,6 +105,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **An empty `add_vectors()` batch is a no-op on every backend.** It
+  writes nothing and returns `[]`. Previously the four disagreed, and
+  one of them corrupted the store: `MemoryVectorStore` minted an id for
+  a zero-dimension vector and grew by a row, `FaissVectorStore` raised a
+  bare `AssertionError` with no message, and `ChromaVectorStore` raised
+  `ValueError` or `IndexError` depending on whether the caller passed
+  `[]` or `np.array([])`. An empty batch is something a caller produces
+  rather than intends — a comprehension that filtered everything out —
+  so the guard belongs here rather than at every call site.
+
 - **`ChromaVectorStore.update_metadata()` now replaces a row's metadata
   instead of merging into it.** A key omitted from the supplied dict is
   removed, matching `MemoryVectorStore`, `FaissVectorStore` and
