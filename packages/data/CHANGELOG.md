@@ -289,6 +289,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   applied here too. pgvector was never affected — its `domain_id` is a
   column the metadata write does not touch.
 
+- **`ChromaVectorStore` no longer invents a `created_at` for a row that
+  predates timestamp tracking.** An update stamped the current time into
+  `created_at` whenever the row had none, so a single
+  `update_metadata_where(None, ...)` migration sweep would record every
+  legacy row as created at the moment of the sweep, with nothing left to
+  distinguish a fabricated date from a real one. A write establishes
+  tracking; an update no longer does — matching Memory and FAISS, which
+  guard on the row having a side-car entry, and pgvector, which leaves a
+  `NULL` `created_at` alone.
+
 - **`ChromaVectorStore.add_vectors()` no longer discards a write to an id
   the store already holds.** It reached chromadb's `add`, which drops a
   duplicate id silently — no exception, no warning, the original vector
@@ -331,10 +341,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   on `include_timestamps`.** The argument is on the `VectorStore` ABC
   and every other backend accepted it, so passing it broke exactly the
   runtime backend swap the filter-semantics doc promises. Both accept it
-  now; because Chroma tracks no timestamps, the injected values are
-  `None` — the same answer the contract already defines for a pgvector
-  row from before the timestamp migration or a pickle written before
-  tracking existed.
+  now, and answer from values this backend really tracks — see the
+  timestamp-tracking entry under *Added*.
 
 - **Consumer metadata is no longer shared between a store and its
   caller, in either direction.** On Memory and FAISS a caller could edit

@@ -221,7 +221,7 @@ await store.search(q, k=10, filter={"missing_key": "value"})
 |---|---|
 | `MemoryVectorStore` | Python filter via `VectorStoreBase._match_metadata_filter`, applied to candidates **before** similarity ranking: every stored row is matched, the survivors are scored, sorted, and truncated to `k`. `update_metadata_where` walks the in-process `metadata_store` and `dict.update`s `set_` into each match. |
 | `FaissVectorStore` | Same `_match_metadata_filter`, and likewise **not** applied after ranking. An unfiltered search is answered by the FAISS index. A filtered one selects the matching rows from `metadata_store`, scores just those against the query from the vector side-car, sorts, and truncates to `k` — exact on every index type, and the same rows the index would have ranked, in the same order. (Rows scoring *equal* are ordered by insertion rather than by whatever internal order the index would have used; the ranking agrees, the tie-break need not.) `update_metadata_where` walks the same `metadata_store`, with no FAISS index involvement. |
-| `ChromaVectorStore` | Post-hoc Python filter via `VectorStoreBase._match_metadata_filter` by default. Chroma's where-engine returns zero rows for *any* predicate against list-valued metadata, so neither scalar nor list filter values are pushed down unless the key is declared in `scalar_metadata_keys` (then `$eq`/`$in` is pushed for that key). Because that residual filter runs *after* Chroma has truncated to `n_results`, the query escalates — `k * POST_FILTER_OVERFETCH`, then doubling, bounded by `collection.count()` — until `k` rows survive the filter or the whole collection has been returned, at which point the answer is exact. `count()` uses `collection.get(where=..., include=["metadatas"])` and post-filters. `update_metadata_where` fetches matched rows, merges `set_` in Python (Chroma `update` replaces a row's metadata wholesale), and writes them back. Metadata is encoded at the Chroma boundary since chromadb's store is scalar-only (empty dict → no-metadata; every list/dict value, including `[]`, → reversible JSON sentinel — chromadb otherwise silently corrupts non-scalar values, bleeding them across collections); reads decode back so the round-trip matches Memory/FAISS. |
+| `ChromaVectorStore` | Post-hoc Python filter via `VectorStoreBase._match_metadata_filter` by default. Chroma's where-engine returns zero rows for *any* predicate against list-valued metadata, so neither scalar nor list filter values are pushed down unless the key is declared in `scalar_metadata_keys` (then `$eq`/`$in` is pushed for that key). Because that residual filter runs *after* Chroma has truncated to `n_results`, the query escalates — `k * POST_FILTER_OVERFETCH`, then doubling, bounded by `collection.count()` — until `k` rows survive the filter or the whole collection has been returned, at which point the answer is exact. `count()` uses `collection.get(where=..., include=["metadatas"])` and post-filters. `update_metadata_where` fetches matched rows, merges `set_` in Python and writes them back — the merge is done here rather than left to chromadb because the decoded row has to be re-encoded as a whole. (chromadb's own `update` *merges*: a key it is not given survives. That is why `update_metadata`, whose contract is a wholesale replacement, has to name each departing key with a `None` value to delete it — and why a `None` **value** is not storable on this backend, since dropping a key and setting it to `None` are the same request.) Row timestamps live in this collection too, under two reserved NUL-delimited keys that every read strips. Metadata is encoded at the Chroma boundary since chromadb's store is scalar-only (empty dict → no-metadata; every list/dict value, including `[]`, → reversible JSON sentinel — chromadb otherwise silently corrupts non-scalar values, bleeding them across collections); reads decode back so the round-trip matches Memory/FAISS. |
 | `PgVectorStore` | JSONB-native via `jsonb_build_object` and the `@>` containment operator. For each filter element, two `@>` checks are emitted ORed together — one with the value as a scalar and one wrapped in an array — to cover both scalar-metadata and list-metadata in one SQL shape. Type-preserving (booleans stay booleans, numbers stay numbers); replaces the older text-cast `metadata->>'key' = '...'` translation, which silently returned zero rows for booleans, numbers, and lists. `update_metadata_where` reuses this translation in a single `UPDATE ... SET metadata = metadata || $::jsonb` (JSONB merge, `updated_at` refreshed). |
 
 ## Type safety (PgVector)
@@ -312,13 +312,45 @@ The only way to change a stored row is to call a mutator.
   `POST_FILTER_OVERFETCH` is a module-level constant in
   `dataknobs_data.vector.stores.common`, shared by every backend that
   post-filters, and is not yet configurable per store.
-- **Chroma does not track timestamps.** `include_timestamps=True` is
-  accepted on `ChromaVectorStore.search()` and `get_vectors()` — so a
-  runtime swap does not break on the argument — but the injected
-  `_created_at` / `_updated_at` are always `None`. That is the same
-  answer the contract gives for any row with no tracked timestamp: a
-  pgvector row from before the timestamp migration, or a Memory/FAISS
-  pickle written before tracking existed.
+- **Chroma's writes read first.** `add_vectors()` and `add_documents()`
+  issue one extra `collection.get(...)` per call — per batch, not per
+  row — to read each id's stored `created_at` before overwriting it, so
+  that re-adding an existing id preserves the original creation date.
+  `update_metadata()` reads for a second reason as well: the keys it
+  must tombstone are the ones the row has and the caller's replacement
+  does not, which cannot be known without the stored dict. For a bulk
+  ingest this materializes every existing row's full metadata to read
+  two floats, because chromadb has no way to project a subset of keys.
+- **Chroma's read-then-write is not atomic.** chromadb offers no
+  compare-and-swap, so both sequences above have a window. Two
+  concurrent `add_vectors()` calls for the same new id each read
+  "absent" and each stamp their own `created_at`; last write wins, and
+  both values are within a moment of each other. More consequentially,
+  a key written by a concurrent writer *between* `update_metadata()`'s
+  read and its write is not in the snapshot, so it is not tombstoned
+  and survives — the wholesale replacement quietly degrades to a
+  partial one. Treat a row as having a single writer, or serialize at
+  the application layer. This is the one place the note under
+  *Persistence* below — that Chroma and pgvector leave concurrency to
+  the backing service — does not fully hold: Postgres has the
+  primitives to make this atomic and chromadb does not.
+- **Every backend tracks timestamps, including Chroma.** All four
+  answer `include_timestamps=True` on `search()` and `get_vectors()`
+  from values they really hold. Where those values live differs —
+  pgvector has real columns, Memory and FAISS keep a side-car keyed by
+  row, and Chroma, whose only per-row storage is the metadata dict the
+  consumer also owns, keeps them in-band under reserved keys stripped
+  from every read path.
+
+  `None` therefore means one thing everywhere: *this row has no tracked
+  timestamp*. A pgvector row from before the timestamp migration, a
+  Memory/FAISS pickle written before tracking existed, and a Chroma
+  collection written before this backend tracked them all answer that
+  way, and all repopulate on the row's next `add_vectors`. An
+  `update_metadata` does **not** repopulate them on any backend: an
+  update does not begin tracking a row that was never tracked, because
+  the alternative is recording the update time as a creation date with
+  nothing left to distinguish it from a real one.
 - **FAISS filtered search leaves the index.** An unfiltered
   `FaissVectorStore.search()` uses the FAISS index and is as fast as
   the configured index type makes it. A filtered one does not: no FAISS

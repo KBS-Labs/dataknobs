@@ -201,6 +201,106 @@ async def test_a_row_written_without_tracking_reports_none():  # type: ignore[no
         await _drop(store)
 
 
+async def _write_legacy_row(store: Any, row_id: str = "legacy") -> None:
+    """Add a row straight through chromadb, so it carries no reserved keys.
+
+    What a collection written by a version before this backend tracked
+    timestamps looks like.
+    """
+    await asyncio.to_thread(
+        store.collection.add,
+        embeddings=[_vec(0).tolist()],
+        ids=[row_id],
+        metadatas=[{"g": "x"}],
+    )
+
+
+@pytest.mark.parametrize("via", ["update_metadata", "update_metadata_where"])
+async def test_updating_a_legacy_row_does_not_invent_a_created_at(via: str):  # type: ignore[no-untyped-def]
+    """An update must not begin tracking a row that was never tracked.
+
+    ``created_at`` for a pre-tracking row is ``None`` — meaning *not
+    known* — and the other three backends leave it that way through an
+    update: Memory and FAISS guard on the row having a side-car entry,
+    and pgvector's ``created_at`` column stays NULL. Only a full write
+    establishes tracking.
+
+    Stamping it here would put the *update* time in ``created_at``,
+    which is not merely wrong but unrecoverably so: a consumer
+    migrating an old collection with one
+    ``update_metadata_where(None, ...)`` sweep would set every legacy
+    row's creation date to the moment of the sweep, and nothing
+    afterwards could distinguish a fabricated date from a real one.
+    """
+    store = await _store()
+    try:
+        await _write_legacy_row(store)
+
+        if via == "update_metadata":
+            assert await store.update_metadata(["legacy"], [{"g": "y"}]) == 1
+        else:
+            assert await store.update_metadata_where(None, {"g": "y"}) == 1
+
+        meta = (await store.get_vectors(["legacy"], include_timestamps=True))[0][1]
+        assert meta is not None
+        assert meta["g"] == "y", "the update itself must still have applied"
+        assert meta["_created_at"] is None, f"invented a creation date: {meta}"
+    finally:
+        await _drop(store)
+
+
+async def test_replacing_a_bare_legacy_row_with_nothing_is_not_an_error():  # type: ignore[no-untyped-def]
+    """The one input that can produce a payload chromadb refuses.
+
+    Every key set here is empty at once: a legacy row (no reserved
+    timestamp keys) that also carries no consumer metadata, replaced by
+    an empty dict. There is nothing to write and nothing to tombstone,
+    and chromadb rejects an empty update dict outright — so the write
+    has to be skipped rather than sent.
+
+    Only reachable now that an update declines to start tracking an
+    untracked row: while the timestamps were stamped unconditionally the
+    payload always had two keys in it and could never be empty.
+    """
+    store = await _store()
+    try:
+        await asyncio.to_thread(
+            store.collection.add,
+            embeddings=[_vec(0).tolist()],
+            ids=["bare_legacy"],
+        )
+
+        assert await store.update_metadata(["bare_legacy"], [{}]) == 1
+
+        meta = (await store.get_vectors(["bare_legacy"], include_timestamps=True))[0][1]
+        assert meta is not None
+        assert meta["_created_at"] is None
+    finally:
+        await _drop(store)
+
+
+async def test_updating_a_tracked_row_still_preserves_created_at():  # type: ignore[no-untyped-def]
+    """The guard above must not cost a tracked row its real ``created_at``.
+
+    Same code path, opposite input: a row that *does* carry a stored
+    creation date keeps it across the same update.
+    """
+    store = await _store()
+    try:
+        await store.add_vectors([_vec(0)], ids=["r1"], metadata=[{"g": "x"}])
+        before = (await store.get_vectors(["r1"], include_timestamps=True))[0][1]
+        assert before is not None and before["_created_at"] is not None
+
+        await store.update_metadata(["r1"], [{"g": "y"}])
+
+        after = (await store.get_vectors(["r1"], include_timestamps=True))[0][1]
+        assert after is not None
+        assert after["_created_at"] == before["_created_at"]
+        assert after["_updated_at"] is not None
+    finally:
+        await _drop(store)
+
+
 async def test_consumer_metadata_wins_a_key_collision():  # type: ignore[no-untyped-def]
     """The documented collision policy holds here as elsewhere.
 

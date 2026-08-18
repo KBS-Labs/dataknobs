@@ -233,19 +233,36 @@ class ChromaVectorStore(VectorStore):
         *,
         created: datetime | None,
         updated: datetime,
+        start_tracking: bool,
     ) -> dict[str, Any]:
         """Attach the reserved timestamp keys to an encoded payload.
 
-        ``created`` of ``None`` means this row is new and starts its
-        life now, which is what makes an upsert preserve the original:
-        the caller passes the value it read back, or ``None`` if there
-        was none to read.
+        ``created`` of ``None`` is ambiguous on its own — it means
+        either "brand new row" or "row that predates tracking" — and the
+        two want opposite answers, so the caller disambiguates with
+        *start_tracking* rather than this method guessing.
+
+        ``start_tracking=True`` is the write paths (``add_vectors``,
+        ``add_documents``): a row being written begins its life now, and
+        a ``created`` read back from an existing row is preserved, which
+        is what makes an upsert keep the original date.
+
+        ``start_tracking=False`` is the update paths. An update does not
+        begin tracking a row that was never tracked: ``created_at`` of
+        ``None`` means *not known*, and inventing one would silently
+        record the update time as a creation date with nothing left to
+        distinguish it from a real one. The other three backends already
+        behave this way — Memory and FAISS guard on the row having a
+        side-car entry, pgvector leaves a NULL ``created_at`` alone — so
+        the row simply stays untracked until a write establishes it.
 
         Returns a dict even when *encoded* is ``None``. A row the
         consumer gave no metadata still has timestamps, and chromadb's
         "no metadata" form cannot carry them.
         """
         payload = dict(encoded or {})
+        if created is None and not start_tracking:
+            return payload
         payload[cls._TS_CREATED_KEY] = (created or updated).timestamp()
         payload[cls._TS_UPDATED_KEY] = updated.timestamp()
         return payload
@@ -266,11 +283,15 @@ class ChromaVectorStore(VectorStore):
         ``stored`` is the raw chromadb metadata, not a decoded one:
         only its key set is used, and encoding does not change that.
 
-        Returns ``None`` when there is nothing to write. That is the
-        no-op form chromadb accepts — an empty dict is rejected
-        outright ("non-empty dict" in update), and ``None`` leaves the
-        row alone, which is the right answer when neither the stored
-        row nor the replacement has any keys.
+        Returns ``None`` when neither the stored row nor the
+        replacement has any keys, matching the "no metadata" form
+        :meth:`_encode_metadata` produces. It does *not* reach chromadb
+        in that form: every caller passes the result through
+        :meth:`_stamp`, which may add the reserved timestamp keys and
+        always returns a dict. Deciding whether the final payload is
+        writable is therefore the caller's job, not this method's —
+        chromadb rejects an empty update dict, so a payload that is
+        still empty after stamping is skipped rather than sent.
         """
         payload: dict[str, Any] = dict(cls._encode_metadata(new_meta) or {})
         for key in stored or {}:
@@ -432,6 +453,9 @@ class ChromaVectorStore(VectorStore):
                 self._encode_metadata(meta),
                 created=created_by_id.get(id_val),
                 updated=now,
+                # A write establishes tracking: a genuinely new id has no
+                # stored ``created`` and starts its life now.
+                start_tracking=True,
             )
             for id_val, meta in zip(ids, rows, strict=False)
         ]
@@ -756,6 +780,19 @@ class ChromaVectorStore(VectorStore):
         for exactly that reason: the keys to tombstone are the ones
         the row has and the caller's dict does not.
 
+        One consequence, and the only place this backend cannot match
+        the others: a ``None`` **value** is not storable here. Removing
+        a key and setting it to ``None`` are the same request in
+        chromadb's update API, so ``{"reviewer": None}`` drops the key
+        rather than storing it — Memory and FAISS keep it, and pgvector
+        stores JSON ``null``. A consumer needing "present but empty" as
+        a portable value should pick one this backend can hold, such as
+        ``""`` or ``False``.
+
+        This is not new — chromadb always deleted on ``None`` — but the
+        replacement mechanism now *depends* on that behaviour, which
+        turns an incidental limitation into a structural one.
+
         Replacing the consumer's keys does not disturb the row's
         timestamps: ``created_at`` is preserved and ``updated_at``
         advances, as on every other backend.
@@ -774,6 +811,7 @@ class ChromaVectorStore(VectorStore):
         }
 
         now = datetime.now(UTC)
+        matched = 0
         # The configured ``domain_id`` is defaulted back in, exactly as
         # ``add_vectors`` does it: this path replaces the metadata dict
         # outright and the scope lives inside that dict, so a caller
@@ -793,19 +831,26 @@ class ChromaVectorStore(VectorStore):
             # unguarded write would capture it rather than merely edit it.
             if not self._in_configured_domain(self._decode_metadata(stored)):
                 continue
-            filtered_ids.append(id_val)
+            matched += 1
             # Stamp after the replacement payload, not before: that
             # payload tombstones every stored key the caller omitted,
             # and the reserved keys are stored keys the caller never
             # supplies. Re-setting them here is what keeps a metadata
             # replacement from also erasing the row's timestamps.
-            filtered_metadata.append(
-                self._stamp(
-                    self._replacement_payload(stored, meta),
-                    created=self._reserved_timestamps(stored)[0],
-                    updated=now,
-                )
+            payload = self._stamp(
+                self._replacement_payload(stored, meta),
+                created=self._reserved_timestamps(stored)[0],
+                updated=now,
+                start_tracking=False,
             )
+            # An empty payload is a row with nothing to write: an
+            # untracked row, carrying no metadata, replaced by none.
+            # chromadb rejects an empty update dict, and there is
+            # nothing to send anyway — the requested state already
+            # holds, so it counts as updated but is not written.
+            if payload:
+                filtered_ids.append(id_val)
+                filtered_metadata.append(payload)
 
         if filtered_ids:
             await asyncio.to_thread(
@@ -813,7 +858,7 @@ class ChromaVectorStore(VectorStore):
                 ids=filtered_ids,
                 metadatas=filtered_metadata,
             )
-        return len(filtered_ids)
+        return matched
 
     async def update_metadata_where(
         self,
@@ -855,6 +900,7 @@ class ChromaVectorStore(VectorStore):
         metadatas = self._as_list(result.get("metadatas"))
 
         now = datetime.now(UTC)
+        matched = 0
         update_ids: list[str] = []
         update_metadatas: list[dict[str, Any]] = []
         for cid, raw_meta in zip(ids, metadatas, strict=False):
@@ -862,19 +908,23 @@ class ChromaVectorStore(VectorStore):
             if post_filter and not self._match_metadata_filter(existing, post_filter):
                 continue
             existing.update(set_)
-            update_ids.append(cid)
+            matched += 1
             # ``existing`` came back from a decode, which strips the
             # reserved keys — so the re-encoded payload carries none,
             # and a merge-update would leave the stored ones untouched.
             # ``updated_at`` has to advance on a matched row, so both
             # are written back explicitly.
-            update_metadatas.append(
-                self._stamp(
-                    self._encode_metadata(existing),
-                    created=self._reserved_timestamps(raw_meta)[0],
-                    updated=now,
-                )
+            payload = self._stamp(
+                self._encode_metadata(existing),
+                created=self._reserved_timestamps(raw_meta)[0],
+                updated=now,
+                start_tracking=False,
             )
+            # See ``update_metadata``: an empty payload is a matched row
+            # with nothing to write, and chromadb refuses one.
+            if payload:
+                update_ids.append(cid)
+                update_metadatas.append(payload)
 
         if update_ids:
             await asyncio.to_thread(
@@ -882,7 +932,7 @@ class ChromaVectorStore(VectorStore):
                 ids=update_ids,
                 metadatas=update_metadatas,
             )
-        return len(update_ids)
+        return matched
 
     async def count(self, filter: dict[str, Any] | None = None) -> int:
         """Count vectors in the collection.

@@ -256,12 +256,12 @@ async def test_update_metadata_replaces_not_merges(
     The deliberate contrast with its filter-keyed sibling above:
     ``update_metadata_where`` merges ``set_`` into what is already
     there, while ``update_metadata`` supplies the row's new metadata
-    outright. The ABC documents the argument as "new metadata for each
-    vector", and three of the four backends behave that way — Chroma
-    merged, because chromadb's own ``update`` merges and nothing
-    compensated. A consumer clearing a key by omitting it therefore
-    got different storage depending on which backend the config
-    selected.
+    outright. The ABC documents the argument as the complete
+    replacement metadata, and three of the four backends behaved that
+    way — Chroma merged, because chromadb's own ``update`` merges and
+    nothing compensated. A consumer clearing a key by omitting it
+    therefore got different storage depending on which backend the
+    config selected.
     """
     replaced = await any_vector_store.update_metadata(["a-1"], [{"replacement": "yes"}])
     assert replaced == 1
@@ -275,6 +275,49 @@ async def test_update_metadata_replaces_not_merges(
     # The store agrees with itself: the dropped key no longer selects
     # this row, and the untouched sibling still carries it.
     assert await any_vector_store.count(filter={"tenant": "A"}) == 1
+
+
+@pytest.mark.asyncio
+async def test_update_metadata_with_an_empty_dict_clears_the_row(
+    any_vector_store: Any,
+) -> None:
+    """The degenerate replacement is still a replacement.
+
+    ``{}`` says the row should end up with no metadata, so every stored
+    key departs. Worth pinning on its own because it is the single input
+    for which "replace" and "no-op" are indistinguishable from outside,
+    and because a backend that expresses removal as a per-key tombstone
+    has to build a payload its own store will accept — chromadb rejects
+    an empty update dict outright, so the all-keys-removed case is
+    exactly where such a backend can fail.
+    """
+    assert await any_vector_store.update_metadata(["a-1"], [{}]) == 1
+
+    meta = (await any_vector_store.get_vectors(["a-1"], include_metadata=True))[0][1]
+    assert meta is not None
+    assert "tenant" not in meta, f"omitted key survived an empty replacement: {meta}"
+    # The store agrees with itself.
+    assert await any_vector_store.count(filter={"tenant": "A"}) == 1
+
+
+@pytest.mark.asyncio
+async def test_update_metadata_with_an_empty_dict_on_a_bare_row(
+    any_vector_store: Any,
+) -> None:
+    """Nothing to remove and nothing to add is still not an error.
+
+    A row written with no metadata, replaced by no metadata. Every key
+    set involved is empty, so a backend building its payload from
+    tombstones has nothing to put in it — and must not send an empty
+    write that its store will reject.
+    """
+    await any_vector_store.add_vectors(_seed_vectors()[:1], ids=["bare"], metadata=None)
+
+    assert await any_vector_store.update_metadata(["bare"], [{}]) == 1
+
+    meta = (await any_vector_store.get_vectors(["bare"], include_metadata=True))[0][1]
+    assert meta is not None
+    assert meta == {} or "tenant" not in meta
 
 
 @pytest.mark.asyncio

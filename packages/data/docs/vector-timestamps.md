@@ -137,7 +137,8 @@ by design, since the two clocks are already unsynchronised.
   FAISS sidecar pickles persisted before timestamp tracking was added:
   the timestamp side-car loads empty (`data.get("timestamps", {})`),
   so existing rows return `None` for both keys until the next
-  `add_vectors` or `update_metadata` refresh repopulates them. An
+  `add_vectors` refresh repopulates them — `update_metadata` does not,
+  because it guards on the row already having a side-car entry. An
   index *persisted before the stored-vector side-car was added* also
   has no `vectors` side-car (`data.get("vectors", {})` loads empty),
   so `get_vectors()` returns `None` for its ids until the vectors are
@@ -145,9 +146,26 @@ by design, since the two clocks are already unsynchronised.
   unaffected because the FAISS index itself is restored normally.
 - **ChromaVectorStore collections written before tracking.** Rows in a
   collection written by an earlier version carry no reserved timestamp
-  keys and return `None` for both until their next `add_vectors`,
-  `add_documents`, `update_metadata`, or `update_metadata_where`
-  repopulates them. Nothing is backfilled on read.
+  keys and return `None` for both until their next `add_vectors` or
+  `add_documents` repopulates them. Nothing is backfilled on read.
+
+**One rule across all four:** a *write* establishes tracking; an
+*update* does not. `add_vectors` (and `add_documents`) repopulates a
+pre-tracking row's timestamps; `update_metadata` and
+`update_metadata_where` leave `created_at` exactly as they found it,
+including `None`.
+
+The reason is that `None` here means *not known*, and there is no
+honest value an update could put in its place. Stamping the update time
+into `created_at` would make one `update_metadata_where(None, ...)`
+migration sweep record every legacy row as having been created at the
+moment of the sweep — and nothing afterwards could tell a fabricated
+creation date from a real one. A retention or audit policy reading
+those dates would be reading the sweep.
+
+`updated_at` is the one asymmetry: pgvector refreshes it to `NOW()` on
+`update_metadata` even for a pre-migration row, because it is a real
+column with no side-car entry to be missing.
 
 ## Consumer metadata key collision
 
