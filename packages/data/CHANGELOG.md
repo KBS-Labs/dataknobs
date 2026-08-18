@@ -319,6 +319,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and then declined to put them back, reporting an id the caller had not
   asked to lose. `update_vectors()` is now an alias for `add_vectors()`.
 
+- **A scoped write no longer narrows a row that belongs to several
+  domains.** Scope membership follows the four-quadrant rule, so a row
+  tagged `["t1", "t2"]` belongs to both — and the write guard, which
+  resolves membership the same way, admits a `t1`-scoped store's write to
+  it. But the write-path default re-applied the configured scope as a
+  *scalar*, so the admitted write replaced `["t1", "t2"]` with `"t1"` and
+  the co-owner silently lost the row. Reachable through `add_vectors()`,
+  `add_documents()` and `update_metadata()` on Memory, FAISS and Chroma;
+  `PgVectorStore` keeps `domain_id` in a scalar column and cannot hold
+  the shape. A write that does not mention `domain_id` now preserves the
+  row's own value rather than re-stamping the configured one.
+
 - **Re-adding an id on `ChromaVectorStore` now replaces that row's
   metadata instead of merging into it.** `add_vectors()` and
   `add_documents()` upsert on id conflict, and chromadb's `upsert`

@@ -186,11 +186,15 @@ class VectorStore(ABC, VectorStoreBase):
         from the same consumer code disappeared on three backends and
         survived on the fourth.
 
-        A configured ``domain_id`` is preserved across the replacement
-        rather than being one of the keys dropped, so a caller updating
-        an unrelated field does not push the row out of its own scope.
-        An id outside the configured scope is not updated and does not
-        count toward the return value.
+        Under a configured ``domain_id`` the row's **own** scope is
+        preserved across the replacement rather than being one of the
+        keys dropped, so a caller updating an unrelated field does not
+        push the row out of its own scope. Preserved, not re-stamped:
+        a row belonging to several domains keeps all of them, where
+        writing the configured scope over it would have evicted the
+        co-owners on a write that never mentioned ``domain_id``. An id
+        outside the configured scope is not updated and does not count
+        toward the return value.
 
         Backends carrying metadata in a store with a narrower value
         domain than Python's may not round-trip every value; where that

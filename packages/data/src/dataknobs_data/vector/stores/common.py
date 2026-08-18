@@ -20,7 +20,7 @@ from ..types import DistanceMetric
 from .config import VectorStoreConfig, VectorStoreTimestampConfig
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Iterable, Iterator, Mapping
+    from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 
     import numpy as np
 
@@ -334,7 +334,12 @@ class VectorStoreBase(StructuredConfigConsumer[VectorStoreConfig]):
         return eff
 
     def _apply_domain_default(
-        self, metadata: list[dict[str, Any]] | None, count: int
+        self,
+        metadata: list[dict[str, Any]] | None,
+        count: int,
+        *,
+        ids: Sequence[str] | None = None,
+        stored: Mapping[str, dict[str, Any] | None] | None = None,
     ) -> list[dict[str, Any]]:
         """Return per-row metadata with ``domain_id`` defaulted.
 
@@ -350,6 +355,24 @@ class VectorStoreBase(StructuredConfigConsumer[VectorStoreConfig]):
         already promised the result does not alias the caller's, and a
         ``dict(...)`` made that true of the outer dict alone. Every value
         inside stayed shared with whatever the caller went on holding.
+
+        *ids* and *stored* let the default preserve the row's **own**
+        scope rather than re-stamping the configured one. The rule being
+        implemented is "a caller who does not mention ``domain_id`` must
+        not change it", and re-stamping the configured scalar implements
+        that only where the stored scope already *is* that scalar. A row
+        tagged ``["t1", "t2"]`` belongs to both domains under the
+        four-quadrant rule, so a ``t1`` store's write is admitted — and
+        re-stamping ``"t1"`` over it silently evicted ``t2``.
+
+        Passing them is what makes the write path agree with the guard
+        that admitted it: anything still in *stored* has already been
+        checked by :meth:`_reject_out_of_scope_ids`, so carrying its
+        value forward cannot widen the row into a domain the caller does
+        not hold. Omit them and the prior scalar behaviour stands, which
+        is correct wherever a stored list cannot arise — ``PgVectorStore``
+        keeps ``domain_id`` in a scalar column and does its own default
+        inline.
         """
         rows = (
             [
@@ -360,9 +383,32 @@ class VectorStoreBase(StructuredConfigConsumer[VectorStoreConfig]):
             else [{} for _ in range(count)]
         )
         if self._is_scoped:
-            for row in rows:
-                row.setdefault("domain_id", self.domain_id)
+            for i, row in enumerate(rows):
+                if "domain_id" not in row:
+                    row["domain_id"] = self._preserved_domain(ids, stored, i)
         return rows
+
+    def _preserved_domain(
+        self,
+        ids: Sequence[str] | None,
+        stored: Mapping[str, dict[str, Any] | None] | None,
+        index: int,
+    ) -> Any:
+        """The ``domain_id`` a silent row should keep, or the config default.
+
+        Returns the value already stored for the row when there is one,
+        so a write that never mentions ``domain_id`` leaves it alone.
+        Falls back to the configured scope for a genuine insert, for a
+        stored row that carries no scope of its own, and for callers
+        that do not supply the stored map at all.
+        """
+        if ids is None or stored is None or index >= len(ids):
+            return self.domain_id
+        prior = stored.get(ids[index])
+        if not prior:
+            return self.domain_id
+        existing = prior.get("domain_id")
+        return self.domain_id if existing is None else existing
 
     @staticmethod
     def _is_empty_batch(vectors: Any) -> bool:

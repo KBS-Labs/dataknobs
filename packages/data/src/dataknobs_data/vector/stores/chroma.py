@@ -419,9 +419,10 @@ class ChromaVectorStore(VectorStore):
         if ids is None:
             ids = [str(uuid4()) for _ in range(len(vectors))]
 
-        # Per-row metadata: fresh dicts with config-level domain_id
-        # defaulted in (caller's dicts never aliased — Items #8 / 131).
-        metadata = self._apply_domain_default(metadata, len(ids))
+        # Per-row metadata (fresh dicts, config-level domain_id defaulted
+        # in — caller's dicts never aliased) is built inside
+        # ``_stamped_payloads``, which is the only place the stored rows
+        # the default has to preserve are in hand.
 
         # Add to collection. chromadb 1.x rejects empty dict / empty-list
         # metadata; encode per row (decoded back on read). Offloaded:
@@ -493,12 +494,19 @@ class ChromaVectorStore(VectorStore):
         # for the stored metadata the check needs. Raising before the
         # ``upsert`` is what keeps a rejected batch from landing
         # partially — chromadb has no transaction to roll back.
-        self._reject_out_of_scope_ids(
-            {rid: self._decode_metadata(raw) for rid, raw in stored_by_id.items()}
-        )
+        decoded_by_id = {rid: self._decode_metadata(raw) for rid, raw in stored_by_id.items()}
+        self._reject_out_of_scope_ids(decoded_by_id)
 
         now = datetime.now(UTC)
-        rows = metadata if metadata is not None else [{} for _ in ids]
+        # The configured ``domain_id`` is defaulted in here rather than
+        # in each caller, for the same reason the guard above is: both
+        # write paths reach this method, and the decoded stored rows the
+        # default needs to preserve a co-owned scope are the ones the
+        # guard just read. Applying it in the callers meant the default
+        # could not see what it was overwriting, so a ``t1`` store's
+        # silent write re-stamped ``"t1"`` over a stored ``["t1", "t2"]``
+        # and evicted the co-owner.
+        rows = self._apply_domain_default(metadata, len(ids), ids=ids, stored=decoded_by_id)
         return [
             self._stamp(
                 self._replacement_payload(stored_by_id.get(id_val), meta),
@@ -901,7 +909,12 @@ class ChromaVectorStore(VectorStore):
         # domain. Applied before ``_replacement_payload`` so the scope
         # is one of the keys being written rather than one of the keys
         # being tombstoned.
-        rows = self._apply_domain_default(metadata, len(metadata))
+        rows = self._apply_domain_default(
+            metadata,
+            len(metadata),
+            ids=ids,
+            stored={rid: self._decode_metadata(raw) for rid, raw in stored_by_id.items()},
+        )
         filtered_ids: list[str] = []
         filtered_metadata: list[dict[str, Any]] = []
         for id_val, meta in zip(ids, rows, strict=False):
@@ -1164,11 +1177,10 @@ class ChromaVectorStore(VectorStore):
         if ids is None:
             ids = [str(uuid4()) for _ in range(len(documents))]
 
-        # Per-row metadata: fresh dicts with config-level domain_id
-        # defaulted in, exactly as the vector write path does. Without
-        # it a scoped store wrote rows carrying no domain_id, which
-        # every scoped read then filtered back out.
-        metadata = self._apply_domain_default(metadata, len(ids))
+        # Per-row metadata carries the config-level domain_id, applied
+        # inside ``_stamped_payloads`` exactly as the vector write path
+        # gets it. Without it a scoped store wrote rows carrying no
+        # domain_id, which every scoped read then filtered back out.
 
         # Add documents (Chroma will embed them if embedding_function is set)
         await asyncio.to_thread(

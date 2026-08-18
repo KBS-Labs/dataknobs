@@ -839,8 +839,56 @@ async def test_a_multi_domain_row_is_visible_to_every_scoped_surface(
     assert (rows[0][1] or {})["k"] == "v"
     assert "k" in await multi_domain_store.metadata_fields()
     assert await multi_domain_store.update_metadata(["shared"], [{"k": "w"}]) == 1
+    # Reaching the row is half the contract; leaving its ownership alone
+    # is the other half, and asserting only the return count above hid a
+    # scoped update that quietly narrowed ``["t1", "t2"]`` to ``"t1"``.
+    with _unscoped(multi_domain_store) as store:
+        assert ((await store.get_vectors(["shared"]))[0][1] or {}).get("domain_id") == [
+            "t1",
+            "t2",
+        ]
     assert await multi_domain_store.delete_vectors(["shared"]) == 1
     assert await multi_domain_store.count() == 0
+
+
+@pytest.mark.asyncio
+async def test_a_scoped_write_does_not_narrow_a_co_owned_row(
+    multi_domain_store: Any,
+) -> None:
+    """Preserving a row's scope means *its* scope, not the writer's.
+
+    Two fixes met badly here. Scope membership became the four-quadrant
+    rule, so a row tagged ``["t1", "t2"]`` belongs to both — and the
+    write guard, built on that same test, therefore admits a ``t1``
+    store's write to it. But the write-path default re-applied the
+    configured scope as a *scalar*, so the admitted write replaced
+    ``["t1", "t2"]`` with ``"t1"`` and ``t2`` silently lost the row.
+
+    That is the harm the guard exists to prevent, reached through the
+    door the guard opened. It is also invisible from the writer's side:
+    every assertion a ``t1`` store can make still passes.
+
+    The rule the default was reaching for is "a caller who does not
+    mention ``domain_id`` must not change it". Re-stamping the
+    configured scalar implements that only for a row whose scope is
+    already exactly that scalar.
+    """
+    for verb in ("add", "update"):
+        if verb == "add":
+            await multi_domain_store.add_vectors(
+                _seed_vectors()[:1], ids=["shared"], metadata=[{"k": "w"}]
+            )
+        else:
+            await multi_domain_store.update_metadata(["shared"], [{"k": "w"}])
+
+        with _unscoped(multi_domain_store) as store:
+            stored = (await store.get_vectors(["shared"]))[0][1] or {}
+        assert stored.get("domain_id") == ["t1", "t2"], (
+            f"{verb} narrowed a co-owned row to the writer's scope: {stored}"
+        )
+
+    # The writer still owns it, and so does the co-owner.
+    assert await multi_domain_store.count() == 1
 
 
 @pytest.mark.asyncio

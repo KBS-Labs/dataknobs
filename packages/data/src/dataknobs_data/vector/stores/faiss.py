@@ -292,23 +292,27 @@ class FaissVectorStore(VectorStore):
         if ids is None:
             ids = [str(uuid4()) for _ in range(len(vectors))]
 
-        # Per-row metadata: fresh dicts with config-level domain_id
-        # defaulted in (caller's dicts never aliased — Items #8 / 131).
-        rows = self._apply_domain_default(metadata, len(ids))
-
         # A scoped store may not write an id another domain owns: this
         # path upserts, so that write would capture the row rather than
         # add one. Checked before the eviction below, which is
         # destructive and has no transaction to roll back. Metadata is
         # keyed by internal id, so the external id resolves through
         # ``id_map`` first.
-        self._reject_out_of_scope_ids(
-            {
-                ext_id: self.metadata_store.get(self.id_map[ext_id])
-                for ext_id in ids
-                if ext_id in self.id_map
-            }
-        )
+        #
+        # The check runs before the per-row metadata is built, not after:
+        # the same stored rows decide both who may write and which scope
+        # a silent row keeps, so reading them once and in that order is
+        # what keeps the two answers consistent.
+        stored = {
+            ext_id: self.metadata_store.get(self.id_map[ext_id])
+            for ext_id in ids
+            if ext_id in self.id_map
+        }
+        self._reject_out_of_scope_ids(stored)
+
+        # Per-row metadata: fresh dicts with config-level domain_id
+        # defaulted in (caller's dicts never aliased — Items #8 / 131).
+        rows = self._apply_domain_default(metadata, len(ids), ids=ids, stored=stored)
 
         # No inline training: the live index is always immediately
         # addable — flat / hnsw, or the temporary flat standing in for
@@ -817,7 +821,16 @@ class FaissVectorStore(VectorStore):
         # scope lives inside that dict. See ``MemoryVectorStore`` for
         # the full note; the two share the hazard because they share the
         # storage shape.
-        rows = self._apply_domain_default(metadata, len(metadata))
+        rows = self._apply_domain_default(
+            metadata,
+            len(metadata),
+            ids=ids,
+            stored={
+                ext_id: self.metadata_store.get(self.id_map[ext_id])
+                for ext_id in ids
+                if ext_id in self.id_map
+            },
+        )
         updated = 0
         for ext_id, row in zip(ids, rows, strict=False):
             if ext_id in self.id_map:

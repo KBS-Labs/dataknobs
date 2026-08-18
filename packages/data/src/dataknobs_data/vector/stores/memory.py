@@ -225,16 +225,15 @@ class MemoryVectorStore(VectorStore):
         # path upserts, so that write would capture the row rather than
         # add one. Whole batch checked before the first assignment —
         # there is no transaction here to roll a partial write back.
-        self._reject_out_of_scope_ids(
-            {i: self.metadata_store.get(i) for i in ids if i in self.vectors}
-        )
+        stored = {i: self.metadata_store.get(i) for i in ids if i in self.vectors}
+        self._reject_out_of_scope_ids(stored)
 
         # Store vectors, metadata, and timestamps. Upsert semantics:
         # preserve created_at across re-adds of the same id; refresh
         # updated_at every time. ``_apply_domain_default`` returns
         # fresh per-row dicts (config-level domain_id defaulted in,
         # caller's dicts never aliased — see Items #8 / 131).
-        rows = self._apply_domain_default(metadata, len(ids))
+        rows = self._apply_domain_default(metadata, len(ids), ids=ids, stored=stored)
         now = datetime.now(UTC)
         for i, vector_id in enumerate(ids):
             self.vectors[vector_id] = vectors[i]
@@ -389,7 +388,12 @@ class MemoryVectorStore(VectorStore):
         #
         # Sized by ``metadata`` rather than ``ids`` so a short list still
         # truncates the pairing below, as ``zip`` alone used to.
-        rows = self._apply_domain_default(metadata, len(metadata))
+        rows = self._apply_domain_default(
+            metadata,
+            len(metadata),
+            ids=ids,
+            stored={i: self.metadata_store.get(i) for i in ids},
+        )
         updated = 0
         for vector_id, row in zip(ids, rows, strict=False):
             if vector_id in self.vectors and self._in_configured_domain(
