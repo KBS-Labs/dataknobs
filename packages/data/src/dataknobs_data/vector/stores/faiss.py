@@ -398,14 +398,18 @@ class FaissVectorStore(VectorStore):
             # same for the metadata dict beside it, which was handed out
             # live whenever timestamps were not being injected.
             vector = stored.copy()
-            stored_meta = self.metadata_store.get(internal_id) if include_metadata else None
-            metadata: dict[str, Any] | None
-            if inject:
-                created, updated = self.timestamps.get(internal_id, (None, None))
-                metadata = self._inject_timestamps(stored_meta, created=created, updated=updated)
-            else:
-                metadata = dict(stored_meta) if stored_meta is not None else None
-            results.append((vector, metadata))
+            created, updated = self.timestamps.get(internal_id, (None, None))
+            results.append(
+                (
+                    vector,
+                    self._outbound_metadata(
+                        self.metadata_store.get(internal_id) if include_metadata else None,
+                        inject=inject,
+                        created=created,
+                        updated=updated,
+                    ),
+                )
+            )
 
         return results
 
@@ -543,19 +547,16 @@ class FaissVectorStore(VectorStore):
     ) -> tuple[str, float, dict[str, Any] | None]:
         """Assemble one result tuple. Shared by both search paths."""
         ext_id = reverse_id_map.get(internal_id, str(internal_id))
-        stored = self.metadata_store.get(internal_id) if include_metadata else None
-        out_meta: dict[str, Any] | None
-        if inject:
-            created, updated = self.timestamps.get(internal_id, (None, None))
-            out_meta = self._inject_timestamps(stored, created=created, updated=updated)
-        else:
-            # Copied, not handed out live. Chroma and pgvector build a
-            # fresh dict per row on the way out, so returning the stored
-            # one here made "mutate a result" quietly rewrite the store
-            # on two backends of four — a swap-visible difference, and a
-            # way to corrupt a store without calling a mutator. Only the
-            # ``k`` returned rows are copied, not the M scored ones.
-            out_meta = dict(stored) if stored is not None else None
+        created, updated = self.timestamps.get(internal_id, (None, None))
+        # Copied, not handed out live — and only for the ``k`` rows that
+        # are actually returned, since this runs per result row rather
+        # than per scored candidate.
+        out_meta = self._outbound_metadata(
+            self.metadata_store.get(internal_id) if include_metadata else None,
+            inject=inject,
+            created=created,
+            updated=updated,
+        )
         return (ext_id, self._score_from_raw(raw), out_meta)
 
     def _raw_index_scores(self, query: np.ndarray, matrix: np.ndarray) -> np.ndarray:
@@ -786,7 +787,11 @@ class FaissVectorStore(VectorStore):
         for ext_id, meta in zip(ids, metadata, strict=False):
             if ext_id in self.id_map:
                 internal_id = self.id_map[ext_id]
-                self.metadata_store[internal_id] = meta
+                # Stored as a copy: the caller keeps its own dict and
+                # must not keep a handle on the row through it. The
+                # ``add_vectors`` path gets this from
+                # ``_apply_domain_default``; this one has no equivalent.
+                self.metadata_store[internal_id] = self._copy_metadata(meta) or {}
                 if internal_id in self.timestamps:
                     created, _ = self.timestamps[internal_id]
                     self.timestamps[internal_id] = (created, now)

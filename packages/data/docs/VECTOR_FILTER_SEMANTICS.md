@@ -215,6 +215,47 @@ await store.count(filter={"count": 5})        # → 1
 await store.count(filter={"count": "5"})      # → 0  (type-preserving)
 ```
 
+## Metadata ownership
+
+A store and its caller never share a metadata object, in either
+direction. Every backend takes a copy of what is written to it and
+returns a copy of what is read from it, so:
+
+```python
+meta = {"type": "note", "tags": ["urgent"]}
+await store.add_vectors(vectors, ids=["a"], metadata=[meta])
+
+meta["tags"].append("later")        # does not reach the stored row
+
+(_, stored), = await store.get_vectors(["a"])
+stored["tags"].append("later")      # does not reach it either
+```
+
+The copies are **deep**. A shallow copy would leave the nested `tags`
+list shared, which is where this is actually reached — the outer dict
+is usually replaced wholesale rather than edited. Memory and FAISS copy
+with `copy.deepcopy` rather than through a JSON round-trip, because they
+persist by pickle and so accept values JSON cannot express: a tuple in
+metadata survives the copy as a tuple. That is a property of the copy on
+those two backends, not a portable one — Chroma and pgvector store
+through JSON, where a tuple reads back as a list.
+
+This applies to `add_vectors`, `update_metadata`,
+`update_metadata_where`, `search` and `get_vectors`. The
+`update_metadata_where` case is the one worth calling out: a single
+`set_` is merged into every row the filter selects, and each row gets
+its own copy, so the rows can diverge afterwards and a later edit to
+`set_` reaches none of them.
+
+Chroma and pgvector satisfy this by construction — both serialize
+metadata at their boundary, so what they store and what they return are
+already reconstructions. Memory and FAISS copy explicitly. The cost is
+paid per stored row and per *returned* row, never per scored candidate,
+so a filtered search over a large corpus does not copy the rows it
+discards.
+
+The only way to change a stored row is to call a mutator.
+
 ## Constraints
 
 - **Hashability.** List filter values and list metadata values are

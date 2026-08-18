@@ -233,14 +233,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   row from before the timestamp migration or a pickle written before
   tracking existed.
 
-- **Mutating a returned metadata dict rewrote the store on Memory and
-  FAISS.** `search()` and `get_vectors()` handed back the *live*
-  `metadata_store` entry whenever timestamps were not being injected, so
-  a caller adding a key to a result silently edited the store — no
-  mutator called, and nothing to see at the call site. Chroma and
-  pgvector build a fresh dict per row, so the same code was safe on two
-  backends of four and corrupting on the other two. All four now return
-  a copy. Only the returned rows are copied, not every scored candidate.
+- **Consumer metadata is no longer shared between a store and its
+  caller, in either direction.** On Memory and FAISS a caller could edit
+  a stored row without calling a mutator — `search()` and `get_vectors()`
+  handed back the live `metadata_store` entry, and `update_metadata()`
+  kept the dict it was given — while Chroma and pgvector, which
+  serialize at their boundary, were unaffected by identical calling
+  code. Both directions are now copied, and the copy is **deep**: a
+  shallow one leaves `result["tags"].append(...)` reaching the store,
+  which is the same defect one level down and the level at which it is
+  actually hit. This covers the ranked read, the id-keyed read,
+  `add_vectors()`, `update_metadata()` and `update_metadata_where()` —
+  the last of which merged one `set_` into every matched row, so a
+  nested value inside it was shared by the caller *and* by every row the
+  filter selected.
+
+  Two things worth knowing. Copies are taken per stored row and per
+  *returned* row, never per scored candidate, so a filtered search over
+  a large corpus does not pay for the rows it discards. And a caller
+  that was relying on the old aliasing to mutate a store in place must
+  now call a mutator — that path was never the contract on all four
+  backends, but it did work on two of them.
 
 - **`VectorStore.get_vectors()` is annotated to return what it returns.**
   The ABC declared `list[tuple[np.ndarray, dict | None]]`, but every

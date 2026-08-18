@@ -262,18 +262,19 @@ class MemoryVectorStore(VectorStore):
     ) -> dict[str, Any] | None:
         """The metadata dict a result carries — never the stored one.
 
-        Copied on the way out. Chroma and pgvector build a fresh dict per
-        row anyway, so returning the stored one here made "mutate a
-        result" quietly rewrite the store on two backends of four — a
-        swap-visible difference, and a way to corrupt a store without
-        calling a mutator. ``_inject_timestamps`` already returns a new
-        dict, so only the non-injecting path needed the copy.
+        Copied on the way out, at every depth. Chroma and pgvector
+        reconstruct each row from its serialized form, so returning the
+        stored object here made "mutate a result" quietly rewrite the
+        store on two backends of four — a swap-visible difference, and a
+        way to corrupt a store without calling a mutator.
         """
-        stored = self.metadata_store.get(vector_id) if include_metadata else None
-        if inject:
-            created, updated = self.timestamps.get(vector_id, (None, None))
-            return self._inject_timestamps(stored, created=created, updated=updated)
-        return dict(stored) if stored is not None else None
+        created, updated = self.timestamps.get(vector_id, (None, None))
+        return self._outbound_metadata(
+            self.metadata_store.get(vector_id) if include_metadata else None,
+            inject=inject,
+            created=created,
+            updated=updated,
+        )
 
     async def delete_vectors(self, ids: list[str]) -> int:
         """Delete vectors by ID."""
@@ -361,7 +362,11 @@ class MemoryVectorStore(VectorStore):
         updated = 0
         for vector_id, meta in zip(ids, metadata, strict=False):
             if vector_id in self.vectors:
-                self.metadata_store[vector_id] = meta
+                # Stored as a copy: the caller keeps its own dict and
+                # must not keep a handle on the row through it. The
+                # ``add_vectors`` path gets this from
+                # ``_apply_domain_default``; this one has no equivalent.
+                self.metadata_store[vector_id] = self._copy_metadata(meta) or {}
                 # Legacy pickles: IDs written before timestamp
                 # tracking was introduced exist in ``self.vectors`` but
                 # not in ``self.timestamps``. Leave ``updated_at`` as

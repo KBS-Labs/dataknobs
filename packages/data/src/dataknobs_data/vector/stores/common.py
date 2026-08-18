@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import copy
 import logging
 import os
 from datetime import UTC, datetime
@@ -337,9 +338,17 @@ class VectorStoreBase(StructuredConfigConsumer[VectorStoreConfig]):
         read-side ``_effective_filter`` can find it. Returns fresh
         per-row dicts (never mutates or aliases the caller's). A no-op
         passthrough (still copied) when no scope is configured.
+
+        The copy is deep, and the sentence above is why it has to be: it
+        already promised the result does not alias the caller's, and a
+        ``dict(...)`` made that true of the outer dict alone. Every value
+        inside stayed shared with whatever the caller went on holding.
         """
         rows = (
-            [dict(metadata[i]) if i < len(metadata) else {} for i in range(count)]
+            [
+                (self._copy_metadata(metadata[i]) or {}) if i < len(metadata) else {}
+                for i in range(count)
+            ]
             if metadata is not None
             else [{} for _ in range(count)]
         )
@@ -645,6 +654,13 @@ class VectorStoreBase(StructuredConfigConsumer[VectorStoreConfig]):
         external id; FAISS: internal id) — the caller passes matching
         ``metadata_items`` and ``timestamps``.
 
+        ``set_`` is copied per matched row rather than merged by
+        reference. One ``set_`` is merged into every match, so a nested
+        value inside it would otherwise be shared by the caller *and* by
+        every row the filter selected — a single ``append`` reaching an
+        unbounded number of rows at once, and the rows unable to diverge
+        from each other afterwards.
+
         Returns the number of rows whose metadata was merged.
         """
         now = datetime.now(UTC)
@@ -652,7 +668,7 @@ class VectorStoreBase(StructuredConfigConsumer[VectorStoreConfig]):
         for key, meta in metadata_items:
             if filter is not None and not self._match_metadata_filter(meta, filter):
                 continue
-            meta.update(set_)
+            meta.update(self._copy_metadata(set_) or {})
             if timestamps is not None and key in timestamps:
                 created, _ = timestamps[key]
                 timestamps[key] = (created, now)
@@ -731,6 +747,62 @@ class VectorStoreBase(StructuredConfigConsumer[VectorStoreConfig]):
                 continue
             result[key] = self._format_timestamp(value)
         return result
+
+    # ------------------------------------------------------------------
+    # Consumer metadata ownership.
+    #
+    # A store must not share a mutable object with its caller in either
+    # direction: not hand out a reference into its own storage, and not
+    # keep one to a dict the caller still holds. Chroma and pgvector get
+    # this for free — both serialize at their boundary, so what they
+    # store and what they return are reconstructions. The in-process
+    # backends have to do it deliberately, and these are where they do.
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _copy_metadata(meta: dict[str, Any] | None) -> dict[str, Any] | None:
+        """An independent copy of consumer metadata, ``None`` passed through.
+
+        Deep, because shallow is not independence: a shallow copy of
+        ``{"tags": ["a"]}`` still shares the list, and appending to it
+        through the copy reaches whatever else holds the original. That
+        is the whole defect this exists to prevent, one level down —
+        and it is exactly the level at which it was missed the first
+        time.
+
+        ``deepcopy`` rather than a JSON round-trip: the in-process
+        backends persist by pickle and so accept values JSON cannot
+        express, and reconstructing through JSON would quietly change
+        them (a tuple returning as a list). The cost is bounded — this
+        runs per stored row and per *returned* row, never per scored
+        candidate.
+        """
+        return copy.deepcopy(meta) if meta is not None else None
+
+    def _outbound_metadata(
+        self,
+        stored: dict[str, Any] | None,
+        *,
+        inject: bool,
+        created: datetime | None = None,
+        updated: datetime | None = None,
+    ) -> dict[str, Any] | None:
+        """The metadata dict a result carries — never the stored one.
+
+        Shared by every read path of the in-process backends, both the
+        ranked one and the id-keyed one. Those three call sites each
+        used to decide the copy for themselves, which is how two of them
+        ended up copying only the outer dict.
+
+        ``inject`` adds the configured timestamp keys, and is the
+        caller's already-resolved ``include_timestamps and
+        include_metadata`` — a store with no metadata for the row still
+        returns a dict when injecting, and ``None`` when not.
+        """
+        copied = self._copy_metadata(stored)
+        if inject:
+            return self._inject_timestamps(copied, created=created, updated=updated)
+        return copied
 
     def __repr__(self) -> str:
         """String representation."""

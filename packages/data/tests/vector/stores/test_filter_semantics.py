@@ -476,6 +476,126 @@ async def test_mutating_returned_metadata_does_not_rewrite_the_store(
     assert "injected_by_caller" not in (refetched[0][1] or {})
 
 
+def _alias_vector() -> np.ndarray:
+    """One row to write in the aliasing tests, kept off the seed corpus."""
+    return np.array([[0.0, 0.0, 0.0, 1.0]], dtype=np.float32)
+
+
+async def _seed_alias_row(store: Any, vector_id: str, metadata: dict[str, Any]) -> None:
+    """Add one row carrying ``metadata``, for an aliasing test to poke at.
+
+    Written per test rather than taken from ``SEED_METADATA``, whose
+    dicts are module-level constants — a test that reached a nested value
+    through the store would edit them for every test that follows.
+    """
+    await store.add_vectors(_alias_vector(), ids=[vector_id], metadata=[metadata])
+
+
+@pytest.mark.asyncio
+async def test_mutating_a_nested_value_in_a_result_does_not_rewrite_the_store(
+    any_vector_store: Any,
+) -> None:
+    """The dict handed back is independent at depth, not only at the top.
+
+    Chroma and pgvector reconstruct nested values from JSON on the way
+    out, so a list inside a result was already theirs alone. Memory and
+    FAISS copied only the outer dict, so ``result["tags"].append(...)``
+    still reached the stored row — the same swap-visible difference as
+    the test above, one level down, and not covered by it.
+    """
+    await _seed_alias_row(any_vector_store, "NESTED", {"type": "aliasing", "tags": ["one"]})
+
+    fetched = await any_vector_store.get_vectors(["NESTED"])
+    assert fetched[0][1] is not None
+    fetched[0][1]["tags"].append("injected by caller")
+
+    refetched = await any_vector_store.get_vectors(["NESTED"])
+    assert (refetched[0][1] or {})["tags"] == ["one"]
+
+    # Same contract through the ranked read.
+    hits = await any_vector_store.search(_query_vector(), k=5, filter={"type": "aliasing"})
+    assert hits and hits[0][2] is not None
+    hits[0][2]["tags"].append("injected by caller")
+
+    again = await any_vector_store.search(_query_vector(), k=5, filter={"type": "aliasing"})
+    assert (again[0][2] or {})["tags"] == ["one"]
+
+
+@pytest.mark.asyncio
+async def test_mutating_metadata_after_add_vectors_does_not_reach_the_store(
+    any_vector_store: Any,
+) -> None:
+    """A writer keeps no live handle on what it wrote.
+
+    The mirror of the read-side contract: Chroma and pgvector serialize
+    on the way in, so the dict the caller passed stopped being the
+    store's the moment ``add_vectors`` returned. Memory and FAISS copied
+    the outer dict but kept the caller's nested values, so a list the
+    caller went on using was the store's list too.
+    """
+    written: dict[str, Any] = {"type": "inbound_add", "tags": ["one"]}
+    await _seed_alias_row(any_vector_store, "INBOUND_ADD", written)
+
+    written["type"] = "rewritten by caller"
+    written["tags"].append("injected by caller")
+
+    fetched = await any_vector_store.get_vectors(["INBOUND_ADD"])
+    stored = fetched[0][1]
+    assert stored is not None
+    assert stored["type"] == "inbound_add"
+    assert stored["tags"] == ["one"]
+
+
+@pytest.mark.asyncio
+async def test_mutating_metadata_after_update_metadata_does_not_reach_the_store(
+    any_vector_store: Any,
+) -> None:
+    """``update_metadata`` takes a copy too, at every depth.
+
+    Worse than the ``add_vectors`` path on Memory and FAISS, which at
+    least copied the outer dict: this one stored the caller's dict
+    itself, so even a top-level assignment afterwards rewrote the row.
+    """
+    await _seed_alias_row(any_vector_store, "INBOUND_UPDATE", {"type": "inbound_update"})
+
+    replacement: dict[str, Any] = {"type": "inbound_update", "tags": ["two"]}
+    await any_vector_store.update_metadata(["INBOUND_UPDATE"], [replacement])
+
+    replacement["type"] = "rewritten by caller"
+    replacement["tags"].append("injected by caller")
+
+    fetched = await any_vector_store.get_vectors(["INBOUND_UPDATE"])
+    stored = fetched[0][1]
+    assert stored is not None
+    assert stored["type"] == "inbound_update"
+    assert stored["tags"] == ["two"]
+
+
+@pytest.mark.asyncio
+async def test_mutating_set_after_update_metadata_where_does_not_reach_the_store(
+    any_vector_store: Any,
+) -> None:
+    """``set_`` is merged as a copy, per row.
+
+    The filter-keyed mutator merges one ``set_`` into every match, so a
+    nested value inside it was shared by the caller *and* by every row
+    the filter selected — one ``append`` reaching an unbounded number of
+    rows at once.
+    """
+    await _seed_alias_row(any_vector_store, "INBOUND_WHERE_1", {"type": "inbound_where"})
+    await _seed_alias_row(any_vector_store, "INBOUND_WHERE_2", {"type": "inbound_where"})
+
+    set_: dict[str, Any] = {"tags": ["three"]}
+    assert await any_vector_store.update_metadata_where({"type": "inbound_where"}, set_) == 2
+
+    set_["tags"].append("injected by caller")
+
+    fetched = await any_vector_store.get_vectors(["INBOUND_WHERE_1", "INBOUND_WHERE_2"])
+    for _, stored in fetched:
+        assert stored is not None
+        assert stored["tags"] == ["three"]
+
+
 # ---------------------------------------------------------------------------
 # Result *count* when the filter's matches fall outside the global top-k.
 #
