@@ -105,6 +105,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`domain_id=""` scopes on every backend.** `PgVectorStore` guarded
+  its column predicates on truthiness while the metadata-carrying
+  backends tested `is None`, so a store configured with an empty-string
+  domain isolated on three backends and ran completely unscoped on the
+  fourth. `VectorStoreConfig.domain_id` is `str | None` and never
+  required a non-empty value, so the config was reachable. One shared
+  predicate now decides for all four — a tenant boundary that
+  disappeared on the backend swap it exists to survive was the worst
+  available failure mode.
+
 - **A configured `domain_id` now scopes the id-keyed operations too.**
   `get_vectors()`, `delete_vectors()`, `update_metadata()` and
   `metadata_fields()` address rows by id (or not at all) and so built no

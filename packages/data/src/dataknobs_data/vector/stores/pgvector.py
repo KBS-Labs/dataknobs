@@ -885,7 +885,7 @@ class PgVectorStore(VectorStore):
         Returns ``("", [])`` when unscoped, so the caller can always
         interpolate and splat unconditionally.
         """
-        if not self.domain_id:
+        if not self._is_scoped:
             return "", []
         return f" AND {self._col('domain_id')} = ${next_param}", [self.domain_id]
 
@@ -1114,7 +1114,7 @@ class PgVectorStore(VectorStore):
         param_idx = 2
 
         # Add domain filter if configured
-        if self.domain_id:
+        if self._is_scoped:
             where_clauses.append(f"{col_domain_id} = ${param_idx}")
             params.append(self.domain_id)
             param_idx += 1
@@ -1245,7 +1245,7 @@ class PgVectorStore(VectorStore):
         where_clauses: list[str] = []
         param_idx = 2
 
-        if self.domain_id:
+        if self._is_scoped:
             where_clauses.append(f"{col_domain_id} = ${param_idx}")
             params.append(self.domain_id)
             param_idx += 1
@@ -1290,7 +1290,7 @@ class PgVectorStore(VectorStore):
         params: list[Any] = []
         param_idx = 1
 
-        if self.domain_id:
+        if self._is_scoped:
             where_clauses.append(f"{col_domain_id} = ${param_idx}")
             params.append(self.domain_id)
             param_idx += 1
@@ -1365,7 +1365,7 @@ class PgVectorStore(VectorStore):
         params: list[Any] = []
         param_idx = 1
 
-        if self.domain_id:
+        if self._is_scoped:
             where_clauses.append(f"{col_domain_id} = ${param_idx}")
             params.append(self.domain_id)
             param_idx += 1

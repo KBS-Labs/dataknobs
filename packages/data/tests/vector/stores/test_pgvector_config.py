@@ -242,3 +242,22 @@ def test_domain_scope_sql_binds_the_parameter_it_is_given() -> None:
     assert sql.strip().startswith("AND ")
     assert sql.rstrip().endswith("$3")
     assert params == ["t1"]
+
+
+def test_an_empty_string_domain_still_scopes() -> None:
+    """``domain_id=""`` is a configured scope, not the absence of one.
+
+    ``VectorStoreConfig.domain_id`` is ``str | None`` and does not
+    require a non-empty value, so the empty string is reachable from
+    config. pgvector guarded its column predicates on truthiness while
+    the metadata-carrying backends tested ``is None``, which made that
+    one value isolate on three backends and run completely unscoped on
+    the fourth. A tenant boundary that survives every backend except one
+    is worse than none, because the config that selects the backend is
+    the thing consumers change.
+    """
+    sql, params = _store(domain_id="")._domain_scope_sql(2)
+    assert sql.rstrip().endswith("$2")
+    assert params == [""]
+    assert _store(domain_id="")._is_scoped is True
+    assert _store()._is_scoped is False

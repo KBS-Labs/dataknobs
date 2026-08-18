@@ -313,7 +313,7 @@ class VectorStoreBase(StructuredConfigConsumer[VectorStoreConfig]):
         ``None`` when scoping is active, so ``filter is None`` fast
         paths must consult this first.
         """
-        if self.domain_id is None:
+        if not self._is_scoped:
             return filter
 
         eff: dict[str, Any] = dict(filter) if filter else {}
@@ -357,7 +357,7 @@ class VectorStoreBase(StructuredConfigConsumer[VectorStoreConfig]):
             if metadata is not None
             else [{} for _ in range(count)]
         )
-        if self.domain_id is not None:
+        if self._is_scoped:
             for row in rows:
                 row.setdefault("domain_id", self.domain_id)
         return rows
@@ -383,6 +383,22 @@ class VectorStoreBase(StructuredConfigConsumer[VectorStoreConfig]):
         out-of-tree store.
         """
         return len(vectors) == 0
+
+    @property
+    def _is_scoped(self) -> bool:
+        """Whether a configured domain scope is in force.
+
+        One test, because ``domain_id`` is optional rather than
+        truthy-optional and the two spellings disagree on ``""``.
+        ``PgVectorStore`` guarded its column predicates with
+        ``if not self.domain_id`` while the metadata-carrying backends
+        used ``is None``, so a store configured with an empty-string
+        domain isolated on three backends and ran unscoped on the
+        fourth — a tenant boundary that disappeared on a config-selected
+        backend swap, which is the one thing this scope exists to
+        survive.
+        """
+        return self.domain_id is not None
 
     def _in_configured_domain(self, meta: dict[str, Any] | None) -> bool:
         """Whether a stored row falls inside the configured scope.
@@ -417,7 +433,7 @@ class VectorStoreBase(StructuredConfigConsumer[VectorStoreConfig]):
         ``get_vectors`` called absent and ``delete_vectors`` refused,
         which ``clear()`` then removed anyway.
         """
-        if self.domain_id is None:
+        if not self._is_scoped:
             return True
         return self._match_metadata_filter(meta, {"domain_id": self.domain_id})
 
