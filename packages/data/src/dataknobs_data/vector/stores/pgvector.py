@@ -825,13 +825,28 @@ class PgVectorStore(VectorStore):
         # Build ID type cast
         id_cast = "::uuid" if self.id_type == "uuid" else ""
 
-        async with self._pool.acquire() as conn:
+        # Validate client-side so a malformed id names itself, exactly as
+        # ``delete_vectors`` does before its own ``ANY($1::uuid[])`` bind.
+        # The ownership probe below is a second bulk bind on this path,
+        # and Postgres answers a bad element with "invalid input for
+        # array element at index N" — which the guided-error wrapper then
+        # renders by interpolating the whole array. Hoisted above the
+        # pool acquisition so it covers the probe and the insert loop
+        # both, and costs no connection when it fails.
+        if self.id_type == "uuid":
+            self._validate_uuid_ids(ids)
+
+        async with self._pool.acquire() as conn, conn.transaction():
             # A scoped store may not write an id another domain owns.
             # The ``ON CONFLICT`` clause below assigns ``domain_id``
             # from the incoming row, so an unguarded write to a foreign
             # id does not insert alongside it or edit it — it takes it.
             # One query for the whole batch, before the first insert,
-            # so a rejected batch leaves nothing behind.
+            # so a rejected batch leaves nothing behind. The enclosing
+            # transaction covers the rest: asyncpg gives a bare
+            # ``execute`` its own implicit transaction, so without one
+            # every row committed as it went and any mid-batch failure
+            # left the leading rows behind.
             #
             # ``domain_id`` is a column here rather than a metadata key,
             # so the stored value is lifted into the shape

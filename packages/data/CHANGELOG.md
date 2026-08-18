@@ -341,6 +341,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `get_vectors()` still returned and `clear()` could not remove. The
   scope key now stays in the post-filter however it is declared.
 
+- **A `PgVectorStore` batch write is now atomic.** `add_vectors()` inserts
+  row-by-row over a pooled connection, and asyncpg gives a bare `execute`
+  its own implicit transaction — so any mid-batch failure (a bad
+  `chunk_index`, a dimension mismatch, a serialization error) committed
+  every row before it and left the caller retrying on top of a
+  half-applied write. The loop now runs inside one transaction.
+
+- **A malformed UUID id names itself on a scoped `PgVectorStore`.** The
+  ownership probe a scoped store runs before its inserts binds the whole
+  id array, and Postgres answers a malformed element with a message the
+  guided-error wrapper rendered by interpolating that entire array. Only
+  scoped stores were affected; `delete_vectors()` had validated
+  client-side for exactly this reason, and `add_vectors()` now does too.
+
 - **A consumer value under a reserved timestamp key can no longer become
   a `ChromaVectorStore` row's creation date.** Reserved keys were kept out
   of storage only by the stamping step overwriting them, and stamping
