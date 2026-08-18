@@ -39,7 +39,10 @@ Reviewing those fixes found more, covered below:
   which moved the lockfile out from under the agreement above,
 * a publish that half-landed left the store refusing every later save,
   because the recovery asked instance state which file was the tracked
-  one and got back a path the publish had never used.
+  one and got back a path the publish had never used,
+* the unlocked read above was reached by *any* failure to lock rather
+  than by the condition that licenses it, so a lockfile another uid
+  owns silently bought a torn read in a directory both could write.
 """
 
 from __future__ import annotations
@@ -649,3 +652,61 @@ async def test_a_partial_publish_through_a_symlink_leaves_the_store_usable(
     reopened = await _open(FaissVectorStore, target)
     assert await reopened.count() == 4
     await _shutdown(reopened)
+
+
+@pytest.mark.skipif(hasattr(os, "geteuid") and os.geteuid() == 0, reason="root ignores file modes")
+@pytest.mark.parametrize("backend", BACKENDS)
+async def test_an_unlockable_file_in_a_writable_directory_does_not_degrade(
+    backend: str, tmp_path: Path
+) -> None:
+    """The unlocked read is licensed by the directory, not by any failure.
+
+    ``_persisted_load`` degrades to reading without the lock, and the
+    argument for that is specific: nothing can be published into a
+    directory this process cannot write, so there is no writer to
+    exclude. It bounded that on the *failure* instead of on the
+    condition — any ``OSError`` from taking the lock — which is a
+    strictly larger set, and every path in the difference is one where
+    the directory **is** writable and a writer therefore can exist.
+
+    A lockfile this process cannot open is the reachable case, and the
+    lock's own docstring documents how it arises: the file is created
+    ``0o666`` before umask, so one written under the usual ``022`` by
+    another uid is ``0o644`` and locks out everyone else that can still
+    write the directory. Degrading there is the torn read the lock
+    exists to prevent — for a two-file store, a new index beside a stale
+    side-car. ``ENOLCK`` from an NFS mount without ``lockd``, and
+    ``EMFILE`` from descriptor exhaustion, are the same mistake.
+
+    So this must fail loudly rather than read without the lock.
+    """
+    served = tmp_path / "served"
+    await asyncio.to_thread(served.mkdir)
+    persist = served / "shared.idx"
+
+    writer = await _open(_base(backend), persist)
+    await _ingest(writer, "row", 3, seed=1)
+    await writer.save()
+    await _shutdown(writer)
+
+    # The directory stays writable; only the lockfile is unopenable —
+    # which is what a lockfile created by a different uid looks like.
+    lockfile = Path(str(persist) + ".lock")
+
+    def make_unopenable() -> None:
+        # A *fresh* inode, for the reason the read-only sibling drops
+        # its lockfile too: this process already opened the one the save
+        # above created, and the descriptor it keeps outlives a chmod —
+        # so reusing that inode would test nothing.
+        lockfile.unlink()
+        lockfile.touch(mode=0o000)
+
+    await asyncio.to_thread(make_unopenable)
+    try:
+        with pytest.raises(OSError) as raised:
+            await _open(_base(backend), persist)
+        assert "lock" in str(raised.value).lower(), (
+            "the failure should name the lock it could not take"
+        )
+    finally:
+        await asyncio.to_thread(lockfile.chmod, 0o644)

@@ -449,6 +449,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   write, so there is no concurrent writer to exclude, while `save()`
   keeps the hard lock because there the write *is* what needs excluding.
 
+  That fallback is bounded by the directory being unwritable, not by
+  the lock having failed. Any other reason it fails — a lockfile owned
+  by another uid, `ENOLCK` from an NFS mount without `lockd`, `EMFILE`
+  from descriptor exhaustion — leaves a directory that *is* writable,
+  so a writer to exclude can exist and an unlocked read can return a
+  half-published state. Those raise, with a message naming the lock and
+  the umask that usually causes the first of them.
+
 - **`save(force=True)` returned silently.** It is a deliberate
   destructive bypass of the staleness check, and it is now logged at
   `WARNING` every time, saying whether anything was actually discarded

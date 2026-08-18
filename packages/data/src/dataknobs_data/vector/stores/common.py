@@ -772,8 +772,14 @@ class VectorStoreBase(StructuredConfigConsumer[VectorStoreConfig]):
         """
         # ``os.path.dirname`` is "" for a bare filename (no directory
         # component), and ``makedirs("")`` raises FileNotFoundError.
-        # The guard is why each store had this line; it survives the
-        # move rather than being rediscovered a third time.
+        # Both stores resolve ``persist_path`` before calling this, and
+        # a resolved path is absolute, so neither can reach the empty
+        # case today — the guard is a precondition for a caller that
+        # passes a bare relative name, not dead weight from the move.
+        # Resolving here instead would be worse: the stamp would then be
+        # on a different string than the one the caller hands
+        # ``_write_then_publish``, which is exactly the divergence that
+        # made the half-publish recovery silently never run.
         parent_dir = os.path.dirname(path)
         if parent_dir:
             os.makedirs(parent_dir, exist_ok=True)
@@ -800,6 +806,13 @@ class VectorStoreBase(StructuredConfigConsumer[VectorStoreConfig]):
         that publishes two files — an index beside its side-car — renames
         them one after the other, so an unlocked reader landing between
         the two renames gets a new index with a stale side-car.
+
+        Reads without the lock when the directory is not writable, since
+        nothing can be published into one, and raises when it *is* and
+        the lock still could not be taken — where a writer can exist and
+        the torn read above is live. The boundary is the directory, not
+        the failure: a lockfile owned by another uid fails identically
+        to a read-only mount and means the opposite thing.
         """
         if not Path(path).parent.is_dir():
             # A ``persist_path`` under a directory that does not exist
@@ -810,21 +823,34 @@ class VectorStoreBase(StructuredConfigConsumer[VectorStoreConfig]):
             yield False
             return
 
+        # Asked before the attempt, because it is the *condition* that
+        # licenses an unlocked read, not the failure. See the docstring.
+        writable = os.access(Path(path).parent, os.W_OK)
         with contextlib.ExitStack() as stack:
             try:
                 stack.enter_context(FileLock(path))
             except OSError as exc:
-                # Taking the lock means creating or opening
-                # ``<path>.lock``, so a directory this process cannot
-                # write is a directory it cannot lock — an index baked
-                # into a read-only image layer, or served from a
-                # read-only mount. Failing here would refuse a load that
-                # worked before the lock existed.
+                if writable:
+                    raise OSError(
+                        exc.errno,
+                        f"{type(self).__name__}: could not take the persist "
+                        f"lock on {path}, and its directory is writable — so "
+                        "a writer that this read has to be excluded from can "
+                        "exist, and reading without the lock risks a "
+                        "half-published state. A lockfile is created 0o666 "
+                        "before umask, so one written by another uid under "
+                        "the usual 022 is unopenable here; a directory shared "
+                        "across uids needs a permissive umask.",
+                        path,
+                    ) from exc
+                # Unwritable, so nothing can be published into this
+                # directory and there is no writer to exclude — an index
+                # baked into a read-only image layer, or served from a
+                # read-only mount. Both loaded before the lock existed,
+                # and failing them now would be the lock refusing reads
+                # it was never needed for.
                 #
-                # Degrading is sound rather than merely convenient, and
-                # only on this side: publishing is ``os.replace`` into
-                # this same directory, so a writer to exclude cannot
-                # exist here either. ``_persisted_save`` keeps the hard
+                # Only on this side. ``_persisted_save`` keeps the hard
                 # lock, because there the write *is* the thing that
                 # needs excluding.
                 logger.warning(
