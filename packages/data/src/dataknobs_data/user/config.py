@@ -172,7 +172,13 @@ class UserStateStoreConfig(StructuredConfig):
             applied in memory on every read without touching the stored record.
     """
 
-    backend: str = "memory"
+    #: ``None`` means the config named no backend, which the factory
+    #: reports. Spelling the default here instead made every config that
+    #: omitted the key arrive at the factory as an explicit choice, so the
+    #: one place positioned to say "nobody chose this" never saw the
+    #: absence -- an unpersisted store, silently, for a config whose author
+    #: may only have meant to leave it to the deployment.
+    backend: str | None = None
     namespace: str = "user_state"
     sections: tuple[UserStateSectionSpec, ...] = ()
     enable_event_log: bool = False

@@ -29,6 +29,8 @@ thing is the environment fact that cannot be varied for real.
 
 from __future__ import annotations
 
+import logging
+
 from typing import Any, Callable
 
 import pytest
@@ -216,7 +218,8 @@ class TestTheOtherWayIn:
     def _withdrawn(registry: Any, backend: str) -> tuple[Any, dict[str, Any]]:
         """Declare a real backend unavailable, as a driverless machine would."""
         backend_class = registry.get_factory(backend)
-        assert backend_class is not None, f"{backend} is not installed in this env"
+        if backend_class is None:
+            pytest.skip(f"{backend} is not installed here, so it cannot be withdrawn")
         metadata = registry.get_metadata(backend)
         registry.declare_unavailable(
             backend,
@@ -268,7 +271,17 @@ class TestTheOtherWayIn:
 
         message = str(excinfo.value)
         assert "postgres" in message
-        assert "pg," not in message and "postgresql" not in message
+        # Parsed into names rather than substring-tested: `es` is an alias
+        # of elasticsearch and also a substring of "postgres", so a
+        # substring test reports a passing message as failing. ("pg," was
+        # asserted here before and could not fail either way -- the pre-fix
+        # message was a list repr, where the substring was "pg',".)
+        listed = message.split("Available backends: ")[1].split(", ")
+        aliases = {"postgresql", "pg", "sqlite3", "es", "mem"}
+        assert not aliases & set(listed), (
+            f"aliases listed as backends: {sorted(aliases & set(listed))}"
+        )
+        assert "postgres" in listed
 
     @pytest.mark.asyncio
     async def test_it_still_builds_a_usable_connected_database(self) -> None:
@@ -361,15 +374,24 @@ class TestEachLoaderLoadsWhatItSays:
         EXPECTATIONS,
         ids=[label for label, _, _ in EXPECTATIONS],
     )
-    def test_every_expected_backend_is_registered(
+    def test_every_expected_backend_is_known(
         self, label: str, registry: Any, expected: dict[str, tuple[str, str]]
     ) -> None:
-        missing = sorted(set(expected) - set(registry.list_canonical_keys()))
+        """Known, not creatable -- the difference is the local install set.
 
-        assert missing == [], (
-            f"{label}: registered nothing for {missing} -- a loader naming a "
-            "module or class that does not exist raises ImportError, which "
-            "registration reports as a missing driver"
+        Asserting *registered* here made this a test that every optional
+        driver is installed, which fails on a lean environment with a
+        message about a loader typo. A backend whose driver is absent is
+        still `is_known`, so that is the invariant which holds everywhere;
+        whether it is creatable is checked below, per backend, where it can
+        be skipped honestly.
+        """
+        unknown = sorted(key for key in expected if not registry.is_known(key))
+
+        assert unknown == [], (
+            f"{label}: the registry has never heard of {unknown} -- a loader "
+            "naming a module or class that does not exist raises ImportError, "
+            "which registration reports as a missing driver"
         )
 
     @pytest.mark.parametrize(
@@ -380,13 +402,29 @@ class TestEachLoaderLoadsWhatItSays:
     def test_each_one_resolves_to_the_named_class(
         self, label: str, registry: Any, expected: dict[str, tuple[str, str]]
     ) -> None:
+        skipped = []
         for key, (module_suffix, class_name) in expected.items():
             loaded = registry.get_factory(key)
-            assert loaded is not None, f"{label}: {key} is not registered"
+            if loaded is None:
+                # Declared unavailable: its driver is absent here. The
+                # loader may still be reachable (a store guarding its
+                # driver behind a flag imports fine without it) -- take
+                # that where it is offered, and record the rest rather
+                # than reporting a lean environment as a typo.
+                loaded = registry.load_declared_type(key)
+                if loaded is None:
+                    skipped.append(key)
+                    continue
             assert loaded.__name__ == class_name, f"{label}: {key}"
             assert loaded.__module__ == f"dataknobs_data.{module_suffix}", (
                 f"{label}: {key} resolved to a class from the wrong module"
             )
+
+        if skipped:
+            # Named rather than silently passing over: a green run that
+            # checked four of seven loaders should say which three it did
+            # not reach.
+            pytest.skip(f"{label}: driver absent, loader unverifiable for {sorted(skipped)}")
 
     @pytest.mark.parametrize(
         ("label", "registry", "expected"),
@@ -465,3 +503,94 @@ class TestTheShippedRegistries:
         """One implementation, reached three ways."""
         for name in registry.list_known_keys():
             assert factory.is_backend_available(name) == backend_available(registry, name)
+
+
+class TestDescribingABackendWithNoMetadata:
+    """``backend_info`` answers "what is this?", including "not a thing".
+
+    It read metadata and treated a falsy result as "never heard of it",
+    which is wrong for a backend declared unavailable without any --
+    ``declare_unavailable`` accepts ``metadata=None``. The one state this
+    function exists to describe was reported as unrecognised.
+    """
+
+    def test_a_declared_backend_without_metadata_is_not_called_unknown(self) -> None:
+        sync_backends.declare_unavailable("acme_db", reason="acme-sdk is not installed")
+        try:
+            info = backend_info(sync_backends, "acme_db")
+            assert "error" not in info, f"reported as unrecognised: {info}"
+        finally:
+            sync_backends.unregister("acme_db")
+
+    def test_a_name_nobody_declared_is_still_unknown(self) -> None:
+        info = backend_info(sync_backends, "no_such_backend")
+
+        assert info["error"] == "Backend 'no_such_backend' not recognized"
+
+    def test_a_declared_backend_with_metadata_still_answers_with_it(self) -> None:
+        """The path that already worked, kept covered."""
+        sync_backends.declare_unavailable(
+            "acme_db",
+            metadata={"requires_install": "pip install acme-sdk"},
+            reason="acme-sdk is not installed",
+        )
+        try:
+            assert backend_info(sync_backends, "acme_db")["requires_install"] == (
+                "pip install acme-sdk"
+            )
+        finally:
+            sync_backends.unregister("acme_db")
+
+
+class TestAUserStateStoreThatNamedNoBackend:
+    """The config spelled the default itself, so the factory never knew.
+
+    ``UserStateStoreConfig.backend`` defaulted to ``"memory"`` and was
+    forwarded unconditionally, so a config that named nothing arrived at
+    the factory as an explicit choice and the absence was consumed one
+    frame above the only code positioned to report it. Same shape as the
+    three sites migrated earlier, in the typed-dataclass spelling rather
+    than ``.get(key, default)``.
+    """
+
+    @staticmethod
+    def _warnings(caplog: pytest.LogCaptureFixture) -> list[str]:
+        return [
+            record.getMessage()
+            for record in caplog.records
+            if record.levelno == logging.WARNING
+            and record.name == "dataknobs_data.backend_selection"
+        ]
+
+    @pytest.mark.asyncio
+    async def test_an_absent_backend_is_reported(self, caplog: pytest.LogCaptureFixture) -> None:
+        from dataknobs_data.user.config import UserStateStoreConfig
+        from dataknobs_data.user.store import AsyncUserStateStore
+
+        config = UserStateStoreConfig.from_dict({"namespace": "u"})
+        with caplog.at_level(logging.DEBUG, logger="dataknobs_data.backend_selection"):
+            await AsyncUserStateStore.from_config_async(config)
+
+        assert len(self._warnings(caplog)) == 1
+
+    @pytest.mark.asyncio
+    async def test_a_named_backend_is_not(self, caplog: pytest.LogCaptureFixture) -> None:
+        from dataknobs_data.user.config import UserStateStoreConfig
+        from dataknobs_data.user.store import AsyncUserStateStore
+
+        config = UserStateStoreConfig.from_dict({"namespace": "u", "backend": "memory"})
+        with caplog.at_level(logging.DEBUG, logger="dataknobs_data.backend_selection"):
+            await AsyncUserStateStore.from_config_async(config)
+
+        assert self._warnings(caplog) == []
+
+    def test_the_sync_twin_reports_it_too(self, caplog: pytest.LogCaptureFixture) -> None:
+        """Both ``_setup`` and ``_ainit`` held the same line."""
+        from dataknobs_data.user.config import UserStateStoreConfig
+        from dataknobs_data.user.store import UserStateStore
+
+        config = UserStateStoreConfig.from_dict({"namespace": "u"})
+        with caplog.at_level(logging.DEBUG, logger="dataknobs_data.backend_selection"):
+            UserStateStore.from_config(config)
+
+        assert len(self._warnings(caplog)) == 1

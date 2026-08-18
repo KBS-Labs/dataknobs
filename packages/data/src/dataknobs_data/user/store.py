@@ -870,7 +870,13 @@ class AsyncUserStateStore(
         # the components channel in ``_bind_common``; the only async-only work
         # is building a database when none was injected.
         if self._db is None:
-            self._db = async_database_factory.create(backend=self.config.backend)
+            # ``backend`` forwarded only when the config named one, so an
+            # unnamed backend reaches the factory as an absent key rather
+            # than as this config's guess at what it should have been.
+            options: dict[str, Any] = {}
+            if self.config.backend is not None:
+                options["backend"] = self.config.backend
+            self._db = async_database_factory.create(**options)
             self._owns_db = True
 
     def _adopt_components(
@@ -1416,7 +1422,13 @@ class UserStateStore(
         # Sync construction has no async hook, so the database (when not
         # injected) is built here.
         if self._db is None:
-            self._db = database_factory.create(backend=self.config.backend)
+            # ``backend`` forwarded only when the config named one, so an
+            # unnamed backend reaches the factory as an absent key rather
+            # than as this config's guess at what it should have been.
+            options: dict[str, Any] = {}
+            if self.config.backend is not None:
+                options["backend"] = self.config.backend
+            self._db = database_factory.create(**options)
             self._owns_db = True
 
     def _adopt_components(

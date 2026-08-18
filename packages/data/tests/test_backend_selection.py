@@ -537,3 +537,47 @@ class TestOneDefaultBackendTable:
         assert _resolve_vector_store_config_cls({}) is _resolve_vector_store_config_cls(
             {"backend": DEFAULT_BACKEND}
         )
+
+
+class TestRecognisingTheDefaultUnderItsOtherNames:
+    """``mem`` and ``memory`` name one backend; a caller branching on the
+    answer must not route them differently.
+
+    Without a registry this compares names, which is right for a caller
+    choosing a log line and wrong for one choosing a code path -- the
+    factory resolves both spellings to the same class, so a config saying
+    ``mem`` took the non-default branch and got a *different storage mode*
+    for a backend that was the default all along.
+    """
+
+    def test_an_alias_of_the_default_is_recognised_with_a_registry(self) -> None:
+        from dataknobs_data.backends import sync_backends
+
+        assert is_default_backend({"backend": "mem"}, sync_backends) is True
+
+    def test_case_and_padding_still_normalise_around_the_alias(self) -> None:
+        from dataknobs_data.backends import sync_backends
+
+        assert is_default_backend({"backend": "  MEM  "}, sync_backends) is True
+
+    def test_a_real_choice_is_still_a_real_choice(self) -> None:
+        from dataknobs_data.backends import sync_backends
+
+        assert is_default_backend({"backend": "file"}, sync_backends) is False
+
+    def test_without_a_registry_it_compares_names(self) -> None:
+        """The documented narrower contract, pinned so it cannot drift."""
+        assert is_default_backend({"backend": "memory"}) is True
+        assert is_default_backend({"backend": "mem"}) is False
+
+    def test_the_absent_key_answer_does_not_depend_on_the_registry(self) -> None:
+        from dataknobs_data.backends import sync_backends
+
+        assert is_default_backend({}) is True
+        assert is_default_backend({}, sync_backends) is True
+
+    def test_a_null_backend_is_still_refused_with_a_registry(self) -> None:
+        from dataknobs_data.backends import sync_backends
+
+        with pytest.raises(ValueError, match="present but null"):
+            is_default_backend({"backend": None}, sync_backends)

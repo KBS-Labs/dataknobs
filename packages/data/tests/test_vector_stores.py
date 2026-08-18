@@ -11,6 +11,7 @@ import pytest
 
 from dataknobs_common.testing import is_chromadb_available, is_faiss_available
 from dataknobs_data.testing import vector as _vector, vectors as _vectors
+from dataknobs_data.backend_selection import register_backend
 from dataknobs_data.vector.stores import VectorStoreFactory, vector_backends
 from dataknobs_data.vector.stores.memory import MemoryVectorStore
 from dataknobs_data.vector.types import DistanceMetric
@@ -784,24 +785,32 @@ class TestVectorStoreFactory:
         registration, nothing failed. The assertion was simply wrong
         everywhere it could run.
 
-        Written against a withdrawn backend instead, so the driver-absent
-        path is exercised in *every* environment rather than only in the
-        ones nobody runs the suite in.
+        Written against a backend of this test's own, registered through
+        the real registration path with a probe that reports its driver
+        missing. Withdrawing a *shipped* backend would have re-created the
+        original problem one layer along: it can only be withdrawn on a
+        machine that has it, so the driver-absent path would again run
+        only where the driver is present. A synthetic one is absent
+        everywhere, which is what makes this exercise every environment as
+        the paragraph above claims.
         """
-        backend = "faiss"
-        store_cls = vector_backends.get_factory(backend)
-        assert store_cls is not None, "faiss is not installed in this env"
-        metadata = vector_backends.get_metadata(backend)
-        vector_backends.declare_unavailable(
-            backend,
-            metadata=metadata,
-            reason="faiss is not installed. Install with: pip install faiss-cpu",
+        register_backend(
+            vector_backends,
+            "acme_store",
+            lambda: None,  # never called: the probe below reports it missing
+            metadata={
+                "description": "A backend this machine does not have",
+                "requires_module": "acme_sdk",
+                "requires_install": "pip install acme-sdk",
+            },
+            installed=lambda module: False,
+            override=True,
         )
         try:
-            with pytest.raises(ValueError, match="pip install faiss-cpu"):
-                VectorStoreFactory().create(backend="faiss", dimensions=256)
+            with pytest.raises(ValueError, match="pip install acme-sdk"):
+                VectorStoreFactory().create(backend="acme_store", dimensions=256)
         finally:
-            vector_backends.register(backend, store_cls, metadata=metadata, override=True)
+            vector_backends.unregister("acme_store")
 
     def test_unknown_backend(self):
         """Test creating store with unknown backend."""

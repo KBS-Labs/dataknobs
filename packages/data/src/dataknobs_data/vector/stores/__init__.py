@@ -210,12 +210,13 @@ def _resolve_vector_store_config_cls(
 
     - **A creatable backend** resolves to its ``CONFIG_CLS``.
     - **A backend this installation cannot build** — known to the registry,
-      driver absent — returns :data:`SKIP_VALIDATION`. Whether a config is
-      well-formed is a property of the config, not of the machine reading
-      it, so an uninstalled driver must not fail a valid section; and it is
-      not a typo, so it must not be reported as one. There is simply no
-      store class here to read a schema off. ``create()`` is the call that
-      cares whether the driver is present, and it says so by name.
+      driver absent — resolves to its ``CONFIG_CLS`` when the store class
+      is still importable, and to :data:`SKIP_VALIDATION` when it is not.
+      Whether a config is well-formed is a property of the config, not of
+      the machine reading it, so an uninstalled driver must not fail a
+      valid section; and it is not a typo, so it must not be reported as
+      one. ``create()`` is the call that cares whether the driver is
+      present, and it says so by name.
     - **A backend nobody registered** returns ``None``, which ``validate``
       surfaces as a ``ConfigurationError``. This is the genuine typo.
 
@@ -227,14 +228,24 @@ def _resolve_vector_store_config_cls(
     keeps it so); the branch covers a custom bare-callable backend
     registered out of band.
 
-    The cost of the middle case is that a malformed section for a backend
-    this machine lacks is not caught here — it is caught wherever the
-    backend can actually be built. Reading the typed schema without the
-    driver is possible for the stores that defer their ``ImportError``, but
-    not for one whose module fails to import at all, so it would make the
-    guarantee depend on which of the two idioms a backend happens to use.
-    A uniform skip is the honest version of a guarantee that cannot be
-    uniform.
+    The middle case is split rather than skipped wholesale because the two
+    halves are genuinely different. A store guarding its optional driver
+    behind a module-level flag — which every optional store here does —
+    imports without it, so its schema is readable and the section is
+    checked exactly as it would be on a machine that has the driver. Only
+    a store whose module raises on import has nothing to read, and that is
+    what :data:`SKIP_VALIDATION` is for. The schema comes from the same
+    loader the construction path uses, via
+    :meth:`~dataknobs_common.registry.PluginRegistry.load_declared_type`,
+    so this holds no second key-to-class table to drift out of step.
+
+    What ``validate()`` does with the returned class is its own question:
+    today ``from_dict`` is permissive, so the class it gets back and
+    :data:`SKIP_VALIDATION` reject the same configs — everything except an
+    unrecognised discriminator. Returning the class anyway is what keeps
+    *which check runs* independent of the local install set, so tightening
+    ``from_dict`` later does not silently tighten it only on the machines
+    that happen to have every driver.
     """
     if "backend" in raw:
         # Normalised by the same function the construction path uses. The
@@ -254,25 +265,33 @@ def _resolve_vector_store_config_cls(
         backend = DEFAULT_BACKEND
     store_cls = vector_backends.get_factory(backend)
     if store_cls is None:
-        if vector_backends.get_metadata(backend, follow_alias=True):
-            # Known, but not creatable on this machine. Whether a config is
-            # well-formed does not depend on which optional drivers happen
-            # to be installed where it is being checked, so reporting the
-            # section as matching no variant is wrong twice over: it fails a
-            # valid config, and it sends the reader to look for a typo in a
-            # name that is spelled correctly. `create()` is the call that
-            # cares about the driver, and it names it.
+        # Asked of the registry directly. Truthy metadata used to stand in
+        # for "known", which is a different question with a different
+        # answer for a backend declared unavailable without any -- it was
+        # reported as a typo, the exact failure this branch exists to
+        # prevent, just under a narrower precondition.
+        if not vector_backends.is_known(backend):
+            # Unknown discriminator — the legitimate typo path; validate()
+            # raises ConfigurationError. Silent here so a real typo is
+            # reported by validate(), not pre-empted by a misleading
+            # WARNING.
+            return None
+        # Known, but not creatable on this machine. Whether a config is
+        # well-formed does not depend on which optional drivers happen to
+        # be installed where it is being checked, so reporting the section
+        # as matching no variant is wrong twice over: it fails a valid
+        # config, and it sends the reader to look for a typo in a name that
+        # is spelled correctly. `create()` is the call that cares about the
+        # driver, and it names it.
+        store_cls = vector_backends.load_declared_type(backend)
+        if store_cls is None:
             logger.debug(
-                "Vector-store backend %r is known but not installed here, so "
-                "there is no store class to read a typed schema off; skipping "
-                "validation of this section.",
+                "Vector-store backend %r is known but neither creatable nor "
+                "importable here, so there is no store class to read a typed "
+                "schema off; skipping validation of this section.",
                 backend,
             )
             return SKIP_VALIDATION
-        # Unknown discriminator — the legitimate typo path; validate()
-        # raises ConfigurationError. Silent here so a real typo is reported
-        # by validate(), not pre-empted by a misleading WARNING.
-        return None
     config_cls = getattr(store_cls, "CONFIG_CLS", None)
     if isinstance(config_cls, type) and issubclass(config_cls, StructuredConfig):
         return config_cls

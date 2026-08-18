@@ -132,7 +132,10 @@ def normalize_backend(raw: Any) -> str:
     return name
 
 
-def is_default_backend(config: Mapping[str, Any]) -> bool:
+def is_default_backend(
+    config: Mapping[str, Any],
+    registry: PluginRegistry[Any] | None = None,
+) -> bool:
     """Whether this config asks for the default backend.
 
     True both when the config names it and when it names nothing, because
@@ -148,10 +151,19 @@ def is_default_backend(config: Mapping[str, Any]) -> bool:
 
     Args:
         config: A config that may carry a ``backend`` key.
+        registry: The registry the caller would have built through, used
+            to recognise the default's *aliases*. Without it this compares
+            names, so a config spelling the default as one of its aliases
+            -- ``mem`` for ``memory`` -- reads as naming something else,
+            and the caller takes its non-default branch for a backend the
+            factory would have resolved to the same class. Pass it
+            whenever the answer selects between code paths rather than
+            merely between log lines.
 
     Returns:
         True when the key is absent, or present and naming
-        :data:`DEFAULT_BACKEND`.
+        :data:`DEFAULT_BACKEND` -- or, with a ``registry``, any spelling
+        that resolves to the same plugin.
 
     Raises:
         ValueError: The key is present but names nothing usable, per
@@ -161,7 +173,17 @@ def is_default_backend(config: Mapping[str, Any]) -> bool:
     """
     if "backend" not in config:
         return True
-    return normalize_backend(config["backend"]) == DEFAULT_BACKEND
+    named = normalize_backend(config["backend"])
+    if named == DEFAULT_BACKEND:
+        return True
+    if registry is None:
+        return False
+    # Alias identity is the registry's to answer, not something to restate
+    # here as a second list that can drift from the one `register_backend`
+    # actually declared. Two spellings are the same plugin when they share
+    # a factory -- the same test `list_canonical_keys` collapses on.
+    default_factory = registry.get_factory(DEFAULT_BACKEND)
+    return default_factory is not None and registry.get_factory(named) is default_factory
 
 
 def register_backend(
@@ -225,7 +247,17 @@ def register_backend(
             reason = str(exc)
 
     if reason is not None:
-        registry.declare_unavailable(key, metadata=metadata, reason=reason, aliases=aliases)
+        # `load` goes with the declaration, not just the registration. A
+        # backend guarding its driver behind a module-level flag imports
+        # fine without it, so its class -- and the typed config schema on
+        # it -- stays readable for validation even here; one that imports
+        # its driver at top level does not, and `load_declared_type`
+        # reports that by returning None. Which of the two a backend is
+        # gets discovered on the one path that cares, rather than assumed
+        # for all of them at registration.
+        registry.declare_unavailable(
+            key, metadata=metadata, reason=reason, aliases=aliases, type_loader=load
+        )
         logger.debug("Backend '%s' is unavailable: %s", key, reason)
         return
 
@@ -287,6 +319,12 @@ def backend_info(registry: PluginRegistry[Any], backend_type: str) -> dict[str, 
     metadata = registry.get_metadata(backend_type, follow_alias=True)
     if metadata:
         return metadata
+    # Whether the registry knows the name is its own question, asked of it
+    # directly. Truthy metadata used to stand in for the answer, which is
+    # wrong for a backend declared unavailable without any: the one state
+    # this function exists to describe was reported as unrecognised.
+    if registry.is_known(backend_type):
+        return {"description": f"Backend '{backend_type}' is known but carries no metadata"}
     return {
         "description": "Unknown backend",
         "error": f"Backend '{backend_type}' not recognized",

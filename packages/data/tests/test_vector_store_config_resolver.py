@@ -19,6 +19,7 @@ from typing import Any, ClassVar, Mapping
 import pytest
 
 import dataknobs_data.vector.stores  # noqa: F401 — eager resolver registration
+from dataknobs_data.backend_selection import register_backend
 from dataknobs_data.vector.stores import vector_backends
 from dataknobs_data.vector.stores.config import MemoryVectorStoreConfig
 
@@ -108,19 +109,30 @@ class TestABackendThisMachineCannotBuild:
 
     @staticmethod
     def _withdrawn(backend: str):
-        """Declare a real backend unavailable, as a driverless machine would.
+        """Withdraw a real backend exactly as a driverless machine does.
 
-        Uses the shipped registry and the registration API rather than
-        substituting a double, because the resolver reads that singleton
-        and the bug is in how it reads it.
+        Through ``register_backend`` with a probe that reports the driver
+        missing -- not a hand-rolled ``declare_unavailable`` -- so the
+        aliases, the metadata and the type loader are wired the way real
+        registration wires them. Declaring it by hand instead described an
+        environment no machine is in, and the difference is load-bearing
+        here: the loader is what lets the resolver read a schema off a
+        backend it cannot build.
+
+        Uses the shipped registry rather than a double, because the
+        resolver reads that singleton and the bug was in how it read it.
         """
         store_cls = vector_backends.get_factory(backend)
-        assert store_cls is not None, f"{backend} is not installed in this env"
+        if store_cls is None:
+            pytest.skip(f"{backend} is not installed here, so it cannot be withdrawn")
         metadata = vector_backends.get_metadata(backend)
-        vector_backends.declare_unavailable(
+        register_backend(
+            vector_backends,
             backend,
+            lambda: store_cls,
             metadata=metadata,
-            reason="faiss is not installed. Install with: pip install faiss-cpu",
+            installed=lambda module: False,
+            override=True,
         )
         return store_cls, metadata
 
@@ -137,12 +149,57 @@ class TestABackendThisMachineCannotBuild:
         finally:
             self._restore("faiss", store_cls, metadata)
 
-    def test_its_section_is_skipped_rather_than_rejected(self) -> None:
+    def test_its_section_resolves_to_the_same_schema_either_way(self) -> None:
+        """What ``validate()`` checks must not depend on the local install set.
+
+        The store module guards its driver behind a module-level flag, so
+        the class -- and the ``CONFIG_CLS`` on it -- is readable with the
+        driver absent. Resolving to :data:`SKIP_VALIDATION` here would make
+        the set of checks a config gets a property of the machine reading
+        it. (Today ``from_dict`` is permissive enough that both answers
+        reject the same configs; this pins *which* answer is given, so
+        tightening it later tightens it everywhere at once.)
+        """
+        with_driver = _resolver()({"backend": "faiss"})
         store_cls, metadata = self._withdrawn("faiss")
         try:
-            assert _resolver()({"backend": "faiss"}) is SKIP_VALIDATION
+            assert _resolver()({"backend": "faiss"}) is with_driver
+            assert with_driver is not SKIP_VALIDATION
         finally:
             self._restore("faiss", store_cls, metadata)
+
+    def test_a_backend_whose_module_cannot_import_is_skipped(self) -> None:
+        """The other idiom, and the case ``SKIP_VALIDATION`` is really for."""
+
+        def explode():
+            raise ImportError("No module named 'acme_sdk'")
+
+        register_backend(
+            vector_backends,
+            "acme_store",
+            explode,
+            metadata={"requires_module": "acme_sdk", "requires_install": "pip install acme"},
+            installed=lambda module: False,
+            override=True,
+        )
+        try:
+            assert _resolver()({"backend": "acme_store"}) is SKIP_VALIDATION
+        finally:
+            vector_backends.unregister("acme_store")
+
+    def test_a_backend_declared_without_metadata_is_not_reported_as_a_typo(self) -> None:
+        """Being known is the registry's own question, not truthy metadata.
+
+        ``declare_unavailable`` accepts ``metadata=None``, and the resolver
+        used to read metadata for truth to decide whether it recognised the
+        name -- so a consumer withdrawing their own backend without any got
+        it reported as a misspelling.
+        """
+        vector_backends.declare_unavailable("acme_store", reason="acme-sdk is not installed")
+        try:
+            assert _resolver()({"backend": "acme_store"}) is SKIP_VALIDATION
+        finally:
+            vector_backends.unregister("acme_store")
 
     def test_a_real_typo_is_still_reported(self) -> None:
         """The distinction only matters if the other half still works."""
