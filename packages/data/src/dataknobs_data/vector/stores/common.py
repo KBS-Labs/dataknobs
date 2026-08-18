@@ -30,6 +30,27 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def _forced_save_effect(
+    current: tuple[int, int, int] | None,
+    persisted: tuple[int, int, int] | None,
+) -> str:
+    """What ``save(force=True)`` is about to cost, for the WARNING log.
+
+    Three outcomes, not two. A file that is *gone* differs from one that
+    *changed*: both fail the identity comparison, but only one of them
+    has another writer's rows in it. Reporting a loss that did not happen
+    sends an operator looking for rows nothing discarded.
+    """
+    if current == persisted:
+        return "The file is unchanged, so nothing was discarded."
+    if current is None:
+        return "The file is no longer there, so nothing was discarded."
+    return (
+        "The file changed since this store read or wrote it, so another "
+        "writer's rows are being discarded."
+    )
+
+
 def _flush_to_disk(path: str) -> None:
     """Force ``path``'s contents out of the page cache before it is published.
 
@@ -675,12 +696,7 @@ class VectorStoreBase(StructuredConfigConsumer[VectorStoreConfig]):
                 "%s: save(force=True) bypassed the staleness check on %s. %s",
                 type(self).__name__,
                 path,
-                (
-                    "The file changed since this store read or wrote it, so "
-                    "another writer's rows are being discarded."
-                    if current != self._persisted_identity
-                    else "The file is unchanged, so nothing was discarded."
-                ),
+                _forced_save_effect(current, self._persisted_identity),
             )
             return
         if current == self._persisted_identity:

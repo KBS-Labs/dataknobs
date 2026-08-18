@@ -380,7 +380,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`save(force=True)` returned silently.** It is a deliberate
   destructive bypass of the staleness check, and it is now logged at
   `WARNING` every time, saying whether anything was actually discarded
-  — the line an operator wants when asking where the rows went.
+  — the line an operator wants when asking where the rows went. A file
+  that is *gone* is reported as such rather than as a discarded write:
+  both fail the identity comparison, but only one of them had another
+  writer's rows in it.
 
 - **`update_vectors()` no longer resets a row's `created_at`, or destroys
   rows on a refused batch.** It was implemented as `delete_vectors()`

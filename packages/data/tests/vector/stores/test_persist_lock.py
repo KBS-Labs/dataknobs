@@ -32,7 +32,9 @@ Reviewing those fixes found more, covered below:
 * the ``makedirs`` the lock depends on stayed duplicated in each store
   instead of moving into the bracket with it,
 * taking the lock made a *read* require write access to the directory,
-  which refuses an index on a read-only mount.
+  which refuses an index on a read-only mount,
+* ``force=True`` reported a discarded write for a file that was merely
+  gone.
 """
 
 from __future__ import annotations
@@ -507,3 +509,38 @@ async def test_a_read_only_directory_still_loads(backend: str, tmp_path: Path) -
         await _shutdown(reopened)
     finally:
         await asyncio.to_thread(served.chmod, 0o755)
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+async def test_forcing_over_a_file_that_is_gone_does_not_claim_a_loss(
+    backend: str, tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A missing file and a changed file are not the same bypass.
+
+    Both fail the identity comparison, so both took the branch announcing
+    that "another writer's rows are being discarded" — but a file that is
+    gone has no rows in it. The WARNING is the line an operator reads
+    when asking where the rows went, so a loss it invents sends them
+    looking for something that never happened.
+    """
+    persist = tmp_path / "shared.idx"
+    store = await _open(_base(backend), persist)
+    await _ingest(store, "row", 3, seed=1)
+    await store.save()
+
+    # Whatever the store publishes, remove it: the identity stamp now
+    # points at a file that is not there.
+    await asyncio.to_thread(persist.unlink)
+
+    with caplog.at_level(logging.WARNING, logger="dataknobs_data.vector.stores.common"):
+        await store.save(force=True)
+
+    messages = [record.getMessage() for record in caplog.records]
+    assert any("no longer there" in message for message in messages), (
+        f"the bypass did not report a deleted file as such: {messages}"
+    )
+    assert not any("being discarded" in message for message in messages), (
+        f"the bypass claimed a loss that did not happen: {messages}"
+    )
+
+    await _shutdown(store)
