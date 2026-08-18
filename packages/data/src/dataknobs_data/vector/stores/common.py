@@ -30,6 +30,53 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def _flush_to_disk(path: str) -> None:
+    """Force ``path``'s contents out of the page cache before it is published.
+
+    ``os.replace`` is atomic with respect to *readers*, not with respect
+    to power loss: on a journalled filesystem the rename metadata can
+    reach the disk while the data it names has not, leaving a truncated
+    file that has already replaced a known-good one. The whole point of
+    staging is that a failure leaves the previous state intact, and
+    without this the guarantee stops at process death.
+
+    Best-effort by design. A filesystem that refuses ``fsync`` on a
+    read-only descriptor is not a reason to fail a save that has
+    otherwise succeeded.
+    """
+    try:
+        fd = os.open(path, os.O_RDONLY)
+    except OSError:
+        return
+    try:
+        os.fsync(fd)
+    except OSError:
+        logger.debug("Could not fsync %s before publishing it", path)
+    finally:
+        os.close(fd)
+
+
+def _flush_directory(published_path: str) -> None:
+    """Force the *rename* durable, having forced the contents durable.
+
+    A file's own ``fsync`` says nothing about the directory entry
+    pointing at it, so a crash can lose the rename while keeping the
+    data. Not available on every platform — Windows cannot open a
+    directory as a file — so failure here is expected rather than
+    exceptional.
+    """
+    try:
+        fd = os.open(os.path.dirname(published_path) or ".", os.O_RDONLY)
+    except OSError:
+        return
+    try:
+        os.fsync(fd)
+    except OSError:
+        logger.debug("Could not fsync the directory holding %s", published_path)
+    finally:
+        os.close(fd)
+
+
 POST_FILTER_OVERFETCH = 4
 """Candidates fetched per requested row when a post-filter follows.
 
@@ -807,12 +854,18 @@ class VectorStoreBase(StructuredConfigConsumer[VectorStoreConfig]):
                 tmp = self._scratch_sibling(final_path)
                 created.append(tmp)
                 write(tmp)
+                _flush_to_disk(tmp)
                 self._carry_mode(tmp, final_path)
                 staged.append((tmp, final_path))
             for tmp, final_path in staged:
                 os.replace(tmp, final_path)
                 published.append(final_path)
             staged.clear()
+            if published:
+                # One entry per directory, and in practice one directory:
+                # a store's files are siblings, and the rename is only
+                # atomic because the scratch is too.
+                _flush_directory(published[0])
         finally:
             # Emptied above exactly when every rename landed, so a
             # non-empty ``staged`` here *is* the failure signal.

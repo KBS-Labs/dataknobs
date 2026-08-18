@@ -26,7 +26,9 @@ Reviewing those fixes found more, covered below:
 
 * a ``write`` that raises leaked the scratch file it had already
   created, which unique names turned from self-healing into unbounded,
-* a scratch file left by a killed process was never swept.
+* a scratch file left by a killed process was never swept,
+* a published file was not ``fsync``ed before the rename that publishes
+  it, so staging survived a crashed process but not a power cut.
 """
 
 from __future__ import annotations
@@ -34,6 +36,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import os
 import threading
 from pathlib import Path
 from typing import Any
@@ -390,5 +393,47 @@ async def test_a_dead_writer_s_scratch_file_is_swept_on_the_next_save(
 
     assert not await asyncio.to_thread(orphan.exists), "an orphaned scratch file survived a save"
     assert await asyncio.to_thread(persist.exists), "the save itself did not land"
+
+    await _shutdown(store)
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+async def test_a_publish_flushes_the_file_and_the_rename(
+    backend: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Staging survives a crash; without ``fsync`` it does not survive power loss.
+
+    ``os.replace`` is atomic against readers, not against a power cut: on
+    a journalled filesystem the rename metadata can land while the data
+    it names has not, leaving a truncated file that has *already*
+    replaced a known-good one — the one outcome staging exists to
+    prevent.
+
+    Durability is not observable from a test, so this asserts the
+    syscall. ``os.fsync`` is replaced with a real recording function
+    rather than a mock: the inodes it captures are checked against the
+    published file and its directory, so the test pins *what* was
+    flushed and not merely that something was.
+    """
+    persist = tmp_path / "shared.idx"
+    store = await _open(_base(backend), persist)
+    await _ingest(store, "row", 3, seed=1)
+
+    real_fsync = os.fsync
+    flushed: list[int] = []
+
+    def recording_fsync(fd: int) -> None:
+        flushed.append(os.fstat(fd).st_ino)
+        real_fsync(fd)
+
+    monkeypatch.setattr(os, "fsync", recording_fsync)
+    await store.save()
+    monkeypatch.undo()
+
+    file_ino, dir_ino = await asyncio.to_thread(
+        lambda: (persist.stat().st_ino, tmp_path.stat().st_ino)
+    )
+    assert file_ino in flushed, "the published file was never flushed to disk"
+    assert dir_ino in flushed, "the rename that published it was never flushed"
 
     await _shutdown(store)

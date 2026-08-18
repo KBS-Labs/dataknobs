@@ -359,6 +359,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   mid-save is swept by the next save of that target, under the lock that
   guarantees no live writer owns it.
 
+- **A published file is flushed before the rename that publishes it.**
+  `os.replace` is atomic against a concurrent reader but not against
+  power loss: on a journalled filesystem the rename metadata can reach
+  the disk while the data it names has not, leaving a truncated file
+  that has already replaced a known-good one. The file and the directory
+  entry are now both `fsync`ed, so staging protects against a power cut
+  and not only against a crashed process.
+
 - **`save(force=True)` returned silently.** It is a deliberate
   destructive bypass of the staleness check, and it is now logged at
   `WARNING` every time, saying whether anything was actually discarded
