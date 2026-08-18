@@ -155,7 +155,7 @@ CASE_IDS = [f"case{i + 1}" for i in range(len(FOUR_QUADRANT_CASES))]
     ]
 )
 async def any_vector_store(
-    request: pytest.FixtureRequest, pgvector_config: dict[str, Any]
+    request: pytest.FixtureRequest,
 ) -> AsyncIterator[Any]:
     """Yield a freshly-seeded VectorStore for each backend param."""
     backend = request.param
@@ -172,7 +172,7 @@ async def any_vector_store(
             }
         )
     elif backend == "pgvector":
-        store = PgVectorStore(pgvector_config)
+        store = PgVectorStore(request.getfixturevalue("pgvector_config"))
     else:
         pytest.fail(f"Unknown backend param: {backend}")
 
@@ -242,7 +242,7 @@ TYPE_SAFETY_METADATA: list[dict[str, Any]] = [
     ]
 )
 async def type_safety_store(
-    request: pytest.FixtureRequest, pgvector_config: dict[str, Any]
+    request: pytest.FixtureRequest,
 ) -> AsyncIterator[Any]:
     """Two-record store for type-roundtrip cases."""
     backend = request.param
@@ -259,7 +259,7 @@ async def type_safety_store(
             }
         )
     elif backend == "pgvector":
-        store = PgVectorStore(pgvector_config)
+        store = PgVectorStore(request.getfixturevalue("pgvector_config"))
     else:
         pytest.fail(f"Unknown backend param: {backend}")
 
@@ -357,7 +357,7 @@ def _domain_scoped_metadata() -> list[dict[str, Any]]:
     ]
 )
 async def domain_scoped_store(
-    request: pytest.FixtureRequest, pgvector_config: dict[str, Any]
+    request: pytest.FixtureRequest,
 ) -> AsyncIterator[Any]:
     """Store configured with ``domain_id="t1"``, seeded across t1/t2."""
     backend = request.param
@@ -375,7 +375,9 @@ async def domain_scoped_store(
             }
         )
     elif backend == "pgvector":
-        store = PgVectorStore({**pgvector_config, "domain_id": "t1"})
+        store = PgVectorStore(
+            {**request.getfixturevalue("pgvector_config"), "domain_id": "t1"}
+        )
     else:
         pytest.fail(f"Unknown backend param: {backend}")
 
@@ -1030,7 +1032,7 @@ def _topk_query() -> np.ndarray:
     ]
 )
 async def topk_store(
-    request: pytest.FixtureRequest, pgvector_config: dict[str, Any]
+    request: pytest.FixtureRequest,
 ) -> AsyncIterator[Any]:
     """Store seeded with a corpus larger than the ``k`` used below."""
     backend = request.param
@@ -1047,7 +1049,7 @@ async def topk_store(
             }
         )
     elif backend == "pgvector":
-        store = PgVectorStore(pgvector_config)
+        store = PgVectorStore(request.getfixturevalue("pgvector_config"))
     else:
         pytest.fail(f"Unknown backend param: {backend}")
 

@@ -112,7 +112,7 @@ def _seed_vectors() -> np.ndarray:
     ]
 )
 async def any_vector_store(
-    request: pytest.FixtureRequest, pgvector_config: dict[str, Any]
+    request: pytest.FixtureRequest,
 ) -> AsyncIterator[Any]:
     """Yield a freshly-seeded VectorStore for each backend param."""
     backend = request.param
@@ -129,7 +129,7 @@ async def any_vector_store(
             }
         )
     elif backend == "pgvector":
-        store = PgVectorStore(pgvector_config)
+        store = PgVectorStore(request.getfixturevalue("pgvector_config"))
     else:
         pytest.fail(f"Unknown backend param: {backend}")
 

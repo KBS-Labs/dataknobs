@@ -119,7 +119,7 @@ def _seed_vectors() -> np.ndarray:
 
 def _make_store(
     backend: str,
-    pgvector_config: dict[str, Any],
+    request: pytest.FixtureRequest,
     *,
     extra_config: dict[str, Any] | None = None,
 ) -> Any:
@@ -128,6 +128,14 @@ def _make_store(
     Shared by every parametrized store fixture so backend wiring lives
     in one place. ``extra_config`` is merged into the store config
     (used by the timestamp tests to request ``datetime`` format).
+
+    Takes the *request* rather than a resolved ``pgvector_config`` so
+    the pgvector fixture is reached only on the pgvector param. As an
+    ordinary fixture parameter it bound every param to a live
+    PostgreSQL — pytest resolves parameters before the body chooses a
+    branch — and ``wait_for_postgres`` raises after its retry window
+    instead of skipping, so the three service-free backends stalled and
+    then ERRORed at setup wherever no server was running.
     """
     extra = extra_config or {}
     if backend == "memory":
@@ -143,7 +151,7 @@ def _make_store(
             }
         )
     if backend == "pgvector":
-        return PgVectorStore({**pgvector_config, **extra})
+        return PgVectorStore({**request.getfixturevalue("pgvector_config"), **extra})
     pytest.fail(f"Unknown backend param: {backend}")
 
 
@@ -164,11 +172,11 @@ def _make_store(
     ]
 )
 async def any_vector_store(
-    request: pytest.FixtureRequest, pgvector_config: dict[str, Any]
+    request: pytest.FixtureRequest,
 ) -> AsyncIterator[Any]:
     """Yield a freshly-seeded VectorStore for each backend param."""
     backend = request.param
-    store = _make_store(backend, pgvector_config)
+    store = _make_store(backend, request)
     await store.initialize()
     try:
         await store.add_vectors(_seed_vectors(), ids=list(SEED_IDS), metadata=_seed_metadata())
@@ -195,7 +203,7 @@ async def any_vector_store(
     ]
 )
 async def ts_vector_store(
-    request: pytest.FixtureRequest, pgvector_config: dict[str, Any]
+    request: pytest.FixtureRequest,
 ) -> AsyncIterator[Any]:
     """Freshly-seeded store, in ``datetime`` timestamp format.
 
@@ -208,7 +216,7 @@ async def ts_vector_store(
     backend = request.param
     store = _make_store(
         backend,
-        pgvector_config,
+        request,
         extra_config={"timestamps": {"format": "datetime"}},
     )
     await store.initialize()
@@ -599,13 +607,13 @@ async def test_faiss_timestamps_survive_save_load(tmp_path: Any) -> None:
     ]
 )
 async def empty_vector_store(
-    request: pytest.FixtureRequest, pgvector_config: dict[str, Any]
+    request: pytest.FixtureRequest,
 ) -> AsyncIterator[Any]:
     """Initialized-but-unseeded store, so the test owns the exact
     metadata dict passed to ``add_vectors`` (the aliasing subject).
     """
     backend = request.param
-    store = _make_store(backend, pgvector_config)
+    store = _make_store(backend, request)
     await store.initialize()
     try:
         yield store

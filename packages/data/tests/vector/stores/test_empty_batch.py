@@ -84,7 +84,7 @@ def pgvector_config(make_pgvector_test_table: Any) -> Iterator[dict[str, Any]]:
     ]
 )
 async def empty_store(
-    request: pytest.FixtureRequest, pgvector_config: dict[str, Any]
+    request: pytest.FixtureRequest,
 ) -> AsyncIterator[Any]:
     """An initialized, empty store for each backend."""
     backend = request.param
@@ -98,7 +98,7 @@ async def empty_store(
             {"dimensions": 4, "collection_name": f"test_empty_batch_{uuid.uuid4().hex[:8]}"}
         )
     elif backend == "pgvector":
-        store = PgVectorStore(pgvector_config)
+        store = PgVectorStore(request.getfixturevalue("pgvector_config"))
     else:
         pytest.fail(f"Unknown backend param: {backend}")
 
