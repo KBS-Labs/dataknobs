@@ -43,6 +43,7 @@ from dataknobs_common.testing import (
     requires_real_postgres,
 )
 
+from dataknobs_data.vector.stores.common import POST_FILTER_OVERFETCH
 from dataknobs_data.vector.stores.memory import MemoryVectorStore
 
 if is_faiss_available():
@@ -457,27 +458,38 @@ async def test_config_domain_id_scopes_update_metadata_where(
 # larger than ``k`` and rows carrying another filter value sit nearer the
 # probe.
 #
-# The filter below is a scalar over scalar metadata, which Chroma
-# translates into its native ``where`` rather than a residual Python
-# post-filter. A shortfall here is therefore the truncate-then-filter
-# ordering and not the dilution bound of an over-fetched post-filter.
+# The decoy count is load-bearing and is not a round number by
+# accident. ``"group"`` is not declared in Chroma's
+# ``scalar_metadata_keys`` (which defaults to empty), so on that backend
+# the filter is a *residual Python post-filter*, not a pushed-down
+# ``where`` — and a post-filter is compensated for by over-fetching
+# ``k * POST_FILTER_OVERFETCH`` candidates. A corpus at or below that
+# window is one Chroma fetches entirely, so its post-filter never
+# dilutes and the case cannot fail there however the backend behaves.
+#
+# That is the same flaw as the one this section exists to fix, one level
+# up: a corpus small enough that the truncation under test is
+# unreachable. ``_TOPK_DECOYS`` therefore exceeds ``_TOPK_K *
+# POST_FILTER_OVERFETCH`` so that every backend has to look past its
+# first fetch to answer, and all four legs can fail.
 # ---------------------------------------------------------------------------
 
-_TOPK_DECOYS = 3
-_TOPK_TARGETS = 9
 _TOPK_K = 3
+_TOPK_DECOYS = _TOPK_K * POST_FILTER_OVERFETCH + 8
+_TOPK_TARGETS = 9
 
 
 def _topk_corpus() -> tuple[np.ndarray, list[str], list[dict[str, Any]]]:
-    """Twelve rows in which the three nearest the probe are excluded.
+    """A corpus whose every matching row sits outside the global top-k.
 
     Row ``i`` is ``[1, t, 0, 0]`` for an increasing ``t``, so similarity
     to the probe ``[1, 0, 0, 0]`` falls monotonically under every metric
-    these backends default to. The three ``group="other"`` rows take the
-    smallest ``t`` and so own the global top-3; the nine
-    ``group="target"`` rows follow in order.
+    these backends default to. The ``group="other"`` rows take the
+    smallest ``t`` and so own the whole leading window — including the
+    over-fetched one — and the ``group="target"`` rows follow in order.
     """
-    offsets = [0.01, 0.02, 0.03] + [0.1 * (i + 1) for i in range(_TOPK_TARGETS)]
+    offsets = [0.001 * (i + 1) for i in range(_TOPK_DECOYS)]
+    offsets += [0.1 * (i + 1) for i in range(_TOPK_TARGETS)]
     vectors = np.array([[1.0, t, 0.0, 0.0] for t in offsets], dtype=np.float32)
     ids = [f"other{i}" for i in range(_TOPK_DECOYS)]
     ids += [f"target{i}" for i in range(_TOPK_TARGETS)]

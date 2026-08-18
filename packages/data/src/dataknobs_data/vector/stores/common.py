@@ -506,14 +506,17 @@ class VectorStoreBase(StructuredConfigConsumer[VectorStoreConfig]):
         Without a post-filter the sequence is just ``k``: the index's
         own truncation is already exact and over-fetching is waste.
 
-        With one, the first size is ``k * POST_FILTER_OVERFETCH``. A
-        caller that knows how many rows exist to search passes
-        ``ceiling``; the sequence then doubles from there, capped at
-        ``ceiling`` and ending on it, so the caller can keep asking
-        until enough rows match or the corpus is exhausted. A caller
-        with no such bound — a store whose index is queried remotely,
-        and which cannot cheaply say how many rows a wider fetch would
-        even reach — gets the single over-fetched size and stops.
+        With one, the first size is ``k * POST_FILTER_OVERFETCH``. That
+        alone is a heuristic and not a bound: a filter matching fewer
+        than one candidate in ``POST_FILTER_OVERFETCH`` still
+        under-returns. A caller that can say how many rows exist to
+        search passes ``ceiling``; the sequence then doubles from there,
+        capped at ``ceiling`` and ending on it, so the caller keeps
+        asking until enough rows survive its filter or the corpus is
+        exhausted — at which point the answer is exact rather than
+        merely over-fetched. A caller that cannot cheaply establish that
+        bound omits ``ceiling`` and gets the single over-fetched size,
+        keeping the heuristic's shortfall.
 
         Args:
             k: Rows the caller asked for.

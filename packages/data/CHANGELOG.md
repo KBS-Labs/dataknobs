@@ -111,13 +111,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     produce the same size are indistinguishable, so this catches the
     common accident and is not a lock.
 
-- **The post-filter over-fetch multiplier is one shared policy.**
-  `ChromaVectorStore` held two hard-coded copies of `k * 4`; both now
-  come from `VectorStoreBase._overfetch_sizes`, with the same value and
-  the same behavior. `dataknobs_bots`' knowledge-layer over-fetch is
-  deliberately *not* merged into it — that one compensates for
-  tombstone visibility rather than for scope, and coupling them would
-  tie the knowledge layer's swap semantics to a store constant.
+- **A post-filtered Chroma search escalates its fetch instead of
+  settling for one over-fetch.** The multiplier is also now one shared
+  policy: `ChromaVectorStore` held two hard-coded copies of `k * 4`, and
+  both come from `VectorStoreBase._overfetch_sizes`. Where the caller
+  can bound the search — Chroma's `collection.count()` is native and
+  O(1) — the sequence doubles up to the whole collection rather than
+  stopping at the first size, so the answer becomes exact rather than
+  merely over-fetched. A sparse filter therefore costs several
+  round-trips plus one `count()`; declaring the key in
+  `scalar_metadata_keys` pushes the predicate down and avoids both.
+  `dataknobs_bots`' knowledge-layer over-fetch is deliberately *not*
+  merged into it — that one compensates for tombstone visibility rather
+  than for scope, and coupling them would tie the knowledge layer's swap
+  semantics to a store constant.
 
 - **`UserStateStoreConfig.backend` now defaults to `None`, not `"memory"`.**
   The typed default was forwarded unconditionally, so a config that named
@@ -195,6 +202,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   registration. It now raises a `ValueError` naming both.
 
 ### Fixed
+
+- **`ChromaVectorStore.search(filter=...)` under-returned for the same
+  reason, at a wider window.** A filter that cannot be pushed down is
+  applied in Python *after* Chroma has truncated to `n_results`, and
+  over-fetching a fixed `k * 4` only moves the threshold: a filter
+  matching fewer than one candidate in four still lost rows, and a
+  sparse one returned nothing at all while `count(filter=...)` reported
+  many matches. The fetch now escalates to the collection size, so a
+  filtered search returns a full `k` whenever `k` rows match. Note that
+  a filter is post-filtered *unless* its key is declared in
+  `scalar_metadata_keys`, which defaults to empty — so this was the
+  default path, not an unusual one.
+
+- **`ChromaVectorStore.search_documents()` scored every store as though
+  it were cosine.** The collection is created with `hnsw:space` from the
+  configured metric, so a store configured `euclidean`, `l2`,
+  `dot_product` or `inner_product` receives distances in that metric —
+  but this method applied `1 - distance` unconditionally, reporting
+  *negative* scores for any L2 distance above 1. `search()` had the
+  correct per-metric conversion all along; the two now share one, so
+  they cannot disagree again.
+
+- **`ChromaVectorStore.search()` and `get_vectors()` raised `TypeError`
+  on `include_timestamps`.** The argument is on the `VectorStore` ABC
+  and every other backend accepted it, so passing it broke exactly the
+  runtime backend swap the filter-semantics doc promises. Both accept it
+  now; because Chroma tracks no timestamps, the injected values are
+  `None` — the same answer the contract already defines for a pgvector
+  row from before the timestamp migration or a pickle written before
+  tracking existed.
 
 - **A failed `.meta` write left a FAISS store unloadable.** The index
   file and its side-car were each written directly over their targets,
