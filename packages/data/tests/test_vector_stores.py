@@ -11,7 +11,8 @@ import pytest
 
 from dataknobs_common.testing import is_chromadb_available, is_faiss_available
 from dataknobs_data.testing import vector as _vector, vectors as _vectors
-from dataknobs_data.vector.stores import VectorStoreFactory
+from dataknobs_data.backend_selection import register_backend
+from dataknobs_data.vector.stores import VectorStoreFactory, vector_backends
 from dataknobs_data.vector.stores.memory import MemoryVectorStore
 from dataknobs_data.vector.types import DistanceMetric
 
@@ -754,34 +755,62 @@ class TestVectorStoreFactory:
         assert isinstance(store, MemoryVectorStore)
         assert store.dimensions == 128
 
+    @pytest.mark.skipif(not FAISS_AVAILABLE_FOR_FACTORY, reason="faiss-cpu is not installed")
     def test_create_faiss_store(self):
         """Test creating Faiss vector store."""
+        from dataknobs_data.vector.stores.faiss import FaissVectorStore
+
         factory = VectorStoreFactory()
-        if not FAISS_AVAILABLE_FOR_FACTORY:
-            # Test that it raises the appropriate error when not installed
-            with pytest.raises(ValueError, match="Faiss backend requires faiss-cpu"):
-                factory.create(backend="faiss", dimensions=256, index_type="flat")
-        else:
-            # Test normal creation when installed
-            from dataknobs_data.vector.stores.faiss import FaissVectorStore
+        store = factory.create(backend="faiss", dimensions=256, index_type="flat")
+        assert isinstance(store, FaissVectorStore)
+        assert store.dimensions == 256
 
-            store = factory.create(backend="faiss", dimensions=256, index_type="flat")
-            assert isinstance(store, FaissVectorStore)
-            assert store.dimensions == 256
-
+    @pytest.mark.skipif(not CHROMA_AVAILABLE_FOR_FACTORY, reason="chromadb is not installed")
     def test_create_chroma_store(self):
         """Test creating Chroma vector store."""
-        factory = VectorStoreFactory()
-        if not CHROMA_AVAILABLE_FOR_FACTORY:
-            # Test that it raises the appropriate error when not installed
-            with pytest.raises(ValueError, match="Chroma backend requires chromadb"):
-                factory.create(backend="chroma", collection_name="test")
-        else:
-            # Test normal creation when installed
-            from dataknobs_data.vector.stores.chroma import ChromaVectorStore
+        from dataknobs_data.vector.stores.chroma import ChromaVectorStore
 
-            store = factory.create(backend="chroma", collection_name="test")
-            assert isinstance(store, ChromaVectorStore)
+        factory = VectorStoreFactory()
+        store = factory.create(backend="chroma", collection_name="test")
+        assert isinstance(store, ChromaVectorStore)
+
+    def test_creating_an_uninstalled_backend_says_what_to_install(self):
+        """Where the driver-absent half of the two tests above went.
+
+        Each used to carry an ``if not AVAILABLE:`` branch asserting the
+        store's own "Faiss backend requires faiss-cpu" text, raised from
+        ``_setup`` at construction. That branch never ran in CI, where
+        both drivers are installed -- so when registration began gating on
+        the driver, and the raise moved earlier to a message naming the
+        registration, nothing failed. The assertion was simply wrong
+        everywhere it could run.
+
+        Written against a backend of this test's own, registered through
+        the real registration path with a probe that reports its driver
+        missing. Withdrawing a *shipped* backend would have re-created the
+        original problem one layer along: it can only be withdrawn on a
+        machine that has it, so the driver-absent path would again run
+        only where the driver is present. A synthetic one is absent
+        everywhere, which is what makes this exercise every environment as
+        the paragraph above claims.
+        """
+        register_backend(
+            vector_backends,
+            "acme_store",
+            lambda: None,  # never called: the probe below reports it missing
+            metadata={
+                "description": "A backend this machine does not have",
+                "requires_module": "acme_sdk",
+                "requires_install": "pip install acme-sdk",
+            },
+            installed=lambda module: False,
+            override=True,
+        )
+        try:
+            with pytest.raises(ValueError, match="pip install acme-sdk"):
+                VectorStoreFactory().create(backend="acme_store", dimensions=256)
+        finally:
+            vector_backends.unregister("acme_store")
 
     def test_unknown_backend(self):
         """Test creating store with unknown backend."""

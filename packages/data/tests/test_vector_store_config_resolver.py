@@ -13,15 +13,36 @@ The resolver registered by ``dataknobs-data`` into the shared
 
 from __future__ import annotations
 
+from dataclasses import dataclass, field
+from typing import Any, ClassVar, Mapping
+
+import pytest
+
 import dataknobs_data.vector.stores  # noqa: F401 — eager resolver registration
+from dataknobs_data.backend_selection import register_backend
 from dataknobs_data.vector.stores import vector_backends
 from dataknobs_data.vector.stores.config import MemoryVectorStoreConfig
 
+from dataknobs_common.exceptions import ConfigurationError
 from dataknobs_common.structured_config import (
     SKIP_VALIDATION,
     StructuredConfig,
     config_registries,
 )
+
+
+@dataclass(frozen=True)
+class _HoldsAVectorStore(StructuredConfig):
+    """The smallest config that reaches the resolver through ``validate``.
+
+    Any config declaring a ``vector_store`` polymorphic section has this
+    shape; several ship in other packages, but a local one keeps this file
+    a test of the resolver rather than of whichever config it borrowed.
+    """
+
+    _polymorphic_fields: ClassVar[Mapping[str, str]] = {"vector_store": "vector_store"}
+
+    vector_store: dict[str, Any] = field(default_factory=dict)
 
 
 def _resolver():
@@ -36,12 +57,27 @@ def test_resolver_agrees_with_construction_registry_for_all_backends() -> None:
     # Drift guard: for every registered backend, the resolver must return
     # exactly the CONFIG_CLS the construction path reads off the store class,
     # so validation and construction can never resolve to different configs.
+    #
+    # Iterates `list_known_keys`, not `list_keys`: gating registration on the
+    # driver removes an uninstalled backend from the creatable set, which is
+    # exactly the set this guard was reading. It would have covered `faiss`
+    # on a machine with faiss-cpu and quietly stopped covering it on one
+    # without -- reporting a clean scan for a backend it was no longer
+    # looking at, in the environment where the resolver is most likely to be
+    # wrong about it.
     resolver = _resolver()
-    keys = vector_backends.list_keys()
+    keys = vector_backends.list_known_keys()
     assert keys, "expected at least the always-available memory backend"
     for key in keys:
         expected = getattr(vector_backends.get_factory(key), "CONFIG_CLS", None)
-        assert resolver({"backend": key}) is expected, f"drift for backend {key!r}"
+        resolved = resolver({"backend": key})
+        if expected is None:
+            # Known but not creatable here: no store class to read a schema
+            # off. Skipping is right; reporting the name as unrecognised is
+            # not.
+            assert resolved is SKIP_VALIDATION, f"drift for backend {key!r}"
+        else:
+            assert resolved is expected, f"drift for backend {key!r}"
 
 
 def test_resolver_defaults_to_memory() -> None:
@@ -52,6 +88,150 @@ def test_resolver_defaults_to_memory() -> None:
 def test_resolver_returns_none_for_unknown_backend() -> None:
     result = _resolver()({"backend": "pgvektor"})
     assert result is None
+
+
+class TestABackendThisMachineCannotBuild:
+    """Validating a config must not depend on the local install set.
+
+    Registration probes a backend's driver and declares the backend
+    unavailable when it is absent, which is what makes ``available`` mean
+    ``installed``. The resolver read the *creatable* set to answer a
+    question that is not about creatability, so on a machine without
+    ``faiss-cpu`` a perfectly good ``vector_store: {backend: faiss}``
+    section -- the one this project's own migration guide prints --
+    resolved to ``None`` and ``validate()`` reported it as matching no
+    known variant, telling the reader to go and check their spelling.
+
+    A static config is the same config everywhere. What differs is whether
+    *this* machine could build it, which is a question ``create()`` answers
+    at the point it matters, with a message naming the driver.
+    """
+
+    @staticmethod
+    def _withdrawn(backend: str):
+        """Withdraw a real backend exactly as a driverless machine does.
+
+        Through ``register_backend`` with a probe that reports the driver
+        missing -- not a hand-rolled ``declare_unavailable`` -- so the
+        aliases, the metadata and the type loader are wired the way real
+        registration wires them. Declaring it by hand instead described an
+        environment no machine is in, and the difference is load-bearing
+        here: the loader is what lets the resolver read a schema off a
+        backend it cannot build.
+
+        Uses the shipped registry rather than a double, because the
+        resolver reads that singleton and the bug was in how it read it.
+        """
+        store_cls = vector_backends.get_factory(backend)
+        if store_cls is None:
+            pytest.skip(f"{backend} is not installed here, so it cannot be withdrawn")
+        metadata = vector_backends.get_metadata(backend)
+        register_backend(
+            vector_backends,
+            backend,
+            lambda: store_cls,
+            metadata=metadata,
+            installed=lambda module: False,
+            override=True,
+        )
+        return store_cls, metadata
+
+    @staticmethod
+    def _restore(backend: str, store_cls, metadata) -> None:
+        vector_backends.register(backend, store_cls, metadata=metadata, override=True)
+
+    def test_its_config_section_is_not_reported_as_an_unknown_variant(self) -> None:
+        store_cls, metadata = self._withdrawn("faiss")
+        try:
+            assert _resolver()({"backend": "faiss"}) is not None, (
+                "a known backend whose driver is missing was reported as a typo"
+            )
+        finally:
+            self._restore("faiss", store_cls, metadata)
+
+    def test_its_section_resolves_to_the_same_schema_either_way(self) -> None:
+        """What ``validate()`` checks must not depend on the local install set.
+
+        The store module guards its driver behind a module-level flag, so
+        the class -- and the ``CONFIG_CLS`` on it -- is readable with the
+        driver absent. Resolving to :data:`SKIP_VALIDATION` here would make
+        the set of checks a config gets a property of the machine reading
+        it. (Today ``from_dict`` is permissive enough that both answers
+        reject the same configs; this pins *which* answer is given, so
+        tightening it later tightens it everywhere at once.)
+        """
+        with_driver = _resolver()({"backend": "faiss"})
+        store_cls, metadata = self._withdrawn("faiss")
+        try:
+            assert _resolver()({"backend": "faiss"}) is with_driver
+            assert with_driver is not SKIP_VALIDATION
+        finally:
+            self._restore("faiss", store_cls, metadata)
+
+    def test_a_backend_whose_module_cannot_import_is_skipped(self) -> None:
+        """The other idiom, and the case ``SKIP_VALIDATION`` is really for."""
+
+        def explode():
+            raise ImportError("No module named 'acme_sdk'")
+
+        register_backend(
+            vector_backends,
+            "acme_store",
+            explode,
+            metadata={"requires_module": "acme_sdk", "requires_install": "pip install acme"},
+            installed=lambda module: False,
+            override=True,
+        )
+        try:
+            assert _resolver()({"backend": "acme_store"}) is SKIP_VALIDATION
+        finally:
+            vector_backends.unregister("acme_store")
+
+    def test_a_backend_declared_without_metadata_is_not_reported_as_a_typo(self) -> None:
+        """Being known is the registry's own question, not truthy metadata.
+
+        ``declare_unavailable`` accepts ``metadata=None``, and the resolver
+        used to read metadata for truth to decide whether it recognised the
+        name -- so a consumer withdrawing their own backend without any got
+        it reported as a misspelling.
+        """
+        vector_backends.declare_unavailable("acme_store", reason="acme-sdk is not installed")
+        try:
+            assert _resolver()({"backend": "acme_store"}) is SKIP_VALIDATION
+        finally:
+            vector_backends.unregister("acme_store")
+
+    def test_a_real_typo_is_still_reported(self) -> None:
+        """The distinction only matters if the other half still works."""
+        store_cls, metadata = self._withdrawn("faiss")
+        try:
+            assert _resolver()({"backend": "fiass"}) is None
+        finally:
+            self._restore("faiss", store_cls, metadata)
+
+    def test_a_parent_config_holding_the_section_still_validates(self) -> None:
+        """End to end, through ``validate`` -- the consumer-visible failure.
+
+        The resolver is reached from a parent config that declares a
+        ``vector_store`` polymorphic section, which is where the wrong
+        answer became a ``ConfigurationError`` telling the reader to check
+        a discriminator that was correct. Declared here rather than
+        imported from a package that owns one, so this stays a test of the
+        resolver.
+        """
+        store_cls, metadata = self._withdrawn("faiss")
+        try:
+            _HoldsAVectorStore(vector_store={"backend": "faiss"}).validate()
+        finally:
+            self._restore("faiss", store_cls, metadata)
+
+    def test_a_parent_config_naming_a_typo_still_raises(self) -> None:
+        store_cls, metadata = self._withdrawn("faiss")
+        try:
+            with pytest.raises(ConfigurationError):
+                _HoldsAVectorStore(vector_store={"backend": "fiass"}).validate()
+        finally:
+            self._restore("faiss", store_cls, metadata)
 
 
 def test_registered_backend_without_config_cls_is_skipped() -> None:

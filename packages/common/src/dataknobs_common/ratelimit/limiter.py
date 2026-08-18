@@ -188,6 +188,12 @@ rate_limiter_backends: PluginRegistry[RateLimiter] = PluginRegistry(
     config_key_default="memory",
     not_found_kind="rate limiter backend",
     not_found_exception=ValueError,
+    default_warning=(
+        "No '%(config_key)s' key in this rate limiter config; falling back "
+        "to '%(key)s'. That default counts only what passes through this "
+        "process, so a deployment running N of them enforces N times the "
+        "configured rate against the service being protected."
+    ),
 )
 """Registry of named :class:`RateLimiter` factories.
 

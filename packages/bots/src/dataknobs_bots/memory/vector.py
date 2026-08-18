@@ -97,10 +97,12 @@ class VectorMemory(StructuredConfigConsumer[VectorMemoryConfig], Memory):
 
         from ..providers import build_embedding_config, create_embedding_provider
 
-        store_config: dict[str, Any] = {
-            "backend": self.config.backend,
-            "dimensions": self.config.dimension,
-        }
+        # ``backend`` forwarded only when the config named one, so an
+        # unnamed backend reaches the factory as an absent key rather than
+        # as this config's guess at what it should have been.
+        store_config: dict[str, Any] = {"dimensions": self.config.dimension}
+        if self.config.backend is not None:
+            store_config["backend"] = self.config.backend
         if self.config.collection is not None:
             store_config["collection_name"] = self.config.collection
         if self.config.persist_path is not None:

@@ -895,8 +895,15 @@ class _SkipValidation:
 #: arises for construction registries that accept bare-callable backends (no
 #: ``CONFIG_CLS`` to read): such a backend is valid and constructible, so
 #: rejecting its config at :meth:`StructuredConfig.validate` time would be a
-#: false positive. Skipping keeps ``validate`` fail-soft — the same posture it
-#: takes for an unregistered binding or an empty section — while preserving the
+#: false positive. It arises a second way, for registries whose plugins have
+#: optional drivers: a variant this installation cannot build *and* cannot
+#: import has no class to read a schema off, though it is a real variant and
+#: its section is not a typo. Whether a config is well-formed is a property
+#: of the config rather than of the machine checking it, so the discriminator
+#: is accepted and the fields go unchecked — the weaker of the two answers,
+#: and the only honest one when the schema is genuinely unreachable.
+#: Skipping keeps ``validate`` fail-soft — the same posture it takes for an
+#: unregistered binding or an empty section — while preserving the
 #: typo-catching ``None`` → raise path.
 SKIP_VALIDATION: _SkipValidation = _SkipValidation()
 
@@ -907,7 +914,8 @@ SKIP_VALIDATION: _SkipValidation = _SkipValidation()
 #: :meth:`StructuredConfig.validate` as a
 #: :class:`~dataknobs_common.exceptions.ConfigurationError`); or
 #: :data:`SKIP_VALIDATION` when the discriminator *is* recognized but exposes no
-#: typed config to check (skipped, not raised). Exported so a resolver function
+#: typed config to check -- because the variant has none, or because its class
+#: cannot be imported here (skipped, not raised). Exported so a resolver function
 #: can annotate its return without importing the private :class:`_SkipValidation`
 #: sentinel type.
 ConfigClassResolution = type[StructuredConfig] | _SkipValidation | None

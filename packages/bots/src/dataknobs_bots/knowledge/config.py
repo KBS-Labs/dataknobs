@@ -31,8 +31,14 @@ class RAGKnowledgeBaseConfig(StructuredConfig):
         vector_store: Vector-store config forwarded to
             ``VectorStoreFactory``. Required in practice; kept defaulted
             (empty dict) so the config is default-constructible for the
-            pre-built ``from_components`` path, with the missing-key
-            failure surfacing from the factory as it does today.
+            pre-built ``from_components`` path, which never reads it.
+            An empty section does *not* fail: the factory falls back to
+            an in-process store and reports having done so at WARNING,
+            naming the consequence (embeddings that vanish on restart).
+            That report is the only signal distinguishing "left to the
+            deployment" from "meant to be configured and was not", so a
+            config reaching ``_ainit`` without this section should expect
+            to see it.
         embedding: Nested embedding-provider config (preferred). Kept a
             raw mapping — embedder config is owned by ``dataknobs-llm``.
         embedding_provider: Legacy flat embedding-provider key.

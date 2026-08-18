@@ -54,6 +54,12 @@ event_bus_backends: PluginRegistry[EventBus] = PluginRegistry(
     config_key_default="memory",
     not_found_kind="event bus backend",
     not_found_exception=ValueError,
+    default_warning=(
+        "No '%(config_key)s' key in this event bus config; falling back to "
+        "'%(key)s'. That default delivers only to subscribers in this "
+        "process, so an event published here never reaches another process "
+        "and is lost entirely when this one restarts."
+    ),
 )
 """Registry of named :data:`EventBusFactory` callables.
 

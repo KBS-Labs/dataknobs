@@ -908,15 +908,25 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
         Returns:
             Tuple of ``(database, storage_mode)``.
         """
-        backend = cfg.get("backend", "memory")
-        if backend == "memory":
+        from dataknobs_data import is_default_backend
+        from dataknobs_data.backends import sync_backends
+
+        # Asked as one question rather than compared against a second
+        # spelling of the default. The absence is deliberately *not*
+        # reported here: a bank config naming no backend is asking for
+        # conversation-scoped storage, which is this method's documented
+        # default and the recommended answer -- not the "a config arrived
+        # empty" case the factory's WARNING exists for. Nothing is built
+        # through a factory on this branch, so there is no provenance to
+        # report either.
+        if is_default_backend(cfg, sync_backends):
             from dataknobs_data.backends.memory import SyncMemoryDatabase
 
             return SyncMemoryDatabase(), "inline"
         from dataknobs_data import database_factory
 
         backend_config = dict(cfg.get("backend_config", {}))
-        backend_config["backend"] = backend
+        backend_config["backend"] = cfg["backend"]
         backend_config.setdefault("table", bank_name)
         db = database_factory.create(**backend_config)
         db.connect()
@@ -969,10 +979,15 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
         """
         from ..memory.bank import MemoryBank
 
+        from dataknobs_data import is_default_backend
+        from dataknobs_data.backends import sync_backends
+
         for name, bank_dict in banks_data.items():
             cfg = self._bank_configs.get(name, {})
-            backend = cfg.get("backend", "memory")
-            if backend != "memory":
+            # Whether to build a db at all, which is the same question
+            # ``_create_bank_db`` asks on entry -- asked the same way, so
+            # the two cannot disagree about what counts as the default.
+            if not is_default_backend(cfg, sync_backends):
                 db, _mode = self._create_bank_db(name, cfg)
                 # The db is built by this wizard for the bank — owned.
                 self._banks[name] = MemoryBank.from_dict(bank_dict, db=db, owns_db=True)
@@ -1947,14 +1962,19 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
                         def_id, def_config
                     )
 
-                # Create database backend (default: in-memory for conversation scope)
-                db_backend = artifacts_config.get("backend", "memory")
-                if db_backend == "memory":
+                # Create database backend (default: in-memory for
+                # conversation scope). The absence is not reported, for the
+                # reason given in ``_create_bank_db``: conversation-scoped
+                # storage is what this config means by saying nothing.
+                from dataknobs_data import is_default_backend
+                from dataknobs_data.backends import async_backends
+
+                if is_default_backend(artifacts_config, async_backends):
                     artifact_db = AsyncMemoryDatabase()
                 else:
                     from dataknobs_data import async_database_factory
 
-                    artifact_db = async_database_factory.create(backend=db_backend)
+                    artifact_db = async_database_factory.create(backend=artifacts_config["backend"])
 
                 artifact_registry = ArtifactRegistry(
                     db=artifact_db,

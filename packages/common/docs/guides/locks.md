@@ -104,8 +104,15 @@ key→lock map reference-count evicted so it cannot grow unbounded.
 
 ```python
 lock = create_lock({"backend": "memory"})
-lock = create_lock({})  # equivalent — "memory" is the default
+lock = create_lock({})  # same lock, logged at WARNING
 ```
+
+The two build the same object, which is why the second is reported. An
+empty config is what a deployment is left with when its lock config is
+missing or resolves to nothing, and an in-process lock excludes only
+coroutines sharing this interpreter — every process acquires it
+independently and all of them believe they hold it. Naming the backend
+explicitly is what distinguishes choosing it from ending up with it.
 
 **Use when:**
 
@@ -408,7 +415,9 @@ See [Custom Backends](#custom-backends-plugin-registry) for usage.
 {"backend": "memory"}
 ```
 
-No additional keys. `{}` is equivalent — `"memory"` is the default.
+No additional keys. `{}` builds the same lock, and logs a WARNING saying
+so — see the In-Process section above for why the two are reported
+differently.
 
 ### Postgres Backend
 

@@ -1,15 +1,18 @@
 """Factory for creating vector store backends."""
 
-import logging
-import re
 from typing import Any
 
 from dataknobs_config import FactoryBase
 
+from dataknobs_data.backend_selection import (
+    available_backends,
+    backend_available,
+    backend_info,
+    select_backend,
+)
+
 from . import vector_backends
 from .base import VectorStore
-
-logger = logging.getLogger(__name__)
 
 
 class VectorStoreFactory(FactoryBase):
@@ -19,7 +22,9 @@ class VectorStoreFactory(FactoryBase):
     based on configuration, supporting specialized vector databases.
 
     Configuration Options:
-        backend (str): Backend type (faiss, chroma, memory)
+        backend (str): Backend type. ``get_available_backends()`` reports the
+            registered names; a config that omits the key falls back to
+            ``memory`` and says so at WARNING.
         dimensions (int): Vector dimensions (required for some backends)
         **kwargs: Backend-specific configuration options
 
@@ -51,32 +56,58 @@ class VectorStoreFactory(FactoryBase):
         Raises:
             ValueError: If backend type is not recognized or not available
         """
-        backend_type = config.pop("backend", "memory").lower()
+        backend_class, backend_type, options = select_backend(
+            config, vector_backends, kind="vector store"
+        )
 
-        logger.info("Creating vector store with backend: %s", backend_type)
-
-        # Get backend class from registry
-        backend_class = vector_backends.get_factory(backend_type)
-        if not backend_class:
-            available = vector_backends.list_keys()
-            raise ValueError(
-                f"Unknown backend type: {backend_type}. "
-                f"Available backends: {', '.join(sorted(set(available)))}"
-            )
-
-        # Create and return backend instance
         try:
-            return backend_class(config)
+            store: VectorStore = backend_class(options)
+            return store
         except ImportError as e:
-            # Convert ImportError to ValueError with expected format
-            # Extract package name from "pip install X" in error message
-            match = re.search(r"pip install ([\w-]+)", str(e))
-            if match:
-                package = match.group(1)
-                raise ValueError(f"{backend_type.capitalize()} backend requires {package}") from e
-            else:
-                # Fallback if pattern doesn't match
-                raise ValueError(f"Backend '{backend_type}' has missing dependencies") from e
+            # Unreachable for a built-in store: registration probes the
+            # declared driver, so a store missing its driver is refused by
+            # `select_backend` above with a message naming what to install.
+            # Kept for a backend registered out of band, which nothing
+            # probed -- the ValueError contract is what this factory
+            # promises, and an ImportError escaping it would break a caller
+            # catching what the docstring says.
+            #
+            # The reason travels on `__cause__` rather than being scraped
+            # out of the text. This used to regex the store's own message
+            # for "pip install X" and rebuild it as "Faiss backend requires
+            # faiss-cpu", which is a second phrasing of what
+            # `select_backend` now says for the same condition -- and one
+            # that silently degraded to "has missing dependencies" whenever
+            # the pattern did not match.
+            raise ValueError(
+                f"The vector store registered as '{backend_type}' could not be "
+                f"constructed: a module it needs is not installed ({type(e).__name__})."
+            ) from e
+
+    def get_available_backends(self) -> list[str]:
+        """List the vector store backends this factory can create.
+
+        Returns:
+            Sorted canonical names. Registration aliases are collapsed, so a
+            backend appears once however many spellings ``create`` accepts.
+        """
+        return available_backends(vector_backends)
+
+    def is_backend_available(self, backend_type: str) -> bool:
+        """Whether a vector store backend can be created here.
+
+        Every store in this package defers its driver's ``ImportError`` to
+        construction, so registration probes the declared driver instead --
+        which is what makes this the guard the documentation describes
+        rather than a restatement of "is the name known".
+
+        Args:
+            backend_type: Backend name or registration alias
+
+        Returns:
+            True when ``create(backend=backend_type)`` can resolve it.
+        """
+        return backend_available(vector_backends, backend_type)
 
     def get_backend_info(self, backend_type: str) -> dict[str, Any]:
         """Get information about a specific backend.
@@ -87,14 +118,7 @@ class VectorStoreFactory(FactoryBase):
         Returns:
             Dictionary with backend information from registry metadata
         """
-        # PluginRegistry handles case normalization via canonicalize_keys
-        if not vector_backends.is_registered(backend_type):
-            return {
-                "description": "Unknown backend",
-                "error": f"Backend '{backend_type}' not recognized",
-            }
-
-        return vector_backends.get_metadata(backend_type)
+        return backend_info(vector_backends, backend_type)
 
 
 # Create singleton instance for registration

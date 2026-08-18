@@ -2374,16 +2374,15 @@ class AsyncLLMProvider(LLMProvider, ConfigOverrideMixin):
             most_similar_idx = np.argmax(similarities)
             print(f"Most similar: {texts[most_similar_idx]}")
             # => Most similar: Machine learning uses statistical methods
-
-            # Store in vector database
-            from dataknobs_data import database_factory
-            db = database_factory.create("vector_db")
-            for text, emb in zip(texts, embeddings):
-                db.create({"text": text, "embedding": emb})
             ```
 
         See Also:
             complete: Text generation method
+            dataknobs_data.vector.stores.VectorStoreFactory: Persisting the
+                vectors this returns. Named rather than demonstrated: an
+                example of another package's API in this docstring is one
+                nothing here compiles or tests, and the one that used to sit
+                below had drifted into three separate errors.
         """
         pass
 

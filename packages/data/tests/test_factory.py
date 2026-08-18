@@ -201,18 +201,12 @@ class TestFactoryEdgeCases:
         db = factory.create()  # No backend specified
         assert isinstance(db, SyncMemoryDatabase)
 
-    def test_backend_with_missing_dependencies(self):
-        """Test helpful error when backend dependencies missing."""
-        factory = DatabaseFactory()
-
-        # Mock the import to raise ImportError
-        with patch.object(factory, "create") as mock_create:
-            mock_create.side_effect = ValueError(
-                "PostgreSQL backend requires psycopg2. "
-                "Install with: pip install dataknobs-data[postgres]"
-            )
-            with pytest.raises(ValueError, match="PostgreSQL backend requires psycopg2"):
-                factory.create(backend="postgres", host="localhost")
+    # The missing-dependency error is covered in test_backend_availability.py
+    # (`test_selecting_it_says_what_to_install_rather_than_reporting_a_typo`),
+    # against a registry built with the driver genuinely absent. What stood
+    # here patched `factory.create` and asserted on the message the patch had
+    # just been told to raise -- a string that appears nowhere in any package
+    # source, then or now.
 
     def test_factory_singleton(self):
         """Test that database_factory is a singleton."""

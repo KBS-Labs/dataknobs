@@ -44,7 +44,9 @@ With Caching:
 """
 
 import asyncio
+import copy
 import inspect
+import logging
 import threading
 import time
 from collections.abc import Iterator
@@ -54,7 +56,9 @@ from typing import (
     Dict,
     Generic,
     List,
+    NamedTuple,
     Protocol,
+    Sequence,
     TypeVar,
     runtime_checkable,
 )
@@ -65,8 +69,49 @@ from dataknobs_common.exceptions import (
     OperationError,
 )
 
+logger = logging.getLogger(__name__)
+
+#: Text for :meth:`PluginRegistry.create` when the routing key was absent
+#: and ``config_key_default`` supplied it, logged at **DEBUG**. Generic on
+#: purpose, and quiet on purpose: it can only report that a guess happened,
+#: which is worth recording and is not worth interrupting anyone for.
+#:
+#: A registry that can say what its own fallback *costs* passes
+#: ``default_warning`` instead and is reported at WARNING. Every registry
+#: with a consequential default should; a registry whose default is the
+#: recommended answer should not, because a documented config omits that key
+#: deliberately and a warning on it is a warning on correct usage.
+DEFAULT_KEY_WARNING = (
+    "No '%(config_key)s' key in this %(registry)s config; falling back to "
+    "'%(key)s'. A config that names no %(config_key)s is indistinguishable "
+    "from one that asks for the default, so this is reported rather than "
+    "assumed."
+)
+
 T = TypeVar("T")
 T_co = TypeVar("T_co", covariant=True)
+
+
+class Unavailable(NamedTuple):
+    """Why a known key cannot be created, and which key describes it.
+
+    ``describes_key`` is the spelling whose metadata answers for this one.
+    It is the key itself for a canonical declaration and the canonical key
+    for an alias, which is what lets ``get_metadata(follow_alias=True)``
+    work for a plugin that has no factory to group by.
+
+    ``type_loader`` imports the plugin's class on demand, for the callers
+    that want to *read* something off it rather than build it. It is not a
+    factory and is deliberately not stored as one: ``is_registered`` has to
+    keep meaning "creatable", and this plugin is not. Kept lazy because the
+    usual reason a plugin is unavailable is that importing its module is
+    expensive or unwise, and the introspecting caller is rarer than the
+    ones who only wanted to know the plugin exists.
+    """
+
+    reason: str
+    describes_key: str
+    type_loader: Callable[[], Any] | None = None
 
 
 @runtime_checkable
@@ -863,6 +908,7 @@ class PluginRegistry(Generic[T]):
         on_first_access: Callable[["PluginRegistry[T]"], None] | None = None,
         not_found_kind: str | None = None,
         not_found_exception: type[Exception] = NotFoundError,
+        default_warning: str | None = None,
     ):
         """Initialize plugin registry.
 
@@ -898,6 +944,23 @@ class PluginRegistry(Generic[T]):
                 ``DataknobsError`` classes are called with the message
                 only (no ``context=`` kwarg) since stdlib exceptions
                 would crash on the unknown keyword.
+            default_warning: What this registry's fallback costs, logged at
+                WARNING by ``create()`` / ``create_async()`` when the
+                routing key was absent from config and
+                ``config_key_default`` supplied it. Interpolated with
+                ``%(config_key)s``, ``%(key)s`` and ``%(registry)s``.
+
+                Pass this when the default has a consequence someone needs
+                to act on -- an in-process lock that coordinates nothing, a
+                bus whose events reach nobody, an unpersisted store that
+                loses everything on restart -- because the generic sentence
+                cannot say what went wrong.
+
+                Leave it ``None`` when the default is simply the
+                recommended answer. The fallback is then recorded at DEBUG
+                using :data:`DEFAULT_KEY_WARNING`, so the provenance is
+                still there without warning anyone about a config written
+                the way the documentation writes it.
         """
         self._name = name
         #: Every factory is invoked as ``factory(key, config)``, so the stored
@@ -919,8 +982,38 @@ class PluginRegistry(Generic[T]):
         self._initializer = on_first_access
         self._initialized = on_first_access is None
         self._metadata: Dict[str, Dict[str, Any]] = {}
+        #: Keys this registry knows about but cannot create, each mapped
+        #: to its reason and to the key whose metadata describes it. Kept
+        #: apart from ``_factories`` so ``is_registered`` keeps meaning
+        #: "creatable", while ``get_metadata`` can still answer the one
+        #: question that is only ever asked while the answer is unavailable:
+        #: what would I have to install?
+        self._unavailable: Dict[str, Unavailable] = {}
         self._not_found_kind = not_found_kind
         self._not_found_exception = not_found_exception
+        #: ``None`` means this registry claims no consequence for its own
+        #: default, so the fallback is recorded at DEBUG rather than WARNING.
+        #: Not defaulted to :data:`DEFAULT_KEY_WARNING` here: doing so made
+        #: every registry with a ``config_key_default`` warn, including six
+        #: whose default is the recommended answer and whose documented
+        #: configs therefore omit the key on purpose.
+        self._default_warning = default_warning
+        if default_warning is not None:
+            # Interpolated lazily by `logging` against a dict, so a literal
+            # `%` in consumer-supplied text is a format spec to the handler
+            # and raises there -- inside logging, at the first fallback,
+            # long after the registry was built and only on the branch
+            # nobody exercises. Proved here instead, where the text is
+            # authored: an authoring fault is fatal at authoring time.
+            try:
+                default_warning % {"config_key": "k", "key": "v", "registry": "r"}
+            except (ValueError, KeyError, TypeError) as exc:
+                raise ValueError(
+                    f"default_warning for registry {name!r} is not a valid "
+                    f"%-format template: {exc}. Placeholders are "
+                    f"%(config_key)s, %(key)s and %(registry)s; a literal "
+                    f"percent sign must be written %%."
+                ) from exc
 
     def _check_validate_type(self, key: str, instance: Any) -> None:
         """Reject a factory result that is not the registered type.
@@ -976,9 +1069,19 @@ class PluginRegistry(Generic[T]):
             # raises leaves those keys behind; because we reset _initialized
             # below, the next access re-runs the populator from the top and
             # hits "already registered", masking the real error.
+            #
+            # Every piece of state a populator can reach belongs here, not
+            # every dict: `_unavailable` was added to the class without being
+            # added to this list, so an abandoned run's marks outlived the
+            # metadata that explained them, and `_default_factory` -- which
+            # `set_default_factory` lets a populator replace -- was missed for
+            # the same reason one scope wider. Naming the invariant as *state*
+            # is what stops the next attribute from being missed too.
             factories_snapshot = dict(self._factories)
             instances_snapshot = dict(self._instances)
             metadata_snapshot = dict(self._metadata)
+            unavailable_snapshot = dict(self._unavailable)
+            default_factory_snapshot = self._default_factory
             self._initialized = True
             try:
                 self._initializer(self)  # type: ignore[misc]
@@ -991,6 +1094,9 @@ class PluginRegistry(Generic[T]):
                 self._instances.update(instances_snapshot)
                 self._metadata.clear()
                 self._metadata.update(metadata_snapshot)
+                self._unavailable.clear()
+                self._unavailable.update(unavailable_snapshot)
+                self._default_factory = default_factory_snapshot
                 self._initialized = False
                 raise
 
@@ -1074,31 +1180,131 @@ class PluginRegistry(Generic[T]):
             if metadata is not None:
                 self._metadata[key] = metadata
 
+            # A key that was declared unavailable is creatable again. The two
+            # states are exclusive, so registering clears the mark rather than
+            # leaving the order of the two calls to decide the outcome.
+            self._unavailable.pop(key, None)
+
             # Clear cached instance if overriding
             if key in self._instances:
                 del self._instances[key]
 
-    def unregister(self, key: str) -> None:
-        """Unregister a plugin.
+    def declare_unavailable(
+        self,
+        key: str,
+        *,
+        metadata: Dict[str, Any] | None = None,
+        reason: str,
+        aliases: Sequence[str] = (),
+        type_loader: Callable[[], Any] | None = None,
+    ) -> None:
+        """Record a plugin this registry knows of but cannot create.
+
+        A plugin behind an optional dependency has three states, not two:
+        creatable, absent because the dependency is missing, and absent
+        because the name is a typo. A registry holding only ``_factories``
+        conflates the last two, so the one question worth asking about an
+        uninstalled plugin -- what would I install? -- had no answer,
+        because the metadata carrying it went unregistered along with the
+        factory.
+
+        Declaring the key keeps its metadata reachable while leaving
+        :meth:`is_registered` and :meth:`list_keys` meaning "creatable", so
+        nothing that asks what it can build sees a plugin it cannot.
 
         Args:
-            key: Key to unregister
+            key: Plugin identifier.
+            metadata: Metadata to attach, as :meth:`register` takes. This is
+                what makes ``requires_install`` readable while the plugin is
+                uninstalled.
+            reason: Why it cannot be created here, in a sentence a caller
+                can act on -- ``create()`` raises this instead of reporting
+                an unknown key.
+            aliases: Other accepted spellings of the same plugin, withdrawn
+                with it and answering with its metadata. Declared here
+                rather than by the caller repeating the call, because
+                :meth:`get_metadata`'s ``follow_alias`` groups by shared
+                factory and an unavailable plugin has none -- so a caller
+                that could not say "these are the same plugin" had to copy
+                the metadata under every spelling to keep
+                ``requires_install`` reachable.
+            type_loader: Imports and returns the plugin's class, for
+                :meth:`load_declared_type`. Supply it when the class is
+                importable even though the plugin is not creatable -- a
+                backend whose module guards its optional driver behind a
+                flag, for instance -- so a caller reading a typed schema
+                off the class is not forced to keep its own second copy of
+                the key-to-class mapping. Omit it when importing the module
+                is exactly what fails.
 
-        Raises:
-            NotFoundError: If key not registered
+        Example:
+            ```python
+            registry.declare_unavailable(
+                "postgres",
+                metadata={"requires_install": "pip install ...[postgres]"},
+                reason="psycopg2 is not installed",
+                aliases=("pg", "postgresql"),
+            )
+            ```
         """
         self._ensure_initialized()
         key = self._canon(key)
 
         with self._lock:
-            if key not in self._factories:
+            if metadata is not None:
+                self._metadata[key] = metadata
+            for spelling in (key, *(self._canon(alias) for alias in aliases)):
+                self._factories.pop(spelling, None)
+                self._instances.pop(spelling, None)
+                self._unavailable[spelling] = Unavailable(reason, key, type_loader)
+
+    def unregister(self, key: str) -> None:
+        """Unregister a plugin, or drop a key declared unavailable.
+
+        Both states are things this registry knows about, so both are
+        things it can be told to forget. Removing only the creatable half
+        left a key that :meth:`list_known_keys` reported and nothing could
+        withdraw: :meth:`register` was the only way to clear a mark, which
+        made "forget this" reachable only by first supplying a factory.
+
+        Args:
+            key: Key to unregister. Unregistering a canonical key also
+                drops the unavailable marks that named it as their
+                describing key, because those marks answer with metadata
+                that is being removed here -- leaving them would strand a
+                key that :meth:`list_known_keys` still reports, whose
+                ``requires_install`` has just become ``{}``. An alias
+                unregistered on its own drops only itself.
+
+        Raises:
+            NotFoundError: If the key is neither registered nor declared
+                unavailable -- that is, if the registry has never heard of
+                it at all.
+        """
+        self._ensure_initialized()
+        key = self._canon(key)
+
+        with self._lock:
+            if key not in self._factories and key not in self._unavailable:
                 raise NotFoundError(
                     f"Plugin not found: {key}",
                     context={"key": key, "registry": self._name},
                 )
 
-            del self._factories[key]
+            self._factories.pop(key, None)
+            self._unavailable.pop(key, None)
             self._metadata.pop(key, None)
+
+            # An unavailable alias carries no metadata of its own -- it
+            # answers through `describes_key`, which is the key being
+            # dropped here. Withdrawing them together is what keeps
+            # "a mark cannot outlive the metadata that explains it" true
+            # in the one direction `declare_unavailable(aliases=...)` made
+            # reachable.
+            for spelling, declared in list(self._unavailable.items()):
+                if declared.describes_key == key:
+                    del self._unavailable[spelling]
+                    self._instances.pop(spelling, None)
 
             # Clear cached instance
             if key in self._instances:
@@ -1458,6 +1664,10 @@ class PluginRegistry(Generic[T]):
 
         - Explicit ``key``, or extraction from ``config[config_key]``
           (falling back to ``config_key_default``).
+        - Reporting a key that came from the default rather than from the
+          config — at WARNING for a registry that declared what its
+          fallback costs, at DEBUG otherwise. See
+          :meth:`_report_key_defaulted`.
         - Optional stripping of the routing key from ``config`` when
           ``strip_config_key`` is set.
         - Key canonicalization and factory lookup.
@@ -1465,7 +1675,8 @@ class PluginRegistry(Generic[T]):
         Returns the resolved factory, the canonical key (for error
         context), and the possibly key-stripped config. Raises
         ``ValueError`` (unresolvable key) or ``self._not_found_exception``
-        (unknown key — :class:`NotFoundError` by default; opt-in via the
+        (unknown key, or a key declared unavailable —
+        :class:`NotFoundError` by default; opt-in via the
         ``not_found_exception`` ctor kwarg) directly — both callers
         invoke this *before* their factory-invocation ``try`` so these
         propagate unwrapped, matching the historical contract.
@@ -1476,12 +1687,20 @@ class PluginRegistry(Generic[T]):
         if key is None:
             if self._config_key is None:
                 raise ValueError("key is required when config_key is not configured")
-            resolved = (config or {}).get(self._config_key, self._config_key_default)
-            if resolved is None:
+            if self._config_key in (config or {}):
+                key = (config or {})[self._config_key]
+            else:
+                key = self._config_key_default
+                # Reported before the lookup, so a config that names nothing
+                # *and* resolves to nothing still says which of the two
+                # happened. Guarded on the default having been used at all:
+                # a registry with no default raises below instead.
+                if key is not None:
+                    self._report_key_defaulted(key)
+            if key is None:
                 raise ValueError(
                     f"config must contain '{self._config_key}' (no default configured)"
                 )
-            key = resolved
 
             # Strip the routing key from config before passing to factory
             if self._strip_config_key and config is not None:
@@ -1492,7 +1711,15 @@ class PluginRegistry(Generic[T]):
         with self._lock:
             if key not in self._factories:
                 available = sorted(self._factories.keys())
-                if self._not_found_kind is not None:
+                if key in self._unavailable:
+                    # Known, but not creatable here. Reporting it as unknown
+                    # sends the reader looking for a typo in a name that is
+                    # spelled correctly.
+                    message = (
+                        f"{self._not_found_kind or 'Plugin'} '{key}' is not "
+                        f"available here: {self._unavailable[key].reason}"
+                    )
+                elif self._not_found_kind is not None:
                     message = (
                         f"Unknown {self._not_found_kind}: {key}. "
                         f"Available backends: {', '.join(available)}"
@@ -1511,8 +1738,38 @@ class PluginRegistry(Generic[T]):
                 raise exc_cls(message)
             return self._factories[key], key, config
 
+    def _report_key_defaulted(self, key: str) -> None:
+        """Report that nothing in the config chose ``key``.
+
+        An absent routing key and an explicit one naming the same value
+        produce the same object, which is exactly what made the difference
+        invisible: the only place the distinction still exists is here,
+        between reading the config and resolving the name.
+
+        The level says whose problem it is. A registry that passed
+        ``default_warning`` is claiming its fallback has a consequence
+        someone needs to act on -- a lock coordinating nothing, a bus
+        whose events reach nobody -- and gets WARNING. One that passed
+        nothing has a default that is the recommended answer, so the
+        omission is ordinary and the record belongs at DEBUG, where it is
+        still there for whoever goes looking.
+        """
+        context = {
+            "config_key": self._config_key,
+            "key": key,
+            "registry": self._name,
+        }
+        if self._default_warning is None:
+            logger.debug(DEFAULT_KEY_WARNING, context)
+        else:
+            logger.warning(self._default_warning, context)
+
     def list_keys(self) -> List[str]:
         """List all registered plugin keys.
+
+        Every accepted spelling is reported, aliases included — this is the
+        lookup surface. For one name per plugin, see
+        :meth:`list_canonical_keys`.
 
         Returns:
             List of registered keys
@@ -1521,6 +1778,135 @@ class PluginRegistry(Generic[T]):
 
         with self._lock:
             return list(self._factories.keys())
+
+    def list_known_keys(self) -> List[str]:
+        """Every key this registry knows of, creatable or not.
+
+        :meth:`list_keys` answers "what can I build?"; this answers "what
+        does this registry know about?", which for a registry using
+        :meth:`declare_unavailable` is the larger set.
+
+        Returns:
+            Sorted keys, including those declared unavailable.
+        """
+        self._ensure_initialized()
+
+        with self._lock:
+            return sorted(set(self._factories) | set(self._unavailable))
+
+    def is_known(self, key: str) -> bool:
+        """Whether this registry has heard of ``key`` at all.
+
+        :meth:`is_registered` answers "can I build this?"; this answers
+        "do I recognise the name?", which is the larger set once
+        :meth:`declare_unavailable` is in use. The two differ exactly over
+        the plugins whose driver is missing, which is the case a caller
+        distinguishing a typo from an uninstalled backend needs -- asking
+        it via truthy metadata instead gets the answer wrong for a plugin
+        declared without any.
+
+        Args:
+            key: Key to check. Aliases are accepted.
+
+        Returns:
+            True if the key is registered or declared unavailable.
+        """
+        self._ensure_initialized()
+        key = self._canon(key)
+
+        with self._lock:
+            return key in self._factories or key in self._unavailable
+
+    def load_declared_type(self, key: str) -> type | None:
+        """The class of a plugin that cannot be created here, if reachable.
+
+        For a caller that wants to *read* something off the class -- a
+        typed config schema, a docstring, a class attribute -- without
+        building the plugin. Deliberately separate from
+        :meth:`get_factory`, which returns ``None`` here and must keep
+        doing so: a declared-unavailable plugin is not creatable, and a
+        caller reaching for a factory means to create.
+
+        Whether the class is reachable is discovered rather than assumed.
+        A plugin whose module guards its optional driver behind a flag
+        imports fine without it; one whose module imports the driver at
+        top level does not, and that is the case this returns ``None`` for
+        rather than propagating. Either way the caller gets a definite
+        answer instead of having to model the two idioms itself.
+
+        Args:
+            key: Key to look up. Aliases are accepted.
+
+        Returns:
+            The class, or ``None`` if the key is not declared unavailable,
+            was declared without a ``type_loader``, or its module cannot be
+            imported here after all.
+        """
+        self._ensure_initialized()
+        key = self._canon(key)
+
+        with self._lock:
+            declared = self._unavailable.get(key)
+        if declared is None or declared.type_loader is None:
+            return None
+
+        # Outside the lock: the loader imports a module, which runs
+        # arbitrary top-level code and can re-enter this registry.
+        try:
+            loaded = declared.type_loader()
+        except ImportError as exc:
+            logger.debug(
+                "Plugin '%s' in %s is declared unavailable and its class "
+                "cannot be imported either: %s",
+                key,
+                self._name,
+                exc,
+            )
+            return None
+        return loaded if isinstance(loaded, type) else None
+
+    def list_canonical_keys(self) -> List[str]:
+        """Registered keys with aliases collapsed, one name per plugin.
+
+        A registry lists every spelling it accepts, so three aliases for one
+        plugin read as three plugins. That is right for the lookup
+        :meth:`list_keys` serves and wrong for a list shown to someone
+        choosing between plugins.
+
+        Keys sharing a factory form one group, and the name reported is the
+        one carrying metadata — the convention this package registers by,
+        the canonical key taking the metadata and its aliases taking none. A
+        group where no key has metadata reports its first-registered key, so
+        a registration following a different convention still yields one
+        name per plugin rather than an error.
+
+        Two genuinely distinct plugins deliberately registered against the
+        same factory are one group by this rule, and report one name while
+        both stay creatable. Register distinct plugins against distinct
+        factories to keep them distinct here.
+
+        Returns:
+            Sorted canonical keys, one per registered plugin.
+        """
+        self._ensure_initialized()
+
+        with self._lock:
+            # Grouped under one lock rather than by re-reading through
+            # get_factory: a concurrent unregister between the listing and
+            # the lookups would drop keys into a group keyed on None.
+            groups: Dict[int, List[str]] = {}
+            for key, factory in self._factories.items():
+                # Keyed by identity rather than by the factory itself: a
+                # registered callable need not be hashable, and the registry
+                # holds a reference to every one of them for as long as this
+                # dict lives, so an id cannot be reused underneath us.
+                groups.setdefault(id(factory), []).append(key)
+
+            names = []
+            for keys in groups.values():
+                described = [key for key in keys if self._metadata.get(key)]
+                names.append(described[0] if described else keys[0])
+            return sorted(names)
 
     def clear_cache(self, key: str | None = None) -> None:
         """Clear cached instances.
@@ -1553,20 +1939,55 @@ class PluginRegistry(Generic[T]):
         with self._lock:
             return self._factories.get(key)
 
-    def get_metadata(self, key: str) -> Dict[str, Any]:
-        """Get metadata for a registered plugin.
+    def get_metadata(self, key: str, *, follow_alias: bool = False) -> Dict[str, Any]:
+        """Get metadata for a plugin, registered or declared unavailable.
 
         Args:
             key: Plugin identifier.
+            follow_alias: When the key itself carries no metadata, answer
+                with the metadata of a key sharing its factory. An alias is
+                registered without metadata of its own, so asking about
+                ``pg`` otherwise returns an empty dict while every other
+                question about it answers for postgres. Opt-in, because the
+                historical shape is "metadata stored against this key".
 
         Returns:
-            Metadata dict, or empty dict if no metadata stored.
+            A deep copy of the metadata, or an empty dict if none stored.
+            Copied all the way down: a shallow copy hands back the live
+            nested dicts, so a caller reading ``config_options`` and
+            editing it changed what every later caller saw.
         """
         self._ensure_initialized()
         key = self._canon(key)
 
         with self._lock:
-            return dict(self._metadata.get(key, {}))
+            metadata = self._metadata.get(key)
+            if not metadata and follow_alias:
+                metadata = self._aliased_metadata(key)
+            return copy.deepcopy(metadata) if metadata else {}
+
+    def _aliased_metadata(self, key: str) -> Dict[str, Any] | None:
+        """Metadata of another spelling of ``key``'s plugin, if any has some.
+
+        Two ways to be another spelling, because the two states record the
+        relationship differently. A creatable alias shares its canonical
+        key's factory, which is what identifies the group. An unavailable
+        one has no factory to share, so :meth:`declare_unavailable` names
+        the describing key outright.
+
+        Caller holds the lock.
+        """
+        declared = self._unavailable.get(key)
+        if declared is not None:
+            return self._metadata.get(declared.describes_key)
+
+        factory = self._factories.get(key)
+        if factory is None:
+            return None
+        for other, candidate in self._factories.items():
+            if candidate is factory and self._metadata.get(other):
+                return self._metadata[other]
+        return None
 
     @property
     def cached_instances(self) -> Dict[str, T]:
@@ -1656,6 +2077,14 @@ __all__ = [
     "AsyncRegistry",
     "BackendRegistry",
     "CachedRegistry",
+    # Both are part of the `declare_unavailable` / `default_warning`
+    # surface: `Unavailable` is what `PluginRegistry` records for a
+    # withdrawn plugin and is named in its docstrings, and
+    # `DEFAULT_KEY_WARNING` is the text a registry falls back to at DEBUG.
+    # Referenced from public documentation, so exported rather than
+    # reachable only by knowing the module layout.
+    "DEFAULT_KEY_WARNING",
     "PluginRegistry",
     "Registry",
+    "Unavailable",
 ]

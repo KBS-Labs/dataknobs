@@ -128,7 +128,12 @@ class VectorMemoryConfig(StructuredConfig):
     # slated for removal, and without a ``provider`` discriminator to resolve on.
     _polymorphic_fields: ClassVar[Mapping[str, str]] = {"embedding": "embedding"}
 
-    backend: str = "memory"
+    #: ``None`` means the config named no backend, which the factory
+    #: reports. Spelling the default here instead sent every config that
+    #: omitted the key to the factory as an explicit choice, so an
+    #: unpersisted vector store -- one that loses every embedding on
+    #: restart -- was indistinguishable from one that was asked for.
+    backend: str | None = None
     dimension: int = 1536
     collection: str | None = None
     persist_path: str | None = None

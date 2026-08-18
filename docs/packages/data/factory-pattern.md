@@ -26,6 +26,30 @@ pg_db = factory.create(backend="postgres", host="localhost", database="myapp")
 s3_db = factory.create(backend="s3", bucket="my-bucket")
 ```
 
+### When no backend is named
+
+Every example above names a backend. A config that does not is still valid —
+it falls back to `memory` — but the factory says so at **WARNING** rather than
+letting the fallback pass unremarked:
+
+```
+No 'backend' key in this database config; falling back to 'memory'. That
+default is in-process and unpersisted -- it answers every query with zero
+results until something writes to it, and loses everything when the process
+restarts. If this config came from resolving a resource reference, check that
+the named resource is defined in this environment.
+```
+
+An explicit `backend="memory"` is logged at INFO instead. The two build the
+same object, and the level is the only thing that distinguishes a store
+somebody chose from one left over from a config that arrived empty — most
+often a `$resource` reference to a resource the environment does not define,
+which resolves to `{}` unless it is
+[declared required](../config/environment-aware.md#4-missing-resources).
+
+The same applies to `AsyncDatabaseFactory` and `VectorStoreFactory`, which
+share one selector.
+
 ## Configuration-Based Creation
 
 ### Using Config Files
@@ -88,7 +112,9 @@ db = config.get_instance("databases", "main")
 
 ## Backend Information API
 
-Query available backends and their requirements:
+Query available backends and their requirements. All three factories —
+`DatabaseFactory`, `AsyncDatabaseFactory` and `VectorStoreFactory` — answer
+the same three questions about their own registry:
 
 ```python
 factory = DatabaseFactory()
@@ -96,7 +122,7 @@ factory = DatabaseFactory()
 # Get all available backends
 backends = factory.get_available_backends()
 print(f"Available backends: {backends}")
-# Output: ['memory', 'file', 'postgres', 'elasticsearch', 's3']
+# Output: ['duckdb', 'elasticsearch', 'file', 'memory', 'postgres', 's3', 'sqlite']
 
 # Get information about a specific backend
 info = factory.get_backend_info("s3")
@@ -105,8 +131,13 @@ print(info)
 #     'description': 'AWS S3 object storage backend',
 #     'persistent': True,
 #     'requires_install': 'pip install dataknobs-data[s3]',
-#     'required_params': ['bucket'],
-#     'optional_params': ['prefix', 'region', 'endpoint_url', ...]
+#     'requires_module': 'boto3',
+#     'vector_support': False,
+#     'config_options': {
+#         'bucket': 'S3 bucket name (required)',
+#         'prefix': 'Object key prefix (default: records/)',
+#         ...
+#     },
 # }
 
 # Check if backend is available
@@ -114,7 +145,54 @@ if factory.is_backend_available("postgres"):
     db = factory.create(backend="postgres", **config)
 else:
     print("PostgreSQL backend not available")
-    print("Install with: pip install dataknobs-data[postgres]")
+    print(factory.get_backend_info("postgres")["requires_install"])
+    # Install with: pip install dataknobs-data[postgres]
+```
+
+**Available means installed.** Registration probes the driver a backend
+declares in `requires_module`, so a registered name is one whose optional
+dependency is actually present. `is_backend_available("postgres")` is
+therefore the check to make before offering it.
+
+That probe is what makes the answer trustworthy, because the backends do
+not agree among themselves about when to fail. Some import their driver at
+module top level, so a missing driver fails the import; others catch their
+own `ImportError` and raise only when you construct one. Asking whether the
+module loaded would answer honestly for the first group and optimistically
+for the second — `is_backend_available("faiss")` would return `True` on a
+machine without `faiss-cpu`, and `create()` would then raise.
+
+**A backend that is missing still describes itself.** `requires_install` is
+only ever read by someone who does not have the backend installed, so a
+backend whose driver is absent stays *known* rather than disappearing:
+`get_backend_info(...)` answers for it, and `create()` reports the missing
+driver rather than an unrecognised name.
+
+```python
+# On a machine without psycopg2:
+factory.is_backend_available("postgres")           # False
+"postgres" in factory.get_available_backends()     # False
+factory.get_backend_info("postgres")["requires_install"]
+# 'pip install dataknobs-data[postgres]'
+
+factory.create(backend="postgres", host="localhost")
+# ValueError: Backend 'postgres' is known but not available here.
+#             Install with: pip install dataknobs-data[postgres]
+```
+
+**The reported list names each backend once.** `create()` accepts
+registration aliases — `pg` and `postgresql` for postgres, `es` for
+elasticsearch, `mem` for memory, `chromadb` for chroma — but
+`get_available_backends()` reports the canonical name alone, so it is a list
+of backends rather than a list of spellings. `is_backend_available()` and
+`get_backend_info()` still answer for an alias, so every question about `pg`
+agrees with the same question about `postgres`.
+
+An unknown name is reported rather than raised:
+
+```python
+factory.get_backend_info("no-such-backend")
+# {'description': 'Unknown backend', 'error': "Backend 'no-such-backend' not recognized"}
 ```
 
 ## Dynamic Backend Selection
@@ -233,30 +311,62 @@ class CustomDatabase(Database):
         # Implement clear
         pass
 
-# Register with factory
-factory = DatabaseFactory()
-factory.register_backend("custom", CustomDatabase)
+# Register with the registry the factory reads.
+#
+# Registration is not a factory method: the factory reads a registry, it
+# does not own one. `register_backend` populates that registry and probes
+# the driver named by `requires_module` before registering, which is what
+# keeps `is_backend_available()` an answer about this machine rather than
+# about the name.
+from dataknobs_data import register_backend
+from dataknobs_data.backends import sync_backends
+
+register_backend(
+    sync_backends,
+    "custom",
+    lambda: CustomDatabase,
+    metadata={
+        "description": "A custom backend",
+        "persistent": True,
+        # Omit both when the backend needs no optional dependency; a
+        # backend without `requires_module` always registers.
+        "requires_install": "pip install my-driver",
+        "requires_module": "my_driver",
+    },
+)
 
 # Now you can create instances
+factory = DatabaseFactory()
 custom_db = factory.create(backend="custom", **config)
 ```
 
 ## Error Handling
 
-The factory provides helpful error messages:
+A missing driver raises `ValueError`, not `ImportError` — the backend is
+refused before construction, by the registry lookup rather than by the
+backend's own import:
 
 ```python
 try:
-    # Try to create backend with missing dependency
+    # A backend whose optional driver is not installed here
     db = factory.create(backend="postgres", host="localhost")
-except ImportError as e:
-    print(f"Missing dependency: {e}")
-    print("Install with: pip install dataknobs-data[postgres]")
 except ValueError as e:
-    print(f"Invalid configuration: {e}")
-except Exception as e:
-    print(f"Failed to create backend: {e}")
+    print(e)
+    # Backend 'postgres' is known but not available here.
+    # Install with: pip install dataknobs-data[postgres]
 ```
+
+The message already carries the install command, so there is nothing to
+reconstruct from the exception type. A name the registry does not know at
+all reads differently, and deliberately so:
+
+```python
+factory.create(backend="postgrez")
+# ValueError: Unknown backend type: postgrez.
+# Available backends: duckdb, elasticsearch, file, memory, postgres, s3, sqlite
+```
+
+Catching `ImportError` around `create()` catches nothing.
 
 ## Testing with Factory
 

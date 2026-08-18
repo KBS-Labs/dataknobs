@@ -5,6 +5,13 @@ from typing import Any
 
 from dataknobs_config import FactoryBase
 
+from dataknobs_data.backend_selection import (
+    available_backends,
+    backend_available,
+    backend_info,
+    build_backend,
+    select_backend,
+)
 from dataknobs_data.backends import async_backends, sync_backends
 from dataknobs_data.database import SyncDatabase
 
@@ -15,6 +22,18 @@ from dataknobs_data.vector.stores.factory import VectorStoreFactory
 logger = logging.getLogger(__name__)
 
 
+def _async_backend_unavailable(backend_type: str, available: str) -> str:
+    """An unrecognised async backend usually exists, without an async variant.
+
+    Different enough from "you typed it wrong" to be worth its own sentence,
+    which is why the async factory does not share the default text.
+    """
+    return (
+        f"Backend '{backend_type}' does not support async operations yet. "
+        f"Available async backends: {available}"
+    )
+
+
 class DatabaseFactory(FactoryBase):
     """Factory for creating database backends dynamically.
 
@@ -22,7 +41,9 @@ class DatabaseFactory(FactoryBase):
     based on configuration, supporting all available backends.
 
     Configuration Options:
-        backend (str): Backend type (memory, file, postgres, elasticsearch, s3)
+        backend (str): Backend type. ``get_available_backends()`` reports the
+            registered names; a config that omits the key falls back to
+            ``memory`` and says so at WARNING.
         **kwargs: Backend-specific configuration options
 
     Example Configuration:
@@ -56,28 +77,38 @@ class DatabaseFactory(FactoryBase):
         Raises:
             ValueError: If backend type is not recognized or not available
         """
-        backend_type = config.pop("backend", "memory").lower()
+        backend_class, backend_type, options = select_backend(
+            config, sync_backends, kind="database"
+        )
+        database: SyncDatabase = build_backend(
+            backend_class, options, kind="database", backend_type=backend_type
+        )
+        return database
 
-        logger.info("Creating database with backend: %s", backend_type)
+    def get_available_backends(self) -> list[str]:
+        """List the backends this factory can create.
 
-        # Check if vector_enabled is set
-        vector_enabled = config.get("vector_enabled", False)
+        Returns:
+            Sorted canonical names. Registration aliases are collapsed, so a
+            backend appears once however many spellings ``create`` accepts.
+        """
+        return available_backends(sync_backends)
 
-        if vector_enabled:
-            # All backends now have vector support (some native, some via Python)
-            logger.debug("Vector support enabled for backend: %s", backend_type)
+    def is_backend_available(self, backend_type: str) -> bool:
+        """Whether a backend can be created under this installation.
 
-        # Get backend class from registry
-        backend_class = sync_backends.get_factory(backend_type)
-        if not backend_class:
-            available = sync_backends.list_keys()
-            raise ValueError(
-                f"Unknown backend type: {backend_type}. "
-                f"Available backends: {', '.join(sorted(set(available)))}"
-            )
+        Registration probes the backend's declared driver, so a registered
+        name is one whose optional dependency is present. A backend that is
+        known but uninstalled reports False here and still describes itself
+        through :meth:`get_backend_info`, including what to install.
 
-        # Create and return backend instance
-        return backend_class.from_config(config)
+        Args:
+            backend_type: Backend name or registration alias
+
+        Returns:
+            True when ``create(backend=backend_type)`` can resolve it.
+        """
+        return backend_available(sync_backends, backend_type)
 
     def get_backend_info(self, backend_type: str) -> dict[str, Any]:
         """Get information about a specific backend.
@@ -88,14 +119,7 @@ class DatabaseFactory(FactoryBase):
         Returns:
             Dictionary with backend information from registry metadata
         """
-        # PluginRegistry handles case normalization via canonicalize_keys
-        if not sync_backends.is_registered(backend_type):
-            return {
-                "description": "Unknown backend",
-                "error": f"Backend '{backend_type}' not recognized",
-            }
-
-        return sync_backends.get_metadata(backend_type)
+        return backend_info(sync_backends, backend_type)
 
 
 class AsyncDatabaseFactory(FactoryBase):
@@ -116,26 +140,50 @@ class AsyncDatabaseFactory(FactoryBase):
         Raises:
             ValueError: If backend doesn't support async operations
         """
-        backend_type = config.pop("backend", "memory").lower()
+        backend_class, backend_type, options = select_backend(
+            config,
+            async_backends,
+            kind="async database",
+            unknown_message=_async_backend_unavailable,
+        )
+        return build_backend(
+            backend_class, options, kind="async database", backend_type=backend_type
+        )
 
-        # Check if vector_enabled is set
-        vector_enabled = config.get("vector_enabled", False)
+    def get_available_backends(self) -> list[str]:
+        """List the backends this factory can create.
 
-        if vector_enabled:
-            # All backends now have vector support (some native, some via Python)
-            logger.debug("Vector support enabled for async backend: %s", backend_type)
+        Returns:
+            Sorted canonical names of the backends with an async variant.
+            Registration aliases are collapsed.
+        """
+        return available_backends(async_backends)
 
-        # Get backend class from registry
-        backend_class = async_backends.get_factory(backend_type)
-        if not backend_class:
-            available = async_backends.list_keys()
-            raise ValueError(
-                f"Backend '{backend_type}' does not support async operations yet. "
-                f"Available async backends: {', '.join(sorted(set(available)))}"
-            )
+    def is_backend_available(self, backend_type: str) -> bool:
+        """Whether a backend has an async variant under this installation.
 
-        # Create and return backend instance
-        return backend_class.from_config(config)
+        Two ways to be absent: no async variant exists, or its driver is
+        not installed. Both report False; :meth:`get_backend_info` tells
+        them apart, since only the second describes itself.
+
+        Args:
+            backend_type: Backend name or registration alias
+
+        Returns:
+            True when ``create(backend=backend_type)`` can resolve it.
+        """
+        return backend_available(async_backends, backend_type)
+
+    def get_backend_info(self, backend_type: str) -> dict[str, Any]:
+        """Get information about a specific async backend.
+
+        Args:
+            backend_type: Name of the backend
+
+        Returns:
+            Dictionary with backend information from registry metadata
+        """
+        return backend_info(async_backends, backend_type)
 
 
 # TODO: Add AsyncVectorStoreFactory when async vector stores are implemented

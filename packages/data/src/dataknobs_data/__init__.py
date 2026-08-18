@@ -24,17 +24,20 @@ Quick Examples:
     ```python
     from dataknobs_data import database_factory, Record, Query, Operator, Filter
 
-    # Create an in-memory database
-    db = database_factory("memory")
+    # Create an in-memory database. Naming the backend explicitly is what
+    # distinguishes choosing it from ending up with it: a config that names
+    # none still gets "memory", and says so at WARNING.
+    db = database_factory.create(backend="memory")
+    db.connect()
 
     # Add records
-    db.add(Record({"name": "Alice", "age": 30}))
-    db.add(Record({"name": "Bob", "age": 25}))
+    db.create(Record({"name": "Alice", "age": 30}))
+    db.create(Record({"name": "Bob", "age": 25}))
 
     # Query with filters
     query = Query(filters=[Filter("age", Operator.GT, 25)])
     results = db.search(query)
-    print(results)  # [Record with Alice's data]
+    print([record.data for record in results])  # [{'name': 'Alice', 'age': 30}]
     ```
 
     Use schemas for validation:
@@ -51,8 +54,9 @@ Quick Examples:
     )
 
     # Create database with schema
-    db = database_factory("memory", config={"schema": schema})
-    db.add(Record({"name": "Alice", "age": 30, "email": "alice@example.com"}))
+    db = database_factory.create(backend="memory", schema=schema)
+    db.connect()
+    db.create(Record({"name": "Alice", "age": 30, "email": "alice@example.com"}))
     ```
 
     Stream large datasets:
@@ -60,12 +64,13 @@ Quick Examples:
     ```python
     from dataknobs_data import database_factory, StreamConfig
 
-    db = database_factory("sqlite", config={"path": "large_data.db"})
+    db = database_factory.create(backend="sqlite", path="large_data.db")
+    db.connect()
 
-    # Stream records in batches
+    # Stream records, read in batches of the configured size
     config = StreamConfig(batch_size=100)
-    for batch in db.stream(config=config):
-        process_batch(batch.records)
+    for record in db.stream_read(config=config):
+        process(record)
     ```
 
 Design Philosophy:
@@ -103,6 +108,18 @@ from .exceptions import (
     RecordValidationError,
     SerializationError,
     TransactionError,
+)
+from .backend_selection import (
+    DEFAULT_BACKEND,
+    available_backends,
+    backend_available,
+    backend_info,
+    build_backend,
+    is_default_backend,
+    module_installed,
+    normalize_backend,
+    register_backend,
+    select_backend,
 )
 from .factory import AsyncDatabaseFactory, DatabaseFactory, async_database_factory, database_factory
 
@@ -206,6 +223,18 @@ __all__ = [
     "AsyncDatabaseFactory",
     "database_factory",
     "async_database_factory",
+    # Backend selection — the same helpers the factories above use, for a
+    # consumer holding a PluginRegistry of their own backends.
+    "DEFAULT_BACKEND",
+    "available_backends",
+    "backend_available",
+    "backend_info",
+    "build_backend",
+    "is_default_backend",
+    "module_installed",
+    "normalize_backend",
+    "register_backend",
+    "select_backend",
     # Validation and Migration modules
     "validation",
     "migration",

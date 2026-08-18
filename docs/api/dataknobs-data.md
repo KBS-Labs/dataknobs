@@ -109,12 +109,44 @@ Factory for creating database instances.
 
 ```python
 class DatabaseFactory(FactoryBase):
-    def create(self, **config) -> Database
-    def get_available_backends(self) -> List[str]
-    def get_backend_info(self, backend: str) -> Dict[str, Any]
-    def is_backend_available(self, backend: str) -> bool
-    def register_backend(self, name: str, backend_class: Type[Database]) -> None
+    def create(self, **config) -> SyncDatabase
+    def get_available_backends(self) -> list[str]
+    def get_backend_info(self, backend_type: str) -> dict[str, Any]
+    def is_backend_available(self, backend_type: str) -> bool
 ```
+
+Registration is not a factory method — backends live in the registry the
+factory reads, so a custom one is added there and every factory method
+picks it up:
+
+```python
+from dataknobs_data import register_backend
+from dataknobs_data.backends import sync_backends
+
+register_backend(
+    sync_backends,
+    "my_backend",
+    lambda: MyDatabase,          # imported on first use, not at registration
+    metadata={
+        "description": "Custom backend",
+        "persistent": True,
+        "requires_module": "my_driver",          # probed at registration
+        "requires_install": "pip install my-driver",
+    },
+    aliases=("mine",),
+)
+```
+
+`register_backend` probes the driver named by `requires_module` and, when
+it is absent, records the backend as *known but not creatable* instead of
+registering it. That is what keeps `is_backend_available()` an answer
+about this machine rather than about the name, and what lets `create()`
+say which driver to install rather than reporting the name as unknown.
+
+`sync_backends.register(...)` is the lower-level call underneath it. It
+skips the probe, so a backend registered that way reports as available
+whether or not its driver is installed — use it only for a backend with no
+optional dependency.
 
 **Example:**
 ```python

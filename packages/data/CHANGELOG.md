@@ -9,6 +9,63 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`get_available_backends()` and `is_backend_available()`** on
+  `DatabaseFactory`, `AsyncDatabaseFactory` and `VectorStoreFactory`. Three
+  documents described both as factory methods, so following any of them
+  raised `AttributeError`; the reference page's own "Backend Information API"
+  section showed all three calls while only `get_backend_info` existed.
+
+  Registration probes the driver each backend declares in its new
+  `requires_module` metadata, so *registered* means *installed*:
+  `is_backend_available("postgres")` is the check to make before offering a
+  backend, and `get_backend_info(...)["requires_install"]` is what to print
+  when it is absent.
+
+  The probe is what makes the answer trustworthy. Backends do not agree
+  among themselves about when to fail — `postgres`, `duckdb` and async
+  `sqlite` import their driver at module top level, while `faiss`, `chroma`,
+  `pgvector`, `s3` and async `elasticsearch` catch their own `ImportError`
+  and raise only on construction. Reading "did the module load?" would have
+  answered honestly for the first group and optimistically for the second.
+
+- **Backends stay described when their driver is missing.** A backend whose
+  driver is absent is recorded as known-but-unavailable rather than left out,
+  so `get_backend_info(...)["requires_install"]` answers in the one situation
+  it exists for — nobody reads it while the backend is installed — and
+  `create()` reports the missing driver instead of an unrecognised name.
+
+  `get_available_backends()` reports canonical names with registration
+  aliases collapsed — `postgres` once rather than `postgres`, `postgresql`
+  and `pg` — so it is a list of backends rather than a list of spellings.
+  The unknown-backend `ValueError` prints that same list, from the same call,
+  so the two cannot drift apart.
+
+- **`get_backend_info()` on `AsyncDatabaseFactory`**, which had none. The
+  other two factories carried it, so the async one answered two of the three
+  questions its siblings answer.
+
+- **`dataknobs_data.backend_selection`** — `DEFAULT_BACKEND`,
+  `select_backend()`, `available_backends()`, `backend_available()`,
+  `backend_info()`, `normalize_backend()`, `register_backend()`,
+  `build_backend()`, `module_installed()` and `is_default_backend()`, the
+  answers the three factories previously each held their own copy of.
+  All ten are re-exported
+  from `dataknobs_data`, so a consumer with a `PluginRegistry` of their own
+  backends gets the same provenance logging, the same alias collapsing and
+  the same availability probing without reimplementing any of it —
+  `module_installed` included, since `register_backend(installed=...)` takes
+  the probe as a parameter and wrapping the default one should not mean
+  reaching into a submodule. The module imports nothing from its own
+  package, so it is safe to import from anywhere in it.
+
+- **`AsyncDatabase.from_backend()` and `SyncDatabase.from_backend()` resolve
+  the way the factories do.** They held a fourth copy of the same four steps
+  and were not migrated with the other three, so a correctly spelled backend
+  whose driver is absent came back as `Unknown backend: postgres` — the
+  answer that sends the reader hunting for a typo in a name that is right.
+  They now report what to install, list canonical names rather than every
+  alias, and construct through `from_config()` like every other path.
+
 - **`dataknobs_data.testing`** — deterministic vector draws, for this package's
   tests and for consumers testing their own `VectorStore` implementations.
   `vectors(count, dim, seed=0)` returns a `(count, dim)` float32 array,
@@ -19,7 +76,117 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   seeds the process-global RNG, so a draw in one test cannot shift what any
   later test draws.
 
+### Changed
+
+- **`UserStateStoreConfig.backend` now defaults to `None`, not `"memory"`.**
+  The typed default was forwarded unconditionally, so a config that named
+  no backend reached the factory as an explicit choice and the absence was
+  consumed one frame above the only code positioned to report it — an
+  unpersisted store, silently, for a config whose author may only have
+  meant to leave the choice to the deployment. The key is now forwarded
+  only when the config names one. Code reading `config.backend` and
+  expecting a string must handle `None`, which means "not chosen here".
+
+
+- **A config with no `backend` key now logs at WARNING.** It was INFO — the
+  same line, naming the same backend, as an explicit `backend: memory` — and
+  on `AsyncDatabaseFactory` there was no line at all. The two are not the
+  same event. One is a deployment choosing an in-process store; the other is
+  what is left when a config arrives empty, and an empty config handed to a
+  factory does not fail. It produces a store that answers every query with
+  zero results and loses everything when the process restarts.
+
+  An explicit `backend: memory` is still INFO, which is what keeps the
+  WARNING meaning something. The object built is identical either way — that
+  identity is what made the difference invisible.
+
+- **`get_backend_info()` answers for an alias.** An alias carries no registry
+  metadata of its own, so asking about `pg` returned `{}` while every other
+  question about it answered for postgres. It resolves to the key describing
+  the same backend.
+
+- **The unknown-backend `ValueError` lists canonical names**, where it
+  previously listed every registered spelling. The three lead sentences are
+  unchanged, including `AsyncDatabaseFactory`'s deliberately distinct one —
+  an unrecognised name there usually means the backend exists without an
+  async variant, which is worth saying differently from "you typed it wrong".
+
+- **Backend-selection log records now come from
+  `dataknobs_data.backend_selection`.** They were emitted by
+  `dataknobs_data.factory` and `dataknobs_data.vector.stores.factory`, so a
+  consumer routing or filtering by logger name needs to add the new one.
+
+- **`VectorStoreFactory.create()` reports a missing driver differently.** It
+  used to build the store, catch the `ImportError` the store raised from
+  `_setup`, regex the text for a `pip install X` and re-emit it as
+  `Faiss backend requires faiss-cpu` — degrading to `Backend 'faiss' has
+  missing dependencies` whenever that pattern did not match. A store whose
+  driver is absent is now refused before construction, with the same
+  `ValueError` the database factories raise:
+  `Backend 'faiss' is known but not available here. Install with: pip
+  install faiss-cpu`. Code matching the old text needs updating; code
+  catching `ValueError` does not.
+
+- **A `vector_store` section naming an uninstalled backend still validates.**
+  `StructuredConfig.validate()` resolves the section's config class through
+  the same registry `create()` uses, so gating registration on the driver
+  made a valid `backend: faiss` section resolve to nothing on a machine
+  without `faiss-cpu` — reported as matching no known variant, which reads
+  as a misspelled discriminator. Whether a config is well-formed does not
+  depend on which optional drivers the machine reading it happens to have.
+  A known backend that cannot be built here now skips validation of its
+  section; only an unregistered name is still an error.
+
+- **A `backend` key that is present but unusable says which way it is
+  unusable.** `backend: null`, `backend: ""` and a non-string all rendered
+  into `Unknown backend type: <value>`, which reads as a backend of that
+  name and sends the reader looking for a spelling mistake. `backend: null`
+  additionally raised `AttributeError` from the config-validation path,
+  where the construction path raised `ValueError` — the two read the config
+  through one function now, so they classify it identically. Names are
+  stripped and lowercased on both paths.
+
+- **A registered object that cannot be built from a config is reported as
+  such.** `PluginRegistry` accepts any callable, while the database
+  factories require the class form; a bare function reached
+  `.from_config` and raised `AttributeError: 'function' object …` from
+  inside the factory, naming nothing that would lead back to the
+  registration. It now raises a `ValueError` naming both.
+
 ### Fixed
+
+- **`is_default_backend()` reads the default's aliases when given a
+  registry.** Without one it compares names, so a config spelling the
+  default as `mem` read as naming something else and its caller took the
+  non-default branch — for a backend the factory resolves to the same
+  class. Pass the registry you would have built through wherever the
+  answer selects between code paths rather than between log lines; alias
+  identity is then the registry's answer rather than a second list here.
+
+- **`backend_info()` called a metadata-less backend unrecognised.** It read
+  metadata and treated a falsy result as "never heard of it", which is the
+  wrong answer for a backend declared unavailable without any —
+  `declare_unavailable` accepts `metadata=None`. The one state this
+  function exists to describe was reported as a typo. It now asks the
+  registry whether the name is known.
+
+- **A `vector_store` section for an uninstalled backend is checked against
+  its real schema where that schema is reachable.** The resolver returned
+  `SKIP_VALIDATION` for every backend whose driver was absent, which made
+  *which checks a config gets* a property of the machine reading it. Every
+  optional store here guards its driver behind a module-level flag and so
+  imports without it; the schema is read off that class, through the same
+  loader the construction path uses. `SKIP_VALIDATION` is now reserved for
+  a backend whose module genuinely cannot be imported. (No config changes
+  verdict today — `from_dict` is permissive enough that both answers accept
+  the same sections — so this pins the answer rather than tightening it.)
+
+
+- **The async `sqlite` backend recorded `requires_install: False`.** It is on
+  `aiosqlite`, which ships in the `sqlite` extra; only the sync variant is on
+  stdlib `sqlite3`. The two shared a metadata block that described the sync
+  one, so the async backend reported needing no installation while having a
+  driver that can be absent.
 
 - **`SyncPostgresDatabase.close()` closed nothing.** The body set
   `_connected = False` and carried a comment giving the reason — "PostgresDB

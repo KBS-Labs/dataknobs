@@ -9,6 +9,83 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`PluginRegistry.is_known()`** — whether the registry recognises a name
+  at all, which is the larger set once `declare_unavailable` is in use.
+  `is_registered()` answers "can I build this?"; the two differ exactly
+  over the plugins whose driver is missing. Callers distinguishing a typo
+  from an uninstalled backend were reaching for `get_metadata()` and
+  testing it for truth, which answers a different question and gets it
+  wrong for a plugin declared without any metadata — reporting it as a
+  misspelling, the one thing the declaration exists to prevent.
+
+- **`PluginRegistry.load_declared_type()`** and
+  **`declare_unavailable(type_loader=...)`** — the class of a plugin that
+  cannot be created here, imported on demand, for a caller that wants to
+  *read* something off it rather than build it. Deliberately not a
+  factory: `is_registered()` has to keep meaning "creatable". Whether the
+  class is reachable is discovered rather than assumed — a plugin guarding
+  its optional driver behind a module-level flag imports without it, one
+  importing the driver at top level does not, and the second case returns
+  `None` instead of propagating. Without this, a validator wanting a typed
+  schema off an uninstallable backend had to keep its own second
+  name-to-class table, which is the drift the registry exists to prevent.
+
+- **`PluginRegistry.declare_unavailable()`** — record a plugin the registry
+  knows of but cannot create. A plugin behind an optional dependency has
+  three states, not two: creatable, absent because the dependency is
+  missing, and absent because the name is a typo. A registry holding only
+  factories conflates the last two, so the one question worth asking about
+  an uninstalled plugin — what would I install? — had no answer, because
+  the metadata carrying it went unregistered along with the factory.
+
+  A declared key keeps its metadata reachable through `get_metadata()`
+  while `is_registered()` and `list_keys()` go on meaning *creatable*, so
+  nothing that asks what it can build sees a plugin it cannot. `create()`
+  raises the declared reason rather than reporting the name as unknown.
+  `register()` on the same key clears the mark, so the order of the two
+  calls does not decide the outcome, and `unregister()` drops a declared
+  key as readily as a registered one — both are things the registry knows,
+  so both are things it can be told to forget.
+
+  `aliases=` withdraws a plugin's other spellings with it and points them
+  at its metadata. `get_metadata(follow_alias=True)` groups by shared
+  factory, and an unavailable plugin has none — so without this the one
+  state in which `requires_install` is ever read was the one state in which
+  an alias could not reach it, and a caller had to copy the metadata dict
+  under every spelling to compensate.
+
+- **`PluginRegistry.list_canonical_keys()`** — registered keys with aliases
+  collapsed, one name per plugin. `list_keys()` reports every accepted
+  spelling, which is right for the lookup it serves and wrong for a list
+  shown to someone choosing between plugins. Keys sharing a factory form one
+  group, reported under the key carrying metadata.
+
+- **`PluginRegistry.list_known_keys()`** — every key the registry knows,
+  creatable or not.
+
+- **`PluginRegistry.get_metadata(key, follow_alias=True)`** — answer for a
+  key that carries no metadata of its own by resolving to one that shares
+  its factory. An alias is registered without metadata, so asking about it
+  returned `{}` while every other question about it answered for the
+  canonical name. Opt-in; the default keeps the historical shape.
+
+- **`PluginRegistry(default_warning=...)`** — what a registry's fallback
+  costs, logged at WARNING when the routing key was absent from config and
+  `config_key_default` supplied it. A registry whose default has
+  consequences should say what they are, because a generic sentence cannot:
+  the three that ship with one — a lock every process holds at once, a bus
+  whose events reach nobody, a rate limit enforced N times over — each say
+  their own.
+
+  Leaving it unset is the other half of the decision, not the absence of
+  one. Six registries here and in the packages above default to the
+  *recommended* answer — `simple` reasoning, `buffer` memory, `rag`
+  knowledge, `markdown_tree` chunking, `mapping` and `null` resolution —
+  and every documented config for those omits the key on purpose. Their
+  fallback is recorded at DEBUG, so the provenance is still there without
+  a warning fired on correct usage, per turn, drowning the three that mean
+  something.
+
 - **`requires_real_postgres`, `requires_real_postgres_sync`,
   `requires_real_elasticsearch`, `requires_real_s3` — a service gate that tests
   the three terms a behavioural suite actually depends on.** The existing
@@ -148,6 +225,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A populator that replaced the default factory before failing kept the
+  replacement.** `_ensure_initialized` rolls back so a retry starts clean,
+  but its snapshot was written as "every dict" and `_default_factory` is
+  not one — `set_default_factory()` is public and a populator holds the
+  registry. An abandoned run's default therefore survived, and the next
+  `create()` for an unregistered key silently succeeded off it. The
+  invariant is now stated as *state* rather than as dicts, which is what
+  had already been got wrong once when `_unavailable` was added.
+
+- **`unregister()` stranded the aliases of a withdrawn plugin.** An
+  unavailable alias carries no metadata of its own — it answers through
+  the canonical key, whose metadata `unregister()` removes. Dropping only
+  the named spelling left the aliases in `list_known_keys()`, answering
+  `{}` to the `requires_install` question that is the whole reason a
+  withdrawn plugin stays visible. They are now withdrawn with it; an alias
+  unregistered on its own still drops only itself.
+
+- **A literal `%` in `default_warning` raised inside `logging`.** The text
+  is interpolated lazily against a dict, so `"costs 50% of throughput"` is
+  a malformed format spec — failing at the first fallback, on the branch
+  nobody exercises, in a traceback naming neither the registry nor the
+  text. It is now rejected when the registry is constructed, with a
+  message naming the registry, the placeholders and the `%%` escape.
+
 - **The Ollama probes ask the service, not this machine.**
   `is_ollama_available()` and `is_ollama_model_available()` shelled out to the
   local `ollama` CLI and took no host or port, so no caller could aim them and
@@ -189,6 +290,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   about one service.
 
 ### Changed
+
+- **`PluginRegistry.create()` reports a routing key it supplied itself.** It
+  read `config[config_key]` with `config_key_default` as the fallback and
+  logged nothing at any level, so a config that named no backend and one
+  that named the default produced the same object with no way to tell them
+  apart. Ten registries share the construct. Three of them default to
+  `memory`, where the in-process variant is not a smaller version of the
+  real thing but a different thing that fails silently: `create_lock({})`
+  returned a lock every process holds at once, `create_rate_limiter` a limit
+  enforced once per process rather than once overall, and
+  `create_event_bus({})` a bus whose events reach nobody. Each of those
+  three now says what its own default costs. An explicitly named backend is
+  unchanged and silent.
+
+- **`PluginRegistry.get_metadata()` returns a deep copy.** It copied only
+  the top level, so a nested value — a `config_options` dict, say — was the
+  live registry entry, and a caller reading and editing one changed what
+  every later caller saw.
 
 - **The Ollama probes and markers take `host` / `port`.**
   `is_ollama_available(host=None, port=None, *, timeout=2.0)`,
