@@ -101,7 +101,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   than accepting vectors. It exists so a test never falls through to
   chromadb's default, which downloads ~166 MB of model weights on first
   use — a cold runner fails on that rather than skipping, and no `skipif`
-  can see a download coming.
+  can see a download coming. It must be passed on every open: measured on
+  chromadb 1.5.9, a persistent collection reopened without it comes back
+  holding the default embedding function, silently, whether or not the
+  class is registered with chromadb's function table.
 
 ### Changed
 

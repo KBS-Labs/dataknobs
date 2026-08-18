@@ -20,6 +20,7 @@ Example:
 
 from __future__ import annotations
 
+import functools
 from typing import Any
 
 import numpy as np
@@ -69,32 +70,44 @@ def text_embedding(text: str, dim: int = 384) -> np.ndarray:
     return np.random.default_rng(sum(ord(c) for c in text[:10])).random(dim)
 
 
-def chroma_embedding_function(dim: int = 8) -> Any:
-    """A chromadb embedding function that embeds without downloading a model.
+@functools.cache
+def _deterministic_embedding_function_class() -> Any:
+    """The embedding-function class, built once and registered with chromadb.
 
-    A ``ChromaVectorStore`` built with no ``embedding_function`` falls
-    through to chromadb's default, which fetches ~166 MB of ONNX weights
-    on first use and caches them under ``~/.cache/chroma``. That makes a
-    test suite pass on a developer machine whose cache is warm and
-    *fail* — not skip — on a cold runner, because the download is not
-    something a ``skipif`` can see coming.
+    Defined here rather than inline in :func:`chroma_embedding_function`
+    so that there is exactly one class object. A class statement inside
+    that function ran on every call, so no two instances shared a type
+    and chromadb saw a different embedding function each time it was
+    handed one.
 
-    Pass this instead wherever a test exercises a document path
-    (``add_documents``, ``search_documents``), which are the only paths
-    that embed text rather than accepting vectors outright. Embeddings
-    come from :func:`text_embedding`, so they are deterministic and
-    inherit its collision property: texts agreeing in their first ten
-    characters embed identically. That is usually irrelevant — a test
-    asserting on ranking needs its texts to differ inside that window.
+    The registration is what ``name`` and ``build_from_config`` below
+    exist for: chromadb reconstructs a persisted collection's embedding
+    function by looking its name up in ``known_embedding_functions``,
+    and a name absent from that table cannot be reconstructed. It is
+    applied once, here, because registering the same name twice is not
+    the caching behaviour anyone wants.
 
-    ``dim`` must match the store's configured ``dimensions``; being able
-    to pick a small one is a side benefit, since nothing here needs 384.
+    **It does not currently rescue a reopened persistent collection**,
+    and the docstring says so rather than implying otherwise. Measured
+    on chromadb 1.5.9: a ``PersistentClient`` collection created with
+    this function and reopened through ``get_collection`` comes back
+    holding ``DefaultEmbeddingFunction`` — silently, with no warning —
+    whether or not the class is registered. So the reopen path falls
+    back to the very model-downloading default this helper exists to
+    avoid. A test that needs the guarantee must pass the embedding
+    function explicitly on every open, which is what
+    ``ChromaVectorStore.initialize`` does and why nothing in this repo
+    is exposed. The registration stays because it is the correct
+    declaration for a class carrying these methods, and because the
+    fallback is chromadb's behaviour to change, not ours.
 
-    Imported lazily so this module stays importable without chromadb
-    installed, as the rest of it has no such dependency.
+    Imported lazily, and cached, so this module stays importable without
+    chromadb installed.
     """
     from chromadb.api.types import EmbeddingFunction
+    from chromadb.utils.embedding_functions import register_embedding_function
 
+    @register_embedding_function
     class _DeterministicEmbeddingFunction(EmbeddingFunction):
         """Text in, :func:`text_embedding` out."""
 
@@ -117,4 +130,31 @@ def chroma_embedding_function(dim: int = 8) -> Any:
         def build_from_config(config: dict[str, Any]) -> Any:
             return _DeterministicEmbeddingFunction(config["dim"])
 
-    return _DeterministicEmbeddingFunction(dim)
+    return _DeterministicEmbeddingFunction
+
+
+def chroma_embedding_function(dim: int = 8) -> Any:
+    """A chromadb embedding function that embeds without downloading a model.
+
+    A ``ChromaVectorStore`` built with no ``embedding_function`` falls
+    through to chromadb's default, which fetches ~166 MB of ONNX weights
+    on first use and caches them under ``~/.cache/chroma``. That makes a
+    test suite pass on a developer machine whose cache is warm and
+    *fail* — not skip — on a cold runner, because the download is not
+    something a ``skipif`` can see coming.
+
+    Pass this instead wherever a test exercises a document path
+    (``add_documents``, ``search_documents``), which are the only paths
+    that embed text rather than accepting vectors outright. Embeddings
+    come from :func:`text_embedding`, so they are deterministic and
+    inherit both of its properties. Texts agreeing in their first ten
+    characters embed identically, so a test needing two distinct
+    embeddings has to vary its texts inside that window. And every
+    component is drawn from ``[0, 1)``, so any two embeddings are highly
+    cosine-similar regardless of their texts — fine for asserting that a
+    particular row came back, unusable for asserting a *ranking*.
+
+    ``dim`` must match the store's configured ``dimensions``; being able
+    to pick a small one is a side benefit, since nothing here needs 384.
+    """
+    return _deterministic_embedding_function_class()(dim)
