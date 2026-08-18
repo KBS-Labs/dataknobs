@@ -42,7 +42,11 @@ Reviewing those fixes found more, covered below:
   one and got back a path the publish had never used,
 * the unlocked read above was reached by *any* failure to lock rather
   than by the condition that licenses it, so a lockfile another uid
-  owns silently bought a torn read in a directory both could write.
+  owns silently bought a torn read in a directory both could write,
+* the scratch sweep built a glob out of its target's name, so a name
+  holding ``[`` or ``*`` missed its own orphans and matched another
+  file's, and ``<name>.*.tmp`` reached a longer-named neighbour's live
+  scratch under a lock the sweep does not hold.
 """
 
 from __future__ import annotations
@@ -710,3 +714,96 @@ async def test_an_unlockable_file_in_a_writable_directory_does_not_degrade(
         )
     finally:
         await asyncio.to_thread(lockfile.chmod, 0o644)
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+async def test_a_scratch_sweep_matches_its_own_target_literally(
+    backend: str, tmp_path: Path
+) -> None:
+    """A ``persist_path`` is a filename, not a glob pattern.
+
+    The sweep built its pattern by concatenating the target's name, so a
+    name containing ``[``, ``]``, ``?`` or ``*`` was interpreted rather
+    than matched. It then failed in both directions at once: its own
+    orphans stopped matching, so the leak the sweep exists to close came
+    back, and a *different* file whose name the pattern happened to
+    describe started matching instead.
+    """
+    persist = tmp_path / "index[v2].idx"
+    store = await _open(_base(backend), persist)
+    await _ingest(store, "row", 3, seed=1)
+
+    orphan = tmp_path / "index[v2].idx.deadbeef.tmp"
+    await asyncio.to_thread(orphan.write_bytes, b"half a snapshot")
+
+    await store.save()
+
+    assert not await asyncio.to_thread(orphan.exists), (
+        "the sweep read its target's name as a pattern and missed its own orphan"
+    )
+    await _shutdown(store)
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+async def test_a_scratch_sweep_leaves_a_longer_named_neighbour_alone(
+    backend: str, tmp_path: Path
+) -> None:
+    """Sweeping ``idx`` must not reach ``idx.pkl``'s scratch files.
+
+    ``<name>.*.tmp`` matches any target whose name merely *begins* with
+    this one, and the lock held while sweeping is this target's — the
+    neighbour's live writer holds a different one. So the sweep could
+    unlink a scratch file another writer was about to rename, turning
+    the lock's guarantee into the ``FileNotFoundError`` unique names
+    were introduced to stop.
+
+    The scratch token comes from ``mkstemp``, whose alphabet has no
+    ``.``, so a dot in it means the file belongs to a longer target.
+    """
+    persist = tmp_path / "idx"
+    store = await _open(_base(backend), persist)
+    await _ingest(store, "row", 3, seed=1)
+
+    # Not this store's: it belongs to a neighbour persisting to
+    # ``idx.pkl``, which is a different target under a different lock.
+    neighbour = tmp_path / "idx.pkl.deadbeef.tmp"
+    await asyncio.to_thread(neighbour.write_bytes, b"a live stager's bytes")
+
+    await store.save()
+
+    assert await asyncio.to_thread(neighbour.exists), (
+        "the sweep unlinked a scratch file belonging to another target, "
+        "whose writer holds a different lock and is about to rename it"
+    )
+    await _shutdown(store)
+
+
+@requires_faiss
+async def test_a_side_car_s_orphaned_scratch_is_swept_too(tmp_path: Path) -> None:
+    """Every file the store publishes gets its own sweep.
+
+    A two-file store stages an index and a ``.meta`` side-car, so a
+    process killed mid-save leaks up to two scratch files. Only the
+    tracked path used to be swept, and the side-car's leftovers were
+    reached — when they were reached — by the prefix looseness the test
+    above removes. Sweeping per published file is what keeps them
+    covered once the match is exact.
+    """
+    persist = tmp_path / "index.idx"
+    store = await _open(FaissVectorStore, persist)
+    await _ingest(store, "row", 3, seed=1)
+
+    index_orphan = tmp_path / "index.idx.deadbeef.tmp"
+    side_car_orphan = tmp_path / "index.idx.meta.deadbeef.tmp"
+    await asyncio.to_thread(index_orphan.write_bytes, b"half an index")
+    await asyncio.to_thread(side_car_orphan.write_bytes, b"half a side-car")
+
+    await store.save()
+
+    assert not await asyncio.to_thread(index_orphan.exists), (
+        "the index's orphaned scratch survived a save"
+    )
+    assert not await asyncio.to_thread(side_car_orphan.exists), (
+        "the side-car's orphaned scratch survived a save"
+    )
+    await _shutdown(store)

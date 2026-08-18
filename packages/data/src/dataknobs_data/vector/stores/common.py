@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import glob
 import copy
 import logging
 import os
@@ -61,12 +62,18 @@ def _flush_to_disk(path: str) -> None:
     staging is that a failure leaves the previous state intact, and
     without this the guarantee stops at process death.
 
-    Best-effort by design. A filesystem that refuses ``fsync`` on a
-    read-only descriptor is not a reason to fail a save that has
-    otherwise succeeded.
+    Opened ``O_WRONLY`` because Windows implements ``os.fsync`` as
+    ``_commit``, which rejects a read-only descriptor — so a read-only
+    open would make the guarantee above silently absent there, swallowed
+    into the debug line below. Nothing is written through the handle;
+    the mode is what the platform requires to flush. The scratch file
+    was created by this process moments ago, so it is writable.
+
+    Best-effort by design: a filesystem with no working ``fsync`` is not
+    a reason to fail a save that has otherwise succeeded.
     """
     try:
-        fd = os.open(path, os.O_RDONLY)
+        fd = os.open(path, os.O_WRONLY)
     except OSError:
         return
     try:
@@ -785,7 +792,6 @@ class VectorStoreBase(StructuredConfigConsumer[VectorStoreConfig]):
             os.makedirs(parent_dir, exist_ok=True)
 
         with FileLock(path):
-            self._sweep_orphaned_scratch(path)
             self._guard_persisted_identity(path, force=force)
             yield
             self._stamp_persisted_identity(path)
@@ -904,6 +910,12 @@ class VectorStoreBase(StructuredConfigConsumer[VectorStoreConfig]):
         therefore refreshed on the way out, while ``_dirty`` stays set
         because nothing was persisted.
 
+        Sweeps each published file's orphaned scratch siblings first,
+        under the lock the bracket holds. It lives here rather than in
+        the bracket because this is the only thing that creates them,
+        and because the bracket knows one path while a store may publish
+        several — the side-car's leftovers need sweeping too.
+
         Each scratch file gets a name of its own. A fixed
         ``<final>.tmp`` sibling is shared by every writer of that path,
         so two of them stage over each other's bytes and the loser's
@@ -945,6 +957,11 @@ class VectorStoreBase(StructuredConfigConsumer[VectorStoreConfig]):
         published: list[str] = []
         try:
             for final_path, write in writes:
+                # Swept per published file rather than once for the
+                # tracked one: a two-file store leaks up to two scratch
+                # files per kill, and now that the match is exact the
+                # side-car's are no longer reached by prefix accident.
+                self._sweep_orphaned_scratch(final_path)
                 tmp = self._scratch_sibling(final_path)
                 created.append(tmp)
                 write(tmp)
@@ -1004,9 +1021,21 @@ class VectorStoreBase(StructuredConfigConsumer[VectorStoreConfig]):
         """Remove scratch siblings of ``final_path`` left by a dead writer.
 
         Called with the file lock held, which is what makes it safe: a
-        live writer publishing this target holds that lock, so every
-        ``<name>.*.tmp`` visible here belongs to a process that died
-        between creating one and renaming it.
+        live writer publishing *this* target holds that lock, so a
+        scratch file of this target visible here belongs to a process
+        that died between creating one and renaming it.
+
+        That argument covers this target and no other, so the match has
+        to be exact in both directions. The name is escaped, because a
+        ``persist_path`` is a filename and may contain ``[``, ``?`` or
+        ``*`` — read as a pattern it stops matching this target's own
+        orphans and starts matching some other file's. And the token is
+        required to be dot-free, because ``<name>.*.tmp`` also describes
+        every target whose name merely *begins* with this one:
+        ``idx``'s sweep would otherwise reach ``idx.pkl``'s scratch
+        files, whose writer holds a different lock and may be about to
+        rename one. ``mkstemp``'s alphabet has no ``.``, so a dot in the
+        token means the file belongs to a longer-named target.
 
         Unique scratch names made this necessary. The previous fixed
         ``<name>.tmp`` was overwritten by the next save, so a hard kill
@@ -1015,10 +1044,13 @@ class VectorStoreBase(StructuredConfigConsumer[VectorStoreConfig]):
         """
         target = Path(final_path)
         try:
-            orphans = list(target.parent.glob(target.name + ".*.tmp"))
+            candidates = list(target.parent.glob(glob.escape(target.name) + ".*.tmp"))
         except OSError:
             return
-        for orphan in orphans:
+        for orphan in candidates:
+            token = orphan.name[len(target.name) + 1 : -len(".tmp")]
+            if "." in token:
+                continue
             with contextlib.suppress(OSError):
                 orphan.unlink()
             logger.debug("Removed an orphaned scratch file: %s", orphan)

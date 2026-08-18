@@ -331,6 +331,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The scratch sweep read its target's name as a glob pattern.** A
+  `persist_path` is a filename, so one containing `[`, `?` or `*` was
+  interpreted rather than matched — the sweep stopped finding its own
+  orphaned scratch files, reopening the unbounded leak it exists to
+  close, and started matching a different file's. The name is now
+  escaped.
+
+  It also matched any target whose name merely *begins* with this one,
+  so a store persisting to `idx` could unlink a live scratch file
+  belonging to one persisting to `idx.pkl` — a different target, under
+  a lock the sweeping store does not hold, whose writer is about to
+  rename it. The scratch token is now required to be dot-free, which
+  `mkstemp`'s alphabet guarantees for this target's own files.
+
+  Sweeping moved from the save bracket to the publish itself, which is
+  the only thing that creates scratch files and the only one that knows
+  every path being written: a two-file store's side-car leftovers used
+  to be reached, when they were reached at all, by the prefix looseness
+  above.
+
+- **`fsync` before publishing was a silent no-op on Windows.** The
+  staged file was opened `O_RDONLY` to flush it, and Windows implements
+  `os.fsync` as `_commit`, which rejects a read-only descriptor — so
+  the crash-durability guarantee was absent there, swallowed into a
+  debug line. Opened `O_WRONLY` now; nothing is written through the
+  handle.
+
 - **A half-landed publish left a symlinked store refusing every save.**
   `FaissVectorStore` writes an index and a `.meta` side-car; if the
   second rename fails after the first has landed, the store has
