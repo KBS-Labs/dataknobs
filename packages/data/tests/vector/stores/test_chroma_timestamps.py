@@ -22,6 +22,8 @@ import numpy as np
 import pytest
 from dataknobs_common.testing import is_chromadb_available
 
+from dataknobs_data.testing import chroma_embedding_function
+
 if is_chromadb_available():
     from dataknobs_data.vector.stores.chroma import ChromaVectorStore
 
@@ -100,8 +102,14 @@ async def test_no_read_path_exposes_a_reserved_key():  # type: ignore[no-untyped
 
 
 async def test_documents_read_path_is_clean_too():  # type: ignore[no-untyped-def]
-    """``search_documents`` decodes through the same boundary."""
-    store = await _store(dimensions=384)
+    """``search_documents`` decodes through the same boundary.
+
+    The only case in this file that embeds text, so the only one that
+    needs an embedding function. The deterministic one keeps chromadb
+    from reaching for its default, which downloads a model on first use
+    and would fail — not skip — on a runner with a cold cache.
+    """
+    store = await _store(embedding_function=chroma_embedding_function(DIMENSIONS))
     try:
         await store.add_documents(["some text"], ids=["d1"], metadata=[{"g": "x"}])
         hits = await store.search_documents("some text", k=1)

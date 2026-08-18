@@ -7,9 +7,12 @@ carried no configured ``domain_id``, which made them invisible to the
 scoped reads that every other method applies — the store wrote a
 document and then could not find it.
 
-The embedding here comes from chromadb's own default function, so these
-stores are configured at its dimensionality rather than the small
-vectors the sibling suites use.
+These are the only cases in the vector suite that embed *text* rather
+than accepting vectors outright, so they need an embedding function. They
+use the deterministic one from ``dataknobs_data.testing`` rather than
+chromadb's default, which would download ~166 MB of ONNX weights on
+first use — a cold runner would fail here rather than skip, and no
+``skipif`` can see a download coming.
 """
 
 from __future__ import annotations
@@ -20,6 +23,8 @@ from typing import Any
 import pytest
 from dataknobs_common.testing import is_chromadb_available
 
+from dataknobs_data.testing import chroma_embedding_function
+
 if is_chromadb_available():
     from dataknobs_data.vector.stores.chroma import ChromaVectorStore
 
@@ -27,14 +32,16 @@ requires_chromadb = pytest.mark.skipif(not is_chromadb_available(), reason="chro
 
 pytestmark = [pytest.mark.asyncio, requires_chromadb]
 
-# chromadb's default embedding function decides this, not the caller.
-DEFAULT_EF_DIMENSIONS = 384
+# Ours to choose, now that the embedding function is: nothing here
+# needs 384 dimensions.
+EF_DIMENSIONS = 8
 
 
 async def _store(**config: Any) -> Any:
     store = ChromaVectorStore(
         {
-            "dimensions": DEFAULT_EF_DIMENSIONS,
+            "dimensions": EF_DIMENSIONS,
+            "embedding_function": chroma_embedding_function(EF_DIMENSIONS),
             "collection_name": f"test_add_docs_{uuid.uuid4().hex[:8]}",
             **config,
         }

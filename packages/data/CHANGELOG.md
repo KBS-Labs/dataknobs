@@ -96,6 +96,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   seeds the process-global RNG, so a draw in one test cannot shift what any
   later test draws.
 
+  `chroma_embedding_function(dim=8)` returns a chromadb embedding function
+  backed by `text_embedding`, for the document paths that embed text rather
+  than accepting vectors. It exists so a test never falls through to
+  chromadb's default, which downloads ~166 MB of model weights on first
+  use — a cold runner fails on that rather than skipping, and no `skipif`
+  can see a download coming.
+
 ### Changed
 
 - **`ChromaVectorStore.update_metadata()` now replaces a row's metadata
