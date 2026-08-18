@@ -301,8 +301,25 @@ class VectorStore(ABC, VectorStoreBase):
     ) -> list[str]:
         """Update existing vectors by ID.
 
-        This is a convenience method that deletes and re-adds vectors.
-        Some vector stores may override this with a more efficient implementation.
+        A thin alias for :meth:`add_vectors`, which upserts: on every
+        shipping backend a same-id write replaces the row's metadata
+        outright rather than merging into it, so re-adding *is* the
+        update.
+
+        This used to delete first. The delete was there to guarantee
+        the replacement, which ``add_vectors`` already guarantees, and
+        it cost two things to buy nothing:
+
+        * **It discarded the row's ``created_at``.** Deleting takes the
+          timestamp tracking with the row, so the re-add had nothing to
+          preserve and stamped a fresh creation date — breaking the
+          documented rule that ``created_at`` survives every write to a
+          tracked id, and turning a re-ingest sweep into a rewrite of
+          every row's creation date.
+        * **It destroyed in-scope rows on a refused batch.** A scoped
+          ``delete_vectors`` skips an out-of-domain id and deletes the
+          rest; ``add_vectors`` raises on one. A mixed batch therefore
+          deleted the caller's own row and then declined to restore it.
 
         Args:
             vectors: New vector values
@@ -312,10 +329,6 @@ class VectorStore(ABC, VectorStoreBase):
         Returns:
             List of updated IDs
         """
-        # Delete existing vectors
-        await self.delete_vectors(ids)
-
-        # Add new vectors with same IDs
         return await self.add_vectors(vectors, ids, metadata)
 
     # Higher-level convenience methods

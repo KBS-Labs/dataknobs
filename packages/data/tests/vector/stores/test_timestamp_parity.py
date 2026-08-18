@@ -194,3 +194,49 @@ async def test_upsert_refreshes_updated_consistently(
         "created_at must not change on upsert (backend-dependent parity violation)"
     )
     assert second["_updated_at"] > first["_updated_at"], "updated_at must advance on upsert"
+
+
+@pytest.mark.asyncio
+async def test_update_vectors_preserves_created(
+    any_vector_store: Any,
+) -> None:
+    """``update_vectors`` is an upsert, so it keeps ``created_at`` too.
+
+    The documented rule is that ``created_at`` survives every write to
+    an id the store already tracks — ``add_vectors`` on the same id is
+    the case the suite above pins. ``update_vectors`` is that same
+    operation reached through a different verb, but it was implemented
+    as ``delete_vectors`` followed by ``add_vectors``, and the delete
+    takes the tracking entry with the row. The re-add then had nothing
+    to preserve and stamped a fresh creation date.
+
+    The delete bought nothing: ``add_vectors`` already replaces a row's
+    metadata outright on all four backends, which is the only thing the
+    delete was there to guarantee. So the row was destroyed and rebuilt
+    to achieve what a plain upsert already did, and the tracking loss
+    was the whole of the difference.
+
+    The consequence is the one the null-timestamp rationale warns
+    about: a re-ingest sweep that calls ``update_vectors`` rewrites
+    every row's creation date to the moment of the sweep, and nothing
+    afterwards can tell a fabricated date from a real one.
+    """
+    vec1 = _vector(4)
+    vec2 = _vector(4, seed=1)
+
+    await any_vector_store.add_vectors([vec1], ids=["u1"], metadata=[{"v": 1}])
+    first = (await any_vector_store.get_vectors(["u1"], include_timestamps=True))[0][1]
+    assert first is not None
+
+    await asyncio.sleep(0.05)
+
+    await any_vector_store.update_vectors([vec2], ids=["u1"], metadata=[{"v": 2}])
+    second = (await any_vector_store.get_vectors(["u1"], include_timestamps=True))[0][1]
+    assert second is not None
+
+    assert second["_created_at"] == first["_created_at"], (
+        "update_vectors reset created_at — the delete discarded the tracking entry"
+    )
+    assert second["_updated_at"] > first["_updated_at"], "updated_at must advance"
+    # And the replacement is still a replacement, not a merge.
+    assert second["v"] == 2

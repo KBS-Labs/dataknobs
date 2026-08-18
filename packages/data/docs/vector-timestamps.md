@@ -156,7 +156,9 @@ by design, since the two clocks are already unsynchronised.
 *update* does not. `add_vectors` (and `add_documents`) repopulates a
 pre-tracking row's timestamps; `update_metadata` and
 `update_metadata_where` leave `created_at` exactly as they found it,
-including `None`.
+including `None`. `update_vectors` is a write — it is an alias for
+`add_vectors` — so it establishes tracking and, on a row already
+tracked, preserves `created_at` like any other upsert.
 
 The reason is that `None` here means *not known*, and there is no
 honest value an update could put in its place. Stamping the update time

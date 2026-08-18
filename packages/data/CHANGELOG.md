@@ -298,6 +298,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`update_vectors()` no longer resets a row's `created_at`, or destroys
+  rows on a refused batch.** It was implemented as `delete_vectors()`
+  followed by `add_vectors()`. The delete bought nothing — `add_vectors()`
+  already replaces a row's metadata outright on every backend, which is
+  the only thing the delete guaranteed — and it cost two things.
+
+  It took the row's timestamp tracking with the row, so the re-add had
+  nothing to preserve and stamped a fresh creation date. That breaks the
+  documented rule that `created_at` survives every write to a tracked id,
+  in the way the null-timestamp rationale warns about: a re-ingest sweep
+  built on `update_vectors()` rewrote every row's creation date to the
+  moment of the sweep, after which nothing could tell a fabricated date
+  from a real one.
+
+  And under a configured `domain_id` it lost data. A scoped
+  `delete_vectors()` skips an out-of-domain id and deletes the rest,
+  while `add_vectors()` refuses the batch outright — so a batch mixing
+  the caller's own ids with one it does not own deleted the caller's rows
+  and then declined to put them back, reporting an id the caller had not
+  asked to lose. `update_vectors()` is now an alias for `add_vectors()`.
+
 - **Re-adding an id on `ChromaVectorStore` now replaces that row's
   metadata instead of merging into it.** `add_vectors()` and
   `add_documents()` upsert on id conflict, and chromadb's `upsert`

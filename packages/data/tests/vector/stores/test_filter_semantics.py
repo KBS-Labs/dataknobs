@@ -654,6 +654,41 @@ async def test_a_rejected_batch_writes_nothing(
 
 
 @pytest.mark.asyncio
+async def test_a_rejected_update_vectors_destroys_nothing(
+    domain_scoped_store: Any,
+) -> None:
+    """The batch verb that deletes first must refuse before it deletes.
+
+    ``update_vectors`` was ``delete_vectors`` then ``add_vectors``. A
+    scoped ``delete_vectors`` silently skips an out-of-domain id and
+    deletes the rest, while ``add_vectors`` now *raises* on one — so a
+    mixed batch deleted the caller's own row and then refused to put it
+    back, reporting an id the caller had not asked to lose. The guard
+    introduced the loss: before it, the same call captured ``o1``
+    instead, which is wrong differently but keeps ``s1``.
+
+    Both halves are asserted. The raise is the contract; ``s1``
+    surviving is the reason the ordering matters.
+    """
+    with pytest.raises(VectorDomainScopeError):
+        await domain_scoped_store.update_vectors(
+            _seed_vectors()[:2],
+            ids=["s1", "o1"],
+            metadata=[{"k": "rewritten"}, {"k": "taken"}],
+        )
+
+    # The store's own row is untouched, not deleted-and-not-replaced.
+    row = (await domain_scoped_store.get_vectors(["s1"]))[0]
+    assert row[0] is not None, "update_vectors deleted an in-scope row, then refused to re-add it"
+    assert (row[1] or {}).get("k") == "v", "the row was rewritten despite the batch being refused"
+    assert await domain_scoped_store.count() == 2
+
+    # And the row it refused to take still belongs to its owner.
+    with _unscoped(domain_scoped_store) as store:
+        assert ((await store.get_vectors(["o1"]))[0][1] or {}).get("domain_id") == "t2"
+
+
+@pytest.mark.asyncio
 async def test_a_scoped_store_still_writes_its_own_ids(
     domain_scoped_store: Any,
 ) -> None:
