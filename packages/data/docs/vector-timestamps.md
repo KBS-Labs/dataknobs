@@ -51,7 +51,10 @@ When `include_metadata=False`, timestamp injection is silently skipped
 - `created_at` is set on first `add_vectors` for an ID and **preserved**
   on subsequent upserts (same-ID `add_vectors`).
 - `updated_at` is **refreshed** on every upsert and on
-  `update_metadata`.
+  `update_metadata` — for a row the store already tracks. A row
+  written before this backend tracked timestamps is not given one
+  retroactively by an update; see [Null timestamps](#null-timestamps)
+  for what an untracked row does instead.
 
 ## Where the values are stored
 

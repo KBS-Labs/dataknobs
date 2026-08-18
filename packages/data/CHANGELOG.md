@@ -108,6 +108,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`ChromaVectorStore.update_metadata()` and `update_metadata_where()`
+  return rows *matched*, not rows written.** Both previously returned
+  the number of rows actually sent to chromadb, which now differs: a
+  matched row whose requested state already holds produces an empty
+  update payload, which chromadb rejects and which has nothing to send
+  anyway, so it is counted but not written. `matched` is what the
+  abstract contract asks for and what the other backends report.
+
 - **`domain_id=""` scopes on every backend.** `PgVectorStore` guarded
   its column predicates on truthiness while the metadata-carrying
   backends tested `is None`, so a store configured with an empty-string
