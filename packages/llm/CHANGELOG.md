@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Fixed
+
+- **Two docstring examples that could not run.** Both reached for a vector
+  capability through `database_factory` and invented a backend name for it:
+  `AsyncLLMProvider.embed` closed with a "store in vector database" block
+  calling `database_factory.create("vector_db")`, and the `AsyncPromptBuilder`
+  module example opened with `database_factory.create("vector",
+  embedding_model="...")`. Each is a `TypeError` before it is anything else —
+  `create` takes `**config`, so the backend name cannot be passed positionally
+  — and neither `vector_db` nor `vector` is a database backend; the `embed`
+  example then passed a plain dict where `create` requires a `Record`.
+
+  The `embed` block is gone rather than corrected. It was teaching another
+  package's storage API from inside the embedding API's docstring, which is
+  how it came to be wrong in three ways without anything noticing;
+  `VectorStoreFactory` is named in `See Also` instead. The prompt-builder
+  example keeps its database, which is load-bearing — it is what the adapter
+  wraps — and now builds it correctly, from `async_database_factory`, since
+  `AsyncDataknobsBackendAdapter` takes an `AsyncDatabase` and the sync factory
+  was the wrong one regardless of the backend name.
+
 ## v0.7.0 - 2026-08-11
 
 ### Added

@@ -31,10 +31,12 @@ Example:
         AsyncDictResourceAdapter,
         AsyncDataknobsBackendAdapter
     )
-    from dataknobs_data import database_factory
+    from dataknobs_data import async_database_factory
 
-    # Set up data sources for RAG
-    docs_db = database_factory.create("vector", embedding_model="...")
+    # Set up data sources for RAG. AsyncDataknobsBackendAdapter wraps an
+    # AsyncDatabase, so this is the async factory; swap the backend for a
+    # persistent one ("file", "postgres", ...) outside development.
+    docs_db = async_database_factory.create(backend="memory")
 
     # Create adapters
     adapters = {
