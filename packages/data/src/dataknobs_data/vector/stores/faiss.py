@@ -384,6 +384,12 @@ class FaissVectorStore(VectorStore):
 
             internal_id = self.id_map[ext_id]
 
+            # Out-of-domain rows answer exactly as absent ones do, so a
+            # caller cannot distinguish "not here" from "not yours".
+            if not self._in_configured_domain(self.metadata_store.get(internal_id)):
+                results.append((None, None))
+                continue
+
             stored = self.vectors.get(internal_id)
             if stored is None:
                 # ``ext_id`` resolved but its internal id has no stored
@@ -430,6 +436,8 @@ class FaissVectorStore(VectorStore):
         for ext_id in ids:
             if ext_id in self.id_map:
                 internal_id = self.id_map[ext_id]
+                if not self._in_configured_domain(self.metadata_store.get(internal_id)):
+                    continue
                 internal_ids.append(internal_id)
                 del self.id_map[ext_id]
                 if internal_id in self.metadata_store:
@@ -788,15 +796,21 @@ class FaissVectorStore(VectorStore):
             await self.initialize()
 
         now = datetime.now(UTC)
+        # The same write-path preparation ``add_vectors`` does — a copy,
+        # so the caller keeps no handle on the stored row, and the
+        # configured ``domain_id`` defaulted back in, because this path
+        # replaces the metadata dict outright and on this backend the
+        # scope lives inside that dict. See ``MemoryVectorStore`` for
+        # the full note; the two share the hazard because they share the
+        # storage shape.
+        rows = self._apply_domain_default(metadata, len(metadata))
         updated = 0
-        for ext_id, meta in zip(ids, metadata, strict=False):
+        for ext_id, row in zip(ids, rows, strict=False):
             if ext_id in self.id_map:
                 internal_id = self.id_map[ext_id]
-                # Stored as a copy: the caller keeps its own dict and
-                # must not keep a handle on the row through it. The
-                # ``add_vectors`` path gets this from
-                # ``_apply_domain_default``; this one has no equivalent.
-                self.metadata_store[internal_id] = self._copy_metadata(meta) or {}
+                if not self._in_configured_domain(self.metadata_store.get(internal_id)):
+                    continue
+                self.metadata_store[internal_id] = row
                 if internal_id in self.timestamps:
                     created, _ = self.timestamps[internal_id]
                     self.timestamps[internal_id] = (created, now)
@@ -856,7 +870,8 @@ class FaissVectorStore(VectorStore):
 
         fields: set[str] = set()
         for meta in self.metadata_store.values():
-            fields.update(meta.keys())
+            if self._in_configured_domain(meta):
+                fields.update(meta.keys())
         return fields
 
     async def clear(self, filter: dict[str, Any] | None = None) -> None:

@@ -92,9 +92,12 @@ class VectorStoreBase(StructuredConfigConsumer[VectorStoreConfig]):
         self.metadata = cfg.metadata
 
         # Config-level multi-tenant scoping. When set, every
-        # read/count/clear/update_metadata_where is implicitly scoped
-        # to this domain (via _effective_filter) and add_vectors
-        # defaults a row's "domain_id" to it. This mirrors
+        # read/count/clear/update is implicitly scoped to this domain
+        # and add_vectors defaults a row's "domain_id" to it. Scoping
+        # applies however a row is addressed: the filter-keyed surfaces
+        # get it from _effective_filter, the id-keyed ones
+        # (get_vectors, delete_vectors, update_metadata) and
+        # metadata_fields from _in_configured_domain. This mirrors
         # PgVectorStore's long-standing config-level domain_id
         # behavior; Memory/FAISS/Chroma honor it through the shared
         # helpers so a runtime backend swap preserves isolation
@@ -380,6 +383,30 @@ class VectorStoreBase(StructuredConfigConsumer[VectorStoreConfig]):
         out-of-tree store.
         """
         return len(vectors) == 0
+
+    def _in_configured_domain(self, meta: dict[str, Any] | None) -> bool:
+        """Whether a stored row falls inside the configured scope.
+
+        The id-keyed half of what :meth:`_effective_filter` does for the
+        filter-keyed half. ``get_vectors``, ``delete_vectors`` and
+        ``update_metadata`` address rows by id, so no filter is built and
+        that helper never runs — which left the configured scope binding
+        only the surfaces that happen to take a ``filter``. Isolation
+        that depends on *how* a caller asks is not isolation: ids are
+        routinely derived from content and are guessable.
+
+        ``metadata_fields`` uses it too. Field names are data — the union
+        over every stored row discloses the shape of a neighbouring
+        domain's metadata without returning any of its rows.
+
+        Identity when no scope is configured, so an unscoped store keeps
+        its prior behaviour exactly. Backends whose ``domain_id`` is a
+        real column (``PgVectorStore``) express the same predicate in
+        SQL instead of calling this.
+        """
+        if self.domain_id is None:
+            return True
+        return (meta or {}).get("domain_id") == self.domain_id
 
     # ------------------------------------------------------------------
     # Single-file persistence: dirty tracking, identity, atomic publish.

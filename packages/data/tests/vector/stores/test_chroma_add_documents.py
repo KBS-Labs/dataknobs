@@ -89,8 +89,16 @@ async def test_add_documents_does_not_cross_domains():  # type: ignore[no-untype
 
     A row carrying its own ``domain_id`` keeps it, which is what makes
     the stamp safe to apply unconditionally.
+
+    The tenant-b row is observed from a tenant-b store rather than
+    through the writer: a scoped store answers for an out-of-domain id
+    exactly as it does for an absent one, so reading it back through the
+    tenant-a store would assert the isolation leak rather than the
+    write. Both stores name the same collection, which is what lets the
+    second one see what the first wrote.
     """
-    store = await _store(domain_id="tenant-a")
+    collection = f"test_add_docs_{uuid.uuid4().hex[:8]}"
+    store = await _store(domain_id="tenant-a", collection_name=collection)
     try:
         await store.add_documents(
             ["mine", "theirs"],
@@ -100,7 +108,16 @@ async def test_add_documents_does_not_cross_domains():  # type: ignore[no-untype
         assert await store.count() == 1
         rows = await store.get_vectors(["d1", "d2"])
         assert (rows[0][1] or {}).get("domain_id") == "tenant-a"
-        assert (rows[1][1] or {}).get("domain_id") == "tenant-b"
+        # d2 belongs to tenant-b, so this store cannot see it at all.
+        assert rows[1] == (None, None)
+
+        other = await _store(domain_id="tenant-b", collection_name=collection)
+        try:
+            assert await other.count() == 1
+            other_rows = await other.get_vectors(["d2"])
+            assert (other_rows[0][1] or {}).get("domain_id") == "tenant-b"
+        finally:
+            await other.close()
     finally:
         await _drop(store)
 

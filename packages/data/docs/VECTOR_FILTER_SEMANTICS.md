@@ -55,7 +55,31 @@ constructed with `domain_id="x"`:
   AND-composes the explicit filter on top of the tenant scope.
   An explicit caller `domain_id` that is out of scope (e.g.
   `filter={"domain_id": "y"}` on a store scoped to `"x"`)
-  resolves to an unsatisfiable filter and matches zero rows.
+  resolves to an unsatisfiable filter and matches zero rows, and
+* confines the **id-keyed** operations to the same scope.
+  `get_vectors()`, `delete_vectors()` and `update_metadata()`
+  address rows by id, so they build no filter; each instead checks
+  the row it resolved against the configured scope. An
+  out-of-domain id is answered exactly as an absent one — `(None,
+  None)` from `get_vectors()`, and no contribution to the count
+  returned by the other two — so a caller cannot tell "not here"
+  from "not yours". `metadata_fields()` likewise unions keys only
+  over in-scope rows.
+
+  This half matters more than it looks. Scoping only the surfaces
+  that happen to take a `filter` would make the tenant boundary a
+  property of *how a caller asks* rather than of the store, and
+  vector ids are routinely derived from content (`"<doc>_<chunk>"`),
+  so they are guessable rather than secret. It also closes a write
+  path: because a replacement carries the configured `domain_id`
+  forward, an unscoped `update_metadata()` on another tenant's row
+  would not merely edit that row, it would relabel it into the
+  caller's own domain.
+
+  `update_metadata()` preserving the configured `domain_id` is what
+  keeps that replacement from having the opposite effect — dropping
+  the scope key and leaving a row its own store can no longer see,
+  count, or even `clear()`.
 
 This makes the **runtime-swap promise hold for config-level
 scoping**: a tenant-scoped store behaves identically under

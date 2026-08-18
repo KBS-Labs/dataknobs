@@ -105,6 +105,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **A configured `domain_id` now scopes the id-keyed operations too.**
+  `get_vectors()`, `delete_vectors()`, `update_metadata()` and
+  `metadata_fields()` address rows by id (or not at all) and so built no
+  filter, which left the tenant scope binding only the surfaces that
+  take one. A scoped store answered for any id in the collection, and
+  `metadata_fields()` returned the union of every tenant's key names.
+  All four are now confined to the configured domain on every backend,
+  and an out-of-domain id is answered exactly as an absent one — so a
+  caller cannot distinguish "not here" from "not yours".
+
+  **This is a behaviour change.** Code that used a scoped store to reach
+  rows outside its domain — knowingly or not — now gets `(None, None)`
+  from `get_vectors()` and no effect from the other two. Use an
+  unscoped store, or one scoped to the row's own domain, where that
+  reach was intended. Unscoped stores are unaffected.
+
 - **An empty `add_vectors()` batch is a no-op on every backend.** It
   writes nothing and returns `[]`. Previously the four disagreed, and
   one of them corrupted the store: `MemoryVectorStore` minted an id for
@@ -114,6 +130,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `[]` or `np.array([])`. An empty batch is something a caller produces
   rather than intends — a comprehension that filtered everything out —
   so the guard belongs here rather than at every call site.
+
+- **`VectorStore.update_metadata()` documents its replace contract on
+  the ABC.** It said only "New metadata for each vector", and that
+  ambiguity is why one backend read it as a merge. The base class now
+  states that the supplied dict becomes the row's metadata outright,
+  that a configured `domain_id` survives the replacement, and that an
+  out-of-scope id is not updated.
 
 - **`ChromaVectorStore.update_metadata()` now replaces a row's metadata
   instead of merging into it.** A key omitted from the supplied dict is
@@ -252,6 +275,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   registration. It now raises a `ValueError` naming both.
 
 ### Fixed
+
+- **`update_metadata()` no longer pushes a row out of its own domain.**
+  On Memory, FAISS and Chroma the configured `domain_id` lives *in* the
+  metadata dict, and `update_metadata()` replaces that dict wholesale —
+  so a caller updating one field, without restating a scope key it has
+  no reason to know about, silently unscoped the row. The row then
+  vanished from `count()`, `search()` and `update_metadata_where()`, and
+  could not even be deleted: a scoped `clear()` resolves to
+  `{"domain_id": <configured>}`, and an absent key never matches a
+  filter. It became an orphan that only an unscoped store could still
+  see. The write-path default that `add_vectors()` applies is now
+  applied here too. pgvector was never affected — its `domain_id` is a
+  column the metadata write does not touch.
 
 - **`ChromaVectorStore.add_vectors()` no longer discards a write to an id
   the store already holds.** It reached chromadb's `add`, which drops a

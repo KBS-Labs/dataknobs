@@ -205,3 +205,40 @@ def test_explicit_schema_retains_prior_default() -> None:
         }
     )
     assert store.schema == "edubot"
+
+
+def _store(**extra: object) -> PgVectorStore:
+    """A store built without touching a database.
+
+    ``_domain_scope_sql`` is pure string assembly, so it is reachable
+    from a config-only construction and needs no postgres.
+    """
+    return PgVectorStore(
+        {"connection_string": "postgresql://u:p@h:5432/db", "dimensions": 4, **extra}
+    )
+
+
+def test_domain_scope_sql_is_empty_when_unscoped() -> None:
+    """An unscoped store emits no predicate and consumes no parameter.
+
+    The call sites interpolate and splat unconditionally, so "unscoped"
+    has to be expressible as a fragment that changes neither the SQL nor
+    the parameter list.
+    """
+    assert _store()._domain_scope_sql(2) == ("", [])
+
+
+def test_domain_scope_sql_binds_the_parameter_it_is_given() -> None:
+    """Placeholder numbering is the caller's to supply, and is checked here.
+
+    Each id-keyed statement has a different number of leading
+    parameters — one for the id, two when a metadata payload precedes
+    the scope — so an off-by-one here binds the scope to the wrong value
+    rather than failing loudly. Postgres would reject a *missing*
+    parameter, but ``$1`` when ``$2`` was meant is a well-formed query
+    that silently compares the domain against an id.
+    """
+    sql, params = _store(domain_id="t1")._domain_scope_sql(3)
+    assert sql.strip().startswith("AND ")
+    assert sql.rstrip().endswith("$3")
+    assert params == ["t1"]

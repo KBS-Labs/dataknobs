@@ -458,8 +458,12 @@ class ChromaVectorStore(VectorStore):
 
         inject = include_timestamps and include_metadata
 
-        # Get from collection
-        include = ["embeddings", "metadatas"] if include_metadata else ["embeddings"]
+        # Get from collection. Metadata is fetched whenever a scope is
+        # configured even if the caller did not ask for it: on this
+        # backend the row's ``domain_id`` lives in that dict, so it is
+        # what the scope check has to read.
+        want_meta = include_metadata or self.domain_id is not None
+        include = ["embeddings", "metadatas"] if want_meta else ["embeddings"]
         result = await asyncio.to_thread(self.collection.get, ids=ids, include=include)
 
         # chromadb 1.x returns ndarrays — coerce before truthiness/index.
@@ -478,6 +482,11 @@ class ChromaVectorStore(VectorStore):
             if emb is not None:
                 emb = np.array(emb, dtype=np.float32)
             raw_meta = metadatas[idx] if idx < len(metadatas) else None
+            # Out-of-domain rows answer exactly as absent ones do, so a
+            # caller cannot distinguish "not here" from "not yours".
+            if not self._in_configured_domain(self._decode_metadata(raw_meta)):
+                vectors.append((None, None))
+                continue
             meta = self._decode_metadata(raw_meta) if include_metadata else None
             if inject:
                 created, updated = self._reserved_timestamps(raw_meta)
@@ -491,9 +500,17 @@ class ChromaVectorStore(VectorStore):
         if not self._initialized:
             await self.initialize()
 
-        # Check which IDs exist
-        existing = await asyncio.to_thread(self.collection.get, ids=ids, include=[])
-        existing_ids = self._as_list(existing.get("ids"))
+        # Metadata, not just ids: it carries the scope each candidate
+        # has to be checked against before it can be deleted.
+        existing = await asyncio.to_thread(self.collection.get, ids=ids, include=["metadatas"])
+        existing_metas = self._as_list(existing.get("metadatas"))
+        existing_ids = [
+            rid
+            for i, rid in enumerate(self._as_list(existing.get("ids")))
+            if self._in_configured_domain(
+                self._decode_metadata(existing_metas[i] if i < len(existing_metas) else None)
+            )
+        ]
 
         if existing_ids:
             await asyncio.to_thread(self.collection.delete, ids=existing_ids)
@@ -757,12 +774,25 @@ class ChromaVectorStore(VectorStore):
         }
 
         now = datetime.now(UTC)
+        # The configured ``domain_id`` is defaulted back in, exactly as
+        # ``add_vectors`` does it: this path replaces the metadata dict
+        # outright and the scope lives inside that dict, so a caller
+        # updating one field would otherwise push the row out of its own
+        # domain. Applied before ``_replacement_payload`` so the scope
+        # is one of the keys being written rather than one of the keys
+        # being tombstoned.
+        rows = self._apply_domain_default(metadata, len(metadata))
         filtered_ids: list[str] = []
         filtered_metadata: list[dict[str, Any]] = []
-        for id_val, meta in zip(ids, metadata, strict=False):
+        for id_val, meta in zip(ids, rows, strict=False):
             if id_val not in stored_by_id:
                 continue
             stored = stored_by_id[id_val]
+            # A scoped store may not rewrite another domain's row — and
+            # since the replacement carries the configured scope, an
+            # unguarded write would capture it rather than merely edit it.
+            if not self._in_configured_domain(self._decode_metadata(stored)):
+                continue
             filtered_ids.append(id_val)
             # Stamp after the replacement payload, not before: that
             # payload tombstones every stored key the caller omitted,
@@ -916,7 +946,9 @@ class ChromaVectorStore(VectorStore):
         result = await asyncio.to_thread(self.collection.get, include=["metadatas"])
         fields: set[str] = set()
         for meta in self._as_list(result.get("metadatas")):
-            fields.update(self._decode_metadata(meta).keys())
+            decoded = self._decode_metadata(meta)
+            if self._in_configured_domain(decoded):
+                fields.update(decoded.keys())
         return fields
 
     async def clear(self, filter: dict[str, Any] | None = None) -> None:

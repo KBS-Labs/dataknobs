@@ -332,7 +332,9 @@ def _domain_scoped_metadata() -> list[dict[str, Any]]:
     return [
         {"k": "v"},
         {"k": "v"},
-        {"domain_id": "t2", "k": "v"},
+        # ``secret`` exists only outside the configured domain, so a
+        # scoped ``metadata_fields()`` must not report it.
+        {"domain_id": "t2", "k": "v", "secret": 1},
     ]
 
 
@@ -388,9 +390,16 @@ async def domain_scoped_store(
         await store.close()
 
 
-# NOTE on the asserted contract. #8 delivers *isolation* symmetry: a
-# configured ``domain_id`` confines every read/count/clear/update to
+# NOTE on the asserted contract. A configured ``domain_id`` delivers
+# *isolation* symmetry: it confines every read/count/clear/update to
 # that domain on every backend, and a cross-domain request is empty.
+# That holds however the row is addressed — the filter-keyed surfaces
+# get it from ``_effective_filter``, the id-keyed ones
+# (``get_vectors``, ``delete_vectors``, ``update_metadata``) and
+# ``metadata_fields`` from ``_in_configured_domain``, and pgvector from
+# a column predicate. A scope that bound only the surfaces taking a
+# filter would be a property of how the caller asks rather than of the
+# store.
 # The behavior of a caller *explicitly* passing ``domain_id`` in the
 # filter is intentionally NOT asserted as uniform: pgvector scopes via
 # a dedicated ``domain_id`` column and stores caller metadata JSONB
@@ -444,6 +453,119 @@ async def test_config_domain_id_scopes_update_metadata_where(
     assert cross == 0
     # The scoped store still sees exactly its two in-domain rows.
     assert await domain_scoped_store.count() == 2
+
+
+@pytest.mark.asyncio
+async def test_update_metadata_keeps_the_row_inside_the_configured_domain(
+    domain_scoped_store: Any,
+) -> None:
+    """A replacement dict omitting ``domain_id`` must not unscope the row.
+
+    ``update_metadata`` replaces a row's metadata outright, and on the
+    three backends that carry ``domain_id`` *in* that metadata the
+    configured scope is one of the keys being replaced. A caller
+    updating an unrelated field has no reason to restate it, so the
+    write-path default that ``add_vectors`` applies has to apply here
+    too — otherwise the row survives the update but leaves the domain.
+
+    pgvector cannot fail this: its ``domain_id`` is a column the
+    metadata write never touches. It is in the parametrization as the
+    reference the other three have to match.
+    """
+    assert await domain_scoped_store.update_metadata(["s1"], [{"k": "w"}]) == 1
+
+    # Every scoped surface must still see the row it just updated.
+    assert await domain_scoped_store.count() == 2
+    assert {r[0] for r in await domain_scoped_store.search(_query_vector(), k=10)} == {"s1", "s2"}
+    assert await domain_scoped_store.update_metadata_where(None, {"_swept": True}) == 2
+
+
+@pytest.mark.asyncio
+async def test_update_metadata_leaves_the_row_deletable(
+    domain_scoped_store: Any,
+) -> None:
+    """The unscoped row is not merely invisible — it is unreachable.
+
+    A scoped ``clear()`` resolves to ``{"domain_id": <configured>}`` and
+    takes the filtered path, and an absent key never matches a filter.
+    So a row that lost its ``domain_id`` cannot be deleted by the store
+    that wrote it, while an unscoped store over the same backing data
+    still returns it: a leak that outlives the only API that could
+    clean it up.
+    """
+    await domain_scoped_store.update_metadata(["s1"], [{"k": "w"}])
+    await domain_scoped_store.clear()
+
+    # Nothing of the configured domain is left behind to be orphaned.
+    assert await domain_scoped_store.count() == 0
+    # ``get_vectors`` answers positionally, so a row that is really gone
+    # comes back as a ``(None, None)`` placeholder rather than being
+    # omitted — which is what distinguishes "deleted" from "still there
+    # but no longer visible to the scoped surfaces".
+    assert await domain_scoped_store.get_vectors(["s1"]) == [(None, None)]
+
+
+@pytest.mark.asyncio
+async def test_get_vectors_does_not_reach_outside_the_configured_domain(
+    domain_scoped_store: Any,
+) -> None:
+    """Knowing an id is not authority to read it.
+
+    ``get_vectors`` is id-keyed, so it never passed through
+    ``_effective_filter`` and answered from the whole collection. That
+    makes the configured scope a property of *how you ask* rather than
+    of the store, which is the opposite of an isolation boundary — and
+    ids are frequently derived from content, so they are guessable.
+    """
+    assert await domain_scoped_store.get_vectors(["o1"]) == [(None, None)]
+    # In-domain ids still answer, and position is still preserved.
+    rows = await domain_scoped_store.get_vectors(["s1", "o1", "s2"])
+    assert [r[0] is not None for r in rows] == [True, False, True]
+
+
+@pytest.mark.asyncio
+async def test_delete_vectors_does_not_reach_outside_the_configured_domain(
+    domain_scoped_store: Any,
+) -> None:
+    """A scoped store cannot delete another domain's row."""
+    assert await domain_scoped_store.delete_vectors(["o1"]) == 0
+    # Still there: proven from a surface that can see across domains
+    # rather than from the scoped count, which would read 2 either way.
+    assert await domain_scoped_store.delete_vectors(["s1", "o1"]) == 1
+
+
+@pytest.mark.asyncio
+async def test_update_metadata_does_not_reach_outside_the_configured_domain(
+    domain_scoped_store: Any,
+) -> None:
+    """A scoped store cannot rewrite — or capture — another domain's row.
+
+    Sharper than the read case. Because the write path defaults the
+    configured ``domain_id`` into the replacement dict, an unscoped
+    ``update_metadata`` would not merely edit the out-of-domain row, it
+    would relabel it into the caller's own domain: a cross-domain read
+    that leaves no trace it happened.
+    """
+    assert await domain_scoped_store.update_metadata(["o1"], [{"k": "z"}]) == 0
+    # The store still sees only its own two rows — o1 was neither
+    # edited nor captured.
+    assert await domain_scoped_store.count() == 2
+    assert await domain_scoped_store.count(filter={"k": "z"}) == 0
+
+
+@pytest.mark.asyncio
+async def test_metadata_fields_does_not_disclose_another_domain(
+    domain_scoped_store: Any,
+) -> None:
+    """Field *names* are data too.
+
+    ``metadata_fields()`` unions the keys of every stored row, so on a
+    scoped store it leaked the shape of every other domain's metadata —
+    enough to learn what a neighbour records without reading a row.
+    """
+    fields = await domain_scoped_store.metadata_fields()
+    assert "k" in fields
+    assert "secret" not in fields
 
 
 @pytest.mark.asyncio

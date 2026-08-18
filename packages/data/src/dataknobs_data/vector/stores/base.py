@@ -175,11 +175,33 @@ class VectorStore(ABC, VectorStoreBase):
         ids: list[str],
         metadata: list[dict[str, Any]],
     ) -> int:
-        """Update metadata for existing vectors.
+        """Replace metadata for existing vectors, by id.
+
+        The supplied dict becomes the row's metadata **outright**: a key
+        the row holds and the caller omits is *removed*, not retained.
+        This is the opposite of :meth:`update_metadata_where`, whose
+        contract is a merge, and the distinction is stated here rather
+        than left to each backend because leaving it implicit is what
+        allowed a shipped backend to read it as a merge — a key omitted
+        from the same consumer code disappeared on three backends and
+        survived on the fourth.
+
+        A configured ``domain_id`` is preserved across the replacement
+        rather than being one of the keys dropped, so a caller updating
+        an unrelated field does not push the row out of its own scope.
+        An id outside the configured scope is not updated and does not
+        count toward the return value.
+
+        Backends carrying metadata in a store with a narrower value
+        domain than Python's may not round-trip every value; where that
+        is so it is documented on the backend. ``ChromaVectorStore``
+        cannot store a ``None`` value, because deleting a key and
+        setting it to ``None`` are the same operation in chromadb's
+        update API.
 
         Args:
             ids: Vector IDs to update
-            metadata: New metadata for each vector
+            metadata: The complete replacement metadata for each vector
 
         Returns:
             Number of vectors updated
