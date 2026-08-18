@@ -554,7 +554,7 @@ class ChromaVectorStore(VectorStore):
         # configured even if the caller did not ask for it: on this
         # backend the row's ``domain_id`` lives in that dict, so it is
         # what the scope check has to read.
-        want_meta = include_metadata or self.domain_id is not None
+        want_meta = include_metadata or self._is_scoped
         include = ["embeddings", "metadatas"] if want_meta else ["embeddings"]
         result = await asyncio.to_thread(self.collection.get, ids=ids, include=include)
 
@@ -677,6 +677,20 @@ class ChromaVectorStore(VectorStore):
         native: dict[str, Any] = {}
         post: dict[str, Any] = {}
         for key, value in filter.items():
+            if self._is_scoped and key == "domain_id":
+                # The configured scope key never pushes down, whatever
+                # the consumer declared. ``scalar_metadata_keys`` is a
+                # promise about stored values, and this is the one key
+                # the write path cannot keep it for: the scope is a
+                # *default*, so a caller can store a list here through
+                # the public API, and a co-owned row is a documented
+                # shape. A list is stored sentinel-encoded, so a native
+                # ``$eq`` against the encoded string matches nothing and
+                # the filter-keyed half goes blind to a row the id-keyed
+                # half still returns — the split that resolving scope
+                # through one evaluator exists to prevent.
+                post[key] = value
+                continue
             if isinstance(value, list):
                 # Empty-list filter never matches under four-quadrant
                 # semantics (the unsatisfiable short-circuit handles it

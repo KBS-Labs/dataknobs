@@ -232,3 +232,49 @@ async def test_count_with_post_filter_still_materializes(make_chroma_store):
     assert "metadatas" in (captured.get("include") or []), (
         f"Post-filter count must materialize metadata; got include={captured.get('include')!r}"
     )
+
+
+@requires_chromadb
+@pytest.mark.asyncio
+async def test_declaring_the_scope_key_scalar_does_not_split_the_store(
+    make_chroma_store: Callable[..., ChromaVectorStore],
+) -> None:
+    """The configured scope key never pushes down, however it is declared.
+
+    ``scalar_metadata_keys`` is a promise about *stored* values, and the
+    write path cannot keep it for ``domain_id``: the configured scope is
+    a default, so a caller may store a list there through the ordinary
+    public API, and a co-owned row is the documented shape. A list is
+    stored sentinel-encoded, and a native ``$eq`` against the encoded
+    string can never match it.
+
+    Declaring the scope key therefore re-opened the split that resolving
+    scope through one evaluator had just closed, with the halves
+    swapped: ``count()`` and ``search()`` went blind to the row while
+    ``get_vectors()`` still returned it and ``clear()`` left it behind —
+    a row its own store could see but never remove.
+
+    So the scope key stays in the post-filter whatever the consumer
+    declares. It is the one key whose correctness cannot be traded for a
+    query plan, and the cost is bounded: a scoped store post-filters the
+    key it was already going to post-filter before the declaration
+    existed.
+    """
+    store = make_chroma_store(domain_id="t1", scalar_metadata_keys=["domain_id"])
+    await store.initialize()
+    await store.add_vectors(
+        [_vec(0)], ids=["shared"], metadata=[{"domain_id": ["t1", "t2"], "k": "v"}]
+    )
+
+    # Filter-keyed half.
+    assert await store.count() == 1, "count() went blind to a co-owned row"
+    assert [h[0] for h in await store.search(_vec(0), k=5)] == ["shared"]
+
+    # Id-keyed half — the same answer, which is the whole point.
+    assert (await store.get_vectors(["shared"]))[0][0] is not None
+    # ``clear`` reports nothing (it returns ``None`` on this backend), so
+    # the row's absence afterwards is the assertion.
+    await store.clear()
+    assert (await store.get_vectors(["shared"]))[0] == (None, None), (
+        "clear() left behind a row the store could still see"
+    )

@@ -331,6 +331,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the shape. A write that does not mention `domain_id` now preserves the
   row's own value rather than re-stamping the configured one.
 
+- **Declaring the configured scope key in `scalar_metadata_keys` no
+  longer splits `ChromaVectorStore` against itself.** `scalar_metadata_keys`
+  is a promise about stored values that the write path cannot keep for
+  `domain_id`: the configured scope is a default rather than an override,
+  so a caller can store a list there through the ordinary API. A list is
+  stored sentinel-encoded, so the native `$eq` the declaration enables
+  matched nothing — `count()` and `search()` went blind to a row that
+  `get_vectors()` still returned and `clear()` could not remove. The
+  scope key now stays in the post-filter however it is declared.
+
 - **Re-adding an id on `ChromaVectorStore` now replaces that row's
   metadata instead of merging into it.** `add_vectors()` and
   `add_documents()` upsert on id conflict, and chromadb's `upsert`

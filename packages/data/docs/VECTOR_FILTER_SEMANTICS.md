@@ -172,13 +172,23 @@ store = ChromaVectorStore({
     "dimensions": 384,
     "collection_name": "kb",
     # Stored values for these keys are guaranteed scalar.
-    "scalar_metadata_keys": ["domain_id", "tenant_id"],
+    "scalar_metadata_keys": ["tenant_id", "category"],
 })
 ```
 
 For declared keys the partitioner pushes a Chroma-native predicate
 (`$eq` for a scalar filter value, `$in` for a list filter value),
-eliminating the post-filter. `count(filter={"domain_id": "x"})`
+eliminating the post-filter.
+
+**The configured scope key is the one exception.** When a store sets
+`domain_id`, that key stays in the post-filter however it is declared,
+and declaring it buys nothing. The declaration is a promise about
+*stored* values that the write path cannot keep here: the configured
+scope is a default rather than an override, so a caller can store a
+list under `domain_id` through the ordinary API, and a co-owned row is
+a documented shape. A list is stored sentinel-encoded, so a native
+`$eq` would match nothing — leaving `count()` and `search()` blind to a
+row `get_vectors()` still returns and `clear()` cannot remove. `count(filter={"domain_id": "x"})`
 then fetches only IDs (no metadata) when the entire filter pushes
 down, regardless of collection size. (Declaring a key scalar is a
 contract that its stored values are never lists; pushing a native
