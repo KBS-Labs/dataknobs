@@ -17,6 +17,11 @@ Two ways it did not:
   create a fresh inode and lock that instead. Two holders, no error.
 
 Both are reproduce-first below: each fails against the pre-fix lock.
+
+A third test guards the boundary the two fixes had to respect: an async
+caller constructs the lock on its event loop and offloads only
+``acquire`` to a worker thread, so construction has to stay off the
+filesystem however the exclusion above is implemented.
 """
 
 from __future__ import annotations
@@ -30,6 +35,7 @@ from pathlib import Path
 import pytest
 
 from dataknobs_common.locks import FileLock
+from dataknobs_common.testing import assert_no_blocking, requires_blockbuster
 
 HOLD = 0.15
 """Seconds a holder stays in the section — long enough that an overlap is
@@ -204,3 +210,18 @@ def test_the_same_file_spelled_two_ways_shares_one_lock(tmp_path: Path) -> None:
         thread.join(timeout=10)
 
     assert peak == 1, "two spellings of one path took two different locks"
+
+
+@requires_blockbuster
+async def test_constructing_a_lock_does_not_block_the_loop(tmp_path: Path) -> None:
+    """Construction stays off the filesystem, because callers do it on a loop.
+
+    ``acquire`` blocks without bound by design, and every async caller
+    offloads it to a worker thread — but it constructs the lock first,
+    on the event loop, where a stat of the path stalls every co-tenant
+    before the offload begins. Canonicalizing the path is filesystem
+    I/O (``realpath`` resolves each component), so it belongs with the
+    blocking half rather than in ``__init__``.
+    """
+    with assert_no_blocking():
+        FileLock(str(tmp_path / "state.bin"))

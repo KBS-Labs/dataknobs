@@ -45,7 +45,9 @@ shape for exactly this reason, and cheap next to what removing it costs.
   network mounts are unreliable. Same caveat the single-file stores'
   mtime/inode identity check already carries.
 * **:meth:`acquire` blocks without bound.** Correct on a worker thread,
-  fatal on an event loop — never call it from a coroutine.
+  fatal on an event loop — never call it from a coroutine. Constructing
+  the lock there is fine: ``__init__`` touches no filesystem, so the
+  usual shape — build the lock on the loop, offload ``acquire`` — holds.
 * **Not reentrant.** One thread acquiring twice deadlocks.
 """
 
@@ -102,27 +104,38 @@ class FileLock:
         self.filepath = filepath
         self.lockfile = filepath + ".lock"
         self.lock_handle: IO[bytes] | None = None
-        # Canonical so two spellings of one file — relative vs absolute,
-        # a symlink and its target — contend for the same mutex instead
-        # of taking one each and both proceeding.
-        self._mutex = _mutex_for(os.path.realpath(self.lockfile))
-        self._held = False
+        # Set between a successful ``acquire`` and its ``release``, and
+        # ``None`` otherwise — which is also how ``release`` knows there
+        # is nothing to hand on. Resolved in ``acquire`` rather than
+        # here because resolving it is filesystem I/O; see there.
+        self._mutex: threading.Lock | None = None
 
     def acquire(self) -> None:
         """Block until this is the only holder, in this process and beyond.
+
+        Canonicalizing the path is filesystem I/O — ``realpath`` resolves
+        every component — so it happens here rather than in ``__init__``.
+        An async caller builds the lock on its event loop and offloads
+        only this call to a worker thread, so a stat in the constructor
+        would stall that loop just before the offload meant to keep it
+        free.
 
         Takes the intra-process mutex first: it is the cheaper of the two
         and holding it is what makes the OS-level handle below safe to
         keep on ``self``, since only one thread of this process can be
         between here and :meth:`release`.
         """
-        self._mutex.acquire()
+        # Canonical so two spellings of one file — relative vs absolute,
+        # a symlink and its target — contend for the same mutex instead
+        # of taking one each and both proceeding.
+        mutex = _mutex_for(os.path.realpath(self.lockfile))
+        mutex.acquire()
         try:
             self._lock_file()
         except BaseException:
-            self._mutex.release()
+            mutex.release()
             raise
-        self._held = True
+        self._mutex = mutex
 
     def _lock_file(self) -> None:
         """Take the OS-level lock on the sibling lockfile."""
@@ -161,8 +174,10 @@ class FileLock:
         The lockfile is deliberately left in place — see the module
         docstring for why removing it is what lets two holders in.
         """
-        if not self._held:
+        mutex = self._mutex
+        if mutex is None:
             return
+        self._mutex = None
         try:
             handle = self.lock_handle
             self.lock_handle = None
@@ -176,8 +191,7 @@ class FileLock:
                         pass
                 handle.close()
         finally:
-            self._held = False
-            self._mutex.release()
+            mutex.release()
 
     def __enter__(self) -> Self:
         self.acquire()
