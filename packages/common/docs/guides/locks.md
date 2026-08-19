@@ -19,6 +19,12 @@ The lock abstraction lets you:
 - **Scale from single-process** (in-memory) **to multi-replica** (a
   registry-pluggable distributed backend)
 
+Everything on this page up to [`FileLock`](#filelock-a-different-primitive)
+describes that abstraction. `FileLock` also lives in
+`dataknobs_common.locks` and is **not** an implementation of it — read
+that section before reaching for either, because the two are not
+interchangeable.
+
 ## Installation
 
 The in-process lock is included in `dataknobs-common`:
@@ -431,6 +437,143 @@ shape: `connection_string`, individual `host`/`port`/`database`/
 fallbacks. Requires the `postgres` extra
 (`pip install 'dataknobs-common[postgres]'`).
 
+## `FileLock` — a different primitive
+
+`FileLock` shares the module and shares nothing else. It is a
+synchronous, path-keyed, advisory lock on a single file, and it does
+not implement `DistributedLock`:
+
+| | `DistributedLock` | `FileLock` |
+|---|---|---|
+| Call style | `async` | synchronous |
+| Keyed by | an opaque string | a filesystem path |
+| Scope | whoever shares the backing store | whoever can see the path |
+| Contention | `acquire()` returns `False` on timeout | the same, but unbounded by default |
+| Where it runs | on the event loop | inside a worker thread |
+
+The last row is the one that decides which you want. `FileLock` guards
+blocking disk I/O that has already been pushed off the loop — there is
+no loop there to `await` on, so the async protocol cannot be used even
+where it would otherwise fit.
+
+```python
+from dataknobs_common.locks import FileLock
+
+# Inside a worker thread — never on the event loop.
+with FileLock("/var/lib/app/index.pkl"):
+    ...  # read-modify-write, serialized against every other holder
+```
+
+### What it guarantees
+
+Mutual exclusion against **every** overlapping holder, which takes two
+mechanisms rather than one:
+
+- **Within one process**, a `threading.Lock` per lockfile. POSIX
+  record locks (`fcntl.lockf`) are owned by the *process*, so without
+  this a second thread of the same interpreter is granted a lock the
+  first already holds — two instances of a store in one process would
+  get no exclusion at all.
+- **Across processes**, `fcntl.lockf` on POSIX and `msvcrt.locking` on
+  Windows, taken on a sibling `<path>.lock` file.
+
+Two spellings of one file take the same lock, whichever half is doing
+the excluding. The lockfile is a sibling of the **resolved** target, so
+a symlink and its target share one; and the intra-process mutex is
+keyed by that lockfile's `(st_dev, st_ino)` rather than by its path, so
+hard links and case-insensitive volumes collapse too.
+
+### Bounding the wait
+
+`acquire()` blocks without bound by default. Every caller reaches it
+from a worker thread, and on the shared `asyncio.to_thread` executor an
+unbounded wait parks one of a small number of workers for as long as
+the current holder runs — every unrelated offload on that loop queues
+behind it. Pass `timeout` where that matters:
+
+```python
+lock = FileLock("/var/lib/app/index.pkl", timeout=30)
+
+if lock.acquire():        # False if the timeout elapsed
+    try:
+        ...
+    finally:
+        lock.release()
+
+with FileLock(path, timeout=30):   # raises TimeoutError instead
+    ...
+```
+
+The context manager raises rather than yielding an unheld lock: the
+body of every caller is a whole-state rewrite, so running it unlocked
+is the silent clobber the lock exists to prevent.
+
+### What it does not
+
+- **Advisory, and local-filesystem only.** A writer that never takes
+  the lock is not stopped by it, and `fcntl` semantics over NFS and
+  similar network mounts are unreliable.
+- **It needs to write, even to read.** The lockfile is opened `O_RDWR`,
+  so holding the lock requires create-or-write permission on the
+  target's directory. A caller on a read-only mount has no writer to
+  exclude — nothing can be published into a directory it cannot write —
+  so a read path should degrade to an unlocked read rather than fail;
+  `VectorStoreBase._persisted_load` is the worked example.
+- **Not reentrant.** One thread acquiring twice deadlocks. This is a
+  change in behaviour rather than a limitation of the new lock: the
+  previous one appeared reentrant only because `fcntl` grants the
+  owning process a lock it already holds, which is the defect the
+  intra-process mutex above exists to fix.
+
+### The `.lock` file stays, and so does the descriptor on it
+
+Releasing unlocks. It does not unlink `<path>.lock`, so a zero-byte
+file is left beside the target permanently, and it does not close the
+descriptor the lock was taken on. Both are deliberate and load-bearing,
+for reasons that turn out to be the same one seen twice.
+
+*The name*, because release hands the lock to a blocked waiter, which
+then holds an inode with no name; unlinking at that moment lets the
+next `acquire` create a *fresh* inode and lock that instead — two
+holders, no error.
+
+*The descriptor*, because of a POSIX rule that catches most people out:
+closing **any** descriptor referring to a file releases every record
+lock the process holds on it, whatever descriptor took them. A handle
+per lock instance therefore makes an *unsuccessful* acquire dangerous —
+it opens the lockfile, finds the mutex taken, and closes its handle on
+the way out, releasing a lock another thread holds and neither of them
+knows about. So there is exactly one descriptor per lockfile inode,
+owned by the process-wide registry rather than by any `FileLock`, and
+release is `LOCK_UN` on it. Nothing observable inside the process
+depends on this; it is why the bounded-`acquire` path below is safe to
+use next to an unbounded one.
+
+Two consequences of that permanence. The file is never truncated, so it
+can carry contents; and it is created `0o666` before umask, so a
+lockfile one uid creates stays openable by every other uid that can
+write the directory. umask still applies — a lockfile written by root
+under the usual `022` is `0o644` and locks out an unprivileged writer
+for good, which a deployment sharing a directory across uids has to
+solve with a permissive umask.
+
+### Across a fork
+
+The registry is reset in the child after `os.fork()`, both halves of
+it. Only the forking thread survives, so a mutex any other thread held
+is locked in the child with no owner left to release it, and the
+child's first `acquire()` on that path would block on a holder that
+does not exist.
+
+The inherited descriptors are closed in the same handler, and the
+timing is the point: record locks are not inherited across a fork, so
+the child provably holds none at that instant, which is what makes
+closing safe — and doing it before the child can acquire anything is
+what stops an inherited descriptor from later releasing a lock the
+child does hold, by the POSIX rule above. The registry is process-local
+bookkeeping either way, so rebuilding it is the correct
+reconstruction, not a workaround.
+
 ## Usage Across DataKnobs
 
 | Package | Component | How It Uses the Lock |
@@ -455,6 +598,8 @@ from dataknobs_common.locks import (
     PostgresAdvisoryLock,
     # Typed config for the Postgres backend
     PostgresLockConfig,
+    # Separate primitive — see the section above
+    FileLock,
 )
 
 # Also re-exported from the top-level namespace:
@@ -463,5 +608,6 @@ from dataknobs_common import (
     create_lock,
     create_lock_async,
     InProcessLock,
+    FileLock,
 )
 ```

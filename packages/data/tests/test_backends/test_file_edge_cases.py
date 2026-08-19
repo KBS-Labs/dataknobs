@@ -4,7 +4,8 @@ import asyncio
 import os
 import tempfile
 import platform
-from unittest.mock import MagicMock, patch, mock_open
+import threading
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -22,10 +23,15 @@ from dataknobs_data.records import Record
 
 
 class TestFileLock:
-    """Test FileLock edge cases."""
+    """Test FileLock edge cases.
+
+    Imported from ``dataknobs_data.backends.file``, which re-exports it
+    from ``dataknobs_common.locks`` — so these also pin that the move
+    did not break the import shape callers already had.
+    """
 
     def test_lock_acquire_release(self):
-        """Test basic lock acquisition and release."""
+        """Basic acquisition and release; the lockfile survives both."""
         with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as f:
             filepath = f.name
 
@@ -34,8 +40,10 @@ class TestFileLock:
             lock.acquire()
             assert os.path.exists(filepath + ".lock")
             lock.release()
-            # Lock file should be removed after release
-            assert not os.path.exists(filepath + ".lock")
+            # Deliberately NOT removed. Unlinking on release hands the
+            # lock to a waiter and then lets the next acquire create a
+            # fresh inode to lock instead — two holders, no error.
+            assert os.path.exists(filepath + ".lock")
         finally:
             if os.path.exists(filepath):
                 os.remove(filepath)
@@ -50,8 +58,7 @@ class TestFileLock:
         try:
             with FileLock(filepath):
                 assert os.path.exists(filepath + ".lock")
-            # Lock file should be removed after context exit
-            assert not os.path.exists(filepath + ".lock")
+            assert os.path.exists(filepath + ".lock")
         finally:
             if os.path.exists(filepath):
                 os.remove(filepath)
@@ -60,43 +67,97 @@ class TestFileLock:
 
     @pytest.mark.skipif(platform.system() != "Windows", reason="Windows-specific test")
     def test_windows_lock_retry(self):
-        """Test Windows lock retry mechanism."""
+        """Test Windows lock retry mechanism.
+
+        ``msvcrt`` is substituted rather than exercised: its blocking
+        variant has no non-blocking probe to script, and the branch only
+        runs on Windows, where this test runs for real. The branch is
+        selected by ``sys.platform``, which is already ``win32`` here —
+        so nothing patches the platform check itself.
+
+        The lockfile is left real. ``acquire`` keys its intra-process
+        mutex on the lockfile's inode, so a substituted open would hand
+        it a handle with no ``fileno`` to stat; and the retry loop now
+        holds one handle across attempts rather than reopening per
+        attempt, which is the behaviour worth pinning here.
+        """
         with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as f:
             filepath = f.name
 
         try:
-            with patch("platform.system", return_value="Windows"):
-                # Mock msvcrt module
-                msvcrt_mock = MagicMock()
-                lock_attempts = [OSError("locked"), OSError("locked"), None]
-                msvcrt_mock.locking.side_effect = lock_attempts
-                msvcrt_mock.LK_NBLCK = 1
-                msvcrt_mock.LK_UNLCK = 2
+            msvcrt_mock = MagicMock()
+            lock_attempts = [OSError("locked"), OSError("locked"), None]
+            msvcrt_mock.locking.side_effect = lock_attempts
+            msvcrt_mock.LK_NBLCK = 1
+            msvcrt_mock.LK_UNLCK = 2
 
-                with patch.dict("sys.modules", {"msvcrt": msvcrt_mock}):
-                    with patch("time.sleep") as sleep_mock:
-                        lock = FileLock(filepath)
-                        with patch("builtins.open", mock_open()):
-                            lock.acquire()
-                            # Should retry on OSError
-                            assert sleep_mock.call_count == 2
+            with patch.dict("sys.modules", {"msvcrt": msvcrt_mock}):
+                with patch("time.sleep") as sleep_mock:
+                    lock = FileLock(filepath)
+                    assert lock.acquire() is True
+                    # Should retry on OSError
+                    assert sleep_mock.call_count == 2
+                    lock.release()
         finally:
             if os.path.exists(filepath):
                 os.remove(filepath)
+            if os.path.exists(filepath + ".lock"):
+                os.remove(filepath + ".lock")
 
-    def test_lock_release_error_handling(self):
-        """Test lock release error handling."""
+    def test_release_without_acquire_is_a_no_op(self):
+        """A release that never acquired must not raise or free a mutex.
+
+        The intra-process mutex is released in ``release()``; releasing
+        one this instance never took would raise ``RuntimeError`` and,
+        worse, hand the section to a thread that is legitimately inside
+        it.
+        """
         with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as f:
             filepath = f.name
 
         try:
-            lock = FileLock(filepath)
-            lock.acquire()
+            FileLock(filepath).release()  # no acquire — must not raise
 
-            # Make lock file unremovable
-            with patch("os.remove", side_effect=OSError("Permission denied")):
-                lock.release()  # Should not raise exception
+            # And the lock is still takeable afterwards.
+            with FileLock(filepath):
+                pass
+        finally:
+            if os.path.exists(filepath):
+                os.remove(filepath)
+            if os.path.exists(filepath + ".lock"):
+                os.remove(filepath + ".lock")
 
+    def test_two_instances_over_one_path_do_not_both_hold(self):
+        """Two ``FileLock`` objects on one path exclude each other.
+
+        This is the shape two database instances in one process have,
+        and the one POSIX record locks do not cover on their own: their
+        owner is the process, so the second acquire used to be granted
+        immediately.
+        """
+        with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as f:
+            filepath = f.name
+
+        try:
+            first = FileLock(filepath)
+            second = FileLock(filepath)
+            first.acquire()
+
+            inside = threading.Event()
+
+            def take_second():
+                second.acquire()
+                inside.set()
+                second.release()
+
+            waiter = threading.Thread(target=take_second)
+            waiter.start()
+            try:
+                assert not inside.wait(timeout=0.3), "second holder was let in"
+            finally:
+                first.release()
+                waiter.join(timeout=10)
+            assert inside.is_set(), "second holder never got the lock"
         finally:
             if os.path.exists(filepath):
                 os.remove(filepath)

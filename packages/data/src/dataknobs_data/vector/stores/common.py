@@ -4,14 +4,17 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import glob
 import copy
 import logging
 import os
+import tempfile
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar, cast
 
 from dataknobs_common.exceptions import ConcurrencyError
+from dataknobs_common.locks import FileLock
 from dataknobs_common.structured_config import StructuredConfigConsumer
 
 from ..exceptions import VectorDomainScopeError
@@ -26,6 +29,84 @@ if TYPE_CHECKING:
 
 
 logger = logging.getLogger(__name__)
+
+
+def _forced_save_effect(
+    current: tuple[int, int, int] | None,
+    persisted: tuple[int, int, int] | None,
+) -> str:
+    """What ``save(force=True)`` is about to cost, for the WARNING log.
+
+    Four outcomes, not two. A file that is *gone* differs from one that
+    *changed*: both fail the identity comparison, but only one of them
+    has another writer's rows in it. Reporting a loss that did not happen
+    sends an operator looking for rows nothing discarded. A file that was
+    never there differs again — "unchanged" describes a file, and there
+    is none to describe.
+    """
+    if current is None and persisted is None:
+        return "There is no file at that path, so nothing was discarded."
+    if current == persisted:
+        return "The file is unchanged, so nothing was discarded."
+    if current is None:
+        return "The file is no longer there, so nothing was discarded."
+    return (
+        "The file changed since this store read or wrote it, so another "
+        "writer's rows are being discarded."
+    )
+
+
+def _flush_to_disk(path: str) -> None:
+    """Force ``path``'s contents out of the page cache before it is published.
+
+    ``os.replace`` is atomic with respect to *readers*, not with respect
+    to power loss: on a journalled filesystem the rename metadata can
+    reach the disk while the data it names has not, leaving a truncated
+    file that has already replaced a known-good one. The whole point of
+    staging is that a failure leaves the previous state intact, and
+    without this the guarantee stops at process death.
+
+    Opened ``O_WRONLY`` because Windows implements ``os.fsync`` as
+    ``_commit``, which rejects a read-only descriptor — so a read-only
+    open would make the guarantee above silently absent there, swallowed
+    into the debug line below. Nothing is written through the handle;
+    the mode is what the platform requires to flush. The scratch file
+    was created by this process moments ago, so it is writable.
+
+    Best-effort by design: a filesystem with no working ``fsync`` is not
+    a reason to fail a save that has otherwise succeeded.
+    """
+    try:
+        fd = os.open(path, os.O_WRONLY)
+    except OSError:
+        return
+    try:
+        os.fsync(fd)
+    except OSError:
+        logger.debug("Could not fsync %s before publishing it", path)
+    finally:
+        os.close(fd)
+
+
+def _flush_directory(published_path: str) -> None:
+    """Force the *rename* durable, having forced the contents durable.
+
+    A file's own ``fsync`` says nothing about the directory entry
+    pointing at it, so a crash can lose the rename while keeping the
+    data. Not available on every platform — Windows cannot open a
+    directory as a file — so failure here is expected rather than
+    exceptional.
+    """
+    try:
+        fd = os.open(os.path.dirname(published_path) or ".", os.O_RDONLY)
+    except OSError:
+        return
+    try:
+        os.fsync(fd)
+    except OSError:
+        logger.debug("Could not fsync the directory holding %s", published_path)
+    finally:
+        os.close(fd)
 
 
 POST_FILTER_OVERFETCH = 4
@@ -613,11 +694,22 @@ class VectorStoreBase(StructuredConfigConsumer[VectorStoreConfig]):
         writer that got there first.
 
         ``force`` skips the check. It is the deliberate way out of a
-        refusal, and it accepts the loss.
+        refusal, and it accepts the loss — so it is logged at WARNING
+        every time it is used, per ``rules/security.md`` §8 and because
+        it is the line an operator wants when asking where the rows
+        went. The identity is read even under ``force``, at the cost of
+        one ``stat`` before a whole-state serialization, so the log can
+        say whether anything was actually discarded.
         """
-        if force:
-            return
         current = self._file_identity(path)
+        if force:
+            logger.warning(
+                "%s: save(force=True) bypassed the staleness check on %s. %s",
+                type(self).__name__,
+                path,
+                _forced_save_effect(current, self._persisted_identity),
+            )
+            return
         if current == self._persisted_identity:
             return
         raise ConcurrencyError(
@@ -660,15 +752,141 @@ class VectorStoreBase(StructuredConfigConsumer[VectorStoreConfig]):
         self._refresh_persisted_identity(path)
         self._dirty = False
 
+    @contextlib.contextmanager
+    def _persisted_save(self, path: str, *, force: bool) -> Iterator[None]:
+        """Hold ``path``'s file lock across staleness check → write → stamp.
+
+        The check and the write it guards are two operations with a
+        scheduling point between them: both run on a worker thread, with
+        a whole serialization in between. Without a lock spanning them,
+        two instances over one path both pass the check before either
+        writes, and the second replaces the first's file with a snapshot
+        that never saw its rows — **and neither raises**, because the
+        refusal that exists to prevent exactly that was passed by both
+        while the file still looked untouched.
+
+        ``_save_lock`` cannot close this. It is an ``asyncio.Lock`` on
+        one instance, and the conflicting writer is a *different*
+        instance, in this process or another. :class:`FileLock` covers
+        both — it is the same lock ``AsyncFileDatabase`` already takes
+        for the same hazard on the same kind of single-file store.
+
+        The bracket lives here rather than in each store because the
+        sequence is identical in both, and a third store adopting
+        ``persist_path`` should inherit it rather than rediscover it.
+        That is also why the directory is created here. It was written
+        out in each store, and it is a *precondition of the lock* — the
+        lockfile is a sibling of the target, so its directory has to
+        exist before ``FileLock`` can open it. A third store inheriting
+        the bracket without it would get ``FileNotFoundError`` out of the
+        lock on its first save.
+        """
+        # ``os.path.dirname`` is "" for a bare filename (no directory
+        # component), and ``makedirs("")`` raises FileNotFoundError.
+        # Both stores resolve ``persist_path`` before calling this, and
+        # a resolved path is absolute, so neither can reach the empty
+        # case today — the guard is a precondition for a caller that
+        # passes a bare relative name, not dead weight from the move.
+        # Resolving here instead would be worse: the stamp would then be
+        # on a different string than the one the caller hands
+        # ``_write_then_publish``, which is exactly the divergence that
+        # made the half-publish recovery silently never run.
+        parent_dir = os.path.dirname(path)
+        if parent_dir:
+            os.makedirs(parent_dir, exist_ok=True)
+
+        with FileLock(path):
+            self._guard_persisted_identity(path, force=force)
+            yield
+            self._stamp_persisted_identity(path)
+
+    @contextlib.contextmanager
+    def _persisted_load(self, path: str) -> Iterator[bool]:
+        """Hold ``path``'s file lock across the read and the stamp after it.
+
+        Yields whether the file exists. A body told ``False`` must not
+        read, and nothing is stamped in that case — a store that read
+        nothing is in step with nothing.
+
+        The lock is not only about this instance's own save.
+        :meth:`_stamp_persisted_identity` writes two fields the save path
+        owns, so a load running inside a save can declare the store in
+        step with a file the save has not written yet, after which
+        ``close()`` skips persisting a mutation nobody wrote. And a store
+        that publishes two files — an index beside its side-car — renames
+        them one after the other, so an unlocked reader landing between
+        the two renames gets a new index with a stale side-car.
+
+        Reads without the lock when the directory is not writable, since
+        nothing can be published into one, and raises when it *is* and
+        the lock still could not be taken — where a writer can exist and
+        the torn read above is live. The boundary is the directory, not
+        the failure: a lockfile owned by another uid fails identically
+        to a read-only mount and means the opposite thing.
+        """
+        if not Path(path).parent.is_dir():
+            # A ``persist_path`` under a directory that does not exist
+            # yet is the ordinary first-run shape: ``save()`` creates the
+            # directory, ``load()`` finds nothing. Taking the lock first
+            # would mean opening a lockfile in a directory that is not
+            # there and failing the load outright.
+            yield False
+            return
+
+        # Asked before the attempt, because it is the *condition* that
+        # licenses an unlocked read, not the failure. See the docstring.
+        writable = os.access(Path(path).parent, os.W_OK)
+        with contextlib.ExitStack() as stack:
+            try:
+                stack.enter_context(FileLock(path))
+            except OSError as exc:
+                if writable:
+                    raise OSError(
+                        exc.errno,
+                        f"{type(self).__name__}: could not take the persist "
+                        f"lock on {path}, and its directory is writable — so "
+                        "a writer that this read has to be excluded from can "
+                        "exist, and reading without the lock risks a "
+                        "half-published state. A lockfile is created 0o666 "
+                        "before umask, so one written by another uid under "
+                        "the usual 022 is unopenable here; a directory shared "
+                        "across uids needs a permissive umask.",
+                        path,
+                    ) from exc
+                # Unwritable, so nothing can be published into this
+                # directory and there is no writer to exclude — an index
+                # baked into a read-only image layer, or served from a
+                # read-only mount. Both loaded before the lock existed,
+                # and failing them now would be the lock refusing reads
+                # it was never needed for.
+                #
+                # Only on this side. ``_persisted_save`` keeps the hard
+                # lock, because there the write *is* the thing that
+                # needs excluding.
+                logger.warning(
+                    "%s: could not take the persist lock on %s (%s). Reading "
+                    "without it: nothing can be published into a directory "
+                    "this process cannot write, so there is no concurrent "
+                    "writer to exclude.",
+                    type(self).__name__,
+                    path,
+                    exc,
+                )
+            exists = Path(path).exists()
+            yield exists
+            if exists:
+                self._stamp_persisted_identity(path)
+
     def _write_then_publish(
         self,
         writes: list[tuple[str, Callable[[str], None]]],
+        tracked: str,
     ) -> None:
         """Write each file to a scratch sibling, then rename them into place.
 
-        Each ``(final_path, write)`` pair is written to ``final_path +
-        ".tmp"``; only once *every* write has succeeded are the renames
-        performed. A write that fails — out of space, permissions, a
+        Each ``(final_path, write)`` pair is written to a uniquely named
+        scratch file in ``final_path``'s own directory; only once *every*
+        write has succeeded are the renames performed. A write that fails — out of space, permissions, a
         pickle that will not serialize — therefore leaves the existing
         files untouched, instead of replacing one of them and abandoning
         the caller with a half-updated pair whose two halves describe
@@ -676,7 +894,9 @@ class VectorStoreBase(StructuredConfigConsumer[VectorStoreConfig]):
 
         This is not a transaction across several files. ``os.replace`` is
         atomic per file, so a crash *between* two renames still leaves a
-        new file beside an old sibling. Making that impossible needs a
+        new file beside an old sibling — a concurrent *reader* is covered
+        by :meth:`_persisted_load` taking the same lock the publish is
+        under, but a crash is not. Making that impossible needs a
         single-file format or a write-ahead log, neither of which this
         change introduces. What it does remove is the far likelier
         failure: an error raised on the second write after the first has
@@ -694,29 +914,192 @@ class VectorStoreBase(StructuredConfigConsumer[VectorStoreConfig]):
         therefore refreshed on the way out, while ``_dirty`` stays set
         because nothing was persisted.
 
-        Scratch files are removed on any failure. Blocking I/O; callers
-        run on a worker thread.
+        Sweeps each published file's orphaned scratch siblings first,
+        under the lock the bracket holds. It lives here rather than in
+        the bracket because this is the only thing that creates them,
+        and because the bracket knows one path while a store may publish
+        several — the side-car's leftovers need sweeping too.
+
+        Each scratch file gets a name of its own. A fixed
+        ``<final>.tmp`` sibling is shared by every writer of that path,
+        so two of them stage over each other's bytes and the loser's
+        cleanup can unlink a file the winner is about to rename —
+        turning a silent clobber into a spurious ``FileNotFoundError``.
+        The cost of unique names is that a process killed mid-save
+        leaves its scratch file behind instead of having it overwritten
+        by the next save; one stray file is the better failure.
+
+        Permissions follow the file being replaced, where there is one.
+        ``mkstemp`` creates owner-only, and publishing that over an
+        existing file would silently narrow whatever mode the consumer
+        had set — as the previous fixed-name scratch silently *widened*
+        it to the umask default on every save.
+
+        Every scratch file is removed on any failure, including one
+        whose ``write`` raised — which is the likeliest failure of the
+        three the paragraph above names, and the one a list built from
+        *successful* writes cannot clean up. Blocking I/O; callers run on
+        a worker thread.
+
+        Args:
+            writes: Each final path and the callable that writes it to a
+                scratch sibling, in publish order.
+            tracked: Which of those paths carries the identity stamp —
+                the canonical ``persist_path``. Passed rather than read
+                back off the instance because the two are not the same
+                string: paths here are canonical, while ``persist_path``
+                is not resolved, so through a symlink a re-derivation
+                would not match anything published and the refresh above
+                would silently never run.
         """
+        # Appended before ``write`` rather than after it, because the
+        # write is what fails. A published scratch no longer exists, so
+        # the unlink below finds nothing and suppresses the ENOENT;
+        # tracking the two cases apart would buy nothing.
+        created: list[str] = []
         staged: list[tuple[str, str]] = []
         published: list[str] = []
         try:
             for final_path, write in writes:
-                tmp = f"{final_path}.tmp"
+                # Swept per published file rather than once for the
+                # tracked one: a two-file store leaks up to two scratch
+                # files per kill, and now that the match is exact the
+                # side-car's are no longer reached by prefix accident.
+                self._sweep_orphaned_scratch(final_path)
+                tmp = self._scratch_sibling(final_path)
+                created.append(tmp)
                 write(tmp)
+                _flush_to_disk(tmp)
+                self._carry_mode(tmp, final_path)
                 staged.append((tmp, final_path))
             for tmp, final_path in staged:
                 os.replace(tmp, final_path)
                 published.append(final_path)
             staged.clear()
+            # One flush per *directory*, which is one flush in practice:
+            # a store's files are siblings, because the rename is only
+            # atomic within a filesystem. Deduplicated rather than
+            # assumed, so a store publishing into two directories makes
+            # both renames durable instead of the first one's.
+            for representative in {os.path.dirname(p): p for p in published}.values():
+                _flush_directory(representative)
         finally:
             # Emptied above exactly when every rename landed, so a
             # non-empty ``staged`` here *is* the failure signal.
             failed = bool(staged)
-            for tmp, _ in staged:
+            for tmp in created:
                 with contextlib.suppress(OSError):
                     os.unlink(tmp)
-            if failed and self.persist_path is not None and str(self.persist_path) in published:
-                self._refresh_persisted_identity(str(self.persist_path))
+            if failed and tracked in published:
+                self._refresh_persisted_identity(tracked)
+
+    @staticmethod
+    def _canonical_persist_path(path: str | os.PathLike[str]) -> str:
+        """Resolve ``path`` to the file it actually names.
+
+        A ``persist_path`` is often a stable name pointing at versioned
+        storage, and publishing is ``os.replace`` — which replaces the
+        *symlink* rather than writing through it. The first save then
+        turns the alias into a regular file holding this store's
+        snapshot, while the versioned file it used to point at keeps the
+        old one, and nothing says so.
+
+        Resolving here fixes that and keeps the lock honest. ``FileLock``
+        takes its lockfile beside the resolved target so two spellings of
+        one file contend; a save that destroys the symlink would move the
+        lockfile out from under that agreement after exactly one write,
+        leaving two writers serialized until the moment it stopped
+        mattering.
+
+        Every derived path follows from the result, which is why the
+        stores resolve once at the top rather than each consumer
+        resolving its own: FAISS's ``.meta`` side-car is not itself a
+        symlink, so deriving it from an unresolved path would strand it
+        in a different directory from the index it describes.
+
+        Non-strict: a path whose directory does not exist yet resolves to
+        itself, which is the ordinary first-run shape.
+        """
+        return os.path.realpath(path)
+
+    @staticmethod
+    def _sweep_orphaned_scratch(final_path: str) -> None:
+        """Remove scratch siblings of ``final_path`` left by a dead writer.
+
+        Called with the file lock held, which is what makes it safe: a
+        live writer publishing *this* target holds that lock, so a
+        scratch file of this target visible here belongs to a process
+        that died between creating one and renaming it.
+
+        That argument covers this target and no other, so the match has
+        to be exact in both directions. The name is escaped, because a
+        ``persist_path`` is a filename and may contain ``[``, ``?`` or
+        ``*`` — read as a pattern it stops matching this target's own
+        orphans and starts matching some other file's. And the token is
+        required to be dot-free, because ``<name>.*.tmp`` also describes
+        every target whose name merely *begins* with this one:
+        ``idx``'s sweep would otherwise reach ``idx.pkl``'s scratch
+        files, whose writer holds a different lock and may be about to
+        rename one. ``mkstemp``'s alphabet has no ``.``, so a dot in the
+        token means the file belongs to a longer-named target.
+
+        Unique scratch names made this necessary. The previous fixed
+        ``<name>.tmp`` was overwritten by the next save, so a hard kill
+        cost one stray file forever; unique names cost one *per kill*,
+        which is unbounded over a process that is restarted.
+        """
+        target = Path(final_path)
+        try:
+            candidates = list(target.parent.glob(glob.escape(target.name) + ".*.tmp"))
+        except OSError:
+            return
+        for orphan in candidates:
+            token = orphan.name[len(target.name) + 1 : -len(".tmp")]
+            if "." in token:
+                continue
+            with contextlib.suppress(OSError):
+                orphan.unlink()
+            logger.debug("Removed an orphaned scratch file: %s", orphan)
+
+    @staticmethod
+    def _scratch_sibling(final_path: str) -> str:
+        """An empty, uniquely named file beside ``final_path``.
+
+        Beside it rather than in a temp directory so the publishing
+        ``os.replace`` stays within one filesystem, which is what makes
+        it atomic.
+        """
+        target = Path(final_path)
+        fd, tmp = tempfile.mkstemp(
+            dir=target.parent,
+            prefix=target.name + ".",
+            suffix=".tmp",
+        )
+        os.close(fd)
+        return tmp
+
+    @staticmethod
+    def _carry_mode(scratch: str, final_path: str) -> None:
+        """Give ``scratch`` the permissions of the file it will replace.
+
+        A no-op when there is nothing to replace: a file created here
+        keeps ``mkstemp``'s owner-only mode, which is the right default
+        for a store's own data and the one thing this cannot inherit.
+
+        Only the permission bits carry. ``setgid`` and the sticky bit are
+        masked off deliberately: they are rarely meaningful on a regular
+        file, and reproducing ``setgid`` from a file this process may not
+        own is the kind of thing a save should not be doing silently. A
+        directory relying on ``setgid`` for group inheritance is
+        unaffected — that bit lives on the directory, not on the file
+        being replaced.
+        """
+        try:
+            mode = Path(final_path).stat().st_mode & 0o777
+        except OSError:
+            return
+        with contextlib.suppress(OSError):
+            Path(scratch).chmod(mode)
 
     def _overfetch_sizes(
         self,

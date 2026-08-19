@@ -108,6 +108,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`SyncFileDatabase` and `AsyncFileDatabase` leave a `<path>.lock`
+  file beside their data file.** It is no longer removed when the lock
+  is released, because removing it is what let two holders in: release
+  hands the lock to a blocked waiter holding a now-nameless inode, and
+  unlinking there lets the next acquirer create a fresh inode and lock
+  that instead. Two instances of either backend in one process
+  are also genuinely serialized now, which they were not before —
+  `fcntl` record locks are owned by the process, so the second acquire
+  used to be granted immediately.
+
+- **`FileLock` is no longer reentrant.** One thread acquiring the same
+  path twice now deadlocks where it previously succeeded. The old
+  behaviour was not a feature: it worked only because `fcntl` grants the
+  owning process a lock it already holds, which is precisely the defect
+  the intra-process mutex above fixes — there was no way to keep it
+  without keeping the hole. In-tree callers never nest, but the class is
+  importable, and `from dataknobs_data.backends.file import FileLock`
+  still resolves (to `dataknobs_common.locks.FileLock`, where it now
+  lives so the vector stores can reach it too).
+
+  Two other differences on that same surface. Holding the lock needs
+  create-or-write permission on the directory even to read under it, so
+  a caller on a read-only mount must degrade rather than fail. And
+  `FileLock(path, timeout=...)` now bounds the wait — worth setting from
+  a worker of the shared `asyncio.to_thread` executor, where an
+  unbounded wait parks a pooled thread for as long as the holder runs.
+
+- **A persisted vector-store file keeps the permissions it had.** The
+  scratch-then-rename publish used to reset the mode to the umask
+  default on every save, discarding any `chmod` a consumer had applied.
+  It now carries the replaced file's mode across. A file the store
+  creates for the first time is owner-only.
+
 - **`ChromaVectorStore.update_metadata()` and `update_metadata_where()`
   return rows *matched*, not rows written.** Both previously returned
   the number of rows actually sent to chromadb, which now differs: a
@@ -297,6 +330,188 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   registration. It now raises a `ValueError` naming both.
 
 ### Fixed
+
+- **The scratch sweep read its target's name as a glob pattern.** A
+  `persist_path` is a filename, so one containing `[`, `?` or `*` was
+  interpreted rather than matched — the sweep stopped finding its own
+  orphaned scratch files, reopening the unbounded leak it exists to
+  close, and started matching a different file's. The name is now
+  escaped.
+
+  It also matched any target whose name merely *begins* with this one,
+  so a store persisting to `idx` could unlink a live scratch file
+  belonging to one persisting to `idx.pkl` — a different target, under
+  a lock the sweeping store does not hold, whose writer is about to
+  rename it. The scratch token is now required to be dot-free, which
+  `mkstemp`'s alphabet guarantees for this target's own files.
+
+  Sweeping moved from the save bracket to the publish itself, which is
+  the only thing that creates scratch files and the only one that knows
+  every path being written: a two-file store's side-car leftovers used
+  to be reached, when they were reached at all, by the prefix looseness
+  above.
+
+- **The rename flush covered one directory, not each.** Both stores
+  publish siblings, so flushing the first published path's directory was
+  right by coincidence; a store publishing into two made only the first
+  rename durable. Deduplicated by directory now, which is the same one
+  flush in practice and the right one for a store inheriting the
+  bracket.
+
+- **`save(force=True)` called a file that never existed "unchanged".**
+  True about the loss — there is none — but "unchanged" describes a
+  file, and the WARNING is what an operator reads to find out what a
+  destructive flag just did. Reported as no file at that path.
+
+- **`fsync` before publishing was a silent no-op on Windows.** The
+  staged file was opened `O_RDONLY` to flush it, and Windows implements
+  `os.fsync` as `_commit`, which rejects a read-only descriptor — so
+  the crash-durability guarantee was absent there, swallowed into a
+  debug line. Opened `O_WRONLY` now; nothing is written through the
+  handle.
+
+- **A half-landed publish left a symlinked store refusing every save.**
+  `FaissVectorStore` writes an index and a `.meta` side-car; if the
+  second rename fails after the first has landed, the store has
+  replaced the tracked file without reaching its identity stamp, so it
+  refreshes the stamp on the way out — otherwise every later save
+  raises `ConcurrencyError` naming a conflicting writer that does not
+  exist, with `save(force=True)` the only escape.
+
+  That recovery re-derived the tracked path from `persist_path`, which
+  is not resolved, and compared it against the paths it had published,
+  which are canonical. Through a symlink the two never matched, so the
+  branch never ran — in exactly the layout resolving was introduced
+  for, a stable name pointing at versioned storage. The publish is now
+  told which path carries the stamp instead of deducing it.
+
+- **A compressed file database locked a path nothing read or wrote.**
+  `SyncFileDatabase` / `AsyncFileDatabase` built their `FileLock` before
+  applying the `.gz` suffix a configured `compression` implies, so
+  `{"path": "data.json", "compression": "gzip"}` wrote `data.json.gz`
+  while locking `data.json.lock`. The same data file reached the other
+  way — `{"path": "data.json.gz"}`, gzip auto-detected — locked
+  `data.json.gz.lock`, so two instances over one file were serialized
+  by nothing. `FileLock` resolves symlinks and keys its mutex by inode
+  to guarantee one file gets one lock however it is spelled; this
+  defeated all of it from the caller's side by naming the wrong file.
+
+  Path, format, compression and handler are now resolved together, by
+  one function both backends call, and the lock is built from the
+  result. They are interdependent — a `.gz` suffix names the
+  compression, the stem beneath it names the format, and a configured
+  compression renames the file — and the two `_setup` bodies had
+  derived them apart, identically, which is why the defect was in both.
+
+  A temp database with `compression` set also leaked the name
+  `tempfile` reserved: `close()` removed the compressed file and its
+  lockfile but not the `.json` stub beneath, one `/tmp` entry per
+  process. The stub is what keeps the compressed name unique, so it is
+  held until `close()` rather than dropped at setup.
+
+- **Two single-file vector stores over one `persist_path` could both
+  write, with neither raising.** `FaissVectorStore` and
+  `MemoryVectorStore` refuse to overwrite a file that changed since
+  they read it — but the check and the write it guards ran on a worker
+  thread with a whole serialization between them, so two instances both
+  passed the check before either wrote. The second replaced the first's
+  file with a snapshot that had never seen its rows, and the refusal
+  that exists to prevent exactly that never fired.
+
+  The check, the write and the stamp that follows are now held under
+  `dataknobs_common.locks.FileLock` on a sibling `<persist_path>.lock`,
+  so the second writer meets a file that has already moved and raises
+  `ConcurrencyError` as documented. This closes the same-process case
+  as well as the cross-process one: the per-instance `asyncio.Lock`
+  could never see a second instance, and POSIX record locks alone do
+  not exclude two threads of one interpreter.
+
+  The `.lock` file is created on the first save or load and left in
+  place; the lock is advisory and local-filesystem only, so a networked
+  mount carries the same caveat the identity check already did.
+
+- **`load()` could run inside the store's own `save()`.** The read ends
+  by stamping two fields the save path owns, so a load landing mid-save
+  declared the store in step with a file the save had not written yet —
+  after which `close()` skipped persisting a mutation nobody wrote. For
+  FAISS it was also a torn read: the index and its `.meta` side-car are
+  published by two renames, and a reader between them paired a new
+  index with a stale side-car. `load()` now takes the same locks the
+  save does.
+
+- **Concurrent publishes collided on one scratch file.** Every writer of
+  a path staged to the same `<file>.tmp`, so one wrote over the other's
+  bytes and the loser's cleanup could unlink a file the winner was about
+  to rename — turning a silent clobber into a spurious
+  `FileNotFoundError`. Each write now stages to a uniquely named scratch
+  file in the target's own directory.
+
+  Unique names have to be cleaned up rather than overwritten, so two
+  things do that. A write that raises — an unpicklable value, a full
+  disk — has its scratch file removed, where the cleanup previously ran
+  over a list built only from writes that *succeeded* and left the
+  partial snapshot behind. And a scratch file left by a process killed
+  mid-save is swept by the next save of that target, under the lock that
+  guarantees no live writer owns it.
+
+- **A symlinked `persist_path` is written through, not replaced.**
+  Publishing is `os.replace`, which replaces the *symlink* rather than
+  following it: the first save turned a stable name pointing at
+  versioned storage into a regular file holding that store's snapshot,
+  while the versioned file it had pointed at kept the old one — two
+  files silently disagreeing, with nothing to say which was live. The
+  store now resolves `persist_path` once and derives everything from
+  the result, so the index, FAISS's `.meta` side-car and the lockfile
+  all land beside the resolved target rather than splitting across two
+  directories.
+
+  This is also what makes the lock hold. `FileLock` takes its lockfile
+  beside the resolved target so two spellings of one file contend for
+  it; a save that destroyed the symlink moved the lockfile with it, so
+  two writers were serialized until the first write and not after.
+
+- **A published file is flushed before the rename that publishes it.**
+  `os.replace` is atomic against a concurrent reader but not against
+  power loss: on a journalled filesystem the rename metadata can reach
+  the disk while the data it names has not, leaving a truncated file
+  that has already replaced a known-good one. The file and the directory
+  entry are now both `fsync`ed, so staging protects against a power cut
+  and not only against a crashed process.
+
+- **A read-only `persist_path` directory no longer refuses to load.**
+  Holding the file lock means creating or opening `<path>.lock`, so
+  taking it on the read path made a *load* require write access that a
+  load never needed — an index baked into a read-only image layer, or
+  served from a read-only mount, stopped opening. `load()` now falls
+  back to an unlocked read and logs at `WARNING`. Only the read path
+  does: nothing can be published into a directory this process cannot
+  write, so there is no concurrent writer to exclude, while `save()`
+  keeps the hard lock because there the write *is* what needs excluding.
+
+  That fallback is bounded by the directory being unwritable, not by
+  the lock having failed. Any other reason it fails — a lockfile owned
+  by another uid, `ENOLCK` from an NFS mount without `lockd`, `EMFILE`
+  from descriptor exhaustion — leaves a directory that *is* writable,
+  so a writer to exclude can exist and an unlocked read can return a
+  half-published state. Those raise, with a message naming the lock and
+  the umask that usually causes the first of them.
+
+- **`save(force=True)` returned silently.** It is a deliberate
+  destructive bypass of the staleness check, and it is now logged at
+  `WARNING` every time, saying whether anything was actually discarded
+  — the line an operator wants when asking where the rows went. A file
+  that is *gone* is reported as such rather than as a discarded write:
+  both fail the identity comparison, but only one of them had another
+  writer's rows in it.
+
+- **A temporary file database no longer removes its lockfile while an
+  operation holds it.** `close()` unlinks the generated file and its
+  `<path>.lock`, which is correct for a path belonging to one instance,
+  but it ran outside the instance lock — so a `close()` concurrent with
+  an in-flight write removed the lockfile that write was holding, which
+  is the handover defect `FileLock` was fixed to stop causing. Both the
+  sync and async backends now clean up under the lock every other
+  operation takes, through one shared helper rather than two copies.
 
 - **`update_vectors()` no longer resets a row's `created_at`, or destroys
   rows on a refused batch.** It was implemented as `delete_vectors()`

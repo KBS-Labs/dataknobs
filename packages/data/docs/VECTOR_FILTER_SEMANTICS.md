@@ -435,16 +435,28 @@ The only way to change a stored row is to call a mutator.
     opened to read writes nothing on teardown — necessarily, since that
     write would move the file's identity and make the real writer's save
     refuse.
-  * The check is best-effort, not a lock: it compares modification time,
-    size and inode, and two writes inside one filesystem timestamp tick
-    that happen to produce the same size are indistinguishable. It
-    catches the overwhelmingly common accident, not a determined race.
+  * The check runs under a lock, but the check itself is best-effort:
+    it compares modification time, size and inode, and two writes inside
+    one filesystem timestamp tick that happen to produce the same size
+    are indistinguishable. It catches the overwhelmingly common
+    accident, not a determined race.
+  * The lock is `dataknobs_common.locks.FileLock`, taken on a sibling
+    `<persist_path>.lock` and held across the check, the write and the
+    stamp that follows — so a second writer cannot slip through the
+    window between them and make the refusal never fire. It is
+    **advisory and local-filesystem**: a writer that does not go through
+    a vector store is not stopped by it, and `fcntl` semantics over NFS
+    and similar network mounts are unreliable. The `.lock` file is
+    created on first save or load and deliberately left in place;
+    removing it on release is what would let two holders in.
   * A refusal is recoverable with `save(force=True)`, which overwrites
     deliberately and accepts the loss of whatever the other writer
     persisted. Without it the refusal repeats forever, because what it
     compares against has not moved. It is only ever the right call
     against a *genuine* conflict — a refusal the store caused itself is
-    a defect, not a case for `force`.
+    a defect, not a case for `force`. Every use is logged at `WARNING`,
+    saying whether anything was actually discarded; that line is the
+    record of where the rows went.
 
   Sequential lifetimes are unaffected and keep appending, since
   `initialize()` loads the file first. For genuinely concurrent writers,
@@ -458,7 +470,14 @@ The only way to change a stored row is to call a mutator.
   that impossible needs a single-file format or a write-ahead log.
   Retrying is not blocked by it, though: the store re-reads the file's
   identity and stays dirty, so the next `save()` or `close()` writes the
-  rows it still holds.
+  rows it still holds. A concurrent *reader* is covered — `load()` takes
+  the same lock the publish is under, so it cannot land between the two
+  renames — but a crash is not.
+
+  Each write stages to a uniquely named scratch file beside its target
+  rather than a fixed `<file>.tmp`, so a process killed mid-save leaves
+  one stray `*.tmp` file behind. Permissions follow the file being
+  replaced; a file this store creates is owner-only.
 - **Chroma `count` materializes metadata.** Chroma has no first-class
   filtered-count API. The `count(filter=...)` path uses
   `collection.get(where=..., include=["metadatas"])` and post-filters

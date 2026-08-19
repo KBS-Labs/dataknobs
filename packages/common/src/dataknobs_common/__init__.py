@@ -141,6 +141,7 @@ from dataknobs_common.imports import (
 )
 from dataknobs_common.locks import (
     DistributedLock,
+    FileLock,
     InProcessLock,
     LockFactory,
     create_lock,
@@ -402,6 +403,8 @@ __all__ = [
     "lock_backends",
     "LockFactory",
     "InProcessLock",
+    # Advisory single-file lock — a separate primitive, not a backend
+    "FileLock",
     # Metadata helpers
     "enforce_immutable_keys",
     # Pack composition
