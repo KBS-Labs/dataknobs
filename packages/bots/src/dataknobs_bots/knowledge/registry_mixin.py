@@ -189,8 +189,30 @@ class AutoIngestionMixin:
             key: value for key, value in kb_config.items() if key not in self._MIXIN_ONLY_KEYS
         }
 
-        if domain_id is not None and rag_config.get("domain_id") is None:
+        configured_domain = rag_config.get("domain_id")
+        if domain_id is not None and configured_domain is None:
             rag_config["domain_id"] = domain_id
+        elif (
+            domain_id is not None
+            and configured_domain is not None
+            and configured_domain != domain_id
+        ):
+            # The config wins — that is the documented precedence, and it
+            # is right for a section written for one bot. But the same
+            # section is routinely reused as a template across every
+            # registration, and then this quietly points every domain at
+            # one namespace: chunk ids stop separating, each bot's ingest
+            # overwrites the last on a shared store, and nothing fails.
+            # Too legitimate to refuse, too costly to leave silent.
+            logger.warning(
+                "Knowledge-base config sets domain_id=%r, which overrides the "
+                "registration's domain %r. Every registration sharing this config "
+                "will write under %r, so their chunks no longer separate. Remove "
+                "domain_id from a knowledge-base section used as a template.",
+                configured_domain,
+                domain_id,
+                configured_domain,
+            )
 
         # The historical embedder defaults, applied only when the embedder
         # is unconfigured — which means *none* of the three keys, not two

@@ -1468,8 +1468,7 @@ knowledge_base:
   documents_path: ./docs
   vector_store:
     backend: faiss
-    dimension: 384
-    collection: knowledge
+    dimensions: 384
   embedding_provider: ollama
   embedding_model: nomic-embed-text
 ```
@@ -1478,9 +1477,17 @@ knowledge_base:
 
 `tenant_id` and `domain_id` bind the knowledge base to one scope.
 Every write stamps the binding into chunk metadata and into the
-chunk-id prefix, and every read, `count`, `clear` and
-`update_metadata_where` composes it onto the store filter — so two
-knowledge bases over one physical vector store stay isolated.
+chunk-id prefix, so two knowledge bases over one physical vector store
+stay isolated.
+
+Which of them also composes onto the store filter depends on where the
+value came from. A binding the knowledge base configures **itself** is
+composed onto every read, `count`, `clear` and `update_metadata_where`,
+because nothing else is enforcing it. A `domain_id` **adopted from the
+store** — as in the example below — is not: the store already confines
+every one of those surfaces to that domain, by its own means and
+identically on every backend, and naming the key in the filter as well
+would move the read onto a surface whose behaviour is backend-specific.
 
 ```yaml
 knowledge_base:
@@ -1489,8 +1496,7 @@ knowledge_base:
   tenant_id: acme
   vector_store:
     backend: faiss
-    dimension: 384
-    collection: knowledge
+    dimensions: 384
     domain_id: bot-a        # the knowledge base adopts this
 ```
 
@@ -1578,8 +1584,8 @@ knowledge_base:
   # Vector store configuration
   vector_store:
     backend: faiss          # faiss, chroma, pinecone, weaviate
-    dimension: 384          # Must match embedding dimension
-    collection: knowledge   # Collection/index name
+    dimensions: 384          # Must match embedding dimension
+    # collection_name: knowledge   # chroma only
     metric: cosine         # Similarity metric
 
   # Embedding configuration
@@ -1673,7 +1679,7 @@ documentation in `dataknobs-xization` for full details.
 ```yaml
 vector_store:
   backend: faiss
-  dimension: 384
+  dimensions: 384
   index_type: IVF        # Optional: Flat, IVF, HNSW
   nlist: 100            # Optional: For IVF index
 ```
@@ -1689,8 +1695,8 @@ vector_store:
 ```yaml
 vector_store:
   backend: chroma
-  dimension: 384
-  collection: knowledge
+  dimensions: 384
+  collection_name: knowledge
   persist_directory: ./chroma_db  # Optional
 ```
 
@@ -1708,7 +1714,7 @@ vector_store:
   api_key: ${PINECONE_API_KEY}
   environment: us-west1-gcp
   index_name: knowledge
-  dimension: 384
+  dimensions: 384
 ```
 
 **Characteristics:**
@@ -3932,7 +3938,7 @@ knowledge_base:
     api_key: ${PINECONE_API_KEY}
     environment: us-west1-gcp
     index_name: production-kb
-    dimension: 1536
+    dimensions: 1536
   embedding_provider: openai
   embedding_model: text-embedding-3-small
   chunking:

@@ -7,6 +7,8 @@ backfills missing behavioral coverage for ``_ensure_knowledge_base_ingested``.
 
 from __future__ import annotations
 
+import logging
+
 from dataclasses import fields
 from pathlib import Path
 from typing import Any
@@ -181,6 +183,50 @@ class TestBuildRagConfigForwarding:
             "the defaults are a pair: half of one and half of the other is the "
             "divergence, not the fix"
         )
+
+    def test_a_template_domain_overriding_the_registration_is_reported(self, caplog: Any) -> None:
+        """One config reused across registrations must not silently merge them.
+
+        ``kb_config["domain_id"]`` outranks the registration's domain,
+        which is right for a config written for one bot. But the same
+        knowledge-base section is routinely shared as a template across
+        every registered bot, and then that precedence quietly points
+        every domain at one namespace — defeating the chunk-id
+        separation this projection exists to provide, with no call
+        failing and nothing in the store to show which bot wrote what.
+        The precedence stands; it is now audible.
+        """
+        with caplog.at_level(logging.WARNING):
+            rag_config = _MinimalMixinUser()._build_rag_config(
+                {
+                    "vector_store": {"backend": "memory", "dimensions": 384},
+                    "domain_id": "shared",
+                },
+                domain_id="bot-a",
+            )
+
+        assert rag_config["domain_id"] == "shared", "the documented precedence changed"
+        reported = "\n".join(r.getMessage() for r in caplog.records)
+        assert "shared" in reported and "bot-a" in reported
+
+    def test_a_matching_template_domain_says_nothing(self, caplog: Any) -> None:
+        """Agreement is not a conflict."""
+        with caplog.at_level(logging.WARNING):
+            _MinimalMixinUser()._build_rag_config(
+                {"vector_store": {"backend": "memory", "dimensions": 384}, "domain_id": "bot-a"},
+                domain_id="bot-a",
+            )
+        assert not caplog.records
+
+    def test_no_template_domain_says_nothing(self, caplog: Any) -> None:
+        """The ordinary path: the registration supplies the binding."""
+        with caplog.at_level(logging.WARNING):
+            rag_config = _MinimalMixinUser()._build_rag_config(
+                {"vector_store": {"backend": "memory", "dimensions": 384}},
+                domain_id="bot-a",
+            )
+        assert rag_config["domain_id"] == "bot-a"
+        assert not caplog.records
 
     def test_embedding_base_url_arrives_as_api_base(self) -> None:
         """A legacy ``embedding_base_url`` reaches the config it was meant for.

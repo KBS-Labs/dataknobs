@@ -366,6 +366,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   knowledge base's binding when the config does not set one, so an adopter
   sharing a store across bots is correct with no config change.
 
+- **An empty-string binding is a binding at every surface.** The chunk-id
+  fold tested truthiness while identity stamping and filter composition
+  tested `is not None`, so `domain_id: ""` got scoped reads and a scoped
+  write tag with an *unnamespaced* chunk id — the collision the fold
+  exists to prevent, at the one value where the two spellings disagree.
+  This is the split `VectorStoreBase._is_scoped` settled for the store
+  layer after a truthiness test made an empty-string domain isolate on
+  three backends and run unscoped on a fourth. Only absent/`None` is
+  unbound now. A knowledge base carrying none of the fold keys still
+  produces the historical `stem_index` id, byte for byte.
+
+- **Every distinct identity conflict is reported, not just the first.**
+  The once-per-instance warning guard was keyed by the metadata key
+  alone, so a knowledge base handed several different contradicting
+  values reported one and silently re-tagged the rest. The offending
+  value is now part of the key. The per-chunk flood the guard was
+  written for repeats one value and still collapses to a single line.
+
+- **A knowledge-base config that overrides the registration's domain says
+  so.** `kb_config["domain_id"]` outranking the registration is right for
+  a section written for one bot, and that precedence is unchanged — but
+  the same section is routinely reused as a template across every
+  registration, where it quietly points every domain at one namespace and
+  their chunks stop separating. Reported at WARNING when the two differ.
+
 - **A `KnowledgeIngestionManager` refuses a destination bound to another
   domain.** The manager's per-call `domain_id` is authoritative — that is
   what lets one manager hold many domains in one destination — but a
@@ -383,10 +408,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   agrees with the call and is unaffected, as is the unbound destination
   the manager exists for.
 
-- **`embedding_base_url` works.** The mixin read the key and forwarded it
-  under a name no config field carries, so it was discarded in silence and
-  the endpoint it named was never used. It is now a legacy alias for
-  `api_base`; `api_base` wins when both are present.
+- **`embedding_base_url` reaches the embedder on the legacy flat config
+  shape.** The mixin read the key and forwarded it under a name no config
+  field carries, so it was discarded in silence and the endpoint it named
+  was never used. It is now a legacy alias for a top-level `api_base`,
+  and `api_base` wins when both are present. Scope worth stating: the
+  top-level passthroughs are consulted only on the legacy `embedding_`
+  prefix path. A configured nested `embedding` section supplies the
+  provider's endpoint, key and dimensions from inside itself, and neither
+  spelling of the top-level key is read at all — prefer the nested form.
 
   **Migration — chunk ids change for a knowledge base over a domain-scoped
   store**, from `overview_0` to `bot-a\x1foverview\x1f0`. A knowledge base

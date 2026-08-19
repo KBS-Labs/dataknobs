@@ -285,6 +285,17 @@ class RAGKnowledgeBase(
         ``warn_caller`` handoff in :meth:`_embed_and_store_chunks`,
         held per instance because these sites are not confined to a
         single call.
+
+        Callers reporting a *conflict* fold the offending value into
+        ``tag``, so "once" means once per distinct conflict rather than
+        once per key. One knowledge base can be handed many different
+        contradicting values over its life, and a key-only tag reports
+        the first while every later one is re-tagged in silence — which
+        is the failure these warnings exist to prevent, not a quieter
+        version of it. The set grows with the number of *distinct*
+        conflicts, which is bounded by the caller's domain/tenant
+        cardinality; the per-chunk flood the guard was written for
+        repeats one value and still collapses to one line.
         """
         if tag in self._identity_warnings:
             return
@@ -307,7 +318,7 @@ class RAGKnowledgeBase(
         supplied = composed.get(key)
         if supplied is not None and supplied != value:
             self._warn_once(
-                f"override:{key}",
+                f"override:{key}:{supplied!r}",
                 "Ignoring caller-supplied %s=%r: this knowledge base is bound to "
                 "%r, and identity tags are not caller-assignable at the write "
                 "boundary.",
@@ -1031,8 +1042,17 @@ class RAGKnowledgeBase(
         r"""Return ``(chunk_prefix, chunk_separator)`` for a chunk's id.
 
         Walks :attr:`_CHUNK_ID_PREFIX_KEYS` against ``metadata`` and
-        folds every present, truthy value into the prefix in declared
-        order; ``source_stem`` is always last. When at least one fold
+        folds every value that is *present* — ``is not None``, not
+        truthy — into the prefix in declared order; ``source_stem`` is
+        always last. The distinction is the one
+        ``VectorStoreBase._is_scoped`` settled for the store layer after
+        a truthiness test made an empty-string domain isolate on three
+        backends and run unscoped on a fourth: a binding is optional,
+        not truthy-optional. Identity stamping and filter composition
+        here already tested ``is not None``, so folding on truthiness
+        gave ``domain_id=""`` scoped reads and a scoped write tag with
+        an *unnamespaced* id — the collision this fold prevents,
+        reintroduced at the one value where the two spellings disagree. When at least one fold
         key is present the record-separator (``\x1f``) is used so
         snake_case-tag collisions are impossible (``my`` + ``team_doc``
         vs ``my_team`` + ``doc`` would both produce ``my_team_doc`` under
@@ -1054,7 +1074,7 @@ class RAGKnowledgeBase(
         parts: list[str] = []
         for key in cls._CHUNK_ID_PREFIX_KEYS:
             value = md.get(key)
-            if value:
+            if value is not None:
                 parts.append(str(value))
         if not parts:
             # Legacy single-segment path — byte-identical to pre-fold.
@@ -1421,7 +1441,7 @@ class RAGKnowledgeBase(
         compose_scope_key(scoped, key, value)
         if scoped[key] == []:
             self._warn_once(
-                f"refused:{key}",
+                f"refused:{key}:{requested!r}",
                 "Filter asked for %s=%r on a knowledge base bound to %r; the "
                 "operation is scoped to the binding and matches nothing. Use an "
                 "unbound knowledge base to act across scopes deliberately.",
