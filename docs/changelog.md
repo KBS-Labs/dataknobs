@@ -5,6 +5,203 @@ All notable changes to Dataknobs packages will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Release - 2026-08-19
+
+Three changes run across the workspace in this release.
+
+**Path containment is one shared guard rather than a habit.** `dataknobs-common`
+gains `safe_join`, `safe_join_or_raise`, `safe_segment` and `PathAnchor`, and
+every site that composed an untrusted name onto a base directory now resolves
+through them: config names and `@`-references in config; `$include` / `$import`
+chains and `FileSystemResource` in fsm; `DocumentFileRef` and ingest globs in
+xization; knowledge-backend keys, wizard subflow names and draft ids in bots.
+Two spellings were open nearly everywhere the composition was checked at all —
+a `..` segment that walks out, and an absolute value that discards the base
+outright, which is the wider of the two rather than a narrower case. Refusals
+are now one type, `PathEscapeError`, a `ValueError` subclass, so one `except`
+covers what four exception types and four wordings used to. A name addressing a
+*subdirectory* is unaffected everywhere — that is how a layout convention is
+spelled, and bounding a name is not flattening it. Where a deployment spans
+sibling trees deliberately, each guard takes an opt-out that logs the escape at
+WARNING rather than switching the check off silently.
+
+**A config naming no backend is no longer indistinguishable from one naming the
+default.** Sites across data and bots read the key as
+`.get("backend", "memory")` or forwarded a typed default unconditionally, so
+the absence was consumed one frame above the only code positioned to report it.
+The choice is now forwarded only when a config makes it, and the fallback is
+reported — at WARNING where an in-process store that loses everything on
+restart is the consequence, at DEBUG where the default is the recommended
+answer. `UserStateStoreConfig.backend` and `VectorMemoryConfig.backend` default
+to `None`, meaning "not chosen here"; code reading either and expecting a string
+must handle it.
+
+**The quality gate now covers the test trees.** Every package's tests are linted
+at a ceiling of zero alongside its sources, the mypy ceilings that had drifted
+above what the tree measures were re-baselined, and each declined ruff rule
+carries a category and a written argument that a test checks. Several rules were
+un-declined and their sites fixed. No runtime behaviour changed: the two
+published DSL names this reached (`ComplexQuery.AND` / `.OR`) are waived per
+line rather than renamed.
+
+### dataknobs-common [3.0.0]
+
+#### Changed
+- **Breaking:** `BoundTenantContext`, `PrefixedTenantContext` and `SharedCorpusTenantContext` — and `create_tenant_context` / `tenant_context_from_env` — reject a `tenant_id` that is empty, is `.` or `..`, or contains `/`, `\` or NUL. A separator inside the one segment whose job is isolation merged two tenants' state: by traversal on a filesystem backend, and with no traversal at all on a key-string backend, where the namespaces simply collide. Use a flat identifier; `PrefixedTenantContext`'s `prefix_pattern` stays free-form for a nested convention, and now documents that a pattern picks its own delimiter and this check cannot know what it is
+- **Breaking:** `find_config_file` rejects a name containing `..` or an absolute one — both previously addressed outside `config_dir`, and the name reaching it is frequently an `extends:` value, an environment variable, or a resolver's output rather than a caller's literal. `allow_outside=True` opts back out, logging each real escape at WARNING
+- `PluginRegistry.get_metadata()` returns a deep copy; a caller reading and editing a nested value previously changed what every later caller saw
+- `PluginRegistry.create()` reports a routing key it supplied itself — at WARNING for the three registries whose default fails silently (a lock every process holds at once, a rate limit enforced once per process, a bus whose events reach nobody), at DEBUG where the default is the recommended answer
+- `validate_tenant_id` is `safe_segment` under a different name — same rule, same rejections, and it raises `SegmentEscapeError`, which is still a `ValueError`, so no caller changes
+- `ConfigPathEscapeError` also subclasses `PathEscapeError`, so one `except PathEscapeError` reaches every composing site. Purely additive; it keeps `ConfigLoadError`
+- the Ollama probes and markers take `host` / `port`. Existing calls are unaffected, but `None` now means "resolve from the environment" where `is_ollama_model_usable` meant `localhost`
+
+#### Added
+- `FileLock` (`dataknobs_common.locks`) — a path-keyed advisory lock excluding every overlapping holder, which needs both halves: `fcntl.lockf` / `msvcrt.locking` across processes and a mutex per lockfile inode within one, since POSIX record locks are owned by the process. Keyed off the file rather than the string naming it, so a symlink and its target share one lock. Not a `DistributedLock`, and not reentrant
+- `safe_join` / `safe_join_or_raise` / `PathEscapeError` — compose a path from untrusted parts without leaving a base, judged lexically so it is safe on an event loop and works on a path that does not exist yet
+- `safe_segment` / `SegmentEscapeError` — the second question a composed name has to answer. `safe_join` asks *may this address here?*; this asks *is this one segment?*, which is what an identifier interpolated into a layout with literal segments of its own has to be
+- `PathAnchor`, with `anchored_at()` / `rooted_at()` constructors — a boundary fixed when a load starts while the position inside it moves, for a loader following references from file to file
+- `validate_tenant_id` is exported from `dataknobs_common.tenancy`, for a consumer writing its own `TenantContext` impl — nothing runs `__post_init__` on a class this module never sees
+- `PluginRegistry.declare_unavailable()`, `is_known()`, `list_known_keys()`, `list_canonical_keys()`, `load_declared_type()`, `get_metadata(follow_alias=True)` and `PluginRegistry(default_warning=...)`. A plugin behind an optional dependency has three states rather than two, and a registry holding only factories reports "not installed" as "misspelled" — losing the one answer worth having, which is what to install
+- `requires_real_postgres` / `requires_real_postgres_sync` / `requires_real_elasticsearch` / `requires_real_s3`, and the `must_skip_real_service()` predicate behind them — a gate testing all three terms a behavioural suite depends on (opted in, reachable, driver installed) rather than only whether a server answered
+- `ollama_env_params()`, `list_ollama_models()` and `wait_for_ollama()` in `dataknobs_common.testing`
+
+#### Fixed
+- the Ollama probes shelled out to the local `ollama` CLI, so a machine without the binary reported a reachable server down — a silent skip of every gated test rather than a failure. They probe `GET /api/tags` now, match model names instead of rendered table text (`mistral` was satisfied by `mistral-small`, and `GB` reported available), understand all three spellings of `$OLLAMA_HOST`, and bound the response body so a misdirected variable cannot hang the probe
+- a populator that replaced the default factory and then failed kept the replacement, so the next `create()` for an unregistered key silently succeeded off it
+- `unregister()` stranded a withdrawn plugin's aliases, leaving them answering `{}` to the one question a withdrawn plugin stays visible to answer
+- a literal `%` in `default_warning` raised inside `logging`, at the first fallback, naming neither the registry nor the text
+
+#### Security
+- `safe_join` accepted a NUL inside a path part. Nothing was exploitable through it, but the refusal arrived from a different place as a different type than every other rejection of a bad name
+
+### dataknobs-config [0.6.0]
+
+#### Changed
+- **Breaking:** `$requires` on a resource the environment does not define now raises. The severity was inverted — a resource that existed but lacked a declared capability aborted the build, while one that did not exist at all resolved to its inline defaults and reached the factory. Declare `$required: false` alongside `$requires` where "if it is there it must do X; it may be absent" was the intent
+- **Breaking:** a `$`-prefixed key that is not a marker is an error. The set is closed, and the comprehension building a reference's inline defaults took everything else — so `$requred: true` was promoted to a default and passed to the factory as a keyword argument, meaning *not required*, at the exact site meant to close that class of failure. `$requires` must be a list (a bare string iterates character by character), and `$required` / `$requires` on a block with no `$resource` is rejected, which is what gives away a typo in the selector key itself
+- **Breaking:** an `@`-reference is contained within `config_root`. Any config *value* beginning with `@` is a file reference, so a `..` segment climbed out of the tree and the absolute branch never consulted `config_root` at all. `Config(..., allow_reference_outside_config_root=True)` is the migration — a caller argument, deliberately not settable from a config file, since a reference is bounded precisely because it comes out of config content
+- **Breaking:** `EnvironmentConfig.load()` raises on an escaping environment name where it previously returned an empty config, so a deployment with a malformed `DATAKNOBS_ENVIRONMENT` booted on defaults. A name merely *absent* from `config_dir` still returns an empty config
+- **Breaking:** `resolve_for_build(strict_resources=..., resolve_resources=False)` raises `ValueError`. The pair validated nothing and returned a config anyway, from the method documented as the startup preflight
+- `ConfigBindingResolver` resolves references nested inside the resource it looks up, rather than passing one on as a literal `{"$resource": ...}` keyword argument. Both resolvers now run the same resolution below the entry point
+- `ResourceNotFoundError` subclasses both `EnvironmentConfigError` and `KeyError`. `resolve_for_build()` could not previously raise a `KeyError`; under a strict policy it can, so an `except KeyError` there for unrelated reasons will swallow it. Its `__str__` is restored — `KeyError`'s wrapped the message in quotes and escaped every name inside it
+
+#### Added
+- **A `$resource` reference can declare that its resource must exist**, at four levels, most specific first and each unset-means-defer: `$required: true` on the reference, a non-empty `$requires`, `strict_resources=` on `resolve_for_build` / `EnvironmentAwareConfig`, and `settings: {strict_resources: true}` on the environment. The default is unchanged — a missing resource still warns and degrades. The environment level is the only one a deployment whose references are generated at runtime can reach
+- `find_unresolved_resources()` on `EnvironmentAwareConfig` — every unresolvable reference in one pass as `UnresolvedResourceRef(path, resource_type, resource_name, required, has_inline_defaults)`. Raise-on-first is right for a build and wrong for a preflight. It runs the *same* walk as the build, so it is a prediction of it rather than a second opinion
+- `resolve_resource_references(config, environment, ...)` is exported, with `RESOURCE_MARKER_KEYS`, `STRICT_RESOURCES_SETTING` and `UnresolvedResourceRef` — the shared primitive, so a consumer holding a config tree does not become another reader of the format. Reading it independently is what produced the divergences this release closes
+- `EnvironmentConfig.get_resource(..., required=)` separates data from policy. `defaults` carried both meanings at once, which made one combination unreachable: merge these values, but still fail if the resource is absent
+- `allow_outside=True` on `InheritableConfigLoader`, `EnvironmentConfig.load()` and `EnvironmentAwareConfig.load_app()`, for a layout that genuinely spans sibling trees. Off by default; a real escape logs at WARNING
+- a reference cycle raises `ConfigError` naming the chain, in both the build and the survey, and failure messages name the dotted config path of the reference that failed
+
+#### Security
+- a configuration name could address a file outside the directory it was loaded from, on all three loaders. Three of the four names this affects are not a caller's own literal: an `extends:` value read out of a config file, an environment name from `DATAKNOBS_ENVIRONMENT`, and a consumer-supplied resolver's output
+
+### dataknobs-utils [2.0.1]
+
+#### Changed
+- **Integer and float columns are typed by range and width.** `integer` is a 4-byte signed type while pandas defaults to `int64`, so a column holding a value past 2³¹ created a column its own data could not enter; `real` carries ~7 significant digits, so a `float64` round-tripped silently rounded. 64-bit maps to `bigint` / `double precision`, `uint64` to `numeric(20)`, and genuinely narrow columns keep the narrow type. Note the interaction with `CREATE TABLE IF NOT EXISTS`: a table already created with the narrower column keeps it
+- the `varchar` width is measured on the rendered value with the renderer that sends it, and a column of empty strings emits `varchar(1)` rather than the `varchar(0)` PostgreSQL refuses outright
+
+#### Fixed
+- **`PostgresDB` emitted a `CREATE TABLE` that crashed on boolean and timestamp columns.** `_psql_schema_line` named only integer and float and fell through to `.str.len()` for everything else, so a `bool`, `datetime64[ns]`, nullable `boolean` or tz-aware column raised `AttributeError` and the table could not be created at all. The ladder now maps `bool` → `boolean`, `datetime64` → `timestamp`, tz-aware → `timestamptz`, `timedelta64` → `interval`
+- **`PostgresRecordFetcher.get_records` inlined three identifiers unquoted, one of them caller-supplied per call.** `fields_to_retrieve` was a reachable injection vector rather than a hardening gap — a fetcher configured for one table returned a column from another, plus `current_user`, through nothing but that parameter. All three positions are quoted, `ids` is bound, and `table_head`'s `LIMIT` is bound
+- **`PostgresDB` never closed a connection and opened a new one per call**, measured at 79% of wall time for a trivial `SELECT 1`. `DotenvPostgresConnector` holds one connection per thread — per thread because psycopg2's `with conn` is not re-entrant and two threads would share a transaction. `PostgresDB` gains `close()` and context-manager support; a cached connection is validated with a round trip, since `connection.closed` reports only what this process did to it
+- `upload` sent every value as text, so a null arrived as `'nan'`, a nullable `Int64` upcast to `'1.0'`, and a `timedelta64[ns]` as `'86400000000000 nanoseconds'`. Values are gathered per column and passed as typed parameters
+- `upload` built a syntactically invalid INSERT for a frame with no rows, and rejected default integer column labels with a message naming neither the subject nor the fix
+
+### dataknobs-xization [2.1.0]
+
+#### Security
+- **Breaking:** a glob pattern could enumerate outside a `LocalDocumentSource`'s root. `Path.glob` treats `..` as an ordinary literal segment, so `../secrets/*.env` yielded refs carrying each file's real size and resolved absolute `source_uri` onward into chunk metadata. The claim that no check was needed — that every ref is derived with `relative_to(root)` — does not hold: `relative_to` re-expresses a path lexically and enforces nothing. A match outside the root is now skipped and logged. Breaking for a configuration whose patterns deliberately reached outside the root; such an ingest previously enumerated those files and then failed on the first read
+- a `DocumentFileRef` can no longer read outside that root either. `read_bytes` and `read_streaming` composed `root / ref.path` unchecked, and an absolute `ref.path` discarded the root. The `DocumentSource` protocol states the rule, so a consumer-written implementation inherits it
+
+### dataknobs-data [0.9.0]
+
+#### Changed
+- **Breaking:** a configured `domain_id` scopes the id-keyed operations too. `get_vectors()`, `delete_vectors()`, `update_metadata()`, `add_vectors()`, `add_documents()` and `metadata_fields()` address rows by id and so built no filter, which left the tenant scope binding only the surfaces that take one — a scoped store answered for any id in the collection, and `metadata_fields()` returned the union of every tenant's key names. An out-of-domain id is now answered exactly as an absent one. Code that used a scoped store to reach outside its domain gets `(None, None)` and no effect; unscoped stores are unaffected
+- **Breaking:** `ChromaVectorStore.update_metadata()` replaces a row's metadata instead of merging into it, matching the other three backends and the contract the ABC now states outright. Code relying on the merge for a partial update must supply the full dict, or use `update_metadata_where()`, whose contract is a merge and is unchanged. The same methods return rows *matched* rather than rows written
+- **Breaking:** a file `persist_path` written by two overlapping instances raises `ConcurrencyError` rather than silently discarding one of them — `save()` serializes the whole in-memory state, so the earlier writer's rows were gone from disk entirely. Covers `FaissVectorStore` and `MemoryVectorStore` alike, on `VectorStoreBase`. Three consequences: `close()` persists only a store that was mutated (load-bearing, since a no-op write would move the file's identity); `save(force=True)` overwrites deliberately and is the way out of a refusal; and the check is best-effort — mtime, size and inode — so it catches the common accident and is not a lock
+- **Breaking:** `FileLock` is no longer reentrant — one thread acquiring the same path twice deadlocks. It worked only because `fcntl` grants the owning process a lock it already holds, which is the defect the new intra-process mutex fixes; there was no way to keep it without keeping the hole. `from dataknobs_data.backends.file import FileLock` still resolves, to `dataknobs_common.locks.FileLock`
+- **Breaking:** `VectorStoreFactory.create()` refuses a backend whose driver is absent *before* construction, with the same `ValueError` the database factories raise, rather than building the store and regexing the resulting `ImportError` for a `pip install` line. Code matching the old text needs updating; code catching `ValueError` does not
+- `domain_id=""` scopes on every backend. `PgVectorStore` guarded on truthiness while the metadata-carrying backends tested `is None`, so an empty-string domain isolated on three backends and ran completely unscoped on the fourth
+- an empty `add_vectors()` batch is a no-op everywhere. The four disagreed and one corrupted the store — `MemoryVectorStore` minted an id for a zero-dimension vector and grew by a row
+- `SyncFileDatabase` and `AsyncFileDatabase` leave a `<path>.lock` beside their data file. Removing it on release is what let two holders in, and two instances in one process are genuinely serialized now
+- a persisted file keeps the permissions it had; the publish used to reset the mode to the umask default on every save
+- a post-filtered Chroma search escalates its fetch rather than settling for one over-fetch, doubling up to the whole collection where `count()` can bound it, so the answer becomes exact. Declaring the key in `scalar_metadata_keys` pushes the predicate down and avoids the round-trips
+- backend-selection log records come from `dataknobs_data.backend_selection`, not from `dataknobs_data.factory` / `vector.stores.factory` — a consumer routing by logger name needs the new one
+- a `vector_store` section naming an uninstalled backend still validates. Whether a config is well-formed does not depend on which optional drivers the machine reading it happens to have
+- `backend: null`, `backend: ""` and a non-string say which way they are unusable, instead of rendering into `Unknown backend type: <value>` and sending the reader after a spelling mistake
+
+#### Added
+- `dataknobs_data.backend_selection` — `select_backend()`, `available_backends()`, `backend_available()`, `backend_info()`, `normalize_backend()`, `register_backend()`, `build_backend()` and `DEFAULT_BACKEND`, one resolution shared by the three factories and by `AsyncDatabase.from_backend()` / `SyncDatabase.from_backend()`, which held a fourth copy
+- `compose_scope_key()` — the three-case scope composition (absent key, in-scope value, out-of-scope value) as a module-level function beside the contract it depends on. The obvious spelling, overwriting the caller's key, is wrong in the one direction that costs data: it turns a request for *another* scope into a request for *this* one, so a destructive call that should match no rows matches every row in the caller's own scope
+- `ChromaVectorStore` tracks `created_at` / `updated_at`, exposed via `include_timestamps=True` on `get_vectors()` and `search()` — the surface the other three backends already carried. A `timestamps:` block now takes effect where it was previously parsed and never read
+- `get_available_backends()` / `is_backend_available()` on all three factories, `get_backend_info()` on `AsyncDatabaseFactory`, and backends that stay described when their driver is missing, so `requires_install` answers in the one state anyone asks it
+- `dataknobs_data.testing` — deterministic vector draws, for this package's tests and for consumers testing their own `VectorStore`
+
+#### Fixed
+- **`FaissVectorStore.search(filter=...)` applied the filter after the index had truncated to `k`**, so a filtered search returned only the matching rows that happened to fall inside the global top-`k` window. `ChromaVectorStore.search()` under-returned for the same reason at a wider window
+- **`update_vectors()` reset a row's `created_at` and destroyed rows on a refused batch.** It was `delete_vectors()` followed by `add_vectors()`, and the delete bought nothing
+- **a scoped write could capture another domain's row by writing its id**, and `update_metadata()` could push a row out of its own domain, since on three backends the configured `domain_id` lives *in* the metadata dict that method replaces wholesale
+- a row whose `domain_id` is a list belongs to every domain named, and is no longer invisible to half its own store or narrowed by a scoped write
+- `ChromaVectorStore` alone: `add_vectors()` silently discarded a write to an id it already held; `add_documents()` did not apply the configured `domain_id`; `search_documents()` scored every store as though it were cosine; `search()` and `get_vectors()` raised `TypeError` on `include_timestamps`; and a consumer value under a reserved timestamp key could become a row's creation date
+- consumer metadata is no longer shared between a store and its caller in either direction — on Memory and FAISS a caller could edit a stored row without calling a mutator
+- the single-file persistence path is fixed throughout: the scratch sweep read its target's name as a glob pattern, `fsync` before publishing was a no-op on Windows, a symlinked `persist_path` was replaced rather than written through, concurrent publishes collided on one scratch file, a `load()` could run inside the store's own `save()`, a half-landed FAISS publish left the store refusing every save, and a read-only directory refused to load
+- `SyncPostgresDatabase.close()` closed nothing — the comment giving the reason was false — and `connect()` replaced its `PostgresDB` without closing the first
+- `VectorStore.get_vectors()` is annotated to return what it returns: every backend yields `(None, None)` for an id it does not hold
+
+### dataknobs-llm [0.7.1]
+
+#### Fixed
+- two docstring examples that could not run, both reaching for a vector capability through `database_factory` and inventing a backend name for it. The `AsyncLLMProvider.embed` block is gone rather than corrected — it taught another package's storage API from inside the embedding API's docstring, which is how it came to be wrong in three ways without anything noticing; `VectorStoreFactory` is named in `See Also` instead
+
+### dataknobs-bots [0.11.0]
+
+#### Changed
+- **Breaking:** `InMemoryBotRegistry` and `create_memory_registry` take keyword arguments only, forwarding to `BotRegistry` instead of re-declaring its seven parameters. Deliberate rather than incidental: `BotRegistry` takes `backend` first while the subclass did not, so inheriting the signature would have made a positional first argument mean something else entirely, silently. Every documented example already uses keywords
+- **Breaking:** an S3 content key is normalised, so a non-canonically-spelled object written by an earlier release is unreachable — `sub/../guide.md` now composes `{prefix}acme/content/guide.md`. Two spellings of one intended file were two distinct objects, which is the defect, but an existing bucket holding such an object needs it re-keyed. Affects only buckets written with non-canonical or escaping paths
+- **Breaking:** an empty `domain_id` is refused on every knowledge-backend method, not only `key_pattern`. `None` remains the all-domains spelling; an empty string now means a caller passed an unset variable, which is what it always was
+- `ConfigCachingManager` resolves `$resource` references through `dataknobs-config` instead of walking the config itself. It was a third reader of the format, recognising `$resource` and `type` and nothing else — so it discarded every inline default, ignored `$required` and `$requires`, passed a misspelled marker on as data, and left a nested reference as a literal dict. Raising on a resource the environment does not define is the behaviour it has always had and is preserved
+- `ConfigValidator` reports a misspelled marker in a `$resource` section. Skipping every `$`-prefixed key let `$requred: true` — which reads as *not required* — past the one check that runs before resolution
+- a non-canonical `PrefixedTenantContext` pattern fails every S3 state call rather than only the file backend's
+
+#### Added
+- **every entry point from a portable config to a running bot takes `strict_resources`** — `DynaBot.from_environment_aware_config`, `BotManager`, `BotRegistry`, `ConfigCachingManager`, and `InMemoryBotRegistry` / `create_memory_registry` through the keyword forwarding above — so an operator can state the policy wherever the bot is built rather than at one of them. `ConfigCachingManager` takes it defaulting to `True`, which is what it has always done; the difference is that the posture was a literal, so an operator who had explicitly written `strict_resources: false` was overridden by it
+
+#### Removed
+- **Breaking:** `ReviewArtifactTool`, `RunAllReviewsTool` and `GetReviewResultsTool`, which could not be called successfully — `registry.get()` had become async and was still called without `await`, and `add_review()` / `get_definition()` do not exist on `ArtifactRegistry` at all. The un-awaited `get` was the quietest: a coroutine is truthy, so the `if not artifact` guard passed and a coroutine travelled on in place of an `Artifact`. The module's whole suite was skipped under a note saying the tools used the old API, so three broken public classes sat behind a passing build. No working caller can exist. The capability was superseded by `ArtifactRegistry.submit_for_review()` and `get_evaluations()`
+
+#### Fixed
+- **two knowledge bases over one vector store overwrote each other's chunks.** `domain_id` folds into the chunk-id prefix, but nothing supplied the value unless a `KnowledgeIngestionManager` threaded it through, so the common shape — a shared store, one knowledge base per bot — collided. A knowledge base now derives its binding from the store it is bound to, and the binding means one thing at every surface
+- **a bound `tenant_id` now scopes `count()`, `clear()` and `update_metadata_where()`.** It scoped `query` and `hybrid_query` and nothing else, so on a shared store `clear()` reached every tenant's rows
+- **`AutoIngestionMixin` forwards the whole knowledge-base config to the ingest knowledge base.** It hand-copied six keys while the bot's own knowledge base is built from the entire section, so the two disagreed about everything the whitelist did not name — `tenant_id` among them, which meant the ingest wrote untagged chunks that the bot's tenant-scoped reads could never match: a total retrieval blackout reported as a successful ingest. The projection is now a pass-through with a named exclusion set
+- replacing a knowledge base's vector store no longer orphans the chunks it already wrote, and `set_provider()` no longer inverts the close-ownership gate on `RAGKnowledgeBase`, `VectorMemory` and `SummaryMemory`
+- an empty-string binding is a binding at every surface — the chunk-id fold tested truthiness while identity stamping and filter composition tested `is not None`
+- a knowledge-base config overriding the registration's domain now says so at WARNING. The precedence is right for a section written for one bot and is unchanged, but the same section is routinely reused as a template, and then it quietly points every domain at one namespace
+- `embedding_base_url` reaches the embedder on the legacy flat config shape; it was forwarded under a name no config field carries and discarded in silence
+- a wizard skipped extraction after an auto-advance under `advance()` and never under a conversation
+- every path-containment refusal is one catchable type, where `FileKnowledgeBackend`, `ConfigDraftManager` and `WizardConfigLoader` each raised a bare `ValueError`
+- `key_pattern()` named the wrong document in a tenanted deployment, and the watch built from it looked healthy
+
+#### Security
+- **deleting one knowledge base destroyed every tenant's ingest state.** A tenant context contributes a prefix to every state key, and that prefix's first segment landed at the same level as a knowledge base's own domain segment
+- **a knowledge base could overwrite and delete another one, on every persistent backend.** `domain_id` is interleaved with the layout's own literal segments — `{domain}/content/{path}`, `{domain}/_metadata.json` — so an identifier occupying more than one slot addressed a neighbour's storage. One tenant could also read another's ingest state through the two-hop file-backend composition
+- a knowledge-base `domain_id` or resource path, a wizard subflow name, a `wizard_config` path, and a `ConfigDraftManager` config name or draft id could each address a file outside their declared base. `S3KnowledgeBackend` composed every key unchecked, its file-backend twin having been guarded a release earlier
+
+### dataknobs-fsm [0.4.1]
+
+#### Security
+- **a `$include` or `$import` could read any file on the volume.** `ConfigLoader._resolve_references` composed the reference onto a base directory and opened the result unchecked at both sites, and because the loader rebases to each included file's parent before recursing, a chain walked wherever the first hop reached. Containment is now judged against the config tree, fixed once when the load starts, so a fragment in a subdirectory may still reach a sibling above it. `load_from_file(config_root=...)` widens the anchor for a deployment whose configs deliberately span sibling directories — widening rather than switching the check off keeps the boundary a boundary
+- **a path handed to `FileSystemResource` could address any file on the volume.** `__init__` resolves `base_path`, which is only meaningful if that directory is a boundary, but no composed path was ever checked back against it — `acquire`/`open`, `exists`, `delete` and `list_files` each composed independently. Two placements are load-bearing: in `delete` the check runs before the blanket `except Exception: return False`, since `False` is also that method's "no such file" answer, and in `acquire` the refusal is re-raised ahead of the handler that would otherwise mark the resource `ERROR` for a caller's bad name
+
+#### Fixed
+- a cyclic `$include` recursed until the interpreter gave out, so a one-character typo in a fragment surfaced as an apparent interpreter fault with a thousand-frame traceback naming no file. A cycle raises `ConfigLoadError` naming the chain, tracking the files currently *open* rather than those already seen, so an ordinary shared fragment is unaffected
+- a malformed reference raised a bare `KeyError('file')` or a `pathlib` error, naming neither the directive nor the file that carried it
+- the include cache outlived the load that filled it, so a `ConfigLoader` held across loads — the ordinary way to hold one — served the first load's copy of every fragment however the file had changed
+
+#### Added
+- behavioural tests for `$include` and `$import`, which had none in this package's suite or in any example config in the repository, so the containment work above cannot buy a boundary by breaking the feature
+
 ## Release - 2026-08-11
 
 Two changes run across the workspace in this release.

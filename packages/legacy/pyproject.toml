@@ -8,10 +8,10 @@ authors = [
 ]
 requires-python = ">=3.12"
 dependencies = [
-    "dataknobs-common==2.0.0",
+    "dataknobs-common==3.0.0",
     "dataknobs-structures==1.0.16",
-    "dataknobs-utils==2.0.0",
-    "dataknobs-xization==2.0.0",
+    "dataknobs-utils==2.0.1",
+    "dataknobs-xization==2.1.0",
 ]
 
 [tool.uv.sources]
