@@ -202,6 +202,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     rather than raising. It is now documented as the naming policy it is —
     deliberately stricter than containment — rather than as the boundary.
 
+### Added
+
+- **Every entry point from a portable config to a bot now takes
+  `strict_resources`.** A `$resource` reference naming a resource the
+  environment does not define degrades to the reference's inline defaults
+  with a warning, which is usually right in development and usually wrong in
+  production: an empty config handed to a factory rarely fails, it produces
+  the factory's default, and a degraded `conversation_storage` binding is an
+  in-memory database that holds state perfectly until the process restarts.
+
+  `dataknobs-config` made that policy declarable at four levels. Two of them
+  live in code, and neither was reachable here — `DynaBot.from_environment_aware_config`
+  did not accept the argument, and a caller handing in a plain dict cannot
+  reach the levels that live on `EnvironmentAwareConfig` either, because that
+  object is built inside the entry point. So the only levels available were
+  the reference's own `$required` and the environment file's setting, and a
+  deployment that could edit neither had no switch at all.
+
+  It is now on `DynaBot.from_environment_aware_config` (per call),
+  `BotRegistry`, `InMemoryBotRegistry` and `BotManager` (per instance).
+  Registry-wide rather than per-call on the registries because both cache: an
+  argument passed to one `get_bot` would silently decide what every later
+  caller received. `None` is the default everywhere and defers exactly as
+  before, so nothing changes for a caller who does not pass it.
+
+- **`ConfigCachingManager` takes it too, defaulting to `True`.** That
+  manager resolves strictly, which is the behaviour it has always had and is
+  preserved — but the posture was a literal, so the environment's own
+  `strict_resources` setting was the one level it never consulted. Passing
+  `None` hands that decision back to the operator; passing `False` degrades.
+  The default is `True` rather than `None` because defaulting to `None` would
+  turn every existing deployment lenient without anyone asking for it.
+
+  `ResourceNotFoundError` subclasses `KeyError`, so code wrapping bot
+  creation in `except KeyError` for unrelated reasons will swallow a strict
+  failure.
+
 ### Changed
 
 - **`ConfigCachingManager` resolves `$resource` references through

@@ -117,6 +117,8 @@ class BotRegistry:
         max_cache_size: int = 1000,
         validate_on_register: bool = True,
         config_key: str = "bot",
+        *,
+        strict_resources: bool | None = None,
     ):
         """Initialize bot registry.
 
@@ -134,6 +136,19 @@ class BotRegistry:
                 when registering (default: True)
             config_key: Key within config containing bot configuration.
                 Defaults to "bot". Used during environment resolution.
+            strict_resources: Whether a `$resource` reference naming a
+                resource the environment does not define raises rather
+                than degrading to the reference's inline defaults. `None`
+                (default) defers to the environment's `strict_resources`
+                setting, then to `False`, so leaving it unset changes
+                nothing. A reference's own `$required` overrides it.
+
+                Registry-wide rather than per-call because `get_bot`
+                caches: a policy passed to one call would silently decide
+                what every later caller gets back, and the argument that
+                produced the cached bot would not be visible to them. A
+                caller who wants the decision per resolution has
+                `DynaBot.from_environment_aware_config` directly.
         """
         self._backend = backend or InMemoryBackend()
         self._env_dir = Path(env_dir)
@@ -141,6 +156,7 @@ class BotRegistry:
         self._max_cache_size = max_cache_size
         self._validate_on_register = validate_on_register
         self._config_key = config_key
+        self._strict_resources = strict_resources
 
         # Bot instance cache: bot_id -> (DynaBot, cached_timestamp)
         self._cache: dict[str, tuple[DynaBot, float]] = {}
@@ -351,6 +367,7 @@ class BotRegistry:
                     environment=self._environment,
                     env_dir=self._env_dir,
                     config_key=self._config_key,
+                    strict_resources=self._strict_resources,
                 )
             else:
                 # Traditional path - use config as-is
@@ -671,6 +688,8 @@ class InMemoryBotRegistry(BotRegistry):
         max_cache_size: int = 1000,
         validate_on_register: bool = True,
         config_key: str = "bot",
+        *,
+        strict_resources: bool | None = None,
     ):
         """Initialize in-memory bot registry.
 
@@ -686,6 +705,19 @@ class InMemoryBotRegistry(BotRegistry):
                 when registering (default: True)
             config_key: Key within config containing bot configuration.
                 Defaults to "bot". Used during environment resolution.
+            strict_resources: Whether a `$resource` reference naming a
+                resource the environment does not define raises rather
+                than degrading to the reference's inline defaults. `None`
+                (default) defers to the environment's `strict_resources`
+                setting, then to `False`, so leaving it unset changes
+                nothing. A reference's own `$required` overrides it.
+
+                Registry-wide rather than per-call because `get_bot`
+                caches: a policy passed to one call would silently decide
+                what every later caller gets back, and the argument that
+                produced the cached bot would not be visible to them. A
+                caller who wants the decision per resolution has
+                `DynaBot.from_environment_aware_config` directly.
         """
         super().__init__(
             backend=InMemoryBackend(),
@@ -695,6 +727,7 @@ class InMemoryBotRegistry(BotRegistry):
             max_cache_size=max_cache_size,
             validate_on_register=validate_on_register,
             config_key=config_key,
+            strict_resources=strict_resources,
         )
 
     async def clear(self) -> None:

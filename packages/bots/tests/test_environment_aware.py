@@ -1,8 +1,9 @@
-"""Tests for environment-aware configuration in DynaBot and BotManager."""
+"""Tests for environment-aware configuration in DynaBot and its registries."""
 
 import pytest
 
 from dataknobs_bots import DynaBot, BotManager
+from dataknobs_bots.bot import InMemoryBotRegistry
 from dataknobs_config import EnvironmentAwareConfig, EnvironmentConfig
 
 
@@ -558,3 +559,221 @@ class TestResolutionThroughAnAlreadyExpandedEnvironment:
         resolved = config.resolve_for_build("bot")
 
         assert resolved["db"]["replica"]["connection_string"] == "postgres://u:p${x}ss@h/db"
+
+
+class TestMissingResourcePolicyPassThrough:
+    """The missing-resource policy is declarable at the bot entry points.
+
+    ``dataknobs-config`` resolves a reference naming a resource the
+    environment does not define leniently by default -- warn, degrade to
+    the reference's inline defaults -- and takes a ``strict_resources``
+    argument to say otherwise. Every level of that chain was reachable
+    except the two that live in code, because the argument stopped at
+    ``resolve_for_build`` and none of this package's entry points
+    forwarded it. A caller handing in a plain dict could not reach them
+    at all: the ``EnvironmentAwareConfig`` those levels live on is built
+    inside the entry point, so its constructor is not the caller's to
+    pass.
+
+    The consequence is the one the policy exists for. A degraded
+    ``conversation_storage`` binding is an in-memory database, which
+    holds state perfectly until the process restarts -- so the bot below
+    builds either way, and only the policy decides whether the operator
+    hears about it before or after deployment.
+    """
+
+    @staticmethod
+    def _environment(settings: dict | None = None) -> EnvironmentConfig:
+        """An environment defining the LLM binding but not the storage one."""
+        return EnvironmentConfig(
+            name="test",
+            resources={
+                "llm_providers": {"default": {"provider": "echo", "model": "test"}},
+            },
+            settings=settings or {},
+        )
+
+    @staticmethod
+    def _portable() -> dict:
+        return {
+            "bot": {
+                "llm": {"$resource": "default", "type": "llm_providers"},
+                "conversation_storage": {
+                    "$resource": "conversations",
+                    "type": "databases",
+                    # The inline default the lenient path degrades to.
+                    "backend": "memory",
+                },
+            }
+        }
+
+    async def test_the_default_still_degrades(self):
+        """Unset means unset: the lenient default is unchanged."""
+        bot = await DynaBot.from_environment_aware_config(
+            self._portable(), environment=self._environment()
+        )
+        assert bot is not None
+
+    async def test_a_dict_caller_can_now_ask_to_fail(self):
+        """The dict branch builds the config here, so this is the only level it has."""
+        from dataknobs_config import ResourceNotFoundError
+
+        with pytest.raises(ResourceNotFoundError, match="conversations"):
+            await DynaBot.from_environment_aware_config(
+                self._portable(),
+                environment=self._environment(),
+                strict_resources=True,
+            )
+
+    async def test_it_reaches_the_prebuilt_config_branch_too(self):
+        """A caller handing in an EnvironmentAwareConfig never touches the constructor.
+
+        Forwarding the policy there rather than to ``resolve_for_build``
+        would have covered only half the signature's accepted input, and
+        silently: the argument would be accepted and ignored.
+        """
+        from dataknobs_config import ResourceNotFoundError
+
+        env_aware = EnvironmentAwareConfig(config=self._portable(), environment=self._environment())
+
+        with pytest.raises(ResourceNotFoundError, match="conversations"):
+            await DynaBot.from_environment_aware_config(env_aware, strict_resources=True)
+
+    async def test_the_call_level_outranks_the_config_s_own(self):
+        """A config carrying a policy is overridden by the caller, per the chain.
+
+        The call level is more specific than the instance level, so a
+        caller who says ``False`` gets the degrade even though the config
+        was built strict. This is the documented precedence rather than a
+        rule this package adds, and it is why the default is ``None``.
+        """
+        env_aware = EnvironmentAwareConfig(
+            config=self._portable(),
+            environment=self._environment(),
+            strict_resources=True,
+        )
+
+        bot = await DynaBot.from_environment_aware_config(env_aware, strict_resources=False)
+        assert bot is not None
+
+    async def test_none_leaves_the_config_s_own_policy_alone(self):
+        """Not passing it must not read as passing ``False``."""
+        from dataknobs_config import ResourceNotFoundError
+
+        env_aware = EnvironmentAwareConfig(
+            config=self._portable(),
+            environment=self._environment(),
+            strict_resources=True,
+        )
+
+        with pytest.raises(ResourceNotFoundError, match="conversations"):
+            await DynaBot.from_environment_aware_config(env_aware)
+
+    async def test_the_operator_level_still_decides_when_nothing_else_does(self):
+        """The environment setting was already reachable; it must stay so."""
+        from dataknobs_config import ResourceNotFoundError
+
+        with pytest.raises(ResourceNotFoundError, match="conversations"):
+            await DynaBot.from_environment_aware_config(
+                self._portable(),
+                environment=self._environment({"strict_resources": True}),
+            )
+
+    async def test_a_reference_may_still_opt_out_of_a_strict_call(self):
+        """``$required: false`` is the most specific level and outranks the call."""
+        portable = self._portable()
+        portable["bot"]["conversation_storage"]["$required"] = False
+
+        bot = await DynaBot.from_environment_aware_config(
+            portable, environment=self._environment(), strict_resources=True
+        )
+        assert bot is not None
+
+
+class TestMissingResourcePolicyThroughTheRegistries:
+    """The same policy, reachable from the paths consumers are told to use.
+
+    ``BotRegistry`` is the recommended entry point -- ``BotManager``'s
+    deprecation message names it as the replacement -- and it always
+    takes the dict branch, since a config comes back from its backend as
+    a mapping. So without a registry-level parameter the two code levels
+    of the chain were unreachable for exactly the callers on the path
+    this package recommends.
+
+    Registry-wide rather than per-call because both classes cache: a
+    policy passed to one ``get_bot`` call would silently decide what
+    every later caller gets back.
+    """
+
+    @staticmethod
+    def _environment() -> EnvironmentConfig:
+        return EnvironmentConfig(
+            name="test",
+            resources={
+                "llm_providers": {"default": {"provider": "echo", "model": "test"}},
+            },
+            settings={},
+        )
+
+    @staticmethod
+    def _portable() -> dict:
+        return {
+            "bot": {
+                "llm": {"$resource": "default", "type": "llm_providers"},
+                "conversation_storage": {
+                    "$resource": "conversations",
+                    "type": "databases",
+                    "backend": "memory",
+                },
+            }
+        }
+
+    async def test_registry_default_still_degrades(self):
+        registry = InMemoryBotRegistry(environment=self._environment(), validate_on_register=False)
+        await registry.initialize()
+        try:
+            await registry.register("b", self._portable())
+            assert await registry.get_bot("b") is not None
+        finally:
+            await registry.close()
+
+    async def test_registry_can_declare_the_binding_must_exist(self):
+        from dataknobs_config import ResourceNotFoundError
+
+        registry = InMemoryBotRegistry(
+            environment=self._environment(),
+            validate_on_register=False,
+            strict_resources=True,
+        )
+        await registry.initialize()
+        try:
+            await registry.register("b", self._portable())
+            with pytest.raises(ResourceNotFoundError, match="conversations"):
+                await registry.get_bot("b")
+        finally:
+            await registry.close()
+
+    async def test_the_in_memory_subclass_forwards_it_too(self):
+        """It re-declares the whole signature rather than inheriting it.
+
+        Which is why the parameter has to be added twice, and why a test
+        that only drove the base class would have reported the in-process
+        registry -- the one most consumers reach for first -- as covered.
+        """
+        import inspect
+
+        from dataknobs_bots.bot import BotRegistry
+
+        for cls in (BotRegistry, InMemoryBotRegistry):
+            assert "strict_resources" in inspect.signature(cls.__init__).parameters
+
+    async def test_manager_can_declare_it_as_well(self):
+        from dataknobs_config import ResourceNotFoundError
+
+        manager = BotManager(environment=self._environment(), strict_resources=True)
+        with pytest.raises(ResourceNotFoundError, match="conversations"):
+            await manager.get_or_create("b", config=self._portable())
+
+    async def test_manager_default_still_degrades(self):
+        manager = BotManager(environment=self._environment())
+        assert await manager.get_or_create("b", config=self._portable()) is not None

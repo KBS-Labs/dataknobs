@@ -1346,6 +1346,8 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
         environment: EnvironmentConfig | str | None = None,
         env_dir: str | Path = "config/environments",
         config_key: str = "bot",
+        *,
+        strict_resources: bool | None = None,
     ) -> DynaBot:
         """Create DynaBot with environment-aware configuration.
 
@@ -1364,9 +1366,33 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
                     Only used if environment is a string name.
             config_key: Key within config containing bot configuration.
                        Defaults to "bot". Set to None to use root config.
+            strict_resources: Whether a `$resource` reference naming a
+                resource this environment does not define raises rather
+                than degrading to the reference's inline defaults. `None`
+                (default) defers to the config's own policy, then to the
+                environment's `strict_resources` setting, then to `False`
+                -- so leaving it unset changes nothing. A reference's own
+                `$required` overrides every level.
+
+                This is the *call* level of that chain, and it is the only
+                level a caller handing in a plain dict can reach: the
+                `EnvironmentAwareConfig` is built here, so its constructor
+                is not theirs to pass. Set it `True` at startup to fail on
+                a binding this environment does not define, rather than
+                building a bot whose storage silently degraded to an
+                in-process default.
 
         Returns:
             Fully initialized DynaBot instance with resolved resources
+
+        Raises:
+            ResourceNotFoundError: If a reference names a resource this
+                environment does not define and the effective policy is
+                strict. It subclasses `KeyError`, so a caller wrapping
+                this in `except KeyError` for unrelated reasons will
+                swallow it.
+            ConfigError: If a reference is malformed, or names a resource
+                that does not declare a capability it `$requires`
 
         Example:
             ```python
@@ -1397,6 +1423,14 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
             from dataknobs_config import EnvironmentAwareConfig
             env_config = EnvironmentAwareConfig.load_app("my-bot", ...)
             bot = await DynaBot.from_environment_aware_config(env_config)
+
+            # Fail on a binding production does not define, rather than
+            # degrading to an in-process default
+            bot = await DynaBot.from_environment_aware_config(
+                config,
+                environment="production",
+                strict_resources=True,
+            )
             ```
 
         Note:
@@ -1437,11 +1471,21 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
             # Switch environment on existing EnvironmentAwareConfig
             config = config.with_environment(environment, env_dir)
 
-        # Resolve resources and env vars (late binding happens here)
+        # Resolve resources and env vars (late binding happens here).
+        #
+        # The policy is forwarded here rather than to the constructor
+        # above because the constructor is only on the dict branch: a
+        # caller handing in a pre-built EnvironmentAwareConfig takes the
+        # `elif` and never reaches it, so a constructor-only pass-through
+        # would silently do nothing for half the signature's accepted
+        # input. This covers both branches, and it is the call level of
+        # the precedence chain, which is where a per-call argument
+        # belongs -- a config that carries its own policy keeps it
+        # whenever this is left None.
         if config_key:
-            resolved = config.resolve_for_build(config_key)
+            resolved = config.resolve_for_build(config_key, strict_resources=strict_resources)
         else:
-            resolved = config.resolve_for_build()
+            resolved = config.resolve_for_build(strict_resources=strict_resources)
 
         # Delegate to existing from_config
         return await cls.from_config(resolved)

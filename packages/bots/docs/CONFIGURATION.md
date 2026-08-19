@@ -502,6 +502,8 @@ llm:
 
 **`$required`** declares that the resource must exist. Without it, a reference naming a resource the environment does not define warns and degrades to the reference's inline defaults (or to an empty config, which usually means the factory's own default — an in-memory database, for instance, that holds state until the process restarts). `$required: false` opts a reference out of the strictness `$requires` and a resolver-wide setting would otherwise impose.
 
+That resolver-wide setting is `strict_resources`, and every entry point that resolves a config accepts it: `strict_resources=` on a `DynaBot.from_environment_aware_config` call, or on a `BotRegistry` / `InMemoryBotRegistry` / `BotManager` / `ConfigCachingManager` constructor. It is lenient by default everywhere except `ConfigCachingManager`, which has always raised and keeps doing so. An operator with no access to application code has a fourth lever: `settings: {strict_resources: true}` in the environment file itself.
+
 Additional fields in a resource reference are **inline defaults**: they fill
 keys the environment's resource does not set, and are discarded wherever it
 does. The environment wins — a binding is the deployment's to decide, and a

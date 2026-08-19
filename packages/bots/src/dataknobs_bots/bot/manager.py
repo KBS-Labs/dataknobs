@@ -129,6 +129,8 @@ class BotManager:
         config_loader: ConfigLoaderType | None = None,
         environment: EnvironmentConfig | str | None = None,
         env_dir: str | Path = "config/environments",
+        *,
+        strict_resources: bool | None = None,
     ):
         """Initialize BotManager.
 
@@ -144,12 +146,28 @@ class BotManager:
                 If a string, loads environment config from env_dir.
             env_dir: Directory containing environment config files.
                 Only used if environment is a string name.
+            strict_resources: Whether a `$resource` reference naming a
+                resource the environment does not define raises rather
+                than degrading to the reference's inline defaults. `None`
+                (default) defers to the config's own policy, then to the
+                environment's `strict_resources` setting, then to
+                `False`, so leaving it unset changes nothing.
+
+                Manager-wide rather than per-call, for the reason
+                `get_or_create` already caches on: the arguments that
+                built a bot are not visible to whoever gets it back from
+                the cache. Note that a value set here is the *call* level
+                of the precedence chain and so outranks the instance
+                policy of an `EnvironmentAwareConfig` handed to
+                `get_or_create` -- which is why the default is `None` and
+                not `False`.
         """
         warnings.warn(_DEPRECATION_MESSAGE, DeprecationWarning, stacklevel=2)
 
         self._bots: dict[str, DynaBot] = {}
         self._config_loader = config_loader
         self._env_dir = Path(env_dir)
+        self._strict_resources = strict_resources
 
         # Load environment config if specified
         self._environment: EnvironmentConfig | None = None
@@ -273,6 +291,7 @@ class BotManager:
                 environment=self._environment,
                 env_dir=self._env_dir,
                 config_key=config_key,
+                strict_resources=self._strict_resources,
             )
         else:
             # Traditional path - use config as-is

@@ -222,6 +222,64 @@ llm:
 # Resolved config has temperature: 0.7 and timeout: 30
 ```
 
+### When a Resource Is Missing
+
+A reference naming a resource the environment does not define resolves to
+the reference's inline defaults, with a warning — or to `{}` when it
+declares none. That is usually right in development and usually wrong in
+production: an empty config handed to a factory rarely fails, it produces
+the factory's default. A degraded `conversation_storage` binding becomes an
+in-memory database, which holds state perfectly until the process restarts.
+
+[Missing Resources](../../config/environment-aware.md#4-missing-resources)
+documents the full four-level precedence chain. Two of those levels live in
+code, and every entry point here that resolves a config exposes them:
+
+| Entry point | Default | Where to say otherwise |
+|---|---|---|
+| `DynaBot.from_environment_aware_config` | lenient — warn and degrade | `strict_resources=` on the call |
+| `BotRegistry` / `InMemoryBotRegistry` | lenient | `strict_resources=` on the constructor |
+| `BotManager` (deprecated) | lenient | `strict_resources=` on the constructor |
+| `ConfigCachingManager` | **strict — raises** | `strict_resources=` on the constructor |
+| `BotResourceResolver` | **strict — raises** | not configurable |
+
+`ConfigCachingManager` and `BotResourceResolver` differ because raising is
+what those two paths have always done; the default is preserved rather than
+moved. Pass `strict_resources=None` to `ConfigCachingManager` to hand the
+decision to the environment's own setting instead.
+
+```python
+from dataknobs_bots.bot import InMemoryBotRegistry
+
+# Fail at startup on a binding production does not define, rather than
+# discovering it as an empty conversation history after deployment
+registry = InMemoryBotRegistry(
+    environment="production",
+    strict_resources=True,
+)
+```
+
+The registries and the manager take the policy on the constructor rather
+than per call because all three cache: an argument passed to one
+`get_bot` / `get_or_create` would silently decide what every later caller
+receives. For a per-resolution decision, call
+`DynaBot.from_environment_aware_config` directly.
+
+Leaving it unset changes nothing — `None` defers to the config's own
+policy, then to the environment's `strict_resources` setting, then to
+lenient. A reference's own `$required` overrides every level, so a single
+binding can opt in or out regardless of what the code asked for:
+
+```yaml
+conversation_storage:
+  $resource: conversations
+  type: databases
+  $required: true       # absent in this environment -> raise, do not degrade
+```
+
+`ResourceNotFoundError` subclasses `KeyError`, so code wrapping bot
+creation in `except KeyError` for unrelated reasons will swallow it.
+
 ## BotResourceResolver
 
 High-level resolver that automatically initializes resources.
