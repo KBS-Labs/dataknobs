@@ -12,10 +12,15 @@ from __future__ import annotations
 
 import importlib.util
 from pathlib import Path
+from types import ModuleType
 
 import pytest
 
 _SCRIPT = Path(__file__).resolve().parent.parent / "bin" / "docs-mirror-check.py"
+
+#: What the ``tree`` fixture hands back: the loaded guard module, its
+#: sandbox package-docs dir, and its sandbox site-docs dir.
+_Tree = tuple[ModuleType, Path, Path]
 
 
 @pytest.fixture(scope="module")
@@ -286,6 +291,63 @@ def test_transclude_subdir_source_exempt_from_completeness(tree):
     entry = {"transclude": [{"package": "guides/events.md", "site": "events.md"}]}
     res = mod.Result()
     mod.check_completeness(entry, pkg, site, res)
+    assert res.ok, res.errors
+
+
+def test_package_only_with_a_site_counterpart_is_detected(tree: _Tree) -> None:
+    """``package_only`` must mean unpaired, not "I did not classify this".
+
+    The completeness pass is satisfied by either answer, and there is no
+    ``check_package_only``, so naming a doc here opts it out of every
+    per-class invariant. That made the class the path of least
+    resistance for a pair that was awkward to express -- and the guard
+    then reported the package clean while the site copy could drift,
+    move or vanish unnoticed.
+    """
+    mod, pkg, site = tree
+    _w(pkg / "USER_GUIDE.md", "# guide\n")
+    (site / "guides").mkdir()
+    _w(site / "guides" / "user-guide.md", "# guide\n")
+    res = mod.Result()
+    mod.check_unpaired({"package_only": ["USER_GUIDE.md"]}, pkg, site, res)
+    assert not res.ok
+    assert any("USER_GUIDE.md" in e and "user-guide.md" in e for e in res.errors)
+
+
+def test_site_only_with_a_package_counterpart_is_detected(tree: _Tree) -> None:
+    """The same hole from the other side, including a nested source."""
+    mod, pkg, site = tree
+    (pkg / "html").mkdir()
+    _w(pkg / "html" / "HTML_CONVERSION.md", "# convert\n")
+    _w(site / "html-conversion.md", "# convert\n")
+    res = mod.Result()
+    mod.check_unpaired({"site_only": ["html-conversion.md"]}, pkg, site, res)
+    assert not res.ok
+    assert any("html-conversion.md" in e and "html/HTML_CONVERSION.md" in e for e in res.errors)
+
+
+def test_genuinely_unpaired_docs_pass(tree: _Tree) -> None:
+    """A doc with no counterpart anywhere is what the class is for."""
+    mod, pkg, site = tree
+    _w(pkg / "BENCHMARKING.md", "# bench\n")
+    _w(site / "index.md", "# landing\n")
+    res = mod.Result()
+    mod.check_unpaired(
+        {"package_only": ["BENCHMARKING.md"], "site_only": ["index.md"]}, pkg, site, res
+    )
+    assert res.ok, res.errors
+
+
+def test_a_classified_pair_is_not_reported_by_the_unpaired_check(tree: _Tree) -> None:
+    """Only the two unpaired classes are in scope; a real pair is fine."""
+    mod, pkg, site = tree
+    _w(pkg / "TOOLS.md", "# tools\n")
+    (site / "guides").mkdir()
+    _w(site / "guides" / "tools.md", "# tools\n")
+    res = mod.Result()
+    mod.check_unpaired(
+        {"symlink": [{"package": "TOOLS.md", "site": "guides/tools.md"}]}, pkg, site, res
+    )
     assert res.ok, res.errors
 
 
