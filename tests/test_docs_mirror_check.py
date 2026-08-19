@@ -298,6 +298,44 @@ def test_transclude_subdir_source_exempt_from_completeness(tree: _Tree) -> None:
     assert res.ok, res.errors
 
 
+def test_unpaired_subdir_page_is_classifiable_without_going_recursive(tree: _Tree) -> None:
+    """The subdir exemption must cover the unpaired classes, not just the pairs.
+
+    It was written for the paired classes alone, when the unpaired ones
+    had no per-class check to fall back on. ``check_unpaired`` is now
+    that check, and it matches on the canonicalized basename at any
+    depth. Without the exemption a genuinely unpaired subdirectory page
+    could not be classified at all under a non-recursive scope -- the
+    entry tripped "manifest references missing site doc", because the
+    completeness pass globs only top-level basenames -- so the only way
+    to record it was to opt the whole package into ``recursive``, and
+    the practical answer was to leave it unclassified and unverified.
+    """
+    mod, pkg, site = tree
+    (site / "guides").mkdir()
+    _w(site / "guides" / "environment-aware.md", "# env\n")
+    res = mod.Result()
+    mod.check_completeness({"site_only": ["guides/environment-aware.md"]}, pkg, site, res)
+    assert res.ok, res.errors
+
+
+def test_an_unpaired_subdir_page_is_still_checked_for_a_counterpart(tree: _Tree) -> None:
+    """The exemption skips the completeness set, not the class's own check.
+
+    That distinction is the whole justification for it: exempting a file
+    from a top-level glob is only safe while something else still asks
+    the question the class exists to answer.
+    """
+    mod, pkg, site = tree
+    (site / "guides").mkdir()
+    _w(site / "guides" / "environment-aware.md", "# env\n")
+    _w(pkg / "ENVIRONMENT_AWARE.md", "# env\n")
+    res = mod.Result()
+    mod.check_unpaired({"site_only": ["guides/environment-aware.md"]}, pkg, site, res)
+    assert not res.ok
+    assert any("ENVIRONMENT_AWARE.md" in e for e in res.errors)
+
+
 def test_package_only_with_a_site_counterpart_is_detected(tree: _Tree) -> None:
     """``package_only`` must mean unpaired, not "I did not classify this".
 

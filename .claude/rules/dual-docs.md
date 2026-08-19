@@ -62,7 +62,8 @@ When updating documentation for any package:
    classified, so a new doc there fails until you do. A package without it
    requires only *top-level* `*.md` — a new doc under a subdirectory (every
    bots guide, for instance) passes unclassified and gets no verification
-   at all.
+   at all. It can still be classified individually, in any class; the
+   scope decides what the guard *demands*, not what it accepts.
 
    | Scope | Packages |
    |---|---|
@@ -84,18 +85,26 @@ When updating documentation for any package:
    | `diverge` | Intentional divergence; recorded, not content-checked. Add `shared_sections` for any block that must still stay identical |
    | `package_only` / `site_only` | Genuinely unpaired — **not** a fallback for a pair you did not want to classify |
 
-   A paired entry may point at a subdirectory on either side (a package
+   **Any** entry may point at a subdirectory on either side (a package
    source under `guides/`, or a site page under `guides/` as every bots
-   guide is), so prefer a real pair over `package_only`/`site_only`:
-   an unpaired classification opts the file out of per-class verification.
+   guide is) — paired or unpaired, whatever the package's scope. So
+   prefer a real pair over `package_only`/`site_only`: those two classes
+   verify only that no counterpart exists, never what the file contains.
 
    That preference is now enforced rather than advisory. The guard fails
    an unpaired entry whose counterpart exists in the other tree, matched
-   on the canonicalized basename at any depth — because the two unpaired
-   classes have no per-class check at all, so a real pair recorded there
-   is verified by nothing while still reporting green. If two documents
-   share a name but are genuinely different, that is a `diverge` with a
-   reason, not a `package_only`.
+   on the canonicalized basename at any depth — because a real pair
+   recorded as unpaired gets no content or existence check while still
+   reporting green. If two documents share a name but are genuinely
+   different, that is a `diverge` with a reason, not a `package_only`.
+
+   The subdirectory rule reached the unpaired classes later than the
+   paired ones, and the gap was not cosmetic: a genuinely unpaired
+   nested page could not be classified at all under a top-level scope,
+   so the only ways to record it were to opt the whole package into
+   `recursive: true` or to leave it unverified. Both classes accept a
+   nested path now, which is the cheap way to cover one nested doc
+   without reconciling the package's whole tree.
 
    **Two documents that differ overall but share one block.** Neither
    `mirror` (whole file must match) nor `transclude` (whole file is an
