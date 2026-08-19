@@ -124,6 +124,8 @@ class ConfigCachingManager(CachingRegistryManager[ResolvedConfig]):
         event_topic: str = "registry:configs",
         cache_ttl: int = 300,
         max_cache_size: int = 1000,
+        *,
+        strict_resources: bool | None = True,
     ) -> None:
         """Initialize the configuration caching manager.
 
@@ -135,6 +137,19 @@ class ConfigCachingManager(CachingRegistryManager[ResolvedConfig]):
             event_topic: Topic for invalidation events
             cache_ttl: Cache TTL in seconds
             max_cache_size: Maximum cached configs
+            strict_resources: Whether a `$resource` reference naming a
+                resource the environment does not define raises rather
+                than degrading to the reference's inline defaults.
+
+                Defaults to `True`, which is the odd one out among this
+                package's resolution entry points and is deliberate:
+                raising is what this path has always done (see
+                :meth:`_resolve_resources`), so a `None` default would
+                quietly turn every existing deployment lenient. `False`
+                degrades; `None` hands the decision to the environment's
+                own `strict_resources` setting, which is the level this
+                manager otherwise makes unreachable by answering it
+                itself.
         """
         super().__init__(
             backend=backend,
@@ -145,6 +160,7 @@ class ConfigCachingManager(CachingRegistryManager[ResolvedConfig]):
         )
         self._environment = environment
         self._config_key = config_key
+        self._strict_resources = strict_resources
 
     @property
     def environment(self) -> EnvironmentConfig | None:
@@ -228,9 +244,12 @@ class ConfigCachingManager(CachingRegistryManager[ResolvedConfig]):
         define -- warn, return the reference unchanged -- that had never run:
         the lookup it guarded raises rather than returning ``None``. Raising
         is therefore the behaviour this has always had, and it is preserved by
-        resolving strictly. What changes is that a reference can now say
-        otherwise for itself, with ``$required: false`` and inline defaults to
-        degrade to, which is what the unreachable branch was reaching for.
+        the ``strict_resources=True`` default. What changes is that a
+        reference can now say otherwise for itself, with ``$required: false``
+        and inline defaults to degrade to, which is what the unreachable
+        branch was reaching for -- and that a deployment can say otherwise for
+        the whole manager, which is what every other resolution entry point in
+        this package already allowed and this one did not.
 
         Args:
             config: Configuration with potential $resource references
@@ -240,8 +259,8 @@ class ConfigCachingManager(CachingRegistryManager[ResolvedConfig]):
 
         Raises:
             ResourceNotFoundError: If a reference names a resource the
-                environment does not define and does not declare
-                ``$required: false``
+                environment does not define, the effective policy is strict,
+                and the reference does not declare ``$required: false``
             ConfigError: If a reference is malformed, names a resource that
                 does not declare a capability it ``$requires``, or reaches
                 itself
@@ -256,7 +275,7 @@ class ConfigCachingManager(CachingRegistryManager[ResolvedConfig]):
             # whoever builds objects from it, as it does for every other
             # config this registry serves.
             substitute=False,
-            strict_resources=True,
+            strict_resources=self._strict_resources,
         )
         return resolved
 

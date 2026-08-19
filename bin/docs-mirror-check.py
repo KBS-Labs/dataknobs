@@ -485,12 +485,28 @@ def check_unpaired(entry: dict, pkg_dir: Path, site_dir: Path, res: Result) -> N
             paired.add(pair["site"])
             paired.add(pair["package"])
 
-    for cls, names, other_dir, other_side in (
-        ("package_only", entry.get("package_only", []), site_dir, "site"),
-        ("site_only", entry.get("site_only", []), pkg_dir, "package"),
+    for cls, names, own_dir, other_dir, other_side in (
+        ("package_only", entry.get("package_only", []), pkg_dir, site_dir, "site"),
+        ("site_only", entry.get("site_only", []), site_dir, pkg_dir, "package"),
     ):
         counterparts = _counterparts(other_dir)
         for name in names:
+            # Existence is this check's job for these two classes, and only
+            # for these two. A pair's file is opened by its own per-class
+            # check, and every classified top-level name is compared against
+            # the on-disk set by ``check_completeness`` -- but a nested name
+            # is exempt from that set precisely so it can be classified at
+            # all, and nothing below asks whether it is there. The absence
+            # of a counterpart is what this function is looking for, so a
+            # name that points at nothing looks like a clean answer.
+            if not (own_dir / name).exists():
+                res.fail(
+                    f"{cls}: '{name}' is classified but no such file exists "
+                    f"({(own_dir / name).relative_to(ROOT)}). A rename leaves the "
+                    f"entry behind and a typo never had a file; either way the "
+                    f"document this was meant to cover is verified by nothing."
+                )
+                continue
             hits = [h for h in sorted(counterparts.get(_canon_name(name), [])) if h not in paired]
             if not hits:
                 continue
@@ -531,13 +547,18 @@ def check_completeness(entry: dict, pkg_dir: Path, site_dir: Path, res: Result) 
             )
         store[name] = bucket
 
-    def _add_paired(store: dict[str, str], name: str, bucket: str, side: str) -> None:
-        # A paired entry may point at a *subdirectory* on either side: a
-        # package source under ``guides/`` (a transclusion of
-        # ``guides/events.md``), or a site page under ``guides/`` (where every
-        # bots guide lives). Under the default non-recursive scope such a file
-        # is not part of the completeness set -- its existence, and the pair's
-        # invariant, are enforced by the per-class check instead.
+    def _add_in_scope(store: dict[str, str], name: str, bucket: str, side: str) -> None:
+        # An entry may point at a *subdirectory* on either side: a package
+        # source under ``guides/`` (a transclusion of ``guides/events.md``),
+        # or a site page under ``guides/`` (where every bots guide lives).
+        # Under the default non-recursive scope such a file is not part of
+        # the completeness set -- its existence, and its class's invariant,
+        # are enforced by the per-class check instead. For the paired
+        # classes that is free: each one opens both files. For the unpaired
+        # ones it is not, because ``check_unpaired`` asks only whether a
+        # counterpart exists, so it carries an existence assertion of its
+        # own -- added when this exemption was extended to them, since the
+        # exemption is what removes the completeness pass's version of it.
         #
         # Both sides must apply that rule. Exempting only the package side
         # made a subdirectory site page inexpressible as a pair -- it would
@@ -545,6 +566,16 @@ def check_completeness(entry: dict, pkg_dir: Path, site_dir: Path, res: Result) 
         # ``site_on_disk`` was a non-recursive glob of basenames -- which in
         # turn forced genuine pairs to be recorded as ``package_only`` and
         # silently opted them out of per-class verification.
+        #
+        # So must both *populations*. The rule was first written for the
+        # paired classes alone, back when the unpaired ones had no per-class
+        # check to fall back on; :func:`check_unpaired` is that check, and it
+        # matches on the canonicalized basename at any depth, so it reads a
+        # nested path exactly as it reads a top-level one. Leaving the
+        # exemption off them made a genuinely unpaired subdirectory page
+        # inexpressible in the other direction -- not misclassifiable, but
+        # unclassifiable, which under a non-recursive scope means silently
+        # unverified.
         #
         # Under ``recursive`` the exemption is exactly what we are removing,
         # so subdirectory paths participate like any other.
@@ -554,12 +585,12 @@ def check_completeness(entry: dict, pkg_dir: Path, site_dir: Path, res: Result) 
 
     for kind in ("symlink", "mirror", "transclude", "diverge"):
         for pair in entry.get(kind, []):
-            _add_paired(pkg_classified, pair["package"], kind, "package")
-            _add_paired(site_classified, pair["site"], kind, "site")
+            _add_in_scope(pkg_classified, pair["package"], kind, "package")
+            _add_in_scope(site_classified, pair["site"], kind, "site")
     for name in entry.get("package_only", []):
-        _add(pkg_classified, name, "package_only", "package")
+        _add_in_scope(pkg_classified, name, "package_only", "package")
     for name in entry.get("site_only", []):
-        _add(site_classified, name, "site_only", "site")
+        _add_in_scope(site_classified, name, "site_only", "site")
 
     def _on_disk(root: Path) -> set[str]:
         if recursive:

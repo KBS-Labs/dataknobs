@@ -661,3 +661,94 @@ class TestConfigCachingManagerResourceResolution:
             assert resolved["storage"] == {"$resource": "gone", "type": "x"}
         finally:
             await manager.close()
+
+
+class TestConfigCachingManagerDeclarablePolicy:
+    """The manager's missing-resource posture is now a parameter, not a literal.
+
+    It resolved with a hard-coded ``strict_resources=True``, which is the
+    behaviour that path has always had and is preserved as the default
+    here. What the literal also did was answer a question the operator
+    owns: with the code level always set, the environment's own
+    ``strict_resources`` setting was never consulted, so a deployment
+    that had deliberately written one got it honoured by every other
+    resolution entry point in this package and ignored by this one.
+
+    ``None`` is what hands that level back. It is not the default,
+    because defaulting to it would turn every existing deployment lenient
+    without anyone asking.
+    """
+
+    @pytest.fixture
+    def environment_factory(self):
+        from dataknobs_config import EnvironmentConfig
+
+        def build(settings=None):
+            return EnvironmentConfig(
+                name="test",
+                resources={"databases": {"conversations": {"backend": "postgres"}}},
+                settings=settings or {},
+            )
+
+        return build
+
+    @pytest.fixture
+    async def backend(self):
+        backend = InMemoryBackend()
+        await backend.initialize()
+        yield backend
+        await backend.close()
+
+    @staticmethod
+    async def _resolve(backend, environment, **kwargs):
+        """Register the reference and resolve it under one manager.
+
+        Registration lives here rather than in a fixture because closing
+        a manager closes the backend with it, so a test exercising two
+        managers needs the config put back between them.
+        """
+        await backend.register(
+            "bot-1",
+            {
+                "storage": {
+                    "$resource": "gone",
+                    "type": "databases",
+                    "backend": "memory",
+                },
+            },
+        )
+        manager = ConfigCachingManager(
+            backend=backend, environment=environment, cache_ttl=10, **kwargs
+        )
+        await manager.initialize()
+        try:
+            return await manager.get_or_create("bot-1")
+        finally:
+            await manager.close()
+
+    @pytest.mark.asyncio
+    async def test_the_default_is_still_strict(self, backend, environment_factory):
+        from dataknobs_config import ResourceNotFoundError
+
+        with pytest.raises(ResourceNotFoundError, match="gone"):
+            await self._resolve(backend, environment_factory())
+
+    @pytest.mark.asyncio
+    async def test_false_degrades_to_the_inline_defaults(self, backend, environment_factory):
+        resolved = await self._resolve(backend, environment_factory(), strict_resources=False)
+        assert resolved["storage"] == {"backend": "memory"}
+
+    @pytest.mark.asyncio
+    async def test_none_defers_to_the_environment_setting(self, backend, environment_factory):
+        """Both directions, because deferring is only useful if it can say either."""
+        from dataknobs_config import ResourceNotFoundError
+
+        lenient = await self._resolve(backend, environment_factory(), strict_resources=None)
+        assert lenient["storage"] == {"backend": "memory"}
+
+        with pytest.raises(ResourceNotFoundError, match="gone"):
+            await self._resolve(
+                backend,
+                environment_factory({"strict_resources": True}),
+                strict_resources=None,
+            )
