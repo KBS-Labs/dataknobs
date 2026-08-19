@@ -351,6 +351,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   to be reached, when they were reached at all, by the prefix looseness
   above.
 
+- **The rename flush covered one directory, not each.** Both stores
+  publish siblings, so flushing the first published path's directory was
+  right by coincidence; a store publishing into two made only the first
+  rename durable. Deduplicated by directory now, which is the same one
+  flush in practice and the right one for a store inheriting the
+  bracket.
+
+- **`save(force=True)` called a file that never existed "unchanged".**
+  True about the loss — there is none — but "unchanged" describes a
+  file, and the WARNING is what an operator reads to find out what a
+  destructive flag just did. Reported as no file at that path.
+
 - **`fsync` before publishing was a silent no-op on Windows.** The
   staged file was opened `O_RDONLY` to flush it, and Windows implements
   `os.fsync` as `_commit`, which rejects a read-only descriptor — so

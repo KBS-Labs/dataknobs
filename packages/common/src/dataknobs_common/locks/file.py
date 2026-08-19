@@ -189,6 +189,16 @@ Only reached on the timeout path: an unbounded acquire blocks in the
 kernel rather than spinning.
 """
 
+_BINARY = getattr(os, "O_BINARY", 0)
+"""``os.O_BINARY`` where it exists, else a no-op.
+
+Windows translates line endings on a text-mode descriptor. Nothing is
+read or written through the lock's handle today, but the file is
+deliberately never truncated so that it *can* carry contents, and a
+descriptor opened text-mode would corrupt them the day something does.
+POSIX has no such mode and no such constant.
+"""
+
 _IDENTITY_ATTEMPTS = 3
 """Times to re-look-up a lockfile that was replaced mid-registration.
 
@@ -230,7 +240,7 @@ def _entry_for(lockfile: str) -> _LockEntry:
             # every lock it takes goes through an entry — which is what
             # makes opening, and closing again below, safe here.
             try:
-                fd = os.open(lockfile, os.O_RDWR)
+                fd = os.open(lockfile, os.O_RDWR | _BINARY)
             except FileNotFoundError:
                 # Unlinked between the stat and the open; recreate and
                 # look it up again.
@@ -266,7 +276,7 @@ def _create_lockfile(lockfile: str) -> None:
     an error — the caller re-stats either way.
     """
     try:
-        fd = os.open(lockfile, os.O_CREAT | os.O_EXCL | os.O_RDWR, 0o666)
+        fd = os.open(lockfile, os.O_CREAT | os.O_EXCL | os.O_RDWR | _BINARY, 0o666)
     except FileExistsError:
         return
     os.close(fd)
@@ -342,11 +352,14 @@ class FileLock:
     def __init__(self, filepath: str, *, timeout: float | None = None):
         self.filepath = filepath
         self.timeout = timeout
-        # The unresolved sibling. ``acquire`` replaces this with the
-        # sibling of the *resolved* target, which is the file actually
-        # locked; resolving needs the filesystem, and ``__init__`` is
-        # called on the event loop. See the module docstring.
-        self.lockfile = filepath + ".lock"
+        # Not known until ``acquire`` resolves the target: the lockfile
+        # is a sibling of the *resolved* path, and resolving is
+        # filesystem I/O that ``__init__`` must not do because an async
+        # caller builds the lock on its event loop. ``None`` rather than
+        # the unresolved sibling, which reads as an answer while naming
+        # a file that is not the one locked whenever a symlink is in the
+        # path. See the module docstring.
+        self.lockfile: str | None = None
         # Set between a successful ``acquire`` and its ``release``, and
         # ``None`` otherwise — which is also how ``release`` knows there
         # is nothing to hand on. The entry is process-wide state this

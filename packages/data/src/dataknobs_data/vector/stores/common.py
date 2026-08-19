@@ -37,11 +37,15 @@ def _forced_save_effect(
 ) -> str:
     """What ``save(force=True)`` is about to cost, for the WARNING log.
 
-    Three outcomes, not two. A file that is *gone* differs from one that
+    Four outcomes, not two. A file that is *gone* differs from one that
     *changed*: both fail the identity comparison, but only one of them
     has another writer's rows in it. Reporting a loss that did not happen
-    sends an operator looking for rows nothing discarded.
+    sends an operator looking for rows nothing discarded. A file that was
+    never there differs again — "unchanged" describes a file, and there
+    is none to describe.
     """
+    if current is None and persisted is None:
+        return "There is no file at that path, so nothing was discarded."
     if current == persisted:
         return "The file is unchanged, so nothing was discarded."
     if current is None:
@@ -972,11 +976,13 @@ class VectorStoreBase(StructuredConfigConsumer[VectorStoreConfig]):
                 os.replace(tmp, final_path)
                 published.append(final_path)
             staged.clear()
-            if published:
-                # One entry per directory, and in practice one directory:
-                # a store's files are siblings, and the rename is only
-                # atomic because the scratch is too.
-                _flush_directory(published[0])
+            # One flush per *directory*, which is one flush in practice:
+            # a store's files are siblings, because the rename is only
+            # atomic within a filesystem. Deduplicated rather than
+            # assumed, so a store publishing into two directories makes
+            # both renames durable instead of the first one's.
+            for representative in {os.path.dirname(p): p for p in published}.values():
+                _flush_directory(representative)
         finally:
             # Emptied above exactly when every rename landed, so a
             # non-empty ``staged`` here *is* the failure signal.

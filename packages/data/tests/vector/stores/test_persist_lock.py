@@ -46,7 +46,10 @@ Reviewing those fixes found more, covered below:
 * the scratch sweep built a glob out of its target's name, so a name
   holding ``[`` or ``*`` missed its own orphans and matched another
   file's, and ``<name>.*.tmp`` reached a longer-named neighbour's live
-  scratch under a lock the sweep does not hold.
+  scratch under a lock the sweep does not hold,
+* the rename flush covered the first directory published into rather
+  than each of them,
+* ``force=True`` called a file that never existed *unchanged*.
 """
 
 from __future__ import annotations
@@ -805,5 +808,89 @@ async def test_a_side_car_s_orphaned_scratch_is_swept_too(tmp_path: Path) -> Non
     )
     assert not await asyncio.to_thread(side_car_orphan.exists), (
         "the side-car's orphaned scratch survived a save"
+    )
+    await _shutdown(store)
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+async def test_publishing_into_two_directories_flushes_both(
+    backend: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The rename flush covers every directory published into, not the first.
+
+    Both current stores write siblings, so one directory is the whole
+    set and flushing ``published[0]`` was right by coincidence rather
+    than by construction. A store publishing into two makes the second
+    rename durable only if the flush is per directory — and the bracket
+    is inherited, so the next store to adopt it should not have to
+    discover that.
+
+    Durability is not observable, so this asserts the syscall, against
+    the real ``os.fsync`` recording what it was handed.
+    """
+    left = tmp_path / "left"
+    right = tmp_path / "right"
+    await asyncio.to_thread(left.mkdir)
+    await asyncio.to_thread(right.mkdir)
+
+    store = await _open(_base(backend), left / "shared.idx")
+
+    here = str(left / "here.bin")
+    there = str(right / "there.bin")
+
+    def writer(payload: bytes) -> Any:
+        def write(path: str) -> None:
+            Path(path).write_bytes(payload)
+
+        return write
+
+    real_fsync = os.fsync
+    flushed: list[int] = []
+
+    def recording_fsync(fd: int) -> None:
+        flushed.append(os.fstat(fd).st_ino)
+        real_fsync(fd)
+
+    monkeypatch.setattr(os, "fsync", recording_fsync)
+    await asyncio.to_thread(
+        store._write_then_publish,
+        [(here, writer(b"a" * 8)), (there, writer(b"b" * 8))],
+        here,
+    )
+    monkeypatch.undo()
+
+    left_ino, right_ino = await asyncio.to_thread(lambda: (left.stat().st_ino, right.stat().st_ino))
+    assert left_ino in flushed, "the first directory's rename was never flushed"
+    assert right_ino in flushed, (
+        "the second directory's rename was never flushed — a crash loses it "
+        "while keeping the data it names"
+    )
+    await _shutdown(store)
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+async def test_forcing_over_a_file_that_never_existed_describes_no_file(
+    backend: str, tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A file that was never there is not a file that is unchanged.
+
+    ``force=True`` on a path nothing has written yet reaches the bypass
+    with no identity on either side. It reported the file as *unchanged*
+    — true about the loss, wrong about the subject, and the WARNING is
+    read by an operator asking what a destructive flag just did.
+    """
+    persist = tmp_path / "shared.idx"
+    store = await _open(_base(backend), persist)
+    await _ingest(store, "row", 3, seed=1)
+
+    with caplog.at_level(logging.WARNING, logger="dataknobs_data.vector.stores.common"):
+        await store.save(force=True)
+
+    messages = [record.getMessage() for record in caplog.records]
+    assert any("no file at that path" in message for message in messages), (
+        f"the bypass described a file that was never there: {messages}"
+    )
+    assert not any("being discarded" in message for message in messages), (
+        f"the bypass claimed a loss that did not happen: {messages}"
     )
     await _shutdown(store)
