@@ -231,11 +231,19 @@ class SummaryMemory(StructuredConfigConsumer[SummaryMemoryConfig], Memory):
         return {}
 
     def set_provider(self, role: str, provider: Any) -> bool:
-        """Replace the summary LLM provider if the role matches."""
+        """Replace the summary LLM provider if the role matches.
+
+        The replacement is caller-owned: ``close()`` will not tear it
+        down, and the provider it replaces is the caller's to close.
+        """
         from dataknobs_bots.bot.base import PROVIDER_ROLE_SUMMARY_LLM
 
         if role == PROVIDER_ROLE_SUMMARY_LLM:
             self.llm_provider = provider
+            # Injected, therefore caller-owned. Leaving the flag set
+            # inverted the close() gate: the caller's provider was torn
+            # down while the dedicated one it replaced leaked.
+            self._owns_llm_provider = False
             return True
         return False
 

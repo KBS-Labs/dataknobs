@@ -1468,11 +1468,68 @@ knowledge_base:
   documents_path: ./docs
   vector_store:
     backend: faiss
-    dimension: 384
-    collection: knowledge
+    dimensions: 384
   embedding_provider: ollama
   embedding_model: nomic-embed-text
 ```
+
+### Identity Bindings
+
+`tenant_id` and `domain_id` bind the knowledge base to one scope.
+Every write stamps the binding into chunk metadata and into the
+chunk-id prefix, so two knowledge bases over one physical vector store
+stay isolated.
+
+Which of them also composes onto the store filter depends on where the
+value came from. A binding the knowledge base configures **itself** is
+composed onto every read, `count`, `clear` and `update_metadata_where`,
+because nothing else is enforcing it. A `domain_id` **adopted from the
+store** — as in the example below — is not: the store already confines
+every one of those surfaces to that domain, by its own means and
+identically on every backend, and naming the key in the filter as well
+would move the read onto a surface whose behaviour is backend-specific.
+
+```yaml
+knowledge_base:
+  enabled: true
+  documents_path: ./docs
+  tenant_id: acme
+  vector_store:
+    backend: faiss
+    dimensions: 384
+    domain_id: bot-a        # the knowledge base adopts this
+```
+
+`domain_id` is the one binding with a default: left unset on the
+knowledge base, it falls back to the **vector store's** own
+`domain_id`, so a consumer who scoped the store does not have to
+configure the same value twice. Set it at the knowledge-base level
+only for a deliberately unscoped store whose domains are
+distinguished at the chunk layer; setting it to something a scoped
+store disagrees with is reported at WARNING, because the resulting
+chunks are written and can never be read back.
+
+See the [multi-tenant knowledge base guide](../knowledge/multi-tenant.md)
+for the full precedence rules.
+
+### Embedder Endpoint
+
+The embedder endpoint is `api_base`, either at the top level or inside
+the nested `embedding` section:
+
+```yaml
+knowledge_base:
+  embedding:
+    provider: ollama
+    model: nomic-embed-text
+    api_base: http://embedder.internal:11434
+```
+
+`embedding_base_url` is accepted as a legacy alias for a top-level
+`api_base`, and a top-level `api_base` wins when both are present.
+Prefer the nested form regardless: when an `embedding` section is
+configured, the embedder reads its endpoint, key and dimensions from
+inside it and the top-level passthroughs are not consulted at all.
 
 ### Context Injection Control
 
@@ -1527,8 +1584,8 @@ knowledge_base:
   # Vector store configuration
   vector_store:
     backend: faiss          # faiss, chroma, pinecone, weaviate
-    dimension: 384          # Must match embedding dimension
-    collection: knowledge   # Collection/index name
+    dimensions: 384          # Must match embedding dimension
+    # collection_name: knowledge   # chroma only
     metric: cosine         # Similarity metric
 
   # Embedding configuration
@@ -1622,7 +1679,7 @@ documentation in `dataknobs-xization` for full details.
 ```yaml
 vector_store:
   backend: faiss
-  dimension: 384
+  dimensions: 384
   index_type: IVF        # Optional: Flat, IVF, HNSW
   nlist: 100            # Optional: For IVF index
 ```
@@ -1638,8 +1695,8 @@ vector_store:
 ```yaml
 vector_store:
   backend: chroma
-  dimension: 384
-  collection: knowledge
+  dimensions: 384
+  collection_name: knowledge
   persist_directory: ./chroma_db  # Optional
 ```
 
@@ -1657,7 +1714,7 @@ vector_store:
   api_key: ${PINECONE_API_KEY}
   environment: us-west1-gcp
   index_name: knowledge
-  dimension: 384
+  dimensions: 384
 ```
 
 **Characteristics:**
@@ -3881,7 +3938,7 @@ knowledge_base:
     api_key: ${PINECONE_API_KEY}
     environment: us-west1-gcp
     index_name: production-kb
-    dimension: 1536
+    dimensions: 1536
   embedding_provider: openai
   embedding_model: text-embedding-3-small
   chunking:

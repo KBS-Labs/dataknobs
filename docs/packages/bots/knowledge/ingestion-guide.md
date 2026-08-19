@@ -416,6 +416,43 @@ Event(
 Consumers subscribe on the same bus to react — invalidate query
 caches, refresh routing tables, emit metrics, etc.
 
+## Migrating a store whose chunk ids change
+
+A knowledge base over a **domain-scoped vector store** now folds that
+domain into its chunk ids: `overview_0` becomes
+`bot-a\x1foverview\x1f0`. A knowledge base with no binding over an
+unscoped store is unaffected — its ids are byte-identical to before.
+
+Two populations see the change, and only one of them has anything to
+do:
+
+- **Two or more domains sharing one store.** These were colliding —
+  both domains derived `overview_0` for their own `overview.md`, so
+  the second ingest either overwrote the first or, on a store that
+  refuses a cross-domain capture, failed outright. The re-key *is* the
+  repair. Nothing to do.
+- **One domain per store, with `domain_id` set anyway.** These were
+  correct already. Their next ingest writes new-id rows *alongside*
+  the old ones rather than over them. The exposure is bounded because
+  `ensure_ingested` skips a populated store, so the duplicate only
+  appears on a deliberate `force=True` re-ingest.
+
+To re-key deliberately, clear the domain and re-ingest:
+
+```python
+# clear() on a bound knowledge base is scoped to its own binding, so
+# this removes that domain's rows and nothing else.
+await kb.clear()
+await service.ensure_ingested(kb, kb_config, force=True)
+```
+
+There is no implicit clear on the ingest path, by design: an ingest
+that silently deleted rows would be a worse hazard than the one it
+solves. Note that orphan-on-re-ingest is a pre-existing property of
+this path — a document that chunks to three and later to two already
+leaves the third chunk behind — so this is a one-time bump to an
+existing hazard rather than a new one.
+
 ## Summary
 
 | Path | Entry point | Driven by |

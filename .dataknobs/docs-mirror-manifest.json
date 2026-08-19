@@ -1,12 +1,12 @@
 {
-  "_note": "Classification manifest for the doc-mirror guard (bin/docs-mirror-check.py). The dual-docs rule keeps two copies of most package docs: the package-local tree (packages/<pkg>/docs/*, GitHub, UPPER_SNAKE.md) and the mkdocs site tree (docs/packages/<pkg>/*, lower-hyphen.md). Every *.md in scope for a package MUST be classified here; an unclassified file fails the guard, which is what makes silent drift impossible to introduce. Scope is per-package: by default only TOP-LEVEL *.md must be classified, and a paired entry may still point at a subdirectory on either side (a package source under guides/, or a site page under guides/ where every bots guide lives) \u2014 such a file is exempt from the completeness set but its existence and the pair's invariant are still enforced by the per-class check. Set \"recursive\": true on a package to require every *.md at any depth to be classified, keyed by path relative to the tree root. Opting in demands classifying everything already nested in that package, so it is done per package as each is reconciled. See the guard's module docstring for the full model.",
+  "_note": "Classification manifest for the doc-mirror guard (bin/docs-mirror-check.py). The dual-docs rule keeps two copies of most package docs: the package-local tree (packages/<pkg>/docs/*, GitHub, UPPER_SNAKE.md) and the mkdocs site tree (docs/packages/<pkg>/*, lower-hyphen.md). Every *.md in scope for a package MUST be classified here; an unclassified file fails the guard, which is what makes silent drift impossible to introduce. Scope is per-package: by default only TOP-LEVEL *.md must be classified, and a paired entry may still point at a subdirectory on either side (a package source under guides/, or a site page under guides/ where every bots guide lives) — such a file is exempt from the completeness set but its existence and the pair's invariant are still enforced by the per-class check. Set \"recursive\": true on a package to require every *.md at any depth to be classified, keyed by path relative to the tree root. Opting in demands classifying everything already nested in that package, so it is done per package as each is reconciled. See the guard's module docstring for the full model.",
   "_schema": {
     "symlink": "Site page is a symlink to the package source; drift is structurally impossible. The guard verifies the site path is a symlink resolving to the package source. Used when the source has no intra-doc links that need site-form rewriting. Each entry: {package, site}.",
     "transclude": "Site page is a pymdownx `--8<--` include of the package source; drift is structurally impossible. The guard only verifies the include still points at the source. Each entry: {package, site}.",
-    "mirror": "Hand-authored site copy, byte-identical to the package source except intra-doc .md link filenames (UPPER_SNAKE.md <-> lower-hyphen.md, canonicalized by the guard) plus any declared per-pair line_exceptions. Used when the source has links needing site-form rewriting (a symlink cannot rewrite them). The content-guarded invariant. Each entry: {package, site, line_exceptions?: [{package, site, note}]}. A line_exception matches by exact (canonicalized) line CONTENT, not by position, so its `package` line MUST occur exactly once in the source; if the same line text recurs the guard reports it as ambiguous rather than rewriting every occurrence \u2014 make the surrounding line unique or drop the exception.",
+    "mirror": "Hand-authored site copy, byte-identical to the package source except intra-doc .md link filenames (UPPER_SNAKE.md <-> lower-hyphen.md, canonicalized by the guard) plus any declared per-pair line_exceptions. Used when the source has links needing site-form rewriting (a symlink cannot rewrite them). The content-guarded invariant. Each entry: {package, site, line_exceptions?: [{package, site, note}]}. A line_exception matches by exact (canonicalized) line CONTENT, not by position, so its `package` line MUST occur exactly once in the source; if the same line text recurs the guard reports it as ambiguous rather than rewriting every occurrence — make the surrounding line unique or drop the exception.",
     "diverge": "Intentional content divergence (structural landing page, faithful condensation, independent elaboration). Recorded, not content-checked; both files must exist. Each entry: {package, site, reason}.",
-    "package_only": "Package doc with no site mirror. Listed by package filename.",
-    "site_only": "Site-native page with no package source. Listed by site filename.",
+    "package_only": "Package doc with no site mirror. Listed by package filename. Verified: the guard fails if the site tree holds a file whose basename canonicalizes to the same name, because neither unpaired class has a per-class check -- naming a real pair here opts it out of every invariant. Two same-named documents that are genuinely unrelated are recorded with `diverge` and a reason, not left here.",
+    "site_only": "Site-native page with no package source. Listed by site filename. Verified the same way as package_only, against the package tree.",
     "recursive": "Per-package boolean (default false). false: only top-level *.md must be classified, so a new doc added under a subdirectory passes unclassified. true: every *.md at any depth must be classified, keyed by its path relative to the tree root. Opted in: common, config, structures, utils. Not yet opted in (nested docs remain unenforced; classifying them is tracked follow-up work): bots, data, fsm, llm, xization."
   },
   "packages": {
@@ -78,7 +78,9 @@
           "package": "guides/config-loading.md",
           "site": "config-loading.md",
           "reason": "Independently written: the package guide leads with the helper API for library authors, the site page with the file-format chain for config authors. Reconciling them is its own task.",
-          "shared_sections": ["safe-join-primitive"]
+          "shared_sections": [
+            "safe-join-primitive"
+          ]
         }
       ],
       "package_only": [
@@ -130,16 +132,16 @@
       "site_dir": "docs/packages/data",
       "symlink": [
         {
+          "package": "BATCH_PROCESSING_GUIDE.md",
+          "site": "batch-processing-guide.md"
+        },
+        {
           "package": "DEDUP.md",
           "site": "dedup.md"
         },
         {
           "package": "KEYED_RECORD_STORE.md",
           "site": "keyed-record-store.md"
-        },
-        {
-          "package": "BATCH_PROCESSING_GUIDE.md",
-          "site": "batch-processing-guide.md"
         }
       ],
       "mirror": [
@@ -172,11 +174,6 @@
       ],
       "diverge": [
         {
-          "package": "index.md",
-          "site": "index.md",
-          "reason": "Tree-specific landing pages: the package index is a GitHub development-history overview; the site index is a consumer-facing navigation page. Both API-correct."
-        },
-        {
           "package": "HYBRID_SEARCH.md",
           "site": "hybrid-search.md",
           "reason": "The site page is a faithful condensation of the package source; both API-correct."
@@ -185,6 +182,11 @@
           "package": "PGVECTOR_BACKEND.md",
           "site": "pgvector-backend.md",
           "reason": "Independent elaboration; both sides API-correct."
+        },
+        {
+          "package": "index.md",
+          "site": "index.md",
+          "reason": "Tree-specific landing pages: the package index is a GitHub development-history overview; the site index is a consumer-facing navigation page. Both API-correct."
         }
       ],
       "package_only": [
@@ -221,19 +223,14 @@
       "package_dir": "packages/llm/docs",
       "site_dir": "docs/packages/llm",
       "package_only": [
-        "AB_TESTING.md",
         "BENCHMARKING.md",
-        "BEST_PRACTICES.md",
         "JINJA2_INTEGRATION.md",
         "JINJA2_MIGRATION.md",
         "LLM_ARCHITECTURE_EXPLORATION.md",
-        "PARALLEL_EXECUTION.md",
-        "PROMPT_REFERENCE.md",
         "RAG_CACHING.md",
         "README.md",
         "SCHEMA_VERSIONING.md",
-        "USER_GUIDE.md",
-        "VERSIONING.md"
+        "USER_GUIDE.md"
       ],
       "site_only": [
         "index.md",
@@ -241,9 +238,41 @@
       ],
       "diverge": [
         {
+          "package": "AB_TESTING.md",
+          "site": "examples/ab-testing.md",
+          "reason": "The site page is an examples-section rewrite (6 sections against the guide's 10) rather than a copy: same material, workflow framing. Recorded so both files are existence-checked."
+        },
+        {
           "package": "PROVIDERS.md",
           "site": "guides/providers.md",
           "reason": "Hand-authored copies of the same guide that have drifted in prose (rewrapped paragraphs, plus a passage each copy carries and the other does not). Classified so the pair is recorded and both files are existence-checked: as 'package_only' the site copy was invisible to this guard entirely -- it lives under guides/, and llm is not recursive -- so an edit to one copy had nothing at all checking the other. Reconciling the content, and classifying llm's remaining guides/ pairs, is its own task."
+        },
+        {
+          "package": "VERSIONING.md",
+          "site": "guides/versioning.md",
+          "reason": "The site guide is a condensation of the package guide (9 sections against 96 headings across 601 lines). Note that docs/packages/llm/api/versioning.md shares the canonical name but is a third, API-reference document, not a copy of either -- it stays unclassified until llm goes recursive."
+        }
+      ],
+      "symlink": [
+        {
+          "package": "BEST_PRACTICES.md",
+          "site": "guides/best-practices.md"
+        },
+        {
+          "package": "PARALLEL_EXECUTION.md",
+          "site": "guides/parallel-execution.md"
+        }
+      ],
+      "mirror": [
+        {
+          "package": "PROMPT_REFERENCE.md",
+          "site": "guides/prompt-reference.md",
+          "line_exceptions": [
+            {
+              "package": "See also: [dataknobs-bots Prompt Key Reference](../../bots/docs/PROMPT_REFERENCE.md)",
+              "site": "See also: [dataknobs-bots Prompt Key Reference](../../bots/guides/prompt-reference.md)"
+            }
+          ]
         }
       ]
     },
@@ -294,38 +323,57 @@
       ],
       "mirror": [
         {
-          "package": "knowledge/multi-tenant.md",
-          "site": "knowledge/multi-tenant.md"
+          "package": "PROMPT_CUSTOMIZATION.md",
+          "site": "guides/prompt-customization.md"
+        },
+        {
+          "package": "PROMPT_REFERENCE.md",
+          "site": "guides/prompt-reference.md"
+        },
+        {
+          "package": "WIZARD_ADVANCE_API.md",
+          "site": "guides/wizard-advance-api.md"
         },
         {
           "package": "knowledge/event-triggers.md",
           "site": "knowledge/event-triggers.md"
+        },
+        {
+          "package": "knowledge/ingestion-guide.md",
+          "site": "knowledge/ingestion-guide.md",
+          "line_exceptions": [
+            {
+              "package": "- [DocumentSource](../../../xization/docs/ingestion/document-source.md) —",
+              "site": "- [DocumentSource](../../xization/ingestion/document-source.md) —"
+            },
+            {
+              "package": "- [DirectoryProcessor](../../../xization/docs/ingestion/directory-processor.md)",
+              "site": "- [DirectoryProcessor](../../xization/ingestion/directory-processor.md)"
+            },
+            {
+              "package": "- [RAG Ingestion (historical reference)](../RAG_INGESTION.md) —",
+              "site": "- [RAG Ingestion & Hybrid Search](../guides/rag-ingestion.md) —"
+            }
+          ]
+        },
+        {
+          "package": "knowledge/multi-tenant.md",
+          "site": "knowledge/multi-tenant.md"
         }
       ],
       "package_only": [
-        "API.md",
-        "ARCHITECTURE.md",
-        "ARTIFACTS.md",
-        "ARTIFACT_CORPUS.md",
-        "CONFIGURATION.md",
-        "CONFIG_TOOLKIT.md",
-        "MIGRATION.md",
-        "PROMPT_CUSTOMIZATION.md",
-        "PROMPT_REFERENCE.md",
-        "PROVIDER_REGISTRY.md",
-        "RAG_INGESTION.md",
-        "RUBRICS.md",
-        "TEMPLATE_SECURITY.md",
-        "TESTING.md",
-        "TOOLS.md",
-        "USER_GUIDE.md",
-        "WIZARD_ADVANCE_API.md"
+        "API.md"
       ],
       "site_only": [
         "index.md",
         "quickstart.md"
       ],
       "diverge": [
+        {
+          "package": "CONFIG_TOOLKIT.md",
+          "site": "guides/config-toolkit.md",
+          "reason": "Same opening and title; the site page is a condensation (4 top-level sections against the source's 10, roughly half the length). Recorded so both files are existence-checked -- as 'package_only' the site copy was invisible to this guard, since it lives under guides/ and bots is not recursive. Reconciling the two, or replacing the copy with a transclusion, is its own task."
+        },
         {
           "package": "CONTEXT_AWARE_WIZARDS.md",
           "site": "guides/context-aware-wizards.md",
@@ -344,6 +392,58 @@
           "shared_sections": [
             "catching-api-errors"
           ]
+        },
+        {
+          "package": "RAG_INGESTION.md",
+          "site": "guides/rag-ingestion.md",
+          "reason": "The site page is a condensed rewrite of the same subject (9 sections against 12, under half the length) with its own opening paragraph. Recorded so both files are existence-checked; the package source is also the target of a declared line_exception in knowledge/ingestion-guide.md, so a rename here already fails that pair."
+        },
+        {
+          "package": "TESTING.md",
+          "site": "guides/testing.md",
+          "reason": "Divergent in the other direction: the package doc is a 71-line pointer at `dataknobs_bots.testing` / `dataknobs_llm.testing`, while the site page is a 259-line guide. Not a condensation to reconcile by regenerating either side -- deciding which is canonical is its own task."
+        }
+      ],
+      "symlink": [
+        {
+          "package": "ARCHITECTURE.md",
+          "site": "guides/architecture.md"
+        },
+        {
+          "package": "ARTIFACTS.md",
+          "site": "guides/artifacts.md"
+        },
+        {
+          "package": "ARTIFACT_CORPUS.md",
+          "site": "guides/artifact-corpus.md"
+        },
+        {
+          "package": "CONFIGURATION.md",
+          "site": "guides/configuration.md"
+        },
+        {
+          "package": "MIGRATION.md",
+          "site": "guides/migration.md"
+        },
+        {
+          "package": "PROVIDER_REGISTRY.md",
+          "site": "guides/provider-registry.md"
+        },
+        {
+          "package": "RUBRICS.md",
+          "site": "guides/rubrics.md"
+        },
+        {
+          "package": "TEMPLATE_SECURITY.md",
+          "site": "guides/TEMPLATE_SECURITY.md"
+        },
+        {
+          "package": "TOOLS.md",
+          "site": "guides/tools.md"
+        },
+        {
+          "package": "USER_GUIDE.md",
+          "site": "guides/user-guide.md"
         }
       ]
     },
@@ -395,12 +495,12 @@
       "site_dir": "docs/packages/xization",
       "transclude": [
         {
-          "package": "markdown/RAG_HEADING_ENRICHMENT.md",
-          "site": "heading-enrichment.md"
-        },
-        {
           "package": "markdown/MARKDOWN_CHUNKING.md",
           "site": "markdown-chunking.md"
+        },
+        {
+          "package": "markdown/RAG_HEADING_ENRICHMENT.md",
+          "site": "heading-enrichment.md"
         },
         {
           "package": "markdown/RAG_QUALITY_FILTERING.md",
@@ -411,13 +511,28 @@
         "api.md",
         "chunking-abstraction.md",
         "content-transformation.md",
-        "html-conversion.md",
         "index.md",
-        "ingestion.md",
-        "json-chunking.md",
         "masking.md",
         "normalization.md",
         "tokenization.md"
+      ],
+      "mirror": [
+        {
+          "package": "html/HTML_CONVERSION.md",
+          "site": "html-conversion.md"
+        }
+      ],
+      "diverge": [
+        {
+          "package": "ingestion/INGESTION.md",
+          "site": "ingestion.md",
+          "reason": "The site page is a condensation with its own framing (async-primary, storage-agnostic) rather than a copy of the module doc. Recorded so both files are existence-checked; the package source is also the subject of declared line_exceptions in the bots ingestion guide."
+        },
+        {
+          "package": "json/JSON_CHUNKING.md",
+          "site": "json-chunking.md",
+          "reason": "The site page is a condensation of the module doc (9 sections against 12, about half the length). Recorded so both files are existence-checked."
+        }
       ]
     }
   }

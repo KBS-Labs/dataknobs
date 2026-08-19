@@ -32,6 +32,7 @@ import io
 import json
 import re
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -44,7 +45,7 @@ GATE = ROOT / "bin" / "run-quality-checks.sh"
 #: The ``checks`` object of a real gate run, as the shell heredoc produced it.
 #: Copied from the committed artifact at the commit before the writer replaced
 #: it, and kept verbatim: it is the reference the swap is measured against.
-HEREDOC_CHECKS = {
+HEREDOC_CHECKS: dict[str, dict[str, Any]] = {
     "documentation": {
         "status": "pass",
         "exit_code": 0,
@@ -158,7 +159,7 @@ def _record(records: Path, name: str, code: int, *rest: str) -> None:
     )
 
 
-def _build(tmp_path: Path, records: Path, **overrides: object) -> dict:
+def _build(tmp_path: Path, records: Path, **overrides: Any) -> dict[str, Any]:
     output = tmp_path / "quality-summary.json"
     writer.main(
         [
@@ -171,7 +172,8 @@ def _build(tmp_path: Path, records: Path, **overrides: object) -> dict:
             *_metadata(**overrides),
         ]
     )
-    return json.loads(output.read_text(encoding="utf-8"))
+    document: dict[str, Any] = json.loads(output.read_text(encoding="utf-8"))
+    return document
 
 
 # --------------------------------------------------------------------------
@@ -179,7 +181,7 @@ def _build(tmp_path: Path, records: Path, **overrides: object) -> dict:
 # --------------------------------------------------------------------------
 
 
-def test_a_check_that_records_nothing_is_absent_rather_than_passing(tmp_path):
+def test_a_check_that_records_nothing_is_absent_rather_than_passing(tmp_path: Path) -> None:
     """The whole reason the producer changed shape.
 
     Under the heredoc every check had a status variable initialised to ``0``, so
@@ -197,7 +199,7 @@ def test_a_check_that_records_nothing_is_absent_rather_than_passing(tmp_path):
     assert "unit_tests" not in document["checks"]
 
 
-def test_a_failing_check_is_reported_as_failing(tmp_path):
+def test_a_failing_check_is_reported_as_failing(tmp_path: Path) -> None:
     records = tmp_path / "records.jsonl"
     _record(records, "shell_lint", 2, "--duration", "3")
 
@@ -207,7 +209,7 @@ def test_a_failing_check_is_reported_as_failing(tmp_path):
     assert entry["exit_code"] == 2
 
 
-def test_an_unmeasured_duration_is_null_and_an_instant_one_is_zero(tmp_path):
+def test_an_unmeasured_duration_is_null_and_an_instant_one_is_zero(tmp_path: Path) -> None:
     """``0`` is a measurement; ``null`` is the absence of one.
 
     Conflating them is how this defect class started: a stage that never ran had
@@ -225,7 +227,7 @@ def test_an_unmeasured_duration_is_null_and_an_instant_one_is_zero(tmp_path):
     assert checks["instant_check"]["duration_seconds"] == 0
 
 
-def test_the_fields_of_a_check_land_in_the_documented_order(tmp_path):
+def test_the_fields_of_a_check_land_in_the_documented_order(tmp_path: Path) -> None:
     """Order is for the reader of the raw file; the field set is the contract.
 
     ``skipped`` and ``tool`` are present only when the record carries them, which
@@ -264,7 +266,7 @@ def test_the_fields_of_a_check_land_in_the_documented_order(tmp_path):
     ]
 
 
-def test_the_checks_appear_in_the_order_they_ran(tmp_path):
+def test_the_checks_appear_in_the_order_they_ran(tmp_path: Path) -> None:
     records = tmp_path / "records.jsonl"
     for name in ("workflow_lint", "shell_lint", "validation"):
         _record(records, name, 0, "--duration", "1")
@@ -274,7 +276,7 @@ def test_the_checks_appear_in_the_order_they_ran(tmp_path):
     assert list(document["checks"]) == ["workflow_lint", "shell_lint", "validation"]
 
 
-def test_two_records_for_one_check_are_refused(tmp_path):
+def test_two_records_for_one_check_are_refused(tmp_path: Path) -> None:
     """Two answers to one question, and picking either would hide a bug.
 
     A second record means two sites believe they ran the same check, so one of
@@ -289,7 +291,7 @@ def test_two_records_for_one_check_are_refused(tmp_path):
         _build(tmp_path, records)
 
 
-def test_a_forgotten_top_level_field_fails_the_build(tmp_path):
+def test_a_forgotten_top_level_field_fails_the_build(tmp_path: Path) -> None:
     """Rather than quietly leaving it out of the artifact CI validates."""
     records = tmp_path / "records.jsonl"
     _record(records, "shell_lint", 0, "--duration", "3")
@@ -309,7 +311,7 @@ def test_a_forgotten_top_level_field_fails_the_build(tmp_path):
         )
 
 
-def test_a_top_level_field_the_writer_does_not_know_is_refused(tmp_path):
+def test_a_top_level_field_the_writer_does_not_know_is_refused(tmp_path: Path) -> None:
     """A field with no declared position has no position, so it is not guessed."""
     records = tmp_path / "records.jsonl"
     _record(records, "shell_lint", 0, "--duration", "3")
@@ -331,7 +333,7 @@ def test_a_top_level_field_the_writer_does_not_know_is_refused(tmp_path):
         )
 
 
-def test_the_writer_reproduces_a_heredoc_summary_exactly(tmp_path):
+def test_the_writer_reproduces_a_heredoc_summary_exactly(tmp_path: Path) -> None:
     """The acceptance for the swap: same run, same document.
 
     ``HEREDOC_CHECKS`` is the ``checks`` object of a real gate run, taken from
@@ -373,20 +375,23 @@ def test_the_writer_reproduces_a_heredoc_summary_exactly(tmp_path):
 # --------------------------------------------------------------------------
 
 
-def _rendered(checks: dict, *, mode: str = "pr", package_tests_skipped: bool = False):
-    return writer.render(
+def _rendered(
+    checks: dict[str, Any], *, mode: str = "pr", package_tests_skipped: bool = False
+) -> list[str]:
+    rows: list[str] = writer.render(
         {"checks": checks},
         mode=mode,
         package_tests_skipped=package_tests_skipped,
         palette=writer.Palette(io.StringIO()),
     )
+    return rows
 
 
 def _entry(status: str = "pass", **extra: object) -> dict:
     return {"status": status, "exit_code": 0 if status == "pass" else 1, **extra}
 
 
-def test_a_records_file_that_is_not_there_is_named_rather_than_traced():
+def test_a_records_file_that_is_not_there_is_named_rather_than_traced() -> None:
     """Every other malformed input to this module names itself; this one did not.
 
     A bad JSON line, a record with no ``name``, a duplicate check, an unknown
@@ -402,7 +407,7 @@ def test_a_records_file_that_is_not_there_is_named_rather_than_traced():
     assert "no check recorded" in str(caught.value)
 
 
-def test_a_garbled_check_entry_is_not_rendered_as_a_pass():
+def test_a_garbled_check_entry_is_not_rendered_as_a_pass() -> None:
     """The renderer's own version of "absence is not a pass".
 
     ``render`` already refuses a ``checks`` value that is not a mapping. The
@@ -421,7 +426,7 @@ def test_a_garbled_check_entry_is_not_rendered_as_a_pass():
     assert rows == ["  Documentation:      ✗ FAILED"]
 
 
-def test_a_garbled_test_entry_does_not_reach_the_grouping_arithmetic():
+def test_a_garbled_test_entry_does_not_reach_the_grouping_arithmetic() -> None:
     """The same guard one layer down, where the entries are read field by field.
 
     The two test entries are not just handed to ``verdict`` — they are combined
@@ -438,7 +443,7 @@ def test_a_garbled_test_entry_does_not_reach_the_grouping_arithmetic():
     ]
 
 
-def test_a_skipped_check_is_rendered_as_skipped_not_passed():
+def test_a_skipped_check_is_rendered_as_skipped_not_passed() -> None:
     """The defect this renderer exists to close, in its original form.
 
     A skipped check carries ``status: "pass"`` — it has always been recorded that
@@ -451,7 +456,7 @@ def test_a_skipped_check_is_rendered_as_skipped_not_passed():
     assert rows == ["  Documentation:      ⊘ SKIPPED"]
 
 
-def test_the_row_layout_is_unchanged():
+def test_the_row_layout_is_unchanged() -> None:
     """Two column widths, reproducing the shell's layout rather than tidying it.
 
     The documentation and lint rows align one column further right than the test
@@ -477,7 +482,7 @@ def test_the_row_layout_is_unchanged():
     ]
 
 
-def test_the_documentation_rows_are_shown_only_where_they_could_have_run():
+def test_the_documentation_rows_are_shown_only_where_they_could_have_run() -> None:
     """A dev run does not offer them, so it does not report on them."""
     checks = {"documentation": _entry(skipped=True), "shell_lint": _entry()}
 
@@ -485,7 +490,7 @@ def test_the_documentation_rows_are_shown_only_where_they_could_have_run():
     assert _rendered(checks, mode="dev") == ["  Shell Lint:         ✓ PASSED"]
 
 
-def test_a_check_the_display_table_does_not_name_is_still_shown():
+def test_a_check_the_display_table_does_not_name_is_still_shown() -> None:
     """A check added to the gate reaches the banner without editing the renderer.
 
     Deriving the label rather than requiring one is what makes that true, and it
@@ -498,7 +503,7 @@ def test_a_check_the_display_table_does_not_name_is_still_shown():
     assert rows == ["  Licence audit:      ✗ FAILED"]
 
 
-def test_dev_mode_reports_the_one_verdict_the_run_produced():
+def test_dev_mode_reports_the_one_verdict_the_run_produced() -> None:
     """Dev mode runs both suites through one invocation and one exit code.
 
     Reporting them apart would invent a distinction the run did not make, so the
@@ -514,13 +519,13 @@ def test_dev_mode_reports_the_one_verdict_the_run_produced():
     assert _rendered(failing, mode="dev") == ["  Tests:             ✗ FAILED"]
 
 
-def test_dev_mode_reports_a_skipped_run_as_skipped():
+def test_dev_mode_reports_a_skipped_run_as_skipped() -> None:
     checks = {"unit_tests": _entry(skipped=True), "integration_tests": _entry(skipped=True)}
 
     assert _rendered(checks, mode="dev") == ["  Tests:             ⊘ SKIPPED"]
 
 
-def test_a_run_with_no_package_changed_names_the_guards_it_did_run():
+def test_a_run_with_no_package_changed_names_the_guards_it_did_run() -> None:
     """ "Unit Tests: PASSED" for a run that collected none is green for work not done.
 
     The workspace guards did run and the unit entry carries their status, so the
@@ -537,7 +542,7 @@ def test_a_run_with_no_package_changed_names_the_guards_it_did_run():
     ]
 
 
-def test_colour_is_applied_only_to_a_terminal():
+def test_colour_is_applied_only_to_a_terminal() -> None:
     """Matched to the shell's own test, so a piped run has no escapes in either half."""
 
     class Terminal(io.StringIO):
@@ -553,7 +558,7 @@ def test_colour_is_applied_only_to_a_terminal():
 # --------------------------------------------------------------------------
 
 
-def test_the_banner_derives_no_verdict_of_its_own():
+def test_the_banner_derives_no_verdict_of_its_own() -> None:
     """One producer, so the console and the artifact cannot come to disagree.
 
     They did, and the shape of it was a shell ``if`` over a status variable in

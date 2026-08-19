@@ -89,6 +89,14 @@ When updating documentation for any package:
    guide is), so prefer a real pair over `package_only`/`site_only`:
    an unpaired classification opts the file out of per-class verification.
 
+   That preference is now enforced rather than advisory. The guard fails
+   an unpaired entry whose counterpart exists in the other tree, matched
+   on the canonicalized basename at any depth — because the two unpaired
+   classes have no per-class check at all, so a real pair recorded there
+   is verified by nothing while still reporting green. If two documents
+   share a name but are genuinely different, that is a `diverge` with a
+   reason, not a `package_only`.
+
    **Two documents that differ overall but share one block.** Neither
    `mirror` (whole file must match) nor `transclude` (whole file is an
    include) can express this, so the block gets hand-copied into both

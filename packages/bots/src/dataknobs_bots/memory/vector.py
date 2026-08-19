@@ -286,11 +286,19 @@ class VectorMemory(StructuredConfigConsumer[VectorMemoryConfig], Memory):
         return {}
 
     def set_provider(self, role: str, provider: Any) -> bool:
-        """Replace the embedding provider if the role matches."""
+        """Replace the embedding provider if the role matches.
+
+        The replacement is caller-owned: ``close()`` will not tear it
+        down, and the provider it replaces is the caller's to close.
+        """
         from dataknobs_bots.bot.base import PROVIDER_ROLE_MEMORY_EMBEDDING
 
         if role == PROVIDER_ROLE_MEMORY_EMBEDDING:
             self.embedding_provider = provider
+            # Injected, therefore caller-owned. Leaving the flag set
+            # inverted the close() gate: the caller's provider was torn
+            # down while the config-built one it replaced leaked.
+            self._owns_embedding_provider = False
             return True
         return False
 

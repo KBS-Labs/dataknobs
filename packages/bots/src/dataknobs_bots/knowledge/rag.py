@@ -20,9 +20,11 @@ from dataknobs_common.capabilities import (
     CapabilityLike,
     CapabilityMixin,
 )
+from dataknobs_common.exceptions import ConfigurationError
 from dataknobs_common.lifecycle import close_if_owned
 from dataknobs_common.metadata import enforce_immutable_keys
 from dataknobs_common.structured_config import StructuredConfigConsumer
+from dataknobs_data.vector.stores.common import compose_scope_key
 from dataknobs_xization import (
     ContentTransformer,
     create_chunker,
@@ -79,12 +81,14 @@ class RAGKnowledgeBase(
     # Capability advertisement (per the chunk-layer Tenancy capability).
     # The class HAS the chunk-layer tenant-scoping code path
     # (``tenant_id`` folds into ``_CHUNK_ID_PREFIX_KEYS``, the bound
-    # ``tenant_id`` stamps onto chunk metadata, and ``_resolve_read_filter``
-    # AND-composes the bound tenant onto every read). Advertisement is
-    # **structural**, not activation-state — an unbound instance still
-    # advertises the capability because the class has the code path;
-    # whether a specific instance is currently chunk-scoping is the
-    # natural binding check (``kb._tenant_id is not None``).
+    # ``tenant_id`` stamps onto chunk metadata, ``_resolve_read_filter``
+    # AND-composes the bound identity onto every read, and
+    # ``_scope_for_write`` composes it onto ``clear`` /
+    # ``update_metadata_where``). Advertisement is **structural**, not
+    # activation-state — an unbound instance still advertises the
+    # capability because the class has the code path; whether a specific
+    # instance is currently chunk-scoping is the natural binding check
+    # (``kb._tenant_id is not None or kb._domain_id is not None``).
     # ``Capability.TENANT_SCOPED_STATE`` is deliberately not declared
     # here: backend-state writes are still per-domain, not per-tenant,
     # at the :class:`KnowledgeResourceBackend` layer.
@@ -99,9 +103,20 @@ class RAGKnowledgeBase(
     # ``<tenant>\x1f<domain>\x1f<gen>\x1f<stem>`` for a fully-tagged
     # multi-tenant store. Subclasses rebind to add fold positions (e.g.
     # ``("tenant_id", "domain_id", "region", "_generation")``) without
-    # forking the derivation. Single-tenant consumers see no change:
-    # ``tenant_id`` absent in metadata yields the historical
-    # ``[domain_id?, generation?, source_stem]`` shape.
+    # forking the derivation.
+    #
+    # Which of these keys is present is the binding question.
+    # ``domain_id`` reaches this fold from three places: a manager's
+    # per-call value, the knowledge base's configured ``domain_id``,
+    # and — when neither is set — the bound vector store's own scope,
+    # resolved by :attr:`_domain_id`. That third source is what
+    # namespaces the ids of a knowledge base over a domain-scoped
+    # store, which otherwise derives every id from the source stem
+    # alone and so collides with every other domain over that store.
+    # Single-tenant single-domain consumers see no change: an unbound
+    # knowledge base over an unscoped store carries none of these keys
+    # and keeps the historical ``(source_stem, "_")`` shape, byte for
+    # byte.
     _CHUNK_ID_PREFIX_KEYS: ClassVar[tuple[str, ...]] = (
         "tenant_id",
         "domain_id",
@@ -155,7 +170,9 @@ class RAGKnowledgeBase(
             ContextFormatter(formatter_config) if formatter_config else ContextFormatter()
         )
 
-        self.vector_store: Any = None
+        # Backing field, set directly: the public name is a property
+        # whose setter guards a *swap*, and this is the initial bind.
+        self._vector_store: Any = None
         self.embedding_provider: Any = None
         # Ownership of the cascade-closed collaborators. Bound by
         # :meth:`_ainit` (config-driven build owns what it creates → True)
@@ -170,7 +187,223 @@ class RAGKnowledgeBase(
         # ``tenant_id`` into chunk metadata and every read AND-composes
         # the bound tenant into the vector-store search filter. None
         # (default) preserves the single-tenant byte-identical posture.
+        #
+        # Eager, because ``tenant_id`` has exactly one source. Its
+        # sibling ``domain_id`` has two — this config field and the
+        # bound vector store's own scope — and the store is not bound
+        # until ``_ainit`` / ``_adopt_components``, after this runs. So
+        # that one is the :attr:`_domain_id` property rather than an
+        # attribute set here; see there.
         self._tenant_id: str | None = self.config.tenant_id
+
+        # Tags for identity warnings already emitted, so a condition
+        # that recurs per chunk or per read is reported once per
+        # instance rather than once per row.
+        self._identity_warnings: set[str] = set()
+
+    @property
+    def vector_store(self) -> Any:
+        """The bound vector store.
+
+        Readable and rebindable as it has always been; the setter is
+        what makes rebinding safe. See :meth:`vector_store.setter`.
+        """
+        return self._vector_store
+
+    @vector_store.setter
+    def vector_store(self, store: Any) -> None:
+        """Rebind the store, refusing a swap that orphans written ids.
+
+        The store is not an interchangeable dependency here: when the
+        knowledge base has no ``domain_id`` of its own it adopts the
+        store's, and that value folds into every chunk id
+        (:attr:`_CHUNK_ID_PREFIX_KEYS`). So a swap to a differently
+        scoped store silently repoints the id namespace — every chunk
+        already written sits under a prefix this instance will never
+        compose again. ``count()`` stops seeing them, the
+        skip-if-populated gate re-ingests over rows it cannot see, and
+        ``clear()`` cannot reach them. No call fails; the corpus simply
+        splits in two.
+
+        Refused rather than warned because there is no correct
+        continuation: the ids are already on disk, this class cannot
+        rewrite them, and a warning would leave the split in place. A
+        differently scoped store means a different knowledge base.
+
+        Two cases are *not* swaps and pass through untouched: the
+        initial bind (:meth:`_ainit` / :meth:`_adopt_components`, where
+        no ids exist yet), and any rebind on an instance whose
+        ``config.domain_id`` pins the binding — pinned, the effective
+        domain cannot move whatever the store says, so nothing is
+        orphaned. The store-disagrees-with-config case that leaves is
+        already reported by :attr:`_domain_id`.
+
+        Ownership transfers with the object. The replacement arrived
+        from outside, so this instance does not own it and
+        :meth:`close` must not tear it down — the same handoff
+        ``QueryTransformer.set_provider`` performs. The store being
+        replaced is the caller's to close if it was ours; that cannot
+        happen here, since a setter has no ``await``, so it is
+        reported.
+        """
+        current = getattr(self, "_vector_store", None)
+        if current is not None and store is not current:
+            self._refuse_orphaning_swap(current, store)
+            if self._owns_vector_store:
+                logger.warning(
+                    "Replacing a vector store this knowledge base built and owns. "
+                    "The outgoing store is not closed by this assignment and will "
+                    "not be closed by close() — close it yourself, or inject the "
+                    "store via from_components() so ownership never moves.",
+                )
+            self._owns_vector_store = False
+        self._vector_store = store
+
+    def _refuse_orphaning_swap(self, current: Any, store: Any) -> None:
+        """Raise if replacing ``current`` with ``store`` moves the binding."""
+        if self.config.domain_id is not None:
+            return
+        before = getattr(current, "domain_id", None)
+        after = getattr(store, "domain_id", None)
+        if before == after:
+            return
+        raise ConfigurationError(
+            f"Cannot replace a vector store scoped to {before!r} with one scoped "
+            f"to {after!r}: this knowledge base takes its domain from the store, "
+            f"so every chunk id already written folds {before!r} into its prefix "
+            f"and would become unreachable. Build a separate knowledge base for "
+            f"{after!r}, or set domain_id on this one to pin the binding."
+        )
+
+    @property
+    def _domain_id(self) -> str | None:
+        """The effective domain binding: explicit config, else the store's.
+
+        Resolved on access rather than bound in :meth:`_setup`, because
+        the vector store does not exist yet when that runs — it is built
+        by :meth:`_ainit` or injected by :meth:`_adopt_components`, and
+        ``_ainit`` goes on to ingest ``documents_path`` inside the same
+        method. An eager binding would need setting at both sites, one
+        of them under an ordering constraint; a property has neither
+        problem.
+
+        Falling back to the store is what makes this fix reach the
+        consumers it is for. They scoped the *store*, which is where
+        ``domain_id`` has always been configured, and the knowledge base
+        holds that store — asking it costs nothing and means the
+        chunk-id namespace cannot disagree with the ``domain_id`` the
+        store itself stamps on the row.
+
+        An explicit ``config.domain_id`` still wins: that is the shape
+        for one deliberately unscoped store whose domains are
+        distinguished only at the chunk layer. Against a store scoped to
+        something *else* it is a misconfiguration with an invisible
+        consequence — the row is written carrying this domain while the
+        store's own read filter requires its own — so it is reported
+        rather than left silent.
+
+        ``getattr``, not attribute access, so an out-of-tree store that
+        does not derive from ``VectorStoreBase`` is simply unscoped.
+        """
+        store_domain = getattr(self.vector_store, "domain_id", None)
+        configured = self.config.domain_id
+        if configured is None:
+            return store_domain
+        if store_domain is not None and store_domain != configured:
+            self._warn_once(
+                "binding:domain_id",
+                "Knowledge base is configured with domain_id=%r but its vector "
+                "store is scoped to %r. Chunks will be written tagged %r and the "
+                "store's own read filter will not match them. Leave the knowledge "
+                "base's domain_id unset to adopt the store's scope, or point it at "
+                "an unscoped store.",
+                configured,
+                store_domain,
+                configured,
+            )
+        return configured
+
+    @property
+    def _composable_domain_id(self) -> str | None:
+        """The part of the binding this class has to enforce itself.
+
+        :attr:`_domain_id` answers "which domain is this?" and is the
+        right answer for the chunk-id prefix and the metadata stamp,
+        which have to agree with the tag the store puts on the row.
+        Filter composition asks a different question — "who is enforcing
+        the scope?" — and when the value came from the store, the answer
+        is the store, on every backend and by its own means.
+
+        Composing it anyway is not merely redundant. A configured store
+        scope is uniform across backends; an explicit ``domain_id``
+        *filter key* is documented as deliberately not, because
+        ``PgVectorStore`` keeps the domain in a column and stores caller
+        metadata verbatim, making the key a containment probe against
+        something the column consumed. Every row written before this
+        class began stamping ``domain_id`` into chunk metadata carries
+        the domain only in that column, so the probe excludes a corpus
+        that is squarely in scope: ``count()`` answers 0, the
+        skip-if-populated check re-ingests over rows it can no longer
+        see, and ``clear()`` cannot reach them afterwards.
+
+        So this returns the configured value alone. ``None`` here with a
+        non-``None`` :attr:`_domain_id` is the ordinary case of a
+        knowledge base over a scoped store, and means "already handled",
+        not "unscoped".
+        """
+        return self.config.domain_id
+
+    def _warn_once(self, tag: str, message: str, *args: Any) -> None:
+        """Emit ``message`` at WARNING the first time ``tag`` is seen.
+
+        The conditions this reports recur per chunk or per read, so an
+        unguarded ``logger.warning`` would emit one line per row and
+        bury the first. Same intent as the once-per-call
+        ``warn_caller`` handoff in :meth:`_embed_and_store_chunks`,
+        held per instance because these sites are not confined to a
+        single call.
+
+        Callers reporting a *conflict* fold the offending value into
+        ``tag``, so "once" means once per distinct conflict rather than
+        once per key. One knowledge base can be handed many different
+        contradicting values over its life, and a key-only tag reports
+        the first while every later one is re-tagged in silence — which
+        is the failure these warnings exist to prevent, not a quieter
+        version of it. The set grows with the number of *distinct*
+        conflicts, which is bounded by the caller's domain/tenant
+        cardinality; the per-chunk flood the guard was written for
+        repeats one value and still collapses to one line.
+        """
+        if tag in self._identity_warnings:
+            return
+        self._identity_warnings.add(tag)
+        logger.warning(message, *args)
+
+    def _stamp_identity(self, composed: dict[str, Any], key: str, value: str | None) -> None:
+        """Write an auto-derived identity tag over whatever a caller supplied.
+
+        Auto-derived wins: a caller cannot re-tag chunks for another
+        tenant or another domain through the ``extra_metadata``
+        channel. Overriding a *differing* caller value is reported —
+        the caller asked for something and did not get it, and on a
+        shared store the difference decides which scope the chunk lands
+        in. A caller passing the same value it would have been given is
+        not a conflict and says nothing.
+        """
+        if value is None:
+            return
+        supplied = composed.get(key)
+        if supplied is not None and supplied != value:
+            self._warn_once(
+                f"override:{key}:{supplied!r}",
+                "Ignoring caller-supplied %s=%r: this knowledge base is bound to "
+                "%r, and identity tags are not caller-assignable at the write "
+                "boundary.",
+                key,
+                supplied,
+                value,
+            )
+        composed[key] = value
 
     @classmethod
     async def from_config(  # type: ignore[override]
@@ -886,8 +1119,17 @@ class RAGKnowledgeBase(
         r"""Return ``(chunk_prefix, chunk_separator)`` for a chunk's id.
 
         Walks :attr:`_CHUNK_ID_PREFIX_KEYS` against ``metadata`` and
-        folds every present, truthy value into the prefix in declared
-        order; ``source_stem`` is always last. When at least one fold
+        folds every value that is *present* — ``is not None``, not
+        truthy — into the prefix in declared order; ``source_stem`` is
+        always last. The distinction is the one
+        ``VectorStoreBase._is_scoped`` settled for the store layer after
+        a truthiness test made an empty-string domain isolate on three
+        backends and run unscoped on a fourth: a binding is optional,
+        not truthy-optional. Identity stamping and filter composition
+        here already tested ``is not None``, so folding on truthiness
+        gave ``domain_id=""`` scoped reads and a scoped write tag with
+        an *unnamespaced* id — the collision this fold prevents,
+        reintroduced at the one value where the two spellings disagree. When at least one fold
         key is present the record-separator (``\x1f``) is used so
         snake_case-tag collisions are impossible (``my`` + ``team_doc``
         vs ``my_team`` + ``doc`` would both produce ``my_team_doc`` under
@@ -909,7 +1151,7 @@ class RAGKnowledgeBase(
         parts: list[str] = []
         for key in cls._CHUNK_ID_PREFIX_KEYS:
             value = md.get(key)
-            if value:
+            if value is not None:
                 parts.append(str(value))
         if not parts:
             # Legacy single-segment path — byte-identical to pre-fold.
@@ -1145,27 +1387,34 @@ class RAGKnowledgeBase(
     ) -> dict[str, Any]:
         """Return the effective ``extra_metadata`` seen by the chunk pipeline.
 
-        Identity tags the KB owns at this layer (the bound
-        ``tenant_id``) win over caller-supplied keys on collision — a
-        caller cannot silently re-tag chunks for another tenant by
-        passing ``extra_metadata={"tenant_id": ...}``. Non-identity
-        keys are preserved as-is so callers can still attach
-        per-document ``region``, ``cohort``, or any custom tag through
-        the same channel.
+        Identity tags this knowledge base is bound to — ``tenant_id``
+        and ``domain_id`` — win over caller-supplied keys on collision,
+        so a caller cannot silently re-tag chunks for another tenant or
+        another domain by passing them through ``extra_metadata``. An
+        override of a differing value is reported once per instance;
+        see :meth:`_stamp_identity`. Non-identity keys are preserved
+        as-is, so callers can still attach per-document ``region``,
+        ``cohort``, or any custom tag through the same channel.
 
-        ``domain_id`` is NOT stamped here: it lives one layer up at
-        :meth:`KnowledgeIngestionManager._compose_extra_metadata`,
-        which subclasses this method's contract and layers the
-        per-call ``domain_id`` over the same identity-wins rule before
-        forwarding into :meth:`ingest_from_backend`. Direct
-        :class:`RAGKnowledgeBase` consumers without a manager attach
-        ``domain_id`` themselves (or don't, for single-domain stores).
+        The bound ``domain_id`` is whatever :attr:`_domain_id`
+        resolves — the configured value, else the bound store's scope.
+        A :class:`KnowledgeIngestionManager` supplies ``domain_id``
+        per call instead, from its own
+        :meth:`~KnowledgeIngestionManager._compose_extra_metadata`,
+        which layers it on before forwarding into
+        :meth:`ingest_from_backend`. The two do not fight in practice:
+        a manager holds many domains in one store, so that store is
+        unscoped and this binding resolves to ``None``. They can only
+        meet if a knowledge base is *explicitly* configured with a
+        ``domain_id`` and then driven by a multi-domain manager, which
+        is a misconfiguration whose chunks would already be unreadable
+        — hence the warning rather than a silent override.
 
         Returns a fresh dict so the caller's mapping is never mutated.
         """
         composed: dict[str, Any] = dict(extra_metadata or {})
-        if self._tenant_id is not None:
-            composed["tenant_id"] = self._tenant_id
+        self._stamp_identity(composed, "domain_id", self._domain_id)
+        self._stamp_identity(composed, "tenant_id", self._tenant_id)
         return composed
 
     def _resolve_read_filter(self, filter_metadata: dict[str, Any] | None) -> dict[str, Any] | None:
@@ -1180,21 +1429,103 @@ class RAGKnowledgeBase(
         filter (it needs ``_stale IS NULL OR = false``) and is applied
         as a post-filter via :meth:`_is_stale`.
 
-        When the KB has a bound ``tenant_id`` the bound value is
-        AND-composed into the supplied filter with **explicit-filter-
-        wins on collision** — the inverse of the write-side precedence
-        (auto-derived wins) — because the two sides have different
-        threat models. On write, identity is sacred and a caller cannot
-        silently re-tag chunks for another tenant. On read, admin
-        tooling legitimately needs to read across tenants by passing
-        the explicit key; the asymmetry is therefore deliberate.
+        When the KB has a bound identity — ``tenant_id``, ``domain_id``,
+        or both — each bound value is AND-composed into the supplied
+        filter with **explicit-filter-wins on collision** — the inverse
+        of the write-side precedence (auto-derived wins) — because the
+        two sides have different threat models. On write, identity is
+        sacred and a caller cannot silently re-tag chunks for another
+        tenant. On read, admin tooling legitimately needs to read
+        across scopes by passing the explicit key; the asymmetry is
+        therefore deliberate.
+
+        Only an **explicitly configured** ``domain_id`` composes. A
+        store-derived one does not, and the distinction is not a
+        micro-optimisation: a configured store scope is an isolation
+        guarantee the store already delivers on every backend and by
+        its own means — ``_effective_filter``, ``_in_configured_domain``,
+        or on ``PgVectorStore`` a predicate on a dedicated ``domain_id``
+        column. Naming the key in the filter as well adds nothing to
+        that, and moves the read onto the one surface the store layer
+        documents as deliberately *not* uniform across backends: with
+        ``domain_id`` in a column, caller metadata stored verbatim, and
+        an explicit key therefore a JSONB-containment probe orthogonal
+        to the column, the composed filter excludes every row written
+        before this class began stamping ``domain_id`` into chunk
+        metadata. Those rows are in scope, and the store says so.
+
+        An explicit binding over an *unscoped* store is the opposite
+        case: nothing else is enforcing it, so composing it is the
+        whole mechanism.
         """
-        if self._tenant_id is None:
+        composable = self._composable_domain_id
+        if self._tenant_id is None and composable is None:
             return filter_metadata
-        effective: dict[str, Any] = {"tenant_id": self._tenant_id}
+        effective: dict[str, Any] = {}
+        if composable is not None:
+            effective["domain_id"] = composable
+        if self._tenant_id is not None:
+            effective["tenant_id"] = self._tenant_id
         if filter_metadata:
             effective.update(filter_metadata)  # explicit-filter-wins
         return effective
+
+    def _scope_for_write(self, filter_metadata: dict[str, Any] | None) -> dict[str, Any] | None:
+        """The read filter's counterpart for the filter-driven mutations.
+
+        :meth:`clear` and :meth:`update_metadata_where` select rows by
+        filter and then destroy or re-tag them, so they take the
+        **write** precedence: a bound value overwrites a caller's key
+        of the same name rather than yielding to it. A knowledge base
+        bound to one scope cannot delete another's rows, whatever
+        filter it is handed — which is the inverse of
+        :meth:`_resolve_read_filter`, and deliberately so. Reading
+        across scopes is an admin convenience; deleting across them
+        under a binding that says otherwise is data loss.
+
+        A caller's filter still *narrows* within the scope; only the
+        bound keys themselves are non-negotiable. Naming a bound key
+        with a value the binding does not cover is *refused*, not
+        redirected: the composed value becomes the empty list that
+        ``_match_metadata_filter`` documents as unsatisfiable on every
+        backend, so the operation matches nothing. Rewriting it to the
+        bound value instead — which reads like "the binding wins" —
+        widens the request from no rows to every row in this scope, and
+        on ``clear()`` that deletes the caller's own corpus because
+        they asked to delete somebody else's. The refusal is reported,
+        because a destructive call that silently does nothing is its
+        own kind of surprise.
+
+        An unbound knowledge base is unchanged — including
+        ``clear(None)`` still meaning every row — and is the supported
+        way to act across scopes deliberately. Mirrors
+        :meth:`KnowledgeIngestionManager._scope_for_tenant`, which
+        makes the same guarantee for the manager's own clears.
+        """
+        composable = self._composable_domain_id
+        if self._tenant_id is None and composable is None:
+            return filter_metadata
+        scoped: dict[str, Any] = dict(filter_metadata or {})
+        self._scope_one_key(scoped, "domain_id", composable)
+        self._scope_one_key(scoped, "tenant_id", self._tenant_id)
+        return scoped
+
+    def _scope_one_key(self, scoped: dict[str, Any], key: str, value: str | None) -> None:
+        """Compose one bound key into a write filter, reporting a refusal."""
+        if value is None:
+            return
+        requested = scoped.get(key)
+        compose_scope_key(scoped, key, value)
+        if scoped[key] == []:
+            self._warn_once(
+                f"refused:{key}:{requested!r}",
+                "Filter asked for %s=%r on a knowledge base bound to %r; the "
+                "operation is scoped to the binding and matches nothing. Use an "
+                "unbound knowledge base to act across scopes deliberately.",
+                key,
+                requested,
+                value,
+            )
 
     @staticmethod
     def _is_stale(metadata: dict[str, Any] | None) -> bool:
@@ -1685,6 +2016,19 @@ class RAGKnowledgeBase(
         store counts, store-agnostic). ``include_stale=True`` restores
         the prior single delegated count (every stored chunk).
 
+        A bound ``tenant_id`` / ``domain_id`` composes onto the filter
+        through :meth:`_resolve_read_filter`, the same as any other
+        read — so this counts what this knowledge base can actually
+        see. It is not an incidental consistency: this is the count
+        :meth:`KnowledgeIngestionService.check_needs_ingestion` reads,
+        so an unscoped one made a second scope over a populated shared
+        store answer "already populated" and never receive any chunks
+        of its own.
+
+        The ``_stale`` sub-count is taken against the *same* effective
+        filter, so the subtraction cannot mix scopes and report a total
+        that is too low.
+
         Args:
             filter: Optional metadata filter to count only matching
                 chunks
@@ -1703,33 +2047,46 @@ class RAGKnowledgeBase(
             )
             ```
         """
-        total = await self.vector_store.count(filter)
+        effective = self._resolve_read_filter(filter)
+        total = await self.vector_store.count(effective)
         if include_stale:
             return total
-        stale_filter = {**(filter or {}), "_stale": True}
+        stale_filter = {**(effective or {}), "_stale": True}
         stale = await self.vector_store.count(stale_filter)
         return total - stale
 
     async def clear(self, filter: dict[str, Any] | None = None) -> None:
         """Clear documents from the knowledge base.
 
-        Warning: When ``filter`` is ``None``, this removes all stored
-        chunks and embeddings.  Pass a metadata filter to scope the
-        clear (e.g. ``filter={"domain_id": "docs"}``) so that only
-        matching chunks are removed.
+        Warning: on an **unbound** knowledge base a ``filter`` of
+        ``None`` removes all stored chunks and embeddings — every
+        tenant's and every domain's, on a shared store. Pass a metadata
+        filter to scope the clear (e.g. ``filter={"domain_id":
+        "docs"}``) so that only matching chunks are removed.
+
+        A knowledge base bound to a ``tenant_id`` / ``domain_id``
+        composes that binding onto the filter first
+        (:meth:`_scope_for_write`), so its unfiltered clear removes
+        only its own rows and a filter naming another scope does not
+        reach it. Bound wins here, the inverse of the read side: an
+        admin reading across scopes is a convenience, an admin
+        *deleting* across them from a knowledge base that says
+        otherwise is data loss. Use an unbound knowledge base to clear
+        across scopes deliberately.
 
         Args:
             filter: Optional metadata filter.  When ``None`` (default),
-                all chunks are removed.  When provided, only chunks
-                whose metadata matches the filter are removed; the
-                filter shape is the same as for :meth:`query`.
+                every chunk in this knowledge base's scope is removed.
+                When provided, only chunks whose metadata matches the
+                filter — within that scope — are removed; the filter
+                shape is the same as for :meth:`query`.
 
         Raises:
             NotImplementedError: If the backing vector store does
                 not support ``clear()``.
         """
         if hasattr(self.vector_store, "clear"):
-            await self.vector_store.clear(filter=filter)
+            await self.vector_store.clear(filter=self._scope_for_write(filter))
         else:
             raise NotImplementedError(
                 "Vector store does not support clearing. "
@@ -1754,6 +2111,13 @@ class RAGKnowledgeBase(
         ``NotImplementedError`` (the ABC contract) rather than
         silently mis-swapping.
 
+        Like :meth:`clear`, a bound ``tenant_id`` / ``domain_id``
+        composes onto the filter through :meth:`_scope_for_write`, so a
+        bound knowledge base cannot re-tag — or tombstone — rows
+        outside its own scope. The manager always passes a filter it
+        has already scoped, so this changes nothing on that path; it
+        closes the gap for every direct caller.
+
         Args:
             filter: Metadata filter selecting chunks to update
                 (same shape as :meth:`query` / :meth:`clear`).
@@ -1763,7 +2127,7 @@ class RAGKnowledgeBase(
         Returns:
             Number of chunks whose metadata was updated.
         """
-        return await self.vector_store.update_metadata_where(filter, set_)
+        return await self.vector_store.update_metadata_where(self._scope_for_write(filter), set_)
 
     async def save(self) -> None:
         """Save the knowledge base to persistent storage.
@@ -1789,11 +2153,20 @@ class RAGKnowledgeBase(
         return {}
 
     def set_provider(self, role: str, provider: Any) -> bool:
-        """Replace the embedding provider if the role matches."""
+        """Replace the embedding provider if the role matches.
+
+        The replacement is caller-owned: ``close()`` will not tear it
+        down, and the provider it replaces is the caller's to close.
+        """
         from dataknobs_bots.bot.base import PROVIDER_ROLE_KB_EMBEDDING
 
         if role == PROVIDER_ROLE_KB_EMBEDDING:
             self.embedding_provider = provider
+            # The replacement came from the caller, so it is not ours to
+            # close. Leaving the flag set inverted the ownership gate
+            # exactly: close() tore down the injected provider while the
+            # config-built one it replaced was never closed at all.
+            self._owns_embedding_provider = False
             return True
         return False
 

@@ -31,6 +31,56 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def compose_scope_key(
+    filter: dict[str, Any],
+    key: str,
+    bound: Any,
+) -> None:
+    """AND-compose one bound scope value into ``filter``, in place.
+
+    The single decision every scoped surface has to make about a
+    caller-supplied filter, and the one place to make it. Three
+    behaviours, and only the third is non-obvious:
+
+    * the caller did not name ``key`` — it is set to ``bound``;
+    * the caller named it *within* the bound scope — it collapses to
+      ``bound``, so a filter can narrow but never widen;
+    * the caller named something *else* — the value becomes the empty
+      list, which :meth:`VectorStoreBase._match_metadata_filter`
+      documents as unsatisfiable on every backend.
+
+    That third case is why this is a function rather than a line at
+    each call site. Spelling it as an unconditional overwrite reads as
+    "the binding wins" and is wrong in the one direction that costs
+    data: it rewrites a request for *another* scope into a request for
+    *this* one, so an operation that should have matched nothing
+    matches everything the caller is bound to. On ``clear()`` that is
+    the caller's own corpus, deleted because they asked to delete
+    somebody else's. Refusing a request has to mean refusing it, not
+    redirecting it.
+
+    A list ``bound`` is not supported: the scope is one value, and the
+    membership question below is asked of the *caller's* value.
+
+    Args:
+        filter: The filter dict to compose into. Mutated in place, so
+            callers pass a copy they own.
+        key: The metadata key carrying the scope (``domain_id``,
+            ``tenant_id``).
+        bound: The scope's value. Callers skip this call entirely when
+            unbound; ``None`` here would compose a literal ``None``.
+    """
+    if key not in filter:
+        filter[key] = bound
+        return
+    caller = filter[key]
+    if isinstance(caller, list):
+        in_scope = bound in caller
+    else:
+        in_scope = caller == bound
+    filter[key] = bound if in_scope else []
+
+
 def _forced_save_effect(
     current: tuple[int, int, int] | None,
     persisted: tuple[int, int, int] | None,
@@ -407,6 +457,12 @@ class VectorStoreBase(StructuredConfigConsumer[VectorStoreConfig]):
         the note above ``domain_scoped_store`` in the filter-semantics
         suite is where that divergence is described.
 
+        The per-key decision itself is :func:`compose_scope_key`, shared
+        with the consumers named in the empty-list contract on
+        :meth:`_match_metadata_filter` — they compose the same scope
+        onto their own filters and must refuse an out-of-scope request
+        the same way.
+
         Callers pass the result straight to ``_match_metadata_filter`` /
         the filtered count/clear/update paths; a returned dict is never
         ``None`` when scoping is active, so ``filter is None`` fast
@@ -416,18 +472,7 @@ class VectorStoreBase(StructuredConfigConsumer[VectorStoreConfig]):
             return filter
 
         eff: dict[str, Any] = dict(filter) if filter else {}
-        if "domain_id" not in eff:
-            eff["domain_id"] = self.domain_id
-            return eff
-
-        caller = eff["domain_id"]
-        if isinstance(caller, list):
-            in_scope = self.domain_id in caller
-        else:
-            in_scope = caller == self.domain_id
-        # In scope ⇒ collapse to the configured scope (no widening).
-        # Out of scope ⇒ unsatisfiable empty-list value.
-        eff["domain_id"] = self.domain_id if in_scope else []
+        compose_scope_key(eff, "domain_id", self.domain_id)
         return eff
 
     def _apply_domain_default(

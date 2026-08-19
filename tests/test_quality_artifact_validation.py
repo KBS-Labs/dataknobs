@@ -25,6 +25,7 @@ import json
 import re
 import subprocess
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -49,7 +50,7 @@ def _read_summary_raw(path: Path) -> str:
     return result.stdout
 
 
-def _read_summary(path: Path) -> dict[str, object]:
+def _read_summary(path: Path) -> dict[str, Any]:
     """Run the validator's reader and parse its delimited projection."""
     raw = _read_summary_raw(path)
 
@@ -119,7 +120,7 @@ _REORDERED = {
 }
 
 
-def test_a_status_reads_the_same_whatever_order_the_keys_are_in(tmp_path):
+def test_a_status_reads_the_same_whatever_order_the_keys_are_in(tmp_path: Path) -> None:
     """The reproduction: key order must not change what the validator sees.
 
     Before this was a JSON parse, the second form read as no status at all, so a
@@ -136,7 +137,7 @@ def test_a_status_reads_the_same_whatever_order_the_keys_are_in(tmp_path):
     assert reordered["checks"]["workflow_lint"]["status"] == "fail"
 
 
-def test_a_failing_check_is_never_read_as_absent(tmp_path):
+def test_a_failing_check_is_never_read_as_absent(tmp_path: Path) -> None:
     """A status the reader cannot find is indistinguishable from a passing run.
 
     ``workflow_lint`` is recorded as failing in both fixtures. The old greps
@@ -150,12 +151,12 @@ def test_a_failing_check_is_never_read_as_absent(tmp_path):
         )
 
 
-def test_every_recorded_check_is_reported_not_a_hand_kept_three(tmp_path):
+def test_every_recorded_check_is_reported_not_a_hand_kept_three(tmp_path: Path) -> None:
     """The old reader named unit_tests, integration_tests and workflow_lint only.
 
     The other five reached CI as a bare ``Overall status: FAIL`` naming nothing.
     """
-    doc = {
+    doc: dict[str, Any] = {
         "overall_status": "PASS",
         "checks": {
             name: {"status": "pass", "exit_code": 0}
@@ -177,16 +178,16 @@ def test_every_recorded_check_is_reported_not_a_hand_kept_three(tmp_path):
     )
 
 
-def test_a_check_name_becomes_a_readable_label(tmp_path):
+def test_a_check_name_becomes_a_readable_label(tmp_path: Path) -> None:
     """Derived from the name, so a check added later is not left unlabelled."""
-    doc = {"overall_status": "PASS", "checks": {"shell_lint": {"status": "pass"}}}
+    doc: dict[str, Any] = {"overall_status": "PASS", "checks": {"shell_lint": {"status": "pass"}}}
     summary = _read_summary(_write(tmp_path / "label.json", doc))
     assert summary["checks"]["shell_lint"]["label"] == "Shell lint"
 
 
-def test_a_skipped_check_reads_as_skipped(tmp_path):
+def test_a_skipped_check_reads_as_skipped(tmp_path: Path) -> None:
     """Only ``true`` counts. A missing flag is not a skip."""
-    doc = {
+    doc: dict[str, Any] = {
         "overall_status": "PASS_WITH_SKIPS",
         "checks": {
             "integration_tests": {"status": "pass", "skipped": True},
@@ -209,7 +210,9 @@ def test_a_skipped_check_reads_as_skipped(tmp_path):
         ("empty", ""),
     ],
 )
-def test_an_unreadable_summary_says_so_rather_than_reading_as_empty(tmp_path, name, content):
+def test_an_unreadable_summary_says_so_rather_than_reading_as_empty(
+    tmp_path: Path, name: str, content: str
+) -> None:
     """Fails loud, not blank.
 
     "Could not parse the attestation" and "the attestation says the run passed"
@@ -224,12 +227,12 @@ def test_an_unreadable_summary_says_so_rather_than_reading_as_empty(tmp_path, na
     assert not summary["checks"], f"{name}: no checks should be reported"
 
 
-def test_a_missing_summary_is_an_error_not_a_silent_pass(tmp_path):
+def test_a_missing_summary_is_an_error_not_a_silent_pass(tmp_path: Path) -> None:
     summary = _read_summary(tmp_path / "does-not-exist.json")
     assert summary["error"], "a summary that is not there cannot report a passing run"
 
 
-def test_the_reader_prints_the_projection_and_nothing_else(tmp_path):
+def test_the_reader_prints_the_projection_and_nothing_else(tmp_path: Path) -> None:
     """No banner on this path.
 
     The validator's decorative header goes to stdout on the normal path. If it
@@ -266,7 +269,7 @@ _TEXT_READERS = ("grep ", "sed ", "awk ", "cut ", "head ", "tail ", "jq ")
 _NOT_A_READ = ("-nt ", "-ot ", "! -f ", "-f ", "date -r")
 
 
-def test_nothing_reads_the_summary_except_the_parser():
+def test_nothing_reads_the_summary_except_the_parser() -> None:
     """Recurrence guard for the defect class, not for one instance of it.
 
     ``grep -A<n>`` against the summary is the shape that made field order
@@ -300,7 +303,7 @@ def test_nothing_reads_the_summary_except_the_parser():
     )
 
 
-def test_every_consumer_of_the_projection_names_every_field(tmp_path):
+def test_every_consumer_of_the_projection_names_every_field(tmp_path: Path) -> None:
     """A shell ``read`` with too few variables is silently wrong, not an error.
 
     ``read -r kind name status skipped label`` against a six-field record does
@@ -396,7 +399,7 @@ def _validate(directory: Path) -> str:
     return result.stdout + result.stderr
 
 
-def test_the_overall_status_reaches_the_main_path(tmp_path):
+def test_the_overall_status_reaches_the_main_path(tmp_path: Path) -> None:
     r"""A passing summary must be reported as passing.
 
     The projection moved from tab-delimited to ``\037`` records. Three
@@ -415,7 +418,7 @@ def test_the_overall_status_reaches_the_main_path(tmp_path):
     )
 
 
-def test_an_unreadable_summary_is_named_on_the_main_path(tmp_path):
+def test_an_unreadable_summary_is_named_on_the_main_path(tmp_path: Path) -> None:
     """A summary that cannot be parsed must not read as one that says nothing.
 
     These are the two verdicts the script's own comment says must never meet:
@@ -431,7 +434,7 @@ def test_an_unreadable_summary_is_named_on_the_main_path(tmp_path):
     )
 
 
-def test_the_projection_is_split_never_pattern_matched():
+def test_the_projection_is_split_never_pattern_matched() -> None:
     """Recurrence guard for the class the two stale ``sed`` calls belong to.
 
     ``test_nothing_reads_the_summary_except_the_parser`` covers readers of the

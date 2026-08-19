@@ -98,7 +98,7 @@ def _fmt(violations: list[str], floor: tuple[int, int]) -> str:
 # --------------------------------------------------------------------------
 
 
-def test_workspace_tests_are_reachable():
+def test_workspace_tests_are_reachable() -> None:
     """A guard nothing runs reports green in exactly the way a passing one does.
 
     Every test entry point is keyed by package — ``pytest.ini`` declares
@@ -184,7 +184,7 @@ def _runner_targets(*args: str) -> list[str]:
     return listing.split()
 
 
-def test_running_everything_includes_the_guards():
+def test_running_everything_includes_the_guards() -> None:
     """A bare ``bin/test.sh`` is the command that reads as "run the suite".
 
     It discovers by looping ``packages/*``, so this directory — which belongs
@@ -209,7 +209,7 @@ def test_running_everything_includes_the_guards():
     assert _runner_targets("common") == ["common"]
 
 
-def test_a_change_to_these_guards_still_schedules_them():
+def test_a_change_to_these_guards_still_schedules_them() -> None:
     """A pull request that edits only this directory must still run it.
 
     Reachability is not only "does an entry point name the path" — the gate
@@ -323,7 +323,7 @@ def test_the_release_noise_definition_has_one_home() -> None:
     assert hashes.strip_release_noise(sample) == _scopes.strip_release_noise(sample)
 
 
-def test_the_gate_reads_the_scope_change_detection_computes():
+def test_the_gate_reads_the_scope_change_detection_computes() -> None:
     """The decision above only helps if the gate acts on it.
 
     Text-matched, and deliberately narrow about what that proves: it pins
@@ -381,7 +381,7 @@ def _ci_executed_bin_scripts() -> set[str]:
     return found
 
 
-def test_every_script_ci_executes_exists():
+def test_every_script_ci_executes_exists() -> None:
     """A workflow step naming a script that is not there fails only when it runs.
 
     Which is later than it sounds, and on someone else's branch: the quality job
@@ -458,7 +458,7 @@ def _documentation_inputs() -> list[str]:
     return sorted(inputs)
 
 
-def test_every_documentation_input_is_covered_by_a_hash_scope():
+def test_every_documentation_input_is_covered_by_a_hash_scope() -> None:
     """A documentation input outside every hash scope lets its own edit go unchecked.
 
     This is ``test_every_linted_shell_script_is_covered_by_a_hash_scope`` one
@@ -542,7 +542,7 @@ def _workflow_lint_inputs() -> list[str]:
     )
 
 
-def test_every_workflow_lint_input_is_covered_by_a_hash_scope():
+def test_every_workflow_lint_input_is_covered_by_a_hash_scope() -> None:
     """A workflow outside every hash scope lets its own edit go unvalidated.
 
     ``workflow_lint`` is a recorded check and these files are its entire input,
@@ -634,7 +634,7 @@ def _files_the_workspace_guards_read() -> list[str]:
     return sorted(named)
 
 
-def test_every_file_the_workspace_guards_read_is_covered_by_a_hash_scope():
+def test_every_file_the_workspace_guards_read_is_covered_by_a_hash_scope() -> None:
     """A guard's own input outside every hash scope lets its verdict go stale.
 
     The guards under ``tests/`` are themselves hashed — ``tests/`` is a scope
@@ -679,7 +679,7 @@ def test_every_file_the_workspace_guards_read_is_covered_by_a_hash_scope():
     )
 
 
-def test_every_docs_hash_input_also_reruns_the_docs_checks():
+def test_every_docs_hash_input_also_reruns_the_docs_checks() -> None:
     """Hashing an input the docs checks are not re-run for recomputes nothing.
 
     The two halves have to agree in both directions. The hash decides whether a
@@ -720,7 +720,7 @@ def test_every_docs_hash_input_also_reruns_the_docs_checks():
     )
 
 
-def test_no_workspace_test_is_filed_where_nothing_runs_it():
+def test_no_workspace_test_is_filed_where_nothing_runs_it() -> None:
     """``tests/integration/`` is reached by no entry point, in either mode.
 
     The unit step skips it by name, on the reasonable assumption that
@@ -851,7 +851,7 @@ def _workspace_input_probes() -> list[str]:
     return probes
 
 
-def test_ci_runs_the_gate_when_a_guarded_file_changes():
+def test_ci_runs_the_gate_when_a_guarded_file_changes() -> None:
     """A guard that CI never starts is the same as a guard that does not exist.
 
     Every check in this file reads a hand-maintained toolchain declaration,
@@ -1122,7 +1122,7 @@ REQUIRED_DEFAULT_TARGETS = frozenset({"tests", "bin", "src", "conftest.py"})
 # compares segment by segment from the root for both tiers.
 
 
-def test_the_default_target_set_still_contains_what_it_must():
+def test_the_default_target_set_still_contains_what_it_must() -> None:
     """The deferral list must not be able to buy its way out of a lost target.
 
     The guard above compares the target set against the tracked files and takes
@@ -1342,7 +1342,7 @@ def test_the_formatter_population_is_not_the_linters() -> None:
     )
 
 
-def test_the_gate_asks_for_the_workspace_target_set_rather_than_restating_it():
+def test_the_gate_asks_for_the_workspace_target_set_rather_than_restating_it() -> None:
     """A second copy of the target list is a second thing to forget.
 
     When no package changed, the gate validates the workspace half alone — and
@@ -1460,7 +1460,7 @@ PRINT_CHECK_TEST_FILE_CASES = {
 }
 
 
-def test_the_print_check_recognises_test_files_by_name_not_by_substring():
+def test_the_print_check_recognises_test_files_by_name_not_by_substring() -> None:
     """Skipping "anything with test in it" skipped eleven shipped modules.
 
     The check had two spellings of one question — ``*test*`` for a named file and
@@ -1519,7 +1519,7 @@ def test_the_print_check_recognises_test_files_by_name_not_by_substring():
     )
 
 
-def test_the_print_check_examines_shipped_modules_under_a_testing_package(tmp_path):
+def test_the_print_check_examines_shipped_modules_under_a_testing_package(tmp_path: Path) -> None:
     """The predicate being right does not mean the directory walk uses it.
 
     Asserted as an outcome rather than a spelling. The first version of this
@@ -1628,7 +1628,7 @@ def _gate_pytest_commands() -> list[str]:
     return commands
 
 
-def test_the_gate_runs_no_checker_itself():
+def test_the_gate_runs_no_checker_itself() -> None:
     """Every suite the gate records is run by the command a developer runs.
 
     This started as a narrower guard: the gate's one direct pytest call had to
@@ -1661,7 +1661,7 @@ def test_the_gate_runs_no_checker_itself():
 # --------------------------------------------------------------------------
 
 
-def test_every_project_declares_the_same_floor(floor):
+def test_every_project_declares_the_same_floor(floor: tuple[int, int]) -> None:
     violations = [
         f"{_rel(path)}: requires-python = {requires!r}"
         for path in _pyprojects()
@@ -1677,7 +1677,7 @@ def test_every_project_declares_the_same_floor(floor):
 # --------------------------------------------------------------------------
 
 
-def test_mypy_python_version_matches_floor(floor):
+def test_mypy_python_version_matches_floor(floor: tuple[int, int]) -> None:
     """A stale mypy target makes it reject syntax the interpreter accepts.
 
     Concretely: with a 3.10 target, mypy treats a dependency's PEP 695 ``type``
@@ -1699,7 +1699,7 @@ def test_mypy_python_version_matches_floor(floor):
     assert not violations, _fmt(violations, floor)
 
 
-def test_black_target_version_matches_floor(floor):
+def test_black_target_version_matches_floor(floor: tuple[int, int]) -> None:
     expected = f"py{floor[0]}{floor[1]}"
     violations = [
         f"{_rel(path)}: [tool.black] target-version = {targets!r} (want [{expected!r}])"
@@ -1711,7 +1711,7 @@ def test_black_target_version_matches_floor(floor):
     assert not violations, _fmt(violations, floor)
 
 
-def test_pylint_py_version_matches_floor(floor):
+def test_pylint_py_version_matches_floor(floor: tuple[int, int]) -> None:
     """``.pylintrc`` is live via ``bin/dk lint`` and ``tox.ini``."""
     pylintrc = ROOT / ".pylintrc"
     if not pylintrc.exists():
@@ -1726,7 +1726,7 @@ def test_pylint_py_version_matches_floor(floor):
     assert not violations, _fmt(violations, floor)
 
 
-def test_ruff_target_version_matches_floor(floor):
+def test_ruff_target_version_matches_floor(floor: tuple[int, int]) -> None:
     """A stale ruff target makes it decline modernizations that are available.
 
     This one used to be pinned below the floor while the modernization surface
@@ -1800,7 +1800,7 @@ def _mypy_path_entries() -> list[tuple[Path, str]]:
     return [(path, stripped) for path, entry in entries if (stripped := entry.strip())]
 
 
-def test_mypy_path_entries_resolve():
+def test_mypy_path_entries_resolve() -> None:
     """A ``mypy_path`` entry that does not exist is skipped without a word.
 
     mypy does not validate its search path — a directory that was renamed,
@@ -2008,7 +2008,7 @@ def test_ignore_without_code_tracks_the_adopted_set() -> None:
 # --------------------------------------------------------------------------
 
 
-def test_interpreter_pins_satisfy_floor(floor):
+def test_interpreter_pins_satisfy_floor(floor: tuple[int, int]) -> None:
     """``uv`` reads the *nearest* ``.python-version``.
 
     A package-level pin below the floor makes ``uv run`` from inside that
@@ -2030,7 +2030,7 @@ def test_interpreter_pins_satisfy_floor(floor):
 # --------------------------------------------------------------------------
 
 
-def test_no_classifier_below_floor(floor):
+def test_no_classifier_below_floor(floor: tuple[int, int]) -> None:
     """A classifier below ``requires-python`` advertises support pip refuses."""
     violations = []
 
@@ -2050,7 +2050,7 @@ def test_no_classifier_below_floor(floor):
 # --------------------------------------------------------------------------
 
 
-def test_new_package_template_declares_the_floor(floor):
+def test_new_package_template_declares_the_floor(floor: tuple[int, int]) -> None:
     """Without this, every newly scaffolded package is born already stale."""
     script = ROOT / "bin" / "create-package.py"
     if not script.exists():
@@ -2072,7 +2072,7 @@ def test_new_package_template_declares_the_floor(floor):
 # --------------------------------------------------------------------------
 
 
-def test_the_type_check_fails_when_mypy_does(tmp_path):
+def test_the_type_check_fails_when_mypy_does(tmp_path: Path) -> None:
     """A checker whose verdict ignores its own exit status reports only success.
 
     ``bin/validate.sh`` decided this by piping mypy into ``grep`` and testing the
@@ -2120,7 +2120,7 @@ VALIDATION_SCOPE_STATES = (
 )
 
 
-def test_every_state_that_should_validate_something_does():
+def test_every_state_that_should_validate_something_does() -> None:
     """A run that cannot tell what changed must not validate nothing and pass.
 
     When change detection fails the gate prints "testing all packages", and then

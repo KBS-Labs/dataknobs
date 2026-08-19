@@ -222,7 +222,7 @@
         {
           "path": "tests",
           "tier": "transitional",
-          "ceiling": 223,
+          "ceiling": 121,
           "reason": "the workspace guards; grows whenever a guard is added, which is why it is a ceiling rather than a target"
         },
         {

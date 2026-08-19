@@ -36,6 +36,13 @@ Every pair is classified in ``.dataknobs/docs-mirror-manifest.json``:
   ``package_only``  Package doc with no site mirror.
   ``site_only``     Site-native page with no package source.
 
+Neither unpaired class has a per-class check -- they appear only in the
+completeness pass, which any classification satisfies. So naming a real pair
+in one of them opts it out of every invariant here, silently. ``check_unpaired``
+closes that: an entry whose counterpart exists in the other tree (matched on
+the canonicalized basename, at any depth) fails. Two same-named documents that
+are genuinely unrelated are recorded with ``diverge`` and a reason.
+
 Completeness: every ``*.md`` **in scope** MUST be classified. An unclassified
 file (or a manifest entry with no file on disk) fails the check -- that is
 what makes silent drift impossible to introduce: a doc in scope forces a
@@ -427,6 +434,75 @@ def check_diverge(pair: dict, pkg_dir: Path, site_dir: Path, res: Result) -> Non
     check_shared_sections(pair, pkg_dir, site_dir, res)
 
 
+def _canon_name(name: str) -> str:
+    """The comparison key for one doc: its basename in site form.
+
+    ``USER_GUIDE.md`` and ``guides/user-guide.md`` share it; so do
+    ``html/HTML_CONVERSION.md`` and ``html-conversion.md``. Applied to
+    both sides, so a site page that kept the package spelling
+    (``guides/TEMPLATE_SECURITY.md``) matches too.
+    """
+    return Path(name).name.lower().replace("_", "-")
+
+
+def check_unpaired(entry: dict, pkg_dir: Path, site_dir: Path, res: Result) -> None:
+    """``package_only`` / ``site_only`` must mean unpaired, not unclassified.
+
+    Neither class has a per-class check -- they appear only in the
+    completeness pass, which is satisfied by *any* classification. So
+    naming a doc in one of them opts it out of every invariant this
+    guard exists to enforce, and the package still reports clean while
+    the counterpart drifts, moves or disappears.
+
+    That made them the path of least resistance whenever a pair was
+    awkward to express, and the awkwardness was real: until
+    subdirectory site pages could be paired at all, every bots guide
+    *had* to be recorded this way. The guard changed; the entries left
+    behind did not, and nothing noticed, because a wrong answer here
+    looks exactly like a right one.
+
+    This is what notices. A counterpart is anything in the other tree
+    whose basename matches under :func:`_canon_name`, at any depth --
+    the completeness pass is scoped by ``recursive`` but this is not,
+    since the question is whether a partner exists, not whether it is
+    in the top-level set.
+
+    Two same-named documents that are genuinely unrelated are not a
+    false positive to suppress: say so with ``diverge`` and a reason.
+    Recording the pair is the point -- both files then get an existence
+    check, and the reason survives for whoever reads it next.
+    """
+
+    def _counterparts(root: Path) -> dict[str, list[str]]:
+        found: dict[str, list[str]] = {}
+        for path in root.rglob("*.md"):
+            found.setdefault(_canon_name(path.name), []).append(path.relative_to(root).as_posix())
+        return found
+
+    paired: set[str] = set()
+    for kind in ("symlink", "mirror", "transclude", "diverge"):
+        for pair in entry.get(kind, []):
+            paired.add(pair["site"])
+            paired.add(pair["package"])
+
+    for cls, names, other_dir, other_side in (
+        ("package_only", entry.get("package_only", []), site_dir, "site"),
+        ("site_only", entry.get("site_only", []), pkg_dir, "package"),
+    ):
+        counterparts = _counterparts(other_dir)
+        for name in names:
+            hits = [h for h in sorted(counterparts.get(_canon_name(name), [])) if h not in paired]
+            if not hits:
+                continue
+            res.fail(
+                f"{cls}: '{name}' is classified as unpaired, but the {other_side} "
+                f"tree has {', '.join(hits)}. {cls} carries no per-class check, so "
+                f"this pair is currently verified by nothing. Classify it "
+                f"(symlink / transclude / mirror), or record the divergence with "
+                f"`diverge` and a reason if the two are genuinely different documents."
+            )
+
+
 def check_completeness(entry: dict, pkg_dir: Path, site_dir: Path, res: Result) -> None:
     """Every *.md in both trees must be classified exactly once.
 
@@ -567,6 +643,7 @@ def run(manifest: dict, only: str | None, fix: bool) -> int:
 
         res = Result()
         check_completeness(entry, pkg_dir, site_dir, res)
+        check_unpaired(entry, pkg_dir, site_dir, res)
         for pair in entry.get("symlink", []):
             check_symlink(pair, pkg_dir, site_dir, res)
         for pair in entry.get("mirror", []):

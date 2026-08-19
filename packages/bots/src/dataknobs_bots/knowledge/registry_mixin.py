@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, ClassVar
 
 if TYPE_CHECKING:
     from dataknobs_bots.knowledge.service import (
@@ -50,6 +50,34 @@ class AutoIngestionMixin:
     _auto_ingest: bool
     _ingestion_service: KnowledgeIngestionService
 
+    # Keys the ingestion layer consumes itself, which must not reach
+    # ``RAGKnowledgeBase.from_config``. Everything else in the
+    # knowledge-base section is forwarded verbatim — see
+    # :meth:`_build_rag_config` for why that direction is the safe one.
+    _MIXIN_ONLY_KEYS: ClassVar[frozenset[str]] = frozenset(
+        {
+            # Gate read by _ensure_knowledge_base_ingested.
+            "enabled",
+            # MUST stay excluded. RAGKnowledgeBase._ainit ingests
+            # documents_path during construction, which would run the
+            # ingest before ensure_ingested's skip-if-populated check
+            # and without consulting ``force`` — every registration
+            # would re-ingest the whole corpus. The ingestion service
+            # reads it from kb_config directly, which is the path that
+            # honours both.
+            "documents_path",
+            # Travels with documents_path; meaningless without it.
+            "document_pattern",
+        }
+    )
+
+    # Every key that says something about the embedder. The historical
+    # Ollama defaults fill the gap only when the section names none of
+    # them — see :meth:`_build_rag_config`.
+    _EMBEDDER_KEYS: ClassVar[frozenset[str]] = frozenset(
+        {"embedding", "embedding_provider", "embedding_model"}
+    )
+
     async def _ensure_knowledge_base_ingested(
         self,
         domain_id: str,
@@ -84,8 +112,13 @@ class AutoIngestionMixin:
         logger.info("Ensuring knowledge base ingested for %s", domain_id)
 
         try:
-            # Create RAGKnowledgeBase from config
-            rag_config = self._build_rag_config(kb_config)
+            # Create RAGKnowledgeBase from config. The registration's
+            # own ``domain_id`` becomes the knowledge base's binding
+            # unless the config names one, so an adopter gets
+            # namespaced chunk ids over a shared store with no config
+            # change at all — this mixin is a manager and already holds
+            # the value.
+            rag_config = self._build_rag_config(kb_config, domain_id=domain_id)
             knowledge_base = await RAGKnowledgeBase.from_config(rag_config)
 
             try:
@@ -118,29 +151,85 @@ class AutoIngestionMixin:
             logger.error("Failed to ingest knowledge base for %s: %s", domain_id, e)
             return EnsureIngestionResult(error=str(e))
 
-    def _build_rag_config(self, kb_config: dict[str, Any]) -> dict[str, Any]:
-        """Build RAGKnowledgeBase config from knowledge_base config.
+    def _build_rag_config(
+        self,
+        kb_config: dict[str, Any],
+        *,
+        domain_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Project the knowledge-base config onto the ingest knowledge base.
 
-        Extracts the relevant fields from knowledge_base config and
-        formats them for RAGKnowledgeBase.from_config().
+        Forwards everything except :attr:`_MIXIN_ONLY_KEYS`. The
+        direction matters: a bot's own knowledge base is built from the
+        *whole* section (``create_knowledge_base_from_config``), so a
+        projection that enumerated what to keep guaranteed the two
+        would disagree about anything it had not thought of — and it
+        did, silently. ``tenant_id`` was one, which meant the ingest
+        wrote untagged chunks that the bot's tenant-scoped reads could
+        never match: a total retrieval blackout reported as a
+        successful ingest. Excluding a named few, and saying why each
+        is excluded, fails in the harmless direction instead — a field
+        added to ``RAGKnowledgeBaseConfig`` later arrives here on its
+        own.
+
+        Unknown keys are safe to forward: ``StructuredConfig.from_dict``
+        ignores what matches no field.
 
         Args:
             kb_config: The knowledge_base section of bot config
+            domain_id: The registration's domain, used as the knowledge
+                base's binding when the config does not set one. The
+                resulting precedence is ``kb_config["domain_id"]`` →
+                this argument → the vector store's own ``domain_id``.
 
         Returns:
             Configuration dict for RAGKnowledgeBase.from_config()
         """
         rag_config: dict[str, Any] = {
-            "vector_store": kb_config.get("vector_store", {}),
-            "embedding_provider": kb_config.get("embedding_provider", "ollama"),
-            "embedding_model": kb_config.get("embedding_model", "nomic-embed-text"),
-            "chunking": kb_config.get("chunking", {}),
-            "merger": kb_config.get("merger", {}),
-            "formatter": kb_config.get("formatter", {}),
+            key: value for key, value in kb_config.items() if key not in self._MIXIN_ONLY_KEYS
         }
 
-        # Add optional embedding base URL (for Ollama, vLLM, etc.)
-        if "embedding_base_url" in kb_config:
-            rag_config["embedding_base_url"] = kb_config["embedding_base_url"]
+        configured_domain = rag_config.get("domain_id")
+        if domain_id is not None and configured_domain is None:
+            rag_config["domain_id"] = domain_id
+        elif (
+            domain_id is not None
+            and configured_domain is not None
+            and configured_domain != domain_id
+        ):
+            # The config wins — that is the documented precedence, and it
+            # is right for a section written for one bot. But the same
+            # section is routinely reused as a template across every
+            # registration, and then this quietly points every domain at
+            # one namespace: chunk ids stop separating, each bot's ingest
+            # overwrites the last on a shared store, and nothing fails.
+            # Too legitimate to refuse, too costly to leave silent.
+            logger.warning(
+                "Knowledge-base config sets domain_id=%r, which overrides the "
+                "registration's domain %r. Every registration sharing this config "
+                "will write under %r, so their chunks no longer separate. Remove "
+                "domain_id from a knowledge-base section used as a template.",
+                configured_domain,
+                domain_id,
+                configured_domain,
+            )
+
+        # The historical embedder defaults, applied only when the embedder
+        # is unconfigured — which means *none* of the three keys, not two
+        # of them. Applying them unconditionally is what made a configured
+        # nested ``embedding`` section fall back to Ollama; testing two
+        # keys while writing three did the same to a configured
+        # ``embedding_model``, which is legal on its own because the
+        # default provider is Ollama anyway. Either way ingest and query
+        # land in different vector spaces.
+        #
+        # They fill as a pair. Filling one key and leaving the other to
+        # the config default is the same divergence in miniature: the
+        # bot's own knowledge base is built from this section with no
+        # defaults of its own, so whatever the read side resolves an
+        # absent key to, the ingest side has to resolve it to as well.
+        if not any(key in kb_config for key in self._EMBEDDER_KEYS):
+            rag_config["embedding_provider"] = "ollama"
+            rag_config["embedding_model"] = "nomic-embed-text"
 
         return rag_config

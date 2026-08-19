@@ -292,6 +292,182 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Replacing a knowledge base's vector store no longer orphans the chunks
+  it already wrote.** `RAGKnowledgeBase.vector_store` was a plain public
+  attribute, and a knowledge base without its own `domain_id` takes the
+  binding from the store — a value that folds into every chunk id. So
+  assigning a differently scoped store silently repointed the id namespace:
+  `count()` stopped seeing the existing corpus, the skip-if-populated gate
+  re-ingested over rows it could no longer see, and `clear()` could not
+  reach them. Nothing raised. The attribute is now a property whose setter
+  refuses a swap that would move the effective binding, because once the
+  ids are on disk there is no correct continuation and a warning would
+  leave the corpus split in two. Construction is not a swap, and neither is
+  a rebind on a knowledge base whose own `domain_id` pins the binding.
+
+- **`set_provider()` no longer inverts the close-ownership gate.**
+  `RAGKnowledgeBase`, `VectorMemory` and `SummaryMemory` replaced their
+  provider without clearing the `_owns_*` flag that decides what `close()`
+  tears down. The result was exactly backwards: the provider the caller
+  injected got closed, while the config-built one it replaced was never
+  closed at all — a leak and a use-after-close from one call. An injected
+  provider is now caller-owned at every one of these sites, matching
+  `QueryTransformer.set_provider`, and the contract is stated on
+  `BaseMemory.set_provider` so an override cannot miss it. Rebinding
+  `vector_store` hands ownership back the same way, and warns that the
+  outgoing store — which a synchronous setter cannot await — is the
+  caller's to close.
+
+- **Two knowledge bases over one vector store no longer overwrite each
+  other's chunks.** `domain_id` folds into the chunk-id prefix, but nothing
+  supplied the value unless a `KnowledgeIngestionManager` threaded it per
+  call — so a knowledge base built from config derived every id from the
+  source filename alone, and two domains that each held an `overview.md`
+  both produced `overview_0`. The second ingest took the first's row, or,
+  against a vector store that refuses a write capturing another domain's
+  row, failed every file while reporting no error and zero files.
+
+  `RAGKnowledgeBase` now carries a `domain_id` binding beside `tenant_id`,
+  and resolves it from the **bound vector store** when the config does not
+  set one. The store already holds that value to scope its own reads and to
+  tag rows on write, so deriving it means a consumer who scoped the store
+  gets namespaced chunk ids without configuring the same value twice, and
+  the chunk-id namespace cannot disagree with the tag on the row. An
+  explicit `domain_id` still wins — that is the shape for a deliberately
+  unscoped store — and a binding that contradicts a scoped store is
+  reported at WARNING, because such chunks are written and can never be
+  read back.
+
+  A store-derived binding shapes chunk ids and the metadata stamp only.
+  It is deliberately **not** composed into read or write filters: the
+  store already confines every read, count, clear and update to that
+  domain, by its own means and identically on every backend. Naming the
+  key in the filter as well would move the knowledge base onto the one
+  surface the store layer documents as *not* uniform — `pgvector` keeps
+  the domain in a column and stores caller metadata verbatim, making an
+  explicit `domain_id` a containment probe against a key the column
+  consumed — and would hide every chunk written before this release
+  began stamping `domain_id` into chunk metadata. On that backend a
+  knowledge base over a domain-scoped store would have read zero rows,
+  counted zero, re-ingested over a corpus it could no longer see, and
+  been unable to `clear()` the result.
+
+- **A bound `tenant_id` now scopes `count()`, `clear()` and
+  `update_metadata_where()`.** It scoped `query` and `hybrid_query` and
+  nothing else, so on a shared store `clear()` on a knowledge base bound to
+  one tenant removed every other tenant's rows — data destruction from a
+  call whose documented warning was only about passing no filter. The two
+  filter-driven mutations take **bound-wins** precedence, so a filter can
+  narrow within the scope but not widen past it — naming a bound key with a
+  value outside the binding is refused (the request resolves to the vector
+  store's unsatisfiable empty-list value and is logged at WARNING) rather
+  than redirected to the binding's own value, which would widen a call that
+  should match no rows into one that matches every row the knowledge base
+  owns. Reads keep explicit-filter-wins, so admin tooling can still read
+  across scopes. An
+  **unbound** knowledge base is unchanged and is the supported way to act
+  across scopes deliberately — `clear()` on one still means every row.
+
+  `count()` being unscoped had a second consequence: it is the count
+  `KnowledgeIngestionService.check_needs_ingestion` reads, so a second
+  tenant over a store the first had populated was told it was already
+  populated and skipped forever, never receiving any chunks of its own.
+
+- **`AutoIngestionMixin` now forwards the whole knowledge-base config to the
+  ingest knowledge base.** It hand-copied six keys, while the bot's own
+  knowledge base is built from the entire section — so the two disagreed
+  about everything the list did not name. `tenant_id` was one: the ingest
+  wrote untagged chunks that the bot's tenant-scoped reads could never
+  match, a total retrieval blackout reported as a successful ingest. A
+  nested `embedding` section was another, silently replaced by the
+  hard-coded Ollama defaults, which lands ingest and query in different
+  vector spaces. Those defaults now apply only when the section names none
+  of `embedding`, `embedding_provider` or `embedding_model`, and they fill
+  as a pair: the bot's own knowledge base applies no defaults of its own, so
+  filling one key while leaving the other to resolve from an absent value is
+  the same divergence in miniature. Three keys are still excluded and each says why in the
+  code; `documents_path` in particular must not reach the knowledge base,
+  because construction would ingest it ahead of the skip-if-populated check
+  and ignore `force`. The registration's own `domain_id` becomes the
+  knowledge base's binding when the config does not set one, so an adopter
+  sharing a store across bots is correct with no config change.
+
+- **An empty-string binding is a binding at every surface.** The chunk-id
+  fold tested truthiness while identity stamping and filter composition
+  tested `is not None`, so `domain_id: ""` got scoped reads and a scoped
+  write tag with an *unnamespaced* chunk id — the collision the fold
+  exists to prevent, at the one value where the two spellings disagree.
+  This is the split `VectorStoreBase._is_scoped` settled for the store
+  layer after a truthiness test made an empty-string domain isolate on
+  three backends and run unscoped on a fourth. Only absent/`None` is
+  unbound now. A knowledge base carrying none of the fold keys still
+  produces the historical `stem_index` id, byte for byte.
+
+- **Every distinct identity conflict is reported, not just the first.**
+  The once-per-instance warning guard was keyed by the metadata key
+  alone, so a knowledge base handed several different contradicting
+  values reported one and silently re-tagged the rest. The offending
+  value is now part of the key. The per-chunk flood the guard was
+  written for repeats one value and still collapses to a single line.
+
+- **A knowledge-base config that overrides the registration's domain says
+  so.** `kb_config["domain_id"]` outranking the registration is right for
+  a section written for one bot, and that precedence is unchanged — but
+  the same section is routinely reused as a template across every
+  registration, where it quietly points every domain at one namespace and
+  their chunks stop separating. Reported at WARNING when the two differ.
+
+- **A `KnowledgeIngestionManager` refuses a destination bound to another
+  domain.** The manager's per-call `domain_id` is authoritative — that is
+  what lets one manager hold many domains in one destination — but a
+  destination `RAGKnowledgeBase` carrying a binding of its own
+  contradicted it on every surface at once: identity is sacred at the
+  write boundary, so the destination stamped *its* domain over the call's
+  and the chunks landed in a scope nobody asked for, while its
+  filter-driven mutations were scoped to that binding, so the swap's
+  `clear`, tombstone and rollback stopped naming the rows they exist to
+  replace. The ingest reported success having written the wrong tag and
+  cleaned up nothing. Neither value is derivable from the other, so the
+  pairing is a `ConfigurationError`, raised at the first per-domain call
+  that reveals it — `ingest`, `ingest_if_changed`, `ingest_changes` and
+  `reconcile`. A destination bound to the one domain it is asked for
+  agrees with the call and is unaffected, as is the unbound destination
+  the manager exists for.
+
+- **`embedding_base_url` reaches the embedder on the legacy flat config
+  shape.** The mixin read the key and forwarded it under a name no config
+  field carries, so it was discarded in silence and the endpoint it named
+  was never used. It is now a legacy alias for a top-level `api_base`,
+  and `api_base` wins when both are present. Scope worth stating: the
+  top-level passthroughs are consulted only on the legacy `embedding_`
+  prefix path. A configured nested `embedding` section supplies the
+  provider's endpoint, key and dimensions from inside itself, and neither
+  spelling of the top-level key is read at all — prefer the nested form.
+
+  **Migration — chunk ids change for a knowledge base over a domain-scoped
+  store**, from `overview_0` to `bot-a\x1foverview\x1f0`. A knowledge base
+  with no binding over an unscoped store is byte-identical to before.
+
+  A consumer at one domain per store was already correct and will write
+  new-id rows alongside the old ones on a deliberate `force=True`
+  re-ingest; `await kb.clear()` — now correctly scoped to that domain —
+  followed by a forced re-ingest re-keys them.
+
+  **A consumer sharing one unscoped store across domains has a one-time
+  cleanup**, and it is not automatic. Those chunks were written before
+  anything stamped `domain_id` into chunk metadata, so a newly-bound
+  knowledge base counts none of them, `check_needs_ingestion` reports it
+  as never ingested, and the ingest stores the corpus a second time — the
+  ingest path appends, and no implicit clear was added to it. The old copy
+  is then invisible to every scoped read, and a *bound* `clear()` will not
+  remove it either, because it composes a tag those rows do not carry.
+  Clear them with `await kb.clear()` on an **unbound** knowledge base over
+  the same store before letting each domain re-ingest. Nothing adopts them
+  automatically and nothing should: untagged rows on a shared store belong
+  to no one domain — several wrote them and collided on the same ids,
+  which is the defect being repaired — so assigning them to whichever
+  binding looked first would invent an answer.
+
 - **`VectorMemoryConfig.backend` now defaults to `None`, not `"memory"`.**
   Same laundering as the four `.get(key, default)` sites above, in the
   typed-dataclass spelling: the default was written into the dict handed to
