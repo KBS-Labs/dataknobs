@@ -366,6 +366,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   knowledge base's binding when the config does not set one, so an adopter
   sharing a store across bots is correct with no config change.
 
+- **A `KnowledgeIngestionManager` refuses a destination bound to another
+  domain.** The manager's per-call `domain_id` is authoritative — that is
+  what lets one manager hold many domains in one destination — but a
+  destination `RAGKnowledgeBase` carrying a binding of its own
+  contradicted it on every surface at once: identity is sacred at the
+  write boundary, so the destination stamped *its* domain over the call's
+  and the chunks landed in a scope nobody asked for, while its
+  filter-driven mutations were scoped to that binding, so the swap's
+  `clear`, tombstone and rollback stopped naming the rows they exist to
+  replace. The ingest reported success having written the wrong tag and
+  cleaned up nothing. Neither value is derivable from the other, so the
+  pairing is a `ConfigurationError`, raised at the first per-domain call
+  that reveals it — `ingest`, `ingest_if_changed`, `ingest_changes` and
+  `reconcile`. A destination bound to the one domain it is asked for
+  agrees with the call and is unaffected, as is the unbound destination
+  the manager exists for.
+
 - **`embedding_base_url` works.** The mixin read the key and forwarded it
   under a name no config field carries, so it was discarded in silence and
   the endpoint it named was never used. It is now a legacy alias for
@@ -374,12 +391,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   **Migration — chunk ids change for a knowledge base over a domain-scoped
   store**, from `overview_0` to `bot-a\x1foverview\x1f0`. A knowledge base
   with no binding over an unscoped store is byte-identical to before.
-  Consumers already sharing a store were losing rows, so the re-key is the
-  repair and there is nothing to do. A consumer at one domain per store was
-  already correct and will write new-id rows alongside the old ones on a
-  deliberate `force=True` re-ingest; `await kb.clear()` — now correctly
-  scoped to that domain — followed by a forced re-ingest re-keys them. No
-  implicit clear was added to the ingest path.
+
+  A consumer at one domain per store was already correct and will write
+  new-id rows alongside the old ones on a deliberate `force=True`
+  re-ingest; `await kb.clear()` — now correctly scoped to that domain —
+  followed by a forced re-ingest re-keys them.
+
+  **A consumer sharing one unscoped store across domains has a one-time
+  cleanup**, and it is not automatic. Those chunks were written before
+  anything stamped `domain_id` into chunk metadata, so a newly-bound
+  knowledge base counts none of them, `check_needs_ingestion` reports it
+  as never ingested, and the ingest stores the corpus a second time — the
+  ingest path appends, and no implicit clear was added to it. The old copy
+  is then invisible to every scoped read, and a *bound* `clear()` will not
+  remove it either, because it composes a tag those rows do not carry.
+  Clear them with `await kb.clear()` on an **unbound** knowledge base over
+  the same store before letting each domain re-ingest. Nothing adopts them
+  automatically and nothing should: untagged rows on a shared store belong
+  to no one domain — several wrote them and collided on the same ids,
+  which is the defect being repaired — so assigning them to whichever
+  binding looked first would invent an answer.
 
 - **`VectorMemoryConfig.backend` now defaults to `None`, not `"memory"`.**
   Same laundering as the four `.get(key, default)` sites above, in the

@@ -134,6 +134,15 @@ existed carries the domain only in that column. Only a `domain_id` the
 knowledge base configures **itself** composes, and then only because
 nothing else is enforcing it.
 
+A destination driven by a `KnowledgeIngestionManager` must **not**
+carry a binding for a different domain. The manager threads `domain_id`
+per call and that value is authoritative; a bound destination stamps its
+own domain over it while scoping the swap's `clear` away from the rows
+it is replacing, so the ingest reports success having written the wrong
+tag and cleaned up nothing. The pairing raises `ConfigurationError` at
+the first per-domain call. Point a manager at an **unbound** knowledge
+base — the multi-domain shape it exists for.
+
 Configure it explicitly for the other shape — one deliberately
 **unscoped** store whose domains are distinguished only at the chunk
 layer:
@@ -617,3 +626,36 @@ to every step of the swap:
 
 The cross-tenant isolation pin is exercised end-to-end in
 `tests/knowledge/test_rag_multi_tenant_isolation.py`.
+
+## Migrating a shared unscoped store
+
+Adopting a binding changes what `count()` means, and that is the count
+`KnowledgeIngestionService.check_needs_ingestion` reads. If several
+domains already share one **unscoped** store, the chunks in it were
+written before anything stamped `domain_id` into chunk metadata — so a
+newly-bound knowledge base counts none of them, concludes it has never
+been ingested, and ingests. The ingest path appends rather than
+replacing, so the corpus ends up stored twice, and the untagged copy is
+invisible to every scoped read.
+
+A **bound** `clear()` will not remove that copy either: it composes a tag
+those rows do not carry. Clear it through an **unbound** knowledge base
+over the same store, then let each domain re-ingest:
+
+```python
+# Once, before the newly-bound bots start up.
+sweeper = RAGKnowledgeBase.from_components(
+    None, vector_store=shared_store, embedding_provider=embedder
+)
+await sweeper.clear()          # no binding: every row, including untagged ones
+```
+
+Nothing does this automatically, and nothing should. Untagged rows on a
+shared store belong to no single domain — several domains wrote them and
+collided on the same ids, which is the defect the binding repairs — so
+adopting them into whichever binding looked first would invent an answer.
+Re-ingest is the repair.
+
+A store scoped by its own `domain_id` needs none of this: the domain is
+already on every row, in metadata or in a column, and the knowledge base
+leaves that scope to the store.

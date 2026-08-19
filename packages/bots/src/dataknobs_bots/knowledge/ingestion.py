@@ -467,6 +467,54 @@ class KnowledgeIngestionManager(DynamicCapabilityMixin):
             return BoundTenantContext(self._tenant_id, domain_id)
         return None
 
+    def _assert_destination_accepts(self, domain_id: str) -> None:
+        """Refuse a destination that claims a different domain than the call.
+
+        This manager's per-call ``domain_id`` is authoritative — that is
+        the documented contract, and it is what lets one manager hold
+        many domains in one destination. A destination
+        :class:`RAGKnowledgeBase` with a binding of its own contradicts
+        it on every surface at once: identity is sacred at the write
+        boundary, so the destination stamps *its* domain over this
+        call's and the chunks land in a scope nobody asked for; and its
+        filter-driven mutations are scoped to that binding, so the
+        swap's ``clear``, its tombstone and its rollback stop naming the
+        rows they exist to replace. The ingest then reports success
+        having written the wrong tag and cleaned up nothing.
+
+        The manager cannot reconcile that — both values are legitimate
+        and neither is derivable from the other — so the pairing is a
+        configuration error, refused at the first call that reveals it.
+        Construction is too early to detect it: which domains a manager
+        drives is not known until it is asked, and a destination bound
+        to the *one* domain it is asked for agrees with the call and is
+        left alone.
+
+        The resolved binding is the one that matters, not the configured
+        one: a destination over a domain-scoped *store* stamps that
+        domain onto every chunk just as thoroughly as a configured
+        binding does.
+
+        ``getattr``, not attribute access, for the same reason
+        :attr:`RAGKnowledgeBase._domain_id` asks its store that way: the
+        annotation says ``RAGKnowledgeBase`` but the contract this
+        manager actually uses is structural, and a delegating wrapper
+        that satisfies it is a supported destination. One that exposes
+        no binding is treated as unbound. A wrapper forwarding to a
+        *bound* inner knowledge base is therefore not caught here — it
+        still gets the per-surface WARNINGs from the inner instance,
+        which is the behaviour that predates this guard.
+        """
+        bound = getattr(self._destination, "_domain_id", None)
+        if bound is not None and bound != domain_id:
+            raise ConfigurationError(
+                f"Cannot ingest domain {domain_id!r}: the destination knowledge "
+                f"base is bound to {bound!r}, and would stamp that domain onto "
+                f"every chunk while scoping the swap's own clear away from the "
+                f"rows it replaces. Point the manager at an unbound knowledge "
+                f"base (the multi-domain shape), or drive only {bound!r}."
+            )
+
     def _scope_for_tenant(self, base: Mapping[str, Any]) -> dict[str, Any]:
         """AND-compose the bound ``tenant_id`` into a write/delete filter.
 
@@ -602,6 +650,7 @@ class KnowledgeIngestionManager(DynamicCapabilityMixin):
         Returns:
             :class:`IngestionResult` with aggregate statistics
         """
+        self._assert_destination_accepts(domain_id)
         effective_mode = self._resolve_swap_mode(clear_existing, swap_mode)
         result = IngestionResult(domain_id=domain_id)
         ctx = self._resolve_context(domain_id)
@@ -1085,6 +1134,7 @@ class KnowledgeIngestionManager(DynamicCapabilityMixin):
 
         Returns ``True`` if a reconcile was performed.
         """
+        self._assert_destination_accepts(domain_id)
         return await self._reconcile_interrupted_swap(domain_id)
 
     async def _finalize(self, domain_id: str, result: IngestionResult) -> str:
@@ -1289,6 +1339,7 @@ class KnowledgeIngestionManager(DynamicCapabilityMixin):
         # stay outside the lifecycle ``try`` below — otherwise a failure
         # inside the delegated ``ingest`` would get its terminal "error"
         # status and ``result.finish()`` written a second time here.
+        self._assert_destination_accepts(domain_id)
         ctx = self._resolve_context(domain_id)
         try:
             change = await self._source.list_changes_since(domain_id, since_version, ctx=ctx)
