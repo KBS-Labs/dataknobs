@@ -141,7 +141,7 @@ class TestTempCleanupWaitsForInFlightWork:
         # public method takes it. Pre-fix ``close()`` ignored it and went
         # straight to the unlink.
         async with db._lock:
-            with pytest.raises(asyncio.TimeoutError):
+            with pytest.raises(TimeoutError):
                 await asyncio.wait_for(db.close(), timeout=0.5)
             assert os.path.exists(db.filepath), "close() removed the file mid-operation"
 
