@@ -336,6 +336,39 @@ def test_an_unpaired_subdir_page_is_still_checked_for_a_counterpart(tree: _Tree)
     assert any("ENVIRONMENT_AWARE.md" in e for e in res.errors)
 
 
+def test_an_unpaired_entry_naming_a_file_that_is_not_there_is_reported(tree: _Tree) -> None:
+    """The subdir exemption skipped an *existence* check, not just a glob.
+
+    ``check_completeness`` derives "manifest references missing doc"
+    from the classified set, so exempting a nested path from that set
+    also exempts it from being checked to exist. The paired classes can
+    afford it -- each per-class check opens both files -- but
+    ``check_unpaired`` only globs the *other* tree for a counterpart,
+    and a name with no counterpart is exactly what it is looking for.
+    So a stale entry left by a rename, or a typo made while writing
+    one, passed all three layers: not in the top-level on-disk set, not
+    in the classified set, and no partner to find.
+    """
+    mod, pkg, site = tree
+    (site / "guides").mkdir()
+    _w(site / "guides" / "environment-aware.md", "# env\n")
+    res = mod.Result()
+    # The file is at guides/environment-aware.md; the manifest says otherwise.
+    mod.check_unpaired({"site_only": ["guides/environments.md"]}, pkg, site, res)
+    assert not res.ok
+    assert any("environments.md" in e for e in res.errors), res.errors
+
+
+def test_an_unpaired_entry_that_does_exist_stays_quiet(tree: _Tree) -> None:
+    """The existence check must not fire on the ordinary case."""
+    mod, pkg, site = tree
+    (site / "guides").mkdir()
+    _w(site / "guides" / "environment-aware.md", "# env\n")
+    res = mod.Result()
+    mod.check_unpaired({"site_only": ["guides/environment-aware.md"]}, pkg, site, res)
+    assert res.ok, res.errors
+
+
 def test_package_only_with_a_site_counterpart_is_detected(tree: _Tree) -> None:
     """``package_only`` must mean unpaired, not "I did not classify this".
 

@@ -89,13 +89,14 @@ When updating documentation for any package:
    source under `guides/`, or a site page under `guides/` as every bots
    guide is) — paired or unpaired, whatever the package's scope. So
    prefer a real pair over `package_only`/`site_only`: those two classes
-   verify only that no counterpart exists, never what the file contains.
+   verify only that the file exists and that nothing in the other tree
+   pairs with it, never what the file contains.
 
    That preference is now enforced rather than advisory. The guard fails
    an unpaired entry whose counterpart exists in the other tree, matched
    on the canonicalized basename at any depth — because a real pair
-   recorded as unpaired gets no content or existence check while still
-   reporting green. If two documents share a name but are genuinely
+   recorded as unpaired gets no content check while still reporting
+   green. If two documents share a name but are genuinely
    different, that is a `diverge` with a reason, not a `package_only`.
 
    The subdirectory rule reached the unpaired classes later than the

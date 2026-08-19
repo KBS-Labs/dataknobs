@@ -485,12 +485,28 @@ def check_unpaired(entry: dict, pkg_dir: Path, site_dir: Path, res: Result) -> N
             paired.add(pair["site"])
             paired.add(pair["package"])
 
-    for cls, names, other_dir, other_side in (
-        ("package_only", entry.get("package_only", []), site_dir, "site"),
-        ("site_only", entry.get("site_only", []), pkg_dir, "package"),
+    for cls, names, own_dir, other_dir, other_side in (
+        ("package_only", entry.get("package_only", []), pkg_dir, site_dir, "site"),
+        ("site_only", entry.get("site_only", []), site_dir, pkg_dir, "package"),
     ):
         counterparts = _counterparts(other_dir)
         for name in names:
+            # Existence is this check's job for these two classes, and only
+            # for these two. A pair's file is opened by its own per-class
+            # check, and every classified top-level name is compared against
+            # the on-disk set by ``check_completeness`` -- but a nested name
+            # is exempt from that set precisely so it can be classified at
+            # all, and nothing below asks whether it is there. The absence
+            # of a counterpart is what this function is looking for, so a
+            # name that points at nothing looks like a clean answer.
+            if not (own_dir / name).exists():
+                res.fail(
+                    f"{cls}: '{name}' is classified but no such file exists "
+                    f"({(own_dir / name).relative_to(ROOT)}). A rename leaves the "
+                    f"entry behind and a typo never had a file; either way the "
+                    f"document this was meant to cover is verified by nothing."
+                )
+                continue
             hits = [h for h in sorted(counterparts.get(_canon_name(name), [])) if h not in paired]
             if not hits:
                 continue
@@ -537,7 +553,12 @@ def check_completeness(entry: dict, pkg_dir: Path, site_dir: Path, res: Result) 
         # or a site page under ``guides/`` (where every bots guide lives).
         # Under the default non-recursive scope such a file is not part of
         # the completeness set -- its existence, and its class's invariant,
-        # are enforced by the per-class check instead.
+        # are enforced by the per-class check instead. For the paired
+        # classes that is free: each one opens both files. For the unpaired
+        # ones it is not, because ``check_unpaired`` asks only whether a
+        # counterpart exists, so it carries an existence assertion of its
+        # own -- added when this exemption was extended to them, since the
+        # exemption is what removes the completeness pass's version of it.
         #
         # Both sides must apply that rule. Exempting only the package side
         # made a subdirectory site page inexpressible as a pair -- it would
