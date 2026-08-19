@@ -627,6 +627,36 @@ to every step of the swap:
 The cross-tenant isolation pin is exercised end-to-end in
 `tests/knowledge/test_rag_multi_tenant_isolation.py`.
 
+## Rebinding a knowledge base's store
+
+`vector_store` stays readable and rebindable, but the binding travels
+with it: a knowledge base with no `domain_id` of its own adopts the
+store's, and that value folds into every chunk id. So replacing a
+scoped store with a differently scoped one would repoint the id
+namespace under chunks already written — `count()` stops seeing them,
+the skip-if-populated gate re-ingests over rows it cannot see, and
+`clear()` cannot reach them, all without a single call failing.
+
+That assignment now raises `ConfigurationError`. There is no correct
+continuation once the ids are on disk, and a warning would leave the
+corpus split in two. A differently scoped store means a different
+knowledge base:
+
+```python
+kb.vector_store = another_store_scoped_to("bot-b")   # ConfigurationError
+```
+
+Two rebinds are unaffected. Construction is not a swap — there are no
+ids yet, whatever the store's scope. Neither is a rebind on a knowledge
+base whose own `domain_id` pins the binding, since the effective domain
+cannot move whatever the store says.
+
+Ownership moves with the object in both directions. A store or provider
+handed in from outside is caller-owned, so `close()` leaves it alone —
+that now includes one injected through `set_provider()`, which
+previously left the knowledge base believing it still owned the
+provider it had just replaced.
+
 ## Migrating a shared unscoped store
 
 Adopting a binding changes what `count()` means, and that is the count

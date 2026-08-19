@@ -292,6 +292,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Replacing a knowledge base's vector store no longer orphans the chunks
+  it already wrote.** `RAGKnowledgeBase.vector_store` was a plain public
+  attribute, and a knowledge base without its own `domain_id` takes the
+  binding from the store — a value that folds into every chunk id. So
+  assigning a differently scoped store silently repointed the id namespace:
+  `count()` stopped seeing the existing corpus, the skip-if-populated gate
+  re-ingested over rows it could no longer see, and `clear()` could not
+  reach them. Nothing raised. The attribute is now a property whose setter
+  refuses a swap that would move the effective binding, because once the
+  ids are on disk there is no correct continuation and a warning would
+  leave the corpus split in two. Construction is not a swap, and neither is
+  a rebind on a knowledge base whose own `domain_id` pins the binding.
+
+- **`set_provider()` no longer inverts the close-ownership gate.**
+  `RAGKnowledgeBase`, `VectorMemory` and `SummaryMemory` replaced their
+  provider without clearing the `_owns_*` flag that decides what `close()`
+  tears down. The result was exactly backwards: the provider the caller
+  injected got closed, while the config-built one it replaced was never
+  closed at all — a leak and a use-after-close from one call. An injected
+  provider is now caller-owned at every one of these sites, matching
+  `QueryTransformer.set_provider`, and the contract is stated on
+  `BaseMemory.set_provider` so an override cannot miss it. Rebinding
+  `vector_store` hands ownership back the same way, and warns that the
+  outgoing store — which a synchronous setter cannot await — is the
+  caller's to close.
+
 - **Two knowledge bases over one vector store no longer overwrite each
   other's chunks.** `domain_id` folds into the chunk-id prefix, but nothing
   supplied the value unless a `KnowledgeIngestionManager` threaded it per

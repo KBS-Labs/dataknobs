@@ -90,6 +90,13 @@ class Memory(ABC):
         returns ``False`` (role not recognized).  Concrete subclasses
         override to accept their known roles.
 
+        An override that accepts a role MUST also clear the ownership
+        flag guarding that collaborator in ``close()``.  The provider
+        arrives from the caller, so this instance does not own it;
+        leaving the flag set inverts the gate exactly — the caller's
+        provider is torn down while the config-built one it replaced is
+        never closed at all.
+
         Args:
             role: Provider role name (e.g. ``PROVIDER_ROLE_MEMORY_EMBEDDING``).
             provider: Replacement provider instance.

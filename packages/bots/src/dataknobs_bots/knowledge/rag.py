@@ -20,6 +20,7 @@ from dataknobs_common.capabilities import (
     CapabilityLike,
     CapabilityMixin,
 )
+from dataknobs_common.exceptions import ConfigurationError
 from dataknobs_common.lifecycle import close_if_owned
 from dataknobs_common.metadata import enforce_immutable_keys
 from dataknobs_common.structured_config import StructuredConfigConsumer
@@ -169,7 +170,9 @@ class RAGKnowledgeBase(
             ContextFormatter(formatter_config) if formatter_config else ContextFormatter()
         )
 
-        self.vector_store: Any = None
+        # Backing field, set directly: the public name is a property
+        # whose setter guards a *swap*, and this is the initial bind.
+        self._vector_store: Any = None
         self.embedding_provider: Any = None
         # Ownership of the cascade-closed collaborators. Bound by
         # :meth:`_ainit` (config-driven build owns what it creates → True)
@@ -197,6 +200,80 @@ class RAGKnowledgeBase(
         # that recurs per chunk or per read is reported once per
         # instance rather than once per row.
         self._identity_warnings: set[str] = set()
+
+    @property
+    def vector_store(self) -> Any:
+        """The bound vector store.
+
+        Readable and rebindable as it has always been; the setter is
+        what makes rebinding safe. See :meth:`vector_store.setter`.
+        """
+        return self._vector_store
+
+    @vector_store.setter
+    def vector_store(self, store: Any) -> None:
+        """Rebind the store, refusing a swap that orphans written ids.
+
+        The store is not an interchangeable dependency here: when the
+        knowledge base has no ``domain_id`` of its own it adopts the
+        store's, and that value folds into every chunk id
+        (:attr:`_CHUNK_ID_PREFIX_KEYS`). So a swap to a differently
+        scoped store silently repoints the id namespace — every chunk
+        already written sits under a prefix this instance will never
+        compose again. ``count()`` stops seeing them, the
+        skip-if-populated gate re-ingests over rows it cannot see, and
+        ``clear()`` cannot reach them. No call fails; the corpus simply
+        splits in two.
+
+        Refused rather than warned because there is no correct
+        continuation: the ids are already on disk, this class cannot
+        rewrite them, and a warning would leave the split in place. A
+        differently scoped store means a different knowledge base.
+
+        Two cases are *not* swaps and pass through untouched: the
+        initial bind (:meth:`_ainit` / :meth:`_adopt_components`, where
+        no ids exist yet), and any rebind on an instance whose
+        ``config.domain_id`` pins the binding — pinned, the effective
+        domain cannot move whatever the store says, so nothing is
+        orphaned. The store-disagrees-with-config case that leaves is
+        already reported by :attr:`_domain_id`.
+
+        Ownership transfers with the object. The replacement arrived
+        from outside, so this instance does not own it and
+        :meth:`close` must not tear it down — the same handoff
+        ``QueryTransformer.set_provider`` performs. The store being
+        replaced is the caller's to close if it was ours; that cannot
+        happen here, since a setter has no ``await``, so it is
+        reported.
+        """
+        current = getattr(self, "_vector_store", None)
+        if current is not None and store is not current:
+            self._refuse_orphaning_swap(current, store)
+            if self._owns_vector_store:
+                logger.warning(
+                    "Replacing a vector store this knowledge base built and owns. "
+                    "The outgoing store is not closed by this assignment and will "
+                    "not be closed by close() — close it yourself, or inject the "
+                    "store via from_components() so ownership never moves.",
+                )
+            self._owns_vector_store = False
+        self._vector_store = store
+
+    def _refuse_orphaning_swap(self, current: Any, store: Any) -> None:
+        """Raise if replacing ``current`` with ``store`` moves the binding."""
+        if self.config.domain_id is not None:
+            return
+        before = getattr(current, "domain_id", None)
+        after = getattr(store, "domain_id", None)
+        if before == after:
+            return
+        raise ConfigurationError(
+            f"Cannot replace a vector store scoped to {before!r} with one scoped "
+            f"to {after!r}: this knowledge base takes its domain from the store, "
+            f"so every chunk id already written folds {before!r} into its prefix "
+            f"and would become unreachable. Build a separate knowledge base for "
+            f"{after!r}, or set domain_id on this one to pin the binding."
+        )
 
     @property
     def _domain_id(self) -> str | None:
@@ -2076,11 +2153,20 @@ class RAGKnowledgeBase(
         return {}
 
     def set_provider(self, role: str, provider: Any) -> bool:
-        """Replace the embedding provider if the role matches."""
+        """Replace the embedding provider if the role matches.
+
+        The replacement is caller-owned: ``close()`` will not tear it
+        down, and the provider it replaces is the caller's to close.
+        """
         from dataknobs_bots.bot.base import PROVIDER_ROLE_KB_EMBEDDING
 
         if role == PROVIDER_ROLE_KB_EMBEDDING:
             self.embedding_provider = provider
+            # The replacement came from the caller, so it is not ours to
+            # close. Leaving the flag set inverted the ownership gate
+            # exactly: close() tore down the injected provider while the
+            # config-built one it replaced was never closed at all.
+            self._owns_embedding_provider = False
             return True
         return False
 
