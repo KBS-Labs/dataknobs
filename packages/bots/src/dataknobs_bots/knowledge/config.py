@@ -56,6 +56,14 @@ class RAGKnowledgeBaseConfig(StructuredConfig):
             projected onto ``FormatterConfig``).
         documents_path: Optional directory to ingest on async warmup.
         document_pattern: Glob pattern used when ``documents_path`` is set.
+        tenant_id: Optional tenant binding (see the field comment below).
+        domain_id: Optional domain binding (see the field comment below).
+            Defaults to the bound vector store's own ``domain_id`` when
+            left unset, so a consumer who scoped the store does not have
+            to say it twice.
+
+    ``embedding_base_url`` is accepted as a legacy alias for
+    ``api_base`` — see :meth:`_normalize_dict`.
     """
 
     # Adopt polymorphic-section validation for the nested ``vector_store``
@@ -99,6 +107,35 @@ class RAGKnowledgeBaseConfig(StructuredConfig):
     # across tenants by passing the explicit key). ``None`` (default) is
     # the single-tenant byte-identical posture.
     tenant_id: str | None = None
+
+    # The domain counterpart of ``tenant_id``, with the same write and
+    # read precedence, and one addition: when this is unset the binding
+    # falls back to the bound vector store's ``domain_id``. The store
+    # already carries that value to scope its own reads and to stamp
+    # rows on write, so deriving it is what keeps the chunk-id namespace
+    # and the row's own tag from ever disagreeing — and it means a
+    # consumer who scoped the store gets namespaced chunk ids without
+    # configuring the same value twice. Set this explicitly for the
+    # other shape: one deliberately unscoped store whose domains are
+    # distinguished only at the chunk layer. Resolved on the knowledge
+    # base as ``RAGKnowledgeBase._domain_id``, not here, because the
+    # store is not bound until construction finishes.
+    domain_id: str | None = None
+
+    @classmethod
+    def _normalize_dict(cls, raw: dict[str, Any]) -> dict[str, Any]:
+        """Accept ``embedding_base_url`` as a legacy alias for ``api_base``.
+
+        The key is documented nowhere and matches no field, so it used
+        to reach ``from_dict`` and be discarded in silence — a consumer
+        who set it got the default endpoint and no indication why.
+        Aliasing costs three lines and turns that into working
+        behaviour. ``api_base`` wins when both are present, so the
+        canonical key is never shadowed by the legacy one.
+        """
+        if "embedding_base_url" in raw and raw.get("api_base") is None:
+            raw["api_base"] = raw.pop("embedding_base_url")
+        return raw
 
     # Redacted from ``repr`` by the StructuredConfig base. A secret nested
     # inside a raw mapping section (``embedding``'s ``api_key``,

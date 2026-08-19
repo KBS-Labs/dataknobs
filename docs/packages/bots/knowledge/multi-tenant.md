@@ -94,6 +94,60 @@ wins on collision with caller-supplied `extra_metadata={"tenant_id":
 threat models on the two sides and is documented on
 `_resolve_read_filter`.
 
+### Bound-domain KB
+
+`domain_id` is the second binding, with the same write and read
+precedence as `tenant_id` and one addition: when the knowledge base
+does not configure it, the binding falls back to the **bound vector
+store's** own `domain_id`.
+
+```python
+kb = await RAGKnowledgeBase.from_config({
+    "vector_store": {..., "domain_id": "bot-a"},
+    "embedding": {...},
+    # No knowledge-base-level domain_id: the store's "bot-a" is adopted.
+})
+
+assert kb._domain_id == "bot-a"
+```
+
+That fallback is what makes a domain-scoped store safe to share.
+`domain_id` folds into the chunk-id prefix, so without a binding every
+knowledge base over a shared store derives its ids from the source
+filename alone and two domains that both hold an `overview.md` collide
+on `overview_0`. With it they are `bot-a\x1foverview\x1f0` and
+`bot-b\x1foverview\x1f0`, and both survive. Deriving the value rather
+than requiring a second copy of it also means the chunk-id namespace
+cannot disagree with the `domain_id` the store itself stamps on the
+row.
+
+Configure it explicitly for the other shape — one deliberately
+**unscoped** store whose domains are distinguished only at the chunk
+layer:
+
+```python
+kb = await RAGKnowledgeBase.from_config({
+    "vector_store": {...},          # no domain_id
+    "embedding": {...},
+    "domain_id": "bot-a",
+})
+```
+
+An explicit `domain_id` wins over the store's. Setting it to something
+the store is *not* scoped to is a misconfiguration with an invisible
+consequence — the chunk is written carrying your domain while the
+store's own read filter requires its own, so it is stored and can
+never be read back — and is reported at WARNING rather than left
+silent.
+
+**Do not bind a `domain_id` on a knowledge base driven by a
+multi-domain `KnowledgeIngestionManager`.** The manager supplies
+`domain_id` per ingest call, and a bound value wins over it at the
+write boundary, so every domain's chunks would land under the bound
+one. The two do not meet in a correct configuration: a multi-domain
+manager's store holds many domains and is therefore unscoped, so the
+derived binding is `None`.
+
 ### Per-call `extra_metadata` (consumer-driven routing)
 
 When a single `RAGKnowledgeBase` and `KnowledgeIngestionManager`
@@ -118,6 +172,43 @@ The `tenant_id=` kwarg is a convenience shortcut for
 `extra_metadata={"tenant_id": tenant_id}`; both routes converge on
 the same auto-derived-wins composition.
 
+## What a binding scopes
+
+A binding — `tenant_id`, `domain_id`, or both — composes onto every
+surface that touches the store by filter, not only `query`:
+
+| Surface | Precedence | Effect |
+|---|---|---|
+| `query` / `hybrid_query` | explicit-filter-wins | Reads only the bound scope unless a filter names another |
+| `count` | explicit-filter-wins | Counts only the bound scope, including the `_stale` subtraction |
+| `clear` | **bound-wins** | An unfiltered clear removes only the bound scope's rows |
+| `update_metadata_where` | **bound-wins** | Re-tags only the bound scope's rows |
+| writes (`load_*`, `ingest_*`) | **bound-wins** | Stamps the binding into chunk metadata and the chunk-id prefix |
+
+The read/write inversion is deliberate. Reading across scopes is an
+admin convenience, so an explicit filter overrides the binding.
+*Deleting* across them from a knowledge base bound to one of them is
+data loss, so there the binding wins and a filter can only narrow
+further. Use an **unbound** knowledge base to act across scopes on
+purpose — that is the escape hatch, and `clear()` on one still means
+every row in the store.
+
+`count` being scoped matters beyond consistency: it is the count
+`KnowledgeIngestionService.check_needs_ingestion` reads. Unscoped, a
+second tenant over a store the first had populated was told it was
+already populated and never received any chunks of its own.
+
+```python
+kb_a = await RAGKnowledgeBase.from_config({..., "tenant_id": "acme"})
+kb_b = await RAGKnowledgeBase.from_config({..., "tenant_id": "umbrella"})
+# ... sharing one physical store, only acme has ingested ...
+
+await kb_b.count()                       # 0 — not acme's rows
+await service.check_needs_ingestion(kb_b)  # True — umbrella still needs its own
+
+await kb_b.clear()                       # removes umbrella's rows only
+```
+
 ## Reserved vs. Consumer-Extensible Metadata Keys
 
 The KB owns three identity tags at the write boundary:
@@ -130,8 +221,9 @@ RAGKnowledgeBase._RESERVED_METADATA_KEYS == frozenset({
 })
 ```
 
-These tags are auto-derived from the bound `tenant_id` / per-call
-`domain_id` / TOMBSTONE-swap generation token. A caller-supplied
+These tags are auto-derived from the bound `tenant_id`, the bound or
+per-call `domain_id`, and the TOMBSTONE-swap generation token. A
+caller-supplied
 `extra_metadata` entry with any of these keys is **shadowed** by the
 auto-derived value — identity is sacred at the write boundary, and a
 caller cannot silently re-tag chunks for another tenant or domain
@@ -394,7 +486,8 @@ Advertisement is **structural** ("the class HAS the chunk-layer code
 path"), not activation-state — an unbound `RAGKnowledgeBase` still
 advertises `TENANT_SCOPED_CHUNKS` because the class implements the
 code path; whether a specific instance is currently tenant-scoping is
-the natural `kb._tenant_id is not None` binding check.
+the natural `kb._tenant_id is not None or kb._domain_id is not None`
+binding check.
 
 ### Tenancy-family three-layer split
 

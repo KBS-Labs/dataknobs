@@ -684,6 +684,42 @@ class MyBotManager(CachingRegistryManager[MyBot], AutoIngestionMixin):
             await self._ensure_knowledge_base_ingested(domain_id, config)
 ```
 
+#### What the mixin forwards to the ingest knowledge base
+
+`_ensure_knowledge_base_ingested` builds a temporary
+`RAGKnowledgeBase` for the ingest, from the same `knowledge_base`
+section the bot's own knowledge base is built from. It forwards that
+section **whole**, minus three keys it consumes itself:
+
+| Excluded key | Why |
+|---|---|
+| `enabled` | The gate the mixin reads to decide whether to ingest at all |
+| `documents_path` | `RAGKnowledgeBase._ainit` ingests this at *construction*, which would run before the skip-if-populated check and ignore `force`. The ingestion service reads it from the config directly, which is the path that honours both |
+| `document_pattern` | Travels with `documents_path` |
+
+Everything else reaches the knowledge base, including `tenant_id`,
+`domain_id`, the nested `embedding` section, `chunking`, `merger` and
+`formatter`. Forwarding whole is what keeps the ingest knowledge base
+and the bot's own from disagreeing: a projection that enumerated what
+to *keep* silently dropped anything it had not thought of, and a
+dropped `tenant_id` meant the ingest wrote untagged chunks that the
+bot's tenant-scoped reads could never match.
+
+The registration's own `domain_id` becomes the knowledge base's
+binding when the config does not set one, so an adopter sharing one
+vector store across bots gets namespaced chunk ids with no config
+change. The full precedence is:
+
+```
+knowledge_base["domain_id"]  ->  the registration's domain_id  ->  vector_store["domain_id"]
+```
+
+The Ollama embedder defaults (`ollama` / `nomic-embed-text`) still
+apply, but only when neither a nested `embedding` section nor a flat
+`embedding_provider` is configured.
+
+`embedding_base_url` is accepted as a legacy alias for `api_base`.
+
 ### Service Methods
 
 | Method | Description |
@@ -699,6 +735,8 @@ class MyBotManager(CachingRegistryManager[MyBot], AutoIngestionMixin):
 | `enabled` | bool | False | Whether KB is enabled |
 | `documents_path` | str | None | Path to documents directory |
 | `document_pattern` | str | "**/*.md" | Glob pattern for files |
+| `tenant_id` | str | None | Tenant binding for the knowledge base |
+| `domain_id` | str | None | Domain binding; defaults to the vector store's own `domain_id` |
 
 ### Result Types
 

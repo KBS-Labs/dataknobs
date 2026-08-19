@@ -1474,6 +1474,57 @@ knowledge_base:
   embedding_model: nomic-embed-text
 ```
 
+### Identity Bindings
+
+`tenant_id` and `domain_id` bind the knowledge base to one scope.
+Every write stamps the binding into chunk metadata and into the
+chunk-id prefix, and every read, `count`, `clear` and
+`update_metadata_where` composes it onto the store filter — so two
+knowledge bases over one physical vector store stay isolated.
+
+```yaml
+knowledge_base:
+  enabled: true
+  documents_path: ./docs
+  tenant_id: acme
+  vector_store:
+    backend: faiss
+    dimension: 384
+    collection: knowledge
+    domain_id: bot-a        # the knowledge base adopts this
+```
+
+`domain_id` is the one binding with a default: left unset on the
+knowledge base, it falls back to the **vector store's** own
+`domain_id`, so a consumer who scoped the store does not have to
+configure the same value twice. Set it at the knowledge-base level
+only for a deliberately unscoped store whose domains are
+distinguished at the chunk layer; setting it to something a scoped
+store disagrees with is reported at WARNING, because the resulting
+chunks are written and can never be read back.
+
+See the [multi-tenant knowledge base guide](../knowledge/multi-tenant.md)
+for the full precedence rules.
+
+### Embedder Endpoint
+
+The embedder endpoint is `api_base`, either at the top level or inside
+the nested `embedding` section:
+
+```yaml
+knowledge_base:
+  embedding:
+    provider: ollama
+    model: nomic-embed-text
+    api_base: http://embedder.internal:11434
+```
+
+`embedding_base_url` is accepted as a legacy alias for a top-level
+`api_base`, and a top-level `api_base` wins when both are present.
+Prefer the nested form regardless: when an `embedding` section is
+configured, the embedder reads its endpoint, key and dimensions from
+inside it and the top-level passthroughs are not consulted at all.
+
 ### Context Injection Control
 
 By default, when the knowledge base is enabled, search results are automatically

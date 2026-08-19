@@ -292,6 +292,72 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Two knowledge bases over one vector store no longer overwrite each
+  other's chunks.** `domain_id` folds into the chunk-id prefix, but nothing
+  supplied the value unless a `KnowledgeIngestionManager` threaded it per
+  call — so a knowledge base built from config derived every id from the
+  source filename alone, and two domains that each held an `overview.md`
+  both produced `overview_0`. The second ingest took the first's row, or,
+  against a vector store that refuses a write capturing another domain's
+  row, failed every file while reporting no error and zero files.
+
+  `RAGKnowledgeBase` now carries a `domain_id` binding beside `tenant_id`,
+  and resolves it from the **bound vector store** when the config does not
+  set one. The store already holds that value to scope its own reads and to
+  tag rows on write, so deriving it means a consumer who scoped the store
+  gets namespaced chunk ids without configuring the same value twice, and
+  the chunk-id namespace cannot disagree with the tag on the row. An
+  explicit `domain_id` still wins — that is the shape for a deliberately
+  unscoped store — and a binding that contradicts a scoped store is
+  reported at WARNING, because such chunks are written and can never be
+  read back.
+
+- **A bound `tenant_id` now scopes `count()`, `clear()` and
+  `update_metadata_where()`.** It scoped `query` and `hybrid_query` and
+  nothing else, so on a shared store `clear()` on a knowledge base bound to
+  one tenant removed every other tenant's rows — data destruction from a
+  call whose documented warning was only about passing no filter. The two
+  filter-driven mutations take **bound-wins** precedence, so a filter can
+  narrow within the scope but not widen past it; reads keep
+  explicit-filter-wins, so admin tooling can still read across scopes. An
+  **unbound** knowledge base is unchanged and is the supported way to act
+  across scopes deliberately — `clear()` on one still means every row.
+
+  `count()` being unscoped had a second consequence: it is the count
+  `KnowledgeIngestionService.check_needs_ingestion` reads, so a second
+  tenant over a store the first had populated was told it was already
+  populated and skipped forever, never receiving any chunks of its own.
+
+- **`AutoIngestionMixin` now forwards the whole knowledge-base config to the
+  ingest knowledge base.** It hand-copied six keys, while the bot's own
+  knowledge base is built from the entire section — so the two disagreed
+  about everything the list did not name. `tenant_id` was one: the ingest
+  wrote untagged chunks that the bot's tenant-scoped reads could never
+  match, a total retrieval blackout reported as a successful ingest. A
+  nested `embedding` section was another, silently replaced by the
+  hard-coded Ollama defaults, which lands ingest and query in different
+  vector spaces. Three keys are still excluded and each says why in the
+  code; `documents_path` in particular must not reach the knowledge base,
+  because construction would ingest it ahead of the skip-if-populated check
+  and ignore `force`. The registration's own `domain_id` becomes the
+  knowledge base's binding when the config does not set one, so an adopter
+  sharing a store across bots is correct with no config change.
+
+- **`embedding_base_url` works.** The mixin read the key and forwarded it
+  under a name no config field carries, so it was discarded in silence and
+  the endpoint it named was never used. It is now a legacy alias for
+  `api_base`; `api_base` wins when both are present.
+
+  **Migration — chunk ids change for a knowledge base over a domain-scoped
+  store**, from `overview_0` to `bot-a\x1foverview\x1f0`. A knowledge base
+  with no binding over an unscoped store is byte-identical to before.
+  Consumers already sharing a store were losing rows, so the re-key is the
+  repair and there is nothing to do. A consumer at one domain per store was
+  already correct and will write new-id rows alongside the old ones on a
+  deliberate `force=True` re-ingest; `await kb.clear()` — now correctly
+  scoped to that domain — followed by a forced re-ingest re-keys them. No
+  implicit clear was added to the ingest path.
+
 - **`VectorMemoryConfig.backend` now defaults to `None`, not `"memory"`.**
   Same laundering as the four `.get(key, default)` sites above, in the
   typed-dataclass spelling: the default was written into the dict handed to
