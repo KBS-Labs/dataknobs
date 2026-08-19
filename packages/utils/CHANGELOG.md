@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+## v2.0.1 - 2026-08-19
+
 ### Fixed
 
 - **`upload` rejected a DataFrame with default column labels, and said only

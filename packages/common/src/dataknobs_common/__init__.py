@@ -280,7 +280,7 @@ from dataknobs_common.testing import (
     requires_redis,
 )
 
-__version__ = "2.0.0"
+__version__ = "3.0.0"
 
 __all__ = [
     # Version

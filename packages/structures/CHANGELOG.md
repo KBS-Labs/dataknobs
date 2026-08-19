@@ -13,6 +13,15 @@ package, which for most of them was nothing but the version number.
 
 ### Changed
 
+- This package's tests joined the linted set at a ceiling of zero, alongside
+  the sources that graduated in v1.0.16. No source change and no
+  consumer-visible change, so this rides along with the next release that has
+  one.
+
+## v1.0.16 - 2026-08-11
+
+### Changed
+
 - **This package's sources are now checked under strict typing with a ceiling
   of zero findings**, graduating from the transitional tier it shared with the
   packages still carrying waivers. The single finding standing in the way was
@@ -29,6 +38,12 @@ package, which for most of them was nothing but the version number.
   `requires-python` moved to 3.12 in v1.0.6. The two disagreed, and the pin was
   the stale one; the workspace-level version governs. No consumer-visible
   change — `requires-python` is what an installer reads.
+
+### Added
+
+- This changelog. Entries for v1.0.15 and earlier were reconstructed from the
+  release tags at the same time, which is what the note above the first entry
+  records.
 
 ## v1.0.15 - 2026-07-29
 

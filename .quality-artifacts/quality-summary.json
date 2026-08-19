@@ -1,12 +1,10 @@
 {
-  "timestamp": "2026-08-19T04:59:21Z",
-  "overall_status": "PASS",
+  "timestamp": "2026-08-19T14:46:51Z",
+  "overall_status": "PASS_WITH_SKIPS",
   "run_mode": "pr",
   "environment": "host",
-  "packages": "bots",
-  "tested_packages": [
-    "bots"
-  ],
+  "packages": "all",
+  "tested_packages": [],
   "coverage_percent": null,
   "package_hashes": {
     "bots": "131a75a8c418e3d125b264cfecae42ee2d6a400183eb940284561e60b33cd09c",
@@ -24,9 +22,9 @@
   "workspace_hashes": {
     "toolchain": "aedb70251c3f4bc28b76a77ecb2457097cd245ef7dbbbf63c29e84b145923e47",
     "workspace_tests": "df3eb622d5c6525cda87a651a47359dc243f7809afa573d9f8a6ebe323058903",
-    "docs": "6557241cba2f99baafb63fc53d832b3a1c3cda42c392f5f462115213def0fd13"
+    "docs": "2e9ebbf1c6b0176d06fbece01030674a372555fca4a23680142194acda6881f7"
   },
-  "total_seconds": 135,
+  "total_seconds": 34,
   "checks": {
     "workflow_lint": {
       "status": "pass",
@@ -38,7 +36,7 @@
       "status": "pass",
       "exit_code": 0,
       "tool": "lint-shell.sh",
-      "duration_seconds": 4
+      "duration_seconds": 5
     },
     "contract": {
       "status": "pass",
@@ -49,16 +47,16 @@
     "validation": {
       "status": "pass",
       "exit_code": 0,
-      "skipped": false,
+      "skipped": true,
       "tool": "validate.sh",
-      "duration_seconds": 27
+      "duration_seconds": null
     },
     "documentation": {
       "status": "pass",
       "exit_code": 0,
       "skipped": false,
       "tool": "mkdocs",
-      "duration_seconds": 25
+      "duration_seconds": 24
     },
     "documentation_versions": {
       "status": "pass",
@@ -77,15 +75,15 @@
     "unit_tests": {
       "status": "pass",
       "exit_code": 0,
-      "skipped": false,
-      "duration_seconds": 64,
-      "workspace_guards_seconds": 44
+      "skipped": true,
+      "duration_seconds": null,
+      "workspace_guards_seconds": null
     },
     "integration_tests": {
       "status": "pass",
       "exit_code": 0,
-      "skipped": false,
-      "duration_seconds": 9
+      "skipped": true,
+      "duration_seconds": null
     }
   }
 }
