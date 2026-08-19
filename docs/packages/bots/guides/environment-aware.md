@@ -239,6 +239,7 @@ code, and every entry point here that resolves a config exposes them:
 |---|---|---|
 | `DynaBot.from_environment_aware_config` | lenient — warn and degrade | `strict_resources=` on the call |
 | `BotRegistry` / `InMemoryBotRegistry` | lenient | `strict_resources=` on the constructor |
+| `create_memory_registry` | lenient | `strict_resources=`, forwarded to `InMemoryBotRegistry` |
 | `BotManager` (deprecated) | lenient | `strict_resources=` on the constructor |
 | `ConfigCachingManager` | **strict — raises** | `strict_resources=` on the constructor |
 | `BotResourceResolver` | **strict — raises** | not configurable |

@@ -680,55 +680,36 @@ class InMemoryBotRegistry(BotRegistry):
         ```
     """
 
-    def __init__(
-        self,
-        environment: EnvironmentConfig | str | None = None,
-        env_dir: str | Path = "config/environments",
-        cache_ttl: int = 300,
-        max_cache_size: int = 1000,
-        validate_on_register: bool = True,
-        config_key: str = "bot",
-        *,
-        strict_resources: bool | None = None,
-    ):
+    def __init__(self, **kwargs: Any) -> None:
         """Initialize in-memory bot registry.
 
-        Args:
-            environment: Environment name or EnvironmentConfig for
-                $resource resolution. If None, configs are used as-is
-                without environment resolution.
-            env_dir: Directory containing environment config files.
-                Only used if environment is a string name.
-            cache_ttl: Cache time-to-live in seconds (default: 300)
-            max_cache_size: Maximum cached bots (default: 1000)
-            validate_on_register: If True, validate config portability
-                when registering (default: True)
-            config_key: Key within config containing bot configuration.
-                Defaults to "bot". Used during environment resolution.
-            strict_resources: Whether a `$resource` reference naming a
-                resource the environment does not define raises rather
-                than degrading to the reference's inline defaults. `None`
-                (default) defers to the environment's `strict_resources`
-                setting, then to `False`, so leaving it unset changes
-                nothing. A reference's own `$required` overrides it.
+        Accepts every keyword :class:`BotRegistry` accepts except
+        ``backend``, which is fixed to :class:`InMemoryBackend`.
 
-                Registry-wide rather than per-call because `get_bot`
-                caches: a policy passed to one call would silently decide
-                what every later caller gets back, and the argument that
-                produced the cached bot would not be visible to them. A
-                caller who wants the decision per resolution has
-                `DynaBot.from_environment_aware_config` directly.
+        Forwarded rather than re-declared. This signature used to be a
+        second copy of the base's, and :func:`create_memory_registry`
+        held a third, so a parameter added to the base reached the other
+        two only if someone remembered to add it twice more.
+        ``strict_resources`` reached one of them, which left the
+        factory -- exported, environment-resolving, and the form this
+        class's own docstring recommends -- with no way to say that a
+        binding was mandatory.
+
+        Args:
+            **kwargs: Forwarded to :class:`BotRegistry`. See its
+                docstring for the full set; ``backend`` is rejected.
+
+        Raises:
+            TypeError: If ``backend`` is passed, or if any argument is
+                passed positionally. The base takes ``backend`` first,
+                so a positional here would have silently landed on it.
         """
-        super().__init__(
-            backend=InMemoryBackend(),
-            environment=environment,
-            env_dir=env_dir,
-            cache_ttl=cache_ttl,
-            max_cache_size=max_cache_size,
-            validate_on_register=validate_on_register,
-            config_key=config_key,
-            strict_resources=strict_resources,
-        )
+        if "backend" in kwargs:
+            raise TypeError(
+                "InMemoryBotRegistry always uses in-memory storage and takes no "
+                "'backend'; use BotRegistry(backend=...) for a pluggable one."
+            )
+        super().__init__(backend=InMemoryBackend(), **kwargs)
 
     async def clear(self) -> None:
         """Clear all registrations and cached bots.
@@ -756,27 +737,22 @@ class InMemoryBotRegistry(BotRegistry):
         return f"InMemoryBotRegistry(cached={len(self._cache)}{env})"
 
 
-def create_memory_registry(
-    environment: EnvironmentConfig | str | None = None,
-    env_dir: str | Path = "config/environments",
-    cache_ttl: int = 300,
-    max_cache_size: int = 1000,
-    validate_on_register: bool = True,
-    config_key: str = "bot",
-) -> InMemoryBotRegistry:
+def create_memory_registry(**kwargs: Any) -> InMemoryBotRegistry:
     """Create an InMemoryBotRegistry.
 
     Convenience factory for creating in-memory registries suitable for
     testing, CLIs, or single-instance deployments.
 
+    Every keyword is forwarded verbatim to :class:`InMemoryBotRegistry`
+    and through it to :class:`BotRegistry`, so this stays in step with
+    them by construction. It used to re-declare their parameter list,
+    which is how it came to be the one environment-resolving entry point
+    in the package with no way to require a `$resource` binding.
+
     Args:
-        environment: Environment name or EnvironmentConfig for
-            $resource resolution. If None, configs are used as-is.
-        env_dir: Directory containing environment config files.
-        cache_ttl: Cache time-to-live in seconds (default: 300)
-        max_cache_size: Maximum cached bots (default: 1000)
-        validate_on_register: If True, validate config portability
-        config_key: Key within config containing bot configuration
+        **kwargs: Forwarded to :class:`InMemoryBotRegistry`. See
+            :class:`BotRegistry` for the full set; ``backend`` is
+            rejected, as this registry is always in-memory.
 
     Returns:
         InMemoryBotRegistry instance
@@ -790,13 +766,11 @@ def create_memory_registry(
 
         await registry.register("test-bot", {"llm": {"provider": "echo"}})
         bot = await registry.get_bot("test-bot")
+
+        # Refuse to start when the environment does not define a binding.
+        registry = create_memory_registry(
+            environment="production", strict_resources=True
+        )
         ```
     """
-    return InMemoryBotRegistry(
-        environment=environment,
-        env_dir=env_dir,
-        cache_ttl=cache_ttl,
-        max_cache_size=max_cache_size,
-        validate_on_register=validate_on_register,
-        config_key=config_key,
-    )
+    return InMemoryBotRegistry(**kwargs)

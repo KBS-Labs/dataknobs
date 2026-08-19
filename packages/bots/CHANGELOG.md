@@ -221,7 +221,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   deployment that could edit neither had no switch at all.
 
   It is now on `DynaBot.from_environment_aware_config` (per call),
-  `BotRegistry`, `InMemoryBotRegistry` and `BotManager` (per instance).
+  `BotRegistry`, `InMemoryBotRegistry` and `BotManager` (per instance), and
+  on the `create_memory_registry` factory, which forwards it.
   Registry-wide rather than per-call on the registries because both cache: an
   argument passed to one `get_bot` would silently decide what every later
   caller received. `None` is the default everywhere and defers exactly as
@@ -240,6 +241,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   failure.
 
 ### Changed
+
+- **`InMemoryBotRegistry` and `create_memory_registry` forward keywords to
+  `BotRegistry` instead of re-declaring its parameter list.** All three held
+  a copy of the same seven parameters, so widening the base reached the other
+  two only by hand. **Breaking** for a caller that passes them positionally:
+  both now take keyword arguments only. That is deliberate rather than
+  incidental — `BotRegistry` takes `backend` first while the subclass did
+  not, so inheriting the signature would have made a positional first
+  argument land on `backend` and mean something else entirely, silently.
+  Every documented example already uses keywords.
+
+  `InMemoryBotRegistry` still refuses a `backend`, now with an error that
+  says why rather than an unexpected-keyword message; the base already
+  defaults to `InMemoryBackend`, so that refusal was the only thing the
+  override contributed.
 
 - **`ConfigCachingManager` resolves `$resource` references through
   `dataknobs-config` instead of walking the config itself.** It carried a

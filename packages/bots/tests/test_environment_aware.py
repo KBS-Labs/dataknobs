@@ -3,7 +3,7 @@
 import pytest
 
 from dataknobs_bots import DynaBot, BotManager
-from dataknobs_bots.bot import InMemoryBotRegistry
+from dataknobs_bots.bot import InMemoryBotRegistry, create_memory_registry
 from dataknobs_config import EnvironmentAwareConfig, EnvironmentConfig
 
 
@@ -753,19 +753,73 @@ class TestMissingResourcePolicyThroughTheRegistries:
         finally:
             await registry.close()
 
-    async def test_the_in_memory_subclass_forwards_it_too(self):
-        """It re-declares the whole signature rather than inheriting it.
+    async def test_every_construction_path_reaches_the_same_policy(self):
+        """All three ways to build a registry must agree about the policy.
 
-        Which is why the parameter has to be added twice, and why a test
-        that only drove the base class would have reported the in-process
-        registry -- the one most consumers reach for first -- as covered.
+        There were three copies of this constructor's parameter list:
+        ``BotRegistry``, the in-memory subclass that re-declared the
+        whole thing to hide ``backend``, and the
+        ``create_memory_registry`` factory. A parameter added to the
+        first reached the third only if someone remembered, and nobody
+        did -- the factory is exported, forwards ``environment``, and is
+        the form the class docstring steers people toward, so it
+        resolved ``$resource`` references with no way to say they were
+        mandatory.
+
+        The guard that shipped with the parameter asserted its presence
+        on two of the three, which reproduced the blind spot it was
+        written to close and pinned only this one parameter besides.
+        This drives all three to the raise instead. The subclass now
+        inherits the signature and the factory forwards ``**kwargs``,
+        so there is no longer a copy that can drift.
         """
-        import inspect
+        from dataknobs_bots.bot import BotRegistry, create_memory_registry
+        from dataknobs_bots.registry import InMemoryBackend
+        from dataknobs_config import ResourceNotFoundError
 
-        from dataknobs_bots.bot import BotRegistry
+        def _base() -> BotRegistry:
+            return BotRegistry(
+                backend=InMemoryBackend(),
+                environment=self._environment(),
+                validate_on_register=False,
+                strict_resources=True,
+            )
 
-        for cls in (BotRegistry, InMemoryBotRegistry):
-            assert "strict_resources" in inspect.signature(cls.__init__).parameters
+        for build in (_base, InMemoryBotRegistry, create_memory_registry):
+            kwargs = (
+                {}
+                if build is _base
+                else {
+                    "environment": self._environment(),
+                    "validate_on_register": False,
+                    "strict_resources": True,
+                }
+            )
+            registry = build(**kwargs)
+            await registry.initialize()
+            try:
+                await registry.register("b", self._portable())
+                with pytest.raises(ResourceNotFoundError, match="conversations"):
+                    await registry.get_bot("b")
+            finally:
+                await registry.close()
+
+    async def test_the_in_memory_registry_still_refuses_a_backend(self):
+        """Inheriting the signature must not quietly widen the contract.
+
+        The subclass exists to promise in-memory storage; the base
+        already defaults to it, so the override bought nothing but the
+        hidden parameter. Dropping the override outright would have made
+        ``InMemoryBotRegistry(backend=PostgresBackend())`` legal and the
+        class name a lie, so the refusal is kept and the parameter list
+        is not.
+        """
+        from dataknobs_bots.registry import InMemoryBackend
+
+        with pytest.raises(TypeError, match="in-memory"):
+            InMemoryBotRegistry(backend=InMemoryBackend())
+        with pytest.raises(TypeError, match="in-memory"):
+            create_memory_registry(backend=InMemoryBackend())
 
     async def test_manager_can_declare_it_as_well(self):
         from dataknobs_config import ResourceNotFoundError
