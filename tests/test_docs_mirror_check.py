@@ -13,6 +13,7 @@ from __future__ import annotations
 import importlib.util
 from pathlib import Path
 from types import ModuleType
+from typing import Any
 
 import pytest
 
@@ -24,7 +25,7 @@ _Tree = tuple[ModuleType, Path, Path]
 
 
 @pytest.fixture(scope="module")
-def mirror_mod():
+def mirror_mod() -> ModuleType:
     spec = importlib.util.spec_from_file_location("docs_mirror_check", _SCRIPT)
     assert spec and spec.loader
     mod = importlib.util.module_from_spec(spec)
@@ -33,7 +34,7 @@ def mirror_mod():
 
 
 @pytest.fixture
-def tree(tmp_path, monkeypatch, mirror_mod):
+def tree(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mirror_mod: ModuleType) -> _Tree:
     """A patched ``(module, pkg_dir, site_dir)`` sandbox rooted at ``tmp_path``."""
     pkg_dir = tmp_path / "packages" / "demo" / "docs"
     site_dir = tmp_path / "docs" / "packages" / "demo"
@@ -50,8 +51,11 @@ def _w(path: Path, text: str) -> None:
     path.write_text(text, encoding="utf-8")
 
 
-def _manifest(**entry) -> dict:
-    base = {"package_dir": "packages/demo/docs", "site_dir": "docs/packages/demo"}
+def _manifest(**entry: Any) -> dict[str, Any]:
+    base: dict[str, Any] = {
+        "package_dir": "packages/demo/docs",
+        "site_dir": "docs/packages/demo",
+    }
     base.update(entry)
     return {"packages": {"demo": base}}
 
@@ -61,22 +65,22 @@ def _manifest(**entry) -> dict:
 # --------------------------------------------------------------------------
 
 
-def test_canonicalize_line_rewrites_bare_md_link(mirror_mod):
+def test_canonicalize_line_rewrites_bare_md_link(mirror_mod: ModuleType) -> None:
     assert mirror_mod.canonicalize_line("see [X](FOO_BAR.md)") == "see [X](foo-bar.md)"
 
 
-def test_canonicalize_line_preserves_anchor(mirror_mod):
+def test_canonicalize_line_preserves_anchor(mirror_mod: ModuleType) -> None:
     got = mirror_mod.canonicalize_line("[X](FOO_BAR.md#the-section)")
     assert got == "[X](foo-bar.md#the-section)"
 
 
-def test_canonicalize_line_leaves_paths_urls_and_anchors(mirror_mod):
+def test_canonicalize_line_leaves_paths_urls_and_anchors(mirror_mod: ModuleType) -> None:
     for target in ("sub/FOO.md", "https://x.test/FOO.md", "#same-page", "FOO.txt"):
         line = f"[X]({target})"
         assert mirror_mod.canonicalize_line(line) == line
 
 
-def test_fenced_code_block_link_is_not_rewritten(mirror_mod):
+def test_fenced_code_block_link_is_not_rewritten(mirror_mod: ModuleType) -> None:
     """Finding 3: a link-like token inside a ``` fence is literal example text."""
     text = "\n".join(
         [
@@ -93,14 +97,14 @@ def test_fenced_code_block_link_is_not_rewritten(mirror_mod):
     assert out[4] == "more [C](third-one.md)"  # fence closed, prose rewritten again
 
 
-def test_tilde_fence_and_length_tracked(mirror_mod):
+def test_tilde_fence_and_length_tracked(mirror_mod: ModuleType) -> None:
     text = "\n".join(["~~~", "[B](INSIDE_TILDE.md)", "~~~", "[C](OUTSIDE.md)"])
     out = mirror_mod.canonicalize_text(text)
     assert out[1] == "[B](INSIDE_TILDE.md)"
     assert out[3] == "[C](outside.md)"
 
 
-def test_inline_code_span_link_is_not_rewritten(mirror_mod):
+def test_inline_code_span_link_is_not_rewritten(mirror_mod: ModuleType) -> None:
     """Finding 3: a link-like token inside an inline `code span` is literal."""
     line = "real [A](REAL_ONE.md) but code `[B](CODE_ONE.md)` stays"
     got = mirror_mod.canonicalize_line(line)
@@ -113,7 +117,7 @@ def test_inline_code_span_link_is_not_rewritten(mirror_mod):
 # --------------------------------------------------------------------------
 
 
-def test_clean_mirror_passes(tree):
+def test_clean_mirror_passes(tree: _Tree) -> None:
     mod, pkg, site = tree
     _w(pkg / "API_REFERENCE.md", "# API\n\nsee [G](OTHER_DOC.md)\n")
     _w(site / "api-reference.md", "# API\n\nsee [G](other-doc.md)\n")
@@ -122,7 +126,7 @@ def test_clean_mirror_passes(tree):
     assert res.ok
 
 
-def test_mirror_drift_is_detected(tree):
+def test_mirror_drift_is_detected(tree: _Tree) -> None:
     mod, pkg, site = tree
     _w(pkg / "API_REFERENCE.md", "# API\n\nthe source truth\n")
     _w(site / "api-reference.md", "# API\n\na hand-edited divergence\n")
@@ -132,7 +136,7 @@ def test_mirror_drift_is_detected(tree):
     assert any("mirror drift" in e for e in res.errors)
 
 
-def test_mirror_with_fenced_link_example_stays_in_sync(tree):
+def test_mirror_with_fenced_link_example_stays_in_sync(tree: _Tree) -> None:
     """A fenced literal link is uncanonicalized on both sides, so they match."""
     mod, pkg, site = tree
     body = "# API\n\n```md\n[x](FOO_BAR.md)\n```\nprose [y](REAL_DOC.md)\n"
@@ -143,7 +147,7 @@ def test_mirror_with_fenced_link_example_stays_in_sync(tree):
     assert res.ok, res.errors
 
 
-def test_mirror_flagged_when_site_is_symlink(tree):
+def test_mirror_flagged_when_site_is_symlink(tree: _Tree) -> None:
     mod, pkg, site = tree
     _w(pkg / "API_REFERENCE.md", "# API\n")
     (site / "api-reference.md").symlink_to(pkg / "API_REFERENCE.md")
@@ -158,7 +162,7 @@ def test_mirror_flagged_when_site_is_symlink(tree):
 # --------------------------------------------------------------------------
 
 
-def test_unique_line_exception_is_applied(tree):
+def test_unique_line_exception_is_applied(tree: _Tree) -> None:
     mod, pkg, site = tree
     _w(pkg / "API_REFERENCE.md", "# API\n\nsee [G](BATCH_GUIDE.md) here\n")
     _w(site / "api-reference.md", "# API\n\nsee [G](migration.md) here\n")
@@ -174,7 +178,7 @@ def test_unique_line_exception_is_applied(tree):
     assert res.ok, res.errors
 
 
-def test_ambiguous_line_exception_is_detected(tree):
+def test_ambiguous_line_exception_is_detected(tree: _Tree) -> None:
     """Finding 4: a recurring package line makes the content-match ambiguous."""
     mod, pkg, site = tree
     line = "see [G](BATCH_GUIDE.md) here"
@@ -196,7 +200,7 @@ def test_ambiguous_line_exception_is_detected(tree):
 # --------------------------------------------------------------------------
 
 
-def test_symlink_replaced_by_real_file_is_detected(tree):
+def test_symlink_replaced_by_real_file_is_detected(tree: _Tree) -> None:
     mod, pkg, site = tree
     _w(pkg / "DEDUP.md", "# Dedup\n")
     _w(site / "dedup.md", "# Dedup (hand copy)\n")  # real file, not a symlink
@@ -206,7 +210,7 @@ def test_symlink_replaced_by_real_file_is_detected(tree):
     assert any("not a symlink" in e for e in res.errors)
 
 
-def test_symlink_wrong_target_is_detected(tree):
+def test_symlink_wrong_target_is_detected(tree: _Tree) -> None:
     mod, pkg, site = tree
     _w(pkg / "DEDUP.md", "# Dedup\n")
     _w(pkg / "OTHER.md", "# Other\n")
@@ -217,7 +221,7 @@ def test_symlink_wrong_target_is_detected(tree):
     assert any("should point at" in e for e in res.errors)
 
 
-def test_transclude_replaced_by_handcopy_is_detected(tree):
+def test_transclude_replaced_by_handcopy_is_detected(tree: _Tree) -> None:
     mod, pkg, site = tree
     _w(pkg / "GROUNDED_SOURCES.md", "# Grounded\n")
     _w(site / "grounded-sources.md", "# Grounded\n\nhand-authored, no include\n")
@@ -229,7 +233,7 @@ def test_transclude_replaced_by_handcopy_is_detected(tree):
     assert any("no `--8<--" in e for e in res.errors)
 
 
-def test_transclude_correct_include_passes(tree):
+def test_transclude_correct_include_passes(tree: _Tree) -> None:
     mod, pkg, site = tree
     _w(pkg / "GROUNDED_SOURCES.md", "# Grounded\n")
     _w(
@@ -248,7 +252,7 @@ def test_transclude_correct_include_passes(tree):
 # --------------------------------------------------------------------------
 
 
-def test_unclassified_package_doc_is_detected(tree):
+def test_unclassified_package_doc_is_detected(tree: _Tree) -> None:
     mod, pkg, site = tree
     _w(pkg / "SURPRISE.md", "# new doc nobody classified\n")
     res = mod.Result()
@@ -257,7 +261,7 @@ def test_unclassified_package_doc_is_detected(tree):
     assert any("unclassified package doc" in e for e in res.errors)
 
 
-def test_unclassified_site_doc_is_detected(tree):
+def test_unclassified_site_doc_is_detected(tree: _Tree) -> None:
     mod, pkg, site = tree
     _w(site / "surprise.md", "# new site page nobody classified\n")
     res = mod.Result()
@@ -266,7 +270,7 @@ def test_unclassified_site_doc_is_detected(tree):
     assert any("unclassified site doc" in e for e in res.errors)
 
 
-def test_manifest_reference_to_missing_file_is_detected(tree):
+def test_manifest_reference_to_missing_file_is_detected(tree: _Tree) -> None:
     mod, pkg, site = tree
     # Classified in the manifest entry but neither file exists on disk.
     entry = {"diverge": [{"package": "GHOST.md", "site": "ghost.md"}]}
@@ -277,7 +281,7 @@ def test_manifest_reference_to_missing_file_is_detected(tree):
     assert any("references missing site doc" in e for e in res.errors)
 
 
-def test_transclude_subdir_source_exempt_from_completeness(tree):
+def test_transclude_subdir_source_exempt_from_completeness(tree: _Tree) -> None:
     """A transclusion may source from a package subdir (e.g. ``guides/events.md``).
 
     Such a source is not a top-level package doc, so the top-level completeness
@@ -351,7 +355,7 @@ def test_a_classified_pair_is_not_reported_by_the_unpaired_check(tree: _Tree) ->
     assert res.ok, res.errors
 
 
-def test_double_classification_is_detected(tree):
+def test_double_classification_is_detected(tree: _Tree) -> None:
     mod, pkg, site = tree
     _w(pkg / "X.md", "# x\n")
     _w(site / "x.md", "# x\n")
@@ -370,7 +374,7 @@ def test_double_classification_is_detected(tree):
 # --------------------------------------------------------------------------
 
 
-def test_fix_regenerates_drifted_mirror_and_is_idempotent(tree):
+def test_fix_regenerates_drifted_mirror_and_is_idempotent(tree: _Tree) -> None:
     mod, pkg, site = tree
     _w(pkg / "API_REFERENCE.md", "# API\n\nsee [G](OTHER_DOC.md)\n")
     _w(site / "api-reference.md", "# STALE\n")
@@ -385,7 +389,7 @@ def test_fix_regenerates_drifted_mirror_and_is_idempotent(tree):
     assert res.ok, res.errors
 
 
-def test_fix_skips_ambiguous_exception_without_corrupting(tree):
+def test_fix_skips_ambiguous_exception_without_corrupting(tree: _Tree) -> None:
     """Finding 4: --fix must not rewrite every occurrence of a recurring line."""
     mod, pkg, site = tree
     line = "see [G](BATCH_GUIDE.md) here"
@@ -406,7 +410,7 @@ def test_fix_skips_ambiguous_exception_without_corrupting(tree):
 # --------------------------------------------------------------------------
 
 
-def test_run_returns_zero_on_clean_tree(tree):
+def test_run_returns_zero_on_clean_tree(tree: _Tree) -> None:
     mod, pkg, site = tree
     _w(pkg / "API_REFERENCE.md", "# API\n\nsee [G](OTHER_DOC.md)\n")
     _w(site / "api-reference.md", "# API\n\nsee [G](other-doc.md)\n")
@@ -414,7 +418,7 @@ def test_run_returns_zero_on_clean_tree(tree):
     assert mod.run(manifest, only=None, fix=False) == 0
 
 
-def test_run_returns_one_on_drift(tree):
+def test_run_returns_one_on_drift(tree: _Tree) -> None:
     mod, pkg, site = tree
     _w(pkg / "API_REFERENCE.md", "# API\n\ntruth\n")
     _w(site / "api-reference.md", "# API\n\ndrifted\n")
