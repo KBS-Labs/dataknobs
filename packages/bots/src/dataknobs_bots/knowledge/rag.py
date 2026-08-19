@@ -246,6 +246,36 @@ class RAGKnowledgeBase(
             )
         return configured
 
+    @property
+    def _composable_domain_id(self) -> str | None:
+        """The part of the binding this class has to enforce itself.
+
+        :attr:`_domain_id` answers "which domain is this?" and is the
+        right answer for the chunk-id prefix and the metadata stamp,
+        which have to agree with the tag the store puts on the row.
+        Filter composition asks a different question — "who is enforcing
+        the scope?" — and when the value came from the store, the answer
+        is the store, on every backend and by its own means.
+
+        Composing it anyway is not merely redundant. A configured store
+        scope is uniform across backends; an explicit ``domain_id``
+        *filter key* is documented as deliberately not, because
+        ``PgVectorStore`` keeps the domain in a column and stores caller
+        metadata verbatim, making the key a containment probe against
+        something the column consumed. Every row written before this
+        class began stamping ``domain_id`` into chunk metadata carries
+        the domain only in that column, so the probe excludes a corpus
+        that is squarely in scope: ``count()`` answers 0, the
+        skip-if-populated check re-ingests over rows it can no longer
+        see, and ``clear()`` cannot reach them afterwards.
+
+        So this returns the configured value alone. ``None`` here with a
+        non-``None`` :attr:`_domain_id` is the ordinary case of a
+        knowledge base over a scoped store, and means "already handled",
+        not "unscoped".
+        """
+        return self.config.domain_id
+
     def _warn_once(self, tag: str, message: str, *args: Any) -> None:
         """Emit ``message`` at WARNING the first time ``tag`` is seen.
 
@@ -1312,17 +1342,31 @@ class RAGKnowledgeBase(
         across scopes by passing the explicit key; the asymmetry is
         therefore deliberate.
 
-        Composing a *store-derived* ``domain_id`` is a no-op against
-        that store, whose own ``_effective_filter`` already requires
-        the same equality. It is not a no-op for the other shape — an
-        explicitly configured binding over an unscoped store — and
-        costs one dict entry either way.
+        Only an **explicitly configured** ``domain_id`` composes. A
+        store-derived one does not, and the distinction is not a
+        micro-optimisation: a configured store scope is an isolation
+        guarantee the store already delivers on every backend and by
+        its own means — ``_effective_filter``, ``_in_configured_domain``,
+        or on ``PgVectorStore`` a predicate on a dedicated ``domain_id``
+        column. Naming the key in the filter as well adds nothing to
+        that, and moves the read onto the one surface the store layer
+        documents as deliberately *not* uniform across backends: with
+        ``domain_id`` in a column, caller metadata stored verbatim, and
+        an explicit key therefore a JSONB-containment probe orthogonal
+        to the column, the composed filter excludes every row written
+        before this class began stamping ``domain_id`` into chunk
+        metadata. Those rows are in scope, and the store says so.
+
+        An explicit binding over an *unscoped* store is the opposite
+        case: nothing else is enforcing it, so composing it is the
+        whole mechanism.
         """
-        if self._tenant_id is None and self._domain_id is None:
+        composable = self._composable_domain_id
+        if self._tenant_id is None and composable is None:
             return filter_metadata
         effective: dict[str, Any] = {}
-        if self._domain_id is not None:
-            effective["domain_id"] = self._domain_id
+        if composable is not None:
+            effective["domain_id"] = composable
         if self._tenant_id is not None:
             effective["tenant_id"] = self._tenant_id
         if filter_metadata:
@@ -1361,10 +1405,11 @@ class RAGKnowledgeBase(
         :meth:`KnowledgeIngestionManager._scope_for_tenant`, which
         makes the same guarantee for the manager's own clears.
         """
-        if self._tenant_id is None and self._domain_id is None:
+        composable = self._composable_domain_id
+        if self._tenant_id is None and composable is None:
             return filter_metadata
         scoped: dict[str, Any] = dict(filter_metadata or {})
-        self._scope_one_key(scoped, "domain_id", self._domain_id)
+        self._scope_one_key(scoped, "domain_id", composable)
         self._scope_one_key(scoped, "tenant_id", self._tenant_id)
         return scoped
 

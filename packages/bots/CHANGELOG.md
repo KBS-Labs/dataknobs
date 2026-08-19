@@ -312,6 +312,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reported at WARNING, because such chunks are written and can never be
   read back.
 
+  A store-derived binding shapes chunk ids and the metadata stamp only.
+  It is deliberately **not** composed into read or write filters: the
+  store already confines every read, count, clear and update to that
+  domain, by its own means and identically on every backend. Naming the
+  key in the filter as well would move the knowledge base onto the one
+  surface the store layer documents as *not* uniform — `pgvector` keeps
+  the domain in a column and stores caller metadata verbatim, making an
+  explicit `domain_id` a containment probe against a key the column
+  consumed — and would hide every chunk written before this release
+  began stamping `domain_id` into chunk metadata. On that backend a
+  knowledge base over a domain-scoped store would have read zero rows,
+  counted zero, re-ingested over a corpus it could no longer see, and
+  been unable to `clear()` the result.
+
 - **A bound `tenant_id` now scopes `count()`, `clear()` and
   `update_metadata_where()`.** It scoped `query` and `hybrid_query` and
   nothing else, so on a shared store `clear()` on a knowledge base bound to

@@ -121,6 +121,19 @@ than requiring a second copy of it also means the chunk-id namespace
 cannot disagree with the `domain_id` the store itself stamps on the
 row.
 
+A store-derived binding shapes chunk ids and the metadata stamp; it is
+**not** composed into filters, because the store is already enforcing
+that scope on every read, count, clear and update it serves. Adding
+the key to the filter would buy nothing and cost rows: a configured
+store scope is uniform across backends, whereas an explicit
+`domain_id` filter key is documented as deliberately not — `pgvector`
+holds the domain in a column and stores caller metadata verbatim, so
+the key becomes a containment probe against something the column
+already consumed, and any chunk written before the metadata stamp
+existed carries the domain only in that column. Only a `domain_id` the
+knowledge base configures **itself** composes, and then only because
+nothing else is enforcing it.
+
 Configure it explicitly for the other shape — one deliberately
 **unscoped** store whose domains are distinguished only at the chunk
 layer:
