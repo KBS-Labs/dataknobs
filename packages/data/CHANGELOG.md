@@ -9,6 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`compose_scope_key()` shares the scope-composition decision consumers
+  were re-deriving.** `_match_metadata_filter` documents the empty-list
+  filter value as unsatisfiable on every backend and names the consumers
+  that rely on it to express a deliberate cross-scope no-op, but the
+  decision producing that value lived only inside
+  `VectorStoreBase._effective_filter`. Consumers composing the same scope
+  onto their own filters wrote it themselves, and the obvious spelling —
+  overwrite the caller's key with the bound value — is wrong in the one
+  direction that costs data: it turns a request for *another* scope into a
+  request for *this* one, so a destructive call that should match no rows
+  matches every row in the caller's own scope.
+
+  The three-case decision (absent key, in-scope value, out-of-scope value)
+  is now a module-level function beside the contract it depends on.
+  `_effective_filter` is unchanged in behaviour and delegates to it.
+
 - **`ChromaVectorStore` tracks `created_at` / `updated_at`**, exposed via
   `include_timestamps=True` on `get_vectors()` and `search()` — the same
   surface `MemoryVectorStore`, `FaissVectorStore` and `PgVectorStore`

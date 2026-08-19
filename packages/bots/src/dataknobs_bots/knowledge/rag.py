@@ -23,6 +23,7 @@ from dataknobs_common.capabilities import (
 from dataknobs_common.lifecycle import close_if_owned
 from dataknobs_common.metadata import enforce_immutable_keys
 from dataknobs_common.structured_config import StructuredConfigConsumer
+from dataknobs_data.vector.stores.common import compose_scope_key
 from dataknobs_xization import (
     ContentTransformer,
     create_chunker,
@@ -1342,7 +1343,17 @@ class RAGKnowledgeBase(
         under a binding that says otherwise is data loss.
 
         A caller's filter still *narrows* within the scope; only the
-        bound keys themselves are non-negotiable.
+        bound keys themselves are non-negotiable. Naming a bound key
+        with a value the binding does not cover is *refused*, not
+        redirected: the composed value becomes the empty list that
+        ``_match_metadata_filter`` documents as unsatisfiable on every
+        backend, so the operation matches nothing. Rewriting it to the
+        bound value instead — which reads like "the binding wins" —
+        widens the request from no rows to every row in this scope, and
+        on ``clear()`` that deletes the caller's own corpus because
+        they asked to delete somebody else's. The refusal is reported,
+        because a destructive call that silently does nothing is its
+        own kind of surprise.
 
         An unbound knowledge base is unchanged — including
         ``clear(None)`` still meaning every row — and is the supported
@@ -1353,11 +1364,26 @@ class RAGKnowledgeBase(
         if self._tenant_id is None and self._domain_id is None:
             return filter_metadata
         scoped: dict[str, Any] = dict(filter_metadata or {})
-        if self._domain_id is not None:
-            scoped["domain_id"] = self._domain_id
-        if self._tenant_id is not None:
-            scoped["tenant_id"] = self._tenant_id
+        self._scope_one_key(scoped, "domain_id", self._domain_id)
+        self._scope_one_key(scoped, "tenant_id", self._tenant_id)
         return scoped
+
+    def _scope_one_key(self, scoped: dict[str, Any], key: str, value: str | None) -> None:
+        """Compose one bound key into a write filter, reporting a refusal."""
+        if value is None:
+            return
+        requested = scoped.get(key)
+        compose_scope_key(scoped, key, value)
+        if scoped[key] == []:
+            self._warn_once(
+                f"refused:{key}",
+                "Filter asked for %s=%r on a knowledge base bound to %r; the "
+                "operation is scoped to the binding and matches nothing. Use an "
+                "unbound knowledge base to act across scopes deliberately.",
+                key,
+                requested,
+                value,
+            )
 
     @staticmethod
     def _is_stale(metadata: dict[str, Any] | None) -> bool:

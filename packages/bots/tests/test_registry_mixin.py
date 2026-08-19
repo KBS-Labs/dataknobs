@@ -158,6 +158,30 @@ class TestBuildRagConfigForwarding:
         assert flat["embedding_provider"] == "echo"
         assert "embedding_model" not in flat
 
+    def test_a_configured_embedding_model_survives_the_defaults(self) -> None:
+        """A flat ``embedding_model`` alone is a configured model, not a gap.
+
+        The gap test asks about ``embedding`` and ``embedding_provider``
+        while the fill wrote ``embedding_model`` too, so configuring
+        only the model — legal, and the common shape, since the default
+        provider is Ollama anyway — had it replaced by the default. The
+        ingest then embedded with one model while the bot's own
+        knowledge base, built from the whole section and applying no
+        defaults of its own, queried with the other: two vector spaces,
+        a dimension error or silent garbage retrieval.
+        """
+        model_only = _MinimalMixinUser()._build_rag_config(
+            {
+                "vector_store": {"backend": "memory", "dimensions": 384},
+                "embedding_model": "mxbai-embed-large",
+            }
+        )
+        assert model_only["embedding_model"] == "mxbai-embed-large"
+        assert "embedding_provider" not in model_only, (
+            "the defaults are a pair: half of one and half of the other is the "
+            "divergence, not the fix"
+        )
+
     def test_embedding_base_url_arrives_as_api_base(self) -> None:
         """A legacy ``embedding_base_url`` reaches the config it was meant for.
 

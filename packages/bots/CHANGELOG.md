@@ -318,8 +318,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   one tenant removed every other tenant's rows — data destruction from a
   call whose documented warning was only about passing no filter. The two
   filter-driven mutations take **bound-wins** precedence, so a filter can
-  narrow within the scope but not widen past it; reads keep
-  explicit-filter-wins, so admin tooling can still read across scopes. An
+  narrow within the scope but not widen past it — naming a bound key with a
+  value outside the binding is refused (the request resolves to the vector
+  store's unsatisfiable empty-list value and is logged at WARNING) rather
+  than redirected to the binding's own value, which would widen a call that
+  should match no rows into one that matches every row the knowledge base
+  owns. Reads keep explicit-filter-wins, so admin tooling can still read
+  across scopes. An
   **unbound** knowledge base is unchanged and is the supported way to act
   across scopes deliberately — `clear()` on one still means every row.
 
@@ -336,7 +341,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   match, a total retrieval blackout reported as a successful ingest. A
   nested `embedding` section was another, silently replaced by the
   hard-coded Ollama defaults, which lands ingest and query in different
-  vector spaces. Three keys are still excluded and each says why in the
+  vector spaces. Those defaults now apply only when the section names none
+  of `embedding`, `embedding_provider` or `embedding_model`, and they fill
+  as a pair: the bot's own knowledge base applies no defaults of its own, so
+  filling one key while leaving the other to resolve from an absent value is
+  the same divergence in miniature. Three keys are still excluded and each says why in the
   code; `documents_path` in particular must not reach the knowledge base,
   because construction would ingest it ahead of the skip-if-populated check
   and ignore `force`. The registration's own `domain_id` becomes the

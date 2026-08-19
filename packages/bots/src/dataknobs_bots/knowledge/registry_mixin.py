@@ -71,6 +71,13 @@ class AutoIngestionMixin:
         }
     )
 
+    # Every key that says something about the embedder. The historical
+    # Ollama defaults fill the gap only when the section names none of
+    # them — see :meth:`_build_rag_config`.
+    _EMBEDDER_KEYS: ClassVar[frozenset[str]] = frozenset(
+        {"embedding", "embedding_provider", "embedding_model"}
+    )
+
     async def _ensure_knowledge_base_ingested(
         self,
         domain_id: str,
@@ -185,11 +192,21 @@ class AutoIngestionMixin:
         if domain_id is not None and rag_config.get("domain_id") is None:
             rag_config["domain_id"] = domain_id
 
-        # The historical embedder defaults, applied only when nothing is
-        # configured either way. Applying them unconditionally is what
-        # made a configured nested ``embedding`` section fall back to
-        # Ollama — landing ingest and query in different vector spaces.
-        if "embedding" not in kb_config and "embedding_provider" not in kb_config:
+        # The historical embedder defaults, applied only when the embedder
+        # is unconfigured — which means *none* of the three keys, not two
+        # of them. Applying them unconditionally is what made a configured
+        # nested ``embedding`` section fall back to Ollama; testing two
+        # keys while writing three did the same to a configured
+        # ``embedding_model``, which is legal on its own because the
+        # default provider is Ollama anyway. Either way ingest and query
+        # land in different vector spaces.
+        #
+        # They fill as a pair. Filling one key and leaving the other to
+        # the config default is the same divergence in miniature: the
+        # bot's own knowledge base is built from this section with no
+        # defaults of its own, so whatever the read side resolves an
+        # absent key to, the ingest side has to resolve it to as well.
+        if not any(key in kb_config for key in self._EMBEDDER_KEYS):
             rag_config["embedding_provider"] = "ollama"
             rag_config["embedding_model"] = "nomic-embed-text"
 

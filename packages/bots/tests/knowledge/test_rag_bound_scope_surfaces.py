@@ -150,6 +150,7 @@ async def test_clear_with_a_filter_narrows_within_the_scope(binding: str) -> Non
     # surface the binding wins, the inverse of the read side.
     await kb_a.clear(filter={binding: "umbrella"})
     assert await kb_b.count() == 1
+    assert await kb_a.count() == 1, "the refused clear fell back on its own scope"
 
 
 @pytest.mark.parametrize("binding", BINDINGS)
@@ -191,3 +192,72 @@ async def test_unbound_kb_retains_unscoped_semantics() -> None:
 
     await admin.clear()
     assert len(store.metadata_store) == 0
+
+
+@pytest.mark.parametrize("binding", BINDINGS)
+async def test_clear_naming_another_scope_spares_this_one_too(binding: str) -> None:
+    """Naming another scope destroys nothing — not even the caller's own rows.
+
+    Bound-wins was spelled as an unconditional overwrite, so a filter
+    naming another scope did not narrow to nothing: it was rewritten
+    into the binding's own value and the operation widened from "no
+    rows" to "every row in this scope". ``kb_a.clear(domain_id=B)``
+    deleted all of A. The caller asked to reach outside the scope and
+    got the one outcome worse than being refused — the inverse of what
+    they asked for, silently, on a destructive surface.
+
+    The store layer already had the answer: an out-of-scope request
+    resolves to the empty-list value ``_match_metadata_filter``
+    documents as unsatisfiable on every backend.
+    """
+    store = await _shared_store()
+    kb_a = await _bound_kb(store, binding, "acme")
+    kb_b = await _bound_kb(store, binding, "umbrella")
+
+    await _seed(kb_a, "overview.md", "Alpha overview.")
+    await _seed(kb_a, "guide.md", "Alpha guide.")
+    await _seed(kb_b, "brief.md", "Beta content.")
+
+    await kb_a.clear(filter={binding: "umbrella"})
+
+    assert await kb_a.count() == 2, "clear() naming another scope wiped its own"
+    assert await kb_b.count() == 1, "clear() reached across the binding"
+    assert len(store.metadata_store) == 3
+
+
+@pytest.mark.parametrize("binding", BINDINGS)
+async def test_update_metadata_where_naming_another_scope_is_a_no_op(binding: str) -> None:
+    """The tombstone primitive refuses the same request the same way."""
+    store = await _shared_store()
+    kb_a = await _bound_kb(store, binding, "acme")
+    kb_b = await _bound_kb(store, binding, "umbrella")
+
+    await _seed(kb_a, "overview.md", "Alpha content.")
+    await _seed(kb_b, "brief.md", "Beta content.")
+
+    updated = await kb_a.update_metadata_where({binding: "umbrella"}, {"_stale": True})
+
+    assert updated == 0, "an out-of-scope filter matched rows"
+    assert await kb_a.count() == 1, "tombstoned its own scope instead"
+    assert await kb_b.count() == 1, "reached across the binding"
+
+
+@pytest.mark.parametrize("binding", BINDINGS)
+async def test_a_filter_naming_this_scope_still_matches(binding: str) -> None:
+    """Refusing the *other* scope must not refuse this one.
+
+    The unsatisfiable value is reserved for a genuine disagreement; a
+    caller naming the value it is already bound to is asking for what
+    it would have been given anyway, and the operation proceeds.
+    """
+    store = await _shared_store()
+    kb_a = await _bound_kb(store, binding, "acme")
+    kb_b = await _bound_kb(store, binding, "umbrella")
+
+    await _seed(kb_a, "overview.md", "Alpha content.")
+    await _seed(kb_b, "brief.md", "Beta content.")
+
+    await kb_a.clear(filter={binding: "acme"})
+
+    assert await kb_a.count() == 0, "naming its own scope was refused"
+    assert await kb_b.count() == 1

@@ -24,6 +24,7 @@ from dataknobs_common.capabilities import (
 from dataknobs_common.exceptions import ConfigurationError
 from dataknobs_common.paths import PathEscapeError
 from dataknobs_common.tenancy import BoundTenantContext, create_tenant_context
+from dataknobs_data.vector.stores.common import compose_scope_key
 
 from .events import INGEST_DOMAIN_END, INGEST_DOMAIN_START
 from .storage import IngestionStatus, InvalidVersionError
@@ -476,11 +477,22 @@ class KnowledgeIngestionManager(DynamicCapabilityMixin):
         absent (unbound manager) is a no-op pass-through — single-
         tenant byte-identical posture preserved.
 
+        Composed through :func:`compose_scope_key`, so a base naming a
+        *different* tenant is refused (unsatisfiable) rather than
+        rewritten to this one. No caller supplies that key today — every
+        base here is built from this manager's own per-call
+        ``domain_id`` — so the branch is unreachable and the behaviour
+        unchanged. It is shared anyway because the sibling that *was*
+        reachable, :meth:`RAGKnowledgeBase._scope_for_write`, had the
+        overwrite spelling and turned a cross-scope ``clear`` into a
+        full-scope wipe. One spelling, in one place, is what keeps the
+        next one from having to be found the same way.
+
         Returns a fresh dict so the caller's mapping is never mutated.
         """
         scoped = dict(base)
         if self._tenant_id is not None:
-            scoped["tenant_id"] = self._tenant_id
+            compose_scope_key(scoped, "tenant_id", self._tenant_id)
         return scoped
 
     def _compose_extra_metadata(

@@ -193,6 +193,26 @@ further. Use an **unbound** knowledge base to act across scopes on
 purpose — that is the escape hatch, and `clear()` on one still means
 every row in the store.
 
+On the two destructive surfaces, a filter naming a bound key with a
+value outside the binding is **refused, not redirected**: the request
+resolves to the empty-list value the vector store documents as
+unsatisfiable, so it matches nothing and is logged at WARNING.
+
+```python
+kb_a = await RAGKnowledgeBase.from_config({..., "domain_id": "acme"})
+
+await kb_a.clear(filter={"source": "overview.md"})   # narrows: acme's overview only
+await kb_a.clear(filter={"domain_id": "umbrella"})   # refused: matches nothing
+```
+
+The second call is the case worth stating explicitly, because the
+obvious spelling of "the binding wins" gets it backwards. Overwriting
+the caller's value with the bound one turns a request for *another*
+scope into a request for *this* one — so a call that should have
+matched no rows instead matches every row the knowledge base owns, and
+`clear()` deletes the caller's own corpus because they asked to delete
+somebody else's.
+
 `count` being scoped matters beyond consistency: it is the count
 `KnowledgeIngestionService.check_needs_ingestion` reads. Unscoped, a
 second tenant over a store the first had populated was told it was
