@@ -27,4 +27,4 @@ __all__ = [
 ]
 
 if CONVERSATION_BENCHMARKS_AVAILABLE:
-    __all__.append("ConversationBenchmark")
+    __all__ += ["ConversationBenchmark"]

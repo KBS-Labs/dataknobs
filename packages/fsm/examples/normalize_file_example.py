@@ -2,7 +2,6 @@
 """Example of using SimpleFSM to normalize text files."""
 
 import yaml
-from pathlib import Path
 from dataknobs_fsm.api.simple import SimpleFSM, process_file
 
 
@@ -52,7 +51,6 @@ WORKFLOW_CONFIG = yaml.safe_load(NORMALIZE_FILE_WORKFLOW_YAML)
 # Method 1: Using SimpleFSM directly with process_stream (synchronous)
 def normalize_file_streaming(input_file: str, output_file: str):
     """Normalize a text file using SimpleFSM with streaming."""
-
     # Initialize FSM with the workflow config dictionary
     fsm = SimpleFSM(WORKFLOW_CONFIG)
 
@@ -67,7 +65,7 @@ def normalize_file_streaming(input_file: str, output_file: str):
             use_streaming=True,  # Enable memory-efficient streaming
         )
 
-        print(f"Processing completed:")
+        print("Processing completed:")
         print(f"  Total processed: {results['total_processed']}")
         print(f"  Successful: {results['successful']}")
         print(f"  Failed: {results['failed']}")
@@ -81,7 +79,6 @@ def normalize_file_streaming(input_file: str, output_file: str):
 # Method 2: Using the convenience function
 def normalize_file_simple(input_file: str, output_file: str):
     """Normalize a text file using the convenience function."""
-
     # Use the convenience function that handles FSM lifecycle
     results = process_file(
         fsm_config=WORKFLOW_CONFIG,
@@ -100,7 +97,6 @@ def normalize_file_simple(input_file: str, output_file: str):
 # Method 3: Process individual lines (for small files or testing)
 def normalize_lines(lines: list[str]) -> list[str]:
     """Normalize a list of text lines."""
-
     fsm = SimpleFSM(WORKFLOW_CONFIG)
     normalized = []
 
@@ -127,7 +123,6 @@ def normalize_lines(lines: list[str]) -> list[str]:
 # Method 4: Batch processing for medium-sized datasets
 def normalize_batch(input_lines: list[str]) -> list[str]:
     """Process multiple lines in batches."""
-
     fsm = SimpleFSM(WORKFLOW_CONFIG)
 
     try:

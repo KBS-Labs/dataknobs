@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
-"""
-Advanced FSM Debugging and Monitoring Example.
+"""Advanced FSM Debugging and Monitoring Example.
 
 This example demonstrates:
 1. Step-by-step execution with breakpoints
@@ -13,16 +12,14 @@ This example demonstrates:
 
 import time
 import json
-from typing import Dict, Any, List
+from typing import Dict, Any
 from datetime import datetime
 from dataknobs_fsm.api.advanced import (
-    AdvancedFSM,
     ExecutionMode,
     ExecutionHook,
     FSMDebugger,
     create_advanced_fsm,
 )
-from dataknobs_fsm.core.data_modes import DataHandlingMode
 
 
 # Custom functions for the workflow
@@ -243,7 +240,7 @@ def demonstrate_step_by_step_execution():
 
             # Show if we hit a breakpoint
             if step_result.at_breakpoint:
-                print(f"   🔴 At breakpoint!")
+                print("   🔴 At breakpoint!")
 
             # Show data snapshot
             data_snapshot = context.get_data_snapshot()
@@ -257,7 +254,7 @@ def demonstrate_step_by_step_execution():
             # Allow inspection (in real use, could pause here)
             # input("Press Enter to continue...")
 
-        print(f"\n✅ Execution complete!")
+        print("\n✅ Execution complete!")
         print(f"Final State: {context.get_current_state()}")
         print(f"Total Steps: {len(steps)}")
 
@@ -295,7 +292,7 @@ def demonstrate_execution_with_breakpoints():
         }
 
         # Execute with breakpoints synchronously
-        print(f"\nExecuting with breakpoints...")
+        print("\nExecuting with breakpoints...")
 
         context = fsm.create_context(test_data)
         path = []
@@ -333,7 +330,7 @@ def demonstrate_execution_with_breakpoints():
                     path.append(final_state)
                 break
 
-        print(f"\nExecution completed!")
+        print("\nExecution completed!")
         print(f"Path taken: {' -> '.join(path)}")
 
 
@@ -365,7 +362,7 @@ def demonstrate_execution_tracing():
             "payload": {"numbers": list(range(100))},
         }
 
-        print(f"\nExecuting with tracing enabled...")
+        print("\nExecuting with tracing enabled...")
 
         # Execute with tracing synchronously
         start_time = time.time()
@@ -375,22 +372,22 @@ def demonstrate_execution_tracing():
         print(f"\n✅ Execution completed in {end_time - start_time:.3f} seconds")
 
         # Show trace results
-        print(f"\n📊 Execution Trace:")
+        print("\n📊 Execution Trace:")
         for i, event in enumerate(trace[:10], 1):  # Show first 10 events
             print(f"  {i}. {event['from_state']} -> {event['to_state']}")
             if "duration" in event:
                 print(f"     Duration: {event['duration']:.3f}s")
 
         # Execute with profiling synchronously
-        print(f"\n⏱️ Profiling execution...")
+        print("\n⏱️ Profiling execution...")
         profile = fsm.profile_execution_sync(test_data)
 
-        print(f"\nPerformance Profile:")
+        print("\nPerformance Profile:")
         print(f"  Total time: {profile.get('total_time', 0):.3f}s")
         print(f"  Total transitions: {profile.get('transitions', 0)}")
 
         if "state_times" in profile:
-            print(f"\n  State execution times:")
+            print("\n  State execution times:")
             for state, timing in profile["state_times"].items():
                 if isinstance(timing, dict):
                     # Handle dict format from profile
@@ -451,11 +448,11 @@ def demonstrate_execution_hooks():
             "payload": {"compute": "heavy"},
         }
 
-        print(f"\nExecuting with hooks...")
+        print("\nExecuting with hooks...")
         # Use trace_execution_sync which will trigger hooks
         result = fsm.trace_execution_sync(test_data)
 
-        print(f"\n✅ Execution completed!")
+        print("\n✅ Execution completed!")
         print(f"  Transitions executed: {len(result)}")
         if errors:
             print(f"⚠️ Errors encountered: {errors}")
@@ -497,7 +494,7 @@ def demonstrate_fsm_debugger():
 
         # Start the debug session
         debugger.start(test_data)
-        print(f"\nDebug session started")
+        print("\nDebug session started")
         print(f"Initial state: {debugger.current_state}")
 
         # Set breakpoints
@@ -526,7 +523,7 @@ def demonstrate_fsm_debugger():
 
             # Show watches
             if debugger.watches:
-                print(f"  Watches:")
+                print("  Watches:")
                 for name, value in debugger.watches.items():
                     print(f"    {name}: {value}")
 
@@ -537,13 +534,13 @@ def demonstrate_fsm_debugger():
                 print(f"  State info: {state_info}")
 
                 # Continue to next breakpoint
-                print(f"\n  Continuing to next breakpoint...")
+                print("\n  Continuing to next breakpoint...")
                 next_state = debugger.continue_to_breakpoint()
                 if next_state:
                     print(f"  Stopped at: {next_state.definition.name}")
 
             if result.is_complete:
-                print(f"\n✅ Execution complete!")
+                print("\n✅ Execution complete!")
                 break
 
         # Show execution history

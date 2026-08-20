@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
-"""
-Database ETL Pipeline Example using FSM with COPY mode.
+"""Database ETL Pipeline Example using FSM with COPY mode.
 
 This example demonstrates:
 1. COPY mode for transaction safety and rollback capability
@@ -11,10 +10,8 @@ This example demonstrates:
 6. Data validation and quality checks
 """
 
-import json
 import sqlite3
-from pathlib import Path
-from typing import Dict, Any, List
+from typing import Dict, Any
 from datetime import datetime, timedelta
 import random
 from dataknobs_fsm.api.simple import SimpleFSM
@@ -548,8 +545,12 @@ def main():
 
     # Create ETL FSM
     with create_etl_fsm() as fsm:
-        # Simulate databases (in production, these would be real connections)
+        # Simulate databases (in production, these would be real connections).
+        # The stages below run on payloads passed to fsm.process, so these
+        # handles are closed here rather than left open for the whole run.
         source_db, target_db = simulate_database_operations()
+        source_db.close()
+        target_db.close()
 
         # Test Case 1: Successful ETL
         print("\n📊 Test Case 1: Successful ETL Pipeline")
@@ -565,12 +566,12 @@ def main():
         )
 
         if result["success"]:
-            print(f"✓ ETL Pipeline completed successfully")
+            print("✓ ETL Pipeline completed successfully")
             print(f"Final State: {result['final_state']}")
             print(f"Path: {' -> '.join(result['path'])}")
 
             summary = result["data"].get("etl_summary", {})
-            print(f"\nETL Summary:")
+            print("\nETL Summary:")
             print(f"  • Batch ID: {summary.get('batch_id')}")
             print(f"  • Duration: {summary.get('duration_seconds', 0):.2f} seconds")
             print(f"  • Records Extracted: {summary.get('records_extracted', 0)}")
@@ -580,7 +581,7 @@ def main():
             print(f"  • Success Rate: {summary.get('success_rate', 0):.1f}%")
             print(f"  • Status: {summary.get('status')}")
         else:
-            print(f"✗ ETL Pipeline failed")
+            print("✗ ETL Pipeline failed")
             print(f"Error: {result.get('error')}")
 
         # Test Case 2: ETL with validation failures (high error rate)
@@ -622,10 +623,10 @@ def main():
             print(f"Path: {' -> '.join(result['path'])}")
 
             if result["final_state"] == "failure":
-                print(f"✓ Correctly routed to failure after validation issues")
+                print("✓ Correctly routed to failure after validation issues")
                 rollback_log = result["data"].get("rollback_log", {})
                 if rollback_log:
-                    print(f"\nRollback Log:")
+                    print("\nRollback Log:")
                     print(f"  • Timestamp: {rollback_log.get('timestamp')}")
                     print(f"  • Reason: {rollback_log.get('reason')}")
                     print(f"  • Records Rolled Back: {rollback_log.get('records_rolled_back', 0)}")

@@ -79,8 +79,10 @@ async def example_4_with_synchronizer():
     import numpy as np
 
     # Simple embedding function for demo
+    rng = np.random.default_rng()
+
     def embed_text(text: str) -> np.ndarray:
-        return np.random.rand(384)
+        return rng.random(384)
 
     # Create database with schema
     db = AsyncMemoryDatabase().with_schema(

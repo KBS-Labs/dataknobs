@@ -1,12 +1,10 @@
-"""
-Sensor Dashboard Data Models
+"""Sensor Dashboard Data Models
 
 Simple data models for our sensor monitoring example.
 """
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime
-from typing import Optional, Dict, Any
 from dataknobs_data import Record
 
 
@@ -18,8 +16,8 @@ class SensorReading:
     timestamp: datetime
     temperature: float  # Celsius
     humidity: float  # Percentage 0-100
-    battery: Optional[int] = None  # Battery percentage 0-100
-    location: Optional[str] = None
+    battery: int | None = None  # Battery percentage 0-100
+    location: str | None = None
 
     def to_record(self) -> Record:
         """Convert to a dataknobs Record."""

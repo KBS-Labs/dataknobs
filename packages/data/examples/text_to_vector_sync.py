@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
-"""
-Text-to-Vector Synchronization Example
+"""Text-to-Vector Synchronization Example
 
 This example demonstrates:
 1. Automatic synchronization between text fields and vector embeddings
@@ -14,12 +13,12 @@ Requirements:
 
 import asyncio
 import time
-from typing import List, Optional
+from typing import List
 from datetime import datetime
 from sentence_transformers import SentenceTransformer
 
-from dataknobs_data import AsyncDatabaseFactory, Record, VectorField, Query
-from dataknobs_data.vector import VectorTextSynchronizer, SyncConfig
+from dataknobs_data import AsyncDatabaseFactory, Record, VectorField
+from dataknobs_data.vector import VectorTextSynchronizer
 
 
 # Initialize embedding model
@@ -58,7 +57,7 @@ class DocumentSync:
         ]
         total = len(all_records)
 
-        print(f"\nSync Status:")
+        print("\nSync Status:")
         print(f"  Total records: {total}")
         print(f"  Without embeddings: {len(outdated)}")
         print(f"  With embeddings: {total - len(outdated)}")
@@ -68,7 +67,6 @@ class DocumentSync:
 
 async def main():
     """Run the text-to-vector synchronization example."""
-
     # 1. Setup database
     print("\n1. Setting up database...")
 
@@ -227,11 +225,12 @@ async def main():
     # or event listeners. For this example, we'll manually trigger it.
     new_record = await db.read(new_id)
     success, updated_fields = await sync.synchronizer.sync_record(new_record)
+    print(f"  sync_record -> success={success}, updated fields={updated_fields}")
 
     # Verify the new record has an embedding
     record = await db.read(new_id)
-    if "embedding" in record and record["embedding"]:
-        print(f"✓ New document automatically received embedding")
+    if record.get("embedding"):
+        print("✓ New document automatically received embedding")
         print(f"  Embedding dimensions: {len(record['embedding'])}")
 
     # 9. Batch update demonstration
@@ -270,7 +269,7 @@ async def main():
                 },
             )
 
-        print(f"  ✓ Batch sync completed")
+        print("  ✓ Batch sync completed")
 
     # Final status
     await sync.show_sync_status()

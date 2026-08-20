@@ -1102,7 +1102,7 @@ def _cell_is_covered(cell: str, targets: set[str]) -> bool:
 #: unlinted again. A check derived from the thing it checks moves when that thing
 #: moves; this does not, so removing a member fails here and no entry elsewhere
 #: can quiet it.
-REQUIRED_DEFAULT_TARGETS = frozenset({"tests", "bin", "src", "conftest.py"})
+REQUIRED_DEFAULT_TARGETS = frozenset({"tests", "bin", "src", "conftest.py", "quality-fixture"})
 
 
 # ``test_every_first_party_python_file_is_linted_by_default`` used to sit here,
@@ -1159,8 +1159,10 @@ def test_the_default_target_set_still_contains_what_it_must() -> None:
         assert not missing_workspace, (
             f"bin/validate.sh {shown} no longer validates {missing_workspace}. "
             "These are not deferrable: tests/ holds the guards that check the "
-            "toolchain, and bin/ holds the checkers that decide whether a pull "
-            "request passes. Restore the target — recording it in "
+            "toolchain, bin/ holds the checkers that decide whether a pull "
+            "request passes, and quality-fixture/ is the one tree whose whole "
+            "claim is that the gate reads it and finds nothing. Restore the "
+            "target — recording it in "
             "deferring it in .dataknobs/quality-contract.json is not the fix, "
             "it is the failure this guard exists to catch."
         )
@@ -1325,20 +1327,27 @@ def test_the_formatter_population_is_not_the_linters() -> None:
     do with the formatter. Stating the difference keeps the guard anchored to
     why the two lists exist separately.
 
-    This expires when the two populations legitimately converge, and that is
-    later than it reads. Promoting every ``packages/<pkg>/tests`` cell does not
-    do it: the difference asserted here survives as ``examples``, ``scripts``,
-    ``benchmarks`` and ``docs``, which only the formatter reaches. It expires
-    with the last of *those*, and at that point delete it — the check above is
-    what carries the property.
+    This expires when the two populations legitimately converge, and the
+    difference is now down to its last member. Promoting ``packages/<pkg>/tests``
+    did not do it, and neither did promoting ``examples``, ``scripts`` and
+    ``benchmarks``: what survives is ``packages/<pkg>/docs``, which the formatter
+    reaches and the linter does not.
+
+    That one is a standing target rather than a live one — no tracked ``*.py``
+    lives under any of them today, and the contract declares no cell for them
+    because totality is a statement about tracked files. It is in the
+    formatter's list so that a Python file landing there is formatted from the
+    day it arrives rather than from the day somebody notices. When it is
+    promoted too, delete this — the check above is what carries the property.
     """
     linted = set(_validate_targets_for())
     formatted = set(_format_targets_for("validate.sh"))
     assert formatted - linted, (
-        "the formatter now checks exactly what the linter does. If the deferred "
-        "ruff cells were promoted, that is correct and this guard has expired — "
-        "delete it. Otherwise the format step has been pointed back at "
-        "VALIDATE_TARGETS and 874 files are unchecked again."
+        "the formatter now checks exactly what the linter does. If "
+        "packages/*/docs was promoted into the linter's target set, that is "
+        "correct and this guard has expired — delete it. Otherwise the format "
+        "step has been pointed back at VALIDATE_TARGETS, and every directory "
+        "the two lists used to differ by is unchecked again."
     )
 
 

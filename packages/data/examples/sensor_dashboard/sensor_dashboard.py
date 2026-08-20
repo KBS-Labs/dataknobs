@@ -1,5 +1,4 @@
-"""
-Mini Sensor Dashboard Example
+"""Mini Sensor Dashboard Example
 
 Demonstrates key features of the dataknobs data package through
 a simple sensor monitoring system.
@@ -7,18 +6,14 @@ a simple sensor monitoring system.
 
 import asyncio
 from datetime import datetime, timedelta
-from typing import List, Optional, Dict, Any
+from typing import List, Dict
 import pandas as pd
-from pathlib import Path
 
 from dataknobs_data import (
     Record,
     Query,
     Filter,
     Operator,
-    SortSpec,
-    SortOrder,
-    ComplexQuery,
     QueryBuilder,
     StreamProcessor,
 )
@@ -33,8 +28,7 @@ except ImportError:
 
 
 class SensorDashboard:
-    """
-    A simple sensor monitoring dashboard using dataknobs data package.
+    """A simple sensor monitoring dashboard using dataknobs data package.
 
     This example demonstrates:
     - CRUD operations for sensor management
@@ -83,7 +77,7 @@ class SensorDashboard:
 
         # Convert all readings to records - validate BEFORE creating
         records = []
-        for i, reading in enumerate(readings):
+        for reading in readings:
             try:
                 # Check for invalid data BEFORE creating the record
                 if not reading.sensor_id:
@@ -202,7 +196,7 @@ class SensorDashboard:
         """
         validated_records = []
 
-        for i, reading in enumerate(readings):
+        for reading in readings:
             record = reading.to_record()
 
             # Add validation that might fail
@@ -227,7 +221,7 @@ class SensorDashboard:
             # Check if any record is invalid - this forces fallback
             for r in records:
                 # Using new dict-like access
-                if "_invalid" in r and r["_invalid"]:
+                if r.get("_invalid"):
                     raise ValueError("Batch contains invalid records")
             return original_create_batch(records)
 
@@ -314,8 +308,7 @@ class SensorDashboard:
 
         df = pd.DataFrame(data)
         df["timestamp"] = pd.to_datetime(df["timestamp"])
-        df.set_index("timestamp", inplace=True)
-        return df
+        return df.set_index("timestamp")
 
     def calculate_hourly_averages(self, readings: List[SensorReading]) -> pd.DataFrame:
         """Calculate hourly average temperature and humidity."""
@@ -344,9 +337,9 @@ class SensorDashboard:
         anomalies = []
 
         for reading in readings:
-            if not (temp_threshold[0] <= reading.temperature <= temp_threshold[1]):
-                anomalies.append(reading)
-            elif not (humidity_threshold[0] <= reading.humidity <= humidity_threshold[1]):
+            if not (temp_threshold[0] <= reading.temperature <= temp_threshold[1]) or not (
+                humidity_threshold[0] <= reading.humidity <= humidity_threshold[1]
+            ):
                 anomalies.append(reading)
 
         return anomalies
@@ -494,11 +487,11 @@ class SensorDashboard:
         print("4. Setting field values:")
         # Can set via dict-like access
         record["temperature"] = 25.5
-        print(f"   Set via dict: record['temperature'] = 25.5")
+        print("   Set via dict: record['temperature'] = 25.5")
 
         # Or via attribute access
         record.humidity = 55.0
-        print(f"   Set via attr: record.humidity = 55.0")
+        print("   Set via attr: record.humidity = 55.0")
         print(f"   New values: temp={record.temperature}, humidity={record.humidity}")
         print()
 

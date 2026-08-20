@@ -490,13 +490,20 @@ counts in comment prose, which is enforced in one direction only: an entry
 matching nothing failed, while "241 findings" stayed green at 400. A number
 nobody compares is one that stops being true without anyone finding out.
 
-**A deferred tier is frozen, not unenforced.** Every ceiling currently equals
-what the tree measures, so a `deferred` cell is a backlog that cannot *grow* —
-adding a test with a new lint finding under `packages/*/tests` fails the
-`contract` check even though nothing lints that directory yet. That is the
-ratchet working: the backlog is being cleared, and a phase that clears one
-while another grows it never ends. Write
-new files clean, or clear one of the existing findings in the same cell.
+**A backlog is frozen, not excused.** Every ceiling equals what the tree
+measures, so a cell holding one cannot *grow* — adding a file with a new finding
+fails the `contract` check even where the tier's name suggests it is being
+tolerated. `transitional` freezes a type-checking backlog at its current size;
+it does not licence another. That is the ratchet working: a phase that clears
+one finding while another arrives never ends. Write new files clean, or clear
+one of the existing findings in the same cell.
+
+**Ruff's `deferred` tier is empty.** Every ruff cell is `checked` at a ceiling
+of zero, so the linter reads every tracked first-party `*.py` and finds nothing.
+The remaining backlog is the type checker's. One consequence is visible below:
+the guards over `bin/quality-contract.py` need a cell that measures *something*,
+and there is no longer one in this repository — hence
+[the purpose-built cell](#the-purpose-built-cell).
 
 ```bash
 # Measure the tree against every ceiling (the `contract` check the gate records)
@@ -636,6 +643,45 @@ No counts are recorded on this page. A number in prose is a number nobody
 compares, which is the failure the contract's ceilings exist to have ended; a
 census is re-run at the commit it is quoted against.
 
+### The purpose-built cell
+
+`quality-fixture/` is a small tree that is **clean under `pyproject.toml` and
+dirty under its own `quality-fixture/ruff.toml`**, which selects rules this
+repository declines to. So it carries a ceiling of zero in the contract like
+every other ruff cell, adds nothing to any backlog, and still measures something
+when read under its own configuration.
+
+It exists because clearing the last ruff backlog retired this repository as a
+test fixture. Several guards over `bin/quality-contract.py` need a cell holding
+findings — one inflates a ceiling and checks that `update-baseline` lowers it
+back, one pushes a cell under its ceiling and reads the breach report, one
+checks that a census and a measurement agree. Over a tree that measures zero
+they compare two empty tallies, which agree.
+
+`--contract PATH` is how those guards reach it, and it is the only reason the
+option exists: the properties are properties of the *command* — a census must
+report a backlog and still exit 0 — so an in-process call, which has no exit
+status, cannot check them.
+
+```bash
+# What the fixture measures, under the configuration that can see it
+uv run python bin/quality-contract.py census --tool ruff \
+    --cell quality-fixture/dense --contract <a declaration naming it>
+```
+
+The declaration is built by `tests/_workspace.py` from
+`.dataknobs/quality-contract.json` — two edits to the real one: the ruff
+configuration becomes the fixture's, and the single `quality-fixture` cell
+becomes its two halves. Derived rather than written, because `verify` requires a
+total partition of every tracked `*.py` and a second hand-kept copy of that
+would go stale.
+
+The premise is asserted, in both directions, by
+`test_the_purpose_built_cell_is_dirty_to_itself_and_clean_to_the_gate`. Adopt
+one of the fixture's rules repo-wide and the failure names the premise rather
+than arriving as an unexplained lint error in a directory nobody remembers the
+purpose of.
+
 ## Configuration
 
 ### Linting and Code Style
@@ -660,13 +706,16 @@ runs the formatter alone. All three read the root `pyproject.toml`, and all
 three resolve their file list from one declaration — `format_targets` in
 `bin/package-discovery.sh` — so a green `dk format` means a green format check.
 
-That list is **not** the one the linter uses, and the difference is deliberate.
-`bin/validate.sh` lints `packages/*/src` and the workspace directories, because
-every other per-package directory sits in the quality contract's `deferred`
-tier for ruff. The contract holds `format` to a ceiling of 0 on *all* of its
-cells, so the formatter additionally reaches each package's `tests`,
-`examples`, `scripts`, `benchmarks` and `docs`. Scoping to a package
-(`bin/validate.sh data`) narrows both lists to that package.
+That list is **not** the one the linter uses, and what remains of the difference
+is one directory per package. `bin/validate.sh` lints `packages/*/src` and each
+package's `tests`, `examples`, `scripts` and `benchmarks`, plus the workspace
+directories — every ruff cell is `checked`, so every one of them has to be in
+front of the linter. The contract holds `format` to a ceiling of 0 on *all* of
+its cells, so the formatter additionally reaches each package's `docs` — a
+standing target rather than a live one, since no tracked `*.py` lives under any
+of them today. It is there so that a Python file landing in one is formatted
+from the day it arrives. Scoping to a package (`bin/validate.sh data`) narrows
+both lists to that package.
 
 Each script prints either resolved list without running anything —
 `--print-targets` for the linter's, `--print-format-targets` for the
@@ -678,13 +727,12 @@ unexamined files, and a fix reaching less than the check flags is a red gate
 with no local remedy.
 
 `./bin/fix.sh --print-targets` is the newest of the four and closes the last of
-those corners. It is also worth knowing what it does **not** cover: a bare
-`./bin/fix.sh` reaches each package's `tests` but none of `examples`,
-`scripts`, `benchmarks` or `docs`, whose ruff ceilings the contract does
-compare. Naming the directory reaches it — `./bin/fix.sh packages/bots/examples`
-— so the remedy exists; what it lacks is any way to find out about it from the
-failure. Widening the default would run the linter's `--fix` over files nobody
-has asked to be clean, so it waits on the decision to hold them clean at all.
+those corners. A bare `./bin/fix.sh` now resolves **exactly** the linter's list:
+promoting `examples`, `scripts` and `benchmarks` widened both sides in the same
+change, which is what the contract's ceilings require —
+`test_every_lint_ceiling_is_reachable_by_the_fix` fails a cell the check
+compares and the fix cannot reach, because a red gate with no local remedy is a
+finding a developer has nowhere to take.
 
 ### Type Checking and Python Compatibility
 

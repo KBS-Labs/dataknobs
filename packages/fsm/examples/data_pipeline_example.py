@@ -1,5 +1,4 @@
-"""
-Data Pipeline Example using FSM - Fixed Version
+"""Data Pipeline Example using FSM - Fixed Version
 
 This example demonstrates how to build a robust data processing pipeline
 using the FSM framework with real-world features:
@@ -11,16 +10,13 @@ using the FSM framework with real-world features:
 """
 
 import json
-import tempfile
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any
 
-from dataknobs_fsm.config.validator import ConfigValidator
 from dataknobs_fsm.core.fsm import FSM
 from dataknobs_fsm.core.state import State
 from dataknobs_fsm.core.network import StateNetwork
 from dataknobs_fsm.core.modes import ProcessingMode
-from dataknobs_fsm.execution.async_engine import AsyncExecutionEngine
 from dataknobs_fsm.execution.context import ExecutionContext
 from dataknobs_fsm.functions.base import ITransformFunction, FunctionContext
 from dataknobs_fsm.functions.manager import FunctionManager
@@ -161,7 +157,6 @@ class DataAggregator(ITransformFunction):
 
 def create_simple_pipeline_fsm() -> FSM:
     """Create a simple FSM for data pipeline processing."""
-
     # Create FSM
     fsm = FSM(name="data_pipeline")
 
@@ -280,7 +275,7 @@ def run_simple_pipeline_example():
     # Show sample result
     if results:
         sample = results[0]
-        print(f"\n4. Sample Result:")
+        print("\n4. Sample Result:")
         print(f"   Original value: {test_records[0]['value']}")
         if "validated" in sample:
             print(f"   Validated: {sample.get('validated')}")

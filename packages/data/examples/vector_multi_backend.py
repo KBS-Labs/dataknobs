@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
-"""
-Vector Support for Multiple Backends Example
+"""Vector Support for Multiple Backends Example
 
 This example demonstrates vector search capabilities across different backends:
 1. Memory backend - for fast in-memory vector operations
@@ -19,8 +18,7 @@ import asyncio
 import numpy as np
 import tempfile
 import os
-from pathlib import Path
-from typing import List, Optional, Dict, Any
+from typing import List, Dict, Any
 
 from dataknobs_data import DatabaseFactory, AsyncDatabaseFactory
 from dataknobs_data.records import Record
@@ -138,7 +136,7 @@ class MultiBackendVectorExample:
 
         results = db.vector_search(query_vector=query_vector, vector_field="embedding", k=3)
 
-        self.log(f"\nSearching for vectors similar to [0.7, 0.7, 0.0]:")
+        self.log("\nSearching for vectors similar to [0.7, 0.7, 0.0]:")
         for result in results:
             name = result.record.get_field("name").value
             self.log(f"  - {name}: similarity={result.score:.3f}")
@@ -147,7 +145,7 @@ class MultiBackendVectorExample:
         db.clear()
         return results
 
-    def run_sync_file_example(self, filepath: Optional[str] = None) -> List[Any]:
+    def run_sync_file_example(self, filepath: str | None = None) -> List[Any]:
         """Demonstrate vector search with sync File backend."""
         self.log("\n=== File Backend (Sync) ===")
         self.log("Persistent local storage with vector support")
@@ -185,7 +183,7 @@ class MultiBackendVectorExample:
                 metric="euclidean",  # Using Euclidean distance
             )
 
-            self.log(f"\nSearching for vectors closest to Z-axis [0, 0, 1]:")
+            self.log("\nSearching for vectors closest to Z-axis [0, 0, 1]:")
             for result in results:
                 name = result.record.get_field("name").value
                 self.log(f"  - {name}: distance_score={result.score:.3f}")
@@ -222,7 +220,7 @@ class MultiBackendVectorExample:
             query_vector=query_vector, vector_field="embedding", k=3, metric="dot_product"
         )
 
-        self.log(f"\nSearching using dot product similarity to X-axis [1, 0, 0]:")
+        self.log("\nSearching using dot product similarity to X-axis [1, 0, 0]:")
         for result in results:
             name = result.record.get_field("name").value
             self.log(f"  - {name}: dot_product={result.score:.3f}")
@@ -231,7 +229,7 @@ class MultiBackendVectorExample:
         await db.clear()
         return results
 
-    async def run_async_file_with_filter(self, filepath: Optional[str] = None) -> List[Any]:
+    async def run_async_file_with_filter(self, filepath: str | None = None) -> List[Any]:
         """Demonstrate async vector search with filtering."""
         self.log("\n=== File Backend (Async) with Filtering ===")
         self.log("Combining vector search with metadata filters")
@@ -269,7 +267,7 @@ class MultiBackendVectorExample:
                 query_vector=query_vector, vector_field="embedding", k=2, filter=filter_query
             )
 
-            self.log(f"\nFiltered search (category='diagonal') for [0.7, 0.7, 0]:")
+            self.log("\nFiltered search (category='diagonal') for [0.7, 0.7, 0]:")
             for result in results:
                 name = result.record.get_field("name").value
                 category = result.record.get_field("category").value

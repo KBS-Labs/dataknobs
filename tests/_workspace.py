@@ -15,6 +15,7 @@ same declaration would otherwise carry a third.
 from __future__ import annotations
 
 import importlib.util
+import json
 import re
 import subprocess
 import tomllib
@@ -50,40 +51,157 @@ def load_toml(path: Path) -> dict:
     return tomllib.loads(path.read_text(encoding="utf-8"))
 
 
-def biggest_ruff_cells(contract: dict, count: int = 1) -> list[str]:
-    """The ``count`` ruff cells carrying the largest ceilings, largest first.
+#: The purpose-built cell, and why the guards over ``bin/quality-contract.py``
+#: need one.
+#:
+#: They used to be driven over whichever ruff cell carried the largest ceiling,
+#: which worked for exactly as long as some part of this tree was dirty. Every
+#: ruff cell now measures zero — that is the point of the work, not an accident
+#: of it — so a guard that inflates a ceiling, pushes a cell under one, or asks
+#: whether a census agrees with a measurement has nothing left to say. Two empty
+#: tallies agree.
+#:
+#: So the backlog these guards need is built rather than borrowed.
+#: ``quality-fixture/`` is clean under ``pyproject.toml`` and dirty under its own
+#: ``ruff.toml``, which selects rules this repository does not. It therefore
+#: carries a ceiling of zero in the real declaration, adds nothing to any tier,
+#: and still measures something when read under its own configuration.
+#: ``test_the_purpose_built_cell_is_dirty_to_itself_and_clean_to_the_gate``
+#: asserts both halves, because either one failing quietly is a guard that has
+#: stopped distinguishing anything.
+QUALITY_FIXTURE = "quality-fixture"
 
-    Asked of the declaration rather than named. Deferred cells are promoted one
-    at a time, and the tests backlog was a single glob until it was split into a
-    cell per package so each could clear on its own — it collapses back to a glob
-    when the last of them does. A literal name fails with a ``KeyError`` on the
-    day of any of those moves: a guard going red over a change it holds no
-    opinion about, saying nothing about the property it exists for.
+#: The linter configuration it is dirty under.
+QUALITY_FIXTURE_CONFIG = f"{QUALITY_FIXTURE}/ruff.toml"
 
-    The floor is the anti-vacuity assertion, and it is why this returns cells
-    rather than a name. Every caller needs one that measures well above zero — to
-    inflate, to push under a ceiling, or to keep a census agreeing with a
-    measurement from being two empty tallies agreeing because both are empty.
-    Once the backlog clears past this the guards stop distinguishing anything, so
-    they say so and stop, rather than passing quietly over nothing.
+#: Its cells, the one holding more findings first.
+#:
+#: Two rather than one because three guards watch a command touch the cell it was
+#: named and leave the other exactly as declared, which a single cell cannot
+#: express. The real declaration holds the parent instead — one cell, so that
+#: the tier's claim can be compared against a target ``bin/validate.sh``
+#: actually names.
+QUALITY_FIXTURE_CELLS = (f"{QUALITY_FIXTURE}/dense", f"{QUALITY_FIXTURE}/sparse")
 
-    Lives here because two modules ask it. They had a copy each, differing in
-    sort direction and in whether the floor was checked against the smallest of
-    the chosen cells or against the only one — the same divergence the Python
-    floor extraction had before it moved here.
+#: One reason per cell, and they differ — the guard on the writer's encoding
+#: asserts that lowering one ceiling leaves the *other* cell's prose exactly as
+#: declared, which two identical strings cannot distinguish. The em-dashes are
+#: the subject: the default ``ensure_ascii`` escapes them, and that is the
+#: defect the guard was written for.
+_FIXTURE_REASONS = {
+    QUALITY_FIXTURE_CELLS[0]: (
+        "the larger half of the fixture — deliberate findings under the fixture "
+        "linter configuration, spread over two files so a breach can rank them"
+    ),
+    QUALITY_FIXTURE_CELLS[1]: (
+        "the smaller half — enough to stay a ceiling when a guard pushes it five "
+        "findings under what the tree holds"
+    ),
+}
+
+
+def _fixture_declaration(ceilings: dict[str, int]) -> dict:
+    """The real declaration, read under the fixture's linter configuration.
+
+    Derived rather than written, and derived from the file the repository is
+    actually measured against. A hand-built declaration would have to be a total
+    partition of every tracked ``*.py`` to get past ``verify`` — which is the
+    right demand, since a command measuring a contract that does not describe
+    the tree reports cells that mean nothing — and keeping a second copy of that
+    partition in step with the first is a job nobody would remember to do.
+
+    Two edits, and they are the whole difference. The ruff configuration becomes
+    the fixture's, so the tree is read under rules this repository declines; and
+    the single ``quality-fixture`` cell becomes its two halves, which prefix
+    matching cannot express as an addition because the parent would then cover
+    them as well. The parent is what the real declaration holds, because a
+    ``checked`` tier is compared against ``bin/validate.sh``'s targets and the
+    script names the directory rather than its halves.
     """
-    ranked = sorted(
-        contract["tools"]["ruff"]["cells"], key=lambda cell: cell["ceiling"], reverse=True
+    declared = (ROOT / ".dataknobs" / "quality-contract.json").read_text("utf-8")
+    contract: dict = json.loads(declared)
+    ruff = contract["tools"]["ruff"]
+    ruff["config"] = QUALITY_FIXTURE_CONFIG
+
+    parent = [cell for cell in ruff["cells"] if cell["path"] == QUALITY_FIXTURE]
+    assert len(parent) == 1, (
+        f"the ruff declaration holds {len(parent)} cells named {QUALITY_FIXTURE!r}, "
+        "so there is nothing single to split into its two halves"
     )
-    assert len(ranked) >= count, f"the ruff declaration holds only {len(ranked)} cells"
-    chosen = [cell["path"] for cell in ranked[:count]]
-    assert ranked[count - 1]["ceiling"] > 5, (
-        f"the {count} largest ruff ceilings are {chosen}, and the smallest of them "
-        "is at or below 5 — too small for these guards to tell a real measurement "
-        "from a clean cell. The backlog has been cleared past what they assume; "
-        "drive them over a purpose-built cell instead."
+    ruff["cells"] = [cell for cell in ruff["cells"] if cell["path"] != QUALITY_FIXTURE] + [
+        {
+            "path": cell,
+            "tier": parent[0]["tier"],
+            "ceiling": ceilings[cell],
+            "reason": _FIXTURE_REASONS[cell],
+        }
+        for cell in QUALITY_FIXTURE_CELLS
+    ]
+    return contract
+
+
+@cache
+def _fixture_ceilings() -> tuple[tuple[str, int], ...]:
+    """What the fixture measures, taken rather than written down.
+
+    A count in this file would be the defect the contract's own ``verify``
+    rejects in a cell's reason: true when written, false the moment the fixture
+    is edited, and disagreed with by nothing. So it is measured once per session
+    and the declaration is built around the answer — which also means a guard
+    that inflates a ceiling by 500 and asserts it comes back is comparing
+    against the tree rather than against a number somebody typed.
+
+    The floor is the anti-vacuity assertion the ceiling ranking used to carry.
+    Both halves must measure above it, because the guard that pushes one five
+    findings under its ceiling needs the result to still be a ceiling.
+    """
+    module = load_bin_module("quality-contract")
+    contract = _fixture_declaration(dict.fromkeys(QUALITY_FIXTURE_CELLS, 0))
+    measurement = module.measure_ruff(contract, module.tracked_python(), set(QUALITY_FIXTURE_CELLS))
+    measured = {
+        cell: sum(measurement.by_cell.get(cell, {}).values()) for cell in QUALITY_FIXTURE_CELLS
+    }
+
+    larger, smaller = QUALITY_FIXTURE_CELLS
+    assert measured[smaller] > 5, (
+        f"the purpose-built cell measures {measured}, and the smaller half is at "
+        "or below 5 — too small for these guards to tell a real measurement from "
+        f"a clean one. Either {QUALITY_FIXTURE}/ was edited, or a rule "
+        f"{QUALITY_FIXTURE_CONFIG} selects has since been adopted repo-wide and "
+        "no longer has anything left to report there."
     )
-    return chosen
+    assert measured[larger] > measured[smaller], (
+        f"the purpose-built halves measure {measured}, so the pair is no longer "
+        f"ordered. {larger} is named first because the guards that take both "
+        "inflate one and push the other under its ceiling, and an order that "
+        "silently reverses swaps which is which."
+    )
+    return tuple(measured.items())
+
+
+def quality_fixture_contract() -> dict:
+    """A fresh declaration over the purpose-built cell, at what it measures.
+
+    Fresh on every call rather than shared: every guard here mutates the
+    ceilings it is handed, so one cached object would carry a ``+500`` from the
+    test that wrote it into the next one to ask.
+    """
+    return _fixture_declaration(dict(_fixture_ceilings()))
+
+
+def write_quality_fixture_contract(directory: Path) -> Path:
+    """Write the fixture declaration into ``directory`` and name the file.
+
+    For the guards that drive the command rather than the function. The exit
+    status is the only thing carrying a census's refusals out, and an in-process
+    call has none to check.
+    """
+    destination = directory / "quality-contract.json"
+    destination.write_text(
+        json.dumps(quality_fixture_contract(), indent=2, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+    return destination
 
 
 def python_floor() -> tuple[int, int]:

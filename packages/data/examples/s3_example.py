@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
-"""
-Example demonstrating S3 backend usage with DataKnobs.
+"""Example demonstrating S3 backend usage with DataKnobs.
 
 This example shows:
 1. S3 backend configuration

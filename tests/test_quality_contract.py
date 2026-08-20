@@ -29,7 +29,16 @@ from typing import Any
 
 import pytest
 
-from tests._workspace import ROOT, biggest_ruff_cells, load_bin_module, rel
+from tests._workspace import (
+    QUALITY_FIXTURE,
+    QUALITY_FIXTURE_CELLS,
+    QUALITY_FIXTURE_CONFIG,
+    ROOT,
+    load_bin_module,
+    quality_fixture_contract,
+    rel,
+    write_quality_fixture_contract,
+)
 from tests._workspace import load_toml as _load_toml
 
 CONTRACT = ROOT / ".dataknobs" / "quality-contract.json"
@@ -173,6 +182,60 @@ def test_a_checked_cell_is_one_the_linter_actually_reaches() -> None:
     )
 
 
+def test_the_purpose_built_cell_is_dirty_to_itself_and_clean_to_the_gate() -> None:
+    """The premise the guards over this tool now stand on, asserted in both halves.
+
+    ``quality-fixture/`` exists because the repository stopped being able to
+    serve as one. Every ruff cell here measures zero, so a guard that inflates a
+    ceiling, pushes a cell under one, or checks that a census and a measurement
+    agree was left comparing two empty tallies — which agree. The fixture gives
+    those guards a backlog that is deliberate rather than borrowed.
+
+    That only works while *both* halves hold, and each fails silently on its
+    own. Dirty-to-itself failing leaves half a dozen guards passing over nothing,
+    which is the shape they were rewritten to escape. Clean-to-the-gate failing
+    puts findings in a cell declared at a ceiling of zero — the fixture would
+    then be a backlog, in the one tree that is supposed to prove there is none.
+
+    The third assertion is the one that would go first, and it names the reason
+    rather than the symptom. The fixture is dirty only because it is read under
+    rules this repository declines to select; adopt one of them repo-wide and
+    the fixture becomes an ordinary lint failure whose message says nothing
+    about why it is there. Asked of ruff both times, for the reason
+    ``enabled_rules`` declines to re-implement selector resolution.
+    """
+    contract = quality_fixture_contract()
+    measured = {
+        cell["path"]: cell["ceiling"]
+        for cell in contract["tools"]["ruff"]["cells"]
+        if cell["path"] in QUALITY_FIXTURE_CELLS
+    }
+    assert sorted(measured) == sorted(QUALITY_FIXTURE_CELLS) and all(measured.values()), (
+        f"{QUALITY_FIXTURE} measures {measured} under {QUALITY_FIXTURE_CONFIG}. A "
+        "half that measures nothing is a guard that has stopped distinguishing "
+        "anything, and it reports that by passing."
+    )
+
+    report = contract_module.check(_contract(), ["ruff"], {QUALITY_FIXTURE})
+    assert not report["exceeded"], (
+        f"{QUALITY_FIXTURE} is dirty to this repository's own linter: "
+        f"{report['exceeded']}. It is declared at a ceiling of zero and it has "
+        "to stay there — findings the gate can see make it a backlog, which is "
+        "the one thing this tree exists to demonstrate the absence of."
+    )
+
+    fixture_rules = contract_module.enabled_rules(ROOT / QUALITY_FIXTURE_CONFIG)
+    assert fixture_rules, f"{QUALITY_FIXTURE_CONFIG} enables no rule, so it reports nothing"
+    adopted = sorted(fixture_rules & contract_module.enabled_rules())
+    assert not adopted, (
+        f"{QUALITY_FIXTURE_CONFIG} selects {adopted}, which this repository now "
+        "enforces too. The fixture is clean to the gate only because the rules "
+        "it trips are ones the gate declines — so either drop those from the "
+        "fixture configuration and give it rules that are still declined, or "
+        f"clear the findings they now report in {QUALITY_FIXTURE}/."
+    )
+
+
 def test_the_type_checker_reads_exactly_the_cells_it_is_measured_over() -> None:
     """``unchecked`` must mean the type checker never sees the file.
 
@@ -252,15 +315,21 @@ def test_a_baseline_update_lowers_a_ceiling_and_never_raises_one(tmp_path: Path)
     all the way through the phase that is supposedly clearing it — with the
     tooling reporting green the whole way, because the number moved with it.
 
-    Both directions in one test because it is one decision. Driven over the real
+    Both directions in one test because it is one decision. Driven over a real
     measurement rather than a stubbed one: what is being pinned is what the
-    command does to a ceiling on this repository, and a fake measurement would
-    pin it against a number that no tool produces.
+    command does to a ceiling over a tree it actually reads, and a fake
+    measurement would pin it against a number that no tool produces.
+
+    That tree is the purpose-built cell rather than this repository's own, which
+    is not a weakening — the ceilings it carries are what ruff reports over it,
+    taken at the same moment. This repository has no ruff backlog left to inflate
+    or push under, and a ceiling of zero pushed five findings lower is still
+    zero.
     """
-    contract = _contract()
+    contract = quality_fixture_contract()
     ruff_cells = {cell["path"]: cell for cell in contract["tools"]["ruff"]["cells"]}
 
-    inflated, deflated = biggest_ruff_cells(contract, 2)
+    inflated, deflated = QUALITY_FIXTURE_CELLS
     true_ceilings = {
         inflated: ruff_cells[inflated]["ceiling"],
         deflated: ruff_cells[deflated]["ceiling"],
@@ -270,7 +339,9 @@ def test_a_baseline_update_lowers_a_ceiling_and_never_raises_one(tmp_path: Path)
     ruff_cells[deflated]["ceiling"] = max(true_ceilings[deflated] - 5, 0)
 
     destination = tmp_path / "quality-contract.json"
-    lowered, exceeded = contract_module.update_baseline(contract, ["ruff"], destination)
+    lowered, exceeded = contract_module.update_baseline(
+        contract, ["ruff"], destination, set(QUALITY_FIXTURE_CELLS)
+    )
 
     assert ruff_cells[inflated]["ceiling"] == true_ceilings[inflated], (
         f"an inflated ceiling on {inflated} was not lowered to what the tree "
@@ -312,10 +383,10 @@ def test_update_baseline_rewrites_only_the_cells_it_was_named(tmp_path: Path) ->
     subject is what this command does to a ceiling, and it may not do it to the
     declaration this repository is measured against.
     """
-    contract = _contract()
+    contract = quality_fixture_contract()
     ruff_cells = {cell["path"]: cell for cell in contract["tools"]["ruff"]["cells"]}
 
-    named, untouched = biggest_ruff_cells(contract, 2)
+    named, untouched = QUALITY_FIXTURE_CELLS
     ruff_cells[named]["ceiling"] += 500
     ruff_cells[untouched]["ceiling"] += 500
     inflated = ruff_cells[untouched]["ceiling"]
@@ -358,10 +429,10 @@ def test_a_baseline_update_leaves_the_prose_of_cells_it_did_not_touch(
     Not hypothetical — ``main`` carried one such row at the time this was
     written, from an earlier run of the same command.
     """
-    contract = _contract()
+    contract = quality_fixture_contract()
     ruff_cells = {cell["path"]: cell for cell in contract["tools"]["ruff"]["cells"]}
 
-    named, _ = biggest_ruff_cells(contract, 2)
+    named, _ = QUALITY_FIXTURE_CELLS
     ruff_cells[named]["ceiling"] += 500
 
     unicode_reasons = [
@@ -388,6 +459,70 @@ def test_a_baseline_update_leaves_the_prose_of_cells_it_did_not_touch(
             "a baseline update re-encoded the prose of a cell whose ceiling it "
             f"did not move. Expected to find {reason!r} written as it was declared"
         )
+
+
+def test_a_baseline_update_rewrites_the_declaration_it_was_pointed_at(tmp_path: Path) -> None:
+    """``--contract`` is read on the way in, so it has to be honoured on the way out.
+
+    ``main`` loaded the declaration through an argument and wrote it back through
+    a module constant, which is the one shape of this option that is worse than
+    not having it: the command reports lowering a ceiling in the file it was
+    given and lowers it in ``.dataknobs/quality-contract.json`` instead. A
+    ceiling only ever falls, so re-running does not undo it, and the diff lands
+    in the declaration this repository is measured against with nothing in the
+    output naming it.
+
+    Driven as a subprocess because the defect lives in ``main``'s wiring rather
+    than in ``update_baseline``, which has taken the path as a parameter all
+    along.
+    """
+    declaration = write_quality_fixture_contract(tmp_path)
+    contract = json.loads(declaration.read_text(encoding="utf-8"))
+    named = QUALITY_FIXTURE_CELLS[0]
+    inflated = 0
+    for cell in contract["tools"]["ruff"]["cells"]:
+        if cell["path"] == named:
+            cell["ceiling"] += 500
+            inflated = cell["ceiling"]
+    assert inflated, f"{named} is not a cell of the fixture declaration"
+    declaration.write_text(
+        json.dumps(contract, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
+    )
+    untouched = CONTRACT.read_bytes()
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(TOOL),
+            "update-baseline",
+            "--tool",
+            "ruff",
+            "--cell",
+            named,
+            "--contract",
+            str(declaration),
+        ],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, f"update-baseline exited {result.returncode}: {result.stderr}"
+    lowered = {
+        cell["path"]: cell["ceiling"]
+        for cell in json.loads(declaration.read_text(encoding="utf-8"))["tools"]["ruff"]["cells"]
+        if cell["path"] in QUALITY_FIXTURE_CELLS
+    }
+    assert lowered[named] < inflated, (
+        f"{named} was inflated to {inflated} in the named declaration and the "
+        f"command did not lower it there: {lowered}"
+    )
+    assert CONTRACT.read_bytes() == untouched, (
+        f"update-baseline was pointed at {declaration} and rewrote "
+        f"{rel(CONTRACT)} instead. A ceiling only falls, so this is not "
+        "recoverable by re-running the command."
+    )
 
 
 def _with_cell(tool: str, **overrides: Any) -> dict[str, Any]:
@@ -501,16 +636,21 @@ def test_a_breached_ceiling_names_the_files_that_breached_it() -> None:
     approached from the other side — so an exceeded cell carries the file names
     out with it.
 
-    Driven over the real measurement with one ceiling pushed below what the
-    tree holds, because what is being pinned is what a developer sees when a
-    real cell goes over.
+    Driven over a real measurement with one ceiling pushed below what the tree
+    holds, because what is being pinned is what a developer sees when a cell
+    goes over. The purpose-built cell, since no cell of this repository's own
+    can be pushed under a ceiling any more: they measure zero, and there is
+    nothing below it.
+
+    Its larger half holds two files, which is what makes the ranking below a
+    ranking rather than a listing.
     """
-    contract = _contract()
+    contract = quality_fixture_contract()
     cells = {cell["path"]: cell for cell in contract["tools"]["ruff"]["cells"]}
-    (breached,) = biggest_ruff_cells(contract, 1)
+    breached = QUALITY_FIXTURE_CELLS[0]
     cells[breached]["ceiling"] = 0
 
-    report = contract_module.check(contract, ["ruff"])
+    report = contract_module.check(contract, ["ruff"], {breached})
 
     entry = next((e for e in report["exceeded"] if e["cell"] == f"ruff/{breached}"), None)
     assert entry is not None, (
@@ -519,6 +659,12 @@ def test_a_breached_ceiling_names_the_files_that_breached_it() -> None:
     assert entry["files"], (
         "the breach named no files, so the developer is told a number and left "
         "to find the offenders with a second tool"
+    )
+    counts = [offender["count"] for offender in entry["files"]]
+    assert len(counts) > 1 and counts == sorted(counts, reverse=True), (
+        "the offenders came back as one file, or out of order. Naming them "
+        "largest first is what makes the list somewhere to start rather than "
+        f"the same information the count already carried: {entry['files']}"
     )
     for offender in entry["files"]:
         # Asked of the same matcher the measurement used, rather than checked

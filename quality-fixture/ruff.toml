@@ -1,0 +1,24 @@
+# The linter configuration the purpose-built cell is measured under.
+#
+# Not the repository's. `quality-fixture/` exists so that the guards over
+# `bin/quality-contract.py` have a cell that measures a backlog, and the
+# repository no longer has one: every ruff cell in
+# `.dataknobs/quality-contract.json` reached a ceiling of zero, which is the
+# point of that work and is what retired the tree as a fixture for these guards.
+#
+# So the backlog is built rather than borrowed. Every rule selected below is one
+# the root `pyproject.toml` does not select, which is what lets the same files be
+# clean to the gate and dirty to this — a tracked fixture that adds nothing to
+# any ceiling. `test_the_purpose_built_cell_is_dirty_here_and_clean_to_the_gate`
+# asserts both halves, so the day one of these rules is adopted repo-wide the
+# failure names the premise rather than arriving as a mystery lint error.
+#
+# `select` rather than `extend-select`: this replaces ruff's default rule set
+# instead of adding to it, so the fixture's count moves only when the fixture
+# does.
+
+target-version = "py312"
+line-length = 100
+
+[lint]
+select = ["EM", "TRY003", "RET504", "A002", "FBT002", "PERF401"]

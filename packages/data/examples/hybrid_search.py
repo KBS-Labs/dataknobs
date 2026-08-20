@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
-"""
-Hybrid Search Example - Combining Text and Vector Search
+"""Hybrid Search Example - Combining Text and Vector Search
 
 This example demonstrates:
 1. Setting up hybrid search (text + vector)
@@ -14,7 +13,7 @@ Requirements:
 """
 
 import asyncio
-from typing import List, Dict, Any, Tuple
+from typing import List, Dict, Any
 from dataclasses import dataclass
 from sentence_transformers import SentenceTransformer
 import time
@@ -80,16 +79,13 @@ class HybridSearchDemo:
     async def hybrid_search(
         self, query: str, alpha: float = 0.5, limit: int = 5
     ) -> List[SearchResult]:
-        """
-        Perform hybrid search combining text and vector.
+        """Perform hybrid search combining text and vector.
 
         Args:
             query: Search query
             alpha: Weight between text (0) and vector (1) search
             limit: Number of results to return
         """
-        query_embedding = generate_embedding(query)
-
         # Get both text and vector results
         text_results = await self.text_search(query, limit * 2)
         vector_results = await self.vector_search(query, limit * 2)
@@ -124,8 +120,7 @@ class HybridSearchDemo:
     async def reciprocal_rank_fusion(
         self, query: str, k: int = 60, limit: int = 5
     ) -> List[SearchResult]:
-        """
-        Reciprocal Rank Fusion (RRF) for combining search results.
+        """Reciprocal Rank Fusion (RRF) for combining search results.
         More robust than simple weighted combination.
         """
         # Get both result sets
@@ -164,7 +159,6 @@ class HybridSearchDemo:
 
 async def create_sample_database():
     """Create a database with sample documents."""
-
     print("\n1. Creating sample database...")
 
     factory = AsyncDatabaseFactory()
@@ -274,7 +268,6 @@ async def create_sample_database():
 
 async def compare_search_methods(db, query: str):
     """Compare different search methods for the same query."""
-
     print(f"\n🔍 Query: '{query}'")
     print("=" * 60)
 
@@ -327,7 +320,6 @@ async def compare_search_methods(db, query: str):
 
 async def test_query_expansion(db):
     """Demonstrate query expansion for better results."""
-
     print("\n\n🔄 Query Expansion Example")
     print("=" * 60)
 
@@ -353,7 +345,6 @@ async def test_query_expansion(db):
 
 async def test_filtered_hybrid_search(db):
     """Demonstrate hybrid search with filters."""
-
     print("\n\n🎛️ Filtered Hybrid Search")
     print("=" * 60)
 
@@ -381,7 +372,6 @@ async def test_filtered_hybrid_search(db):
 
 async def analyze_alpha_impact(db):
     """Analyze the impact of alpha parameter on hybrid search."""
-
     print("\n\n📊 Alpha Parameter Analysis")
     print("=" * 60)
 
@@ -415,7 +405,6 @@ async def analyze_alpha_impact(db):
 
 async def main():
     """Run the hybrid search example."""
-
     print("\n" + "=" * 60)
     print("Hybrid Search Example")
     print("=" * 60)

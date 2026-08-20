@@ -175,7 +175,7 @@ class ConversationBenchmark:
         times = []
         for _ in range(self.iterations):
             start = time.perf_counter()
-            messages = await manager.get_messages()
+            await manager.get_messages()
             end = time.perf_counter()
             times.append(end - start)
 

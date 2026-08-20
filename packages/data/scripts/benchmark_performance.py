@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
-"""
-Performance benchmarks for validation and migration modules.
+"""Performance benchmarks for validation and migration modules.
 
 Compares performance between different operations and provides insights
 on optimization opportunities.
@@ -10,13 +9,12 @@ import time
 import random
 import string
 import statistics
-from typing import List, Dict, Any, Callable
+from typing import List
 from dataclasses import dataclass
 
 from dataknobs_data.records import Record
 from dataknobs_data.validation import (
     Schema,
-    Required,
     Range,
     Length,
     Pattern,
@@ -34,7 +32,6 @@ from dataknobs_data.migration import (
     Migrator,
 )
 from dataknobs_data.backends.memory import SyncMemoryDatabase
-from dataknobs_data.query import Query
 
 
 @dataclass

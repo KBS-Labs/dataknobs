@@ -35,7 +35,13 @@ from typing import Any
 
 import pytest
 
-from tests._workspace import ROOT, biggest_ruff_cells, load_bin_module
+from tests._workspace import (
+    QUALITY_FIXTURE_CELLS,
+    ROOT,
+    load_bin_module,
+    quality_fixture_contract,
+    write_quality_fixture_contract,
+)
 
 CONTRACT = ROOT / ".dataknobs" / "quality-contract.json"
 TOOL = ROOT / "bin" / "quality-contract.py"
@@ -213,9 +219,13 @@ def test_the_census_agrees_with_the_linter_over_a_real_cell() -> None:
     is the only assertion here that would catch the census and the measurement
     applying different guards to the same invocation — an unreadable file
     refused on one path and counted on the other, say.
+
+    Over the purpose-built cell, because this repository's ruff cells all
+    measure zero now and two empty tallies agree with each other for free. Real
+    in the sense that matters here: ruff runs, and both sides read what it said.
     """
-    contract = _contract()
-    (cell,) = biggest_ruff_cells(contract)
+    contract = quality_fixture_contract()
+    cell = QUALITY_FIXTURE_CELLS[0]
 
     measurement = contract_module.measure_ruff(contract, contract_module.tracked_python(), {cell})
     run = contract_module.take_census(contract, "ruff", {cell})
@@ -229,8 +239,8 @@ def test_the_census_agrees_with_the_linter_over_a_real_cell() -> None:
         "decomposition of the number the ceiling is compared against."
     )
     assert measured > 0, (
-        f"{cell} carries the largest ruff ceiling in the contract and measured "
-        "nothing, so this compared two empty tallies and asserted nothing"
+        f"{cell} is the purpose-built cell and measured nothing, so this "
+        "compared two empty tallies and asserted nothing"
     )
 
 
@@ -871,7 +881,7 @@ def test_a_generated_configuration_already_in_the_tree_is_refused(
     )
 
 
-def test_a_census_that_ran_reports_a_backlog_without_failing() -> None:
+def test_a_census_that_ran_reports_a_backlog_without_failing(tmp_path: Path) -> None:
     """Not a verdict — the one command whose whole purpose is to read a backlog.
 
     Exiting non-zero over a tree with findings would make it look like a failing
@@ -879,12 +889,28 @@ def test_a_census_that_ran_reports_a_backlog_without_failing() -> None:
     refusals above stop being heard, since the status is the only thing carrying
     them.
 
-    Driven over a real cell with a real backlog, so the zero is a status reported
-    *despite* findings rather than in the absence of any.
+    Driven over a cell with a real backlog, so the zero is a status reported
+    *despite* findings rather than in the absence of any. That cell is the
+    purpose-built one and it is reached through ``--contract``, because this is
+    the guard the option exists for: the property is a property of the *command*
+    — an in-process call has no exit status to check — and no cell of this
+    repository's own has anything left for a census to find.
     """
-    (cell,) = biggest_ruff_cells(_contract())
+    cell = QUALITY_FIXTURE_CELLS[0]
+    declaration = write_quality_fixture_contract(tmp_path)
     result = subprocess.run(
-        [sys.executable, str(TOOL), "census", "--tool", "ruff", "--cell", cell, "--json"],
+        [
+            sys.executable,
+            str(TOOL),
+            "census",
+            "--tool",
+            "ruff",
+            "--cell",
+            cell,
+            "--contract",
+            str(declaration),
+            "--json",
+        ],
         cwd=ROOT,
         capture_output=True,
         text=True,
@@ -895,12 +921,12 @@ def test_a_census_that_ran_reports_a_backlog_without_failing() -> None:
         f"a census over a cell carrying a backlog exited {result.returncode}: {result.stderr}"
     )
     assert json.loads(result.stdout)["total"] > 0, (
-        f"{cell} carries the largest ruff ceiling and censused nothing, so the "
-        "exit status above was reported over an empty run"
+        f"{cell} is the purpose-built cell and censused nothing, so the exit "
+        "status above was reported over an empty run"
     )
 
 
-def test_a_census_does_not_move_the_thing_it_measures() -> None:
+def test_a_census_does_not_move_the_thing_it_measures(tmp_path: Path) -> None:
     """Not a ratchet move. Only ``update_baseline`` writes the declaration.
 
     True by inspection today, and guarded by nothing else — which is the
@@ -909,21 +935,44 @@ def test_a_census_does_not_move_the_thing_it_measures() -> None:
     be caught here and nowhere else. A measurement that also moved the ceiling it
     was taken against leaves nobody able to say what the tree looked like
     beforehand.
+
+    Both declarations are checked, and the second is the one that would move.
+    ``update_baseline`` writes only when a ceiling is *above* what the tree
+    measures, so a census that had learned to lower one would leave this
+    repository's own file untouched — every ruff ceiling in it is zero and
+    nothing can fall below that. The purpose-built cell is where a stray write
+    would land, because its ceilings are the only ones with anywhere to go.
     """
-    before = CONTRACT.read_bytes()
-    (cell,) = biggest_ruff_cells(_contract())
+    repository = CONTRACT.read_bytes()
+    cell = QUALITY_FIXTURE_CELLS[0]
+    declaration = write_quality_fixture_contract(tmp_path)
+    measured_against = declaration.read_bytes()
 
     subprocess.run(
-        [sys.executable, str(TOOL), "census", "--tool", "ruff", "--cell", cell],
+        [
+            sys.executable,
+            str(TOOL),
+            "census",
+            "--tool",
+            "ruff",
+            "--cell",
+            cell,
+            "--contract",
+            str(declaration),
+        ],
         cwd=ROOT,
         capture_output=True,
         text=True,
         check=False,
     )
 
-    assert CONTRACT.read_bytes() == before, (
-        "a census rewrote .dataknobs/quality-contract.json, so the measurement "
-        "moved the ceiling it was being compared against"
+    assert declaration.read_bytes() == measured_against, (
+        "a census rewrote the declaration it was measuring against, so the "
+        "measurement moved the ceiling it was being compared to"
+    )
+    assert CONTRACT.read_bytes() == repository, (
+        "a census rewrote .dataknobs/quality-contract.json — a declaration it "
+        "was not even pointed at"
     )
 
 

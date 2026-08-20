@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
-"""
-Migration Example - Adding Vectors to Existing Data
+"""Migration Example - Adding Vectors to Existing Data
 
 This example demonstrates:
 1. Migrating a database without vectors to include vector support
@@ -15,12 +14,12 @@ Requirements:
 
 import asyncio
 import time
-from typing import List, Dict, Any, Optional
+from typing import List
 from datetime import datetime
 from sentence_transformers import SentenceTransformer
 from dataclasses import dataclass
 
-from dataknobs_data import AsyncDatabaseFactory, Record, VectorField, Query
+from dataknobs_data import AsyncDatabaseFactory, Record, VectorField
 from dataknobs_data.vector import VectorMigration, IncrementalVectorizer
 
 
@@ -56,7 +55,6 @@ class MigrationStats:
 
 async def create_legacy_database():
     """Create a simulated legacy database without vector support."""
-
     print("\n1. Creating legacy database (without vectors)...")
 
     # Create database without vector support
@@ -156,7 +154,6 @@ async def create_legacy_database():
 
 async def migrate_to_vector_database(legacy_db):
     """Migrate legacy database to include vector support."""
-
     print("\n2. Creating new database with vector support...")
 
     # Create new database with vector support
@@ -177,7 +174,6 @@ async def migrate_to_vector_database(legacy_db):
 
 async def manual_migration(legacy_db, vector_db, stats: MigrationStats):
     """Manually migrate records with vector generation."""
-
     print("\n3. Manual Migration Process...")
 
     # Get all records from legacy database
@@ -226,7 +222,6 @@ async def manual_migration(legacy_db, vector_db, stats: MigrationStats):
 
 async def incremental_migration(vector_db):
     """Demonstrate incremental vectorization for large datasets."""
-
     print("\n4. Incremental Vectorization (for large datasets)...")
 
     # Create incremental vectorizer with simplified API
@@ -251,7 +246,7 @@ async def incremental_migration(vector_db):
     # Run vectorization with simplified API
     results = await vectorizer.run()
 
-    print(f"  ✓ Incremental vectorization completed")
+    print("  ✓ Incremental vectorization completed")
     print(f"    Processed: {results.processed} records")
     print(f"    Failed: {results.failed} records")
 
@@ -260,7 +255,6 @@ async def incremental_migration(vector_db):
 
 async def verify_migration(vector_db):
     """Verify that migration was successful."""
-
     print("\n5. Verifying Migration...")
 
     # Check total records
@@ -274,7 +268,7 @@ async def verify_migration(vector_db):
     all_records = await vector_db.find()
 
     for record in all_records:
-        if "embedding" in record and record["embedding"]:
+        if record.get("embedding"):
             records_with_vectors += 1
         else:
             records_without_vectors += 1
@@ -311,7 +305,6 @@ async def verify_migration(vector_db):
 
 async def migration_with_retry(legacy_db, vector_db):
     """Demonstrate migration with retry logic for failed records."""
-
     print("\n6. Migration with Retry Logic...")
 
     # Create migration with simplified API
@@ -322,14 +315,12 @@ async def migration_with_retry(legacy_db, vector_db):
         text_fields=["title", "content"],  # Primary configuration
         vector_field="embedding",
         batch_size=2,
+        max_retries=3,
+        retry_delay=0.5,
     )
 
-    # Add retry logic
-    max_retries = 3
-    retry_delay = 0.5  # seconds
-
     # Run migration with simplified API
-    print(f"  Running migration...")
+    print("  Running migration...")
 
     results = await migration.run(
         progress_callback=lambda status: print(
@@ -337,7 +328,7 @@ async def migration_with_retry(legacy_db, vector_db):
         )
     )
 
-    print(f"  ✓ Migration completed")
+    print("  ✓ Migration completed")
     print(f"    Success: {results.migrated_records} records")
     print(f"    Failed: {results.failed_records} records")
     print(f"    Success rate: {results.success_rate:.1f}%")
@@ -347,7 +338,6 @@ async def migration_with_retry(legacy_db, vector_db):
 
 async def main():
     """Run the migration example."""
-
     print("\n" + "=" * 60)
     print("Vector Migration Example")
     print("=" * 60)
@@ -398,7 +388,7 @@ async def main():
         await incremental_migration(vector_db)
 
         # Step 5: Verify migration
-        verification = await verify_migration(vector_db)
+        await verify_migration(vector_db)
 
         # Final statistics
         stats.end_time = time.time()

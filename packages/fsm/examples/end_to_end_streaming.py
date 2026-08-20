@@ -1,5 +1,4 @@
-"""
-End-to-End Streaming Example for FSM
+"""End-to-End Streaming Example for FSM
 
 This example demonstrates how to stream data through an FSM network where:
 1. Input is streamed from a source (file, database, or custom iterator)
@@ -16,7 +15,7 @@ import tempfile
 from pathlib import Path
 from typing import AsyncIterator, Dict, Any, List
 
-from dataknobs_fsm import SimpleFSM, AsyncSimpleFSM
+from dataknobs_fsm import AsyncSimpleFSM
 
 # ---------------------------------------------------------------------------
 # Blocking filesystem helpers, and how the examples below reach them.
@@ -65,8 +64,7 @@ def _remove(*paths: Path) -> None:
 async def generate_streaming_data(
     count: int = 1000, chunk_size: int = 100
 ) -> AsyncIterator[Dict[str, Any]]:
-    """
-    Simulate a streaming data source.
+    """Simulate a streaming data source.
 
     This could be replaced with:
     - Real-time API data
@@ -95,8 +93,7 @@ async def generate_streaming_data(
 
 
 def create_streaming_fsm_config():
-    """
-    Create an FSM configuration that processes streaming data.
+    """Create an FSM configuration that processes streaming data.
 
     This FSM:
     1. Validates incoming records
@@ -186,8 +183,7 @@ def create_streaming_fsm_config():
 
 
 async def example_file_to_file_streaming():
-    """
-    Example 1: Stream from file to file with FSM processing.
+    """Example 1: Stream from file to file with FSM processing.
 
     This demonstrates the most common use case: processing large files
     without loading them entirely into memory.
@@ -225,7 +221,7 @@ async def example_file_to_file_streaming():
             on_progress=lambda p: print(f"  Processed {p.records_processed} records..."),
         )
 
-        print(f"\nStreaming complete!")
+        print("\nStreaming complete!")
         print(f"  Total records: {results['total_processed']}")
         print(f"  Successful: {results['successful']}")
         print(f"  Failed: {results['failed']}")
@@ -247,8 +243,7 @@ async def example_file_to_file_streaming():
 
 
 async def example_generator_to_file_streaming():
-    """
-    Example 2: Stream from async generator to file.
+    """Example 2: Stream from async generator to file.
 
     This demonstrates processing real-time data streams like:
     - API responses
@@ -281,7 +276,7 @@ async def example_generator_to_file_streaming():
             on_progress=lambda p: print(f"  Streamed {p.records_processed} records..."),
         )
 
-        print(f"\nReal-time processing complete!")
+        print("\nReal-time processing complete!")
         print(f"  Total records: {results['total_processed']}")
         print(f"  Processing time: {results['duration']:.2f}s")
 
@@ -295,8 +290,7 @@ async def example_generator_to_file_streaming():
 
 
 async def example_pipeline_streaming():
-    """
-    Example 3: Multi-stage pipeline with streaming.
+    """Example 3: Multi-stage pipeline with streaming.
 
     This demonstrates how to chain multiple FSMs in a streaming pipeline,
     where output from one FSM streams directly into the next.
