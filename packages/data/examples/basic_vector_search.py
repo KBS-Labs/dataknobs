@@ -271,7 +271,7 @@ async def main():
             k=2,
         )
 
-        near_text_results = await example.db.find(query)
+        near_text_results = await example.db.search(query)
         example.log("\nNear text search results:")
         for result in near_text_results:
             example.log(f"- {result['title']}")

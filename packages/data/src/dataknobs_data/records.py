@@ -224,6 +224,49 @@ class Record:
         """Get a field by name."""
         return self.fields.get(name)
 
+    def get(self, key: str, default: Any = None) -> Any:
+        """Get a field's value by exact name, or ``default`` if it is absent.
+
+        The mapping-shaped accessor, and deliberately the *exact-key* one: this
+        is ``self[key] if key in self else default`` and nothing more. Record
+        already answers ``in``, ``[]``, ``len()`` and iteration, so a reader who
+        sees a mapping is reading it correctly — and so is ruff, whose RUF019
+        rewrites ``"k" in record and record["k"]`` into ``record.get("k")`` and
+        marks the fix safe. Without this method that rewrite raises
+        AttributeError, because ``__getattr__`` refuses any name that is not a
+        field.
+
+        Not an alias for :meth:`get_value`, which resolves dot-notation paths
+        into nested values. ``get_value("config.timeout")`` reaches into a
+        nested dict; ``get("config.timeout")`` looks for a field whose name
+        contains a dot, exactly as ``record["config.timeout"]`` does. Routing
+        this through ``get_value`` would reopen the hole it closes, since the
+        linter's rewrite would then be wrong for any key that looks like a path.
+
+        Args:
+            key: Exact field name. No dot-notation traversal — use
+                :meth:`get_value` for that.
+            default: Returned when no field of that name exists.
+
+        Returns:
+            The field's value, or ``default``.
+
+        Example:
+            ```python
+            record = Record({"name": "Alice", "config": {"timeout": 30}})
+
+            record.get("name")                 # "Alice"
+            record.get("absent")               # None
+            record.get("absent", "fallback")   # "fallback"
+
+            # Exact-key, like record["config.timeout"] — not a path
+            record.get("config.timeout")       # None
+            record.get_value("config.timeout") # 30
+            ```
+        """
+        field = self.fields.get(key)
+        return field.value if field is not None else default
+
     def get_value(self, name: str, default: Any = None) -> Any:
         """Get a field's value by name, supporting dot-notation for nested paths.
 

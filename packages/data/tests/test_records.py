@@ -406,3 +406,79 @@ class TestRecordMetadataNotPolluted:
         generated = record.generate_id()
         assert record.id == generated
         assert record.metadata == {}
+
+
+class TestRecordGet:
+    """``get`` is the missing half of the dict-like access above.
+
+    Record answers ``in``, ``[]``, ``len`` and iteration, which is enough for a
+    reader — and for a linter — to treat it as a mapping. ruff's RUF019 does
+    exactly that: it rewrites ``"k" in r and r["k"]`` to ``r.get("k")`` and
+    marks the fix safe. So ``get`` is not a convenience here; its absence turns
+    a lint autofix into an AttributeError, and its semantics have to be the ones
+    that rewrite is assuming.
+    """
+
+    def test_get_returns_the_value_for_a_present_field(self) -> None:
+        record = Record({"name": "Test", "value": 42})
+
+        assert record.get("name") == "Test"
+        assert record.get("value") == 42
+
+    def test_get_returns_none_for_a_missing_field(self) -> None:
+        record = Record({"name": "Test"})
+
+        assert record.get("absent") is None
+
+    def test_get_returns_the_default_for_a_missing_field(self) -> None:
+        record = Record({"name": "Test"})
+
+        assert record.get("absent", "fallback") == "fallback"
+        assert record.get("name", "fallback") == "Test"
+
+    def test_get_is_the_rewrite_the_linter_performs(self) -> None:
+        """RUF019's fix is only safe if these two decide the same way.
+
+        The rule rewrites ``key in record and record[key]`` — a truthiness
+        test — into ``record.get(key)``. It does not promise the two are
+        ``==``: the old form yields ``False`` for an absent key where ``get``
+        yields ``None``. What it promises is that no ``if`` changes its mind,
+        which is the property worth pinning, and it has to hold for a falsy
+        *present* value as much as for a missing one.
+        """
+        record = Record({"present": "yes", "falsy": 0, "none": None})
+
+        for key in ("present", "falsy", "none", "absent"):
+            before = key in record and record[key]
+            assert bool(record.get(key)) == bool(before), key
+
+        # And for a present key the rewrite must preserve the value itself,
+        # not merely agree about its truthiness.
+        assert record.get("present") == record["present"]
+
+    def test_get_does_not_traverse_dotted_paths(self) -> None:
+        """``get`` mirrors ``[]``; ``get_value`` is the one that traverses.
+
+        Delegating ``get`` to ``get_value`` would reintroduce the bug it exists
+        to close: ``r.get("a.b")`` would stop matching ``r["a.b"]``, and the
+        linter's rewrite would be wrong again for exactly the keys that look
+        like paths.
+        """
+        record = Record({"config": {"timeout": 30}})
+
+        assert record.get_value("config.timeout") == 30
+        assert record.get("config.timeout") is None
+        with pytest.raises(KeyError):
+            _ = record["config.timeout"]
+
+    def test_get_reaches_a_field_named_like_a_dunder_or_private(self) -> None:
+        """Attribute access refuses these names; ``get`` must not.
+
+        ``__getattr__`` raises for anything starting with an underscore, which
+        is why ``_invalid``-style bookkeeping fields are readable only through
+        an explicit accessor.
+        """
+        record = Record({"_invalid": "out of range"})
+
+        assert record.get("_invalid") == "out of range"
+        assert record.get("_absent") is None

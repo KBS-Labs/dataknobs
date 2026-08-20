@@ -177,7 +177,7 @@ async def manual_migration(legacy_db, vector_db, stats: MigrationStats):
     print("\n3. Manual Migration Process...")
 
     # Get all records from legacy database
-    all_records = await legacy_db.find()
+    all_records = await legacy_db.all()
     stats.total_records = len(all_records)
 
     print(f"  Found {stats.total_records} records to migrate")
@@ -265,10 +265,10 @@ async def verify_migration(vector_db):
     records_with_vectors = 0
     records_without_vectors = 0
 
-    all_records = await vector_db.find()
+    all_records = await vector_db.all()
 
     for record in all_records:
-        if record.get_value("embedding"):
+        if record.get("embedding"):
             records_with_vectors += 1
         else:
             records_without_vectors += 1

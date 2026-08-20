@@ -89,7 +89,7 @@ def demonstrate_s3_operations(db):
     # Batch create for efficiency
     print("Batch creating 10 records...")
     start = datetime.utcnow()
-    record_ids = db.batch_create(records)
+    record_ids = db.create_batch(records)
     elapsed = (datetime.utcnow() - start).total_seconds()
     print(f"Created {len(record_ids)} records in {elapsed:.2f} seconds")
     print(f"Average: {elapsed / len(record_ids) * 1000:.1f}ms per record\n")
@@ -97,7 +97,7 @@ def demonstrate_s3_operations(db):
     # Batch read
     print("Batch reading records...")
     start = datetime.utcnow()
-    retrieved = db.batch_read(record_ids[:5])
+    retrieved = db.read_batch(record_ids[:5])
     elapsed = (datetime.utcnow() - start).total_seconds()
     print(f"Read {len(retrieved)} records in {elapsed:.2f} seconds")
 
@@ -125,7 +125,7 @@ def demonstrate_s3_operations(db):
     # Batch delete
     print("\nBatch deleting records...")
     start = datetime.utcnow()
-    results = db.batch_delete(record_ids[5:])
+    results = db.delete_batch(record_ids[5:])
     elapsed = (datetime.utcnow() - start).total_seconds()
     deleted = sum(results)
     print(f"Deleted {deleted} records in {elapsed:.2f} seconds")
@@ -193,7 +193,7 @@ def main():
         print("\n=== Cleanup ===")
         if remaining_ids:
             print(f"Cleaning up {len(remaining_ids)} remaining records...")
-            db.batch_delete(remaining_ids)
+            db.delete_batch(remaining_ids)
 
         print("\n✅ S3 example completed successfully!")
 

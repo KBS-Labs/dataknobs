@@ -8,6 +8,7 @@ from unittest.mock import MagicMock, patch, AsyncMock
 
 from dataknobs_common.testing import requires_package
 from dataknobs_data import VectorField
+from dataknobs_data.backends.sqlite_async import AsyncSQLiteDatabase
 
 # Add examples to path
 examples_path = Path(__file__).parent.parent.parent / "examples"
@@ -292,9 +293,13 @@ async def test_example_main_function():
         mock_instance.perform_vector_search = AsyncMock(return_value=[])
         mock_instance.perform_filtered_search = AsyncMock(return_value=[])
         mock_instance.cleanup = AsyncMock()
-        mock_instance.db = MagicMock()
-        mock_instance.db.vector_search = AsyncMock(return_value=[])
-        mock_instance.db.find = AsyncMock(return_value=[])
+        # spec'd against the class the example actually builds, so a call to a
+        # method that does not exist on it fails here instead of being invented
+        # by the mock. Without this the example spent its life calling db.find(),
+        # which no database class has ever defined, and this test passed anyway.
+        mock_instance.db = MagicMock(spec=AsyncSQLiteDatabase)
+        mock_instance.db.vector_search.return_value = []
+        mock_instance.db.search.return_value = []
         mock_instance.generate_embedding = MagicMock(return_value=[0.1] * 384)
         mock_instance.log = MagicMock()
 
