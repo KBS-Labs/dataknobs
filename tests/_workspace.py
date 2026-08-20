@@ -18,6 +18,7 @@ import importlib.util
 import json
 import re
 import subprocess
+import sys
 import tomllib
 from functools import cache
 from pathlib import Path, PurePosixPath
@@ -33,11 +34,42 @@ def rel(path: Path) -> str:
 
 def load_bin_module(stem: str) -> ModuleType:
     """Import a ``bin/<stem>.py`` script whose hyphenated name blocks ``import``."""
-    script = ROOT / "bin" / f"{stem}.py"
-    spec = importlib.util.spec_from_file_location(stem.replace("-", "_"), script)
+    return load_module_from_path(stem.replace("-", "_"), ROOT / "bin" / f"{stem}.py")
+
+
+def load_module_from_path(name: str, script: Path) -> ModuleType:
+    """Execute a script as a module, from its source rather than from bytecode.
+
+    The compiled-cache step is skipped deliberately. CPython decides a
+    ``__pycache__`` entry is current by comparing the source's size and its
+    mtime **truncated to the second**, so two versions of a file that are the
+    same length and are written inside the same second are indistinguishable to
+    it: the second ``exec_module`` returns the *first* version's code while the
+    file on disk holds the second's.
+
+    That is not a contrived pair. It is what a red/green cycle looks like —
+    disable a branch, run the guard, restore it, run again — and this repository
+    requires that cycle: a guard is not done until it has been shown to go red.
+    It cost a false red here, on a guard that was in fact correct, and the next
+    step after a false red is to "fix" something that was never broken.
+
+    It has the shape the surrounding program is about. A fresh checkout has no
+    ``__pycache__``, so CI is never wrong; only the developer's local run is,
+    and it is wrong in the direction that looks like a finished job. Removing
+    the cache entry rather than merely declining to write one also repairs a
+    stale entry left by an earlier run.
+    """
+    spec = importlib.util.spec_from_file_location(name, script)
     assert spec is not None and spec.loader is not None, f"could not load {rel(script)}"
+    cached = importlib.util.cache_from_source(str(script))
+    Path(cached).unlink(missing_ok=True)
     module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
+    written = sys.dont_write_bytecode
+    sys.dont_write_bytecode = True
+    try:
+        spec.loader.exec_module(module)
+    finally:
+        sys.dont_write_bytecode = written
     return module
 
 
