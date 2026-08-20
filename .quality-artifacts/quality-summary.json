@@ -1,5 +1,5 @@
 {
-  "timestamp": "2026-08-20T18:37:46Z",
+  "timestamp": "2026-08-20T21:43:01Z",
   "overall_status": "PASS",
   "run_mode": "pr",
   "environment": "host",
@@ -21,7 +21,7 @@
     "bots": "131a75a8c418e3d125b264cfecae42ee2d6a400183eb940284561e60b33cd09c",
     "common": "b2d411bddaac949e724129d0a9db7d5dea9559c7525144d7eb90d896aae5cf75",
     "config": "1733742283592b95c1a636e6c08bcab5d0ca19a5ed02b24e7f273f4d5716a455",
-    "data": "53302751eb14e16bbc206ba591069a4050d62c1863779b2915dd807ae9028e80",
+    "data": "52e9ca137332dbcf7dbe1677ba2d47bbc8169cccf044d80d73f20263ef4afbc7",
     "fsm": "afefb3f5a8706866e81f7ce4cbc9e07658b056c598c95a628d76f8122cc394ce",
     "legacy": "f77592a12b3780ae22e0ac113ff15dc537020de05664eea34c0a2734bb91e5a8",
     "llm": "44f1df4b8c165b4e50520e3962b9ccef7616255c088d7330b42a125e045988af",
@@ -35,39 +35,39 @@
     "workspace_tests": "fae2c676fbcd3dba34d15d37f115f74663ad23575c5e1f6f6666ad17937dffdc",
     "docs": "c05e8ac40caa0677abd71965c71221c66cb31725beb365dbd1eeff31d6b2db48"
   },
-  "total_seconds": 265,
+  "total_seconds": 270,
   "checks": {
     "workflow_lint": {
       "status": "pass",
       "exit_code": 0,
       "tool": "lint-workflows.sh",
-      "duration_seconds": 0
+      "duration_seconds": 1
     },
     "shell_lint": {
       "status": "pass",
       "exit_code": 0,
       "tool": "lint-shell.sh",
-      "duration_seconds": 5
+      "duration_seconds": 4
     },
     "contract": {
       "status": "pass",
       "exit_code": 0,
       "tool": "quality-contract.py",
-      "duration_seconds": 1
+      "duration_seconds": 2
     },
     "validation": {
       "status": "pass",
       "exit_code": 0,
       "skipped": false,
       "tool": "validate.sh",
-      "duration_seconds": 76
+      "duration_seconds": 81
     },
     "documentation": {
       "status": "pass",
       "exit_code": 0,
       "skipped": false,
       "tool": "mkdocs",
-      "duration_seconds": 25
+      "duration_seconds": 26
     },
     "documentation_versions": {
       "status": "pass",
