@@ -1,11 +1,25 @@
 """Tests for the text-to-vector synchronization example."""
 
 import pytest
+import sys
 import zlib
+from pathlib import Path
 from typing import List
 
 from dataknobs_data import AsyncDatabaseFactory, Record, VectorField
 from dataknobs_data.vector import VectorTextSynchronizer, ChangeTracker
+
+# Add examples to path
+examples_path = Path(__file__).parent.parent.parent / "examples"
+sys.path.insert(0, str(examples_path))
+
+# The example imports sentence-transformers lazily, so this costs nothing and
+# needs no optional dependency present. It used to load a model at module
+# scope, which is why nothing here imported it -- and why six defects in it
+# went unnoticed while every test in this file stayed green.
+from text_to_vector_sync import (  # noqa: E402 - must follow the sys.path.insert above
+    main as run_sync_example,
+)
 
 
 class MockEmbeddingModel:
@@ -334,3 +348,73 @@ async def test_example_workflow():
 
     finally:
         await db.close()
+
+
+class TestSyncExample:
+    """Drive the shipped example itself, rather than the library it calls.
+
+    Everything above exercises VectorTextSynchronizer and ChangeTracker
+    directly. Useful, but not a test of the example: the example can call
+    those classes wrongly -- and did, at six sites -- with none of it
+    visible from here.
+    """
+
+    @pytest.mark.asyncio
+    async def test_example_runs_end_to_end(self, capsys):
+        """The example's own ``main()``, start to finish, nothing stubbed.
+
+        Only the embedding function is supplied, through the parameter the
+        example exposes for it. A real in-memory SQLite database does the
+        rest.
+        """
+        await run_sync_example(mock_generate_embedding)
+
+        out = capsys.readouterr().out
+        assert "Synchronization Performance Metrics" in out
+
+    @pytest.mark.asyncio
+    async def test_example_reaches_every_numbered_step(self, capsys):
+        """Each step prints a heading; assert the run got to the last one.
+
+        The example used to die at step 4 on a progress callback whose
+        arity did not match ``sync_all``'s ``(done, total)`` contract, then
+        at three separate ``db.update(id, dict)`` calls -- ``update`` takes
+        a Record -- then on a numpy array's ambiguous truth value.
+        """
+        await run_sync_example(mock_generate_embedding)
+
+        out = capsys.readouterr().out
+        for heading in (
+            "1. Setting up database",
+            "4. Running bulk synchronization",
+            "6. Updating document and tracking changes",
+            "7. Re-syncing the record whose text changed",
+            "9. Batch updating multiple documents",
+            "10. Synchronization Performance Metrics",
+        ):
+            assert heading in out, heading
+
+    @pytest.mark.asyncio
+    async def test_example_syncs_every_record(self, capsys):
+        """By the final status check, nothing is left without an embedding."""
+        await run_sync_example(mock_generate_embedding)
+
+        out = capsys.readouterr().out
+        # The example prints a sync status block several times; the last one
+        # is the state it leaves the database in.
+        last_status = out.rsplit("Sync Status:", 1)[-1]
+        assert "Without embeddings: 0" in last_status
+
+    @pytest.mark.asyncio
+    async def test_example_actually_resyncs_the_edited_record(self, capsys):
+        """Step 7 does work, rather than iterating an empty list.
+
+        It used to loop over whatever `show_sync_status` called outdated --
+        a list that only ever holds records with *no* embedding, so an
+        edited record was never in it and the loop body never ran.
+        """
+        await run_sync_example(mock_generate_embedding)
+
+        out = capsys.readouterr().out
+        assert "changed source fields: ['title', 'content']" in out
+        assert "sync_record(force=True) -> success=True, updated=['embedding']" in out

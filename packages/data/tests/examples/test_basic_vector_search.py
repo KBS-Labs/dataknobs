@@ -4,11 +4,10 @@ import pytest
 import sys
 import zlib
 from pathlib import Path
-from unittest.mock import MagicMock, patch, AsyncMock
+from unittest.mock import patch
 
 from dataknobs_common.testing import requires_package
 from dataknobs_data import VectorField
-from dataknobs_data.backends.sqlite_async import AsyncSQLiteDatabase
 
 # Add examples to path
 examples_path = Path(__file__).parent.parent.parent / "examples"
@@ -278,38 +277,36 @@ class TestIntegrationWithRealModel:
 
 
 @pytest.mark.asyncio
-async def test_example_main_function():
-    """Test the main function runs without errors."""
-    # Mock the VectorSearchExample to avoid loading real model
-    with patch("basic_vector_search.VectorSearchExample") as mock_example:
-        mock_instance = AsyncMock()
-        mock_example.return_value = mock_instance
+async def test_example_main_function(capsys):
+    """Run the example's ``main()`` for real, against a real database.
 
-        # Mock all the methods
-        mock_instance.setup_database = AsyncMock()
-        mock_instance.create_documents_with_embeddings = AsyncMock(
-            return_value=(["id1", "id2"], [MagicMock(), MagicMock()])
-        )
-        mock_instance.perform_vector_search = AsyncMock(return_value=[])
-        mock_instance.perform_filtered_search = AsyncMock(return_value=[])
-        mock_instance.cleanup = AsyncMock()
-        # spec'd against the class the example actually builds, so a call to a
-        # method that does not exist on it fails here instead of being invented
-        # by the mock. Without this the example spent its life calling db.find(),
-        # which no database class has ever defined, and this test passed anyway.
-        mock_instance.db = MagicMock(spec=AsyncSQLiteDatabase)
-        mock_instance.db.vector_search.return_value = []
-        mock_instance.db.search.return_value = []
-        mock_instance.generate_embedding = MagicMock(return_value=[0.1] * 384)
-        mock_instance.log = MagicMock()
+    Nothing stands in for ``VectorSearchExample`` here, and that is the
+    whole point. The previous version patched the class out and drove
+    ``main()`` against auto-generated attributes, so the mock *invented*
+    every API the example got wrong: a ``db.find()`` no database class has
+    ever defined, and a ``records[0].data["embedding"].vector`` reaching
+    for a wrapper that ``.data`` has already unwrapped. Both passed here
+    for as long as they existed, because a mock answers to any name.
 
-        # Import and run main
-        from basic_vector_search import main
+    Only the embedding model is substituted, and only because downloading
+    one is not something a test may do -- ``MockEmbeddingModel`` above is a
+    real class with a real ``encode``, not a stand-in that agrees with
+    whatever it is asked. Everything else is the shipped code path over a
+    real in-memory SQLite database, which runs in about a second.
+    """
+    from basic_vector_search import main
 
+    with patch("basic_vector_search.SentenceTransformer", lambda _name: MockEmbeddingModel()):
         await main()
 
-        # Verify key methods were called
-        mock_instance.setup_database.assert_called_once()
-        mock_instance.create_documents_with_embeddings.assert_called_once()
-        mock_instance.perform_vector_search.assert_called()
-        mock_instance.cleanup.assert_called_once()
+    out = capsys.readouterr().out
+    assert "Example completed successfully" in out
+    # Each numbered step prints its own heading; assert the run reached the
+    # last one rather than stopping early on a swallowed error.
+    for heading in (
+        "1. Setting up vector-enabled database",
+        "3. Performing vector similarity search",
+        "5. Finding similar documents",
+        "7. Using Query builder methods",
+    ):
+        assert heading in out, heading

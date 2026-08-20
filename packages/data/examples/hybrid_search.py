@@ -163,7 +163,7 @@ async def create_sample_database():
 
     factory = AsyncDatabaseFactory()
     db = factory.create(
-        backend="sqlite", database=":memory:", vector_enabled=True, vector_metric="cosine"
+        backend="sqlite", path=":memory:", vector_enabled=True, vector_metric="cosine"
     )
 
     await db.connect()

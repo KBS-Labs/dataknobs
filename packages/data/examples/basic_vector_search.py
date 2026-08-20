@@ -110,14 +110,14 @@ class VectorSearchExample:
             },
         ]
 
-    async def setup_database(self, backend: str = "sqlite", database: str = ":memory:") -> Any:
+    async def setup_database(self, backend: str = "sqlite", path: str = ":memory:") -> Any:
         """Set up and return a vector-enabled database."""
         self.log("\n1. Setting up vector-enabled database...")
 
         # Use AsyncDatabaseFactory for async operations
         factory = AsyncDatabaseFactory()
         self.db = factory.create(
-            backend=backend, database=database, vector_enabled=True, vector_metric="cosine"
+            backend=backend, path=path, vector_enabled=True, vector_metric="cosine"
         )
 
         await self.db.connect()  # Use connect instead of initialize
@@ -233,7 +233,10 @@ async def main():
         # Find similar documents
         example.log("\n5. Finding similar documents...")
         first_doc = records[0].data
-        reference_embedding = first_doc["embedding"].vector
+        # `.data` maps field name -> field *value*, so this is already the
+        # vector itself; `.vector` would be reaching for the VectorField
+        # wrapper, which `.data` has unwrapped.
+        reference_embedding = first_doc["embedding"]
 
         similar_results = await example.db.vector_search(
             query_vector=reference_embedding, k=3, vector_field="embedding"
@@ -246,8 +249,8 @@ async def main():
 
         # Demonstrate similarity metrics
         example.log("\n6. Testing different similarity metrics...")
-        vec1 = np.array(records[0].data["embedding"].vector)
-        vec2 = np.array(records[1].data["embedding"].vector)
+        vec1 = np.array(records[0].data["embedding"])
+        vec2 = np.array(records[1].data["embedding"])
 
         # Calculate cosine similarity with safe division
         norm1 = np.linalg.norm(vec1)
