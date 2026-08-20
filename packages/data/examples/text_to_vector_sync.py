@@ -229,7 +229,7 @@ async def main():
 
     # Verify the new record has an embedding
     record = await db.read(new_id)
-    if record.get("embedding"):
+    if record.get_value("embedding"):
         print("✓ New document automatically received embedding")
         print(f"  Embedding dimensions: {len(record['embedding'])}")
 

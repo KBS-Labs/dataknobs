@@ -268,7 +268,7 @@ async def verify_migration(vector_db):
     all_records = await vector_db.find()
 
     for record in all_records:
-        if record.get("embedding"):
+        if record.get_value("embedding"):
             records_with_vectors += 1
         else:
             records_without_vectors += 1

@@ -73,10 +73,11 @@ def _tracked() -> list[PurePosixPath]:
 def _unmeasured_mypy_cell() -> str:
     """One mypy cell the contract puts in a tier no tool reads.
 
-    Named from the declaration for the reason ``biggest_ruff_cells`` is: the
-    bottom tier is what this whole leg exists to empty, so a literal name here
-    fails on the day one of them is promoted, over a change these guards hold no
-    opinion about.
+    Read out of the declaration rather than written down here, because the
+    bottom tier is what the contract's ceilings are being driven toward
+    emptying. A literal path would fail on the day that cell is promoted — over
+    a change these guards hold no opinion about, and whose whole point is that
+    it is allowed.
     """
     cells = _contract()["tools"]["mypy"]["cells"]
     unmeasured: list[str] = sorted(cell["path"] for cell in cells if cell["tier"] == "unchecked")

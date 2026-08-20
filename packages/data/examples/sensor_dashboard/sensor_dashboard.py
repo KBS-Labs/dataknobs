@@ -220,8 +220,7 @@ class SensorDashboard:
         def validating_create_batch(records):
             # Check if any record is invalid - this forces fallback
             for r in records:
-                # Using new dict-like access
-                if r.get("_invalid"):
+                if r.get_value("_invalid"):
                     raise ValueError("Batch contains invalid records")
             return original_create_batch(records)
 
