@@ -255,16 +255,27 @@ fi
 
 # The formatter's population, resolved the same way and kept separate.
 #
-# It is not VALIDATE_TARGETS. That set is the *linter's*, and it deliberately
-# omits every packages/<pkg>/tests cell still in the ruff deferred tier — two
-# of the ten, now that the other eight are promoted and ride in the linter's
-# set too. The quality contract enforces `format` at ceiling 0 on all ten of
-# its cells, so borrowing the linter's list here checked 597 of 1,471 files and
-# printed a clean verdict over the other 874.
+# It is not VALIDATE_TARGETS. That set is the *linter's*, and the two answer
+# different questions: this one is composed from the contract's `format` cells,
+# that one from its ruff cells.
 #
-# That count moves with every promotion, which is the argument for composing
-# this set rather than borrowing one: the sentence above has to be rewritten
-# when a cell is promoted, and the code below does not.
+# The sentence here used to justify the split by saying the linter's set omits
+# every packages/<pkg>/tests cell "still in the ruff deferred tier". No cell has
+# that tier — ruff no longer declares one — and the split does not need it. What
+# is true is narrower and does not move: the formatter additionally names the
+# per-package docs/ directories, which no ruff cell covers. Over the files that
+# exist the two sets are the same today, because those directories hold no
+# Python at all; that is a fact about the current tree rather than an invariant,
+# and nothing here asserts it.
+#
+# Borrowing one list for both is what this replaced, and it failed in the
+# direction that reports success: the format check iterated the *linter's* set
+# while the contract enforced `format` at ceiling 0 over cells that set did not
+# reach, so it printed a clean verdict over files it never opened, and fix.sh
+# could not repair some of them at all. Composing the two independently is why
+# the promotions since then needed no edit to this comment — the previous
+# version carried the size of that bug in prose, which had to be rewritten on
+# every promotion and was not.
 #
 # Composed from format_subdirs rather than restated, so a directory added to
 # the formatter's coverage arrives here, in fix.sh and in `dk format` at once.
@@ -648,8 +659,8 @@ PRINT_EXCEPTIONS=(
     # definition, and under tests/ this is the exception. One file, and the next
     # one argues for itself.
     "packages/data/tests/examples/run_example_tests.py"
-    # The three directories promoted out of the ruff deferred tier, arriving in
-    # this list for the reason the two entries above already give: stdout is the
+    # The three directories the linter was promoted onto last, arriving in this
+    # list for the reason the two entries above already give: stdout is the
     # product. An example teaches by being run and read, a benchmark's product
     # is its timing table, and a script under packages/*/scripts is a developer
     # tool of exactly the kind bin/ holds. Routing any of them through logging

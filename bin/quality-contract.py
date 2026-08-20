@@ -1971,6 +1971,7 @@ def verify(contract: dict[str, Any]) -> list[str]:
         spec = contract["tools"][tool]
         tiers = set(spec.get("tiers", {}))
         seen: set[str] = set()
+        tiers_held: set[str] = set()
 
         # Read rather than indexed, and checked before anything downstream uses
         # it. A tool entry with no cells is a population nothing decided about,
@@ -2013,6 +2014,8 @@ def verify(contract: dict[str, Any]) -> list[str]:
                 )
             if cell.get("tier") not in tiers:
                 faults.append(f"{where}: tier {cell.get('tier')!r} is not one of {sorted(tiers)}")
+            else:
+                tiers_held.add(str(cell["tier"]))
             if not isinstance(cell.get("ceiling"), int) or isinstance(cell.get("ceiling"), bool):
                 faults.append(f"{where}: ceiling {cell.get('ceiling')!r} is not a whole number")
             if not str(cell.get("reason", "")).strip():
@@ -2028,6 +2031,42 @@ def verify(contract: dict[str, Any]) -> list[str]:
                     f"{where}: tier {cell['tier']!r} is not measured, so its ceiling "
                     f"of {cell['ceiling']} claims a number nothing takes"
                 )
+
+        # A tier nothing holds. The other direction of the check above, and the
+        # one that does not follow from it: every cell can name a declared tier
+        # while a declared tier names no cell, which leaves a word in the
+        # vocabulary that describes no part of the tree.
+        #
+        # It is vocabulary that a retreat needs. Un-covering a directory takes
+        # two edits — drop it from the tool's target set, and re-file its cell
+        # in a tier that tolerates a backlog — and neither half is a fault on
+        # its own, because the pair agree with each other.
+        #
+        # What that costs differs by tool, and the milder case is ruff's.
+        # measure_ruff tallies one pass over the whole population regardless of
+        # tier, so `check` keeps measuring a retreated cell and only the *local*
+        # toolchain goes: bin/validate.sh stops reading the directory and
+        # bin/fix.sh stops offering a remedy, so a contributor's pre-push run
+        # reports clean over territory the gate still checks. That is the shape
+        # 2c shipped. mypy is worse — mypy_targets skips _UNMEASURED_TIERS
+        # outright, so a cell retreating there stops being measured at all and
+        # reports {"measured": 0, "ceiling": 0}, which is byte-identical to a
+        # cell that is genuinely clean.
+        #
+        # Re-filing is also the licensed first move toward a ceiling raise,
+        # since a backlog tier is the one place a non-zero ceiling looks like
+        # bookkeeping rather than a reversal.
+        #
+        # So the word goes back the day its last cell empties. Emptying a tier
+        # is the work; striking it is that work's residue, and a pawl fitted
+        # only after the last tooth has passed protects nothing on the way up.
+        unheld = sorted(tiers - tiers_held)
+        if unheld:
+            faults.append(
+                f"{tool}: declares {unheld} but no cell holds that tier, so it is a "
+                "word available to a cell that wants out of being measured. Delete "
+                "it — a tier is struck the day its last cell empties."
+            )
 
         for orphan in split["orphans"]:
             faults.append(f"{tool}: {orphan} is in no cell, so nobody decided about it")

@@ -186,9 +186,9 @@ def test_the_formatter_runs_only_where_it_is_checked_or_asked_for():
     What this cannot see is whether the three agree on their populations.
     ``test_toolchain_consistency`` holds that from the other side — and did not
     when this sentence was first written. The check ran over the *linter's*
-    target set, which omits every cell whose ruff tier is deferred, so it read
-    597 of 1,471 files and passed over the rest; the write side could not reach
-    42 of them at all. Both halves are needed and neither implies the other: a
+    target set, which reached only the cells ruff was pointed at, so it read
+    well under half the files it reported on and passed over the rest; the write
+    side could not reach some of them at all. Both halves are needed and neither implies the other: a
     fourth owner is a target set nobody keeps in step, and three owners reading
     three different sets is the same fault without the fourth script.
     """

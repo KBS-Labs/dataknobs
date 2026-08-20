@@ -141,44 +141,52 @@ def test_the_contract_covers_every_tool_that_decides_a_verdict() -> None:
     )
 
 
-def test_a_checked_cell_is_one_the_linter_actually_reaches() -> None:
-    """The tier has to agree with what ``bin/validate.sh`` does, in both directions.
+def test_every_lint_cell_is_one_the_linter_actually_reaches() -> None:
+    """Every ruff cell is inside ``bin/validate.sh``'s target set, whatever tier it names.
 
-    ``checked`` says the linter reads these files and finds nothing; ``deferred``
-    says it does not read them yet. Neither claim is worth anything on its own,
-    because the cheapest way to satisfy a coverage rule is to drop a directory
-    from the target set and re-file it as deferred — coverage gone, both halves
-    of the declaration still internally consistent.
+    This used to be two assertions over two tiers: a ``checked`` cell outside
+    the target set is a ceiling of zero over files nothing lints, and a
+    ``deferred`` cell inside it is a backlog declared for files already clean.
+    The attack it was built for is the coordinated retreat — *"the cheapest way
+    to satisfy a coverage rule is to drop a directory from the target set and
+    re-file it as deferred"* — and the pair does not stop it. Each half fires on
+    one edit arriving alone; performed together they agree with each other, and
+    a directory leaves the local toolchain with both halves green.
 
-    So each tier is compared against the target set the script resolves. A
-    ``checked`` cell outside it is a ceiling of zero over files nothing lints; a
-    ``deferred`` cell inside it is a backlog declared for files that are already
-    clean.
+    Ruff's ``deferred`` tier is gone, so the second assertion had no reachable
+    input. **Deleting it and keeping the first would not have closed the
+    retreat either.** ``verify`` fails a tier no cell holds, which stops the
+    word being pre-staged, but a single commit that re-adds ``deferred`` to the
+    tier map *and* re-files a cell into it passes ``verify`` — and then the
+    first assertion does not fire, because the cell is no longer ``checked``.
+
+    So the tier is not the subject any more. The invariant is the one a single
+    tier makes sayable: **every cell the contract declares for ruff is one the
+    linter reads.** No tier name appears below, which is what makes it hold
+    against a vocabulary someone widens later — a cell filed under an invented
+    tier fails ``verify`` for the tier and fails here for the coverage,
+    independently.
+
+    What is lost in a retreat is narrower than "coverage" and worth stating
+    exactly, because it is what this guard is for. ``measure_ruff`` tallies one
+    pass over the whole population regardless of tier, so ``check`` keeps
+    measuring a retreated cell. The **local** half is what goes: bin/validate.sh
+    stops reading the directory and bin/fix.sh stops offering a remedy, so a
+    contributor's pre-push run reports clean over territory the gate measures.
+    That is the shape 2c shipped.
     """
     targets = _validate_targets()
     assert targets, "bin/validate.sh --print-targets resolved nothing"
 
     unreached = sorted(
-        cell["path"]
-        for cell in _cells("ruff")
-        if cell["tier"] == "checked" and not _covered_by_targets(cell["path"], targets)
+        cell["path"] for cell in _cells("ruff") if not _covered_by_targets(cell["path"], targets)
     )
     assert not unreached, (
-        f"{rel(CONTRACT)} calls {unreached} checked with a ceiling of zero, but "
-        "bin/validate.sh does not lint them — so the zero is a measurement of "
-        "nothing. Restore the target, or move the cell to the deferred tier "
-        "with the count that makes deferring honest."
-    )
-
-    contradicted = sorted(
-        cell["path"]
-        for cell in _cells("ruff")
-        if cell["tier"] == "deferred" and _covered_by_targets(cell["path"], targets)
-    )
-    assert not contradicted, (
-        f"{rel(CONTRACT)} defers {contradicted}, but bin/validate.sh lints them. "
-        "Either the entry is obsolete and should be promoted to checked, or a "
-        "default target was removed and should come back."
+        f"{rel(CONTRACT)} declares {unreached} for ruff, but bin/validate.sh does "
+        "not lint them — so the ceiling beside each is a measurement of nothing "
+        "locally, and `bin/fix.sh` offers no remedy for a finding the gate will "
+        "still report. Restore the target. There is no tier to move the cell to: "
+        "ruff declares only `checked`, and a tier nothing holds fails verify."
     )
 
 
@@ -534,7 +542,13 @@ def _with_cell(tool: str, **overrides: Any) -> dict[str, Any]:
     pass on a fault it did not cause.
     """
     contract = _contract()
-    cell = {"path": "packages/*/nowhere", "tier": "deferred", "ceiling": 0, "reason": "x"}
+    # ``checked`` because every caller taking the default is a ruff caller and
+    # that is ruff's only tier; the one mypy caller names its own. It was
+    # ``deferred``, which ruff no longer declares — so each default-tier caller
+    # would have carried a second, uninvited tier fault, and every ``any(...)``
+    # assertion over the result would have kept passing while measuring a
+    # contract broken in a way its case did not ask for.
+    cell = {"path": "packages/*/nowhere", "tier": "checked", "ceiling": 0, "reason": "x"}
     cell.update(overrides)
     contract["tools"][tool]["cells"].append(cell)
     return contract
@@ -605,6 +619,86 @@ def test_verify_names_each_malformed_cell() -> None:
     assert any("claims a number nothing takes" in fault for fault in _faults_for(unmeasured)), (
         "an unmeasured tier with a positive ceiling produced no fault — the "
         "number would read as a backlog nothing is measuring"
+    )
+
+
+def test_verify_names_a_tier_no_cell_holds() -> None:
+    """A word in the vocabulary describing no part of the tree.
+
+    The other direction of the tier check, and it does not follow from it: every
+    cell can name a declared tier while a declared tier names no cell. That was
+    ruff's state for as long as it took to empty ``deferred`` — the tier had no
+    cells and the contract said nothing, because the only question being asked
+    was whether each cell's tier was spellable.
+
+    It matters because vocabulary is what a retreat needs. Re-filing a cell into
+    a tier that tolerates a backlog is the cheap half of un-covering a
+    directory, and a tier already sitting in the map makes that a one-word edit
+    to one cell. With the word gone, re-introducing it is a visible change to
+    the tool's tier map — an argument someone has to make in review rather than
+    a line that reads as bookkeeping.
+
+    This is the pawl for the two mypy strikes still ahead: ``transitional`` the
+    day M1 reaches zero and ``unchecked`` the day the last unmeasured cell is
+    promoted. Neither needs remembering now, because the contract will fail and
+    say so.
+    """
+    contract = _contract()
+    contract["tools"]["ruff"]["tiers"]["deferred"] = "outside that target set"
+
+    faults = _faults_for(contract)
+    assert any("no cell holds that tier" in fault for fault in faults), (
+        "verify() accepted a tier no cell holds. The word stays available to a "
+        f"cell that wants out of being measured. Faults reported: {faults}"
+    )
+
+    # Every tier the contract really declares is held, so the fault above is the
+    # only one — asserted rather than assumed, because a second fault here would
+    # mean the check fires on the live declaration and this test proves nothing.
+    assert not _faults_for(_contract()), (
+        "the real contract already faults, so the assertion above cannot "
+        "distinguish the tier it added from a pre-existing fault"
+    )
+
+
+def test_the_coordinated_retreat_fails_even_when_both_halves_arrive_together() -> None:
+    """The attack the tier strike alone does not stop, driven end to end.
+
+    Dropping a directory from the linter's target set and re-filing its cell
+    into a backlog tier is two edits that are each a fault alone and agree with
+    each other together. Striking ``deferred`` does not by itself close it: a
+    commit that re-adds the word *and* uses it passes ``verify``, because the
+    tier is declared and a cell holds it — the check above is satisfied by the
+    very cell doing the retreating.
+
+    What closes it is that
+    ``test_every_lint_cell_is_one_the_linter_actually_reaches`` stopped reading
+    tiers. Replayed here over a real target set rather than argued, because the
+    two guards defend one property from opposite sides and the reasoning above
+    is worth no more than the demonstration that they do.
+    """
+    contract = _contract()
+    contract["tools"]["ruff"]["tiers"]["deferred"] = "outside that target set"
+    retreating = "packages/*/examples"
+    for cell in contract["tools"]["ruff"]["cells"]:
+        if cell["path"] == retreating:
+            cell["tier"] = "deferred"
+            cell["ceiling"] = 12
+
+    assert not _faults_for(contract), (
+        "verify() was expected to accept the retreat — the tier is declared and "
+        "a cell holds it. If it now rejects it, the guard below is no longer "
+        "the thing standing between this repository and a quiet un-covering, "
+        "and this test should say which check took over."
+    )
+
+    # The half that does catch it: the coverage guard, which never asks the tier.
+    targets = _validate_targets() - {
+        path.relative_to(ROOT).as_posix() for path in ROOT.glob(retreating)
+    }
+    assert not _covered_by_targets(retreating, targets), (
+        f"{retreating} is still inside the target set after its directories were "
+        "removed, so this replay does not reproduce a retreat"
     )
 
 
@@ -854,9 +948,9 @@ def test_the_linter_measurer_refuses_a_config_ruff_would_not_load(tmp_path: Path
 
     Driven through the real ruff rather than an injected result, because ruff
     genuinely does this and the assertion is worth no more than the claim that
-    it does. The route is also the work: promoting a cell out of the deferred
-    tier means editing this config, which is precisely when a rejected one
-    reaches the measurer.
+    it does. The route is also the work: clearing a cell to the point where it
+    can be linted by default means editing this config, which is precisely when
+    a rejected one reaches the measurer.
     """
     rejected = tmp_path / "rejected.toml"
     rejected.write_text('[tool.ruff.lint]\nselect = ["NOSUCHRULE999"]\n', encoding="utf-8")

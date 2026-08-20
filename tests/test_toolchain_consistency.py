@@ -894,9 +894,11 @@ def test_ci_runs_the_gate_when_a_guarded_file_changes() -> None:
 # ``DEFERRED_FROM_DEFAULT_LINT`` used to live here: five directory classes of
 # first-party Python that ``bin/validate.sh`` does not reach, each with a count
 # in its comment. It has moved to ``.dataknobs/quality-contract.json`` as that
-# file's ruff axis, and the two guards over it — every tracked file is linted or
-# deferred, and no entry is stale or contradicted — are in
-# ``tests/test_quality_contract.py``.
+# file's ruff axis, and the two guards over it — every tracked file lands in
+# exactly one cell, and no cell is stale or unreached — are in
+# ``tests/test_quality_contract.py``. The "or deferred" half of that sentence
+# has gone with the tier: ruff declares only ``checked``, so there is no longer
+# a way to be decided about and unread at the same time.
 #
 # Two things changed in the move rather than merely relocating.
 #
@@ -1055,7 +1057,7 @@ def _checked_lint_cells() -> list[str]:
     """Every path the quality contract holds to a lint ceiling of zero.
 
     Read from the tier rather than from what ``bin/validate.sh`` reaches. The
-    two agree — ``test_a_checked_cell_is_one_the_linter_actually_reaches`` in
+    two agree — ``test_every_lint_cell_is_one_the_linter_actually_reaches`` in
     tests/test_quality_contract.py is what makes them — and deriving this from
     the target set would make the guard below move whenever that set does,
     which is the shape ``REQUIRED_DEFAULT_TARGETS`` exists to refuse.
@@ -1097,11 +1099,18 @@ def _cell_is_covered(cell: str, targets: set[str]) -> bool:
 #: target set and asks whether it reaches the tracked files — so dropping a
 #: directory from ``workspace_targets`` and naming it in
 #: the quality contract's deferred tier satisfied all of them at once: the files
-#: are no longer uncovered because they are now deferred, and the deferral is not
-#: contradicted because nothing lints them any more. Both guards green, ``bin/``
-#: unlinted again. A check derived from the thing it checks moves when that thing
-#: moves; this does not, so removing a member fails here and no entry elsewhere
-#: can quiet it.
+#: were no longer uncovered because they were now deferred, and the deferral was
+#: not contradicted because nothing linted them any more. Both guards green,
+#: ``bin/`` unlinted again. A check derived from the thing it checks moves when
+#: that thing moves; this does not, so removing a member fails here and no entry
+#: elsewhere can quiet it.
+#:
+#: That escape has since been closed from the other end as well — ruff declares
+#: no tier a cell can retreat into, and
+#: ``test_every_lint_cell_is_one_the_linter_actually_reaches`` no longer reads
+#: tiers at all. This stays because the two are not the same claim: that one is
+#: about cells the contract declares, and a target dropped from a set the
+#: contract never mentions is still a target dropped.
 REQUIRED_DEFAULT_TARGETS = frozenset({"tests", "bin", "src", "conftest.py", "quality-fixture"})
 
 
@@ -1109,8 +1118,8 @@ REQUIRED_DEFAULT_TARGETS = frozenset({"tests", "bin", "src", "conftest.py", "qua
 # with ``_linted_by`` and ``_deferred_by`` beneath it. It asked whether each
 # tracked file was reached by ``bin/validate.sh`` or excused by name, which the
 # quality contract now answers more completely: totality places every file in
-# exactly one cell, and the tier guards compare ``checked`` and ``deferred``
-# against the target set the script resolves, in both directions.
+# exactly one cell, and the coverage guard compares every ruff cell against the
+# target set the script resolves.
 #
 # The helpers went with it, and one of them was subtly wrong in a way the
 # replacement is not. ``_deferred_by`` matched with ``PurePosixPath.match``,
@@ -1119,19 +1128,25 @@ REQUIRED_DEFAULT_TARGETS = frozenset({"tests", "bin", "src", "conftest.py", "qua
 # sibling ``_linted_by`` compared string prefixes from the left. Two rules over
 # one question. Nothing had exercised the difference because every entry in the
 # old list began with ``packages/``; ``cell_matches`` in bin/quality-contract.py
-# compares segment by segment from the root for both tiers.
+# compares segment by segment from the root, for every cell whatever its tier.
 
 
 def test_the_default_target_set_still_contains_what_it_must() -> None:
-    """The deferral list must not be able to buy its way out of a lost target.
+    """The contract must not be able to buy its way out of a lost target.
 
     The guard above compares the target set against the tracked files and takes
-    the deferrals as declared data, which makes it complete about *accidents* and
+    the contract as declared data, which makes it complete about *accidents* and
     silent about one deliberate move: drop a directory from ``workspace_targets``,
-    re-file it in the quality contract's deferred tier, and coverage is gone
+    re-file its cell in a tier that tolerates a backlog, and coverage was gone
     with both checks still green. Replayed over the real repository before this was
     written, the escape also worked for ``packages/*/src`` — all ten package
     sources could leave the target set without a single assertion failing.
+
+    Ruff no longer declares such a tier, and the cell guard no longer reads
+    tiers, so that exact route is shut. This still states the members, because
+    the property it holds is not about cells: ``workspace_targets`` can lose an
+    entry the contract never named, and nothing derived from the contract would
+    notice.
 
     So this states the required members instead of deriving them. That is the
     duplication ``workspace_targets`` exists to remove, and here it is the point:
@@ -1200,11 +1215,11 @@ def test_every_formatting_ceiling_is_reachable_by_the_check_and_by_the_fix() -> 
     the half that was missing while a docstring there said it existed.
 
     The gap it was written against: the format check iterated the *linter's*
-    target set. That set omits every cell whose ruff tier is deferred, and the
-    contract enforces ``format`` at ceiling 0 on all ten of its cells. So
-    ``validate.sh`` opened 597 of 1,471 files and printed "Formatting is clean"
-    over the other 874, while ``fix.sh`` could not repair 42 of them at all —
-    a finding the gate reports and no local command can clear.
+    target set. That set reached only the cells ruff was pointed at, while the
+    contract enforced ``format`` at ceiling 0 on all ten of its cells. So
+    ``validate.sh`` opened well under half the files it reported on and printed
+    "Formatting is clean" over the rest, while ``fix.sh`` could not repair some
+    of them at all — a finding the gate reports and no local command can clear.
 
     Both directions matter and neither implies the other. A check that reads
     less than the contract enforces is a green verdict over unexamined files;
@@ -1231,8 +1246,8 @@ def test_every_lint_ceiling_is_reachable_by_the_fix() -> None:
     """The linter's half of the guard above — the half that was still missing.
 
     The check side is already held, from the other end:
-    ``test_a_checked_cell_is_one_the_linter_actually_reaches`` compares the ruff
-    tiers against ``bin/validate.sh`` in both directions. Nothing compared the
+    ``test_every_lint_cell_is_one_the_linter_actually_reaches`` compares every
+    ruff cell against what ``bin/validate.sh`` resolves. Nothing compared the
     *fix* side, and that is the direction with no symptom — a cell the check
     reads and the fix cannot reach is a red gate with no local remedy, which
     looks exactly like a developer who has not run ``bin/fix.sh`` yet.
@@ -1248,13 +1263,16 @@ def test_every_lint_ceiling_is_reachable_by_the_fix() -> None:
     contract had started enforcing. Every promotion still to come has the same
     shape, and this is what makes the second declaration compulsory.
 
-    The deferred cells are deliberately outside this, and the gap is narrower
-    than it first looks: a bare ``bin/fix.sh`` reaches none of ``examples``,
-    ``scripts``, ``benchmarks`` or ``docs``, while their ceilings *are*
-    compared — but naming the directory does reach it, so the remedy exists and
-    is merely undiscoverable from the failure. Widening the default is a policy
-    call about rewriting files nobody has asked to be clean, which belongs with
-    their promotion rather than ahead of it.
+    Nothing is excepted from this any more, and the paragraph that stood here is
+    worth recording as closed rather than deleted. It excepted the deferred cells
+    and noted that a bare ``bin/fix.sh`` reached none of ``examples``,
+    ``scripts``, ``benchmarks`` or ``docs``, while their ceilings *were*
+    compared — a red gate whose stated remedy did not reach the finding unless
+    the developer knew to name the directory. The first three arrived in the fix
+    pass with their promotion. The fourth has no ruff cell at all, so there is no
+    lint ceiling over it to be unreachable. The policy call that paragraph
+    deferred — whether to widen the default over files nobody had asked to be
+    clean — was answered by making them clean.
     """
     cells = _checked_lint_cells()
     assert cells, "the contract holds no cell to a lint ceiling, so this proves nothing"
@@ -1618,7 +1636,7 @@ def test_the_print_check_counts_files_rather_than_words(tmp_path: Path) -> None:
 # the cheapest way to silence a coverage check. Both directions survive, over
 # every tool rather than just ruff, as
 # ``test_verify_names_a_cell_that_matches_no_tracked_file`` and
-# ``test_a_checked_cell_is_one_the_linter_actually_reaches`` in
+# ``test_every_lint_cell_is_one_the_linter_actually_reaches`` in
 # tests/test_quality_contract.py.
 
 
