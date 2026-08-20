@@ -417,4 +417,22 @@ class TestSyncExample:
 
         out = capsys.readouterr().out
         assert "changed source fields: ['title', 'content']" in out
-        assert "sync_record(force=True) -> success=True, updated=['embedding']" in out
+        assert "sync_record -> success=True, updated=['embedding']" in out
+
+    @pytest.mark.asyncio
+    async def test_sync_on_update_is_inert_for_this_configuration(self, capsys):
+        """Pin the defect the example step 7 documents.
+
+        `sync_on_update` detects change through the field mapping built from
+        the database schema, and `text_fields=` -- the constructor argument
+        this example uses -- never registers anything there. So it returns
+        False on a record whose title and content both just changed.
+
+        This asserts today's wrong answer deliberately, so the example stops
+        agreeing with the library the moment the library is fixed. When
+        `sync_on_update` learns about `text_fields`, this test fails, and the
+        step-7 commentary it guards has to be rewritten in the same change.
+        """
+        await run_sync_example(mock_generate_embedding)
+
+        assert "sync_on_update -> False" in capsys.readouterr().out

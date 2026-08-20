@@ -212,26 +212,31 @@ async def main(embedding_fn: EmbeddingFn = generate_embedding):
         # Check sync status. Note what this does and does not tell you: it
         # reports records with *no* embedding. A record whose text just
         # changed still has one -- a stale one -- so it is absent from this
-        # list, and `sync_on_update` below is what handles that case.
+        # list, and step 7 below is what handles that case.
         missing = await sync.show_sync_status()
 
         # 7. Incremental synchronization
         print("\n7. Re-syncing the record whose text changed...")
 
-        # `sync_on_update` compares old and new data and re-embeds only when a
-        # source text field actually changed -- the point of tracking changes
-        # rather than re-embedding the whole database on every write.
         changed_fields = [k for k in ("title", "content") if old_data.get(k) != first_record[k]]
         print(f"  changed source fields: {changed_fields}")
 
-        # Then force the re-embed. `sync_on_update` reports False here even
-        # though the text did change: staleness is decided by
-        # `_has_current_vector`, which treats a VectorField as current once it
-        # exists ("considered immutable once created") and so never notices
-        # edited source text for the field type vectors are normally stored in.
-        # `force=True` is what actually refreshes the vector today.
-        success, updated = await sync.synchronizer.sync_record(first_id, force=True)
-        print(f"  sync_record(force=True) -> success={success}, updated={updated}")
+        # `sync_on_update` is the change-tracking entry point -- give it the old
+        # and new data and it re-embeds only what actually changed. It reports
+        # False here, and the reason is worth knowing rather than working
+        # around silently: it detects changes through the field mapping built
+        # from the *database schema*, and a synchronizer configured the way this
+        # one is -- with the `text_fields=` constructor argument -- never
+        # registers anything there. So it finds no changed source field and
+        # returns without embedding, whatever the text did.
+        synced = await sync.synchronizer.sync_on_update(first_id, old_data, dict(first_record.data))
+        print(f"  sync_on_update -> {synced}")
+
+        # `sync_record` reads `text_fields` directly, so it is the entry point
+        # that works for this configuration. Note it re-embeds unconditionally
+        # here -- `force` changes nothing on this path.
+        success, updated = await sync.synchronizer.sync_record(first_id)
+        print(f"  sync_record -> success={success}, updated={updated}")
 
         # And anything still missing an embedding gets one.
         for record in missing:
