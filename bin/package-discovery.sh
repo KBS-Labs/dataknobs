@@ -69,6 +69,13 @@ workspace_targets() {
     [[ -d "$ROOT_DIR/tests" ]] && targets+=("tests")
     [[ -d "$ROOT_DIR/bin" ]] && targets+=("bin")
     [[ -d "$ROOT_DIR/src" ]] && targets+=("src")
+    # The purpose-built cell. Tracked first-party Python like the three above,
+    # and linted for the same reason -- but it is here specifically because half
+    # of what it is for is that the gate finds nothing in it. It is dirty only
+    # under quality-fixture/ruff.toml, which nothing but the guards over
+    # bin/quality-contract.py ever runs; dropping it from this list would make
+    # the clean half of that claim a measurement of nothing.
+    [[ -d "$ROOT_DIR/quality-fixture" ]] && targets+=("quality-fixture")
     [[ -f "$ROOT_DIR/conftest.py" ]] && targets+=("conftest.py")
 
     # An empty result is legitimate — a checkout with none of these — and must
@@ -100,6 +107,26 @@ workspace_targets() {
 # which is why a promoted cell arrives with its remedy already in place.
 lint_promoted_test_packages() {
     echo "fsm legacy config structures utils xization llm common bots data"
+}
+
+# Function to list the per-package directories the linter reaches beyond src
+#
+# The sibling of lint_promoted_test_packages, and it lists directories rather
+# than packages because that is the shape of the cells: the contract holds
+# `packages/*/examples` as one cell across every package, not one cell per
+# package, so a promotion here is repo-wide by construction and a per-package
+# list would be a second answer to a question the contract asks once.
+#
+# The same both-directions rule applies — a name arrives here in the SAME
+# change that moves the cell, and test_a_checked_cell_is_one_the_linter_actually
+# _reaches fails either half on its own.
+#
+# Unlike the tests promotion, this one has to widen bin/fix.sh as well: a bare
+# fix.sh reaches every packages/*/tests already, and reaches none of these. A
+# checked cell the fix pass never opens is a red gate whose stated remedy
+# cannot touch it, which test_every_lint_ceiling_is_reachable_by_the_fix holds.
+lint_promoted_subdirs() {
+    echo "examples scripts benchmarks"
 }
 
 # Function to list the per-package directories the formatter covers

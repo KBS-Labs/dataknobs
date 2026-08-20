@@ -174,6 +174,23 @@ print(temp_field.metadata)    # Field metadata if any
 # 6. Check field existence
 if "temperature" in record:
     print(f"Temperature: {record.temperature}°C")
+
+# 7. Mapping-style get() - a default instead of an error
+print(record.get("name"))              # "Alice"
+print(record.get("absent"))            # None
+print(record.get("absent", "unset"))   # "unset"
+```
+
+`get()` is the mapping-shaped counterpart to `record[key]`: same exact-name
+lookup, but it returns a default rather than raising `KeyError`. Reach for it
+where a field is genuinely optional, and for underscore-prefixed bookkeeping
+fields that attribute access refuses:
+
+```python
+record = Record({"_invalid": "temperature out of range"})
+
+record.get("_invalid")     # "temperature out of range"
+record._invalid            # AttributeError - attribute access refuses these
 ```
 
 ### Nested Value Access (Dot-Notation)
@@ -211,6 +228,15 @@ record.get_value("config.missing.key", default=0)  # 0
     would look for `record["my"]["field"]` instead.  This convention is
     shared with the query/filter system: what works in `get_value()` works
     in `Filter()`, and vice versa.
+
+    The exact-key accessors are the way to such a field, and `get()` is one
+    of them — it looks up the name you pass and never splits it:
+
+    | | `"my.field"` (literal dot) | `"config.timeout"` (path) |
+    |---|---|---|
+    | `record["…"]` | the value | `KeyError` |
+    | `record.get(…)` | the value | `None` |
+    | `record.get_value(…)` | `None` | the nested value |
 
 ### Traditional Field Access (Still Supported)
 

@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
-"""
-Migration Example - Adding Vectors to Existing Data
+"""Migration Example - Adding Vectors to Existing Data
 
 This example demonstrates:
 1. Migrating a database without vectors to include vector support
@@ -9,30 +8,52 @@ This example demonstrates:
 4. Handling migration errors and retries
 5. Verifying migration completeness
 
+Every step takes its embedding function as an argument rather than reaching
+for a module global. That is how ``VectorMigration`` and
+``IncrementalVectorizer`` are themselves configured (``embedding_fn=``), so
+the example teaches the library's own idiom -- and it lets a test drive
+``main()`` with a deterministic encoder instead of downloading a model.
+
 Requirements:
-    pip install dataknobs-data sentence-transformers tqdm
+    pip install dataknobs-data sentence-transformers
 """
 
 import asyncio
 import time
-from typing import List, Dict, Any, Optional
-from datetime import datetime
-from sentence_transformers import SentenceTransformer
+from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import datetime
+from functools import cache
 
-from dataknobs_data import AsyncDatabaseFactory, Record, VectorField, Query
+from dataknobs_data import AsyncDatabaseFactory, Record, VectorField
 from dataknobs_data.vector import VectorMigration, IncrementalVectorizer
 
 
-# Initialize embedding model
-print("Loading embedding model...")
-model = SentenceTransformer("all-MiniLM-L6-v2")
+MODEL_NAME = "all-MiniLM-L6-v2"
+
+EmbeddingFn = Callable[[str], list[float]]
 
 
-def generate_embedding(text: str) -> List[float]:
-    """Generate embedding for a text string."""
-    embedding = model.encode(text)
-    return embedding.tolist()
+@cache
+def _embedding_model():
+    """Load the sentence-transformers model once, on first use.
+
+    Both the import and the construction are deferred. Loading a model
+    downloads weights and takes seconds, so doing it as an import side
+    effect -- as this file used to -- makes the module impossible to
+    import without the optional dependency present and a network round
+    trip paid. Nothing could import it, so nothing could test it, which is
+    how a file where every record failed to migrate stayed that way.
+    """
+    from sentence_transformers import SentenceTransformer
+
+    print(f"Loading embedding model ({MODEL_NAME})...")
+    return SentenceTransformer(MODEL_NAME)
+
+
+def generate_embedding(text: str) -> list[float]:
+    """Generate an embedding for a text string using the default model."""
+    return _embedding_model().encode(text).tolist()
 
 
 @dataclass
@@ -56,14 +77,16 @@ class MigrationStats:
 
 async def create_legacy_database():
     """Create a simulated legacy database without vector support."""
-
     print("\n1. Creating legacy database (without vectors)...")
 
-    # Create database without vector support
+    # Create database without vector support. The SQLite backends spell the
+    # location `path`; an unrecognised key is dropped silently by config
+    # projection, so `database=` here would leave you on the `:memory:`
+    # default without a word of complaint.
     factory = AsyncDatabaseFactory()
     db = factory.create(
         backend="sqlite",
-        database=":memory:",
+        path=":memory:",
         vector_enabled=False,  # No vector support initially
     )
 
@@ -154,34 +177,37 @@ async def create_legacy_database():
     return db
 
 
-async def migrate_to_vector_database(legacy_db):
-    """Migrate legacy database to include vector support."""
-
-    print("\n2. Creating new database with vector support...")
-
-    # Create new database with vector support
+async def create_vector_database(label: str = "vector-enabled database"):
+    """Create a database with vector support enabled."""
     factory = AsyncDatabaseFactory()
-    vector_db = factory.create(
+    db = factory.create(
         backend="sqlite",
-        database=":memory:",
+        path=":memory:",
         vector_enabled=True,  # Enable vector support
         vector_metric="cosine",
     )
 
-    await vector_db.connect()
+    await db.connect()
 
-    print("✓ Created vector-enabled database")
+    print(f"✓ Created {label}")
 
-    return vector_db
+    return db
 
 
-async def manual_migration(legacy_db, vector_db, stats: MigrationStats):
+async def migrate_to_vector_database():
+    """Create the new, vector-enabled database to migrate into."""
+    print("\n2. Creating new database with vector support...")
+    return await create_vector_database()
+
+
+async def manual_migration(
+    legacy_db, vector_db, stats: MigrationStats, embedding_fn: EmbeddingFn = generate_embedding
+):
     """Manually migrate records with vector generation."""
-
     print("\n3. Manual Migration Process...")
 
     # Get all records from legacy database
-    all_records = await legacy_db.find()
+    all_records = await legacy_db.all()
     stats.total_records = len(all_records)
 
     print(f"  Found {stats.total_records} records to migrate")
@@ -198,12 +224,14 @@ async def manual_migration(legacy_db, vector_db, stats: MigrationStats):
             try:
                 # Generate embedding from title and content
                 text = f"{record.get('title', '')} {record.get('content', '')}"
-                embedding = generate_embedding(text)
+                embedding = embedding_fn(text)
 
-                # Create new record with embedding
+                # Create new record with embedding. `record.data` is the
+                # field-name -> value dict; a Record is not itself a mapping,
+                # so `{**record}` raises TypeError.
                 new_record = Record(
                     {
-                        **record,
+                        **record.data,
                         "embedding": VectorField(
                             embedding
                         ),  # Simplified - dimensions auto-detected
@@ -224,15 +252,14 @@ async def manual_migration(legacy_db, vector_db, stats: MigrationStats):
     return failed_records
 
 
-async def incremental_migration(vector_db):
+async def incremental_migration(vector_db, embedding_fn: EmbeddingFn = generate_embedding):
     """Demonstrate incremental vectorization for large datasets."""
-
     print("\n4. Incremental Vectorization (for large datasets)...")
 
     # Create incremental vectorizer with simplified API
     vectorizer = IncrementalVectorizer(
         database=vector_db,
-        embedding_fn=generate_embedding,
+        embedding_fn=embedding_fn,
         text_fields=["title", "content"],  # Primary configuration
         vector_field="embedding_v2",  # Additional embedding field
         batch_size=2,
@@ -242,25 +269,22 @@ async def incremental_migration(vector_db):
     # Start vectorization with progress tracking
     print("  Starting incremental vectorization...")
 
-    async def progress_callback(completed: int, total: int, current_batch: List[str]):
+    async def progress_callback(completed: int, total: int, current_batch: list) -> None:
         percentage = (completed / total * 100) if total > 0 else 0
-        print(
-            f"    Progress: {completed}/{total} ({percentage:.1f}%) - Processing: {current_batch[0][:30]}..."
-        )
+        print(f"    Progress: {completed}/{total} ({percentage:.1f}%)")
 
-    # Run vectorization with simplified API
-    results = await vectorizer.run()
+    # Run vectorization. `run()` returns a results dict, not an object.
+    results = await vectorizer.run(progress_callback=progress_callback)
 
-    print(f"  ✓ Incremental vectorization completed")
-    print(f"    Processed: {results.processed} records")
-    print(f"    Failed: {results.failed} records")
+    print("  ✓ Incremental vectorization completed")
+    print(f"    Processed: {results['processed']} records")
+    print(f"    Failed: {results['failed']} records")
 
     return results
 
 
-async def verify_migration(vector_db):
+async def verify_migration(vector_db, embedding_fn: EmbeddingFn = generate_embedding):
     """Verify that migration was successful."""
-
     print("\n5. Verifying Migration...")
 
     # Check total records
@@ -271,10 +295,12 @@ async def verify_migration(vector_db):
     records_with_vectors = 0
     records_without_vectors = 0
 
-    all_records = await vector_db.find()
+    all_records = await vector_db.all()
 
     for record in all_records:
-        if "embedding" in record and record["embedding"]:
+        # Field presence, not truthiness: an embedding's value is a numpy
+        # array, and `if array:` raises "truth value ... is ambiguous".
+        if "embedding" in record:
             records_with_vectors += 1
         else:
             records_without_vectors += 1
@@ -287,7 +313,7 @@ async def verify_migration(vector_db):
         print("\n  Testing vector search capability...")
 
         query_text = "container orchestration and deployment"
-        query_embedding = generate_embedding(query_text)
+        query_embedding = embedding_fn(query_text)
 
         results = await vector_db.vector_search(
             query_vector=query_embedding, k=3, vector_field="embedding"
@@ -309,45 +335,58 @@ async def verify_migration(vector_db):
     }
 
 
-async def migration_with_retry(legacy_db, vector_db):
-    """Demonstrate migration with retry logic for failed records."""
+async def migration_with_retry(legacy_db, embedding_fn: EmbeddingFn = generate_embedding):
+    """Demonstrate migration with retry logic for failed records.
 
+    Migrates into a database of its own rather than the one the earlier
+    steps filled, so what it reports is its own work and not a second copy
+    of everything already there.
+    """
     print("\n6. Migration with Retry Logic...")
 
-    # Create migration with simplified API
-    migration = VectorMigration(
-        source_db=legacy_db,
-        target_db=vector_db,
-        embedding_fn=generate_embedding,
-        text_fields=["title", "content"],  # Primary configuration
-        vector_field="embedding",
-        batch_size=2,
-    )
+    target_db = await create_vector_database("target database for the managed migration")
 
-    # Add retry logic
-    max_retries = 3
-    retry_delay = 0.5  # seconds
-
-    # Run migration with simplified API
-    print(f"  Running migration...")
-
-    results = await migration.run(
-        progress_callback=lambda status: print(
-            f"    Progress: {status.migrated_records}/{status.total_records}"
+    try:
+        # Create migration with simplified API
+        migration = VectorMigration(
+            source_db=legacy_db,
+            target_db=target_db,
+            embedding_fn=embedding_fn,
+            text_fields=["title", "content"],  # Primary configuration
+            vector_field="embedding",
+            batch_size=2,
+            max_retries=3,
+            retry_delay=0.5,
         )
-    )
 
-    print(f"  ✓ Migration completed")
-    print(f"    Success: {results.migrated_records} records")
-    print(f"    Failed: {results.failed_records} records")
-    print(f"    Success rate: {results.success_rate:.1f}%")
+        # Run migration with simplified API
+        print("  Running migration...")
 
-    return results
+        results = await migration.run(
+            progress_callback=lambda status: print(
+                f"    Progress: {status.migrated_records}/{status.total_records}"
+            )
+        )
+
+        print("  ✓ Migration completed")
+        print(f"    Success: {results.migrated_records} records")
+        print(f"    Failed: {results.failed_records} records")
+        # `success_rate` is a 0..1 ratio, so it needs scaling to read as a percent.
+        print(f"    Success rate: {results.success_rate * 100:.1f}%")
+
+        return results
+
+    finally:
+        await target_db.close()
 
 
-async def main():
-    """Run the migration example."""
+async def main(embedding_fn: EmbeddingFn = generate_embedding):
+    """Run the migration example.
 
+    Args:
+        embedding_fn: Text-to-vector function. Defaults to the
+            sentence-transformers model, which is loaded on first call.
+    """
     print("\n" + "=" * 60)
     print("Vector Migration Example")
     print("=" * 60)
@@ -356,15 +395,22 @@ async def main():
     stats = MigrationStats()
     stats.start_time = time.time()
 
+    # Bound outside the `try` so the `finally` can close whatever got opened
+    # before a failure. Each database owns an aiosqlite connection thread;
+    # leaving one open on the error path hangs interpreter shutdown, which
+    # turns a legible traceback into a process that never exits.
+    legacy_db = None
+    vector_db = None
+
     try:
         # Step 1: Create legacy database
         legacy_db = await create_legacy_database()
 
         # Step 2: Create vector-enabled database
-        vector_db = await migrate_to_vector_database(legacy_db)
+        vector_db = await migrate_to_vector_database()
 
         # Step 3: Manual migration
-        failed_records = await manual_migration(legacy_db, vector_db, stats)
+        failed_records = await manual_migration(legacy_db, vector_db, stats, embedding_fn)
 
         if failed_records:
             print(f"\n⚠ Warning: {len(failed_records)} records failed to migrate")
@@ -375,12 +421,12 @@ async def main():
                 try:
                     record = failed["record"]
                     text = f"{record.get('title', '')} {record.get('content', '')}"
-                    embedding = generate_embedding(text)
+                    embedding = embedding_fn(text)
 
                     new_record = Record(
                         {
-                            **record,
-                            "embedding": VectorField(embedding, dimensions=384),
+                            **record.data,
+                            "embedding": VectorField(embedding, dimensions=len(embedding)),
                             "migrated_at": datetime.now().isoformat(),
                             "retry": True,
                         }
@@ -395,10 +441,13 @@ async def main():
                     print(f"    ✗ Retry failed: {e}")
 
         # Step 4: Incremental vectorization (for additional embeddings)
-        await incremental_migration(vector_db)
+        await incremental_migration(vector_db, embedding_fn)
 
         # Step 5: Verify migration
-        verification = await verify_migration(vector_db)
+        await verify_migration(vector_db, embedding_fn)
+
+        # Step 6: The same migration, run by the library instead of by hand
+        await migration_with_retry(legacy_db, embedding_fn)
 
         # Final statistics
         stats.end_time = time.time()
@@ -411,17 +460,21 @@ async def main():
         print(f"  Failed: {stats.failed_records}")
         print(f"  Success Rate: {stats.success_rate:.1f}%")
         print(f"  Duration: {stats.duration:.2f} seconds")
-        print(f"  Average Speed: {stats.migrated_records / stats.duration:.1f} records/second")
-
-        # Cleanup
-        await legacy_db.close()
-        await vector_db.close()
+        if stats.duration > 0:
+            print(f"  Average Speed: {stats.migrated_records / stats.duration:.1f} records/second")
 
         print("\n✓ Migration example completed successfully!")
+
+        return stats
 
     except Exception as e:
         print(f"\n✗ Migration failed: {e}")
         raise
+
+    finally:
+        for db in (legacy_db, vector_db):
+            if db is not None:
+                await db.close()
 
 
 if __name__ == "__main__":

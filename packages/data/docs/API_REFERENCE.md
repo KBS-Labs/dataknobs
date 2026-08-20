@@ -366,6 +366,11 @@ record = Record(
 name = record.get_value("name")
 age = record.get_value("age", default=0)
 
+# Mapping-style access by exact field name
+record.get("name")                # "Alice"
+record.get("absent")              # None
+record.get("absent", "fallback")  # "fallback"
+
 # Dot-notation for nested fields and metadata
 record2 = Record(
     data={"config": {"timeout": 30}},
@@ -389,6 +394,16 @@ data_dict = record.to_dict()
 > JSON keys that literally contain a dot (e.g. `"my.field"`) cannot be
 > accessed via `get_value()` or filtered on.  This convention is consistent
 > across `Record.get_value()` and the Query/Filter system on all backends.
+>
+> `get()` is the exception, because it is the exact-key accessor rather than
+> a path one — it is `record[key]` with a default, and reads a literal
+> `"my.field"` for the same reason `record["my.field"]` does:
+>
+> | | `"my.field"` (literal dot) | `"config.timeout"` (path) |
+> |---|---|---|
+> | `record["…"]` | the value | `KeyError` |
+> | `record.get(…)` | the value | `None` |
+> | `record.get_value(…)` | `None` | the nested value |
 
 ### Query
 

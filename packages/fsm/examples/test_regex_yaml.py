@@ -8,7 +8,6 @@ from dataknobs_fsm.api.simple import SimpleFSM
 
 def test_regex_yaml():
     """Test the regex transformations from YAML config."""
-
     # Load the first configuration from the YAML file
     yaml_path = Path(__file__).parent / "regex_transforms.yaml"
 

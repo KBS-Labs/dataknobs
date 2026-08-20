@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
-"""
-LLM Conversation System Example.
+"""LLM Conversation System Example.
 
 This example demonstrates an FSM-based LLM conversation system with:
 - Multi-stage conversation flow (analyze, respond, refine)
@@ -16,7 +15,7 @@ to consolidate all LLM+FSM examples in one place.
 import asyncio
 import logging
 import os
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List
 from dataclasses import dataclass
 from enum import Enum
 
@@ -48,7 +47,7 @@ class ConversationContext:
     """Maintains conversation context."""
 
     history: List[Dict[str, str]]
-    current_topic: Optional[str] = None
+    current_topic: str | None = None
     user_preferences: Dict[str, Any] = None
 
     def __post_init__(self):
@@ -119,8 +118,7 @@ class IntentAnalyzer:
 
     @staticmethod
     async def analyze(input_text: str, context: ConversationContext) -> Dict[str, Any]:
-        """
-        Analyze user input to determine intent and extract key information.
+        """Analyze user input to determine intent and extract key information.
 
         Args:
             input_text: User's input text
@@ -141,9 +139,9 @@ class IntentAnalyzer:
             intent = ConversationIntent.COMMAND
         elif any(word in input_lower for word in ["hello", "hi", "hey", "greetings"]):
             intent = ConversationIntent.GREETING
-        elif any(word in input_lower for word in ["unclear", "confused", "don't understand"]):
-            intent = ConversationIntent.CLARIFICATION
-        elif context.history and len(input_text.split()) < 5:
+        elif any(word in input_lower for word in ["unclear", "confused", "don't understand"]) or (
+            context.history and len(input_text.split()) < 5
+        ):
             intent = ConversationIntent.CLARIFICATION
         else:
             intent = ConversationIntent.UNKNOWN
@@ -182,13 +180,12 @@ class ResponseGenerator:
         if self.llm_provider and hasattr(self.llm_provider, "initialize"):
             if not self.llm_provider.is_initialized:
                 await self.llm_provider.initialize()
-                logger.info(f"Initialized LLM provider")
+                logger.info("Initialized LLM provider")
 
     async def generate(
         self, intent: str, input_text: str, analysis: Dict[str, Any], context: ConversationContext
     ) -> str:
-        """
-        Generate response based on intent and context.
+        """Generate response based on intent and context.
 
         Args:
             intent: Detected intent
@@ -213,7 +210,7 @@ class ResponseGenerator:
 
     async def _generate_with_llm(
         self, intent: str, input_text: str, analysis: Dict[str, Any], context: ConversationContext
-    ) -> Optional[str]:
+    ) -> str | None:
         """Generate response using LLM."""
         if not self.llm_provider:
             return None
@@ -337,8 +334,7 @@ class ConversationRefinement:
 
     @staticmethod
     async def refine(response: str, analysis: Dict[str, Any], context: ConversationContext) -> str:
-        """
-        Refine response based on context and quality checks.
+        """Refine response based on context and quality checks.
 
         Args:
             response: Initial response
@@ -377,8 +373,7 @@ class LLMConversationFSM:
     """FSM-based LLM conversation system."""
 
     def __init__(self, llm_provider=None):
-        """
-        Initialize conversation FSM.
+        """Initialize conversation FSM.
 
         Args:
             llm_provider: Optional LLM provider instance
@@ -613,8 +608,7 @@ class LLMConversationFSM:
         logger.info("Conversation system initialized")
 
     async def process_message(self, message: str) -> str:
-        """
-        Process a user message and return response.
+        """Process a user message and return response.
 
         Args:
             message: User input message
@@ -655,7 +649,7 @@ class LLMConversationFSM:
             await self.generator.llm_provider.close()
 
 
-def get_llm_config_from_env() -> Optional[LLMConfig]:
+def get_llm_config_from_env() -> LLMConfig | None:
     """Get LLM configuration from environment variables.
 
     Supports:
@@ -812,7 +806,7 @@ async def main():
     # Show token usage if available
     token_usage = conversation.get_token_usage()
     if token_usage["total_tokens"] > 0:
-        print(f"\nToken Usage:")
+        print("\nToken Usage:")
         print(f"- Prompt tokens: {token_usage['prompt_tokens']}")
         print(f"- Completion tokens: {token_usage['completion_tokens']}")
         print(f"- Total tokens: {token_usage['total_tokens']}")

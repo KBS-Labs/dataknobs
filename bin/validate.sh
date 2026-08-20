@@ -126,7 +126,8 @@ while IFS= read -r _pkg; do
     [[ -n "$_pkg" ]] && ALL_PACKAGES+=("$_pkg")
 done <<< "${_discovered// /$'\n'}"
 
-# A promoted package's tests/ rides with its src, wherever that src was added.
+# A promoted package's tests/, examples/, scripts/ and benchmarks/ ride with
+# its src, wherever that src was added.
 #
 # Called from both branches below, and the second one is the load-bearing call:
 # the gate narrows by package name — `validate.sh $PACKAGES --workspace` — so a
@@ -135,14 +136,24 @@ done <<< "${_discovered// /$'\n'}"
 # reported it clean. That is the same shape as the workspace-set defect
 # recorded below, which is why this is a function called twice rather than a
 # line appended once.
-_append_promoted_tests() {
-    local package="$1" promoted
+_append_promoted_dirs() {
+    local package="$1" promoted subdir
     # Unquoted on purpose: the helper emits a plain word list.
     # shellcheck disable=SC2046
     for promoted in $(lint_promoted_test_packages); do
         if [[ "$package" == "$promoted" && -d "packages/$package/tests" ]]; then
             VALIDATE_TARGETS+=("packages/$package/tests")
             break
+        fi
+    done
+    # The second promotion axis, in the same function rather than beside it:
+    # both answer "what does the linter read in this package besides src", and
+    # two functions would need the same pair of call sites kept in step, which
+    # is the defect the comment above records.
+    # shellcheck disable=SC2046
+    for subdir in $(lint_promoted_subdirs); do
+        if [[ -d "packages/$package/$subdir" ]]; then
+            VALIDATE_TARGETS+=("packages/$package/$subdir")
         fi
     done
     # Explicit, because the loop's status is the function's and a final
@@ -162,7 +173,7 @@ if [[ ${#TARGETS[@]} -eq 0 ]]; then
             if [[ -d "packages/$package/src" ]]; then
                 VALIDATE_TARGETS+=("packages/$package/src")
             fi
-            _append_promoted_tests "$package"
+            _append_promoted_dirs "$package"
         done
     fi
 else
@@ -174,7 +185,7 @@ else
             if [[ -d "packages/$target/src" ]]; then
                 VALIDATE_TARGETS+=("packages/$target/src")
             fi
-            _append_promoted_tests "$target"
+            _append_promoted_dirs "$target"
         elif [[ -d "$target" ]]; then
             # It's a directory
             VALIDATE_TARGETS+=("$target")
@@ -637,6 +648,29 @@ PRINT_EXCEPTIONS=(
     # definition, and under tests/ this is the exception. One file, and the next
     # one argues for itself.
     "packages/data/tests/examples/run_example_tests.py"
+    # The three directories promoted out of the ruff deferred tier, arriving in
+    # this list for the reason the two entries above already give: stdout is the
+    # product. An example teaches by being run and read, a benchmark's product
+    # is its timing table, and a script under packages/*/scripts is a developer
+    # tool of exactly the kind bin/ holds. Routing any of them through logging
+    # would not improve the output — with no handler configured by the consumer
+    # who runs the file, it would empty it.
+    #
+    # Whole directories rather than the entry points inside them, and that is
+    # the deliberately loose part. An examples tree is a program plus the
+    # modules it imports (packages/data/examples/sensor_dashboard is four
+    # files), so a list of entry points would exempt the demo and check its
+    # helpers, splitting one program down the middle. The cost is the bin/*.py
+    # cost: a future file here is exempt too, including one that turns out to
+    # be library code in the wrong directory.
+    #
+    # This is the only check that needed a declaration when these cells were
+    # promoted. Ruff, the formatter and the syntax pass all read them as they
+    # stand, and mypy skips them because the contract still files them
+    # unchecked.
+    "packages/*/examples/*"
+    "packages/*/scripts/*"
+    "packages/*/benchmarks/*"
 )
 
 # A test file, by name — the naming convention pytest collects on.

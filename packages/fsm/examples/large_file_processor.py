@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
-"""
-Large file processor example using FSM with REFERENCE mode and streaming.
+"""Large file processor example using FSM with REFERENCE mode and streaming.
 
 This example demonstrates:
 1. REFERENCE mode for handling large files without loading into memory
@@ -18,9 +17,8 @@ The example processes a large CSV/JSONL file by:
 
 import json
 import csv
-import io
 from pathlib import Path
-from typing import Dict, Any, Iterator, List
+from typing import Dict, Any
 import hashlib
 from dataknobs_fsm.api.simple import SimpleFSM
 from dataknobs_fsm.core.data_modes import DataHandlingMode
@@ -99,7 +97,7 @@ def process_chunk(state) -> Dict[str, Any]:
                 chunk_stats["lines_processed"] += 1
             except Exception as e:
                 chunk_stats["lines_failed"] += 1
-                chunk_stats["chunk_errors"].append(f"Line {line_num}: {str(e)}")
+                chunk_stats["chunk_errors"].append(f"Line {line_num}: {e!s}")
 
     elif file_type == "csv":
         for row_num, row in enumerate(chunk_data):
@@ -111,7 +109,7 @@ def process_chunk(state) -> Dict[str, Any]:
                     chunk_stats["lines_processed"] += 1
             except Exception as e:
                 chunk_stats["lines_failed"] += 1
-                chunk_stats["chunk_errors"].append(f"Row {row_num}: {str(e)}")
+                chunk_stats["chunk_errors"].append(f"Row {row_num}: {e!s}")
 
     else:  # text file
         for line_num, line in enumerate(chunk_data):
@@ -122,7 +120,7 @@ def process_chunk(state) -> Dict[str, Any]:
                 chunk_stats["lines_processed"] += 1
             except Exception as e:
                 chunk_stats["lines_failed"] += 1
-                chunk_stats["chunk_errors"].append(f"Line {line_num}: {str(e)}")
+                chunk_stats["chunk_errors"].append(f"Line {line_num}: {e!s}")
 
     # Update global statistics
     data["processing"]["processed_lines"] += chunk_stats["lines_processed"]
@@ -345,7 +343,7 @@ def simulate_chunked_reading(file_path: Path, file_type: str, chunk_size: int = 
     chunks = []
 
     if file_type == "jsonl":
-        with open(file_path, "r") as f:
+        with open(file_path) as f:
             chunk = []
             for line in f:
                 chunk.append(line.strip())
@@ -356,7 +354,7 @@ def simulate_chunked_reading(file_path: Path, file_type: str, chunk_size: int = 
                 chunks.append(chunk)
 
     elif file_type == "csv":
-        with open(file_path, "r", newline="") as f:
+        with open(file_path, newline="") as f:
             reader = csv.reader(f)
             next(reader)  # Skip header
             chunk = []
@@ -369,7 +367,7 @@ def simulate_chunked_reading(file_path: Path, file_type: str, chunk_size: int = 
                 chunks.append(chunk)
 
     else:  # text
-        with open(file_path, "r") as f:
+        with open(file_path) as f:
             chunk = []
             for line in f:
                 chunk.append(line.strip())
@@ -434,7 +432,7 @@ def main():
                 )
 
                 if result["success"]:
-                    print(f"✓ Processing succeeded")
+                    print("✓ Processing succeeded")
                     print(f"Final State: {result['final_state']}")
 
                     summary = result["data"].get("summary", {})
@@ -459,14 +457,14 @@ def main():
                     if result["data"].get("file_hash"):
                         print(f"\nFile Hash: {result['data']['file_hash'][:16]}...")
                 else:
-                    print(f"✗ Processing failed")
+                    print("✗ Processing failed")
                     print(f"Error: {result.get('error', 'Unknown error')}")
 
             finally:
                 # Clean up temporary file
                 if tmp_path.exists():
                     tmp_path.unlink()
-                    print(f"Cleaned up temporary file")
+                    print("Cleaned up temporary file")
 
         print("\n" + "=" * 70)
         print("Example complete!")

@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
-"""
-Demonstration of Batch and Streaming Improvements
+"""Demonstration of Batch and Streaming Improvements
 
 This script showcases:
 1. Enhanced StreamResult with total_batches and failed_indices
@@ -18,7 +17,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 
 from sensor_dashboard import SensorDashboard, AsyncSensorDashboard
-from models import SensorInfo, SensorReading
+from models import SensorReading
 from data_generator import SensorDataGenerator
 
 
@@ -51,7 +50,7 @@ def demo_basic_streaming(dashboard: SensorDashboard):
     print(f"\nStreaming {len(readings)} readings with batch_size=10...")
     result = dashboard.stream_readings_with_tracking(readings, batch_size=10)
 
-    print(f"\nResults:")
+    print("\nResults:")
     print(f"  Total processed: {result.total_processed}")
     print(f"  Successful: {result.successful}")
     print(f"  Failed: {result.failed}")
@@ -104,12 +103,12 @@ def demo_streaming_with_errors(dashboard: SensorDashboard):
         readings.append(reading)
 
     # Stream with validation
-    print(f"\nStreaming with validation (temp: -50 to 100, humidity: 0 to 100)...")
+    print("\nStreaming with validation (temp: -50 to 100, humidity: 0 to 100)...")
     result = dashboard.stream_with_validation(
         readings, temp_range=(-50, 100), humidity_range=(0, 100)
     )
 
-    print(f"\nResults after validation:")
+    print("\nResults after validation:")
     print(f"  Total processed: {result.total_processed}")
     print(f"  Successful: {result.successful}")
     print(f"  Failed: {result.failed}")
@@ -169,7 +168,7 @@ def demo_batch_fallback_behavior(dashboard: SensorDashboard):
         readings, temp_range=(-50, 100), humidity_range=(0, 100)
     )
 
-    print(f"\nFallback Results:")
+    print("\nFallback Results:")
     print(f"  Total batches attempted: {result.total_batches}")
     print(f"  Records processed individually after fallback: {result.total_processed}")
     print(f"  Successful: {result.successful} (valid readings)")
@@ -178,7 +177,7 @@ def demo_batch_fallback_behavior(dashboard: SensorDashboard):
     # Calculate how many batches had to fall back
     expected_batches = len(readings) // 4 + (1 if len(readings) % 4 else 0)
     print(f"  Expected batches: {expected_batches}")
-    print(f"  All batches fell back to individual processing due to invalid records")
+    print("  All batches fell back to individual processing due to invalid records")
 
 
 async def demo_async_streaming_improvements(dashboard: AsyncSensorDashboard):
@@ -209,12 +208,12 @@ async def demo_async_streaming_improvements(dashboard: AsyncSensorDashboard):
     print(f"\nAsync streaming {len(readings)} readings...")
     result = await dashboard.stream_readings_with_tracking(readings, batch_size=7)
 
-    print(f"\nAsync Streaming Results:")
+    print("\nAsync Streaming Results:")
     print(f"  Total processed: {result.total_processed}")
     print(f"  Successful: {result.successful}")
     print(f"  Failed: {result.failed}")
     print(f"  Total batches: {result.total_batches}")
-    print(f"  Batch size: 7")
+    print("  Batch size: 7")
     print(
         f"  Expected batches: {20 // 7 + (1 if 20 % 7 else 0)} (matches actual: {result.total_batches})"
     )

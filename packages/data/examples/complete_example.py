@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
-"""
-Complete example demonstrating all features of the DataKnobs data package.
+"""Complete example demonstrating all features of the DataKnobs data package.
 
 This example shows:
 1. Environment variable substitution
@@ -25,7 +24,6 @@ from dataknobs_data import Record, Query, database_factory, DatabaseFactory
 
 def setup_configuration():
     """Set up configuration with multiple backends."""
-
     # Create config instance
     config = Config()
 
@@ -222,7 +220,7 @@ def main():
     # cloud_db = config.get_instance("databases", "cloud")
 
     # Demonstrate operations on primary database
-    record_ids = demonstrate_crud_operations(primary_db, "Primary")
+    demonstrate_crud_operations(primary_db, "Primary")
 
     # Demonstrate caching
     print("\n=== Caching Strategy ===")

@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
-"""
-Conversation Flow Example.
+"""Conversation Flow Example.
 
 This example demonstrates how to use ConversationFlow to create
 structured conversation flows using the FSM engine.
@@ -12,7 +11,6 @@ from dataknobs_llm.conversations.flow import (
     ConversationFlow,
     FlowState,
     keyword_condition,
-    regex_condition,
     always,
 )
 

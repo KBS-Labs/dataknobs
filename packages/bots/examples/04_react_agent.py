@@ -135,7 +135,7 @@ class TimeTool(Tool):
         import datetime
 
         # Simple mock - just return UTC time with timezone label
-        now = datetime.datetime.now(datetime.timezone.utc)
+        now = datetime.datetime.now(datetime.UTC)
         time_str = now.strftime("%Y-%m-%d %H:%M:%S")
 
         print(f"  → Time: {time_str} {timezone}")

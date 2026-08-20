@@ -132,21 +132,27 @@
         },
         {
           "path": "packages/*/examples",
-          "tier": "deferred",
-          "ceiling": 194,
-          "reason": "the code consumers copy, which is why clearing it needs a policy call first — may an example carry an unused import for illustration? — the rest being tidy-up a fixer clears"
+          "tier": "checked",
+          "ceiling": 0,
+          "reason": "cleared and promoted: the bulk went to the standard safe autofix, and the residue was judgement — unused bindings that discarded a return the example existed to show, a retry demonstration that computed its two settings and passed neither to the constructor that takes them, and a pair of simulated connections built, populated and then leaked"
         },
         {
           "path": "packages/*/scripts",
-          "tier": "deferred",
-          "ceiling": 6,
-          "reason": "developer utilities that ship to nobody; deferred because the lint target set does not reach them, not because the work is large"
+          "tier": "checked",
+          "ceiling": 0,
+          "reason": "cleared and promoted alongside examples; every finding was autofixable"
         },
         {
           "path": "packages/*/benchmarks",
-          "tier": "deferred",
-          "ceiling": 2,
-          "reason": "developer utilities that ship to nobody; deferred because the lint target set does not reach them, not because the work is large"
+          "tier": "checked",
+          "ceiling": 0,
+          "reason": "cleared and promoted alongside examples; the residue was an __all__ built by append and a timed call whose result was bound and unread"
+        },
+        {
+          "path": "quality-fixture",
+          "tier": "checked",
+          "ceiling": 0,
+          "reason": "the purpose-built cell: a fixture tree that is clean under this configuration and dirty under quality-fixture/ruff.toml, which selects rules this repository does not. It exists so the guards over bin/quality-contract.py have a cell that measures a backlog now that no cell here does, and it is checked so that the clean half of that claim is a measurement rather than an assumption"
         }
       ]
     },
@@ -266,6 +272,12 @@
           "tier": "unchecked",
           "ceiling": 0,
           "reason": "outside the target set; developer utilities that ship to nobody"
+        },
+        {
+          "path": "quality-fixture",
+          "tier": "strict",
+          "ceiling": 0,
+          "reason": "the purpose-built cell: a fixture tree that is clean under this configuration and dirty under quality-fixture/ruff.toml, which selects rules this repository does not. It exists so the guards over bin/quality-contract.py have a cell that measures a backlog now that no cell here does, and it is checked so that the clean half of that claim is a measurement rather than an assumption"
         }
       ]
     },
@@ -329,6 +341,12 @@
           "tier": "enforced",
           "ceiling": 0,
           "reason": "formatted by the workspace-wide adoption; a regression fails"
+        },
+        {
+          "path": "quality-fixture",
+          "tier": "enforced",
+          "ceiling": 0,
+          "reason": "the purpose-built cell: a fixture tree that is clean under this configuration and dirty under quality-fixture/ruff.toml, which selects rules this repository does not. It exists so the guards over bin/quality-contract.py have a cell that measures a backlog now that no cell here does, and it is checked so that the clean half of that claim is a measurement rather than an assumption"
         }
       ]
     }

@@ -148,7 +148,6 @@ arcs:
 
 def demo_regex_normalization():
     """Demonstrate regex-based text normalization."""
-
     # Load the workflow
     config = yaml.safe_load(REGEX_NORMALIZE_WORKFLOW_YAML)
     fsm = SimpleFSM(config)
@@ -187,7 +186,6 @@ def demo_regex_normalization():
 
 def demo_advanced_regex():
     """Demonstrate advanced regex processing."""
-
     config = yaml.safe_load(ADVANCED_REGEX_WORKFLOW_YAML)
     fsm = SimpleFSM(config)
 
@@ -215,7 +213,6 @@ def demo_advanced_regex():
 
 def create_custom_regex_workflow(patterns: dict) -> dict:
     """Create a custom workflow with user-defined regex patterns."""
-
     # Build the transform code dynamically
     transform_code = "lambda data, ctx: (lambda re: {**data, 'text': "
 
@@ -247,15 +244,8 @@ def create_custom_regex_workflow(patterns: dict) -> dict:
 
 def demo_custom_regex():
     """Demonstrate dynamically created regex workflows."""
-
-    # Define custom patterns
-    patterns = {
-        r"\b([A-Z]{2,})\b": lambda m: m.group(1).capitalize(),  # ACRONYMS -> Acronyms
-        r"(\d+)\s*%": r"\1 percent",  # 50% -> 50 percent
-        r"\$(\d+)": r"\1 dollars",  # $100 -> 100 dollars
-    }
-
-    # For the config, we need string replacements
+    # The config takes string replacements, so each pattern maps to a
+    # replacement template rather than to a callable.
     string_patterns = {
         r"\b([A-Z]{2,})\b": r"\1",  # Keep as-is for now
         r"(\d+)\s*%": r"\1 percent",

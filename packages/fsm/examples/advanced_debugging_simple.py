@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
-"""
-Simple Advanced FSM Example showcasing actual AdvancedFSM features.
+"""Simple Advanced FSM Example showcasing actual AdvancedFSM features.
 
 This example demonstrates:
 1. Using AdvancedFSM vs SimpleFSM
@@ -15,7 +14,6 @@ import json
 from typing import Dict, Any
 from datetime import datetime
 from dataknobs_fsm.api.advanced import (
-    AdvancedFSM,
     ExecutionMode,
     ExecutionHook,
     create_advanced_fsm,
@@ -46,7 +44,7 @@ def validate_input(state) -> Dict[str, Any]:
         print(f"  ✗ Validation failed: {data['validation_errors']}")
     else:
         data["is_valid"] = True
-        print(f"  ✓ Validation passed")
+        print("  ✓ Validation passed")
 
     data["steps_completed"].append("validate")
     return data
@@ -170,7 +168,7 @@ def demonstrate_advanced_features():
         print("\n2️⃣ Setting Breakpoints")
         fsm.add_breakpoint("validate")
         fsm.add_breakpoint("finalize")
-        print(f"   Breakpoints set at: validate, finalize")
+        print("   Breakpoints set at: validate, finalize")
 
         # Inspect states
         print("\n3️⃣ Inspecting States")

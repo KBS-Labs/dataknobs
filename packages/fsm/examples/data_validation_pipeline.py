@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
-"""
-Data validation pipeline example using FSM with custom functions.
+"""Data validation pipeline example using FSM with custom functions.
 
 This example demonstrates a validation pipeline that:
 1. Validates multiple fields in sequence
@@ -279,7 +278,7 @@ def main():
             result = fsm.process(test_case["data"])
 
             if result["success"]:
-                print(f"✓ Processing succeeded")
+                print("✓ Processing succeeded")
                 print(f"Final State: {result['final_state']}")
                 print(f"Path: {' -> '.join(result['path'])}")
 
@@ -301,7 +300,7 @@ def main():
                             f"  {status} {field}: {'Valid' if validation['valid'] else 'Invalid'}"
                         )
             else:
-                print(f"✗ Processing failed")
+                print("✗ Processing failed")
                 print(f"Error: {result.get('error', 'Unknown error')}")
 
         print("\n" + "=" * 70)

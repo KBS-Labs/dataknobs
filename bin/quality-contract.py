@@ -2259,6 +2259,38 @@ def _add_json(command: argparse.ArgumentParser) -> None:
     command.add_argument("--json", action="store_true", dest="use_json")
 
 
+def _add_contract(command: argparse.ArgumentParser) -> None:
+    """Let a command be pointed at a declaration other than this repository's.
+
+    Which is not a convenience: it is what keeps these commands testable now
+    that the tree they measure has no ruff backlog left in it. A guard over
+    ``census`` has to watch it report findings and still exit zero, and one over
+    the declaration has to watch a command decline to rewrite it — properties of
+    the *command*, since the exit status is the only thing carrying a refusal
+    out, and neither drivable over a tree that measures nothing. So the guards
+    point this at ``quality-fixture/``, whose findings are deliberate and whose
+    ceilings are its own, and what they exercise is the command that ships
+    rather than an in-process approximation of it.
+
+    One command writes a declaration back, so the path is remembered in ``main``
+    rather than re-derived there. Reading through an argument and writing
+    through the constant is the one shape of this option worse than not having
+    it: ``update-baseline --contract`` would report lowering a ceiling in the
+    file it was given and lower it in this repository's instead, unrecoverably,
+    because a ceiling only ever falls.
+
+    Declared per command like every other option here, and on the six that read
+    a declaration rather than globally — ``explain`` answers a question about
+    the linter's configuration, and the contract it happens to consult for the
+    inline-waiver tally is this repository's by definition.
+    """
+    command.add_argument(
+        "--contract",
+        metavar="PATH",
+        help="measure against this declaration instead of the repository's",
+    )
+
+
 def _build_parser() -> argparse.ArgumentParser:
     """One subparser per command, each declaring only the options it reads.
 
@@ -2281,12 +2313,13 @@ def _build_parser() -> argparse.ArgumentParser:
     # them, so the resolution below reads one shape. Declaring the *option* is
     # still per command — a command that does not is the usage error; this only
     # decides what its namespace looks like once that has passed.
-    parser.set_defaults(tool=None, cell=[], use_json=False)
+    parser.set_defaults(tool=None, cell=[], use_json=False, contract=None)
     commands = parser.add_subparsers(dest="command", required=True, metavar="command")
 
     measure = commands.add_parser("check", help="measure the tree and compare every cell")
     _add_tool(measure, "restrict to one tool")
     _add_cells(measure)
+    _add_contract(measure)
     measure.add_argument(
         "--show-findings",
         action="store_true",
@@ -2295,6 +2328,7 @@ def _build_parser() -> argparse.ArgumentParser:
     _add_json(measure)
 
     faults = commands.add_parser("verify", help="check the declaration itself, without measuring")
+    _add_contract(faults)
     _add_json(faults)
 
     baseline = commands.add_parser(
@@ -2302,19 +2336,23 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     _add_tool(baseline, "restrict to one tool")
     _add_cells(baseline)
+    _add_contract(baseline)
 
     split = commands.add_parser("partition", help="which cell each tracked file lands in")
     _add_tool(split, "restrict to one tool")
+    _add_contract(split)
     _add_json(split)
 
     where = commands.add_parser("scope", help="classify caller-named paths against the cells")
     _add_tool(where, "the tool whose cells the paths are classified against")
+    _add_contract(where)
     where.add_argument("paths", nargs="*", help="the paths to classify")
     _add_json(where)
 
     counted = commands.add_parser("census", help="break a cell's findings down by rule")
     _add_tool(counted, "the tool to read; a census reads one at a time")
     _add_cells(counted)
+    _add_contract(counted)
     counted.add_argument(
         "--include-unmeasured",
         action="store_true",
@@ -2377,7 +2415,11 @@ def main() -> None:
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(message)s")
-    contract = load_contract()
+    # Read once and remembered, because one command writes it back. A path that
+    # is an argument on the way in and a constant on the way out is a command
+    # that measures one declaration and rewrites another.
+    contract_path = Path(args.contract) if args.contract else _CONTRACT
+    contract = load_contract(contract_path)
 
     if args.command == "explain":
         if args.audit:
@@ -2510,7 +2552,7 @@ def main() -> None:
         sys.exit(0)
 
     if args.command == "update-baseline":
-        lowered, exceeded = update_baseline(contract, _selected(args.tool), _CONTRACT, only)
+        lowered, exceeded = update_baseline(contract, _selected(args.tool), contract_path, only)
         for line in lowered:
             logger.info("%s", line)
         if not lowered:

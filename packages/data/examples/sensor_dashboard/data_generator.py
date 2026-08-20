@@ -1,12 +1,11 @@
-"""
-Test Data Generator for Sensor Dashboard
+"""Test Data Generator for Sensor Dashboard
 
 Generates realistic sensor data with various edge cases for testing.
 """
 
 import random
 from datetime import datetime, timedelta
-from typing import List, Optional, Tuple
+from typing import List, Tuple
 
 try:
     from .models import SensorReading, SensorInfo
@@ -18,7 +17,7 @@ except ImportError:
 class SensorDataGenerator:
     """Generate synthetic sensor data for testing."""
 
-    def __init__(self, seed: Optional[int] = None):
+    def __init__(self, seed: int | None = None):
         """Initialize generator with optional seed for reproducibility."""
         if seed:
             random.seed(seed)
@@ -90,7 +89,7 @@ class SensorDataGenerator:
         readings = []
         current_time = start_time
 
-        for i in range(count):
+        for _ in range(count):
             anomaly_type = random.choice(["extreme_temp", "extreme_humidity", "sensor_fault"])
 
             if anomaly_type == "extreme_temp":

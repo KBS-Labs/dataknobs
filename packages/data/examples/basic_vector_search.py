@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
-"""
-Basic Vector Search Example
+"""Basic Vector Search Example
 
 This example demonstrates:
 1. Setting up a vector-enabled database
@@ -13,7 +12,7 @@ Requirements:
 """
 
 import asyncio
-from typing import List, Optional, Dict, Any
+from typing import List, Dict, Any
 import numpy as np
 
 try:
@@ -36,7 +35,7 @@ except ImportError:
             return np.array([float((hash_val + i) % 100) / 100.0 for i in range(384)])
 
 
-from dataknobs_data import AsyncDatabaseFactory, DatabaseFactory, Record, VectorField, Query
+from dataknobs_data import AsyncDatabaseFactory, Record, VectorField, Query
 
 
 class VectorSearchExample:
@@ -111,14 +110,14 @@ class VectorSearchExample:
             },
         ]
 
-    async def setup_database(self, backend: str = "sqlite", database: str = ":memory:") -> Any:
+    async def setup_database(self, backend: str = "sqlite", path: str = ":memory:") -> Any:
         """Set up and return a vector-enabled database."""
         self.log("\n1. Setting up vector-enabled database...")
 
         # Use AsyncDatabaseFactory for async operations
         factory = AsyncDatabaseFactory()
         self.db = factory.create(
-            backend=backend, database=database, vector_enabled=True, vector_metric="cosine"
+            backend=backend, path=path, vector_enabled=True, vector_metric="cosine"
         )
 
         await self.db.connect()  # Use connect instead of initialize
@@ -126,7 +125,7 @@ class VectorSearchExample:
         return self.db
 
     async def create_documents_with_embeddings(
-        self, documents: Optional[List[Dict]] = None
+        self, documents: List[Dict] | None = None
     ) -> List[str]:
         """Create documents with embeddings in the database."""
         if not self.db:
@@ -162,7 +161,7 @@ class VectorSearchExample:
         if not self.db:
             raise RuntimeError("Database not initialized.")
 
-        self.log(f"\n3. Performing vector similarity search...")
+        self.log("\n3. Performing vector similarity search...")
         self.log(f"Query: '{query_text}'")
 
         query_embedding = self.generate_embedding(query_text)
@@ -187,7 +186,7 @@ class VectorSearchExample:
         if not self.db:
             raise RuntimeError("Database not initialized.")
 
-        self.log(f"\n4. Vector search with category filter...")
+        self.log("\n4. Vector search with category filter...")
 
         query_embedding = self.generate_embedding(query_text)
 
@@ -214,7 +213,6 @@ class VectorSearchExample:
 
 async def main():
     """Run the basic vector search example."""
-
     # Create example instance
     example = VectorSearchExample(verbose=True)
 
@@ -223,19 +221,22 @@ async def main():
         await example.setup_database()
 
         # Create documents
-        record_ids, records = await example.create_documents_with_embeddings()
+        _record_ids, records = await example.create_documents_with_embeddings()
 
         # Perform searches
         query_text = "How do neural networks work in AI?"
-        results = await example.perform_vector_search(query_text)
+        await example.perform_vector_search(query_text)
 
         # Filtered search
-        filtered_results = await example.perform_filtered_search(query_text, "AI")
+        await example.perform_filtered_search(query_text, "AI")
 
         # Find similar documents
         example.log("\n5. Finding similar documents...")
         first_doc = records[0].data
-        reference_embedding = first_doc["embedding"].vector
+        # `.data` maps field name -> field *value*, so this is already the
+        # vector itself; `.vector` would be reaching for the VectorField
+        # wrapper, which `.data` has unwrapped.
+        reference_embedding = first_doc["embedding"]
 
         similar_results = await example.db.vector_search(
             query_vector=reference_embedding, k=3, vector_field="embedding"
@@ -248,8 +249,8 @@ async def main():
 
         # Demonstrate similarity metrics
         example.log("\n6. Testing different similarity metrics...")
-        vec1 = np.array(records[0].data["embedding"].vector)
-        vec2 = np.array(records[1].data["embedding"].vector)
+        vec1 = np.array(records[0].data["embedding"])
+        vec2 = np.array(records[1].data["embedding"])
 
         # Calculate cosine similarity with safe division
         norm1 = np.linalg.norm(vec1)
@@ -273,8 +274,8 @@ async def main():
             k=2,
         )
 
-        near_text_results = await example.db.find(query)
-        example.log(f"\nNear text search results:")
+        near_text_results = await example.db.search(query)
+        example.log("\nNear text search results:")
         for result in near_text_results:
             example.log(f"- {result['title']}")
 

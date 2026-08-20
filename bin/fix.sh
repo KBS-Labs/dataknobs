@@ -97,6 +97,27 @@ while IFS= read -r _pkg; do
     [[ -n "$_pkg" ]] && ALL_PACKAGES+=("$_pkg")
 done <<< "${_discovered// /$'\n'}"
 
+# The directories promoted out of the ruff deferred tier, which the fix pass has
+# to reach for the same reason validate.sh does: the contract holds them to a
+# ceiling of zero, so a finding arriving there fails `dk pr`, and the command
+# that failure tells you to run is this one.
+#
+# Called from both branches, as validate.sh's twin is — `bin/fix.sh data` is the
+# invocation a developer reaches for after a scoped failure, and a widening
+# wired only into the bare branch would miss it while `bin/fix.sh` looked right.
+_append_promoted_subdirs() {
+    local package="$1" subdir
+    # Unquoted on purpose: the helper emits a plain word list.
+    # shellcheck disable=SC2046
+    for subdir in $(lint_promoted_subdirs); do
+        if [[ -d "packages/$package/$subdir" ]]; then
+            FIX_TARGETS+=("packages/$package/$subdir")
+        fi
+    done
+    # Explicit: the loop's status is the function's under errexit.
+    return 0
+}
+
 # Determine what to fix
 FIX_TARGETS=()
 FIX_PACKAGES=()
@@ -111,6 +132,7 @@ if [[ ${#TARGETS[@]} -eq 0 ]]; then
         if [[ -d "packages/$package/tests" ]]; then
             FIX_TARGETS+=("packages/$package/tests")
         fi
+        _append_promoted_subdirs "$package"
     done
     # The code belonging to no package. validate.sh reports findings here now,
     # so this is where they get fixed — without it, the one entry point named
@@ -136,6 +158,7 @@ else
             if [[ -d "packages/$target/tests" ]]; then
                 FIX_TARGETS+=("packages/$target/tests")
             fi
+            _append_promoted_subdirs "$target"
         elif [[ -d "$target" ]]; then
             # It's a directory
             FIX_TARGETS+=("$target")

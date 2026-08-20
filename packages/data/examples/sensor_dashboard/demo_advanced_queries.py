@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
-"""
-Demonstration of Advanced Query Features in Sensor Dashboard
+"""Demonstration of Advanced Query Features in Sensor Dashboard
 
 This script showcases:
 1. BETWEEN and NOT_BETWEEN operators for range queries
@@ -13,7 +12,7 @@ import random
 from datetime import datetime, timedelta
 from dataknobs_data.backends.memory import SyncMemoryDatabase
 from sensor_dashboard import SensorDashboard
-from models import SensorInfo, SensorReading
+from models import SensorReading
 from data_generator import SensorDataGenerator as DataGenerator
 
 
@@ -146,7 +145,7 @@ def demo_query_builder(dashboard: SensorDashboard):
     print("DEMO: QueryBuilder for Complex Queries")
     print("=" * 60)
 
-    from dataknobs_data import QueryBuilder, Filter, Operator
+    from dataknobs_data import QueryBuilder, Operator
 
     # Generate test data
     generator = DataGenerator()

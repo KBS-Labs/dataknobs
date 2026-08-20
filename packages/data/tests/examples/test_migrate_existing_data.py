@@ -1,13 +1,29 @@
 """Tests for the migration example."""
 
 import pytest
+import sys
 import time
 import zlib
+from pathlib import Path
 from typing import List
-from dataclasses import dataclass
 
 from dataknobs_data import AsyncDatabaseFactory, Record, VectorField
 from dataknobs_data.vector import VectorMigration, IncrementalVectorizer
+
+# Add examples to path
+examples_path = Path(__file__).parent.parent.parent / "examples"
+sys.path.insert(0, str(examples_path))
+
+# The example imports sentence-transformers lazily, so this import costs
+# nothing and needs no optional dependency present. It used to load a model
+# at module scope, which made the example unimportable here -- so these
+# tests grew up testing the library the example calls, and re-declaring its
+# MigrationStats rather than importing it. Nothing then covered the example
+# itself, and every record in it failed to migrate for as long as that held.
+from migrate_existing_data import (  # noqa: E402 - must follow the sys.path.insert above
+    MigrationStats,
+    main as run_migration_example,
+)
 
 
 class MockEmbeddingModel:
@@ -77,25 +93,6 @@ async def vector_db():
     await db.connect()
     yield db
     await db.close()
-
-
-@dataclass
-class MockMigrationStats:
-    """Mock migration statistics."""
-
-    total_records: int = 0
-    migrated_records: int = 0
-    failed_records: int = 0
-    start_time: float = 0
-    end_time: float = 0
-
-    @property
-    def duration(self) -> float:
-        return self.end_time - self.start_time if self.end_time else time.time() - self.start_time
-
-    @property
-    def success_rate(self) -> float:
-        return (self.migrated_records / self.total_records * 100) if self.total_records > 0 else 0
 
 
 class TestVectorMigration:
@@ -314,18 +311,18 @@ class TestIncrementalVectorizer:
 
 
 class TestMigrationStats:
-    """Test migration statistics tracking."""
+    """Test the example's own statistics tracking."""
 
     def test_stats_initialization(self):
         """Test MigrationStats initialization."""
-        stats = MockMigrationStats()
+        stats = MigrationStats()
         assert stats.total_records == 0
         assert stats.migrated_records == 0
         assert stats.failed_records == 0
 
     def test_stats_duration(self):
         """Test duration calculation."""
-        stats = MockMigrationStats()
+        stats = MigrationStats()
         stats.start_time = time.time()
         time.sleep(0.1)
         stats.end_time = time.time()
@@ -334,7 +331,7 @@ class TestMigrationStats:
 
     def test_stats_success_rate(self):
         """Test success rate calculation."""
-        stats = MockMigrationStats()
+        stats = MigrationStats()
         stats.total_records = 10
         stats.migrated_records = 8
         stats.failed_records = 2
@@ -439,3 +436,81 @@ async def test_migration_verification():
 
     finally:
         await vector_db.close()
+
+
+class TestMigrationExample:
+    """Drive the shipped example itself, rather than the library it calls.
+
+    Everything above exercises VectorMigration and IncrementalVectorizer
+    directly. That is worth doing, but it is not a test of the example: the
+    example can call those classes wrongly -- and did, at six separate
+    sites -- while every test here stays green.
+    """
+
+    @pytest.mark.asyncio
+    async def test_example_migrates_every_record(self, capsys):
+        """The example's own ``main()``, start to finish, no step stubbed.
+
+        Only the embedding function is supplied, through the parameter the
+        example exposes for it; there is nothing to patch and nothing to
+        mock. A real in-memory SQLite database does the rest, in about a
+        second.
+        """
+        stats = await run_migration_example(mock_generate_embedding)
+
+        assert stats.total_records == 8
+        assert stats.migrated_records == 8
+        assert stats.failed_records == 0
+
+        out = capsys.readouterr().out
+        assert "✗ Failed:" not in out
+        assert "Migration example completed successfully" in out
+
+    @pytest.mark.asyncio
+    async def test_example_reaches_every_numbered_step(self, capsys):
+        """Each step prints a heading; assert the run got to the last one.
+
+        Step 6 is here because it used to be defined and never called --
+        the example's one demonstration of the library's own migration path
+        was dead code, and a test that never ran main() could not notice.
+        """
+        await run_migration_example(mock_generate_embedding)
+
+        out = capsys.readouterr().out
+        for heading in (
+            "1. Creating legacy database",
+            "2. Creating new database with vector support",
+            "3. Manual Migration Process",
+            "4. Incremental Vectorization",
+            "5. Verifying Migration",
+            "6. Migration with Retry Logic",
+        ):
+            assert heading in out, heading
+
+    @pytest.mark.asyncio
+    async def test_example_reports_success_rate_as_a_percentage(self, capsys):
+        """A fully successful migration reads 100.0%, not 1.0%.
+
+        ``MigrationStatus.success_rate`` is a 0..1 ratio, so the example's
+        ``:.1f%`` format string needed scaling. Printing "1.0%" next to
+        "Failed: 0 records" is the kind of wrong that survives review.
+        """
+        await run_migration_example(mock_generate_embedding)
+
+        out = capsys.readouterr().out
+        assert "Success rate: 100.0%" in out
+        assert "Success rate: 1.0%" not in out
+
+    @pytest.mark.asyncio
+    async def test_example_verifies_vectors_are_present(self, capsys):
+        """Verification counts vectors by field presence, not truthiness.
+
+        An embedding's value is a numpy array, so the ``if record.get(...)``
+        this used to do raised "truth value of an array ... is ambiguous"
+        the moment a record actually had one.
+        """
+        await run_migration_example(mock_generate_embedding)
+
+        out = capsys.readouterr().out
+        assert "Records with vectors: 8" in out
+        assert "Records without vectors: 0" in out
