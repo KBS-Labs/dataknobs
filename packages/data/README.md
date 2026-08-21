@@ -449,25 +449,32 @@ For complete API documentation, see [API Reference](docs/API_REFERENCE.md).
 ## Custom Backend
 
 ```python
-from dataknobs_data import AsyncDatabase
 from dataknobs_data import SyncDatabase
+from dataknobs_data.backends import register_backend, sync_backends
 
 class CustomBackend(SyncDatabase):
     def create(self, record):
         # Implementation
         pass
-    
+
     def read(self, record_id):
         # Implementation
         pass
-    
+
     # ... other methods
 
-# Register custom backend
-AsyncDatabase.register_backend("custom", CustomBackend)
+# Register custom backend. The third argument imports and returns the
+# class, and is called on first use rather than here, so a backend whose
+# driver is optional costs nothing until something asks for it.
+register_backend(
+    sync_backends,
+    "custom",
+    lambda: CustomBackend,
+    metadata={"description": "A custom backend"},
+)
 
 # Use custom backend
-db = AsyncDatabase.from_backend("custom", config)
+db = SyncDatabase.from_backend("custom", {})
 ```
 
 ## Development

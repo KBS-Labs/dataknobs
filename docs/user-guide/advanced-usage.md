@@ -82,15 +82,15 @@ from dataknobs_data import async_database_factory, Record, Query
 
 async def process_large_dataset():
     # Create async database using factory
-    db = async_database_factory.create({
-        "backend": "postgres",
-        "connection": "postgresql://...",
-        "pool_size": 20
-    })
+    db = async_database_factory.create(
+        backend="postgres",
+        connection_string="postgresql://...",
+        pool_size=20,
+    )
 
     # Batch create with pooling
     records = [Record({"id": i, "data": f"item{i}"}) for i in range(10000)]
-    await db.bulk_create(records, batch_size=100)
+    await db.create_batch(records)
 
     # Async iteration over large result sets
     async for record in db.stream(Query()):
@@ -160,10 +160,10 @@ from dataknobs_fsm import SimpleFSM
 from dataknobs_data import database_factory
 
 # Create database using factory for FSM context
-db = database_factory.create({
-    "backend": "postgres",
-    "connection": "postgresql://..."
-})
+db = database_factory.create(
+    backend="postgres",
+    connection_string="postgresql://...",
+)
 
 config = {
     "name": "db_processor",
@@ -298,10 +298,10 @@ from dataknobs_data import database_factory
 
 async def main():
     # Persistent storage using factory
-    db = database_factory.create({
-        "backend": "postgres",
-        "connection": "postgresql://..."
-    })
+    db = database_factory.create(
+        backend="postgres",
+        connection_string="postgresql://...",
+    )
 
     # Create bots for different tenants
     support_bot = await DynaBot.from_config({
@@ -345,11 +345,11 @@ from dataknobs_data import database_factory
 
 async def main():
     # Knowledge base using factory
-    knowledge_base = database_factory.create({
-        "backend": "elasticsearch",
-        "host": "localhost:9200",
-        "index": "documentation"
-    })
+    knowledge_base = database_factory.create(
+        backend="elasticsearch",
+        host="localhost:9200",
+        index="documentation",
+    )
 
     bot_config = {
         "llm": {"provider": "openai", "model": "gpt-4"},
