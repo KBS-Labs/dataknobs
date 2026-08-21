@@ -151,7 +151,7 @@ metadata = TextMetaData(text_id=1, text_label="article")
 doc = Text("This is the document content.", metadata)
 
 # Without metadata (creates default)
-doc = Text("Simple document.")
+doc = Text("Simple document.", None)
 ```
 
 #### Properties
@@ -395,7 +395,7 @@ invalid_doc = safe_document_creation("", "doc_002")
 from dataknobs_structures import Text
 
 # Document without explicit metadata gets defaults
-doc = Text("Content without metadata")
+doc = Text("Content without metadata", None)
 
 print(f"Default ID: {doc.text_id}")     # 0
 print(f"Default label: {doc.text_label}") # "text"

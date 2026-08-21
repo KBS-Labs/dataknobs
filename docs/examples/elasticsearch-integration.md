@@ -52,7 +52,7 @@ index = ElasticsearchIndex(request_helper, [table_settings])
 ### Indexing Single Documents
 
 ```python
-from dataknobs_structures import Text
+from dataknobs_structures import Text, TextMetaData
 from dataknobs_utils import elasticsearch_utils
 import json
 
@@ -61,8 +61,8 @@ def index_document(index, doc, doc_id=None):
     # Prepare document for indexing
     doc_data = {
         "content": doc.text,
-        "metadata": doc.metadata,
-        "timestamp": doc.metadata.get("timestamp", "2024-01-01T00:00:00Z")
+        "metadata": doc.metadata.data,
+        "timestamp": doc.metadata.get_value("timestamp", "2024-01-01T00:00:00Z"),
     }
     
     # Index the document
@@ -77,12 +77,13 @@ def index_document(index, doc, doc_id=None):
 
 # Example usage
 doc = Text(
-    text="This is a sample document about Elasticsearch integration.",
-    metadata={
-        "title": "Elasticsearch Guide",
-        "author": "John Doe",
-        "tags": ["elasticsearch", "search", "indexing"]
-    }
+    "This is a sample document about Elasticsearch integration.",
+    TextMetaData(
+        text_id="doc_001",
+        title="Elasticsearch Guide",
+        author="John Doe",
+        tags=["elasticsearch", "search", "indexing"],
+    ),
 )
 
 response = index_document(index, doc, doc_id="doc_001")
@@ -92,7 +93,7 @@ print(f"Indexed document: {response}")
 ### Bulk Indexing
 
 ```python
-from dataknobs_structures import Text
+from dataknobs_structures import Text, TextMetaData
 import json
 
 def bulk_index_documents(index, documents):
@@ -112,7 +113,7 @@ def bulk_index_documents(index, documents):
         # Document data
         doc_data = {
             "content": doc.text,
-            "metadata": doc.metadata
+            "metadata": doc.metadata.data
         }
         bulk_data.append(json.dumps(doc_data))
     
@@ -126,7 +127,7 @@ def bulk_index_documents(index, documents):
 
 # Example usage
 documents = [
-    Text(f"Document {i} content", metadata={"id": i})
+    Text(f"Document {i} content", TextMetaData(text_id=i))
     for i in range(100)
 ]
 
@@ -239,7 +240,7 @@ results = advanced_search(
 ### Index Normalized Documents
 
 ```python
-from dataknobs_structures import Text
+from dataknobs_structures import Text, TextMetaData
 from dataknobs_xization import normalize
 
 class ElasticsearchPipeline:
@@ -257,7 +258,7 @@ class ElasticsearchPipeline:
         doc_data = {
             "original_text": doc.text,
             "normalized_text": normalized_text,
-            "metadata": doc.metadata,
+            "metadata": doc.metadata.data,
             "word_count": len(normalized_text.split()),
             "char_count": len(normalized_text)
         }
@@ -295,7 +296,7 @@ pipeline = ElasticsearchPipeline(index)
 
 doc = Text(
     "getUserData&ProcessInput",
-    metadata={"type": "code"}
+    TextMetaData(text_id="doc_001", text_label="code"),
 )
 
 pipeline.process_and_index(doc, "doc_001")

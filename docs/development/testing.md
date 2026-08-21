@@ -183,7 +183,7 @@ class TestTextProcessingPipeline:
             normalized = normalize.expand_ampersand_fn(normalized)
             
             # Tree creation
-            doc = Text(normalized)
+            doc = Text(normalized, None)
             tree = Tree(doc)
             
             assert "get User Name" in tree.data.text
@@ -283,7 +283,7 @@ import pytest
 import tempfile
 from pathlib import Path
 from dataknobs_structures import Tree
-from dataknobs_structures import Text
+from dataknobs_structures import Text, TextMetaData
 from dataknobs_utils import file_utils
 
 @pytest.fixture
@@ -300,7 +300,7 @@ def sample_document():
     """Create a sample document for testing."""
     return Text(
         "This is a sample document with some text.",
-        metadata={"title": "Sample", "author": "Test"}
+        TextMetaData(text_id="sample", title="Sample", author="Test"),
     )
 
 @pytest.fixture
