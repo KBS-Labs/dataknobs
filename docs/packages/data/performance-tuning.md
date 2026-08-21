@@ -19,29 +19,26 @@ Optimal pool size depends on your workload characteristics:
 #### PostgreSQL
 
 ```python
-from dataknobs_data.backends.postgres_native import AsyncPostgresDatabase
+from dataknobs_data.backends.postgres import AsyncPostgresDatabase
 
 # For read-heavy workloads
 read_config = {
-    "min_connections": 20,  # Higher minimum for consistent performance
-    "max_connections": 50,  # Allow bursts
-    "connection_timeout": 10,
+    "min_pool_size": 20,  # Higher minimum for consistent performance
+    "max_pool_size": 50,  # Allow bursts
     "command_timeout": 30
 }
 
 # For write-heavy workloads
 write_config = {
-    "min_connections": 10,  # Lower minimum to reduce idle connections
-    "max_connections": 30,  # Moderate maximum
-    "connection_timeout": 5,
+    "min_pool_size": 10,  # Lower minimum to reduce idle connections
+    "max_pool_size": 30,  # Moderate maximum
     "command_timeout": 60  # Longer timeout for complex writes
 }
 
 # For mixed workloads
 mixed_config = {
-    "min_connections": 15,
-    "max_connections": 40,
-    "connection_timeout": 10,
+    "min_pool_size": 15,
+    "max_pool_size": 40,
     "command_timeout": 45
 }
 ```
