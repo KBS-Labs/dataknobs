@@ -49,9 +49,12 @@ from __future__ import annotations
 import re
 from functools import cache
 from pathlib import Path
+from typing import Any
 
 import pytest
 
+from dataknobs_common.registry import PluginRegistry
+from dataknobs_common.structured_config import StructuredConfig
 from dataknobs_data.backends import async_backends, sync_backends
 from tests._workspace import documentation_files, rel
 
@@ -113,25 +116,30 @@ def _top_level_pairs(body: str) -> dict[str, str]:
     return pairs
 
 
-def _config_classes(backend: str, flavor: str) -> list[type]:
+def _config_classes(backend: str, flavor: str) -> list[type[StructuredConfig]]:
     """The config classes a sample's keys may legitimately belong to.
 
     ``flavor`` of ``"unknown"`` yields both: where the sample gives no signal
     which factory it drives, a key accepted by either is not evidence of a
     defect. Those sites are counted rather than silently waved through.
+
+    The ``issubclass`` narrowing does two jobs at once: it is what makes the
+    return type true rather than asserted, and it is what excludes a backend
+    registered as a bare callable -- no ``CONFIG_CLS``, so no keys to accept
+    and nothing for this guard to check.
     """
-    registries = {
+    registries: dict[str, list[PluginRegistry[Any]]] = {
         "sync": [sync_backends],
         "async": [async_backends],
         "unknown": [sync_backends, async_backends],
-    }[flavor]
-    found = []
-    for registry in registries:
+    }
+    found: list[type[StructuredConfig]] = []
+    for registry in registries[flavor]:
         try:
             cls = getattr(registry.get_factory(backend), "CONFIG_CLS", None)
         except Exception:  # a name that is not a registered backend
             cls = None
-        if cls is not None:
+        if isinstance(cls, type) and issubclass(cls, StructuredConfig):
             found.append(cls)
     return found
 
