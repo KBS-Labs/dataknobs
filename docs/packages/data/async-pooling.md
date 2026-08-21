@@ -250,7 +250,7 @@ await db.close()
 The PostgreSQL implementation uses asyncpg's native connection pooling:
 
 ```python
-from dataknobs_data.backends.postgres_native import AsyncPostgresDatabase
+from dataknobs_data.backends.postgres import AsyncPostgresDatabase
 
 # Create database instance
 db = AsyncPostgresDatabase({
@@ -258,8 +258,8 @@ db = AsyncPostgresDatabase({
     "database": "mydb",
     "user": "user",
     "password": "password",
-    "min_connections": 10,
-    "max_connections": 20
+    "min_pool_size": 10,
+    "max_pool_size": 20
 })
 
 # Connect (gets or creates pool for current event loop)
