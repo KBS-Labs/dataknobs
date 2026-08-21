@@ -62,10 +62,8 @@ base_config = {
     },
     "conversation_storage": {
         "backend": "postgres",  # Shared storage
-        "connection": {
-            "host": "localhost",
-            "database": "bots_db"
-        }
+        "host": "localhost",
+        "database": "bots_db"
     }
 }
 
@@ -234,14 +232,12 @@ await registry.remove_client("client-a")
 ```python
 "conversation_storage": {
     "backend": "postgres",
-    "connection": {
-        "host": "localhost",
-        "port": 5432,
-        "database": "bots_db",
-        "user": "postgres",
-        "password": "password"
-    },
-    "pool_size": 20  # Connection pool
+    "host": "localhost",
+    "port": 5432,
+    "database": "bots_db",
+    "user": "postgres",
+    "password": "password",
+    "max_pool_size": 20  # Ceiling on pooled connections
 }
 ```
 
@@ -333,8 +329,8 @@ registry = BotRegistry(
 ```python
 "conversation_storage": {
     "backend": "postgres",
-    "pool_size": 20,
-    "max_overflow": 10
+    "min_pool_size": 5,
+    "max_pool_size": 20
 }
 ```
 

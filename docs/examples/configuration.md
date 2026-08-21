@@ -49,9 +49,9 @@ class ConfigurationDemo:
                 "database": "${DB_NAME:myapp}",  # With default
                 "user": "${DB_USER}",
                 "password": "${DB_PASSWORD}",
-                "ssl_enabled": "${ENABLE_SSL:false}",  # Boolean conversion
-                "pool_size": "${DB_POOL_SIZE:10}",  # Integer conversion
-                "timeout": "${DB_TIMEOUT:30.0}"  # Float conversion
+                "ssl": "${ENABLE_SSL:false}",  # Boolean conversion
+                "max_pool_size": "${DB_POOL_SIZE:10}",  # Integer conversion
+                "command_timeout": "${DB_TIMEOUT:30.0}"  # Float conversion
             },
             "cache": {
                 "backend": "memory",
@@ -69,8 +69,8 @@ class ConfigurationDemo:
         print(f"  Host: {db_config['host']}")
         print(f"  Port: {db_config['port']} (type: {type(db_config['port']).__name__})")
         print(f"  Database: {db_config['database']}")
-        print(f"  SSL Enabled: {db_config['ssl_enabled']} (type: {type(db_config['ssl_enabled']).__name__})")
-        print(f"  Pool Size: {db_config['pool_size']} (type: {type(db_config['pool_size']).__name__})")
+        print(f"  SSL: {db_config['ssl']} (type: {type(db_config['ssl']).__name__})")
+        print(f"  Max Pool Size: {db_config['max_pool_size']} (type: {type(db_config['max_pool_size']).__name__})")
         
         cache_config = config.get("cache")
         print(f"\nCache Configuration:")
@@ -211,7 +211,7 @@ class ConfigurationDemo:
                     "database": "${DB_NAME}",
                     "user": "${DB_USER}",
                     "password": "${DB_PASSWORD}",
-                    "pool_size": 50
+                    "max_pool_size": 50
                 },
                 "features": {
                     "cache_enabled": True,

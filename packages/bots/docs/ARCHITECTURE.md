@@ -641,7 +641,7 @@ CREATE TABLE messages (
 - Easy to add more instances
 
 **Connection Pooling**:
-```python
+```yaml
 conversation_storage:
   backend: postgres
   min_pool_size: 5       # Connections held open per instance

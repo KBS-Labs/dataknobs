@@ -431,3 +431,81 @@ def tracked_shell_files() -> tuple[str, ...]:
             found.append(name)
     assert found, "no tracked shell files found — has the enumeration broken?"
     return tuple(sorted(found))
+
+
+#: A fenced code block's opening line, and the language it declares.
+#:
+#: Leading whitespace is tolerated on both halves: a fence nested under a list
+#: item or a numbered step is indented, and a reader anchored to column zero
+#: never opens it. 65 such fences sat unread by the import guard, which looks
+#: exactly like a document with no code in it.
+#:
+#: The language is required rather than optional, so a bare ``` only ever
+#: *closes*. That is not tidiness: several documents here open a fence and
+#: embed a same-backtick-count fence inside it -- a markdown sample quoted
+#: inside a Python string -- which leaves every fence boundary after it
+#: inverted. An opener that accepts a bare ``` then reads the document's real
+#: fences as gaps between imaginary ones, and swallows the next labelled fence
+#: whole: 9 import statements across 6 documents, silently. An unlabelled
+#: block declares no language and so is read by no guard here, which is what
+#: makes refusing to open on one free.
+FENCE_OPEN = re.compile(r"^\s*```(?P<lang>[\w+-]+)")
+FENCE_CLOSE = re.compile(r"^\s*```\s*$")
+
+#: An HTML comment, which is how a document annotates the fence below it
+#: without the annotation appearing in rendered output.
+FENCE_MARKER = re.compile(r"^<!--\s*(?P<text>.*?)\s*-->\s*$")
+
+
+class Fence:
+    """One fenced code block, with the annotation that precedes it.
+
+    ``marker`` is the text of the HTML comment immediately above the fence,
+    separated from it by nothing but blank lines. A guard decides for itself
+    what a marker means; what is shared is the reading, because the two
+    guards that want a fence otherwise carry two copies of the patterns
+    above -- and the copy that did not receive the indentation widening
+    above would under-read while reporting green.
+    """
+
+    def __init__(self, lang: str, line: int, body: str, marker: str | None):
+        self.lang, self.line, self.body, self.marker = lang, line, body, marker
+
+    @property
+    def lines(self) -> list[str]:
+        """The body as lines, empty for a fence with no content."""
+        return self.body.split("\n") if self.body else []
+
+
+def code_fences(path: Path) -> list[Fence]:
+    """Every fenced code block in ``path``, in document order.
+
+    ``line`` is the first *content* line, so a body offset added to it names
+    a real line of the document. A fence that is never closed is still
+    returned: dropping it would hide whatever it holds behind a missing
+    delimiter, and a document that loses its closing fence keeps rendering.
+    """
+    found: list[Fence] = []
+    inside = False
+    lang, opened, marker = "", 0, None
+    body: list[str] = []
+    for number, raw in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+        if not inside:
+            comment = FENCE_MARKER.match(raw.strip())
+            opening = FENCE_OPEN.match(raw)
+            if opening is not None:
+                inside, body, opened = True, [], number + 1
+                lang = opening.group("lang").lower()
+            elif comment is not None:
+                marker = comment.group("text")
+            elif raw.strip():
+                marker = None
+            continue
+        if FENCE_CLOSE.match(raw):
+            found.append(Fence(lang, opened, "\n".join(body), marker))
+            inside, marker = False, None
+            continue
+        body.append(raw)
+    if inside:
+        found.append(Fence(lang, opened, "\n".join(body), marker))
+    return found

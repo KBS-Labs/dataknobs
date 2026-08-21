@@ -744,9 +744,11 @@ docker run -d \
 - `database`: Database name
 - `user`: Database user
 - `password`: Database password
-- `pool_size`: Connection pool size
-- `max_overflow`: Extra connections beyond pool_size
-- `pool_timeout`: Connection timeout in seconds
+- `min_pool_size`: Lower bound on the asyncpg pool (default: 2)
+- `max_pool_size`: Upper bound on the asyncpg pool (default: 5)
+- `command_timeout`: asyncpg command timeout in seconds
+- `ssl`: asyncpg-native SSL configuration — `True` requires TLS, a string
+  selects a mode, and an `ssl.SSLContext` is passed through
 
 ### Custom Storage Class
 
