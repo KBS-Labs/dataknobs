@@ -457,7 +457,7 @@ database:
 database:
   host: ${DB_HOST:localhost}  # Defaults to localhost
   port: ${DB_PORT:5432}  # Defaults to PostgreSQL port
-  pool_size: ${DB_POOL_SIZE:10}  # Default pool size
+  max_pool_size: ${DB_POOL_SIZE:10}  # Default pool ceiling
 ```
 
 ### 3. Group Related Configuration
@@ -539,7 +539,7 @@ databases:
     database: ${DB_NAME:myapp}
     user: ${DB_USER:dbuser}
     password: ${DB_PASSWORD}
-    pool_size: ${DB_POOL_SIZE:20}
+    max_pool_size: ${DB_POOL_SIZE:20}
   
   - name: cache
     factory: database

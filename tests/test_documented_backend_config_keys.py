@@ -38,10 +38,16 @@ COVERED
     dict. The class name settles sync-vs-async outright, so this is the one
     form where a sibling-backend field is provable rather than merely likely.
 
-    **YAML form** -- a ``backend:`` line in a config block, where the
-    enclosing keys say the block is a database config. ``DB_CONTEXT`` makes
-    that judgement; ``memory`` names a plugin in the vector-store and
-    rate-limiter registries too, so the backend name alone cannot.
+    **Configuration-block form** -- a mapping that names a ``backend``, in a
+    YAML fence, in a quoted dict literal handed to ``Config.load`` or
+    ``from_config``, or in YAML written into a Python string literal. All
+    three are *parsed* and walked by one traversal, because they are one
+    question asked of two parsers: which mapping here is a database config,
+    and what keys does it hold. ``DB_CONTEXT`` answers the first from the
+    enclosing keys -- ``memory`` names a plugin in the vector-store and
+    rate-limiter registries too, so the backend name alone cannot -- and a
+    ``${DB_BACKEND:postgres}`` value is read through to the default an
+    unconfigured reader installs.
 
 NOT COVERED
     A config bound to a variable and passed by name. Which binding a name
@@ -50,41 +56,73 @@ NOT COVERED
     defines, and the nearest earlier binding of that name belongs to a
     different example. Reporting that as a defect would make the guard cry
     wolf, and a guard that cries wolf gets deleted. Those sites are checked
-    by hand when the surrounding page is edited.
+    by hand, and the price of that was on display when this section was last
+    edited: a sample building ``configs[env]`` and splatting it into
+    ``factory.create`` carried a ``pool_size`` that raises, and was found by
+    reading rather than by failing.
 
-    A quoted dict literal handed to ``Config.load`` rather than to a factory
-    or a constructor -- ``{"databases": [{"factory": "database", "backend":
-    "memory", ...}]}`` -- which the object-graph layer builds later, by name.
-    This is a real gap rather than an undecidable one, and it is the largest
-    of the three: a sweep over the corpus finds 109 such blocks whose
-    enclosing key is a database context, against 77 it correctly declines.
-    Closing it needs the ancestry rule ``_ancestry`` applies to YAML rebuilt
-    for Python syntax, and a prototype of that still mistook two vector-store
-    blocks for database ones -- an unsound sweep is worse here than none,
-    for the crying-wolf reason above. Tracked separately; the one site of
-    the nine it flags that a runnable example actually builds is fixed.
+    A **documented key list in prose**. An options list under a heading is
+    the third of the three defect classes above, and it is the one no
+    scanner here reads -- these sweeps read code. A bot configuration guide
+    listed ``pool_size``, ``max_overflow`` and ``pool_timeout`` as the
+    connection options for its Postgres storage; none of the three exists.
+
+    Whether an accepted key does anything. ``accepts()`` answers what the
+    config class takes, and one class backs both Postgres backends, so
+    ``min_pool_size`` / ``max_pool_size`` / ``command_timeout`` are accepted
+    for a *sync* sample and documented by their own class as async-only --
+    psycopg2 has no pool to bound. The flavor machinery cannot help here:
+    both registries resolve Postgres to the same class, so the sibling-field
+    check that catches ``hosts`` on sync Elasticsearch has nothing to
+    compare. Two samples repaired alongside this guard were sync and now say
+    so in a comment, found by reading the config class rather than by
+    failing anything.
+
+    A block in a database context that names **no backend at all** --
+    ``database: {host: ..., port: ..., max_pool_size: ...}``. 136 such
+    blocks are in the tree. They cannot be read against a config class the
+    way a named one can, and the tempting fallback is unsound rather than
+    merely lenient: checking them against the union of every database config
+    flags 115, and the keys it flags most are ``conversations`` (19),
+    ``pool`` (17) and ``$resource`` (14) -- a container mapping keyed by
+    database name, a nesting level that does not exist, and a config-
+    reference directive. Telling a container of named configs from a config
+    is a design question, not a missing branch. Worth recording for whoever
+    takes it: a key rejected by *every* config class is sound whichever
+    backend the block turns out to be, so the unsound half is only the
+    decision that the block is a database config at all. One real defect was
+    found this way and fixed by hand -- a ``pool_size`` in a document that
+    spells the key correctly forty lines above, in the block the old
+    line-scanning reader could read.
 
 The accepted-key set is read from the config class through ``accepts()``, and
 the tolerated routing keys from the runtime's own ``_ROUTING_KEYS``, so this
 file cannot drift from the code it checks. Coverage is asserted rather than
 assumed: a backend whose driver is absent is still read against its declared
-config class, and the corpus floor counts the sites actually checked.
+config class, the corpus floor counts the sites actually checked, each front
+end is counted separately so one going silent cannot hide behind the other,
+and every way a block leaves unchecked -- skipped for its context, in a fence
+that would not parse, naming a backend that resolves to nothing -- is a
+number with a test watching it.
 """
 
 from __future__ import annotations
 
+import ast
 import re
 import textwrap
+from collections.abc import Callable
 from functools import cache
 from pathlib import Path
 from typing import Any
 
 import pytest
+import yaml
 
 from dataknobs_common.registry import PluginRegistry
 from dataknobs_common.structured_config import _ROUTING_KEYS, StructuredConfig
 from dataknobs_data.backends import _register_sync_backends, async_backends, sync_backends
-from tests._workspace import documentation_files, rel
+from tests._workspace import code_fences, documentation_files, rel
 
 #: Keys the object-graph layer owns. They travel with a config on purpose and
 #: the runtime check tolerates them, so the guard must too.
@@ -305,14 +343,27 @@ def _scanned() -> tuple[list[Site], int]:
     return _sites()
 
 
-# --- The YAML form -------------------------------------------------------
+# --- The configuration-block forms ---------------------------------------
 #
-# A ``backend:`` line in a config block reaches the same factory as a call,
-# and the keys beside it are the same keys. The difficulty is not parsing
-# them, it is knowing whose they are: ``memory`` names a plugin in the
-# database registry, the vector-store registry and the rate-limiter registry
-# alike, so the backend name cannot say which config a block is. Only the
-# enclosing keys can.
+# A ``backend`` named inside a configuration block reaches the same factory as
+# a call does, and the keys beside it are the same keys. Two syntaxes carry
+# such a block: a YAML fence, and a quoted dict literal handed to
+# ``Config.load`` or ``from_config`` rather than to a factory or a
+# constructor. They are read through one traversal because they are one
+# question -- which mapping in this document is a database config, and what
+# keys does it hold -- asked of two parsers.
+#
+# Both are parsed rather than pattern-matched, and that is the design. The
+# difficulty was never finding a ``backend``; it is knowing whose block it is.
+# ``memory`` names a plugin in the database registry, the vector-store
+# registry and the rate-limiter registry alike, so only the *enclosing* keys
+# can say. A parser answers that by construction. The line-walking reader this
+# replaced had to rebuild nesting from indentation, was wrong about it twice
+# in its first month -- a list item's leading key measured shallower than the
+# block it opened, and ``- backend:`` on a dash line matched nothing at all --
+# and could not express the question for Python at all. 108 dict-literal
+# blocks went unread on that account, six of them defective, while this file
+# reported green.
 
 #: An ancestry segment that says the block below it holds a *database*
 #: config. ``databases:`` is the environment-resources spelling and the
@@ -323,124 +374,286 @@ def _scanned() -> tuple[list[Site], int]:
 #:
 #: The rule is stated as an allowlist rather than a list of subsystems to
 #: skip because the failure directions are not symmetric: an unrecognised
-#: context leaves a block unchecked, which ``test_the_yaml_share_out_of_scope
-#: _stays_visible`` counts, whereas a denylist that missed a new subsystem
-#: would report its keys as defects -- and a guard that cries wolf is
-#: uninstalled by the second person to hit it.
+#: context leaves a block unchecked, which
+#: ``test_the_share_out_of_scope_stays_visible`` counts, whereas a denylist
+#: that missed a new subsystem would report its keys as defects -- and a
+#: guard that cries wolf is uninstalled by the second person to hit it.
 DB_CONTEXT = re.compile(r"^(databases?|conversation_storage|\w*_db)$")
 
-#: ``key:`` at some indentation, the unit both YAML helpers below work in.
-YAML_KEY = re.compile(r"^(?P<indent>\s*)(?P<dash>-\s+)?(?P<key>[\w-]+):(?P<rest>.*)$")
+#: The fence languages each parser reads.
+YAML_FENCE = frozenset({"yaml", "yml"})
+PYTHON_FENCE = frozenset({"python", "py"})
 
-#: The ``backend:`` line that opens a block. The optional dash matters: a
-#: block written as a list element puts ``backend:`` on the dash line itself
-#: (``- backend: postgres``), and a pattern anchored on ``\s*backend:`` does
-#: not match it -- so the block was not read as unchecked, it was not seen.
-BACKEND_LINE = re.compile(
-    r"^(?P<indent>\s*)(?P<dash>-\s+)?backend:\s*['\"]?(?P<b>[\w-]+)['\"]?\s*(#.*)?$"
-)
+#: A whole value that is an environment substitution, with the default it
+#: falls back to. Unconfigured, a reader installs that default, so it is the
+#: name to read the block's keys against. A substitution with no default
+#: names nothing checkable and is counted instead of skipped -- being
+#: skipped is how the whole substitution form stayed invisible: the line
+#: pattern this replaced required a literal name, so such a block was
+#: neither scanned nor counted, and one carrying ``pool_size`` sat in a
+#: document that spells the key correctly forty lines above.
+SUBSTITUTION = re.compile(r"^\$\{[\w.]+(?::(?P<default>[^{}]*))?\}$")
 
-
-def _ancestry(lines: list[str], at: int, indent: int) -> list[str]:
-    """The mapping keys enclosing line ``at``, innermost first."""
-    chain: list[str] = []
-    want = indent
-    for j in range(at - 1, -1, -1):
-        line = lines[j]
-        if not line.strip() or line.strip().startswith("#"):
-            continue
-        m = YAML_KEY.match(line)
-        if m is None:
-            continue
-        depth = len(m.group("indent")) + (len(m.group("dash")) if m.group("dash") else 0)
-        if depth < want:
-            chain.append(m.group("key"))
-            want = depth
-            if want == 0:
-                break
-    return chain
+#: A quoted ``backend`` key. Only Python fences holding one are parsed, which
+#: keeps ``declined`` meaning "a fence claiming to hold a database block that
+#: could not be read" rather than "a fence of prose". Most Python fences in a
+#: prose document are fragments and do not parse; counting those would bury
+#: the two that matter.
+QUOTED_BACKEND = re.compile(r"""['"]backend['"]\s*:""")
 
 
-def _sibling_keys(lines: list[str], at: int, width: int) -> set[str]:
-    """Every key in the mapping block that the ``backend:`` on line ``at`` is in.
+class Shape:
+    """How to read one parser's nodes as mappings, sequences and scalars.
 
-    Deeper lines are stepped over rather than treated as the end of the
-    block: a key whose value is a nested list or mapping is still a key of
-    this block, and stopping at the first one truncates the read. That is
-    not hypothetical -- an Elasticsearch sample whose ``hosts:`` is a list
-    was read as having exactly two keys, so the ``username`` / ``password``
-    / ``use_ssl`` below it were never checked against anything.
+    Three questions, because they are the only three the traversal asks.
+    ``items`` answers ``None`` for a node that is not a mapping, which is
+    what separates "a config block with no keys" from "not a config block".
     """
-    keys: set[str] = set()
-    opening = YAML_KEY.match(lines[at])
-    if opening is not None:
-        keys.add(opening.group("key"))
-    for forward in (True, False):
-        span = range(at + 1, len(lines)) if forward else range(at - 1, -1, -1)
-        for j in span:
-            line = lines[j]
-            if not line.strip() or line.strip().startswith("#"):
+
+    def __init__(
+        self,
+        items: Callable[[Any], list[tuple[str, Any, int]] | None],
+        children: Callable[[Any], list[Any]],
+        scalar: Callable[[Any], str | None],
+    ):
+        self.items, self.children, self.scalar = items, children, scalar
+
+
+def _yaml_items(node: Any) -> list[tuple[str, Any, int]] | None:
+    if not isinstance(node, yaml.MappingNode):
+        return None
+    return [
+        (str(key.value), value, key.start_mark.line + 1)
+        for key, value in node.value
+        if isinstance(key, yaml.ScalarNode)
+    ]
+
+
+def _yaml_children(node: Any) -> list[Any]:
+    return list(node.value) if isinstance(node, yaml.SequenceNode) else []
+
+
+def _yaml_scalar(node: Any) -> str | None:
+    return str(node.value) if isinstance(node, yaml.ScalarNode) else None
+
+
+def _python_items(node: Any) -> list[tuple[str, Any, int]] | None:
+    if not isinstance(node, ast.Dict):
+        return None
+    return [
+        (key.value, value, key.lineno)
+        for key, value in zip(node.keys, node.values, strict=True)
+        if isinstance(key, ast.Constant) and isinstance(key.value, str)
+    ]
+
+
+def _python_children(node: Any) -> list[Any]:
+    return list(ast.iter_child_nodes(node))
+
+
+def _python_scalar(node: Any) -> str | None:
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value
+    return None
+
+
+YAML_SHAPE = Shape(_yaml_items, _yaml_children, _yaml_scalar)
+PYTHON_SHAPE = Shape(_python_items, _python_children, _python_scalar)
+
+
+class Block:
+    """One mapping in a document, and what its ancestry says it is."""
+
+    def __init__(self, line: int, backend: str | None, named: bool, keys: set[str], db: bool):
+        self.line, self.backend, self.named, self.keys, self.db = line, backend, named, keys, db
+
+
+def _blocks(node: Any, shape: Shape, chain: tuple[str, ...] = (), line: int = 0) -> list[Block]:
+    """Every mapping reachable from ``node``, with the ancestry it sits under.
+
+    Descent is by *key*, so the chain carried down is the real ancestry
+    rather than whichever key happens to appear above the block in the text.
+    That distinction is why this is a parser: a regex walking backwards
+    through characters finds the nearest preceding ``"key":`` and cannot tell
+    a preceding sibling from an enclosing parent. A prototype that did read
+    two bot vector-memory blocks as database configs -- and an unsound sweep
+    here is worse than none, for the crying-wolf reason above.
+    """
+    found: list[Block] = []
+    pairs = shape.items(node)
+    if pairs is not None:
+        backend = next((shape.scalar(value) for key, value, _ in pairs if key == "backend"), None)
+        found.append(
+            Block(
+                line,
+                backend,
+                any(key == "backend" for key, _, _ in pairs),
+                {key for key, _, _ in pairs},
+                any(DB_CONTEXT.match(key) for key in chain),
+            )
+        )
+        for key, value, at in pairs:
+            found.extend(_blocks(value, shape, (key, *chain), at))
+        return found
+    for child in shape.children(node):
+        found.extend(_blocks(child, shape, chain, line))
+    return found
+
+
+def _backend_name(raw: str | None) -> str | None:
+    """The backend a block names, read through an environment substitution.
+
+    ``${DB_BACKEND:postgres}`` is what an unconfigured reader installs, so
+    the default is the name to check the keys against.
+    ``${features.search_backend}`` names nothing checkable and answers
+    ``None``, which the caller counts rather than drops.
+    """
+    if raw is None:
+        return None
+    value = raw.strip().strip("'\"")
+    substitution = SUBSTITUTION.match(value)
+    if substitution is not None:
+        default = (substitution.group("default") or "").strip()
+        return default if re.fullmatch(r"[\w-]+", default) else None
+    return value or None
+
+
+class Tally:
+    """Every way a block left the sweep unchecked, kept as a number.
+
+    A form the sweep cannot read is the defect this file exists to catch, and
+    for a year it was this file's own: the dict-literal form was neither
+    checked nor counted, so no assertion could see it missing. Each field
+    here is one way a block leaves without being checked, and each has a test
+    below watching its share.
+    """
+
+    def __init__(self) -> None:
+        self.out_of_scope = 0
+        self.declined = 0
+        self.undecided = 0
+
+
+def _embedded_yaml(tree: ast.Module, offset: int) -> list[tuple[Any, Shape, int]]:
+    """YAML written into a Python string literal, read as the YAML it is.
+
+    A document that shows a config file by assigning it to a name -- a
+    triple-quoted ``yaml_config``, then loading it -- is writing YAML, and
+    the keys in it are as real as any in a ``yaml`` fence. The line-scanning
+    reader this replaced saw those blocks for the wrong reason (it read the
+    document's text and never asked what a fence was), so a parser that
+    dropped them would be trading one silent narrowing for another. Four
+    documented database blocks live in exactly one such string.
+
+    Only a literal composing to a *mapping* is taken. Every string is valid
+    YAML as a scalar, so the mapping test is what keeps prose out: of the 79
+    literals here that compose to a mapping, one carries a database block,
+    and ``DB_CONTEXT`` is what decides even that.
+    """
+    found: list[tuple[Any, Shape, int]] = []
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.Constant) and isinstance(node.value, str)):
+            continue
+        if "\n" not in node.value or ":" not in node.value:
+            continue
+        try:
+            composed = yaml.compose(node.value)
+        except yaml.YAMLError:
+            continue
+        if isinstance(composed, yaml.MappingNode):
+            found.append((composed, YAML_SHAPE, node.lineno + offset - 1))
+    return found
+
+
+def _roots(path: Path) -> tuple[list[tuple[Any, Shape, int]], int]:
+    """Every parseable configuration root in ``path``, and how many declined.
+
+    A YAML fence is parsed whole. A Python fence is parsed only when it names
+    a quoted ``backend``, and is retried wrapped in a dict when it will not
+    parse alone: the documented bare-fragment shape --
+    ``"conversation_storage": {...}`` on its own in a fence -- is not a
+    Python module but is a Python dict body. 14 fences in this tree need
+    that retry and 125 do not.
+    """
+    roots: list[tuple[Any, Shape, int]] = []
+    declined = 0
+    for fence in code_fences(path):
+        if fence.lang in YAML_FENCE:
+            try:
+                composed = [node for node in yaml.compose_all(fence.body) if node is not None]
+            except yaml.YAMLError:
+                declined += 1
                 continue
-            m = YAML_KEY.match(line)
-            if m is None:
-                # Not a ``key:`` line -- a list element or a bare scalar.
-                # Deeper content belongs to one of this block's keys;
-                # anything shallower ends the block.
-                if len(line) - len(line.lstrip()) > width:
+            roots.extend((node, YAML_SHAPE, fence.line - 1) for node in composed)
+        elif fence.lang in PYTHON_FENCE:
+            source = textwrap.dedent(fence.body)
+            for candidate, offset in ((source, 0), ("_ = {\n" + source + "\n}", -1)):
+                try:
+                    tree = ast.parse(candidate)
+                except SyntaxError:
                     continue
+                at = fence.line - 1 + offset
+                if QUOTED_BACKEND.search(fence.body):
+                    roots.append((tree, PYTHON_SHAPE, at))
+                roots.extend(_embedded_yaml(tree, at))
                 break
-            # Dash-aware, matching ``_ancestry``: ``  - name: cache`` puts a
-            # list item's first key two columns left of its siblings, so
-            # measuring raw whitespace both mismeasured that key and ended
-            # the walk on the very line that opens the block.
-            depth = len(m.group("indent")) + (len(m.group("dash")) if m.group("dash") else 0)
-            if depth > width:
-                continue  # nested under one of this block's keys
-            if depth < width:
-                break
-            if m.group("dash"):
-                # A dash at this depth opens a list item, which is the
-                # block boundary a raw-whitespace measurement got right by
-                # accident. Backwards it opens *this* item, so its key is
-                # ours and the walk ends having taken it; forwards it opens
-                # the next one, whose keys are a different block's. Without
-                # this, a documented resource list reads as one block and
-                # every backend in it is checked against every other's keys.
-                if not forward:
-                    keys.add(m.group("key"))
-                break
-            keys.add(m.group("key"))
-    return keys
+            else:
+                declined += QUOTED_BACKEND.search(fence.body) is not None
+    return roots, declined
 
 
-def _yaml_sites() -> tuple[list[Site], int]:
-    """Every documented YAML database-config block, and how many were out of scope."""
+def _config_blocks(path: Path) -> tuple[list[Site], Tally]:
+    """The database-config blocks in one document, and what it left unread."""
     sites: list[Site] = []
-    out_of_scope = 0
+    tally = Tally()
+    roots, tally.declined = _roots(path)
+    for root, shape, offset in roots:
+        for block in _blocks(root, shape):
+            backend = _backend_name(block.backend)
+            if not block.db:
+                # A name no database registry knows needs no watching --
+                # ``backend: faiss`` is a vector store, and out of scope for
+                # a reason that will not change. A *real* database backend
+                # skipped for its context is the judgement worth counting.
+                known = backend is not None and any(
+                    reg.is_known(backend) for reg in (sync_backends, async_backends)
+                )
+                tally.out_of_scope += known
+                continue
+            if backend is None:
+                # Named a backend the sweep cannot resolve to anything, or
+                # named none at all. The first is counted; the second is the
+                # separate gap the module docstring measures.
+                tally.undecided += block.named
+                continue
+            sites.append(Site(path, block.line + offset, backend, "unknown", block.keys))
+    return sites, tally
+
+
+def _config_block_sites() -> tuple[list[Site], Tally]:
+    """Every documented database-config block, and what the sweep left unread.
+
+    ``"unknown"`` is the flavor, stated rather than inferred. A block handed
+    to ``Config.load`` or written into a config file says nothing about which
+    factory will build it, and measuring that says so: 107 of 108 dict blocks
+    give no signal either way, so a lenient-share counter here would count
+    the whole population and mean nothing by it.
+    """
+    sites: list[Site] = []
+    total = Tally()
     for path in documentation_files():
-        lines = path.read_text(encoding="utf-8").split("\n")
-        for i, line in enumerate(lines):
-            m = BACKEND_LINE.match(line)
-            if m is None:
-                continue
-            width = len(m.group("indent")) + (len(m.group("dash")) if m.group("dash") else 0)
-            if not any(DB_CONTEXT.match(key) for key in _ancestry(lines, i, width)):
-                # Counted only when the name is one a database registry
-                # knows. A ``backend: faiss`` block is out of scope for a
-                # reason that needs no watching; a ``backend: memory`` one
-                # is out of scope only because its *context* said so, and
-                # that is the judgement worth keeping visible.
-                if any(reg.is_known(m.group("b")) for reg in (sync_backends, async_backends)):
-                    out_of_scope += 1
-                continue
-            sites.append(Site(path, i + 1, m.group("b"), "unknown", _sibling_keys(lines, i, width)))
-    return sites, out_of_scope
+        found, tally = _config_blocks(path)
+        sites.extend(found)
+        total.out_of_scope += tally.out_of_scope
+        total.declined += tally.declined
+        total.undecided += tally.undecided
+    return sites, total
 
 
 @cache
-def _scanned_yaml() -> tuple[list[Site], int]:
-    """Scan once; every YAML test below reads the same result."""
-    return _yaml_sites()
+def _scanned_blocks() -> tuple[list[Site], Tally]:
+    """Scan once; every block test below reads the same result."""
+    return _config_block_sites()
 
 
 # --- The constructor form ------------------------------------------------
@@ -527,30 +740,62 @@ def test_the_constructor_sweep_reads_a_meaningful_corpus() -> None:
     assert len(sites) >= 10, f"only {len(sites)} documented backend constructors found"
 
 
-def test_every_documented_yaml_key_is_one_the_backend_accepts() -> None:
+def test_every_documented_block_key_is_one_the_backend_accepts() -> None:
     """The same rule as the call form, on the shape most consumers copy.
 
-    A bot's ``conversation_storage:`` block reaches
+    A bot's ``conversation_storage`` block reaches
     ``AsyncDatabaseFactory.create(**config)`` with every key it carries, so
-    a ``pool_size:`` there is not decoration -- it is a key the config class
-    now rejects, in a document telling the reader to write it.
+    a ``pool_size`` there is not decoration -- it is a key the config class
+    now rejects, in a document telling the reader to write it. Six of the
+    seven this found the first time it ran were dict literals, invisible to
+    every earlier form of this sweep; one sat under a heading reading
+    "Configure Connection Pooling" and named two keys that do not exist.
     """
-    sites, _ = _scanned_yaml()
+    sites, _ = _scanned_blocks()
     offenders = [str(site) for site in sites if site.rejected]
-    assert not offenders, "documented YAML config keys no backend field claims:\n" + "\n".join(
+    assert not offenders, "documented config-block keys no backend field claims:\n" + "\n".join(
         offenders
     )
 
 
-def test_the_yaml_sweep_reads_a_meaningful_corpus() -> None:
-    """As for the call form: a scanner that stops matching must fail, not pass."""
-    sites, _ = _scanned_yaml()
+def test_the_block_sweep_reads_a_meaningful_corpus() -> None:
+    """As for the call form: a scanner that stops matching must fail, not pass.
+
+    Both syntaxes are named. A floor on the total alone would be satisfied by
+    either one of them on its own, which is exactly the state this sweep
+    replaced: the YAML half read 90 blocks and reported green while the
+    Python half read none.
+    """
+    sites, _ = _scanned_blocks()
     checked = [site for site in sites if site.checked]
-    assert len(checked) >= 60, f"only {len(checked)} of {len(sites)} YAML blocks were checked"
+    assert len(checked) >= 150, f"only {len(checked)} of {len(sites)} config blocks were checked"
     assert {"memory", "postgres"} <= {site.backend for site in checked}
 
+    suffix = {".md"}
+    read = {site.path.suffix for site in checked}
+    assert read <= suffix, f"blocks read from unexpected files: {sorted(read - suffix)}"
 
-def test_the_yaml_share_out_of_scope_stays_visible() -> None:
+
+def test_both_syntaxes_are_actually_read() -> None:
+    """A floor on the total cannot see one parser going silent.
+
+    The two front ends fail independently -- a change to the fence languages,
+    to ``QUOTED_BACKEND``, or to either shape adapter takes out one and
+    leaves the other reporting a healthy corpus. So each is counted.
+    """
+    from_yaml = from_python = 0
+    for path in documentation_files():
+        roots, _ = _roots(path)
+        for _, shape, _ in roots:
+            if shape is YAML_SHAPE:
+                from_yaml += 1
+            else:
+                from_python += 1
+    assert from_yaml >= 400, f"only {from_yaml} YAML documents parsed"
+    assert from_python >= 100, f"only {from_python} Python fences parsed"
+
+
+def test_the_share_out_of_scope_stays_visible() -> None:
     """Blocks skipped for their context are counted, not silently dropped.
 
     ``DB_CONTEXT`` decides whose config a block is. A subsystem it does not
@@ -559,29 +804,77 @@ def test_the_yaml_share_out_of_scope_stays_visible() -> None:
     database keys -- but it is also how coverage would quietly erode if the
     expression stopped matching. The share is small; assert that it is.
     """
-    sites, out_of_scope = _scanned_yaml()
-    assert out_of_scope * 4 <= len(sites), (
-        f"{out_of_scope} YAML blocks naming a real database backend were "
+    sites, tally = _scanned_blocks()
+    assert tally.out_of_scope * 2 <= len(sites), (
+        f"{tally.out_of_scope} blocks naming a real database backend were "
         f"skipped as belonging to another subsystem, against {len(sites)} "
         "read as database configs"
     )
 
 
-def _yaml(text: str) -> list[str]:
-    """A dedented YAML fixture as the scanners see it."""
-    return textwrap.dedent(text).strip("\n").split("\n")
+def test_the_share_that_would_not_parse_stays_visible() -> None:
+    """A fence the parser refuses is the one place this sweep can go blind.
+
+    It is a small number and it should stay one. Four YAML fences here are
+    schema descriptions rather than configs -- ``temperature: float
+    (optional, default: 0.7)`` is prose in YAML clothing -- and two Python
+    fences elide their dict with ``...``. All six are non-configs, so
+    declining them is right; a sweep that started declining fifty would be
+    reporting green over the difference.
+    """
+    sites, tally = _scanned_blocks()
+    assert tally.declined <= 10, (
+        f"{tally.declined} fences claiming to hold a database block could "
+        f"not be parsed, against {len(sites)} blocks read"
+    )
+
+
+def test_a_backend_that_cannot_be_resolved_is_counted_not_dropped() -> None:
+    """``backend: ${features.search_backend}`` names nothing checkable.
+
+    That is a fact about the sample, not a defect in it, so it is not
+    reported -- but it is the *shape* whose whole population used to vanish.
+    The line pattern this replaced required a literal name, so every
+    ``backend: ${VAR:default}`` block was neither scanned nor counted, and
+    ``out_of_scope`` could not see them either because it counted only lines
+    that matched and then failed the context test. Nine such blocks were in
+    a database context, one of them carrying a key no backend accepts.
+    """
+    _, tally = _scanned_blocks()
+    assert tally.undecided >= 1, (
+        "no block names a backend the sweep cannot resolve; either the tree "
+        "changed or ``_backend_name`` stopped answering None, which is how "
+        "this population disappeared last time"
+    )
+    assert tally.undecided <= 5, f"{tally.undecided} blocks name an unresolvable backend"
+
+
+def _yaml_blocks(text: str, shape: Shape = YAML_SHAPE) -> list[Block]:
+    """The blocks a dedented YAML fixture yields, as the sweep reads them."""
+    root = yaml.compose(textwrap.dedent(text).strip("\n"))
+    return _blocks(root, shape)
+
+
+def _database_block(text: str, key: str = "backend") -> Block:
+    """The one database-context block in a fixture that has exactly one."""
+    found = [block for block in _yaml_blocks(text) if block.db and key in block.keys]
+    assert len(found) == 1, f"fixture yielded {len(found)} database blocks, wanted 1"
+    return found[0]
 
 
 def test_a_list_items_leading_key_is_read() -> None:
     """The dash puts it two columns left of its siblings, not outside the block.
 
-    ``_ancestry`` counted the dash from the start and ``_sibling_keys`` did
-    not, so a leading key measured shallower than the block it opens and
-    ended the walk instead of joining it. ``name`` leads every documented
-    list today and is routing, which is why nothing was being missed -- and
-    why nothing would have noticed when something was.
+    The reader this replaced measured depth two ways: ``_ancestry`` counted
+    the dash and ``_sibling_keys`` did not, so a leading key measured
+    shallower than the block it opens and ended the walk instead of joining
+    it. ``name`` leads every documented list today and is routing, which is
+    why nothing was being missed -- and why nothing would have noticed when
+    something was. A parser has no depth arithmetic to get wrong; the
+    fixture stays because that is a claim worth re-checking, not because the
+    mechanism is still there.
     """
-    lines = _yaml(
+    block = _database_block(
         """
         databases:
           - pool_size: 20
@@ -589,40 +882,41 @@ def test_a_list_items_leading_key_is_read() -> None:
             host: db.internal
         """
     )
-    assert _sibling_keys(lines, 2, 4) == {"pool_size", "backend", "host"}
+
+    assert block.keys == {"pool_size", "backend", "host"}
 
 
 def test_a_backend_on_the_dash_line_is_seen() -> None:
     """``- backend: postgres`` is a block, not a non-match.
 
-    A pattern anchored on indentation-then-``backend:`` skipped it
-    silently: the site was not
-    recorded as unchecked, it was never recorded at all, so no coverage
-    assertion could notice its absence.
+    A pattern anchored on indentation-then-``backend:`` skipped it silently:
+    the site was not recorded as unchecked, it was never recorded at all, so
+    no coverage assertion could notice its absence.
     """
-    lines = _yaml(
+    block = _database_block(
         """
         databases:
           - backend: postgres
             pool_size: 20
         """
     )
-    m = BACKEND_LINE.match(lines[1])
 
-    assert m is not None and m.group("b") == "postgres"
-    assert _sibling_keys(lines, 1, 4) == {"backend", "pool_size"}
+    assert block.backend == "postgres"
+    assert block.keys == {"backend", "pool_size"}
 
 
 def test_sibling_list_items_are_separate_blocks() -> None:
     """The boundary a raw-whitespace measurement got right by accident.
 
-    Counting the dash without also stopping at one merges a resource list
-    into a single block, and every backend in it is then checked against
+    Counting the dash without also stopping at one merged a resource list
+    into a single block, and every backend in it was then checked against
     every other's keys -- nine documented sites reported keys belonging to
     their neighbours the moment the depth fix landed without this one.
     """
-    lines = _yaml(
-        """
+    blocks = [
+        block
+        for block in _yaml_blocks(
+            """
         databases:
           - name: cache
             backend: memory
@@ -630,10 +924,217 @@ def test_sibling_list_items_are_separate_blocks() -> None:
             backend: elasticsearch
             index: things
         """
+        )
+        if block.db
+    ]
+
+    assert [block.keys for block in blocks] == [
+        {"name", "backend"},
+        {"name", "backend", "index"},
+    ]
+
+
+def test_a_preceding_sibling_is_not_an_enclosing_parent() -> None:
+    """The error that made a regex sweep of the Python form unshippable.
+
+    A prototype searched backwards through the text for a ``"key":`` and
+    took what it found as the block's parent. Here that finds
+    ``conversation_storage`` and reads a bot's *vector memory* as a database
+    config, whose keys answer to a different class entirely. Two documented
+    blocks were misread that way, and an unsound sweep is worse here than
+    none: a guard that cries wolf is uninstalled by the second person to hit
+    it. Nesting settles it, which is the whole reason both forms are parsed.
+    """
+    source = textwrap.dedent(
+        """
+        config = {
+            "conversation_storage": {"backend": "postgres"},
+            "memory": {"type": "vector", "backend": "memory", "dimension": 768},
+        }
+        """
+    )
+    blocks = [block for block in _blocks(ast.parse(source), PYTHON_SHAPE) if block.keys]
+
+    assert [(sorted(block.keys), block.db) for block in blocks] == [
+        (["conversation_storage", "memory"], False),
+        (["backend"], True),
+        (["backend", "dimension", "type"], False),
+    ], "both blocks must be found; only the storage one is a database config"
+
+
+def test_a_bare_fragment_is_read_by_wrapping_it() -> None:
+    """``"conversation_storage": {...}`` alone in a fence is a dict body.
+
+    It is not a Python module and ``ast.parse`` says so -- ``illegal target
+    for annotation`` -- but it is the form the bot documentation uses to show
+    one section of a config, and 14 fences here are written that way. Both
+    defective pooling samples are among them, so declining the shape would
+    decline the finding.
+    """
+    fragment = '"conversation_storage": {"backend": "postgres", "pool_size": 20}'
+    with pytest.raises(SyntaxError):
+        ast.parse(fragment)
+
+    blocks = [b for b in _blocks(ast.parse("_ = {\n" + fragment + "\n}"), PYTHON_SHAPE) if b.db]
+
+    assert [block.keys for block in blocks] == [{"backend", "pool_size"}]
+
+
+@pytest.fixture
+def document(tmp_path: Path) -> Callable[[str], tuple[list[Site], Tally]]:
+    """Write a markdown fixture and read it back through the real sweep.
+
+    Driven through ``_config_blocks`` rather than through the helper under
+    test, because a helper can be correct and unreachable: the first version
+    of the string-literal test below called ``_embedded_yaml`` directly and
+    stayed green when its one call site was deleted.
+    """
+
+    def write(text: str) -> tuple[list[Site], Tally]:
+        path = tmp_path / "doc.md"
+        path.write_text(textwrap.dedent(text).strip("\n") + "\n", encoding="utf-8")
+        return _config_blocks(path)
+
+    return write
+
+
+def test_a_config_written_into_a_python_string_is_read(
+    document: Callable[[str], tuple[list[Site], Tally]],
+) -> None:
+    """A YAML file shown by assigning it to a name is still a YAML file.
+
+    The line-scanning reader this replaced saw these blocks for the wrong
+    reason -- it read the document's text and never asked what a fence was --
+    so a parser that dropped them would trade one silent narrowing for
+    another. Four documented database blocks live in exactly one such
+    string, and one of them names its backend through a substitution.
+    """
+    sites, _ = document(
+        '''
+        ```python
+        yaml_config = """
+        databases:
+          - name: primary
+            backend: postgres
+            max_pool_size: 20
+        """
+        config.load(yaml.safe_load(yaml_config))
+        ```
+        '''
     )
 
-    assert _sibling_keys(lines, 2, 4) == {"name", "backend"}
-    assert _sibling_keys(lines, 4, 4) == {"name", "backend", "index"}
+    assert [(site.backend, sorted(site.keys)) for site in sites] == [
+        ("postgres", ["backend", "max_pool_size", "name"])
+    ]
+
+
+def test_a_fence_that_will_not_parse_is_counted(
+    document: Callable[[str], tuple[list[Site], Tally]],
+) -> None:
+    """The one place this sweep can go blind, so it is a number and not a gap.
+
+    An upper bound alone does not hold it: a counter stuck at zero satisfies
+    "the share is small" perfectly, which is how the dict-literal form stayed
+    invisible for a year. Both directions are asserted -- the count moves
+    when a fence declines, and stays put when one parses -- because a
+    counter that only ever increments is the same defect wearing the
+    opposite sign.
+    """
+    elided, declining = document(
+        """
+        ```python
+        {"conversation_storage": {"backend": "postgres", ...}}
+        ```
+        """
+    )
+    read, parsing = document(
+        """
+        ```python
+        {"conversation_storage": {"backend": "postgres"}}
+        ```
+        """
+    )
+
+    assert (declining.declined, elided) == (1, [])
+    assert parsing.declined == 0
+    assert [site.backend for site in read] == ["postgres"]
+
+
+def test_a_block_skipped_for_its_context_is_counted(
+    document: Callable[[str], tuple[list[Site], Tally]],
+) -> None:
+    """``DB_CONTEXT`` declining a block is a judgement, not a non-event.
+
+    ``memory`` names a plugin in the vector-store and rate-limiter
+    registries as well, so a block carrying it is skipped on the strength of
+    its enclosing key alone. That is the right answer and the most fragile
+    one here, so the share is watched -- and watching it means the counter
+    has to move, which an upper bound cannot check.
+    """
+    sites, tally = document(
+        """
+        ```yaml
+        conversation_storage:
+          backend: memory
+        rate_limiters:
+          api:
+            backend: memory
+        ```
+        """
+    )
+
+    assert [site.backend for site in sites] == ["memory"]
+    assert tally.out_of_scope == 1
+
+
+def test_a_backend_naming_nothing_checkable_is_counted(
+    document: Callable[[str], tuple[list[Site], Tally]],
+) -> None:
+    """``backend: ${features.search_backend}`` resolves to no name at all.
+
+    Not a defect in the sample -- it is a fact about it -- but it is the
+    shape whose whole population used to vanish. The line pattern this
+    replaced required a literal name, so a ``backend: ${VAR:default}`` block
+    was neither scanned nor counted, and ``out_of_scope`` could not see them
+    either because it counted only lines that matched and then failed the
+    context test.
+    """
+    sites, tally = document(
+        """
+        ```yaml
+        databases:
+          - name: search
+            backend: ${features.search_backend}
+          - name: primary
+            backend: ${PRIMARY_DB:postgres}
+            max_pool_size: 20
+        ```
+        """
+    )
+
+    assert [site.backend for site in sites] == ["postgres"]
+    assert (tally.undecided, tally.out_of_scope) == (1, 0)
+
+
+def test_a_string_that_is_not_a_mapping_is_left_alone() -> None:
+    """Every string is valid YAML as a scalar, so the mapping test is the filter.
+
+    Without it a prose docstring becomes a config block, which is the
+    crying-wolf failure this file refuses. 79 literals here compose to a
+    mapping and one carries a database block; the rest of the tree's strings
+    do not get that far.
+    """
+    prose = ast.parse('x = "a sentence: with a colon in it"')
+
+    assert _embedded_yaml(prose, 0) == []
+
+
+def test_a_substitution_resolves_to_the_default_a_reader_installs() -> None:
+    """And to nothing at all when there is no default to install."""
+    assert _backend_name("${DB_BACKEND:postgres}") == "postgres"
+    assert _backend_name("postgres") == "postgres"
+    assert _backend_name("${features.search_backend}") is None
+    assert _backend_name(None) is None
 
 
 @pytest.mark.parametrize(
@@ -794,6 +1295,7 @@ def test_the_guard_checked_what_it_found() -> None:
     site found and skipped satisfies it just as well as one found and
     checked, which is the hole this closes.
     """
-    sites, _ = _scanned()
-    unchecked = [str(site) for site in sites if site.in_scope and not site.checked]
+    call, _ = _scanned()
+    blocks, _ = _scanned_blocks()
+    unchecked = [str(site) for site in (*call, *blocks) if site.in_scope and not site.checked]
     assert not unchecked, "in-scope sites the guard could not check:\n" + "\n".join(unchecked)

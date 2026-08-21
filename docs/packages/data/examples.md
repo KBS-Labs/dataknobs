@@ -580,8 +580,8 @@ class ApplicationDatabase:
                     "database": "${DB_NAME}",
                     "user": "${DB_USER}",
                     "password": "${DB_PASSWORD}",
-                    "pool_size": 50,
-                    "ssl_mode": "require"
+                    "max_pool_size": 50,  # asyncpg pool bound; inert on the sync backend
+                    "ssl": True  # sync translates this to sslmode=require
                 }
             }
         }

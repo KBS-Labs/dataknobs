@@ -432,8 +432,8 @@ def demonstrate_environment_based_selection():
                     "backend": "postgres",
                     "host": os.environ.get("DB_HOST", "prod-db"),
                     "database": "production",
-                    "pool_size": 50,
-                    "description": "PostgreSQL with connection pooling"
+                    "max_pool_size": 50,  # applies to the async backend
+                    "description": "PostgreSQL, pooled when driven async"
                 }
             }
             

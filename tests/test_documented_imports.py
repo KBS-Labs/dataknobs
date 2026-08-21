@@ -72,15 +72,11 @@ from pathlib import Path
 
 import pytest
 
-from tests._workspace import HISTORICAL, ROOT, documentation_files, rel
+from tests._workspace import HISTORICAL, ROOT, code_fences, documentation_files, rel
 
 NAMESPACE = "dataknobs"
-#: Both halves tolerate leading whitespace: a fence nested under a list item
-#: or a numbered step is indented, and a reader anchored to column zero never
-#: opens it -- 65 such fences sat unread, which looks exactly like a document
-#: with no code in it.
-FENCE_OPEN = re.compile(r"^\s*```(?:python|py)\b", re.IGNORECASE)
-FENCE_CLOSE = re.compile(r"^\s*```\s*$")
+#: The fence languages whose contents are read as Python.
+PYTHON_FENCE = frozenset({"python", "py"})
 
 #: Marks the *next* fence as one whose imports are not meant to resolve.
 #:
@@ -90,7 +86,7 @@ FENCE_CLOSE = re.compile(r"^\s*```\s*$")
 #: doc's author never sees it and a moved block leaves a stale entry behind.
 #: The marker travels with the block instead, is invisible in rendered output,
 #: and carries its own reason.
-ILLUSTRATIVE = re.compile(r"^<!--\s*dk-imports:\s*illustrative\b")
+ILLUSTRATIVE = re.compile(r"^dk-imports:\s*illustrative\b")
 
 
 def _depth(line: str) -> int:
@@ -130,40 +126,28 @@ def import_statements(path: Path) -> list[tuple[int, str]]:
     reports it instead.
     """
     statements: list[tuple[int, str]] = []
-    inside = marked = False
-    pending: list[str] = []
-    opened = depth = 0
-    for number, raw in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
-        if not inside:
-            if ILLUSTRATIVE.match(raw.strip()):
-                marked = True
-            elif FENCE_OPEN.match(raw):
-                inside = True
-            elif raw.strip():
-                marked = False
+    for fence in code_fences(path):
+        if fence.lang not in PYTHON_FENCE or ILLUSTRATIVE.match(fence.marker or ""):
             continue
-        if FENCE_CLOSE.match(raw):
+        pending: list[str] = []
+        opened = depth = 0
+        for offset, raw in enumerate(fence.lines):
+            line = raw.strip()
             if pending:
-                statements.append((opened, "\n".join(pending)))
-            inside = marked = False
-            pending, depth = [], 0
-            continue
-        line = raw.strip()
-        if pending:
-            pending.append(line)
-            depth += _depth(line)
-            if depth <= 0:
-                statements.append((opened, "\n".join(pending)))
-                pending, depth = [], 0
-            continue
-        if not marked and line.startswith(("from ", "import ")) and NAMESPACE in line:
-            depth = _depth(line)
-            if depth > 0:
-                pending, opened = [line], number
-            else:
-                statements.append((number, line))
-    if pending:  # a fence that never closes still owes its fragment a report
-        statements.append((opened, "\n".join(pending)))
+                pending.append(line)
+                depth += _depth(line)
+                if depth <= 0:
+                    statements.append((opened, "\n".join(pending)))
+                    pending, depth = [], 0
+                continue
+            if line.startswith(("from ", "import ")) and NAMESPACE in line:
+                depth = _depth(line)
+                if depth > 0:
+                    pending, opened = [line], fence.line + offset
+                else:
+                    statements.append((fence.line + offset, line))
+        if pending:  # a statement whose parentheses never close still owes a report
+            statements.append((opened, "\n".join(pending)))
     return statements
 
 
