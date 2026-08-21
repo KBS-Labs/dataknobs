@@ -24,6 +24,7 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+from collections import Counter
 from pathlib import Path, PurePosixPath
 from typing import Any
 
@@ -55,6 +56,30 @@ def _contract() -> dict[str, Any]:
 def _cells(tool: str) -> list[dict[str, Any]]:
     cells: list[dict[str, Any]] = _contract()["tools"][tool]["cells"]
     return cells
+
+
+def _check_with(
+    contract: dict[str, Any],
+    tool: str,
+    measurement: Any,
+    only: set[str] | None = None,
+) -> dict[str, Any]:
+    """Run the real ``check`` over a supplied measurement instead of taking one.
+
+    ``MEASURERS`` is a dispatch registry, so substituting an entry drives the
+    whole of ``check`` — the cell walk, the tier reading, the ceiling
+    comparison — over a measurement the test chose. What it replaces is the
+    subprocess, not the logic under test, which is what makes it a seam rather
+    than a stand-in for the thing being asserted.
+
+    It exists because some measurements cannot be provoked from the tree: a
+    finding attributed to a cell no tool is pointed at is reachable in principle
+    (mypy follows imports) and not producible on demand.
+    """
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setitem(contract_module.MEASURERS, tool, lambda *_args: measurement)
+        report: dict[str, Any] = contract_module.check(contract, [tool], only)
+    return report
 
 
 def _validate_targets() -> set[str]:
@@ -871,6 +896,94 @@ def test_a_dead_override_section_fails_the_check(monkeypatch: pytest.MonkeyPatch
         "a scoped run reported unused sections. Scoped to part of the tree "
         "almost every section legitimately matches nothing, so treating that as "
         "a fault would make every single-package validation fail."
+    )
+
+
+def test_an_unmeasured_cell_does_not_report_as_a_cleared_one() -> None:
+    """A cell no tool reads must not render as one that was read and found clean.
+
+    ``_measured`` derives a cell's total from per-file counts rather than
+    keeping a number beside them, and that shape is right — ``dddcb7ba`` moved
+    to it because a total kept separately goes stale against the files it
+    counts. What it cannot express is that a cell with no per-file counts is two
+    different things. ``mypy/conftest.py`` has none because mypy read it and
+    found nothing. ``mypy/packages/*/benchmarks`` has none because
+    ``mypy_targets`` skips its tier, so nothing read it at all — and the M0
+    census put 34 findings in it.
+
+    Rendered as ``{"measured": 0, "ceiling": 0}`` the two are byte-identical.
+    That is the defect class ``Measurement``'s own docstring names, one level
+    up: an absence rendered as a pass. It becomes urgent rather than latent the
+    moment ruff reaches zero, because that is when the artifact starts being
+    read as nearly finished.
+    """
+    report = contract_module.check(
+        _contract(), ["mypy"], only={"conftest.py", "packages/*/benchmarks"}
+    )
+    checked = report["cells"]["mypy/conftest.py"]
+    unread = report["cells"]["mypy/packages/*/benchmarks"]
+
+    assert checked != unread, (
+        f"a cell nothing measured reports {unread}, identical to {checked} from a "
+        "cell mypy read and found clean. One of those zeros is a count and the "
+        "other is a silence, and the artifact cannot tell a reader which."
+    )
+    assert unread["measured"] is None, (
+        f"an unmeasured cell reported measured={unread['measured']!r}. A number "
+        "there is a measurement nothing took, and it sums into any total a "
+        "consumer builds — silently, and low. Absent is the honest value."
+    )
+    assert checked["measured"] == 0, (
+        f"a measured, genuinely clean cell reported {checked['measured']!r}. "
+        "Distinguishing the two must not cost the ordinary case its count."
+    )
+    named = [entry["cell"] for entry in report["unmeasured"]]
+    assert "mypy/packages/*/benchmarks" in named, (
+        f"the unmeasured cell is distinguishable in its own entry but absent from "
+        f"report['unmeasured']: {named}. A reader has to be able to find them "
+        "without walking every cell and knowing which tiers mean what."
+    )
+
+
+def test_a_cell_the_contract_calls_unmeasured_still_reports_a_count_it_gets() -> None:
+    """Nulling the silence must not null a finding that arrives anyway.
+
+    The tier says the tool is not pointed at the cell; it does not guarantee the
+    tool never reports against it. mypy follows imports, and a finding in
+    ``packages/<pkg>/tests/`` lands in the population and matches an
+    ``unchecked`` cell without ``mypy_targets`` ever having named it. Blanking
+    that to ``None`` would suppress a real finding on the authority of a
+    declaration the finding just contradicted — and because ``verify`` pins
+    these ceilings at zero, the count is also a breach, so suppressing it
+    silences a failure rather than merely a number.
+
+    So ``None`` is what a *zero* on an unmeasured cell becomes, never a count.
+    """
+    contract = _contract()
+    cells = contract["tools"]["mypy"]["cells"]
+    unchecked = next(c for c in cells if c["tier"] in contract_module._UNMEASURED_TIERS)
+    measurement = contract_module.Measurement(
+        by_cell={unchecked["path"]: Counter({"packages/data/tests/test_x.py": 3})},
+        unattributed=Counter(),
+        output="",
+    )
+
+    report = _check_with(contract, "mypy", measurement, only={unchecked["path"]})
+    entry = report["cells"][f"mypy/{unchecked['path']}"]
+
+    assert entry["measured"] == 3, (
+        f"a finding reported against an unmeasured cell came back as "
+        f"{entry['measured']!r}. The declaration lost an argument with the tool "
+        "and the tool's evidence is what got dropped."
+    )
+    assert not report["unmeasured"], (
+        "a cell that produced findings was still listed as unmeasured, which is "
+        f"the contradiction stated as both of its sides at once: {report['unmeasured']}"
+    )
+    assert [e["cell"] for e in report["exceeded"]] == [f"mypy/{unchecked['path']}"], (
+        "a positive count against a ceiling of zero was not reported as a "
+        f"breach: {report['exceeded']}. That ceiling is pinned at zero by "
+        "verify precisely so this cannot pass quietly."
     )
 
 
