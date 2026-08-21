@@ -86,17 +86,18 @@ workspace_targets() {
 # Function to list the packages whose tests/ the linter has been promoted onto
 #
 # The second of a promotion's two declarations. The first is the quality
-# contract moving that package's `packages/<pkg>/tests` cell from the deferred
-# tier to `checked` with a ceiling of 0; this one is what makes the ceiling a
-# measurement of something, by putting the directory in front of the linter.
+# contract holding a `packages/<pkg>/tests` cell at `checked` with a ceiling of
+# 0; this one is what makes the ceiling a measurement of something, by putting
+# the directory in front of the linter.
 #
-# Add a name here in the SAME change that moves the cell. Not before — the
-# contract would then defer a directory the linter reads, so a finding arriving
-# there is counted against a backlog that is supposed to be shrinking. Not
-# after — a ceiling of zero over files nothing opens, which is the shape 2c
-# shipped and the shape this whole program exists to make impossible. Both
-# directions fail test_a_checked_cell_is_one_the_linter_actually_reaches, which
-# compares the two declarations against each other rather than trusting either.
+# Add a name here in the SAME change that adds the cell — a ceiling of zero over
+# files nothing opens is the shape 2c shipped, and the shape this whole program
+# exists to make impossible. Compared, rather than either being trusted, by
+# test_every_lint_cell_is_one_the_linter_actually_reaches.
+#
+# There is no longer a tier to park a cell in while this list catches up. ruff
+# declares only `checked`, and the contract fails a tier no cell holds, so the
+# two declarations arrive together or the gate says which one is missing.
 #
 # Deliberately NOT derived from the contract. A target set read out of the file
 # whose ceilings it is supposed to justify makes both coverage guards
@@ -117,9 +118,9 @@ lint_promoted_test_packages() {
 # package, so a promotion here is repo-wide by construction and a per-package
 # list would be a second answer to a question the contract asks once.
 #
-# The same both-directions rule applies — a name arrives here in the SAME
-# change that moves the cell, and test_a_checked_cell_is_one_the_linter_actually
-# _reaches fails either half on its own.
+# The same rule applies — a name arrives here in the SAME change that adds the
+# cell, and test_every_lint_cell_is_one_the_linter_actually_reaches fails a cell
+# this list does not reach.
 #
 # Unlike the tests promotion, this one has to widen bin/fix.sh as well: a bare
 # fix.sh reaches every packages/*/tests already, and reaches none of these. A
@@ -132,11 +133,16 @@ lint_promoted_subdirs() {
 # Function to list the per-package directories the formatter covers
 #
 # The formatter's population is NOT the linter's, and the difference is
-# declared rather than incidental. `bin/validate.sh` lints packages/*/src plus
-# the tests/ of each package in `lint_promoted_test_packages`; every other
-# per-package directory sits in the quality contract's deferred tier for ruff.
-# The contract holds `format` to a ceiling of 0 on all ten of its cells, so the
-# formatter reaches every one of these.
+# declared rather than incidental. `bin/validate.sh` lints packages/*/src, the
+# tests/ of each package in `lint_promoted_test_packages`, and each directory in
+# `lint_promoted_subdirs`; this list adds docs/, which no ruff cell covers. The
+# contract holds `format` to a ceiling of 0 on all ten of its cells, so the
+# formatter reaches every one of them.
+#
+# The two lists agree over every file that exists — docs/ holds no Python — but
+# they are separate declarations and neither is derived from the other, so the
+# agreement is a property of today's tree rather than something either script
+# may assume.
 #
 # Kept here, beside workspace_targets, because three entry points need the same
 # answer: the check in validate.sh, its write side in fix.sh, and `dk format`.

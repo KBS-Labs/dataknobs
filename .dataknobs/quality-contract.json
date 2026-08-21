@@ -5,8 +5,11 @@
     "allowed to be. A ceiling, not evidence: nothing here is produced by a run,",
     "CI never signs it, and moving a number is a deliberate visible diff.",
     "",
-    "Read bin/quality-contract.py for the mechanism. Two rules make this a",
-    "ratchet rather than an excuse list, and both are enforced:",
+    "Read bin/quality-contract.py for the mechanism. These rules make this a",
+    "ratchet rather than an excuse list, and every one of them is enforced --",
+    "the sentence here used to say 'two rules ... both are enforced' above a",
+    "list of three, which is the defect the second rule describes, committed by",
+    "the paragraph introducing it:",
     "",
     "  Totality. Every tracked first-party *.py lands in exactly one cell per",
     "  tool. A file in no cell is one nobody decided about; a file in two is a",
@@ -27,6 +30,16 @@
     "  bare numeral in a reason. Rule names keep their digits: NPY002 names a",
     "  kind of finding and stays true however many there are.",
     "",
+    "  A tier nothing uses is struck. Tiers are vocabulary, and vocabulary is",
+    "  what a retreat needs: the cheap way to un-cover a directory is to drop",
+    "  it from a tool's target set and re-file its cell in a tier that tolerates",
+    "  a backlog, which leaves both declarations agreeing with each other about",
+    "  a directory the local toolchain no longer reads. A tier that cannot be",
+    "  spelled cannot be the first step. So verify fails a declared tier that no",
+    "  cell holds -- the day a tool's last backlog cell empties, the contract",
+    "  itself asks for the word back. ruff's 'deferred' went this way; mypy's",
+    "  'transitional' and 'unchecked' go the same way when their turn comes.",
+    "",
     "A ceiling only ever falls. Raising one is how a backlog grows while it is",
     "supposedly being worked, so it is a change that has to be argued for in a",
     "pull request rather than absorbed by re-running --update-baseline."
@@ -36,8 +49,7 @@
       "unit": "findings",
       "config": "pyproject.toml",
       "tiers": {
-        "checked": "inside bin/validate.sh's default target set, and clean",
-        "deferred": "outside that target set, with the size that makes deferring honest"
+        "checked": "inside bin/validate.sh's default target set, and clean"
       },
       "cells": [
         {

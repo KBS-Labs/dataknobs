@@ -10,14 +10,13 @@ to that sandbox, so no test touches the repo's real manifest or docs.
 
 from __future__ import annotations
 
-import importlib.util
 from pathlib import Path
 from types import ModuleType
 from typing import Any
 
 import pytest
 
-_SCRIPT = Path(__file__).resolve().parent.parent / "bin" / "docs-mirror-check.py"
+from tests._workspace import load_bin_module
 
 #: What the ``tree`` fixture hands back: the loaded guard module, its
 #: sandbox package-docs dir, and its sandbox site-docs dir.
@@ -26,11 +25,14 @@ _Tree = tuple[ModuleType, Path, Path]
 
 @pytest.fixture(scope="module")
 def mirror_mod() -> ModuleType:
-    spec = importlib.util.spec_from_file_location("docs_mirror_check", _SCRIPT)
-    assert spec and spec.loader
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod
+    """Loaded through the shared helper, which reads the source rather than a cache.
+
+    This fixture used to carry its own ``spec_from_file_location`` copy, which
+    is the version of the loader that can hand back a previous edit of the
+    guard — so a reproduce-first cycle over ``bin/docs-mirror-check.py`` could
+    be answered by the code it had just replaced.
+    """
+    return load_bin_module("docs-mirror-check")
 
 
 @pytest.fixture

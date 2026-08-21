@@ -97,8 +97,8 @@ while IFS= read -r _pkg; do
     [[ -n "$_pkg" ]] && ALL_PACKAGES+=("$_pkg")
 done <<< "${_discovered// /$'\n'}"
 
-# The directories promoted out of the ruff deferred tier, which the fix pass has
-# to reach for the same reason validate.sh does: the contract holds them to a
+# The directories the linter was promoted onto last, which the fix pass has to
+# reach for the same reason validate.sh does: the contract holds them to a
 # ceiling of zero, so a finding arriving there fails `dk pr`, and the command
 # that failure tells you to run is this one.
 #
@@ -188,10 +188,10 @@ if [[ ${#FIX_TARGETS[@]} -eq 0 ]]; then
 fi
 
 # The formatter's population, kept separate from the linter's for the reason
-# validate.sh states: the quality contract enforces `format` at ceiling 0 over
-# cells whose ruff tier is deferred, so the two tools do not share a target set.
-# The linter's pass must NOT be widened to match — running `ruff check --fix`
-# over a deferred cell would rewrite files nothing asked to be clean.
+# validate.sh states: the two sets are composed from two different axes of the
+# quality contract, its `format` cells and its ruff cells. The linter's pass
+# must NOT be widened to match — `ruff check --fix` over a directory no ruff
+# cell covers would rewrite files nothing holds to a lint ceiling.
 #
 # Widened the same way validate.sh widens its own, from the same declaration:
 # each in-scope package contributes its whole format set, and anything the
@@ -243,8 +243,16 @@ echo -e "${YELLOW}Fixing code issues...${NC}"
 #
 # Two passes over two populations, rather than one pass doing both to each
 # target. The formatter's set is the wider one, and running the linter's --fix
-# over the difference would rewrite files whose ruff tier is deferred -- churn
-# nobody asked for, in cells the contract does not hold to a lint ceiling.
+# over the difference would rewrite files no ruff cell covers -- churn nobody
+# asked for, in directories the contract does not hold to a lint ceiling.
+#
+# The difference is currently the per-package docs/ directories, and they hold
+# no Python, so this structure guards a set that cannot contain a file today.
+# It stays because the two sets are composed from two independent declarations
+# and nothing makes them equal: a `format` cell added over a directory ruff
+# does not lint restores the difference without touching this loop. Collapsing
+# the passes would assert an equality that holds by coincidence and is checked
+# nowhere.
 #
 # The linter goes first for the reason the single loop had it second: its fixes
 # move code and the formatter then lays it out. Whole-pass rather than

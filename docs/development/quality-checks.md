@@ -472,7 +472,7 @@ Each cell names a path, a tier, a ceiling and a reason:
 
 | Tool | Tiers | Ceiling counts |
 |---|---|---|
-| `ruff` | `checked` / `deferred` | findings |
+| `ruff` | `checked` | findings |
 | `mypy` | `strict` / `transitional` / `unchecked` | findings |
 | `format` | `enforced` | files the formatter would rewrite |
 
@@ -498,11 +498,35 @@ it does not licence another. That is the ratchet working: a phase that clears
 one finding while another arrives never ends. Write new files clean, or clear
 one of the existing findings in the same cell.
 
-**Ruff's `deferred` tier is empty.** Every ruff cell is `checked` at a ceiling
-of zero, so the linter reads every tracked first-party `*.py` and finds nothing.
-The remaining backlog is the type checker's. One consequence is visible below:
-the guards over `bin/quality-contract.py` need a cell that measures *something*,
-and there is no longer one in this repository — hence
+**A tier nothing uses is struck.** Ruff has one tier. `deferred` was deleted
+once its last cell emptied, and `verify` now fails a declared tier that no cell
+holds, so the same thing happens to mypy's `transitional` and `unchecked` when
+their turn comes without anyone having to remember.
+
+That is a ratchet, not bookkeeping. Un-covering a directory takes two edits —
+drop it from the tool's target set, and re-file its cell in a tier that
+tolerates a backlog — and neither is a fault alone, because the two agree with
+each other.
+
+What the retreat costs differs by tool. Ruff is measured in one pass over the
+whole population regardless of tier, so the gate keeps measuring a retreated
+cell and only the *local* half goes: `bin/validate.sh` stops reading the
+directory and `bin/fix.sh` offers no remedy, so a pre-push run reports clean
+over territory the gate still checks. mypy is worse — an `unchecked` cell is not
+measured at all, and reports a measurement of 0 against a ceiling of 0, which is
+indistinguishable from a cell that is genuinely clean.
+
+A tier that cannot be spelled cannot be the first step. Striking it is not
+sufficient on its own, though — a single change that re-adds the word *and* uses
+it passes `verify` — so
+`test_every_lint_cell_is_one_the_linter_actually_reaches` closes the rest by
+comparing every ruff cell against the target set without consulting its tier.
+
+**Every ruff cell is `checked` at a ceiling of zero**, so the linter reads every
+tracked first-party `*.py` and finds nothing. The remaining backlog is the type
+checker's. One consequence is visible below: the guards over
+`bin/quality-contract.py` need a cell that measures *something*, and there is no
+longer one in this repository — hence
 [the purpose-built cell](#the-purpose-built-cell).
 
 ```bash
