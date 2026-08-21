@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Fixed
+
+- **A `DatabaseSource` no longer reports a store it cannot reach as a store
+  with nothing in it.** Both of its searches were wrapped, logged and
+  returned as an empty list, so every way of failing arrived at the caller
+  as "no matching records" — and a source whose database was misconfigured
+  gave that answer on every call, indefinitely, while reading as healthy.
+
+  The wrapping added no resilience it did not already have. A caller
+  retrieving from several sources already decides what a failing one costs
+  it: the grounded retrieval loop guards each source, logs one that raises
+  with its cause, and drops it for that turn while the others still
+  contribute. Absorbing the failure one frame below meant that guard never
+  fired and the source was recorded as having answered. The sibling
+  `VectorKnowledgeSource` never wrapped its retrieval call — only a
+  user-supplied identity callable, per result, where skipping one record is
+  the point.
+
+  A failure now reaches the caller. A *reachable* store that matches nothing
+  still returns an empty list, so the two answers are distinguishable.
+  **Breaking** for a caller that relied on `query()` never raising; the
+  failure it was absorbing was already being reported at WARNING, so a
+  caller with no guard of its own was already logging what it now catches.
+
 ### Changed
 
 - **BREAKING: every database backend config now rejects a key it does not

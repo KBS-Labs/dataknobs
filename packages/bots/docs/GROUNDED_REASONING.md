@@ -211,6 +211,13 @@ retrieval:
 
 `score_threshold` applies to all source types. Vector KB sources use semantic similarity scores; database sources use term-coverage scoring (fraction of query terms found in searchable fields, with 2x weight for the content field).
 
+Retrieval isolates sources from one another. A source that raises is logged
+with its cause and dropped for that turn; every other source still
+contributes, and the turn still answers. A source that is *reachable* and
+simply matches nothing contributes an empty list instead — the two are
+distinguishable, so a source that can never answer does not pass for one
+that had nothing to say.
+
 ### Sources
 
 Sources can be injected programmatically or constructed from config.
