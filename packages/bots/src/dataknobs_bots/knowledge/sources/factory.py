@@ -441,11 +441,13 @@ async def _create_database_source(
     field_defs = schema_config.get("fields", {})
     schema = _build_database_schema(field_defs)
 
-    # A backend that needs connecting raises on every query until it is,
-    # and ``DatabaseSource`` reports a failed query as an empty result set
-    # -- so an unconnected source is indistinguishable from an empty store.
-    # The base declares ``connect`` a no-op, so this is safe for backends
-    # that need nothing.
+    # A backend that needs connecting raises on every query until it is.
+    # ``DatabaseSource`` no longer absorbs that -- it lets the failure
+    # reach the caller -- so an unconnected source is one the retrieval
+    # loop logs and drops on every turn, rather than one that quietly
+    # reports an empty store. Connecting here is what keeps it from
+    # being either. The base declares ``connect`` a no-op, so this is
+    # safe for backends that need nothing.
     await db.connect()
 
     # Set schema on the database if it supports it

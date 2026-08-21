@@ -10,9 +10,8 @@ gap below is invisible:
 * a ``path`` naming a file is dropped, so a persistent backend silently
   gets ``:memory:``;
 * the database is never connected, and a backend that needs connecting
-  raises on first query -- which :class:`DatabaseSource` logs and returns
-  as an empty result set, so a source grounded on nothing reports success
-  on every turn;
+  raises on first query -- which the retrieval loop logs and drops, so a
+  source grounded on nothing contributes nothing on every turn;
 * ``schema.fields`` written as the documented list of ``{name, type}``
   mappings raises, because the builder only reads the mapping form.
 
@@ -35,10 +34,6 @@ from dataknobs_data import Record, async_database_factory
 from dataknobs_data.fields import FieldType
 from dataknobs_data.schema import DatabaseSchema
 from dataknobs_data.sources.base import RetrievalIntent
-
-#: The logger :class:`DatabaseSource` reports a failed query on. Named so a
-#: warning from anywhere else cannot satisfy the assertions below.
-SOURCE_LOGGER = "dataknobs_data.sources.database"
 
 #: The module that decides the backend, and so the only one that can report
 #: having guessed one.
@@ -108,16 +103,22 @@ async def test_a_backend_option_reaches_the_backend(tmp_path: Path) -> None:
     assert [r.content for r in results] == ["A widget was recalled."]
 
 
-async def test_a_built_backend_is_connected(
-    tmp_path: Path, caplog: pytest.LogCaptureFixture
-) -> None:
-    """The source connects what it built, rather than reading as empty.
+async def test_a_built_backend_is_connected(tmp_path: Path) -> None:
+    """The source connects what it built, so its first query can answer.
 
-    A backend that is never connected raises on every query;
-    :class:`DatabaseSource` logs that and returns ``[]``, so the failure
-    reaches the caller as "no matching records" and never as a fault. This
-    asserts on the log rather than the result count so an empty store and
-    an unreachable one cannot both pass.
+    This asserted on a log once. It cannot any longer:
+    :class:`DatabaseSource` no longer absorbs a failed query, so it no
+    longer reports one either -- ``sources/database.py`` has no logger
+    at all -- and an assertion that the source logged nothing would now
+    hold whatever the factory did.
+
+    So it asserts on the record instead. Drop the ``connect`` and the
+    backend raises ``RuntimeError`` here rather than returning ``[]``,
+    which fails this test as an error rather than an assertion. That the
+    raise is what a caller now meets is the subject of
+    ``packages/data/tests/test_database_source_failure_surfaces.py``;
+    what is pinned here is that a source the factory built does not meet
+    it.
     """
     store = tmp_path / "cases.db"
     await _populated_store(store)
@@ -125,12 +126,13 @@ async def test_a_built_backend_is_connected(
     source = await _create_database_source(
         _config(backend="sqlite", path=str(store), table="cases", schema={"fields": FIELDS})
     )
-    with caplog.at_level(logging.WARNING, logger=SOURCE_LOGGER):
-        await source.query(RetrievalIntent(text_queries=["Widget"]))
+    results = await source.query(RetrievalIntent(text_queries=["Widget"]))
     await source.close()
 
-    failures = [r for r in caplog.records if r.name == SOURCE_LOGGER]
-    assert not failures, [r.getMessage() for r in failures]
+    # One record was seeded, and reaching it at all is the claim here.
+    # This config names no ``content_field``, so the content comes back
+    # empty; that it is the seeded record is the sibling test's subject.
+    assert len(results) == 1
 
 
 async def test_an_option_no_backend_accepts_is_reported() -> None:
