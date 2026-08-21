@@ -85,7 +85,7 @@ async def process_large_dataset():
     db = async_database_factory.create(
         backend="postgres",
         connection_string="postgresql://...",
-        pool_size=20,
+        max_pool_size=20,
     )
 
     # Batch create with pooling

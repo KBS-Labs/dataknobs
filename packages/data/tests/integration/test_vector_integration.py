@@ -35,7 +35,6 @@ class TestVectorIntegration:
         db = db_factory.create(
             backend="memory",  # Memory backend now supports vector mode via Python-based search
             vector_enabled=True,
-            vector_dimensions=256,
         )
         assert db is not None
         # Verify it has vector operations

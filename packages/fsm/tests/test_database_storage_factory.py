@@ -41,7 +41,7 @@ class TestDatabaseStorageFactory:
         """
         return StorageConfig(
             backend=StorageBackend.MEMORY,
-            connection_params={"database": "test_db"},
+            connection_params={},
         )
 
     @pytest.fixture
@@ -52,7 +52,7 @@ class TestDatabaseStorageFactory:
 
         config = StorageConfig(
             backend=StorageBackend.SQLITE,
-            connection_params={"database": temp_db.name},
+            connection_params={"path": temp_db.name},
         )
 
         try:
@@ -318,7 +318,7 @@ class TestDatabaseStorageFactory:
         try:
             sqlite_config = StorageConfig(
                 backend=StorageBackend.SQLITE,
-                connection_params={"database": temp_db.name},
+                connection_params={"path": temp_db.name},
             )
 
             storage = UnifiedDatabaseStorage(sqlite_config)
@@ -387,7 +387,7 @@ class TestDatabaseStorageFactory:
         config = StorageConfig(
             backend=StorageBackend.SQLITE,
             connection_params={
-                "database": temp_db.name,  # NO redundant 'type' key
+                "path": temp_db.name,  # NO redundant 'type' key
             },
         )
         storage = UnifiedDatabaseStorage(config)
@@ -452,7 +452,7 @@ class TestDatabaseStorageFactory:
             backend=StorageBackend.SQLITE,  # canonical: SQLite
             connection_params={
                 "type": "memory",  # deprecated alias: disagrees
-                "database": temp_db.name,
+                "path": temp_db.name,
             },
         )
         storage = UnifiedDatabaseStorage(config)

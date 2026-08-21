@@ -369,6 +369,45 @@ factory.create(backend="postgrez")
 
 Catching `ImportError` around `create()` catches nothing.
 
+### A key the backend does not accept
+
+A config key that matches no field on the chosen backend is a `ValueError`
+too, rather than being discarded:
+
+```python
+factory.create(backend="postgres", hosst="db.internal", database="app")
+# ValueError: PostgresDatabaseConfig does not accept 'hosst' (did you mean
+# 'host'?). Accepted keys: auto_create_table, command_timeout,
+# connection_string, database, ensure_database, host, max_pool_size,
+# min_pool_size, password, port, schema, schema_name, ssl, table,
+# table_name, user, vector_enabled, vector_metric.
+```
+
+This is the same event as an unrecognised backend name, one layer in, and
+it reports the same way. It matters more than a misspelt backend name does:
+every connection field has a working default, so a Postgres config built
+entirely from misspelled keys used to succeed against `localhost` and log
+nothing. The "synthesized default values" warning could not cover it — that
+warning fires when *recognized* explicit keys mix with defaults, and an
+unrecognized key enters neither bucket, so the config read as "nothing was
+configured".
+
+The accepted list includes input spellings the backend resolves away, so
+`connection` is answered with `connection_string` rather than with a list
+that appears not to contain it. The routing keys `backend`, `factory`,
+`name` and `type` pass through untouched, so a config dict may still carry
+the discriminator that selected it.
+
+To supply a key only some backends have, ask first:
+
+```python
+from dataknobs_data.backends import sync_backends
+
+config_cls = sync_backends.get_factory(backend_name).CONFIG_CLS
+if config_cls.accepts("table"):
+    backend_config.setdefault("table", collection_name)
+```
+
 ## Testing with Factory
 
 ```python

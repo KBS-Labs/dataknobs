@@ -219,7 +219,7 @@ class TestStorageBackends:
 
     async def test_memory_storage_basic(self):
         """Test basic memory storage operations."""
-        config = StorageConfig(backend=StorageBackend.MEMORY, connection_params={"max_size": 100})
+        config = StorageConfig(backend=StorageBackend.MEMORY, connection_params={})
 
         storage = StorageFactory.create(config)
         await storage.initialize()

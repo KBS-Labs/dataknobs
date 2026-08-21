@@ -273,16 +273,21 @@ class TestStorageBackendsDoNotMutateConfig:
     to the instance the storage actually uses.
     """
 
-    def test_memory_backend_leaves_caller_config_untouched(self) -> None:
+    def test_memory_backend_applies_no_connection_params(self) -> None:
+        """The memory backend takes none, so there is nothing to inject.
+
+        This used to assert ``max_size=1000`` and ``enable_indexing=True``
+        were injected into a replacement config. ``AsyncMemoryDatabase``
+        accepts neither, so both were discarded downstream and the pair
+        pinned an injection that reached nothing. The sibling
+        ``FileStorage`` case below still covers the ``replace``-based
+        no-mutation path, where the defaults are real.
+        """
         cfg = StorageConfig(backend=StorageBackend.MEMORY)
         storage = InMemoryStorage(cfg)
 
-        # Caller's config is unchanged (no backend defaults leaked in).
         assert cfg.connection_params == {}
-        # The storage operates on a distinct config carrying the defaults.
-        assert storage.config is not cfg
-        assert storage.config.connection_params.get("max_size") == 1000
-        assert storage.config.connection_params.get("enable_indexing") is True
+        assert storage.config.connection_params == {}
 
     def test_file_backend_leaves_caller_config_untouched(self) -> None:
         cfg = StorageConfig(backend=StorageBackend.FILE, compression=True)

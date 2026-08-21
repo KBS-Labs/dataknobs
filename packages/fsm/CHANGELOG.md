@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Fixed
+
+- **`InMemoryStorage` no longer injects connection parameters the memory
+  backend has no fields for.** It set `max_size=1000` and
+  `enable_indexing=True` on every in-memory history store;
+  `AsyncMemoryDatabase` accepts neither, so both were discarded by the
+  config projection and the store was never bounded or indexed by them. The
+  class documented itself as applying those defaults, which is what made
+  the gap invisible. Both are removed, along with the config-replacement
+  they existed to justify — a memory store takes no connection parameters,
+  so there is nothing to inject and the caller's config is passed straight
+  through.
+
 ## v0.4.1 - 2026-08-19
 
 ### Security

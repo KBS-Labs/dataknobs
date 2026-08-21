@@ -55,7 +55,7 @@ class TestSyncSqlite:
     def db(self):
         from dataknobs_data.backends.sqlite import SyncSQLiteDatabase
 
-        db = SyncSQLiteDatabase({"database": ":memory:", "table": "records"})
+        db = SyncSQLiteDatabase({"path": ":memory:", "table": "records"})
         db.connect()
         db.create(Record({"a": 1}, id="seed"))
         db.conn.execute(_ABORT_TRIGGER)
@@ -83,7 +83,7 @@ class TestAsyncSqlite:
     async def db(self):
         from dataknobs_data.backends.sqlite_async import AsyncSQLiteDatabase
 
-        db = AsyncSQLiteDatabase({"database": ":memory:", "table": "records"})
+        db = AsyncSQLiteDatabase({"path": ":memory:", "table": "records"})
         await db.connect()
         await db.create(Record({"a": 1}, id="seed"))
         await db.db.execute(_ABORT_TRIGGER)

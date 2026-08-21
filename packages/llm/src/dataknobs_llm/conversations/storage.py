@@ -878,7 +878,7 @@ class DataknobsConversationStorage(ConversationStorage):
         # File backend (local persistence)
         db = database_factory.create(
             backend="file",
-            file_path="./conversations.jsonl"
+            path="./conversations.jsonl"
         )
         storage = DataknobsConversationStorage(db)
 

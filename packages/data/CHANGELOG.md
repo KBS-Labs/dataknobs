@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Changed
+
+- **Every database backend config now rejects a key it does not accept**,
+  rather than discarding it. Set once on `DatabaseConfig`, so all fourteen
+  backends — seven sync, seven async — inherit it, and so does a backend
+  added later.
+
+  The default was wrong specifically for this family: every connection
+  field has a working default, so a config built from misspelled keys did
+  not fail, it succeeded against the wrong store. `create(backend="postgres",
+  hosst="db.internal")` connected to `localhost` and logged nothing. The
+  "synthesized default values" warning could not cover it — that warning
+  fires when *recognized* explicit keys mix with defaults, and an
+  unrecognized key enters neither bucket, so the config read as "nothing
+  was configured" and the case most in need of the warning was the one case
+  it structurally could not see.
+
+  The error names the offending key, suggests the nearest accepted
+  spelling, and lists the accepted set — including input spellings a
+  backend resolves away, so `connection` is answered with
+  `connection_string` and `region` is accepted on the S3 backends. Routing
+  keys (`backend`, `factory`, `name`, `type`) still pass through, so a
+  config dict may carry the discriminator that selected it.
+
+  Migration: a call that raises was already not doing what it read as
+  doing. The message names the accepted spelling. To supply a key only some
+  backends have, ask `CONFIG_CLS.accepts(key)` first.
+
 ### Fixed
 
 - **`Not` is exported from `dataknobs_data.validation`.** The three logical

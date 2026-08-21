@@ -926,8 +926,17 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
         from dataknobs_data import database_factory
 
         backend_config = dict(cfg.get("backend_config", {}))
-        backend_config["backend"] = cfg["backend"]
-        backend_config.setdefault("table", bank_name)
+        backend_name = cfg["backend"]
+        backend_config["backend"] = backend_name
+        # The bank name doubles as the table name on backends that have a
+        # table -- and only on those. This used to be set unconditionally,
+        # which was harmless only because the file, memory and S3 configs
+        # dropped the key; they now reject it. Asking the backend's own
+        # config what it accepts is the question that was being assumed.
+        backend_class = sync_backends.get_factory(backend_name)
+        config_cls = getattr(backend_class, "CONFIG_CLS", None)
+        if config_cls is not None and config_cls.accepts("table"):
+            backend_config.setdefault("table", bank_name)
         db = database_factory.create(**backend_config)
         db.connect()
         return db, "external"

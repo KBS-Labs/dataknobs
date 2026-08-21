@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Fixed
+
+- **Documented examples named database config keys the backends do not
+  have.** `file_path` in `DataknobsConversationStorage`'s docstring, and
+  `db_path` / `base_path` across six conversation-storage examples in the
+  user guide and best-practices guide. The field is `path` in every case.
+  Each example built a database at the config default rather than at the
+  location it named — the SQLite ones at `:memory:`, so an example about
+  persisting conversations to a file persisted nothing. The backend configs
+  now refuse an unrecognised key instead of discarding it, which is how
+  these surfaced.
+
 ## v0.7.1 - 2026-08-19
 
 ### Fixed
