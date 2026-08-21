@@ -55,6 +55,8 @@ import importlib
 import re
 from pathlib import Path
 
+import pytest
+
 from tests._workspace import ROOT, rel
 
 NAMESPACE = "dataknobs"
@@ -259,6 +261,42 @@ def test_a_star_import_is_detected(tmp_path: Path) -> None:
         "```python\nfrom dataknobs_data.validation.constraints import *\n```\n"
     )
     assert not import_statements(doc)
+
+
+def test_star_imports_reports_one_when_the_tree_has_one(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Non-vacuity for the star check: the function itself finds a star import.
+
+    ``test_no_documented_star_import`` calls this function over the real tree,
+    which no longer has a star import in it -- so it passes whether the body
+    below still matches anything or not. ``test_a_star_import_is_detected``
+    exercises the two helpers rather than the function composing them. Between
+    them nothing fails if the composition breaks, which is this file's own
+    stated failure mode wearing the guard's clothes, so the aggregate gets the
+    same treatment ``test_the_scan_actually_reads_imports`` gives the other one.
+
+    Both module-level names ``star_imports`` reads are redirected: the file
+    scan, to a tree with exactly one star import in it, and ``rel``, which
+    names a path relative to the repository root and cannot name this one.
+    """
+    doc = tmp_path / "sample.md"
+    doc.write_text(
+        "```python\n"
+        "from dataknobs_data.validation.constraints import *\n"
+        "```\n"
+        "```python\n"
+        "from dataknobs_data import Record\n"
+        "```\n"
+    )
+    monkeypatch.setitem(globals(), "documentation_files", lambda: [doc])
+    monkeypatch.setitem(globals(), "rel", str)
+
+    found = star_imports()
+
+    assert len(found) == 1, f"expected the one star import, got {found}"
+    assert "import *" in found[0]
+    assert "sample.md:2" in found[0], f"wrong line reported: {found[0]}"
 
 
 def test_the_scan_actually_reads_imports() -> None:
