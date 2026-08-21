@@ -44,6 +44,7 @@ Environment-variable substitution:
 from __future__ import annotations
 
 import dataclasses
+import difflib
 import functools
 import inspect
 import logging
@@ -55,6 +56,7 @@ from typing import (
     Any,
     ClassVar,
     Generic,
+    Literal,
     Self,
     TypeVar,
     Union,
@@ -188,6 +190,67 @@ def _interior_sensitive_keys(cls: type) -> frozenset[str]:
     with _sensitive_keys_lock:
         extras = frozenset(_EXTRA_SENSITIVE_INTERIOR_KEYS)
     return _DEFAULT_SENSITIVE_KEYS | extras | frozenset(name.lower() for name in sensitive_fields)
+
+
+#: Discriminator and metadata keys the object-graph layer owns, tolerated by
+#: :meth:`StructuredConfig.from_dict` under ``_UNKNOWN_KEYS = "raise"``.
+#:
+#: An object builder pops ``factory``/``type``/``name`` and the database
+#: factories strip ``backend``, so a config reaching ``from_dict`` through the
+#: documented route carries none of them. A config handed to ``from_dict``
+#: directly still can -- a resource adapter that forwards
+#: ``{"type": backend, **config}`` verbatim, for instance -- and none of these
+#: is a misspelling of a field, which is what the check is for.
+#:
+#: Tolerated rather than *accepted*: they are excluded from the rejection but
+#: not from the error's list of accepted keys, which would otherwise offer
+#: ``factory`` as an answer to a question about a connection field.
+_ROUTING_KEYS = frozenset({"backend", "factory", "name", "type"})
+
+
+@functools.cache
+def _accepted_keys(cls: type) -> frozenset[str]:
+    """Every input key ``from_dict`` consumes, computed once and cached.
+
+    The dataclass field names, unioned with the ``_INPUT_KEYS`` declared
+    anywhere in the MRO. Both halves are class-definition-time facts, so
+    the result is stable per class and cached alongside
+    :func:`_resolved_hints` and :func:`_interior_sensitive_keys`.
+
+    The MRO walk is what lets a subclass declare only the spellings it
+    adds: the sync S3 config names its two pool aliases and still accepts
+    the four credential aliases its base normalizes.
+    """
+    fields: frozenset[str] = frozenset()
+    if dataclasses.is_dataclass(cls):
+        fields = frozenset(f.name for f in dataclasses.fields(cls))
+    declared: frozenset[str] = frozenset()
+    for base in cls.__mro__:
+        declared |= frozenset(base.__dict__.get("_INPUT_KEYS", ()))
+    return fields | declared
+
+
+def _unknown_keys_message(cls: type, unknown: list[str], accepted: frozenset[str]) -> str:
+    """Explain rejected keys by naming a likely intended spelling for each.
+
+    The accepted list alone is not enough on the path this guards. The
+    caller who wrote ``connection`` gets back a list containing
+    ``connection_string`` and has to spot it; a per-key suggestion puts
+    the answer beside the question.
+    """
+    candidates = sorted(accepted)
+    parts: list[str] = []
+    for key in unknown:
+        close = difflib.get_close_matches(key, candidates, n=1, cutoff=0.6)
+        if not close:
+            # A short key scores poorly against a longer canonical one
+            # (``connection`` against ``connection_string``), so fall back
+            # to a prefix relationship -- which is what an abbreviated or
+            # truncated spelling actually is.
+            close = [c for c in candidates if c.startswith(key) or key.startswith(c)][:1]
+        parts.append(repr(key) + (f" (did you mean {close[0]!r}?)" if close else ""))
+    rendered = ", ".join(candidates) if candidates else "(none)"
+    return f"{cls.__name__} does not accept {', '.join(parts)}. Accepted keys: {rendered}."
 
 
 # Default (and minimum) safety bound on ``_redact_value`` recursion. Config
@@ -486,6 +549,31 @@ class StructuredConfig:
     #: See :meth:`validate`.
     _polymorphic_fields: ClassVar[Mapping[str, str]] = types.MappingProxyType({})
 
+    #: What :meth:`from_dict` does with an input key matching no field
+    #: after normalization. ``"ignore"`` (the default) discards it, which
+    #: is what lets a routing key travel alongside a config. ``"raise"``
+    #: rejects it.
+    #:
+    #: Opt in wherever a discarded key is indistinguishable from an absent
+    #: one *and* absence has a working default -- the combination that
+    #: makes a typo silent rather than loud. The database backend configs
+    #: opt in for exactly that reason: a Postgres config whose keys are all
+    #: misspelled reads as "nothing was configured" and connects to
+    #: ``localhost``.
+    _UNKNOWN_KEYS: ClassVar[Literal["ignore", "raise"]] = "ignore"
+
+    #: Input spellings :meth:`_normalize_dict` consumes that are not
+    #: themselves fields -- ``connection_string`` on the Postgres config,
+    #: the AWS credential aliases on the S3 ones. Unioned across the MRO by
+    #: :func:`_accepted_keys`, so a subclass declares only what it adds.
+    #:
+    #: Read only when ``_UNKNOWN_KEYS`` is ``"raise"``, and only to widen
+    #: what is accepted. A normalizer that removes the key it consumed is
+    #: already invisible to the check, so an undeclared alias costs a less
+    #: helpful message rather than a wrongly rejected config -- the
+    #: declaration is for the error text, and fails safe when it lags.
+    _INPUT_KEYS: ClassVar[frozenset[str]] = frozenset()
+
     def __init_subclass__(cls, **kwargs: Any) -> None:
         """Install the redacting ``__repr__`` and validate ``_MAX_REDACT_DEPTH``.
 
@@ -593,7 +681,11 @@ class StructuredConfig:
         name. Fields absent from ``config`` use their declared default
         (or ``default_factory``). Keys in ``config`` that don't match
         any field are ignored — registry-routing keys like
-        ``"backend"`` pass through cleanly.
+        ``"backend"`` pass through cleanly — unless the class sets
+        ``_UNKNOWN_KEYS = "raise"``, in which case an unmatched key is
+        a ``ValueError`` naming it and the accepted spellings. The check
+        runs *after* :meth:`_normalize_dict`, so an alias that method
+        translates is accepted; one it does not is what gets reported.
 
         A field whose declared type is (or contains) a
         ``StructuredConfig`` subclass is rebuilt recursively from its raw
@@ -617,6 +709,16 @@ class StructuredConfig:
             ``config`` (and defaults where keys are absent).
         """
         normalized = cls._normalize_dict(dict(config))
+        if cls._UNKNOWN_KEYS == "raise":
+            # After normalization, because that is where an accepted alias
+            # becomes a field name. Checking the caller's dict instead would
+            # reject every spelling ``_normalize_dict`` exists to translate.
+            accepted = _accepted_keys(cls)  # type: ignore[arg-type]  # see _redacted_repr
+            unknown = sorted(
+                key for key in normalized if key not in accepted and key not in _ROUTING_KEYS
+            )
+            if unknown:
+                raise ValueError(_unknown_keys_message(cls, unknown, accepted))
         hints = _resolved_hints(cls)  # type: ignore[arg-type]  # see _redacted_repr
         kwargs: dict[str, Any] = {}
         for f in dataclasses.fields(cls):
@@ -629,6 +731,29 @@ class StructuredConfig:
             else:
                 kwargs[f.name] = value
         return cls(**kwargs)
+
+    @classmethod
+    def accepts(cls, key: str) -> bool:
+        """Whether :meth:`from_dict` will consume ``key`` rather than drop it.
+
+        The question a caller composing a config for a backend it does not
+        know statically has to be able to ask. Under
+        ``_UNKNOWN_KEYS = "raise"`` an unrecognised key is an error, so a
+        caller supplying an optional key -- a default table name that only
+        the SQL backends have -- must be able to check first rather than
+        guess and be right for half the backends.
+
+        Args:
+            key: The input spelling to test.
+
+        Returns:
+            True when ``key`` is a declared field or a declared
+            ``_INPUT_KEYS`` alias, at any point in the MRO. Routing keys
+            (``backend``, ``type``, ...) are deliberately not included:
+            they are tolerated by ``from_dict`` but they are the
+            object-graph layer's vocabulary, not this config's surface.
+        """
+        return key in _accepted_keys(cls)  # type: ignore[arg-type]  # see _redacted_repr
 
     @classmethod
     def _normalize_dict(cls, raw: dict[str, Any]) -> dict[str, Any]:

@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Added
+
+- **An unknown-key policy on `StructuredConfig`.** `from_dict` projects a
+  dict onto the declared fields and drops the rest, which is right for a
+  config travelling with the routing key that selected it and wrong
+  wherever every field has a working default — there a misspelled key does
+  not fail, it succeeds against the wrong thing. A class now says which of
+  the two it is:
+
+  - `_UNKNOWN_KEYS: ClassVar[Literal["ignore", "raise"]]` — `"ignore"` by
+    default, so no existing config class changes behaviour. Under
+    `"raise"`, a key matching no field after `_normalize_dict` is a
+    `ValueError` naming it, offering the nearest accepted spelling, and
+    listing the accepted set.
+  - `_INPUT_KEYS: ClassVar[frozenset[str]]` — input spellings
+    `_normalize_dict` consumes that are not themselves fields, unioned
+    across the MRO so a subclass declares only what it adds. It widens what
+    is accepted and what the error offers, so a caller who wrote
+    `connection` is answered with `connection_string` rather than with a
+    list that appears not to contain it.
+  - `accepts(key)` (classmethod) — whether `from_dict` will consume a key.
+    The question a caller composing a config for a statically-unknown
+    target has to be able to ask, since under `"raise"` an optional key
+    that only some targets have can no longer be supplied speculatively.
+
+  The discriminator and metadata keys the object-graph layer owns
+  (`backend`, `factory`, `name`, `type`) pass through under `"raise"`
+  without being declared, and are excluded from the error's accepted list —
+  none of them is a misspelling of a field, and offering `factory` as an
+  answer to a question about a connection field helps nobody.
+
 ## v3.0.0 - 2026-08-19
 
 ### Added
