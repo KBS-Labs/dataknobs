@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-08-21T18:56:37Z",
+  "timestamp": "2026-08-21T19:20:47Z",
   "python_version": "Python 3.12.12",
   "uv_version": "uv 0.12.5 (Homebrew 2026-08-14 aarch64-apple-darwin)",
   "os": "Darwin",
   "os_version": "24.6.0",
-  "git_branch": "sbk/grounded-database-source-backend-config",
-  "git_commit": "d55a3d09c3439616947dc0623d34d514298878bc",
+  "git_branch": "sbk/database-source-does-not-swallow",
+  "git_commit": "156bdcd5854c1b27593675ed92c72cc02a197ae3",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }
