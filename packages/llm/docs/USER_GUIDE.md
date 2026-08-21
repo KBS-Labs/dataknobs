@@ -655,12 +655,10 @@ response = await manager2.complete()
 The conversation system works with any dataknobs backend:
 
 ```python
-from dataknobs_data.backends import (
-    AsyncMemoryDatabase,    # In-memory (testing)
-    AsyncFileDatabase,      # Local files
-    AsyncPostgresDatabase,  # PostgreSQL
-    AsyncSQLiteDatabase     # SQLite
-)
+from dataknobs_data.backends import AsyncMemoryDatabase  # In-memory (testing)
+from dataknobs_data.backends.file import AsyncFileDatabase  # Local files
+from dataknobs_data.backends.postgres import AsyncPostgresDatabase  # PostgreSQL
+from dataknobs_data.backends.sqlite_async import AsyncSQLiteDatabase  # SQLite
 
 # In-memory storage (testing)
 storage = DataknobsConversationStorage(AsyncMemoryDatabase())

@@ -265,6 +265,8 @@ async def ingest_with_enrichment(content, vector_store, embedder):
 from dataknobs_xization import (
     MarkdownChunker,
     ChunkQualityFilter,
+)
+from dataknobs_xization.markdown import (
     enrich_chunk,
     extract_heading_metadata,
 )

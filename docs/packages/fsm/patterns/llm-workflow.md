@@ -19,6 +19,7 @@ For LLM workflow orchestration, see:
 
 The FSM package previously provided LLM workflow patterns with classes like:
 
+<!-- dk-imports: illustrative -- the removed API is the subject of this block -->
 ```python
 # OLD - No longer available
 from dataknobs_fsm.patterns.llm_workflow import (

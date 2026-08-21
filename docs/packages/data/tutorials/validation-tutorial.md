@@ -6,11 +6,11 @@ This tutorial will guide you through the DataKnobs validation system, from basic
 
 ```python
 from dataknobs_data.validation import (
-    Schema, Field, FieldType,
+    Schema, Field,
     Required, Range, Length, Pattern, Enum, Unique, Custom,
     ValidationResult, Coercer
 )
-from dataknobs_data import Record
+from dataknobs_data import FieldType, Record
 from dataknobs_data.backends import SyncMemoryDatabase
 from datetime import datetime
 import re
