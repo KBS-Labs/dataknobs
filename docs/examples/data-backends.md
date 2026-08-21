@@ -209,10 +209,11 @@ def demonstrate_elasticsearch_backend():
         # Create Elasticsearch database
         es_db = factory.create(
             backend="elasticsearch",
-            hosts=[os.environ.get("ES_HOST", "localhost:9200")],
-            index="demo_index",
-            username=os.environ.get("ES_USER"),
-            password=os.environ.get("ES_PASSWORD")
+            # The sync backend takes host/port; `hosts` (a list) and
+            # basic auth are fields on the async backend only.
+            host=os.environ.get("ES_HOST", "localhost"),
+            port=int(os.environ.get("ES_PORT", "9200")),
+            index="demo_index"
         )
         
         # Index documents

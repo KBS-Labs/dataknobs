@@ -656,8 +656,8 @@ postgres_db = factory.create(
     backend="postgres",
     host="localhost",
     database="myapp",
-    pool_size=20,  # Adjust based on concurrent connections
-    max_overflow=10
+    min_pool_size=5,
+    max_pool_size=20,  # Adjust based on concurrent connections
 )
 ```
 

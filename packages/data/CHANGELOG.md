@@ -37,6 +37,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Sixteen documented factory calls named a field no backend has** (eighteen
+  counting the mirrored second copy of one page). They were
+  invisible while unknown keys were dropped: the sample ran, and what it
+  configured was the default. Two pooling pages set pool sizes with
+  `pool_size` / `max_overflow` (SQLAlchemy's spelling; the fields are
+  `min_pool_size` / `max_pool_size`), five Elasticsearch samples passed
+  `hosts` to the *sync* backend (a field on the async config — the sync one
+  takes `host` / `port`), two authenticated with `username` / `password`
+  instead of `basic_auth`, three named `connection` instead of
+  `connection_string`, and the file backend was documented with `pretty` and
+  `backup`, which have never existed.
+
+  `tests/test_documented_backend_config_keys.py` now checks every documented
+  factory call against the real config class via `accepts()`, so the accepted
+  set is read from the code rather than restated. It states what it does not
+  cover — YAML blocks, configs passed by variable, and `backend:` nested in a
+  subsystem config — rather than implying it covers everything.
+
 - **`Not` is exported from `dataknobs_data.validation`.** The three logical
   combinators are `All`, `AnyOf` and `Not`; the first two were exported and
   the third was not, so the only one that negates was the only one

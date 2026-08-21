@@ -54,7 +54,7 @@ from dataknobs_config import Config
 config = Config({
     "databases": {
         "cache": {"backend": "memory"},
-        "storage": {"backend": "postgres", "connection": "..."},
+        "storage": {"backend": "postgres", "connection_string": "..."},
         "search": {"backend": "elasticsearch", "host": "..."}
     }
 })
@@ -306,14 +306,14 @@ async def main():
     # Create bots for different tenants
     support_bot = await DynaBot.from_config({
         "llm": {"provider": "openai", "model": "gpt-4"},
-        "conversation_storage": {"backend": "postgres", "connection": "postgresql://..."},
+        "conversation_storage": {"backend": "postgres", "connection_string": "postgresql://..."},
         "memory": {"type": "buffer", "max_messages": 20},
         "system_prompt": "You are a helpful support agent."
     })
 
     sales_bot = await DynaBot.from_config({
         "llm": {"provider": "anthropic", "model": "claude-3-5-sonnet-20241022"},
-        "conversation_storage": {"backend": "postgres", "connection": "postgresql://..."},
+        "conversation_storage": {"backend": "postgres", "connection_string": "postgresql://..."},
         "memory": {"type": "buffer", "max_messages": 20},
         "system_prompt": "You are a sales assistant."
     })

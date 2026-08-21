@@ -72,11 +72,12 @@ async def main():
         "databases": {
             "conversations": {
                 "backend": "postgres",
-                "connection": "postgresql://..."
+                "connection_string": "postgresql://..."
             },
             "knowledge": {
                 "backend": "elasticsearch",
-                "host": "localhost:9200",
+                "host": "localhost",
+                "port": 9200,
                 "index": "documentation"
             }
         }
@@ -91,7 +92,7 @@ async def main():
     # Configure RAG bot with multi-backend storage
     bot_config = {
         "llm": {"provider": "openai", "model": "gpt-4"},
-        "conversation_storage": {"backend": "postgres", "connection": "postgresql://..."},
+        "conversation_storage": {"backend": "postgres", "connection_string": "postgresql://..."},
         "memory": {
             "type": "buffer",
             "max_messages": 20
@@ -131,7 +132,7 @@ from dataknobs_config import Config
 # Multi-backend configuration
 config = Config({
     "databases": {
-        "source": {"backend": "postgres", "connection": "..."},
+        "source": {"backend": "postgres", "connection_string": "..."},
         "staging": {"backend": "memory"},
         "target": {"backend": "elasticsearch", "host": "..."}
     }

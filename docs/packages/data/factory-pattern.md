@@ -218,7 +218,8 @@ if env == "production":
 elif env == "staging":
     db = factory.create(
         backend="elasticsearch",
-        hosts=[os.environ["ES_HOST"]],
+        host=os.environ["ES_HOST"],
+        port=int(os.environ.get("ES_PORT", "9200")),
         index="staging"
     )
 else:  # development
@@ -242,7 +243,8 @@ def get_database_for_use_case(use_case: str):
         # Need advanced search capabilities
         return factory.create(
             backend="elasticsearch",
-            hosts=["localhost:9200"],
+            host="localhost",
+            port=9200,
             index="search"
         )
     
@@ -464,7 +466,8 @@ class DataService:
         )
         self.search = factory.create(
             backend="elasticsearch",
-            hosts=["search.example.com:9200"],
+            host="search.example.com",
+            port=9200,
             index="products"
         )
         self.archive = factory.create(

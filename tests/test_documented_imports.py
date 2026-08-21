@@ -57,7 +57,7 @@ from pathlib import Path
 
 import pytest
 
-from tests._workspace import ROOT, rel
+from tests._workspace import HISTORICAL, ROOT, documentation_files, rel
 
 NAMESPACE = "dataknobs"
 FENCE_OPEN = re.compile(r"^```(?:python|py)\b", re.IGNORECASE)
@@ -72,33 +72,6 @@ FENCE_CLOSE = re.compile(r"^```\s*$")
 #: The marker travels with the block instead, is invisible in rendered output,
 #: and carries its own reason.
 ILLUSTRATIVE = re.compile(r"^<!--\s*dk-imports:\s*illustrative\b")
-
-#: Documents kept as records of a past design rather than as instructions.
-#:
-#: Rewriting their samples would falsify the record, so they are excluded here
-#: and carry a "Historical record" banner telling the reader the same thing.
-#: Listed as paths rather than inferred from a directory name, because
-#: ``packages/fsm/docs/active/`` is a design archive whose name says the
-#: opposite, and a convention that misleads is worse than an explicit list.
-HISTORICAL = (
-    "/docs/history/",
-    "packages/fsm/docs/active/",
-    "packages/data/docs/DESIGN_PLAN.md",
-    "packages/llm/docs/LLM_ARCHITECTURE_EXPLORATION.md",
-)
-
-
-def documentation_files() -> list[Path]:
-    """Every markdown document a reader can reach, minus the historical ones."""
-    found: set[Path] = set(ROOT.joinpath("docs").rglob("*.md"))
-    for package_docs in ROOT.joinpath("packages").glob("*/docs"):
-        found |= set(package_docs.rglob("*.md"))
-    found |= set(ROOT.joinpath("packages").glob("*/README.md"))
-    if ROOT.joinpath("README.md").exists():
-        found.add(ROOT / "README.md")
-    return sorted(
-        path for path in found if not any(marker in path.as_posix() for marker in HISTORICAL)
-    )
 
 
 def import_statements(path: Path) -> list[tuple[int, str]]:
