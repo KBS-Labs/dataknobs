@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import functools
 import logging
-from collections.abc import Callable
+from collections.abc import Callable, Mapping, Sequence
 from typing import TYPE_CHECKING, Any
 
 from dataknobs_bots.reasoning.grounded_config import GroundedSourceConfig
@@ -376,40 +376,72 @@ def _build_heading_selection_llm(config: Any) -> Any | None:
         return None
 
 
+#: Options ``_create_database_source`` consumes itself. Every other key in
+#: a ``database`` source's options is the backend's, and is forwarded to the
+#: database factory, which accepts or rejects it against the chosen backend.
+_SOURCE_OPTIONS = frozenset({"content_field", "text_search_fields", "schema", "description"})
+
+
 async def _create_database_source(
     config: GroundedSourceConfig,
     **_: Any,
 ) -> GroundedSource:
     """Create a DatabaseSource from config options.
 
-    Expected options:
-        backend: Database backend key (e.g. "memory", "sqlite").
-        connection: Connection string (backend-specific).
+    Options named in :data:`_SOURCE_OPTIONS` configure the source; every
+    other option configures the backend it builds and is forwarded to the
+    database factory verbatim.
+
+    Forwarding rather than transcribing is what lets a backend be pointed
+    at a store: each one takes its own keys -- ``path`` for the file-backed
+    ones, ``host``/``database``/``user`` or ``connection_string`` for
+    Postgres, ``bucket`` for S3 -- and the factory is the only code that
+    knows which. A hand-picked list here could only ever carry the keys
+    someone thought of, and would answer for a backend it had not seen.
+
+    Source options:
         content_field: Field whose value becomes SourceResult.content.
         text_search_fields: Fields for LIKE text search.
-        schema: Dict with "fields" mapping field names to type defs.
+        schema: Dict with "fields" -- either a mapping of field name to
+            type def, or a list of mappings each carrying ``name``.
         description: Human-readable source description.
+
+    Raises:
+        ValueError: If an option is neither a source option nor a key the
+            chosen backend accepts.
     """
     from dataknobs_data import async_database_factory
     from dataknobs_data.sources.database import DatabaseSource
 
     opts = config.options
 
-    # Build the database backend. The key is forwarded only when these
-    # options name one: defaulting here would hand the factory an explicit
+    # ``backend`` is forwarded only when these options name one -- it is
+    # simply not a source option, so the comprehension leaves it absent when
+    # absent. Supplying a default here would hand the factory an explicit
     # choice and hide that nothing chose it.
-    db_config: dict[str, Any] = {}
-    if "backend" in opts:
-        db_config["backend"] = opts["backend"]
+    db_config: dict[str, Any] = {k: v for k, v in opts.items() if k not in _SOURCE_OPTIONS}
 
-    connection = opts.get("connection")
-    if connection:
-        db_config["connection"] = connection
+    try:
+        db = async_database_factory.create(**db_config)
+    except ValueError as exc:
+        # The factory names the config class and the offending key; a bot
+        # config can declare several sources, so name which one it was.
+        raise ValueError(f"Source {config.name!r}: {exc}") from exc
 
-    db = async_database_factory.create(**db_config)
+    # A backend that needs connecting raises on every query until it is,
+    # and ``DatabaseSource`` reports a failed query as an empty result set
+    # -- so an unconnected source is indistinguishable from an empty store.
+    # The base declares ``connect`` a no-op, so this is safe for backends
+    # that need nothing.
+    await db.connect()
 
     # Build the schema from config
     schema_config = opts.get("schema", {})
+    if not isinstance(schema_config, Mapping):
+        raise ValueError(
+            f"Source {config.name!r}: 'schema' must be a mapping carrying a "
+            f"'fields' key, got {type(schema_config).__name__}"
+        )
     field_defs = schema_config.get("fields", {})
     schema = _build_database_schema(field_defs)
 
@@ -443,11 +475,58 @@ def _get_field_type_names() -> dict[str, FieldType]:
     return result
 
 
+def _normalize_field_defs(field_defs: Any) -> dict[str, Any]:
+    """Accept either shape ``schema.fields`` is written in.
+
+    The mapping form keys each definition by field name::
+
+        fields:
+          title: string
+          summary: {type: text}
+
+    The list form carries the name inside each entry, which is how the
+    grounded-reasoning guide writes it and how the rest of a bot config
+    spells a list of named things::
+
+        fields:
+          - name: title
+            type: string
+
+    An entry that is not a mapping, or a mapping with no ``name``, cannot
+    be placed in the schema; it is reported and skipped rather than
+    failing the whole source, matching how an unknown field type is
+    handled below.
+    """
+    if isinstance(field_defs, Mapping):
+        return dict(field_defs)
+    if not isinstance(field_defs, Sequence) or isinstance(field_defs, str | bytes):
+        logger.warning(
+            "schema.fields is %r, which is neither a mapping of field names "
+            "nor a list of field definitions; the schema has no fields",
+            field_defs,
+        )
+        return {}
+
+    normalized: dict[str, Any] = {}
+    for entry in field_defs:
+        if not isinstance(entry, Mapping) or not entry.get("name"):
+            logger.warning(
+                "Field definition %r carries no 'name' and cannot be placed "
+                "in the schema, skipping",
+                entry,
+            )
+            continue
+        definition = {k: v for k, v in entry.items() if k != "name"}
+        normalized[str(entry["name"])] = definition
+    return normalized
+
+
 def _build_database_schema(
-    field_defs: dict[str, Any],
+    field_defs: Any,
 ) -> DatabaseSchema:
     """Build a DatabaseSchema from config field definitions.
 
+    ``field_defs`` is either shape :func:`_normalize_field_defs` accepts.
     Each field definition can be:
         - A string type name: ``"string"``, ``"integer"``, ``"text"``, etc.
         - A dict with ``type`` and optional ``enum``:
@@ -459,11 +538,12 @@ def _build_database_schema(
     from dataknobs_data.fields import FieldType
     from dataknobs_data.schema import DatabaseSchema
 
+    normalized = _normalize_field_defs(field_defs)
     type_map = _get_field_type_names()
     kwargs: dict[str, FieldType] = {}
     enum_fields: dict[str, list[Any]] = {}
 
-    for name, definition in field_defs.items():
+    for name, definition in normalized.items():
         if isinstance(definition, str):
             ft = type_map.get(definition.lower())
             if ft is None:
