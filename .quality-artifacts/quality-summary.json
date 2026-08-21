@@ -1,5 +1,5 @@
 {
-  "timestamp": "2026-08-21T17:06:42Z",
+  "timestamp": "2026-08-21T18:56:37Z",
   "overall_status": "PASS",
   "run_mode": "pr",
   "environment": "host",
@@ -9,7 +9,7 @@
   ],
   "coverage_percent": null,
   "package_hashes": {
-    "bots": "7f0f4ebe98330f72ed41dbd5282850dded24e679328fae93479d24a3de5b31e0",
+    "bots": "c815693cebdf98bfb063783c6a34ef48d30651f311d4f93914bf80cf8eb1cbc9",
     "common": "0feff79174344da72f26c5bf791f72d16e676497c97f71fc18b46fecd0f883ab",
     "config": "33fdf8a284304b52cfa3c91265fcaa8126741c7ee555dcba2b44fe3468e27bfd",
     "data": "6ca7ac9c8ddb213953e9b04b13c0dfaabbdc82da7969243e69e7ff986d31a615",
@@ -44,7 +44,7 @@
       "status": "pass",
       "exit_code": 0,
       "tool": "quality-contract.py",
-      "duration_seconds": 1
+      "duration_seconds": 2
     },
     "validation": {
       "status": "pass",
@@ -72,7 +72,7 @@
       "exit_code": 0,
       "skipped": false,
       "tool": "docs-mirror-check.py",
-      "duration_seconds": 1
+      "duration_seconds": 0
     },
     "unit_tests": {
       "status": "pass",
