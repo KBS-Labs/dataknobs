@@ -7,9 +7,15 @@ into each module as they were written, which is how two of them ended up with
 subtly different floor extraction.
 
 Also the single entry point for reading ``bin/`` modules. Their names are
-hyphenated, so they cannot be imported normally — ``bin/package-hashes.py``
-already carries a private copy of this loader, and every guard that wants the
-same declaration would otherwise carry a third.
+hyphenated, so they cannot be imported normally, and every guard that wants the
+same declaration would otherwise carry its own copy of the loader.
+
+One other copy exists and has to: ``bin/package-hashes.py`` reaches a sibling
+the same way, in the gate's own path, where nothing under ``tests/`` is
+importable. The two are kept in step by
+``test_no_third_loader_appears_without_the_same_treatment``, which drives both
+and fails on a third. That guard is the residue of this sentence having once
+merely *named* the other copy while the correctness fix landed only here.
 """
 
 from __future__ import annotations

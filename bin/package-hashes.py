@@ -16,6 +16,7 @@ import json
 import logging
 import sys
 from pathlib import Path
+from types import ModuleType
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -43,16 +44,53 @@ _HASH_PATTERNS = [
 _HASH_ALGORITHM_VERSION = 3
 
 
+def load_module_from_path(name: str, script: Path) -> ModuleType:
+    """Execute a script as a module, from its source rather than from bytecode.
+
+    The compiled-cache step is skipped deliberately. CPython decides a
+    ``__pycache__`` entry is current by comparing the source's size and its
+    mtime **truncated to the second**, and compares nothing else, so two
+    versions of a file that are the same length and are written inside the same
+    second are indistinguishable to it: the second ``exec_module`` returns the
+    *first* version's code while the file on disk holds the second's.
+
+    What that costs here is not a testing inconvenience. This is how the hasher
+    reaches ``changed-packages.py``, so a stale read is the dependency graph and
+    the release-noise stripper answering from a version that has been replaced —
+    and the gate deciding which packages need re-validating on that basis, while
+    reporting nothing unusual.
+
+    ``tests/_workspace.py`` carries the same function for the same reason. The
+    duplication is not an oversight and cannot be removed by moving it: a
+    ``bin/`` script's name is hyphenated, so reaching a sibling needs a loader
+    already in hand, and a shared one could not itself be reached that way.
+    ``test_no_third_loader_appears_without_the_same_treatment`` drives both and
+    fails on a third, because the hazard in an irreducible twin is a fix that
+    lands on one half — which is what happened to this half.
+    """
+    spec = importlib.util.spec_from_file_location(name, script)
+    if spec is None or spec.loader is None:
+        msg = f"Could not load {script}"
+        raise ImportError(msg)
+    # Removing a stale entry repairs this read; declining to write one stops the
+    # next process inheriting the trap. Both halves are needed, and the second
+    # is the one whose absence still passes a test that only reads.
+    Path(importlib.util.cache_from_source(str(script))).unlink(missing_ok=True)
+    module = importlib.util.module_from_spec(spec)
+    written = sys.dont_write_bytecode
+    sys.dont_write_bytecode = True
+    try:
+        spec.loader.exec_module(module)
+    finally:
+        sys.dont_write_bytecode = written
+    return module
+
+
 def _load_changed_packages() -> Any:
     """Import changed-packages.py (hyphenated name requires importlib)."""
-    script_path = Path(__file__).resolve().parent / "changed-packages.py"
-    spec = importlib.util.spec_from_file_location("changed_packages", script_path)
-    if spec is None or spec.loader is None:
-        msg = f"Could not load {script_path}"
-        raise ImportError(msg)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+    return load_module_from_path(
+        "changed_packages", Path(__file__).resolve().parent / "changed-packages.py"
+    )
 
 
 # Load dependency graph utilities and the shared workspace-input declaration
