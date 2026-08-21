@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-08-21T02:13:32Z",
+  "timestamp": "2026-08-21T02:54:05Z",
   "python_version": "Python 3.12.12",
   "uv_version": "uv 0.12.5 (Homebrew 2026-08-14 aarch64-apple-darwin)",
   "os": "Darwin",
   "os_version": "24.6.0",
-  "git_branch": "sbk/argue-provisional-declines",
-  "git_commit": "d6d1bfe2f36ea39fef6209a27dae1dc8fccae37a",
+  "git_branch": "sbk/unmeasured-not-cleared",
+  "git_commit": "1a0d924adde1c1ce246f59f60f24c26aec17064c",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }
