@@ -117,7 +117,6 @@ nav:
         - packages/data/performance-tuning.md
         - packages/data/batch-processing-guide.md
         - packages/data/migration.md
-        - packages/data/validation.md
         - packages/data/pandas-integration.md
         - packages/data/grounded-sources.md
         - packages/data/vector-timestamps.md
@@ -270,9 +269,7 @@ nav:
         - packages/bots/examples/custom-tools.md
     - Xization:
       - packages/xization/index.md
-      - packages/xization/tokenization.md
       - packages/xization/normalization.md
-      - packages/xization/masking.md
       - packages/xization/content-transformation.md
       - packages/xization/html-conversion.md
       - packages/xization/chunking-abstraction.md
@@ -312,7 +309,6 @@ nav:
       - structures (curated): api/dataknobs-structures.md
       - utils (curated): api/dataknobs-utils.md
       - xization (curated): api/dataknobs-xization.md
-      - common (curated): api/dataknobs-common.md
   
   - Development:
     - Overview: development/index.md
@@ -379,7 +375,6 @@ nav:
       - examples/factory-pattern.md
     - Structures Examples:
       - examples/basic-tree.md
-      - examples/document-processing.md
     - Utils Examples:
       - examples/elasticsearch-integration.md
     - Xization Examples:

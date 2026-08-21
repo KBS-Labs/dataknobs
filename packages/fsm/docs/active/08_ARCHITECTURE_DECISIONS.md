@@ -1,5 +1,9 @@
 # FSM Architecture Decision Records (ADRs)
 
+> **Historical record.** This document describes the design as of its
+> writing. Its code samples are not guaranteed to resolve against the
+> current packages, and are deliberately left as written.
+
 ## ADR-001: Dual Arc Configuration Format Support
 
 ### Status

@@ -423,42 +423,6 @@ metrics.record_request("custom_api", latency=150)
 metrics.record_error("custom_api", error_type="timeout")
 ```
 
-## Factory Functions
-
-### Sequential API Chain
-
-```python
-from dataknobs_fsm.patterns.api_orchestration import create_sequential_api_chain
-
-orchestrator = create_sequential_api_chain(
-    endpoints=[
-        ("auth", "https://api.example.com/auth"),
-        ("user", "https://api.example.com/user"),
-        ("profile", "https://api.example.com/profile")
-    ],
-    headers={"API-Key": "secret"}
-)
-
-result = await orchestrator.execute({"username": "user@example.com"})
-```
-
-### Parallel API Aggregator
-
-```python
-from dataknobs_fsm.patterns.api_orchestration import create_parallel_aggregator
-
-orchestrator = create_parallel_aggregator(
-    endpoints=[
-        ("service1", "https://api1.example.com/data"),
-        ("service2", "https://api2.example.com/data"),
-        ("service3", "https://api3.example.com/data")
-    ],
-    max_concurrent=3,
-    timeout=10.0
-)
-
-aggregated = await orchestrator.execute()
-```
 
 ## Complete Examples
 

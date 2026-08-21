@@ -1,5 +1,9 @@
 # Implementation Plan: Pre-Transform Validators, State Resources, and Shared Variables
 
+> **Historical record.** This document describes the design as of its
+> writing. Its code samples are not guaranteed to resolve against the
+> current packages, and are deliberately left as written.
+
 ## Overview
 
 This document outlines the implementation plan for four related enhancements to the FSM package:

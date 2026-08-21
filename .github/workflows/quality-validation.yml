@@ -51,6 +51,11 @@ jobs:
               # skipping the job that would have recomputed it.
               - 'run_api.sh'
               - 'setup-dk.sh'
+              # The root README, read by the documented-import guard. No pattern
+              # above reaches it: '**/*.py' is code, 'docs/**' is the site tree,
+              # and 'packages/*/docs/**' is the package trees. A change to it
+              # moves that guard's verdict, so it has to start this job.
+              - 'README.md'
               # Documentation inputs. The gate records three checks over these
               # — the site build, the version-table sync, and the dual-docs
               # mirror — so a change to one moves a recorded verdict, exactly

@@ -288,7 +288,7 @@ def get_statistics_query(
 ## Using Queries with Backends
 
 ```python
-from dataknobs_data import SyncMemoryDatabase
+from dataknobs_data.backends import SyncMemoryDatabase
 
 # Initialize database
 db = SyncMemoryDatabase()

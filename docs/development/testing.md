@@ -159,7 +159,8 @@ import tempfile
 from pathlib import Path
 from dataknobs_utils import file_utils
 from dataknobs_xization import normalize
-from dataknobs_structures import Tree, Document
+from dataknobs_structures import Tree
+from dataknobs_structures import Text
 
 @pytest.mark.integration
 class TestTextProcessingPipeline:
@@ -182,7 +183,7 @@ class TestTextProcessingPipeline:
             normalized = normalize.expand_ampersand_fn(normalized)
             
             # Tree creation
-            doc = Document(normalized)
+            doc = Text(normalized)
             tree = Tree(doc)
             
             assert "get User Name" in tree.data.text
@@ -224,7 +225,8 @@ import json
 from pathlib import Path
 from dataknobs_utils import file_utils, elasticsearch_utils
 from dataknobs_xization import normalize
-from dataknobs_structures import Tree, Document
+from dataknobs_structures import Tree
+from dataknobs_structures import Text
 
 class TestUserWorkflows:
     """Test complete user workflows."""
@@ -280,7 +282,8 @@ Use fixtures for reusable test setup:
 import pytest
 import tempfile
 from pathlib import Path
-from dataknobs_structures import Tree, Document
+from dataknobs_structures import Tree
+from dataknobs_structures import Text
 from dataknobs_utils import file_utils
 
 @pytest.fixture
@@ -295,7 +298,7 @@ def sample_tree():
 @pytest.fixture
 def sample_document():
     """Create a sample document for testing."""
-    return Document(
+    return Text(
         "This is a sample document with some text.",
         metadata={"title": "Sample", "author": "Test"}
     )

@@ -1,5 +1,9 @@
 # FSM Custom Functions Design Fix
 
+> **Historical record.** This document describes the design as of its
+> writing. Its code samples are not guaranteed to resolve against the
+> current packages, and are deliberately left as written.
+
 ## Implementation Status: ✅ COMPLETED
 
 This design document proposed solutions for custom function registration in the FSM framework. The recommended approach has been implemented successfully.

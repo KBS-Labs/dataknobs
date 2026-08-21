@@ -332,7 +332,8 @@ state.current_node_id = "msg-2"
 
 ```python
 from dataknobs_llm.conversations import DataknobsConversationStorage
-from dataknobs_data.backends import AsyncMemoryDatabase, AsyncPostgresDatabase
+from dataknobs_data.backends import AsyncMemoryDatabase
+from dataknobs_data.backends.postgres import AsyncPostgresDatabase
 
 # Using memory backend (for testing/development)
 storage = DataknobsConversationStorage(AsyncMemoryDatabase())

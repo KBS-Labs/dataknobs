@@ -217,10 +217,10 @@ archive_db.create(record)
 ### Direct Configuration
 
 ```python
-from dataknobs_data.backends.postgres import PostgresDatabase
+from dataknobs_data.backends.postgres import SyncPostgresDatabase
 
 # All backends support from_config classmethod
-db = PostgresDatabase.from_config({
+db = SyncPostgresDatabase.from_config({
     "host": "localhost",
     "database": "myapp",
     "user": "postgres",
@@ -324,7 +324,8 @@ result = batch_ops.bulk_upsert_dataframe(
 Define and enforce data schemas with comprehensive validation:
 
 ```python
-from dataknobs_data.validation import Schema, FieldType
+from dataknobs_data.validation import Schema
+from dataknobs_data import FieldType
 from dataknobs_data.validation.constraints import *
 
 # Define schema with constraints
@@ -433,9 +434,10 @@ For complete API documentation, see [API Reference](docs/API_REFERENCE.md).
 ## Custom Backend
 
 ```python
-from dataknobs_data import AsyncDatabase, DatabaseBackend
+from dataknobs_data import AsyncDatabase
+from dataknobs_data import SyncDatabase
 
-class CustomBackend(DatabaseBackend):
+class CustomBackend(SyncDatabase):
     def create(self, record):
         # Implementation
         pass

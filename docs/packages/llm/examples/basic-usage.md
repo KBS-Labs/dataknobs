@@ -90,7 +90,7 @@ print(f"\n\nFull response: {full_response}")
 ### Simple Template
 
 ```python
-from dataknobs_llm.prompts import InMemoryPromptLibrary, AsyncPromptBuilder, PromptTemplateDict
+from dataknobs_llm.prompts import ConfigPromptLibrary, AsyncPromptBuilder, PromptTemplateDict
 
 # Create template
 templates = {
@@ -101,7 +101,7 @@ templates = {
 }
 
 # Create library and builder
-library = InMemoryPromptLibrary(prompts={"user": templates})
+library = ConfigPromptLibrary(prompts={"user": templates})
 builder = AsyncPromptBuilder(library=library)
 
 # Render prompt
@@ -277,7 +277,7 @@ llm_claude = create_llm_provider(config_claude, is_async=False)
 ### Basic Error Handling
 
 ```python
-from dataknobs_llm.exceptions import LLMError, RateLimitError, InvalidRequestError
+from dataknobs_llm.exceptions import ContextLengthExceededError, LLMError, RateLimitError
 
 try:
     response = llm.complete("What is Python?")
@@ -285,7 +285,7 @@ try:
 except RateLimitError as e:
     # RateLimitError includes a retry_after attribute (seconds to wait)
     print(f"Rate limit exceeded. Retry after {e.retry_after}s. {e}")
-except InvalidRequestError as e:
+except ContextLengthExceededError as e:
     print(f"Invalid request: {e}")
 except LLMError as e:
     print(f"LLM error occurred: {e}")

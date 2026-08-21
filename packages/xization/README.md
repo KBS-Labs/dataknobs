@@ -131,13 +131,14 @@ md = csv_to_markdown("data.csv", title_field="name")
 ### Text Normalization and Tokenization
 
 ```python
-from dataknobs_xization import normalize, MaskingTokenizer
+from dataknobs_xization import normalize
+from dataknobs_xization.masking_tokenizer import TextFeatures
 
 # Text normalization
-normalized = normalize.normalize_text("Hello, World!")
+normalized = normalize.basic_normalization_fn("Hello, World!")
 
-# Tokenization with masking
-tokenizer = MaskingTokenizer()
+# Character/token features, with camel-case splitting
+features = TextFeatures("getUserName")
 tokens = tokenizer.tokenize("This is a sample text.")
 
 # Working with annotations

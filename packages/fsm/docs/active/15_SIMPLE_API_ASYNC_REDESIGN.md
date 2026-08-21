@@ -1,5 +1,9 @@
 # SimpleFSM API Async Redesign
 
+> **Historical record.** This document describes the design as of its
+> writing. Its code samples are not guaranteed to resolve against the
+> current packages, and are deliberately left as written.
+
 ## Status: Completed
 **Created:** 2025-09-16
 **Completed:** 2025-09-16

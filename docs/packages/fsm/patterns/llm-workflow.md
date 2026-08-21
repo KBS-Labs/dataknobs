@@ -197,6 +197,7 @@ cot_flow = ConversationFlow(
 
 ### Before (FSM Package)
 
+<!-- dk-imports: illustrative -- pre-move imports, shown as the code being migrated away from -->
 ```python
 from dataknobs_fsm.patterns.llm_workflow import (
     LLMWorkflow,

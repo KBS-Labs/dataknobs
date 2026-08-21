@@ -227,5 +227,5 @@ print(f"Temperature: {temperature_field.value}°{unit[0].upper()}")
 ## See Also
 
 - [Record Model](record-model.md) - Working with records and fields
-- [Validation](validation.md) - Advanced validation strategies
+- [Validation](../../api/reference/data.md) - Advanced validation strategies
 - [API Reference](api-reference.md) - Complete API documentation

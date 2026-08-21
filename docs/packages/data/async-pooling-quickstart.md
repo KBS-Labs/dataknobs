@@ -222,7 +222,7 @@ The new implementation is **backwards compatible**! Your existing code will auto
 
 ```python
 # Your existing code - no changes needed!
-from dataknobs_data.backends.elasticsearch import AsyncElasticsearchDatabase
+from dataknobs_data.backends.elasticsearch_async import AsyncElasticsearchDatabase
 
 db = AsyncElasticsearchDatabase(config)
 await db.connect()

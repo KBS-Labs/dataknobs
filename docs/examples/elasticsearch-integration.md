@@ -52,7 +52,7 @@ index = ElasticsearchIndex(request_helper, [table_settings])
 ### Indexing Single Documents
 
 ```python
-from dataknobs_structures import Document
+from dataknobs_structures import Text
 from dataknobs_utils import elasticsearch_utils
 import json
 
@@ -76,7 +76,7 @@ def index_document(index, doc, doc_id=None):
     return response
 
 # Example usage
-doc = Document(
+doc = Text(
     text="This is a sample document about Elasticsearch integration.",
     metadata={
         "title": "Elasticsearch Guide",
@@ -92,7 +92,7 @@ print(f"Indexed document: {response}")
 ### Bulk Indexing
 
 ```python
-from dataknobs_structures import Document
+from dataknobs_structures import Text
 import json
 
 def bulk_index_documents(index, documents):
@@ -126,7 +126,7 @@ def bulk_index_documents(index, documents):
 
 # Example usage
 documents = [
-    Document(f"Document {i} content", metadata={"id": i})
+    Text(f"Document {i} content", metadata={"id": i})
     for i in range(100)
 ]
 
@@ -239,7 +239,7 @@ results = advanced_search(
 ### Index Normalized Documents
 
 ```python
-from dataknobs_structures import Document
+from dataknobs_structures import Text
 from dataknobs_xization import normalize
 
 class ElasticsearchPipeline:
@@ -293,7 +293,7 @@ class ElasticsearchPipeline:
 # Example usage
 pipeline = ElasticsearchPipeline(index)
 
-doc = Document(
+doc = Text(
     "getUserData&ProcessInput",
     metadata={"type": "code"}
 )
@@ -620,6 +620,5 @@ except Exception as e:
 
 ## Related Examples
 
-- [Document Processing](document-processing.md)
 - [Text Normalization](text-normalization.md)
 - [Basic Tree Operations](basic-tree.md)

@@ -40,7 +40,7 @@ pip install dataknobs-structures
 # Good: Group imports by package
 from dataknobs_structures import Tree, Text, TextMetaData
 from dataknobs_utils import json_utils, file_utils
-from dataknobs_xization import basic_normalization_fn
+from dataknobs_xization.normalize import basic_normalization_fn
 
 # Avoid: Scattered imports
 from dataknobs_structures import Tree
@@ -124,7 +124,7 @@ class DocumentProcessor:
     @property
     def normalizer(self):
         if self._normalizer is None:
-            from dataknobs_xization import basic_normalization_fn
+            from dataknobs_xization.normalize import basic_normalization_fn
             self._normalizer = basic_normalization_fn
         return self._normalizer
 ```
@@ -133,7 +133,7 @@ class DocumentProcessor:
 
 ```python
 def process_documents_batch(documents, batch_size=100):
-    from dataknobs_xization import basic_normalization_fn
+    from dataknobs_xization.normalize import basic_normalization_fn
     
     results = []
     for i in range(0, len(documents), batch_size):
@@ -230,7 +230,7 @@ class TestTreeOperations:
 ```python
 def test_full_pipeline():
     from dataknobs_structures import Text, TextMetaData
-    from dataknobs_xization import basic_normalization_fn
+    from dataknobs_xization.normalize import basic_normalization_fn
     from dataknobs_utils import json_utils
     
     # Create document
@@ -285,7 +285,7 @@ logger.log_operation(
 ### Input Sanitization
 
 ```python
-from dataknobs_xization import basic_normalization_fn
+from dataknobs_xization.normalize import basic_normalization_fn
 import re
 
 def sanitize_input(text):

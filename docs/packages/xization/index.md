@@ -521,9 +521,7 @@ For complete API documentation, see the [Xization API Reference](api.md).
 - [JSON Chunking](json-chunking.md) - Chunk JSON and JSONL documents
 - [Content Transformation](content-transformation.md) - Convert JSON, YAML, CSV, HTML to markdown
 - [Ingestion Module](ingestion.md) - Batch directory processing
-- [Tokenization](tokenization.md) - Character-based tokenization
 - [Normalization](normalization.md) - Text normalization functions
-- [Masking](masking.md) - Character masking and features
 
 ## See Also
 

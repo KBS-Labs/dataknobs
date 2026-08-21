@@ -1,5 +1,9 @@
 # Execution Engine Parity Analysis
 
+> **Historical record.** This document describes the design as of its
+> writing. Its code samples are not guaranteed to resolve against the
+> current packages, and are deliberately left as written.
+
 ## Summary
 
 After analyzing the synchronous (`ExecutionEngine`) and asynchronous (`AsyncExecutionEngine`) execution engines, I've identified both functional differences and opportunities for code sharing. A comprehensive refactoring has been completed to ensure feature parity and maximize code reuse between the engines.

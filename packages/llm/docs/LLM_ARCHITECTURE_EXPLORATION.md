@@ -1,5 +1,9 @@
 # DataKnobs LLM Package Architecture Exploration
 
+> **Historical record.** This document describes the design as of its
+> writing. Its code samples are not guaranteed to resolve against the
+> current packages, and are deliberately left as written.
+
 ## Overview
 The dataknobs-llm package provides a comprehensive abstraction layer for working with various LLM providers (OpenAI, Anthropic, Ollama, HuggingFace, Echo). It includes advanced prompt engineering, conversation management, and FSM integration.
 

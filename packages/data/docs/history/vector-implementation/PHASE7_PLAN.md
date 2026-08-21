@@ -1,5 +1,9 @@
 # Phase 7: Pandas Integration - Implementation Plan
 
+> **Historical record.** This document describes the design as of its
+> writing. Its code samples are not guaranteed to resolve against the
+> current packages, and are deliberately left as written.
+
 ## Overview
 Implement seamless integration between DataKnobs Records/Fields and Pandas DataFrames for efficient data analysis and manipulation.
 

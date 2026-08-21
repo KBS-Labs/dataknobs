@@ -1,5 +1,9 @@
 # Vector Support Implementation for Memory, File, and S3 Backends
 
+> **Historical record.** This document describes the design as of its
+> writing. Its code samples are not guaranteed to resolve against the
+> current packages, and are deliberately left as written.
+
 ## Overview
 
 This document tracks the implementation of vector support for the Memory, File, and S3 backends using the consolidated `PythonVectorSearchMixin` approach that was successfully applied to SQLite backends.

@@ -250,7 +250,8 @@ features:
 # config/loader.py
 import os
 from pathlib import Path
-from dataknobs_config import Config, Settings
+from dataknobs_config import Config
+from dataknobs_config.settings import SettingsManager
 from typing import Optional, List
 import logging
 

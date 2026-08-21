@@ -48,7 +48,6 @@ Practical examples of using Dataknobs packages across different use cases.
 
 ## Data Structures Examples
 - [Basic Tree Operations](basic-tree.md) - Working with tree structures
-- [Document Processing](document-processing.md) - Text and metadata handling
 
 ## Text Processing Examples
 - [Text Normalization](text-normalization.md) - Normalizing and cleaning text

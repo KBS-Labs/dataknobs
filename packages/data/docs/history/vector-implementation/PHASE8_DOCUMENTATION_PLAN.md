@@ -1,5 +1,9 @@
 # Phase 8: Documentation - Comprehensive Plan
 
+> **Historical record.** This document describes the design as of its
+> writing. Its code samples are not guaranteed to resolve against the
+> current packages, and are deliberately left as written.
+
 ## Overview
 Complete documentation for all DataKnobs data package features, with special emphasis on recently completed Phase 6 (Advanced Features) and Phase 7 (Pandas Integration).
 

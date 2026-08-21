@@ -1,5 +1,9 @@
 # DataKnobs Data Package - Next Steps
 
+> **Historical record.** This document describes the design as of its
+> writing. Its code samples are not guaranteed to resolve against the
+> current packages, and are deliberately left as written.
+
 ## 🎯 Remaining Priorities
 
 ### Priority 5: Improve Field Access Ergonomics ✅ COMPLETED (August 18, 2025)

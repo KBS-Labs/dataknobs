@@ -243,7 +243,11 @@ def test_a_change_to_these_guards_still_schedules_them() -> None:
     assert _scopes.plan_for_files(["bin/run-quality-checks.sh"])["test_scope"] == "workspace"
 
     # The other two answers, so the fix cannot be "always run everything".
-    assert _scopes.plan_for_files(["README.md"])["test_scope"] == "none"
+    # LICENSE rather than README.md: the root README used to be the inert file
+    # here, and stopped being one when the documented-import guard started
+    # reading it. A negative control has to name something that feeds no check
+    # *today*, or it silently becomes an assertion that a real input is ignored.
+    assert _scopes.plan_for_files(["LICENSE"])["test_scope"] == "none"
     assert _scopes.plan_for_files(["packages/common/src/x.py"])["test_scope"] == "packages"
 
 

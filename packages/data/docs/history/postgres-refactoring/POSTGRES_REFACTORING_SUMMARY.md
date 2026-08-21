@@ -1,5 +1,9 @@
 # PostgreSQL Backend Refactoring Summary
 
+> **Historical record.** This document describes the design as of its
+> writing. Its code samples are not guaranteed to resolve against the
+> current packages, and are deliberately left as written.
+
 ## Overview
 Successfully refactored the PostgreSQL backend implementations (SyncPostgresDatabase and AsyncPostgresDatabase) to share common code through mixins, reducing duplication and improving maintainability.
 

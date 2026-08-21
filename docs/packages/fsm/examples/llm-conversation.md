@@ -81,6 +81,7 @@ print(response.content)
 The LLM functionality previously in the FSM package has been extracted into a dedicated package with improved APIs:
 
 ### Old API (FSM Package)
+<!-- dk-imports: illustrative -- pre-move imports, shown as the code being migrated away from -->
 ```python
 from dataknobs_fsm.llm.providers import create_llm_provider
 from dataknobs_fsm.llm.base import LLMConfig

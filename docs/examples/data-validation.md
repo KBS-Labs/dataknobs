@@ -11,7 +11,8 @@ Complete user registration with multi-level validation, duplicate checking, and 
 from dataknobs_data.validation import (
     Schema, Required, Length, Pattern, Enum, Unique, Custom, Range
 )
-from dataknobs_data import Record, MemoryDatabase, Query
+from dataknobs_data import Record, Query
+from dataknobs_data.backends import SyncMemoryDatabase
 import re
 import hashlib
 from datetime import datetime, date
@@ -21,7 +22,7 @@ class UserRegistrationSystem:
     """Complete user registration with comprehensive validation"""
     
     def __init__(self):
-        self.user_db = MemoryDatabase()
+        self.user_db = SyncMemoryDatabase()
         self.setup_schemas()
         self.setup_validators()
     

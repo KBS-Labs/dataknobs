@@ -1,5 +1,9 @@
 # Vector Store Support - Design Plan
 
+> **Historical record.** This document describes the design as of its
+> writing. Its code samples are not guaranteed to resolve against the
+> current packages, and are deliberately left as written.
+
 ## Executive Summary
 
 This design document outlines the approach for adding vector store capabilities to the DataKnobs data package. We propose a hybrid architecture that extends existing backends with vector capabilities where natural (PostgreSQL pgvector, Elasticsearch) while providing a dedicated vector module for specialized stores (Faiss, AWS OpenSearch).

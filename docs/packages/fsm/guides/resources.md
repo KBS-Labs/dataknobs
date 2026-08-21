@@ -150,10 +150,10 @@ Via dataknobs_data integration:
 Manage file system operations:
 
 ```python
-from dataknobs_fsm.resources.filesystem import FileSystemResourceAdapter
+from dataknobs_fsm.resources.filesystem import FileSystemResource
 
 # Create filesystem resource
-fs_resource = FileSystemResourceAdapter(
+fs_resource = FileSystemResource(
     name="data_fs",
     base_path="/data/processing",
     temp_dir="/tmp/fsm",
@@ -179,10 +179,10 @@ with manager.resource_context("filesystem", "state_123") as fs:
 Manage HTTP connections:
 
 ```python
-from dataknobs_fsm.resources.http import HTTPResourceAdapter
+from dataknobs_fsm.resources.http import HTTPServiceResource
 
 # Create HTTP resource
-http_resource = HTTPResourceAdapter(
+http_resource = HTTPServiceResource(
     name="api_service",
     base_url="https://api.example.com",
     timeout=30,

@@ -1,5 +1,9 @@
 # Vector Store Implementation - Complete Summary
 
+> **Historical record.** This document describes the design as of its
+> writing. Its code samples are not guaranteed to resolve against the
+> current packages, and are deliberately left as written.
+
 ## Executive Summary
 
 The vector store implementation for DataKnobs is **functionally complete** with all major components implemented and tested. The system provides comprehensive vector search capabilities across multiple backends (PostgreSQL, Elasticsearch, SQLite, Faiss, Chroma, Memory) with automatic detection, synchronization, and migration tools.

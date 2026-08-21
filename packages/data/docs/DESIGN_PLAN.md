@@ -1,5 +1,9 @@
 # DataKnobs Data Package Design Plan
 
+> **Historical record.** This document describes the design as of its
+> writing. Its code samples are not guaranteed to resolve against the
+> current packages, and are deliberately left as written.
+
 ## Overview
 A unified data abstraction layer that provides consistent database operations across multiple storage technologies. This package enables seamless data management regardless of the underlying storage mechanism, from in-memory structures to cloud storage and databases.
 

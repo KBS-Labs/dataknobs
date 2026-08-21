@@ -1,5 +1,9 @@
 # Range Operators Implementation Summary
 
+> **Historical record.** This document describes the design as of its
+> writing. Its code samples are not guaranteed to resolve against the
+> current packages, and are deliberately left as written.
+
 ## Overview
 Implemented comprehensive range operators (BETWEEN and NOT_BETWEEN) for the DataKnobs data package with type-aware comparisons and backend-specific optimizations.
 

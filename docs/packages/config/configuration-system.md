@@ -273,9 +273,9 @@ db = config.construct("databases", "primary")
 Configure global settings and type-specific defaults:
 
 ```python
-from dataknobs_config import Settings
+from dataknobs_config.settings import SettingsManager
 
-settings = Settings()
+settings = SettingsManager()
 
 # Set type-specific defaults
 settings.set_defaults("databases", {

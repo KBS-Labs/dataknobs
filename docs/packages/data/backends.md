@@ -22,11 +22,11 @@ The dataknobs-data package supports multiple storage backends, each optimized fo
 In-memory storage for testing and caching.
 
 ```python
-from dataknobs_data.backends.memory import MemoryDatabase
+from dataknobs_data.backends.memory import SyncMemoryDatabase
 
-db = MemoryDatabase()
+db = SyncMemoryDatabase()
 # Or with configuration
-db = MemoryDatabase.from_config({})
+db = SyncMemoryDatabase.from_config({})
 ```
 
 **Best for:**
@@ -45,22 +45,22 @@ db = MemoryDatabase.from_config({})
 Store data in JSON, CSV, or Parquet files.
 
 ```python
-from dataknobs_data.backends.file import FileDatabase
+from dataknobs_data.backends.file import SyncFileDatabase
 
 # JSON storage
-db = FileDatabase.from_config({
+db = SyncFileDatabase.from_config({
     "path": "/data/records.json",
     "format": "json"
 })
 
 # CSV storage
-db = FileDatabase.from_config({
+db = SyncFileDatabase.from_config({
     "path": "/data/records.csv",
     "format": "csv"
 })
 
 # Parquet storage (requires pyarrow)
-db = FileDatabase.from_config({
+db = SyncFileDatabase.from_config({
     "path": "/data/records.parquet",
     "format": "parquet"
 })
@@ -206,9 +206,9 @@ See [DuckDB Backend Documentation](duckdb-backend.md) for detailed usage.
 Full-featured SQL database with ACID compliance.
 
 ```python
-from dataknobs_data.backends.postgres import PostgresDatabase
+from dataknobs_data.backends.postgres import SyncPostgresDatabase
 
-db = PostgresDatabase.from_config({
+db = SyncPostgresDatabase.from_config({
     "host": "localhost",
     "port": 5432,
     "database": "myapp",
@@ -241,9 +241,9 @@ pip install dataknobs-data[postgres]
 Distributed search and analytics engine.
 
 ```python
-from dataknobs_data.backends.elasticsearch import ElasticsearchDatabase
+from dataknobs_data.backends.elasticsearch import SyncElasticsearchDatabase
 
-db = ElasticsearchDatabase.from_config({
+db = SyncElasticsearchDatabase.from_config({
     "hosts": ["localhost:9200"],
     "index": "records",
     "username": "elastic",  # Optional
@@ -274,9 +274,9 @@ pip install dataknobs-data[elasticsearch]
 AWS S3 object storage for large-scale data archival.
 
 ```python
-from dataknobs_data.backends.s3 import S3Database
+from dataknobs_data.backends.s3 import SyncS3Database
 
-db = S3Database.from_config({
+db = SyncS3Database.from_config({
     "bucket": "my-data-bucket",
     "prefix": "records/",
     "region": "us-east-1",

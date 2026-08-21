@@ -1,5 +1,9 @@
 # DataKnobs Data Package - Implementation Status
 
+> **Historical record.** This document describes the design as of its
+> writing. Its code samples are not guaranteed to resolve against the
+> current packages, and are deliberately left as written.
+
 ## Latest Update: August 16, 2025
 
 ### 🚀 Major Recent Achievements

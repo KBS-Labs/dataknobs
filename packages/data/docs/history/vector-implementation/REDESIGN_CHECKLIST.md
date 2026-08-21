@@ -1,5 +1,9 @@
 # Validation and Migration Module Redesign Checklist
 
+> **Historical record.** This document describes the design as of its
+> writing. Its code samples are not guaranteed to resolve against the
+> current packages, and are deliberately left as written.
+
 ## Overview
 This checklist tracks the implementation of the redesign plan documented in REDESIGN_PLAN.md.
 The redesign addresses API inconsistencies and design issues discovered during Phase 9 testing.

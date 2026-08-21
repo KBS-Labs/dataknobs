@@ -441,10 +441,10 @@ processor = FileProcessor(config)
 Stream database records:
 
 ```python
-from dataknobs_fsm.patterns.etl import ETLProcessor
+from dataknobs_fsm.patterns.etl import DatabaseETL
 
 # ETL with streaming
-etl = ETLProcessor(
+etl = DatabaseETL(
     source_db=source_connection,
     target_db=target_connection,
     chunk_size=10000

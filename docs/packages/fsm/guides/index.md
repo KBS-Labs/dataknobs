@@ -104,7 +104,6 @@ from dataknobs_fsm import ConfigLoader, FSMBuilder
 from dataknobs_fsm.patterns.etl import DatabaseETL, create_etl_pipeline
 from dataknobs_fsm.patterns.file_processing import FileProcessor
 from dataknobs_fsm.patterns.api_orchestration import APIOrchestrator
-from dataknobs_fsm.patterns.llm_workflow import LLMWorkflow
 from dataknobs_fsm.patterns.error_recovery import ErrorRecoveryWorkflow
 ```
 

@@ -1,5 +1,9 @@
 # Vector Store Implementation Progress Tracker
 
+> **Historical record.** This document describes the design as of its
+> writing. Its code samples are not guaranteed to resolve against the
+> current packages, and are deliberately left as written.
+
 ## Quick Status Overview - 🎉 ALL PHASES COMPLETE 🎉
 
 | Phase | Status | Progress | Start Date | End Date | Notes |

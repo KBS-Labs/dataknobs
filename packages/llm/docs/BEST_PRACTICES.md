@@ -653,7 +653,7 @@ storage = DataknobsConversationStorage(AsyncMemoryDatabase())
 
 **Local Development**:
 ```python
-from dataknobs_data.backends import AsyncSQLiteDatabase
+from dataknobs_data.backends.sqlite_async import AsyncSQLiteDatabase
 
 storage = DataknobsConversationStorage(
     AsyncSQLiteDatabase(db_path="conversations.db")
@@ -665,7 +665,7 @@ storage = DataknobsConversationStorage(
 
 **Production (Small Scale)**:
 ```python
-from dataknobs_data.backends import AsyncSQLiteDatabase
+from dataknobs_data.backends.sqlite_async import AsyncSQLiteDatabase
 
 storage = DataknobsConversationStorage(
     AsyncSQLiteDatabase(db_path="/var/data/conversations.db")
@@ -677,7 +677,7 @@ storage = DataknobsConversationStorage(
 
 **Production (Large Scale)**:
 ```python
-from dataknobs_data.backends import AsyncPostgresDatabase
+from dataknobs_data.backends.postgres import AsyncPostgresDatabase
 
 storage = DataknobsConversationStorage(
     AsyncPostgresDatabase(
@@ -779,13 +779,10 @@ class PerformanceMiddleware(ConversationMiddleware):
 
 **Pattern**:
 ```python
-from dataknobs_llm.prompts import PromptNotFoundError
-
 async def safe_render(builder, prompt_name, params, fallback_template=None):
-    try:
-        return await builder.render_user_prompt(prompt_name, params=params)
-    except PromptNotFoundError:
-        logger.warning(f"Prompt '{prompt_name}' not found")
+    # A prompt library returns None for an unknown name rather than raising.
+    if builder.library.get_user_prompt(prompt_name) is None:
+        logger.warning("Prompt '%s' not found", prompt_name)
 
         if fallback_template:
             # Use fallback

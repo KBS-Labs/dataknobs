@@ -89,9 +89,9 @@ bot = await registry.get_bot("client-a")
 Sliding window memory that maintains recent conversation history.
 
 ```python
-from dataknobs_bots.memory import create_memory
+from dataknobs_bots.memory import create_memory_from_config
 
-memory = await create_memory({
+memory = await create_memory_from_config({
     "type": "buffer",
     "max_messages": 10
 })
@@ -107,7 +107,7 @@ context = await memory.get_context("How are you?")
 Semantic search-based memory using vector similarity.
 
 ```python
-memory = await create_memory({
+memory = await create_memory_from_config({
     "type": "vector",
     "vector_store": {"backend": "faiss", "dimension": 384},
     "top_k": 5
@@ -123,9 +123,9 @@ memory = await create_memory({
 RAG (Retrieval-Augmented Generation) implementation for document-based question answering.
 
 ```python
-from dataknobs_bots.knowledge import create_knowledge_base
+from dataknobs_bots.knowledge import create_knowledge_base_from_config
 
-kb = await create_knowledge_base({
+kb = await create_knowledge_base_from_config({
     "enabled": True,
     "documents_path": "./docs",
     "vector_store": {"backend": "faiss", "dimension": 384}

@@ -12,7 +12,8 @@ from dataknobs_data.pandas import (
     DataFrameConverter, BatchOperations, ChunkedProcessor,
     ConversionOptions, BatchConfig
 )
-from dataknobs_data import Record, MemoryDatabase, Query, FieldType
+from dataknobs_data import Record, Query, FieldType
+from dataknobs_data.backends import SyncMemoryDatabase
 from dataknobs_data.validation import Schema, Range
 ```
 
@@ -122,7 +123,7 @@ records_from_df = converter.dataframe_to_records(df, options)
 
 ```python
 # Initialize database and batch operations
-db = MemoryDatabase()
+db = SyncMemoryDatabase()
 batch_ops = BatchOperations(db)
 
 # Create sample sales data

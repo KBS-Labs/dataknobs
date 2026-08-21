@@ -12,7 +12,8 @@ import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
 from dataknobs_data.pandas import DataFrameConverter, BatchOperations, ChunkedProcessor
-from dataknobs_data import MemoryDatabase, Query, Record
+from dataknobs_data import Query, Record
+from dataknobs_data.backends import SyncMemoryDatabase
 from typing import Dict, List, Optional
 import json
 
@@ -20,7 +21,7 @@ class EcommerceAnalyticsDashboard:
     """Real-time analytics dashboard for e-commerce data"""
     
     def __init__(self):
-        self.db = MemoryDatabase()
+        self.db = SyncMemoryDatabase()
         self.batch_ops = BatchOperations(self.db)
         self.converter = DataFrameConverter()
         self.cache = {}  # Simple cache for computed metrics
@@ -460,7 +461,8 @@ from sklearn.preprocessing import StandardScaler, LabelEncoder
 from sklearn.ensemble import RandomForestClassifier, GradientBoostingRegressor
 from sklearn.metrics import classification_report, mean_absolute_error
 from dataknobs_data.pandas import DataFrameConverter, BatchOperations
-from dataknobs_data import MemoryDatabase, Query, Record
+from dataknobs_data import Query, Record
+from dataknobs_data.backends import SyncMemoryDatabase
 from dataknobs_data.validation import Schema, Range
 import joblib
 
@@ -468,7 +470,7 @@ class MLPipeline:
     """Machine learning pipeline with DataKnobs integration"""
     
     def __init__(self):
-        self.db = MemoryDatabase()
+        self.db = SyncMemoryDatabase()
         self.batch_ops = BatchOperations(self.db)
         self.converter = DataFrameConverter()
         self.models = {}
@@ -838,7 +840,8 @@ Build a comprehensive ETL pipeline with data quality monitoring and automated re
 
 ```python
 from dataknobs_data.pandas import DataFrameConverter, BatchOperations, ChunkedProcessor
-from dataknobs_data import MemoryDatabase, Query
+from dataknobs_data import Query
+from dataknobs_data.backends import SyncMemoryDatabase
 from dataknobs_data.validation import Schema, Range, Pattern
 import pandas as pd
 import numpy as np
@@ -850,9 +853,9 @@ class ETLPipeline:
     """Comprehensive ETL pipeline with data quality monitoring"""
     
     def __init__(self):
-        self.source_db = MemoryDatabase()
-        self.staging_db = MemoryDatabase()
-        self.warehouse_db = MemoryDatabase()
+        self.source_db = SyncMemoryDatabase()
+        self.staging_db = SyncMemoryDatabase()
+        self.warehouse_db = SyncMemoryDatabase()
         self.batch_ops = BatchOperations(self.warehouse_db)
         self.converter = DataFrameConverter()
         self.quality_metrics = []

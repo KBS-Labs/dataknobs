@@ -289,7 +289,7 @@ Migration-related failures raise `dataknobs_data.exceptions.MigrationError`
 ## See Also
 
 - [API Reference](api-reference.md) — `StreamConfig`, `StreamResult`, `ConflictPolicy`, and the operation/transformer types
-- [Schema Validation](validation.md) — data validation and schema management
+- [Schema Validation](../../api/reference/data.md) — data validation and schema management
 - [Pandas Integration](pandas-integration.md) — bulk DataFrame operations
 - [Backends Overview](backends.md) — supported database backends
 - [Migration Tutorial](tutorials/migration-tutorial.md) — step-by-step walkthrough
