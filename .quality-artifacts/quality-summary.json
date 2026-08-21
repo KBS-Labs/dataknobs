@@ -1,5 +1,5 @@
 {
-  "timestamp": "2026-08-21T15:22:01Z",
+  "timestamp": "2026-08-21T15:55:07Z",
   "overall_status": "PASS",
   "run_mode": "pr",
   "environment": "host",
@@ -19,7 +19,7 @@
   "coverage_percent": null,
   "package_hashes": {
     "bots": "b7370740de59071e0bc5fe17be02379ca3ba29b5b45feef87d239837a484d0a8",
-    "common": "23260b7032d92ac41732c03ab424123b13979400bbab85c06138eb75183cb09a",
+    "common": "0feff79174344da72f26c5bf791f72d16e676497c97f71fc18b46fecd0f883ab",
     "config": "33fdf8a284304b52cfa3c91265fcaa8126741c7ee555dcba2b44fe3468e27bfd",
     "data": "6ca7ac9c8ddb213953e9b04b13c0dfaabbdc82da7969243e69e7ff986d31a615",
     "fsm": "74ee90487419ffc5f219df5e1b0f083e2b839335a98194b32715c9998e5a117d",
@@ -32,10 +32,10 @@
   },
   "workspace_hashes": {
     "toolchain": "52c6f1c5a4b18ea1213fe609f83bf47cde5a791c282341ee0d3ab17d61c1b888",
-    "workspace_tests": "e591fed6f9f46b1ed8c1c093bfe2057df3051eedd42cd8ce90d1ce7088913cf6",
-    "docs": "68a3de0c99c3bcd4ef3c1457733d8a7c9fc53f7e45f96a173070d010c583ca45"
+    "workspace_tests": "70dbdf45abdafcb6671042ed592392ad05b260d34340405ce2946f24bfc3c85a",
+    "docs": "3fe8cb358ca7943509289b6e3f50585df3bec93aa2b1f24cb729e2211ff02c00"
   },
-  "total_seconds": 273,
+  "total_seconds": 275,
   "checks": {
     "workflow_lint": {
       "status": "pass",
@@ -53,14 +53,14 @@
       "status": "pass",
       "exit_code": 0,
       "tool": "quality-contract.py",
-      "duration_seconds": 1
+      "duration_seconds": 0
     },
     "validation": {
       "status": "pass",
       "exit_code": 0,
       "skipped": false,
       "tool": "validate.sh",
-      "duration_seconds": 77
+      "duration_seconds": 81
     },
     "documentation": {
       "status": "pass",
@@ -88,13 +88,13 @@
       "exit_code": 0,
       "skipped": false,
       "duration_seconds": 102,
-      "workspace_guards_seconds": 49
+      "workspace_guards_seconds": 50
     },
     "integration_tests": {
       "status": "pass",
       "exit_code": 0,
       "skipped": false,
-      "duration_seconds": 57
+      "duration_seconds": 56
     }
   }
 }
