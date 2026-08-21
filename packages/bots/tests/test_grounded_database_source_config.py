@@ -216,3 +216,28 @@ async def test_a_schema_that_is_not_a_mapping_is_reported() -> None:
     """``schema`` carries a ``fields`` key; anything else names the source."""
     with pytest.raises(ValueError, match="case_studies"):
         await _create_database_source(_config(backend="memory", schema=["title"]))
+
+
+async def test_a_rejected_config_opens_no_store(tmp_path: Path) -> None:
+    """A config rejected for its schema must not have opened a store first.
+
+    The shape of ``schema`` is a property of the config alone, so it is
+    knowable before anything is opened. Checking it afterwards is not a
+    tidiness question: :meth:`AsyncSQLiteDatabase.connect` creates the
+    parent directories, creates the file, and creates the table, and the
+    raise then abandons all three along with the connection -- so a
+    config that was rejected still leaves a store behind, and the next
+    run finds one already there.
+
+    ``memory`` cannot show this. Its ``connect`` is the base no-op, which
+    is why the sibling above pins the message and this pins the ordering.
+    """
+    store = tmp_path / "unwritten" / "cases.db"
+
+    with pytest.raises(ValueError, match="'schema' must be a mapping"):
+        await _create_database_source(
+            _config(backend="sqlite", path=str(store), table="cases", schema=["title"])
+        )
+
+    assert not store.exists()
+    assert not store.parent.exists()

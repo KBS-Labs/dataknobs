@@ -428,14 +428,10 @@ async def _create_database_source(
         # config can declare several sources, so name which one it was.
         raise ValueError(f"Source {config.name!r}: {exc}") from exc
 
-    # A backend that needs connecting raises on every query until it is,
-    # and ``DatabaseSource`` reports a failed query as an empty result set
-    # -- so an unconnected source is indistinguishable from an empty store.
-    # The base declares ``connect`` a no-op, so this is safe for backends
-    # that need nothing.
-    await db.connect()
-
-    # Build the schema from config
+    # Built from the config alone, and so before anything is opened: a
+    # backend's ``connect`` creates what it is pointed at -- directories,
+    # file, table -- and raising after that abandons a store the config
+    # was rejected for.
     schema_config = opts.get("schema", {})
     if not isinstance(schema_config, Mapping):
         raise ValueError(
@@ -444,6 +440,13 @@ async def _create_database_source(
         )
     field_defs = schema_config.get("fields", {})
     schema = _build_database_schema(field_defs)
+
+    # A backend that needs connecting raises on every query until it is,
+    # and ``DatabaseSource`` reports a failed query as an empty result set
+    # -- so an unconnected source is indistinguishable from an empty store.
+    # The base declares ``connect`` a no-op, so this is safe for backends
+    # that need nothing.
+    await db.connect()
 
     # Set schema on the database if it supports it
     if hasattr(db, "set_schema"):
