@@ -211,6 +211,13 @@ retrieval:
 
 `score_threshold` applies to all source types. Vector KB sources use semantic similarity scores; database sources use term-coverage scoring (fraction of query terms found in searchable fields, with 2x weight for the content field).
 
+Retrieval isolates sources from one another. A source that raises is logged
+with its cause and dropped for that turn; every other source still
+contributes, and the turn still answers. A source that is *reachable* and
+simply matches nothing contributes an empty list instead — the two are
+distinguishable, so a source that can never answer does not pass for one
+that had nothing to say.
+
 ### Sources
 
 Sources can be injected programmatically or constructed from config.
@@ -414,11 +421,22 @@ When a source has a topic index, the grounded strategy uses it instead of standa
 for each source:
     if source.topic_index exists:
         results = topic_index.resolve(user_message, llm=..., intent=...)
+        if not results:                     # read as a vocabulary gap
+            results = source.query(intent, top_k=...)
     else:
         results = source.query(intent, top_k=...)
 ```
 
 Sources without topic indices continue using standard retrieval. Both approaches coexist in the same pipeline.
+
+Note the fallback: an index that returns nothing is taken to have found
+nothing, and the turn retries that source through plain text retrieval.
+That is why a topic index does not absorb its own failures — an index that
+*could not run* would otherwise take the same branch as one that ran and
+matched nothing, silently rerouting the turn and logging a vocabulary gap
+as the cause. A `resolve()` that raises is instead caught by the per-source
+guard above, which drops that source for the turn and logs the real
+failure.
 
 ### Topic Index Types
 

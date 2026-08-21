@@ -7,6 +7,55 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Fixed
+
+- **A `DatabaseSource` no longer reports a store it cannot reach as a store
+  with nothing in it.** Both of its searches were wrapped and logged: the
+  structural-only one returned an empty list, and the text-search loop
+  skipped the failing query/field combination and returned whatever the
+  rest had matched. Either way the failure arrived at the caller as "no
+  matching records" — and a source whose database was misconfigured gave
+  that answer on every call, indefinitely, while reading as healthy. A
+  partly-failed search now raises rather than returning the part that
+  worked, since a silently short answer is the same defect in miniature.
+
+  The wrapping added no resilience it did not already have. A caller
+  retrieving from several sources already decides what a failing one costs
+  it: the grounded retrieval loop guards each source, logs one that raises
+  with its cause, and drops it for that turn while the others still
+  contribute. Absorbing the failure one frame below meant that guard never
+  fired and the source was recorded as having answered. The sibling
+  `VectorKnowledgeSource` never wrapped its retrieval call — only a
+  user-supplied identity callable, per result, where skipping one record is
+  the point.
+
+  A failure now reaches the caller. A *reachable* store that matches nothing
+  still returns an empty list, so the two answers are distinguishable.
+  **Breaking** for a caller that relied on `query()` never raising; the
+  failure it was absorbing was already being reported at WARNING, so a
+  caller with no guard of its own was already logging what it now catches.
+
+- **A `ClusterTopicIndex` no longer reports an index it cannot run as one
+  that found no topics.** The two calls its answer depends on — embedding
+  the query, and fetching seeds from the vector store — were each wrapped,
+  logged and returned as an empty list, the same defect as above in the
+  same directory.
+
+  It landed harder here because of what the caller does with an empty
+  topic index. The grounded retrieval loop reads that as a vocabulary gap
+  and *falls back* to plain text retrieval, logging that the index
+  returned empty. So a broken embedder did not merely read as a quiet
+  index: it silently rerouted the turn to a different retrieval strategy
+  and named the wrong cause while doing it. Both failures now reach the
+  loop's per-source guard, which drops the source and logs what actually
+  happened.
+
+  Embedding seed chunks keeps its per-chunk tolerance — one chunk that
+  will not embed is still dropped so the rest of the pool can cluster —
+  but that is now reported at WARNING rather than DEBUG, and a pool where
+  *every* chunk failed raises instead of returning an empty pool. **Breaking**
+  for a caller that relied on `resolve()` never raising.
+
 ### Changed
 
 - **BREAKING: every database backend config now rejects a key it does not

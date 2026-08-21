@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Documented
+
+- **Grounded retrieval isolates sources from one another**, and the guide
+  now says so: a source that raises is logged with its cause and dropped
+  for that turn while every other source still contributes, and a source
+  that is reachable but matches nothing contributes an empty list instead.
+  The guard was already there and had no test; it was also unreachable
+  through a `database` source or a `ClusterTopicIndex`, both of which
+  absorbed their own failures — see the `dataknobs-data` entries for
+  those. A topic index that absorbed its failure was read as a vocabulary
+  gap, so the turn fell back to plain text retrieval instead of reporting
+  a broken index.
+
 ### Fixed
 
 - **A memory bank no longer sends a table name to a backend that has no

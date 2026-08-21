@@ -12,7 +12,6 @@ no LLM generates SQL or query DSL.
 
 from __future__ import annotations
 
-import logging
 from typing import Any
 
 from dataknobs_data.database import AsyncDatabase
@@ -21,8 +20,6 @@ from dataknobs_data.query import Filter, Operator, Query
 from dataknobs_data.schema import DatabaseSchema
 
 from .base import GroundedSource, RetrievalIntent, SourceResult, SourceSchema
-
-logger = logging.getLogger(__name__)
 
 # FieldType → JSON schema type mapping
 _FIELD_TYPE_MAP: dict[FieldType, str] = {
@@ -237,20 +234,20 @@ class DatabaseSource(GroundedSource):
 
         When there are no text queries (or no text_search_fields), a
         single structural-only query is executed.
+
+        A failing search is not caught here. Returning an empty list for
+        it would make "the query found nothing" and "the query never ran"
+        the same answer, and the second is the one a misconfigured source
+        gives on every call. Callers that retrieve from several sources
+        already decide what a failing one costs them -- the grounded
+        retrieval loop logs it with its cause and drops that source for
+        the turn -- and that decision needs the failure to reach it.
         """
         structural_filters = self._build_structural_filters(intent)
 
         if not intent.text_queries or not self._text_search_fields:
             query = Query(filters=structural_filters).limit(top_k)
-            try:
-                return await self._db.search(query)
-            except Exception:
-                logger.warning(
-                    "Database query failed for source '%s'",
-                    self._name,
-                    exc_info=True,
-                )
-                return []
+            return await self._db.search(query)
 
         # OR across (text_query x text_field) combinations
         seen_ids: set[str] = set()
@@ -265,17 +262,7 @@ class DatabaseSource(GroundedSource):
                 q = Query(
                     filters=structural_filters + [text_filter],
                 ).limit(top_k)
-                try:
-                    batch = await self._db.search(q)
-                except Exception:
-                    logger.warning(
-                        "Database text search failed for source '%s' (query=%r, field=%s)",
-                        self._name,
-                        tq,
-                        text_field,
-                        exc_info=True,
-                    )
-                    continue
+                batch = await self._db.search(q)
                 for r in batch:
                     rid = str(r.id) if hasattr(r, "id") and r.id else ""
                     if rid and rid not in seen_ids:
