@@ -5,11 +5,12 @@ This tutorial will guide you through the DataKnobs Data package migration featur
 ## Prerequisites
 
 ```python
-from dataknobs_data import (
+from dataknobs_data.migration import (
     Migration, Migrator, Transformer,
     AddField, RemoveField, RenameField, TransformField, CompositeOperation,
-    MemoryDatabase, Record, FieldType
 )
+from dataknobs_data import FieldType, Record
+from dataknobs_data.backends import SyncMemoryDatabase
 from datetime import datetime
 import json
 ```
@@ -157,8 +158,8 @@ Migrate data between databases with automatic progress tracking:
 
 ```python
 # Setup source and target databases
-source_db = MemoryDatabase()
-target_db = MemoryDatabase()
+source_db = SyncMemoryDatabase()
+target_db = SyncMemoryDatabase()
 
 # Populate source database
 for i in range(100):
@@ -207,7 +208,7 @@ For large datasets that don't fit in memory, use streaming migration:
 # Stream migration with memory-efficient processing
 def create_large_source():
     """Simulate a large database"""
-    db = MemoryDatabase()
+    db = SyncMemoryDatabase()
     for i in range(10000):  # Simulate 10k records
         db.insert(Record(data={
             "id": i,
@@ -217,7 +218,7 @@ def create_large_source():
     return db
 
 source_db = create_large_source()
-target_db = MemoryDatabase()
+target_db = SyncMemoryDatabase()
 
 # Stream with small batches to minimize memory usage
 progress = migrator.migrate_stream(
@@ -400,8 +401,8 @@ Combine data from multiple record types:
 
 ```python
 # Simulate related data
-users_db = MemoryDatabase()
-orders_db = MemoryDatabase()
+users_db = SyncMemoryDatabase()
+orders_db = SyncMemoryDatabase()
 
 # Add sample data
 users_db.insert(Record(data={"id": 1, "name": "John", "email": "john@example.com"}))
@@ -433,7 +434,7 @@ class DenormalizingMigrator:
             target_db.insert(denormalized)
 
 # Perform denormalization
-target_db = MemoryDatabase()
+target_db = SyncMemoryDatabase()
 migrator = DenormalizingMigrator()
 migrator.migrate(users_db, orders_db, target_db)
 

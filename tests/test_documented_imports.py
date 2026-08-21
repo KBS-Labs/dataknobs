@@ -43,6 +43,21 @@ unchecked -- and that is where the third class above was still living after the
 first sweep: two pages had been documenting a replaced constraint and migration
 API behind `import *`, reporting green throughout.
 
+**The reader had the same shape of hole in it**, and held it for longer. It
+took one physical line at a time, so a parenthesized import arrived at
+``ast.parse`` as the fragment ``from dataknobs_data import (`` -- which starts
+with ``from``, carries the namespace, and counts as a statement by every test
+applied here. ``ast`` cannot read a fragment, and the empty list it produced is
+the same answer a statement importing nothing from the namespace gives, so the
+whole form cost one silent zero apiece: 227 statements, 958 unread targets
+against the 3,055 it was reading, and 21 of the unread did not resolve. A
+fence indented under a list item was never opened at all, for the same kind of
+reason. Neither could fail anything, and the statement tally a non-vacuity
+check watches was identical either way. What holds them now is that a statement the reader
+assembles must itself parse -- an assembly that comes out wrong is a finding
+rather than a zero -- and that the floor below counts *targets*, which is the
+quantity a line-at-a-time reader cannot reach.
+
 Scope is every markdown document a reader can reach: the site tree, each
 package's ``docs/``, and the READMEs. Two carve-outs, both narrow and both
 stated in the code below rather than left to a path convention.
@@ -60,8 +75,12 @@ import pytest
 from tests._workspace import HISTORICAL, ROOT, documentation_files, rel
 
 NAMESPACE = "dataknobs"
-FENCE_OPEN = re.compile(r"^```(?:python|py)\b", re.IGNORECASE)
-FENCE_CLOSE = re.compile(r"^```\s*$")
+#: Both halves tolerate leading whitespace: a fence nested under a list item
+#: or a numbered step is indented, and a reader anchored to column zero never
+#: opens it -- 65 such fences sat unread, which looks exactly like a document
+#: with no code in it.
+FENCE_OPEN = re.compile(r"^\s*```(?:python|py)\b", re.IGNORECASE)
+FENCE_CLOSE = re.compile(r"^\s*```\s*$")
 
 #: Marks the *next* fence as one whose imports are not meant to resolve.
 #:
@@ -74,14 +93,46 @@ FENCE_CLOSE = re.compile(r"^```\s*$")
 ILLUSTRATIVE = re.compile(r"^<!--\s*dk-imports:\s*illustrative\b")
 
 
+def _depth(line: str) -> int:
+    """Net parenthesis depth of an import line, ignoring a trailing comment.
+
+    An import statement cannot contain a string literal, so the only place a
+    parenthesis hides from a count is after a ``#``.
+    """
+    return line.split("#", 1)[0].count("(") - line.split("#", 1)[0].count(")")
+
+
 def import_statements(path: Path) -> list[tuple[int, str]]:
     """``(line number, source)`` for each namespace import inside a py fence.
 
     Prose outside a fence is not a claim that anything imports, and a fence
     carrying the illustrative marker is a claim that something does *not*.
+
+    A statement is assembled across its lines rather than taken one line at a
+    time, and is reported at the line it opens on. The line-at-a-time reader
+    this replaced could not see a parenthesized import at all: it collected the
+    opening ``from dataknobs_data import (`` -- which starts with ``from ``,
+    carries the namespace, and is a statement by every test applied here -- and
+    every name inside the parentheses went unread. 227 such statements were in
+    the tree, hiding 958 targets against the 3,055 being read, 21 of which did
+    not resolve while this file reported green over all of them.
+
+    Assembled lines are rejoined with newlines rather than spaces, and the
+    difference is not cosmetic: a name in one of these blocks is very often
+    followed by a ``#`` comment explaining it, and one line's comment run
+    together with the next swallows every name after it. That produced a
+    statement that would not parse, which is how ``unreadable`` reported the
+    mistake the first time this reader was run over the tree.
+
+    A fragment whose parentheses never close is emitted anyway rather than
+    dropped on the floor. Dropping it would replace one silent zero with
+    another, which is the defect this file exists to refuse; ``unreadable``
+    reports it instead.
     """
     statements: list[tuple[int, str]] = []
     inside = marked = False
+    pending: list[str] = []
+    opened = depth = 0
     for number, raw in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
         if not inside:
             if ILLUSTRATIVE.match(raw.strip()):
@@ -92,19 +143,53 @@ def import_statements(path: Path) -> list[tuple[int, str]]:
                 marked = False
             continue
         if FENCE_CLOSE.match(raw):
+            if pending:
+                statements.append((opened, "\n".join(pending)))
             inside = marked = False
+            pending, depth = [], 0
             continue
         line = raw.strip()
+        if pending:
+            pending.append(line)
+            depth += _depth(line)
+            if depth <= 0:
+                statements.append((opened, "\n".join(pending)))
+                pending, depth = [], 0
+            continue
         if not marked and line.startswith(("from ", "import ")) and NAMESPACE in line:
-            statements.append((number, line))
+            depth = _depth(line)
+            if depth > 0:
+                pending, opened = [line], number
+            else:
+                statements.append((number, line))
+    if pending:  # a fence that never closes still owes its fragment a report
+        statements.append((opened, "\n".join(pending)))
     return statements
 
 
-def targets(statement: str) -> list[tuple[str, str | None]]:
-    """``(module, attribute)`` pairs a statement asserts the existence of."""
+def parsed(statement: str) -> ast.Module | None:
+    """The statement's tree, or ``None`` if it cannot be read as Python.
+
+    The single place that decides a statement is unreadable, because two
+    places deciding it is how one of them stops agreeing with the other.
+    """
     try:
-        tree = ast.parse(statement)
+        return ast.parse(statement)
     except SyntaxError:
+        return None
+
+
+def targets(statement: str) -> list[tuple[str, str | None]]:
+    """``(module, attribute)`` pairs a statement asserts the existence of.
+
+    An unreadable statement answers empty, which is also what a statement
+    naming nothing in the namespace answers -- so on its own this function
+    cannot tell "names nothing" from "could not be read". ``unreadable`` is
+    what makes the second case reportable, and the pairing is the only reason
+    the empty answer here is safe.
+    """
+    tree = parsed(statement)
+    if tree is None:
         return []
     found: list[tuple[str, str | None]] = []
     for node in ast.walk(tree):
@@ -175,6 +260,40 @@ def star_imports() -> list[str]:
         for _, attribute in targets(statement)
         if attribute == "*"
     ]
+
+
+def unreadable() -> list[str]:
+    """Every collected statement this file cannot read as Python.
+
+    The reader assembles a statement from the lines a document spreads it
+    over, and an assembly that comes out wrong produces a string ``ast`` will
+    not parse. ``targets`` answers that string with an empty list -- the same
+    answer it gives a statement importing nothing from the namespace -- so
+    without this the mis-read costs one silent zero and reports nothing at all.
+
+    That is not a hypothetical failure mode; it is the one this file shipped
+    with. Every parenthesized import in the tree arrived at ``ast.parse`` as
+    the fragment ``from dataknobs_data import (``, and the silence was
+    indistinguishable from a clean scan for as long as it lasted.
+    """
+    return [
+        f"{rel(path)}:{number}  {statement}"
+        for path in documentation_files()
+        for number, statement in import_statements(path)
+        if parsed(statement) is None
+    ]
+
+
+def test_no_documented_import_is_unreadable() -> None:
+    """The reader's own output must be Python, or its silence means nothing."""
+    found = unreadable()
+    assert not found, (
+        f"{len(found)} collected statement(s) do not parse, so every name in "
+        "them is unchecked and the import guard is quietly narrower than it "
+        "reports:\n  " + "\n  ".join(found) + "\n\nEither the document holds an "
+        "import that is not valid Python, or the reader assembled it wrongly "
+        "-- and the second is a defect in this file, not in the document."
+    )
 
 
 def test_every_documented_import_resolves() -> None:
@@ -284,6 +403,100 @@ def test_the_scan_actually_reads_imports() -> None:
     assert len(files) > 100, f"only {len(files)} documents in scope"
     scanned = sum(len(import_statements(path)) for path in files)
     assert scanned > 1000, f"only {scanned} imports found; the scan has narrowed"
+
+    named = sum(
+        len(targets(statement)) for path in files for _, statement in import_statements(path)
+    )
+    assert named > 3500, (
+        f"the scan collects {scanned} statements naming only {named} targets. A "
+        "statement count cannot see the narrowing this floor is for: a reader "
+        "that stops at the first physical line still collects the opening "
+        "fragment of a parenthesized import, so the statement total is "
+        "unchanged while every name inside the parentheses goes unchecked. "
+        "This floor sits above what such a reader can reach."
+    )
+
+
+def test_a_parenthesized_import_is_read_across_its_lines(tmp_path: Path) -> None:
+    """The form the reader stopped at, and the silence it produced.
+
+    A reader taking one physical line at a time collects
+    ``from dataknobs_data import (`` -- which starts with ``from ``, carries the
+    namespace, and counts as a statement -- and then hands that fragment to
+    ``ast.parse``, which cannot read it. Every name inside the parentheses is
+    invisible, and the statement tally is exactly what it would be if the
+    import had been on one line, so nothing anywhere reports a narrowing.
+    """
+    doc = tmp_path / "sample.md"
+    doc.write_text("```python\nfrom dataknobs_data import (\n    Record,\n    Query,\n)\n```\n")
+    found = import_statements(doc)
+    assert len(found) == 1, f"expected one statement, got {found}"
+    number, statement = found[0]
+    assert number == 2, f"a statement is reported at its opening line, not {number}"
+    assert targets(statement) == [("dataknobs_data", "Record"), ("dataknobs_data", "Query")]
+
+
+@pytest.mark.parametrize(
+    "tail",
+    [
+        pytest.param("```\n", id="fence-closes"),
+        pytest.param("", id="fence-never-closes"),
+    ],
+)
+def test_an_unclosed_import_is_reported_rather_than_dropped(tmp_path: Path, tail: str) -> None:
+    """Accumulation must not become a second way to see nothing.
+
+    A parenthesis that never closes leaves the reader holding a fragment, at
+    the end of the fence and again at the end of the file. Discarding it either
+    time would be this file's own defect wearing the fix's clothes, so it is
+    emitted and ``unreadable`` names it.
+    """
+    doc = tmp_path / "sample.md"
+    doc.write_text("```python\nfrom dataknobs_data import (\n    Record,\n" + tail)
+    found = import_statements(doc)
+    assert len(found) == 1, f"the fragment must survive to be reported, got {found}"
+    assert parsed(found[0][1]) is None, "the fragment is not Python and must say so"
+    assert not targets(found[0][1]), "an unreadable fragment names nothing"
+
+
+def test_unreadable_reports_one_when_the_tree_has_one(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Non-vacuity for the readability check, the way the star check gets one.
+
+    ``test_no_documented_import_is_unreadable`` runs over a tree where nothing
+    is unreadable, so it passes whether the body below still detects anything
+    or not -- and a guard against silence that has itself gone silent is the
+    exact shape this file is about.
+    """
+    doc = tmp_path / "sample.md"
+    doc.write_text(
+        "```python\n"
+        "from dataknobs_data import (\n"
+        "    Record,\n"
+        "```\n"
+        "```python\n"
+        "from dataknobs_data import Query\n"
+        "```\n"
+    )
+    monkeypatch.setitem(globals(), "documentation_files", lambda: [doc])
+    monkeypatch.setitem(globals(), "rel", str)
+
+    found = unreadable()
+
+    assert len(found) == 1, f"expected the one unreadable fragment, got {found}"
+    assert "sample.md:2" in found[0], f"wrong line reported: {found[0]}"
+
+
+def test_a_fence_indented_under_a_list_item_is_still_read(tmp_path: Path) -> None:
+    """A fence nested in a list is indented, and was therefore never opened."""
+    doc = tmp_path / "sample.md"
+    doc.write_text(
+        "1. Import it:\n\n    ```python\n    from dataknobs_data import Record\n    ```\n"
+    )
+    assert [statement for _, statement in import_statements(doc)] == [
+        "from dataknobs_data import Record"
+    ]
 
 
 def test_a_broken_import_is_detected() -> None:

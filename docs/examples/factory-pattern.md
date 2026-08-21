@@ -21,7 +21,7 @@ import os
 import json
 from typing import Dict, Any, Optional, List
 from dataknobs_data import (
-    Database, 
+    SyncDatabase,
     DatabaseFactory, 
     Record, 
     Query,
@@ -38,7 +38,7 @@ class SmartDatabaseFactory:
         self.factory = DatabaseFactory()
         self.backends_created = []
     
-    def create_for_use_case(self, use_case: str, **kwargs) -> Database:
+    def create_for_use_case(self, use_case: str, **kwargs) -> SyncDatabase:
         """
         Create database based on use case requirements.
         
@@ -133,7 +133,7 @@ class ConfigDrivenFactory:
         # Register factory with config for cleaner syntax
         self.config.register_factory("database", self.factory)
     
-    def get_database(self, name: str) -> Database:
+    def get_database(self, name: str) -> SyncDatabase:
         """
         Get database instance by name from configuration.
         
@@ -160,7 +160,7 @@ class CustomBackendExample:
     def create_custom_backend():
         """Create and register a custom backend."""
         
-        class RedisDatabase(Database):
+        class RedisDatabase(SyncDatabase):
             """Custom Redis backend implementation."""
             
             def __init__(self, host="localhost", port=6379, db=0, **kwargs):

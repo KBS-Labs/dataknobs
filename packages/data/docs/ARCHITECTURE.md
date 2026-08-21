@@ -242,7 +242,7 @@ page for the full contract and `release_pool` reference.
 ```python
 from dataknobs_data.exceptions import (
     DatabaseError,          # Base exception
-    ConnectionError,        # Connection issues
+    DatabaseConnectionError,  # Connection issues
     NotFoundError,         # Record not found
     ValidationError,       # Data validation failed
     QueryError,           # Invalid query
