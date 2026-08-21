@@ -1,18 +1,14 @@
 {
-  "timestamp": "2026-08-21T05:30:34Z",
+  "timestamp": "2026-08-21T06:24:06Z",
   "overall_status": "PASS",
   "run_mode": "pr",
   "environment": "host",
-  "packages": "bots data fsm legacy llm structures utils xization",
+  "packages": "bots data fsm llm",
   "tested_packages": [
     "bots",
     "data",
     "fsm",
-    "legacy",
-    "llm",
-    "structures",
-    "utils",
-    "xization"
+    "llm"
   ],
   "coverage_percent": null,
   "package_hashes": {
@@ -30,10 +26,10 @@
   },
   "workspace_hashes": {
     "toolchain": "52c6f1c5a4b18ea1213fe609f83bf47cde5a791c282341ee0d3ab17d61c1b888",
-    "workspace_tests": "78ad73eb3567b7167bf5a9767b9cbb39b26d06d76c13492d7e1a264fab8e8b59",
-    "docs": "7fdaf170d0ea29a3e772cac4e4fa05571e1da0a5a1e3c9a77769903f3962822f"
+    "workspace_tests": "66ce1ded924bb1d5d0d15b6144c0b08dde2a73b89382320c5ea1943be35e971e",
+    "docs": "3cb6d85b97eda59a537ce53a05c85c92b5019c4104f25a411e869340249a413b"
   },
-  "total_seconds": 243,
+  "total_seconds": 226,
   "checks": {
     "workflow_lint": {
       "status": "pass",
@@ -58,14 +54,14 @@
       "exit_code": 0,
       "skipped": false,
       "tool": "validate.sh",
-      "duration_seconds": 69
+      "duration_seconds": 62
     },
     "documentation": {
       "status": "pass",
       "exit_code": 0,
       "skipped": false,
       "tool": "mkdocs",
-      "duration_seconds": 25
+      "duration_seconds": 24
     },
     "documentation_versions": {
       "status": "pass",
@@ -85,14 +81,14 @@
       "status": "pass",
       "exit_code": 0,
       "skipped": false,
-      "duration_seconds": 82,
-      "workspace_guards_seconds": 48
+      "duration_seconds": 76,
+      "workspace_guards_seconds": 47
     },
     "integration_tests": {
       "status": "pass",
       "exit_code": 0,
       "skipped": false,
-      "duration_seconds": 55
+      "duration_seconds": 54
     }
   }
 }

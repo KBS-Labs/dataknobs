@@ -327,15 +327,15 @@ prototype_db.connect()
 from dataknobs_data import database_factory
 
 # Import from CSV
-csv_db = database_factory("file", path="data.csv", format="csv")
-sqlite_db = database_factory("sqlite", path="migrated.db")
+csv_db = database_factory.create(backend="file", path="data.csv", format="csv")
+sqlite_db = database_factory.create(backend="sqlite", path="migrated.db")
 
 # Transfer data
 for record in csv_db.search(Query()):
     sqlite_db.create(record)
 
 # Later export to PostgreSQL
-pg_db = database_factory("postgres", **pg_config)
+pg_db = database_factory.create(backend="postgres", **pg_config)
 for record in sqlite_db.search(Query()):
     pg_db.create(record)
 ```

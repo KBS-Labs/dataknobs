@@ -36,6 +36,13 @@ its second line, which is worse than one that fails on its first. Renaming a
 symbol at its uses is therefore part of fixing an import here, and is the
 reviewer's job rather than this guard's.
 
+**A star import is the one form that satisfies the check while defeating it**,
+which is why it is now refused outright below. The module it names really does
+exist, so the fence reads as clean while every name used beneath it goes
+unchecked -- and that is where the third class above was still living after the
+first sweep: two pages had been documenting a replaced constraint and migration
+API behind `import *`, reporting green throughout.
+
 Scope is every markdown document a reader can reach: the site tree, each
 package's ``docs/``, and the READMEs. Two carve-outs, both narrow and both
 stated in the code below rather than left to a path convention.
@@ -47,6 +54,8 @@ import ast
 import importlib
 import re
 from pathlib import Path
+
+import pytest
 
 from tests._workspace import ROOT, rel
 
@@ -184,6 +193,17 @@ def findings() -> list[str]:
     return broken
 
 
+def star_imports() -> list[str]:
+    """Every ``from dataknobs... import *`` in a fence the guard is meant to check."""
+    return [
+        f"{rel(path)}:{number}  {statement}"
+        for path in documentation_files()
+        for number, statement in import_statements(path)
+        for _, attribute in targets(statement)
+        if attribute == "*"
+    ]
+
+
 def test_every_documented_import_resolves() -> None:
     """The guard itself: no reachable document names an import that is not there."""
     broken = findings()
@@ -196,6 +216,87 @@ def test_every_documented_import_resolves() -> None:
         "later. If the import is not meant to resolve, mark the fence with "
         "<!-- dk-imports: illustrative -- why --> instead."
     )
+
+
+def test_no_documented_star_import() -> None:
+    """A star import resolves, and takes every name under it out of reach.
+
+    This is the one import form that satisfies the check above while defeating
+    it. ``from dataknobs_data.validation.constraints import *`` names a module
+    that genuinely exists, so ``unresolved`` returns nothing and the fence is
+    counted as clean -- while every class the block then goes on to use is
+    invisible, because no statement ever named one.
+
+    That is not a hypothetical. Two pages sat behind such a line documenting a
+    ``Pattern(regex, flags)`` overload that takes one argument, an
+    ``AddField(default=...)`` keyword spelled ``default_value``, a
+    ``migration.add_operation()`` that is called ``add``, and progress fields
+    named ``percentage`` and ``successful`` where the object has ``percent``
+    and ``succeeded``. The guard reported green over all of it.
+
+    Naming the imports is also what the reader needs: ``import *`` does not say
+    where ``Range`` came from, and a reader who cannot tell cannot look it up.
+    A fence whose subject is the star form itself can carry the illustrative
+    marker, which is honoured here exactly as it is above.
+    """
+    found = star_imports()
+    assert not found, (
+        f"{len(found)} documented star import(s); every name used beneath one is "
+        "unverifiable, so the import check silently stops covering the rest of "
+        "the block:\n  " + "\n  ".join(found) + "\n\nList the names explicitly."
+    )
+
+
+def test_a_star_import_is_detected(tmp_path: Path) -> None:
+    """The detector fires on the form, and the marker still exempts a fence."""
+    doc = tmp_path / "sample.md"
+    doc.write_text("```python\nfrom dataknobs_data.validation.constraints import *\n```\n")
+    statements = import_statements(doc)
+    assert [attribute for _, statement in statements for _, attribute in targets(statement)] == [
+        "*"
+    ]
+
+    doc.write_text(
+        "<!-- dk-imports: illustrative -- the star form is the subject -->\n"
+        "```python\nfrom dataknobs_data.validation.constraints import *\n```\n"
+    )
+    assert not import_statements(doc)
+
+
+def test_star_imports_reports_one_when_the_tree_has_one(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Non-vacuity for the star check: the function itself finds a star import.
+
+    ``test_no_documented_star_import`` calls this function over the real tree,
+    which no longer has a star import in it -- so it passes whether the body
+    below still matches anything or not. ``test_a_star_import_is_detected``
+    exercises the two helpers rather than the function composing them. Between
+    them nothing fails if the composition breaks, which is this file's own
+    stated failure mode wearing the guard's clothes, so the aggregate gets the
+    same treatment ``test_the_scan_actually_reads_imports`` gives the other one.
+
+    Both module-level names ``star_imports`` reads are redirected: the file
+    scan, to a tree with exactly one star import in it, and ``rel``, which
+    names a path relative to the repository root and cannot name this one.
+    """
+    doc = tmp_path / "sample.md"
+    doc.write_text(
+        "```python\n"
+        "from dataknobs_data.validation.constraints import *\n"
+        "```\n"
+        "```python\n"
+        "from dataknobs_data import Record\n"
+        "```\n"
+    )
+    monkeypatch.setitem(globals(), "documentation_files", lambda: [doc])
+    monkeypatch.setitem(globals(), "rel", str)
+
+    found = star_imports()
+
+    assert len(found) == 1, f"expected the one star import, got {found}"
+    assert "import *" in found[0]
+    assert "sample.md:2" in found[0], f"wrong line reported: {found[0]}"
 
 
 def test_the_scan_actually_reads_imports() -> None:
@@ -224,6 +325,8 @@ def test_a_working_import_is_not_flagged() -> None:
     assert unresolved("dataknobs_data.backends", "SyncMemoryDatabase") is None
     assert unresolved("dataknobs_data.backends.postgres", "_pool_manager") is None
     assert unresolved("dataknobs_common", None) is None
+    # A star import really does resolve, which is exactly why resolution alone
+    # is not enough -- test_no_documented_star_import covers the rest.
     assert unresolved("dataknobs_data.validation.constraints", "*") is None
 
 

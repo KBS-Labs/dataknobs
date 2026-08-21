@@ -203,10 +203,10 @@ from dataknobs_xization import normalize
 async def main():
     # Initialize components
     llm = create_llm_provider({"provider": "openai", "model": "gpt-4"})
-    s3_storage = database_factory.create({
-        "backend": "s3",
-        "bucket": "processed-content"
-    })
+    s3_storage = database_factory.create(
+        backend="s3",
+        bucket="processed-content",
+    )
 
     # Content processing pipeline
     pipeline_config = {

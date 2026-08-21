@@ -517,7 +517,7 @@ async def test_elasticsearch_pooling():
     
     **Solution**: Always use context managers or ensure proper cleanup:
     ```python
-    async with AsyncDatabase.create("elasticsearch", config) as db:
+    async with await AsyncDatabase.from_backend("elasticsearch", config) as db:
         # Use database
         pass  # Automatically cleaned up
     ```

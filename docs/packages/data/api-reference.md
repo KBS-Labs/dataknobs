@@ -582,7 +582,11 @@ result = schema.validate(record, coerce=True)  # Will convert to int
 Built-in constraints for field validation:
 
 ```python
-from dataknobs_data.validation.constraints import *
+import re
+
+from dataknobs_data.validation.constraints import (
+    All, AnyOf, Custom, Enum, Length, Not, Pattern, Range, Required, Unique,
+)
 
 # Required fields
 Required()  # Field must be present and non-None
@@ -592,6 +596,7 @@ Required(allow_empty=True)  # Allow empty strings/collections
 Range(min=0, max=100)  # Inclusive range
 Range(min=0)  # Only minimum
 Range(max=100)  # Only maximum
+Range(min=0, max=1, min_exclusive=True, max_exclusive=True)  # Exclusive bounds
 
 # String/collection length
 Length(min=1, max=50)  # Length constraints
@@ -599,13 +604,15 @@ Length(min=5)  # Minimum length only
 
 # Pattern matching
 Pattern(r"^\d{3}-\d{4}$")  # Regex pattern
-Pattern(r"^[A-Z]+$", re.IGNORECASE)  # With flags
+Pattern(re.compile(r"^[A-Z]+$", re.IGNORECASE))  # Compile first to pass flags
 
 # Enumeration
 Enum(["active", "inactive", "pending"])  # Must be one of values
+Enum(["ACTIVE", "INACTIVE"], case_sensitive=False)  # Case-insensitive match
 
-# Uniqueness (with context)
+# Uniqueness (tracked on the ValidationContext passed to check())
 Unique()  # Value must be unique across all records
+Unique(field_name="email")  # Namespace the uniqueness set
 
 # Custom validation
 def validate_email(value):
@@ -615,10 +622,12 @@ Custom(validate_email, "Invalid email format")
 # Composite constraints
 All([Required(), Range(min=0)])  # All must pass
 AnyOf([Pattern(r"^\d+$"), Pattern(r"^[A-Z]+$")])  # At least one must pass
+Not(Enum(["banned"]))  # Must NOT satisfy the wrapped constraint
 
 # Constraint composition with operators
-constraint = Required() & Range(min=0, max=100)  # AND
-constraint = Length(min=10) | Pattern(r"^\d{5}$")  # OR
+constraint = Required() & Range(min=0, max=100)  # AND  -> All
+constraint = Length(min=10) | Pattern(r"^\d{5}$")  # OR  -> AnyOf
+constraint = ~Enum(["banned"])  # NOT -> Not
 ```
 
 ### Coercion

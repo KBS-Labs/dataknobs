@@ -681,12 +681,12 @@ async def optimize_postgres(conn):
 #!/usr/bin/env python
 import asyncio
 import time
-from dataknobs_data import AsyncDatabase, Record
+from dataknobs_data import AsyncDatabase, Query, Record
 
 async def benchmark_backend(backend_type: str, config: dict, num_records: int = 1000):
     """Benchmark a backend's performance."""
     
-    db = await AsyncDatabase.create(backend_type, config)
+    db = await AsyncDatabase.from_backend(backend_type, config)
     records = [
         Record({"id": i, "data": f"test_{i}"}) 
         for i in range(num_records)

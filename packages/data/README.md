@@ -105,7 +105,9 @@ db.close()
 
 ### File Backend
 ```python
-db = await Database.create("file", {
+from dataknobs_data import AsyncDatabase
+
+db = await AsyncDatabase.from_backend("file", {
     "path": "/data/records.json",
     "pretty": True,
     "backup": True
@@ -114,7 +116,9 @@ db = await Database.create("file", {
 
 ### SQLite Backend
 ```python
-db = await Database.create("sqlite", {
+from dataknobs_data import AsyncDatabase
+
+db = await AsyncDatabase.from_backend("sqlite", {
     "path": "app.db",  # or ":memory:" for in-memory
     "journal_mode": "WAL",
     "synchronous": "NORMAL"
@@ -123,7 +127,9 @@ db = await Database.create("sqlite", {
 
 ### PostgreSQL Backend
 ```python
-db = await Database.create("postgres", {
+from dataknobs_data import AsyncDatabase
+
+db = await AsyncDatabase.from_backend("postgres", {
     "host": "localhost",
     "database": "mydb",
     "user": "user",
@@ -135,7 +141,9 @@ db = await Database.create("postgres", {
 
 ### S3 Backend
 ```python
-db = await Database.create("s3", {
+from dataknobs_data import AsyncDatabase
+
+db = await AsyncDatabase.from_backend("s3", {
     "bucket": "my-bucket",
     "prefix": "records/",
     "region": "us-west-2",
@@ -146,7 +154,9 @@ db = await Database.create("s3", {
 
 ### Elasticsearch Backend
 ```python
-db = await Database.create("elasticsearch", {
+from dataknobs_data import AsyncDatabase
+
+db = await AsyncDatabase.from_backend("elasticsearch", {
     "host": "localhost",
     "port": 9200,
     "index": "records",
@@ -324,9 +334,9 @@ result = batch_ops.bulk_upsert_dataframe(
 Define and enforce data schemas with comprehensive validation:
 
 ```python
+from dataknobs_data import FieldType, Record
 from dataknobs_data.validation import Schema
-from dataknobs_data import FieldType
-from dataknobs_data.validation.constraints import *
+from dataknobs_data.validation.constraints import Enum, Pattern, Range, Unique
 
 # Define schema with constraints
 user_schema = Schema("UserSchema")
@@ -357,33 +367,38 @@ if result.valid:
 Migrate data between backends with transformation support:
 
 ```python
-from dataknobs_data.migration import Migration, Migrator
-from dataknobs_data.migration.operations import *
+from datetime import datetime
 
-# Define migration
-migration = Migration("upgrade_schema", "2.0.0")
-migration.add_operation(AddField("created_at", default=datetime.now()))
-migration.add_operation(RenameField("user_name", "username"))
-migration.add_operation(TransformField("email", lambda x: x.lower()))
+from dataknobs_data import AsyncDatabase
+from dataknobs_data.migration import (
+    AddField, Migration, Migrator, RenameField, TransformField,
+)
+
+# Define migration (from_version, to_version)
+migration = Migration("1.0.0", "2.0.0", description="Upgrade user schema")
+migration.add(AddField("created_at", default_value=datetime.now()))
+migration.add(RenameField("user_name", "username"))
+migration.add(TransformField("email", lambda x: x.lower()))
 
 # Migrate between backends
-async def migrate_data():
-    source_db = await Database.create("postgres", postgres_config)
-    target_db = await Database.create("s3", s3_config)
-    
-    migrator = Migrator(source_db, target_db)
-    
+async def migrate_data(postgres_config, s3_config):
+    source_db = await AsyncDatabase.from_backend("postgres", postgres_config)
+    target_db = await AsyncDatabase.from_backend("s3", s3_config)
+
+    migrator = Migrator()
+
     # Run migration with progress tracking
-    progress = await migrator.migrate(
-        migration=migration,
-        batch_size=1000,
-        on_progress=lambda p: print(f"Progress: {p.percentage:.1f}%")
+    progress = await migrator.migrate_async(
+        source_db,
+        target_db,
+        transform=migration,
+        on_progress=lambda p: print(f"Progress: {p.percent:.1f}%"),
     )
-    
-    print(f"Migrated: {progress.successful} records")
+
+    print(f"Migrated: {progress.succeeded} records")
     print(f"Failed: {progress.failed} records")
     print(f"Duration: {progress.duration}s")
-    
+
     await source_db.close()
     await target_db.close()
 ```
@@ -434,25 +449,32 @@ For complete API documentation, see [API Reference](docs/API_REFERENCE.md).
 ## Custom Backend
 
 ```python
-from dataknobs_data import AsyncDatabase
 from dataknobs_data import SyncDatabase
+from dataknobs_data.backends import register_backend, sync_backends
 
 class CustomBackend(SyncDatabase):
     def create(self, record):
         # Implementation
         pass
-    
+
     def read(self, record_id):
         # Implementation
         pass
-    
+
     # ... other methods
 
-# Register custom backend
-AsyncDatabase.register_backend("custom", CustomBackend)
+# Register custom backend. The third argument imports and returns the
+# class, and is called on first use rather than here, so a backend whose
+# driver is optional costs nothing until something asks for it.
+register_backend(
+    sync_backends,
+    "custom",
+    lambda: CustomBackend,
+    metadata={"description": "A custom backend"},
+)
 
 # Use custom backend
-db = AsyncDatabase.from_backend("custom", config)
+db = SyncDatabase.from_backend("custom", {})
 ```
 
 ## Development
