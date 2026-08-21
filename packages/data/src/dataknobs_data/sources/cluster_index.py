@@ -368,6 +368,14 @@ class ClusterTopicIndex:
 
         In eager mode (constructed via :meth:`from_chunks`), steps 2
         and 4 use the pre-built clusters instead.
+
+        Raises:
+            Exception: whatever ``embed_fn`` or ``vector_query_fn``
+                raises, unchanged. These are not absorbed into an empty
+                result, because a caller reads an empty topic index as a
+                vocabulary gap worth retrying another way -- see the
+                comments at each call site. An index that ran and matched
+                nothing still returns an empty list.
         """
         if self._embed_fn is None:
             logger.warning(
@@ -386,16 +394,14 @@ class ClusterTopicIndex:
             params.centroid_score_threshold,
         )
 
-        # Embed the query
-        try:
-            query_embedding = await self._embed_fn(query)
-        except Exception:
-            logger.warning(
-                "Query embedding failed for source '%s'",
-                self._source_name,
-                exc_info=True,
-            )
-            return []
+        # Embed the query. Not wrapped: a query that could not be embedded
+        # is not a query with no topics behind it, and returning an empty
+        # list says the second. That answer is read, not just logged --
+        # the grounded retrieval loop treats an empty topic index as a
+        # vocabulary gap and falls back to plain text retrieval, so
+        # absorbing this reroutes the turn and reports the wrong cause for
+        # it. The loop already drops a source that raises, with its cause.
+        query_embedding = await self._embed_fn(query)
 
         # Pick up the filter slice keyed by our source name and forward
         # it through vector-seed fetching, matching the convention the
@@ -571,19 +577,14 @@ class ClusterTopicIndex:
             )
             return []
 
-        try:
-            results = await self._vector_query_fn(
-                query,
-                params.seed_max_results,
-                filter_metadata=filter_metadata,
-            )
-        except Exception:
-            logger.warning(
-                "Vector query failed for source '%s'",
-                self._source_name,
-                exc_info=True,
-            )
-            return []
+        # This is the index's retrieval call, and it is not wrapped for the
+        # same reason the query embed above is not: a store that cannot be
+        # reached is not a store with no seeds in it.
+        results = await self._vector_query_fn(
+            query,
+            params.seed_max_results,
+            filter_metadata=filter_metadata,
+        )
 
         return [r for r in results if r.relevance >= params.seed_score_threshold]
 
@@ -600,16 +601,37 @@ class ClusterTopicIndex:
 
         chunks: list[SourceResult] = []
         embeddings: list[list[float]] = []
+        last_error: Exception | None = None
         for seed in seeds:
             try:
                 emb = await self._embed_fn(seed.content)
-                chunks.append(seed)
-                embeddings.append(emb)
-            except Exception:
-                logger.debug(
-                    "Failed to embed seed chunk '%s', skipping",
+            except Exception as exc:
+                # One chunk that will not embed is dropped so the rest of
+                # the pool can still cluster, which is what this catch is
+                # for. Reported at WARNING rather than DEBUG: a pool
+                # quietly losing chunks is a degraded answer, and at DEBUG
+                # nobody sees it happening.
+                last_error = exc
+                logger.warning(
+                    "Failed to embed seed chunk '%s' for source '%s', skipping",
                     seed.source_id,
+                    self._source_name,
+                    exc_info=True,
                 )
+                continue
+            chunks.append(seed)
+            embeddings.append(emb)
+
+        if seeds and not chunks:
+            # Every seed failed. The per-chunk tolerance above has stopped
+            # describing what happened -- this is not a pool with nothing
+            # worth clustering, it is an embedder that cannot embed -- and
+            # an empty pool reaches the caller as the former.
+            raise RuntimeError(
+                f"Every one of the {len(seeds)} seed chunks for source "
+                f"{self._source_name!r} failed to embed"
+            ) from last_error
+
         return chunks, embeddings
 
 

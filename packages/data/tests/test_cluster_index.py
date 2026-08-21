@@ -432,7 +432,16 @@ class TestResolve:
         assert len(ids) == len(set(ids))
 
     @pytest.mark.asyncio
-    async def test_embed_fn_failure_returns_empty(self) -> None:
+    async def test_embed_fn_failure_reaches_the_caller(self) -> None:
+        """An embedder that raises is reported, not turned into no topics.
+
+        This asserted ``== []`` while ``resolve`` absorbed the failure,
+        which made a broken embedder indistinguishable from a query with
+        no topics behind it. Pinned here in eager mode; the lazy path and
+        the reasoning for both are in
+        ``test_cluster_index_failure_surfaces.py``.
+        """
+
         async def failing_embed(text: str) -> list[float]:
             raise RuntimeError("embed failed")
 
@@ -442,8 +451,8 @@ class TestResolve:
             embed_fn=failing_embed,
             config=ClusterTopicConfig(cluster_threshold=0.5),
         )
-        results = await idx.resolve("test query")
-        assert results == []
+        with pytest.raises(RuntimeError, match="embed failed"):
+            await idx.resolve("test query")
 
 
 # ------------------------------------------------------------------

@@ -14,8 +14,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   for that turn while every other source still contributes, and a source
   that is reachable but matches nothing contributes an empty list instead.
   The guard was already there and had no test; it was also unreachable
-  through a `database` source, which absorbed its own failures — see the
-  `dataknobs-data` entry for that.
+  through a `database` source or a `ClusterTopicIndex`, both of which
+  absorbed their own failures — see the `dataknobs-data` entries for
+  those. A topic index that absorbed its failure was read as a vocabulary
+  gap, so the turn fell back to plain text retrieval instead of reporting
+  a broken index.
 
 ### Fixed
 

@@ -421,11 +421,22 @@ When a source has a topic index, the grounded strategy uses it instead of standa
 for each source:
     if source.topic_index exists:
         results = topic_index.resolve(user_message, llm=..., intent=...)
+        if not results:                     # read as a vocabulary gap
+            results = source.query(intent, top_k=...)
     else:
         results = source.query(intent, top_k=...)
 ```
 
 Sources without topic indices continue using standard retrieval. Both approaches coexist in the same pipeline.
+
+Note the fallback: an index that returns nothing is taken to have found
+nothing, and the turn retries that source through plain text retrieval.
+That is why a topic index does not absorb its own failures — an index that
+*could not run* would otherwise take the same branch as one that ran and
+matched nothing, silently rerouting the turn and logging a vocabulary gap
+as the cause. A `resolve()` that raises is instead caught by the per-source
+guard above, which drops that source for the turn and logs the real
+failure.
 
 ### Topic Index Types
 
