@@ -987,6 +987,107 @@ def test_a_cell_the_contract_calls_unmeasured_still_reports_a_count_it_gets() ->
     )
 
 
+def test_a_tier_only_silences_a_cell_for_a_tool_that_reads_tiers() -> None:
+    """An unmeasured tier means "not looked at" for mypy alone, not for every tool.
+
+    Whether a zero is a silence is a property of the *measurer*, and only
+    ``mypy_targets`` consults the tier: it drops ``_UNMEASURED_TIERS`` from the
+    directories one pass is pointed at, so a cell there is one mypy was never
+    asked about. ``measure_ruff`` tallies a single pass over the whole
+    population and ``measure_format`` reads every cell's files, so re-tiering a
+    cell changes nothing about whether either looked at it. Its zero stays a
+    count.
+
+    Reading the tier alone would answer for all three, and be right about one.
+    The wrong answer runs the defect this module just closed backwards — a
+    presence rendered as an absence — and it lands in the artifact as a warning
+    saying the tier put the cell outside ruff's target set, which ruff, having
+    just measured it, contradicts.
+
+    Unreachable today: ``verify`` faults a cell naming a tier its tool has not
+    declared, and ruff declares only ``checked``. This pins the guard against
+    the day that vocabulary widens, which is the day the guard is wrong and
+    nothing else would say so.
+    """
+    contract = _contract()
+    cell = contract["tools"]["ruff"]["cells"][0]
+    contract["tools"]["ruff"]["tiers"]["unchecked"] = "measured by nothing"
+    cell["tier"] = "unchecked"
+    cell["ceiling"] = 0
+
+    # An empty measurement is what measure_ruff actually returns for a clean
+    # cell: it tallies per file, so a cell with no findings contributes no
+    # entries. The seam supplies the same thing a real pass would.
+    report = _check_with(
+        contract,
+        "ruff",
+        contract_module.Measurement(by_cell={}, unattributed=Counter(), output=""),
+        only={cell["path"]},
+    )
+    entry = report["cells"][f"ruff/{cell['path']}"]
+
+    assert entry["measured"] == 0, (
+        f"a ruff cell in an unmeasured tier reported measured={entry['measured']!r}. "
+        "ruff measured it and found nothing, so that zero is a count. Reporting "
+        "it as unknown discards a real measurement on the authority of a tier "
+        "the measurer never read."
+    )
+    assert not report["unmeasured"], (
+        f"a cell ruff measured was listed as unmeasured: {report['unmeasured']}. "
+        "The warning that list drives says the tier puts the cell outside the "
+        "tool's target set, and for ruff there is no such target set to be "
+        "outside of."
+    )
+
+
+def test_the_tools_declared_tier_gated_are_the_ones_that_scope_by_tier() -> None:
+    """``_TIER_GATED_TOOLS`` has to keep agreeing with what the measurers do.
+
+    It is a one-bit fact per tool, written down because ``check`` cannot ask a
+    measurer after the fact which cells it was pointed at. Written down is where
+    drift starts, so it is asserted here against the scoping functions
+    themselves rather than restated: widening the tier changes what mypy is
+    pointed at, and changes nothing for the two measurers handed the whole
+    population.
+
+    The day a second measurer starts consulting the tier, this fails — which is
+    the notice ``check``'s guard would otherwise not get.
+    """
+    contract = _contract()
+    files = contract_module.tracked_python()
+
+    assert sorted(contract_module._TIER_GATED_TOOLS) == ["mypy"], (
+        "the declared set changed; the assertions below describe mypy, ruff and "
+        "format specifically and need rewriting alongside it."
+    )
+
+    mypy_cells = contract["tools"]["mypy"]["cells"]
+    narrow = set(contract_module.mypy_targets(mypy_cells, None, False, files))
+    wide = set(contract_module.mypy_targets(mypy_cells, None, True, files))
+    assert narrow < wide, (
+        "mypy is declared tier-gated, but widening the run to unmeasured tiers "
+        f"did not widen its target set ({len(narrow)} of {len(wide)}). Either it "
+        "stopped consulting the tier, or the contract has no unmeasured cell "
+        "left — and in the second case the declaration is what to revisit."
+    )
+
+    for tool in sorted(set(contract_module.MEASURERS) - contract_module._TIER_GATED_TOOLS):
+        cells = json.loads(json.dumps(contract["tools"][tool]["cells"]))
+        before = contract_module._files_in(cells, files, {cells[0]["path"]})
+        tallied = contract_module._tally(cells, [str(path) for path in files])
+        for cell in cells:
+            cell["tier"] = "unchecked"
+        assert contract_module._files_in(cells, files, {cells[0]["path"]}) == before, (
+            f"{tool} is not declared tier-gated, but re-tiering its cells changed "
+            "which files it reads. Its zeros over an unmeasured tier are no "
+            "longer counts, and check's guard has to learn that."
+        )
+        assert contract_module._tally(cells, [str(path) for path in files]) == tallied, (
+            f"{tool} is not declared tier-gated, but re-tiering its cells changed "
+            "how findings attribute to them."
+        )
+
+
 def test_the_formatter_measurer_refuses_a_file_it_could_not_read() -> None:
     """A file the formatter cannot open must not be counted as a formatted one.
 

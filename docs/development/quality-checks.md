@@ -523,6 +523,15 @@ closing line says how many cells went unread rather than claiming every cell is
 within its ceiling. `null` rather than a flag beside the zero, because the zero
 was the defect: it summed into any total a reader built, silently and low.
 
+That applies to mypy and not to the other two, because it is the *measurer* that
+decides whether a tier silences a cell — mypy is pointed at a target set the
+tiers choose, while ruff and the formatter are handed the whole population and
+tally it per cell. So a re-tiered ruff cell is still measured, and reporting
+`null` for it would be the same defect pointed the other way: an absence
+invented where there was a measurement. Which tools read the tier is declared in
+`_TIER_GATED_TOOLS`, and pinned against the measurers by a test rather than
+restated.
+
 That makes the retreat legible; it does not make it opposed. The declaration is
 still the authority on what gets measured, and a cell re-filed into an
 unmeasured tier has still stopped being checked — which is why the tier itself
