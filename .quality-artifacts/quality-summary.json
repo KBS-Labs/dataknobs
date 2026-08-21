@@ -1,5 +1,5 @@
 {
-  "timestamp": "2026-08-21T13:46:44Z",
+  "timestamp": "2026-08-21T15:22:01Z",
   "overall_status": "PASS",
   "run_mode": "pr",
   "environment": "host",
@@ -19,9 +19,9 @@
   "coverage_percent": null,
   "package_hashes": {
     "bots": "b7370740de59071e0bc5fe17be02379ca3ba29b5b45feef87d239837a484d0a8",
-    "common": "0dd5b1bc597131e0b986a4502ab04e71912190d766046c0869e45fcb4d067f03",
+    "common": "23260b7032d92ac41732c03ab424123b13979400bbab85c06138eb75183cb09a",
     "config": "33fdf8a284304b52cfa3c91265fcaa8126741c7ee555dcba2b44fe3468e27bfd",
-    "data": "c89b98c56093843dc68f6108e09443d21ba6f490196ccb1c52b85ed5b20e37c8",
+    "data": "6ca7ac9c8ddb213953e9b04b13c0dfaabbdc82da7969243e69e7ff986d31a615",
     "fsm": "74ee90487419ffc5f219df5e1b0f083e2b839335a98194b32715c9998e5a117d",
     "legacy": "f626b387e3b4dc7f7de016a1e6f67f1a6df33b685b55c1226762d4abb338d217",
     "llm": "5410eb20dc388dcd5dc32ac0a06336f27bdd2afad9c5526ac608c38cfe844be4",
@@ -32,10 +32,10 @@
   },
   "workspace_hashes": {
     "toolchain": "52c6f1c5a4b18ea1213fe609f83bf47cde5a791c282341ee0d3ab17d61c1b888",
-    "workspace_tests": "c2b7babd143577d052cbb25bc250284ea8d811ad380f8de3f4bdfb6062799b6b",
-    "docs": "9640c27df91650e75f4e63b96d29f5c85d272bbbd8506f871aa23916fc05a6b6"
+    "workspace_tests": "e591fed6f9f46b1ed8c1c093bfe2057df3051eedd42cd8ce90d1ce7088913cf6",
+    "docs": "68a3de0c99c3bcd4ef3c1457733d8a7c9fc53f7e45f96a173070d010c583ca45"
   },
-  "total_seconds": 269,
+  "total_seconds": 273,
   "checks": {
     "workflow_lint": {
       "status": "pass",
@@ -60,7 +60,7 @@
       "exit_code": 0,
       "skipped": false,
       "tool": "validate.sh",
-      "duration_seconds": 76
+      "duration_seconds": 77
     },
     "documentation": {
       "status": "pass",
@@ -87,14 +87,14 @@
       "status": "pass",
       "exit_code": 0,
       "skipped": false,
-      "duration_seconds": 100,
-      "workspace_guards_seconds": 48
+      "duration_seconds": 102,
+      "workspace_guards_seconds": 49
     },
     "integration_tests": {
       "status": "pass",
       "exit_code": 0,
       "skipped": false,
-      "duration_seconds": 56
+      "duration_seconds": 57
     }
   }
 }
