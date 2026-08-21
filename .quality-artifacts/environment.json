@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-08-21T03:30:21Z",
+  "timestamp": "2026-08-21T04:36:33Z",
   "python_version": "Python 3.12.12",
   "uv_version": "uv 0.12.5 (Homebrew 2026-08-14 aarch64-apple-darwin)",
   "os": "Darwin",
   "os_version": "24.6.0",
-  "git_branch": "sbk/unmeasured-not-cleared",
-  "git_commit": "8aa12de4aedc451f2779876b9c46f50534c5fd70",
+  "git_branch": "sbk/fix-session-pool-cleanup-import",
+  "git_commit": "27d2efb24e90a57cd054bd28d659ff0bcb28ddc3",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }
