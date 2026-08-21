@@ -159,7 +159,10 @@ def _register_sync_backends(
             "persistent": False,
             "requires_install": False,
             "config_options": {
-                "initial_data": "Optional initial data dictionary",
+                "vector_enabled": "Enable vector support (default: False)",
+                "vector_metric": (
+                    "Distance metric: cosine, euclidean, dot_product (default: cosine)"
+                ),
             },
         },
         aliases=("mem",),
@@ -243,14 +246,25 @@ def _register_sync_backends(
             "requires_install": "pip install dataknobs-data[elasticsearch]",
             "requires_module": "elasticsearch",
             "vector_support": True,
+            # Deliberately disjoint from the async entry, because the two
+            # configs are: this one shapes the index (``mappings`` /
+            # ``settings`` / ``vector_dimensions``) and has no auth surface
+            # at all, while the async one authenticates and hardcodes its
+            # index spec. Reconciling them is tracked separately; until then
+            # the metadata describes what each backend actually takes.
             "config_options": {
-                "hosts": "List of host URLs (required)",
+                "host": "Host name (default: localhost)",
+                "port": "Port (default: 9200)",
                 "index": "Index name (required)",
-                "doc_type": "Document type (default: _doc)",
-                "username": "Optional username",
-                "password": "Optional password",
+                "mappings": "Explicit index mappings",
+                "settings": "Explicit index settings",
+                "refresh": "Refresh policy applied after writes",
+                "default_vector_field": "Field name used for KNN queries",
+                "vector_dimensions": "Vector dimensionality",
                 "vector_enabled": "Enable vector support (default: False)",
-                "vector_metric": "Distance metric: cosine, euclidean, dot_product (default: cosine)",
+                "vector_metric": (
+                    "Distance metric: cosine, euclidean, dot_product (default: cosine)"
+                ),
             },
         },
         aliases=("es",),
@@ -330,7 +344,10 @@ def _register_async_backends(
             "persistent": False,
             "requires_install": False,
             "config_options": {
-                "initial_data": "Optional initial data dictionary",
+                "vector_enabled": "Enable vector support (default: False)",
+                "vector_metric": (
+                    "Distance metric: cosine, euclidean, dot_product (default: cosine)"
+                ),
             },
         },
         aliases=("mem",),
@@ -416,14 +433,26 @@ def _register_async_backends(
             # level, so this module too imports cleanly without its driver.
             "requires_module": "elasticsearch",
             "vector_support": True,
+            # See the sync entry: the two Elasticsearch configs implement
+            # disjoint halves of one contract, so these lists differ on
+            # purpose rather than by neglect.
             "config_options": {
-                "hosts": "List of host URLs (required)",
+                "host": "Host name (default: localhost)",
+                "port": "Port (default: 9200)",
+                "hosts": "Explicit host URL list, overriding host/port",
                 "index": "Index name (required)",
-                "doc_type": "Document type (default: _doc)",
-                "username": "Optional username",
-                "password": "Optional password",
+                "basic_auth": "(username, password) tuple",
+                "api_key": "API key, as an alternative to basic_auth",
+                "verify_certs": "Verify TLS certificates (default: True)",
+                "ca_certs": "Path to a CA bundle",
+                "client_cert": "Path to a client certificate",
+                "client_key": "Path to a client key",
+                "ssl_show_warn": "Show TLS warnings",
+                "refresh": "Refresh policy applied after writes",
                 "vector_enabled": "Enable vector support (default: False)",
-                "vector_metric": "Distance metric: cosine, euclidean, dot_product (default: cosine)",
+                "vector_metric": (
+                    "Distance metric: cosine, euclidean, dot_product (default: cosine)"
+                ),
             },
         },
         aliases=("es",),

@@ -9,8 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **Every database backend config now rejects a key it does not accept**,
-  rather than discarding it. Set once on `DatabaseConfig`, so all fourteen
+- **BREAKING: every database backend config now rejects a key it does not
+  accept**, rather than discarding it. Set once on `DatabaseConfig`, so all fourteen
   backends — seven sync, seven async — inherit it, and so does a backend
   added later.
 
@@ -35,6 +35,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   doing. The message names the accepted spelling. To supply a key only some
   backends have, ask `CONFIG_CLS.accepts(key)` first.
 
+- **The backend registry's `config_options` metadata named keys the config
+  classes reject.** It is returned by `DatabaseFactory.get_backend_info()`,
+  so it is the programmatic equivalent of a documented sample — read by a
+  consumer building a config form or validating input, and until now read by
+  nothing that could tell it was wrong. It carried all three of the defects
+  found in the markdown: a field belonging to the sibling backend (`hosts`,
+  advertised on the *sync* Elasticsearch entry), another library's
+  vocabulary (`username` / `password` where the field is `basic_auth`), and
+  a field that never existed (`initial_data` on the memory backend). The two
+  Elasticsearch entries now differ from each other, because the two configs
+  do: the sync one shapes the index and has no auth surface, the async one
+  authenticates and hardcodes its index spec.
+
 ### Fixed
 
 - **Sixteen documented factory calls named a field no backend has** (eighteen
@@ -49,11 +62,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `connection_string`, and the file backend was documented with `pretty` and
   `backup`, which have never existed.
 
+  The same three mistakes appeared in the two forms most consumers copy, and
+  those broke rather than merely misconfigured: a bot's
+  `conversation_storage:` block reaches the factory with every key it
+  carries, so the documented production Postgres sample — `pool_size`,
+  `max_overflow`, `pool_timeout`, none of them fields — raised at startup for
+  anyone who copied it. Corrected across the bot, environment-resource and
+  backend-reference pages, along with a `SyncSQLiteDatabase({...})` sample
+  passing the async-only `pool_size` and a sync Elasticsearch sample using
+  the async backend's `hosts` and an `auth` key that exists on neither.
+
   `tests/test_documented_backend_config_keys.py` now checks every documented
-  factory call against the real config class via `accepts()`, so the accepted
-  set is read from the code rather than restated. It states what it does not
-  cover — YAML blocks, configs passed by variable, and `backend:` nested in a
-  subsystem config — rather than implying it covers everything.
+  factory call, backend constructor with an inline dict, and YAML config
+  block against the real config class via `accepts()`, so the accepted set is
+  read from the code rather than restated. Coverage is asserted rather than
+  assumed: a backend whose optional driver is absent is still read against
+  its declared config class instead of silently dropping out of the sweep,
+  and the corpus floors count the sites actually checked. What it does not
+  cover — a config bound to a variable and passed by name, where which
+  binding a name refers to is not decidable by reading a prose document — is
+  stated with the reason rather than listed.
 
 - **`Not` is exported from `dataknobs_data.validation`.** The three logical
   combinators are `All`, `AnyOf` and `Not`; the first two were exported and

@@ -16,8 +16,12 @@ need of the warning is the one case it structurally cannot see.
 
 from __future__ import annotations
 
+from pathlib import Path
+from typing import Any
+
 import pytest
 
+from dataknobs_common.structured_config import _ROUTING_KEYS, StructuredConfig
 from dataknobs_data import AsyncDatabase, SyncDatabase
 from dataknobs_data.backends import async_backends, sync_backends
 from dataknobs_data.factory import async_database_factory, database_factory
@@ -25,18 +29,37 @@ from dataknobs_data.factory import async_database_factory, database_factory
 
 #: Enough config to build each backend, so a rejection in these tests is
 #: caused by the key under test rather than by an absent required one.
+#:
+#: The file-backed entries take their path from ``tmp_path`` rather than a
+#: fixed name: a literal under ``/tmp`` collides when the suite is run in
+#: parallel, and outlives the session either way.
 MINIMAL: dict[str, dict[str, object]] = {
     "memory": {},
-    "file": {"path": "/tmp/dk-unknown-key-test.json"},
-    "sqlite": {"path": "/tmp/dk-unknown-key-test.db"},
-    "duckdb": {"path": "/tmp/dk-unknown-key-test.duckdb"},
+    "file": {"path": "{tmp}/store.json"},
+    "sqlite": {"path": "{tmp}/store.db"},
+    "duckdb": {"path": "{tmp}/store.duckdb"},
     "postgres": {"host": "h", "port": 5432, "database": "d", "user": "u", "password": "p"},
     "s3": {"bucket": "b"},
     "elasticsearch": {"host": "localhost", "port": 9200, "index": "i"},
 }
 
 
-def _registered(registry) -> list[str]:
+def _minimal(backend: str, tmp_path: Path) -> dict[str, object]:
+    """``MINIMAL[backend]`` with its paths bound, or a skip.
+
+    ``MINIMAL`` is a fixed literal while ``_registered`` reads the live
+    registry, so a consumer that registers a backend of its own would
+    otherwise turn this suite into a ``KeyError`` rather than a skip.
+    """
+    if backend not in MINIMAL:
+        pytest.skip(f"no minimal config recorded for the {backend!r} backend")
+    return {
+        key: value.format(tmp=tmp_path) if isinstance(value, str) and "{tmp}" in value else value
+        for key, value in MINIMAL[backend].items()
+    }
+
+
+def _registered(registry: Any) -> list[str]:
     """Backend names actually creatable here, so an absent driver skips."""
     return sorted(registry.list_canonical_keys())
 
@@ -76,9 +99,9 @@ def test_the_legacy_connection_key_is_rejected() -> None:
 
 
 @pytest.mark.parametrize("backend", _registered(sync_backends))
-def test_every_sync_backend_rejects_an_unknown_key(backend: str) -> None:
+def test_every_sync_backend_rejects_an_unknown_key(backend: str, tmp_path: Path) -> None:
     """The guard belongs to the shared base, so no backend is exempt."""
-    config = dict(MINIMAL[backend])
+    config = _minimal(backend, tmp_path)
     config["definitely_not_a_key"] = "x"
 
     with pytest.raises(ValueError, match="definitely_not_a_key"):
@@ -86,9 +109,9 @@ def test_every_sync_backend_rejects_an_unknown_key(backend: str) -> None:
 
 
 @pytest.mark.parametrize("backend", _registered(async_backends))
-def test_every_async_backend_rejects_an_unknown_key(backend: str) -> None:
+def test_every_async_backend_rejects_an_unknown_key(backend: str, tmp_path: Path) -> None:
     """The async factory reaches the same config classes by the same route."""
-    config = dict(MINIMAL[backend])
+    config = _minimal(backend, tmp_path)
     config["definitely_not_a_key"] = "x"
 
     with pytest.raises(ValueError, match="definitely_not_a_key"):
@@ -108,9 +131,9 @@ async def test_async_from_backend_rejects_an_unknown_key() -> None:
 
 
 @pytest.mark.parametrize("backend", _registered(sync_backends))
-def test_a_legitimate_config_still_builds(backend: str) -> None:
+def test_a_legitimate_config_still_builds(backend: str, tmp_path: Path) -> None:
     """The guard must not reject the configs it is meant to protect."""
-    db = database_factory.create(backend=backend, **MINIMAL[backend])
+    db = database_factory.create(backend=backend, **_minimal(backend, tmp_path))
     assert db is not None
 
 
@@ -136,13 +159,23 @@ def _declared_aliases(config_cls: type) -> list[str]:
     return sorted(declared)
 
 
-def _backend_config_classes() -> list[type]:
-    """The config class of every registered backend, deduplicated."""
-    classes: dict[str, type] = {}
+def _backend_config_classes() -> list[type[StructuredConfig]]:
+    """The config class of every registered backend, deduplicated.
+
+    ``get_factory`` returns ``None`` for a backend whose driver is absent
+    rather than raising, so the declared type is the fallback -- reading a
+    schema off a plugin that cannot be built is what it is for. Without it
+    this helper raised ``AttributeError`` in any environment thinner than
+    a full dev install, and dropped that backend's coverage entirely.
+    """
+    classes: dict[str, type[StructuredConfig]] = {}
     for registry in (sync_backends, async_backends):
         for name in registry.list_canonical_keys():
-            config_cls = registry.get_factory(name).CONFIG_CLS
-            classes[config_cls.__name__] = config_cls
+            config_cls = getattr(registry.get_factory(name), "CONFIG_CLS", None)
+            if config_cls is None:
+                config_cls = getattr(registry.load_declared_type(name), "CONFIG_CLS", None)
+            if isinstance(config_cls, type) and issubclass(config_cls, StructuredConfig):
+                classes[config_cls.__name__] = config_cls
     return [classes[name] for name in sorted(classes)]
 
 
@@ -163,7 +196,9 @@ ALIAS_PROBES: dict[str, object] = {
     ],
     ids=lambda p: p.__name__ if isinstance(p, type) else str(p),
 )
-def test_every_declared_alias_is_consumed_by_the_normalizer(config_cls: type, alias: str) -> None:
+def test_every_declared_alias_is_consumed_by_the_normalizer(
+    config_cls: type[StructuredConfig], alias: str
+) -> None:
     """A declared alias must not survive normalization as itself."""
     probe = ALIAS_PROBES.get(alias, "probe-value")
     normalized = config_cls._normalize_dict({alias: probe})
@@ -219,6 +254,48 @@ def test_a_declared_alias_reaches_its_field(
 
 
 @pytest.mark.parametrize("config_cls", _backend_config_classes(), ids=lambda c: c.__name__)
-def test_every_backend_config_opts_into_the_guard(config_cls: type) -> None:
+def test_every_backend_config_opts_into_the_guard(config_cls: type[StructuredConfig]) -> None:
     """Inherited from ``DatabaseConfig``, so a new backend gets it for free."""
     assert config_cls._UNKNOWN_KEYS == "raise"
+
+
+def _advertised(registry: Any, name: str) -> tuple[type[StructuredConfig] | None, set[str]]:
+    """The backend's config class and the keys its registry entry advertises."""
+    factory = registry.get_factory(name)
+    cls = getattr(factory, "CONFIG_CLS", None)
+    options = set((registry.get_metadata(name) or {}).get("config_options", {}))
+    return (cls if isinstance(cls, type) and issubclass(cls, StructuredConfig) else None), options
+
+
+@pytest.mark.parametrize(
+    ("flavor", "backend"),
+    [
+        (f, b)
+        for f, r in (("sync", sync_backends), ("async", async_backends))
+        for b in _registered(r)
+    ],
+)
+def test_the_registry_advertises_only_keys_the_backend_accepts(flavor: str, backend: str) -> None:
+    """``config_options`` is documentation, and it is checkable like any other.
+
+    ``DatabaseFactory.get_backend_info()`` returns this metadata, so it is
+    the *programmatic* equivalent of the markdown samples the sibling guard
+    in ``tests/test_documented_backend_config_keys.py`` checks -- read by a
+    consumer building a config form or validating input, and until now read
+    by nothing that could tell it was wrong.
+
+    It carried the same three defects that guard was written for: a field
+    belonging to the sibling backend (``hosts``, advertised on the *sync*
+    Elasticsearch entry), another library's vocabulary (``username`` /
+    ``password`` where the field is ``basic_auth``), and a field that never
+    existed (``initial_data`` on the memory backend).
+    """
+    registry = sync_backends if flavor == "sync" else async_backends
+    config_cls, advertised = _advertised(registry, backend)
+    if config_cls is None:
+        pytest.skip(f"{flavor}/{backend} registers no CONFIG_CLS")
+    rejected = sorted(k for k in advertised - _ROUTING_KEYS if not config_cls.accepts(k))
+    assert not rejected, (
+        f"{flavor}/{backend} advertises {rejected} in config_options, but "
+        f"{config_cls.__name__}.from_dict would raise on them"
+    )
