@@ -272,9 +272,16 @@ CHECKS = (uncategorized, unargued_behavioural)
 #: up is the synthetic-record case below rather than the real config. The one
 #: half nothing exercises any more is the *measuring* half — ruff actually
 #: counting a declined rule — whose refusal path is covered next door in
-#: ``tests/test_quality_contract.py`` and whose success path waits for the next
-#: entry filed here. Real counts when written: 39 presentational, 29
-#: behavioural, 12 covered-elsewhere, 0 provisional.
+#: ``tests/test_quality_contract.py``.
+#:
+#: Its success path is not merely waiting for the next entry filed here: that
+#: entry trips the zero-assertion above it first, so reaching the count needs
+#: the assertion edited too, and the two cannot be live at once. The red test
+#: is the forcing function — it makes a new provisional entry a decision stated
+#: in the pull request rather than a default — and the price is that the edit
+#: admitting one honestly looks exactly like the edit deleting an inconvenient
+#: guard. Real counts when written: 39 presentational, 29 behavioural, 12
+#: covered-elsewhere, 0 provisional.
 MINIMUM_PER_CATEGORY = {"presentational": 20, "behavioural": 15, "covered-elsewhere": 6}
 
 
@@ -418,10 +425,15 @@ def test_no_decline_is_unargued_and_one_that_returns_carries_its_count() -> None
     Zero is asserted rather than merely observed, because the difference between
     "nobody has filed one" and "nobody may file one without reading it" is the
     whole product of this leg, and only the first of those survives on its own.
-    A new entry is not forbidden: the honest way to decline a rule nobody has
-    read is still to say so in the category named for it. What it may not do is
-    arrive without the figure that makes it countable, which is what the second
-    half still checks the moment there is anything to check.
+    A new entry is not forbidden by policy — the honest way to decline a rule
+    nobody has read is still to say so in the category named for it — but it
+    does fail this test, and that is a forcing function rather than a
+    prohibition. Clearing the failure means editing the assertion below in the
+    same pull request that files the entry, and only then is the second half
+    reachable to check that the entry arrived with the figure that makes it
+    countable. The two cannot both be live, and the edit that admits an entry
+    honestly is indistinguishable from the edit that deletes an inconvenient
+    guard. What tells them apart is the pull request, not the diff.
     """
     declines = parse_declines(_config_text())
     provisional = [d.code for d in declines if d.category == "provisional"]
