@@ -1,21 +1,10 @@
 {
-  "timestamp": "2026-08-21T02:13:32Z",
+  "timestamp": "2026-08-21T03:30:21Z",
   "overall_status": "PASS",
   "run_mode": "pr",
   "environment": "host",
-  "packages": "bots common config data fsm legacy llm structures utils xization",
-  "tested_packages": [
-    "bots",
-    "common",
-    "config",
-    "data",
-    "fsm",
-    "legacy",
-    "llm",
-    "structures",
-    "utils",
-    "xization"
-  ],
+  "packages": "all",
+  "tested_packages": [],
   "coverage_percent": null,
   "package_hashes": {
     "bots": "43bba458406fbc7c7078c2d5b4304941419cdf4b943632d56f89784e75e28164",
@@ -32,16 +21,16 @@
   },
   "workspace_hashes": {
     "toolchain": "52c6f1c5a4b18ea1213fe609f83bf47cde5a791c282341ee0d3ab17d61c1b888",
-    "workspace_tests": "b96b6137edb447a86e10e9fb911b4b1a542cfeaf1e6f76aed1fc296268996aa0",
-    "docs": "d67583878a9423099e231b5de42794c5c9f88c097dd095eeb0943ee26643de8f"
+    "workspace_tests": "9147ca1a636cf2cb82fea04fe1e477cdca03d34bcf1fcfef7f2f4667824cc240",
+    "docs": "58375de835d61c4eb33741b02adb74204acb253c7e5f30b3028e393123d01013"
   },
-  "total_seconds": 283,
+  "total_seconds": 89,
   "checks": {
     "workflow_lint": {
       "status": "pass",
       "exit_code": 0,
       "tool": "lint-workflows.sh",
-      "duration_seconds": 1
+      "duration_seconds": 0
     },
     "shell_lint": {
       "status": "pass",
@@ -60,14 +49,14 @@
       "exit_code": 0,
       "skipped": false,
       "tool": "validate.sh",
-      "duration_seconds": 84
+      "duration_seconds": 6
     },
     "documentation": {
       "status": "pass",
       "exit_code": 0,
       "skipped": false,
       "tool": "mkdocs",
-      "duration_seconds": 26
+      "duration_seconds": 27
     },
     "documentation_versions": {
       "status": "pass",
@@ -87,14 +76,14 @@
       "status": "pass",
       "exit_code": 0,
       "skipped": false,
-      "duration_seconds": 102,
+      "duration_seconds": 48,
       "workspace_guards_seconds": 48
     },
     "integration_tests": {
       "status": "pass",
       "exit_code": 0,
-      "skipped": false,
-      "duration_seconds": 58
+      "skipped": true,
+      "duration_seconds": null
     }
   }
 }

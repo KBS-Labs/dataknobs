@@ -62,6 +62,31 @@ _CONTRACT = _ROOT / ".dataknobs" / "quality-contract.json"
 #: zero — a positive one would claim a measurement that nothing takes.
 _UNMEASURED_TIERS = frozenset({"unchecked"})
 
+#: Tools whose measurer is pointed at a target set the contract's tiers decide.
+#:
+#: Only ``mypy_targets`` consults the tier, because only mypy is handed
+#: directories rather than the file population: a cell in an unmeasured tier is
+#: dropped from the pass, so it is one mypy was never asked about. ``measure_ruff``
+#: tallies a single pass over the whole population and ``measure_format`` reads
+#: every cell's files, so re-tiering a cell changes nothing about whether either
+#: looked at it — and their zero over such a cell is a count, not a silence.
+#:
+#: So the tier alone cannot answer whether a zero was measured. It answers for
+#: mypy and would be wrong about the other two, in the direction this module
+#: exists to refuse: a presence rendered as an absence. Written down because
+#: ``check`` has no way to ask a measurer afterwards which cells it was pointed
+#: at, and pinned against the measurers themselves by
+#: ``test_the_tools_declared_tier_gated_are_the_ones_that_scope_by_tier`` — if a
+#: second measurer ever starts reading the tier, that is what says so.
+#:
+#: The alternative is for ``Measurement`` to carry the cells its pass skipped,
+#: which is the shape to take if that day comes. It is more than this fact needs
+#: today, and it has a trap: ``mypy_targets`` also drops a cell whose
+#: directories hold no tracked ``*.py``, and *that* zero is a real one. A flat
+#: "untargeted" set would conflate the two and start reporting ``None`` for
+#: cells whose zero is true and knowable.
+_TIER_GATED_TOOLS = frozenset({"mypy"})
+
 #: A bare numeral in a cell's reason, which is a measurement written where
 #: nothing compares it.
 #:
@@ -2054,9 +2079,19 @@ def verify(contract: dict[str, Any]) -> list[str]:
         # bin/fix.sh stops offering a remedy, so a contributor's pre-push run
         # reports clean over territory the gate still checks. That is the shape
         # 2c shipped. mypy is worse — mypy_targets skips _UNMEASURED_TIERS
-        # outright, so a cell retreating there stops being measured at all and
-        # reports {"measured": 0, "ceiling": 0}, which is byte-identical to a
-        # cell that is genuinely clean.
+        # outright, so a cell retreating there stops being measured at all.
+        #
+        # A retreated mypy cell used to also report {"measured": 0, "ceiling": 0},
+        # byte-identical to a cell that is genuinely clean, which made the retreat
+        # invisible in the artifact as well as unopposed in the tree. That half is
+        # closed: check() reports it as measured=None and lists it under
+        # "unmeasured", so a retreat now shows up as a cell nobody reads. Only for
+        # the tools in _TIER_GATED_TOOLS, which is mypy and is the point — ruff's
+        # retreated cell is still measured, so a None there would be this module
+        # inventing an absence rather than reporting one. What check cannot do is
+        # object to it — the declaration is still the authority on what gets
+        # measured, and a cell moved into an unmeasured tier is still a cell that
+        # stopped being checked. Which is why the tier itself has to go.
         #
         # Re-filing is also the licensed first move toward a ceiling raise,
         # since a backlog tier is the one place a non-zero ceiling looks like
@@ -2100,6 +2135,14 @@ def check(
       scoped one makes almost every section look unused.
     * ``findings`` — what the tool said, when a caller asks for it. A ceiling
       breach reported as a count leaves a developer with nothing to open.
+    * ``unmeasured`` — cells whose tier puts them outside the tool's target set,
+      so that a reader summing the report can find them without knowing which
+      tiers mean what. Their ``measured`` is ``None``, not ``0``: the integer
+      those cells used to carry was indistinguishable from a cell read and found
+      clean, and it summed into any total a consumer built — silently, and low.
+      Only a tool in ``_TIER_GATED_TOOLS`` can put a cell here, since only those
+      measurers read the tier; for the rest a re-tiered cell is still measured
+      and its zero is a count.
     """
     report: dict[str, Any] = {
         "exceeded": [],
@@ -2107,6 +2150,7 @@ def check(
         "cells": {},
         "unattributed": [],
         "unused_config": [],
+        "unmeasured": [],
         "findings": {},
     }
 
@@ -2124,9 +2168,49 @@ def check(
 
         for cell in _restrict(contract["tools"][tool]["cells"], only):
             name = f"{tool}/{cell['path']}"
+            tier = cell.get("tier", "")
             measured = _measured(measurement, cell)
-            report["cells"][name] = {"measured": measured, "ceiling": cell["ceiling"]}
-            entry = {"cell": name, "measured": measured, "ceiling": cell["ceiling"]}
+
+            # A zero from a cell nothing read is a silence, and a zero from a
+            # cell that was read is a count. They are the same integer, so this is
+            # where the difference has to be recorded — downstream is where it
+            # stops being recoverable. _measured derives the total from per-file
+            # counts (dddcb7ba, and that is the right shape), and a cell outside
+            # the tool's target set has none of those for precisely the same
+            # reason a clean cell has none.
+            #
+            # Both conjuncts, and the first is not decoration. Whether a tier
+            # silences a cell is a property of the measurer rather than of the
+            # tier: _TIER_GATED_TOOLS says which measurers read it, and for the
+            # other two a re-tiered cell is still measured, so its zero is a
+            # count. Reading the tier alone would answer for all three and be
+            # right about one, and the wrong answer runs this module's own defect
+            # backwards — a presence rendered as an absence, warning that a tier
+            # put the cell outside a target set the tool does not have.
+            #
+            # Only a zero becomes None. A *count* arriving against such a cell is
+            # the declaration losing an argument with the tool, and the tool is
+            # the one holding evidence: mypy follows imports, so a finding in
+            # packages/<pkg>/tests/ lands in the population and matches an
+            # unchecked cell without mypy_targets ever having named it. Blanking
+            # that would suppress a finding on the authority of the declaration it
+            # just contradicted. Since verify pins these ceilings at zero, the
+            # count is also a breach — so it falls through and is reported as one.
+            if tool in _TIER_GATED_TOOLS and tier in _UNMEASURED_TIERS and not measured:
+                report["cells"][name] = {
+                    "measured": None,
+                    "ceiling": cell["ceiling"],
+                    "tier": tier,
+                }
+                report["unmeasured"].append({"cell": name, "tier": tier, "tool": tool})
+                continue
+
+            report["cells"][name] = {
+                "measured": measured,
+                "ceiling": cell["ceiling"],
+                "tier": tier,
+            }
+            entry = {"cell": name, "measured": measured, "ceiling": cell["ceiling"], "tier": tier}
             if measured > cell["ceiling"]:
                 per_file = measurement.by_cell.get(cell["path"], Counter())
                 ranked = sorted(per_file.items(), key=lambda item: (-item[1], item[0]))
@@ -2631,6 +2715,14 @@ def main() -> None:
             cleared["measured"],
             cleared["ceiling"],
         )
+    for unread in report["unmeasured"]:
+        logger.warning(
+            "%s was not measured: its tier (%s) is outside %s's target set, so it "
+            "reports no count rather than a count of zero",
+            unread["cell"],
+            unread["tier"],
+            unread["tool"],
+        )
     for stray in report["unattributed"]:
         logger.warning(
             "%s reported %d in %s, which is in no cell — not counted anywhere",
@@ -2661,7 +2753,21 @@ def main() -> None:
             dead["section"],
         )
     if not failed:
-        logger.info("Every cell is within its ceiling.")
+        # Not "every cell", when some of them were never read. The count is the
+        # whole point: a reader who is told the tree is within its ceilings while
+        # four cells went unmeasured has been told the thing this leg exists to
+        # stop the artifact from saying.
+        if report["unmeasured"]:
+            unread_cells = len(report["unmeasured"])
+            logger.info(
+                "Every measured cell is within its ceiling. %d %s not measured, "
+                "and %s contents are unknown rather than zero.",
+                unread_cells,
+                "cell was" if unread_cells == 1 else "cells were",
+                "its" if unread_cells == 1 else "their",
+            )
+        else:
+            logger.info("Every cell is within its ceiling.")
     sys.exit(1 if failed else 0)
 
 
