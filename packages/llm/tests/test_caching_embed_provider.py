@@ -122,7 +122,7 @@ class TestSqliteEmbeddingCache:
             assert result is not None
             assert len(result) == 4
             # float32 precision: compare within tolerance
-            for a, b in zip(result, vec):
+            for a, b in zip(result, vec, strict=True):
                 assert abs(a - b) < 1e-6
         finally:
             await cache.close()

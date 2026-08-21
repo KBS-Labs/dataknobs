@@ -436,7 +436,7 @@ class AsyncExecutionEngine(BaseExecutionEngine):
         # (engine.execute() turns it into a failed record result) instead of
         # being silently de-selected.
         outcomes = await asyncio.gather(*(task for _, task in tasks), return_exceptions=True)
-        for (arc, _), outcome in zip(tasks, outcomes):
+        for (arc, _), outcome in zip(tasks, outcomes, strict=True):
             if isinstance(outcome, BaseException):
                 raise outcome
             if outcome:

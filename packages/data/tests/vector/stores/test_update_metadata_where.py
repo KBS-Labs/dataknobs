@@ -845,7 +845,7 @@ async def test_faiss_ivfflat_delete_vectors_then_get() -> None:
 
         survivors = [f"v-{i}" for i in range(n) if i not in (1, 3)]
         got = await store.get_vectors(survivors, include_metadata=True)
-        for ext_id, (vec, meta) in zip(survivors, got):
+        for ext_id, (vec, meta) in zip(survivors, got, strict=True):
             assert vec is not None, f"survivor {ext_id} lost its vector after IVF delete_vectors"
             assert meta is not None and meta["i"] == int(ext_id[2:])
     finally:

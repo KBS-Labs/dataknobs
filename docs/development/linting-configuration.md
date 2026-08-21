@@ -38,7 +38,23 @@ The four categories:
 | `behavioural` | findings can be real; declined deliberately | the argument, as comment lines under the entry |
 | `provisional` | findings can be real and the decline is **not** argued | the count, compared against what ruff reports today |
 
-`provisional` is the category whose total has a target of zero.
+`provisional` is the category whose total has a target of zero, and it is at
+zero: the three entries that held it (`B905`, `PLW2901`, `RUF012` — 80
+findings) were read site by site and are enforced.
+
+That is a state to keep rather than a rule against filing there. Declining a
+rule you have not read is still legitimate, and this is still where it goes —
+the category exists so that doing so is visible and countable rather than
+dressed up as an argument. Adding an entry is a decision to state in the pull
+request; the alternative to stating it is the same decline filed as
+`behavioural` with an invented argument.
+
+The word stays in the vocabulary even with nothing in it, which is the
+opposite of what happens to a quality-contract tier when its last cell empties
+(see [Quality checks](quality-checks.md)). An empty tier is the first move of
+a retreat, so removing it makes that move unspellable; an empty decline
+category blocks nothing by going away, and only costs the next unread decline
+its honest name.
 
 ### Asking about one finding
 

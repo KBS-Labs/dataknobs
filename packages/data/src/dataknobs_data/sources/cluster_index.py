@@ -333,7 +333,9 @@ class ClusterTopicIndex:
             )
 
         all_embeddings = await batch_embed_fn(texts)
-        embeddings_map = {chunk.source_id: emb for chunk, emb in zip(chunks, all_embeddings)}
+        embeddings_map = {
+            chunk.source_id: emb for chunk, emb in zip(chunks, all_embeddings, strict=True)
+        }
         return cls.from_chunks(
             chunks,
             embeddings_map,

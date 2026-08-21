@@ -305,12 +305,6 @@ ignore = [
             # in bin/, so the argparse __doc__ readers noted under D200 are untouched.
     "D417", # [presentational] Missing argument description in docstring
 
-    # flake8-bugbear
-    "B905", # [provisional] zip() without an explicit strict parameter — 36 findings,
-            # 17 of them in src/, and not one has been read. Silent truncation to the
-            # shorter iterable is a real defect shape, so this decline is unargued
-            # rather than argued, and naming that is what this category is for.
-
     # flake8-eradicate - allow commented code with TODOs
     "ERA001", # [presentational] Found commented-out code — a comment does not run
 

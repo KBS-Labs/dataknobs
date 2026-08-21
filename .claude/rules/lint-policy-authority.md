@@ -92,7 +92,25 @@ Declines carry a `[category]` marker, checked by `tests/test_lint_policy.py`:
 | `provisional` | findings can be real and the decline is **not** argued | the measured count, compared against what ruff reports today |
 
 The fourth exists so that an unargued decline is *countable*. The total of
-those counts has a target of zero.
+those counts has a target of zero, **and it is at zero**: the three entries
+that held it — `B905`, `PLW2901`, `RUF012`, 80 findings between them — were
+read site by site and enforced.
+
+Zero is a state to keep, not a rule against filing there. Declining a rule
+nobody has read is still legitimate, and `provisional` is still where it
+goes; what the category does is make that visible and countable instead of
+disguising it as an argument. So a new entry is a decision to state in the
+pull request, not a default — and the alternative to stating it is not a
+tidier config, it is the same decline filed as `behavioural` with an argument
+its author had to invent.
+
+That is also why the word stays in the vocabulary now that nothing holds it,
+which is the opposite of what happens to a quality-contract *tier* the day its
+last cell empties. The two are not the same shape. An empty tier is the first
+move of a coordinated retreat — drop a directory from a tool's targets,
+re-file its cell where a backlog is tolerated — so striking the word makes
+that move unspellable. An empty decline category blocks nothing by going away;
+it only removes the honest name for the next unread decline.
 
 **The category is a property of what a fix would do, not of what a rule is
 named.** Read the findings before assigning one. Two entries here were filed

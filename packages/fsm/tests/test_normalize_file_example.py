@@ -187,7 +187,7 @@ class TestNormalizeLines:
             "normal text",
         ]
 
-        for result, expected_text in zip(normalized, expected):
+        for result, expected_text in zip(normalized, expected, strict=True):
             assert result == expected_text
 
     def test_normalize_lines_empty_list(self):
@@ -221,7 +221,7 @@ class TestNormalizeBatch:
 
         expected = ["batch line 1", "batch line 2", "batch line 3", "batch line 4"]
 
-        for result, expected_text in zip(normalized, expected):
+        for result, expected_text in zip(normalized, expected, strict=True):
             assert result == expected_text
 
     def test_normalize_batch_large_dataset(self):

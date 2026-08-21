@@ -290,7 +290,7 @@ class TestAsyncMemoryBankSerialization:
         restored_records = await restored.all()
 
         assert len(restored_records) == len(original_records)
-        for orig, restored_rec in zip(original_records, restored_records):
+        for orig, restored_rec in zip(original_records, restored_records, strict=True):
             assert restored_rec.created_at == orig.created_at
             assert restored_rec.updated_at == orig.updated_at
             assert restored_rec.source_stage == orig.source_stage

@@ -336,7 +336,7 @@ class TestSyncMemoryDatabaseStreaming:
 
         assert len(streamed) == 100
         # Records should be deep copies
-        assert all(r is not orig for r, orig in zip(streamed, self.records))
+        assert all(r is not orig for r, orig in zip(streamed, self.records, strict=True))
 
     def test_stream_read_with_query(self):
         """Test streaming with query filter."""

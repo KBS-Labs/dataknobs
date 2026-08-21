@@ -646,7 +646,7 @@ class CallbackRegistry(Generic[CallbackT]):
             return_exceptions=True,
         )
         reraise: BaseException | None = None
-        for target, result in zip(self._fanout_buses, results):
+        for target, result in zip(self._fanout_buses, results, strict=True):
             if not isinstance(result, BaseException):
                 continue
             if isinstance(result, asyncio.CancelledError):

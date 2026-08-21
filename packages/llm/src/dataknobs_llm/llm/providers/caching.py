@@ -116,7 +116,7 @@ class MemoryEmbeddingCache(EmbeddingCache):
         return [self._store.get(_cache_key(model, t)) for t in texts]
 
     async def put_batch(self, model: str, texts: list[str], vectors: list[list[float]]) -> None:
-        for text, vector in zip(texts, vectors):
+        for text, vector in zip(texts, vectors, strict=True):
             self._store[_cache_key(model, text)] = vector
 
     async def initialize(self) -> None:
@@ -252,7 +252,10 @@ class SqliteEmbeddingCache(EmbeddingCache):
 
     async def put_batch(self, model: str, texts: list[str], vectors: list[list[float]]) -> None:
         self._check_open()
-        rows = [(_cache_key(model, t), model, _vector_to_blob(v)) for t, v in zip(texts, vectors)]
+        rows = [
+            (_cache_key(model, t), model, _vector_to_blob(v))
+            for t, v in zip(texts, vectors, strict=True)
+        ]
         await self._conn.executemany(
             """
             INSERT OR REPLACE INTO embeddings (cache_key, model, vector)
@@ -460,7 +463,7 @@ class CachingEmbedProvider(AsyncLLMProvider):
         results: list[list[float]] = [[] for _ in text_list]
         misses: list[tuple[int, str]] = []
 
-        for i, (text, cached_vec) in enumerate(zip(text_list, cached)):
+        for i, (text, cached_vec) in enumerate(zip(text_list, cached, strict=True)):
             if cached_vec is not None:
                 results[i] = cached_vec
             else:
@@ -475,7 +478,7 @@ class CachingEmbedProvider(AsyncLLMProvider):
             # list[list[float]]. Cast for type safety.
             miss_vectors: list[list[float]] = miss_result  # type: ignore[assignment]
 
-            for (idx, _text), vector in zip(misses, miss_vectors):
+            for (idx, _text), vector in zip(misses, miss_vectors, strict=True):
                 results[idx] = vector
 
             # Store all misses in cache

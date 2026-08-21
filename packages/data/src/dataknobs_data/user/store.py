@@ -1121,7 +1121,7 @@ class AsyncUserStateStore(
             return 0
         results = await self._db.delete_batch(ids)
         per_section: dict[str, int] = {}
-        for owner, ok in zip(owners, results):
+        for owner, ok in zip(owners, results, strict=True):
             if ok:
                 per_section[owner] = per_section.get(owner, 0) + 1
         total = sum(per_section.values())
@@ -1637,7 +1637,7 @@ class UserStateStore(
             return 0
         results = self._db.delete_batch(ids)
         per_section: dict[str, int] = {}
-        for owner, ok in zip(owners, results):
+        for owner, ok in zip(owners, results, strict=True):
             if ok:
                 per_section[owner] = per_section.get(owner, 0) + 1
         total = sum(per_section.values())

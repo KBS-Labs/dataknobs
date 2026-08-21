@@ -1571,7 +1571,7 @@ class AsyncPostgresDatabase(
         vec_cols, vec_placeholders, vec_values = self._build_vector_params(
             vector_inserts, start_param=4
         )
-        for q_col, placeholder in zip(vec_cols, vec_placeholders):
+        for q_col, placeholder in zip(vec_cols, vec_placeholders, strict=True):
             set_clauses.append(f"{q_col} = {placeholder}")
         values.extend(vec_values)
 
