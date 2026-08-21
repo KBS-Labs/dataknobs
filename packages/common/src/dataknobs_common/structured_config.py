@@ -205,6 +205,17 @@ def _interior_sensitive_keys(cls: type) -> frozenset[str]:
 #: Tolerated rather than *accepted*: they are excluded from the rejection but
 #: not from the error's list of accepted keys, which would otherwise offer
 #: ``factory`` as an answer to a question about a connection field.
+#:
+#: The tolerance leaves a residual hole, and it is worth naming rather than
+#: discovering: ``name`` is an ordinary English word, so
+#: ``create(backend="sqlite", name="app.db")`` passes the check and yields
+#: ``path=":memory:"`` -- the same "succeeds against the wrong store" ending
+#: this check exists to prevent. Narrowing the set is not the answer. A
+#: documented resource list writes ``- name: cache`` / ``factory: database``
+#: / ``backend: memory`` as one mapping, so ``name`` genuinely travels beside
+#: a database config; rejecting it would break the shape the docs teach. The
+#: object-graph layer pops these before ``from_dict`` sees them, which is why
+#: the hole exists only on the direct-call path.
 _ROUTING_KEYS = frozenset({"backend", "factory", "name", "type"})
 
 
@@ -242,15 +253,129 @@ def _unknown_keys_message(cls: type, unknown: list[str], accepted: frozenset[str
     parts: list[str] = []
     for key in unknown:
         close = difflib.get_close_matches(key, candidates, n=1, cutoff=0.6)
-        if not close:
+        if not close and key:
             # A short key scores poorly against a longer canonical one
             # (``connection`` against ``connection_string``), so fall back
             # to a prefix relationship -- which is what an abbreviated or
             # truncated spelling actually is.
+            #
+            # Guarded on a non-empty ``key`` because every candidate starts
+            # with the empty string: an empty key would otherwise be told it
+            # probably meant whichever field sorts first.
             close = [c for c in candidates if c.startswith(key) or key.startswith(c)][:1]
         parts.append(repr(key) + (f" (did you mean {close[0]!r}?)" if close else ""))
     rendered = ", ".join(candidates) if candidates else "(none)"
     return f"{cls.__name__} does not accept {', '.join(parts)}. Accepted keys: {rendered}."
+
+
+#: The class-level attributes that configure a subclass's *behaviour* rather
+#: than describing an instance's data, and the shape each must be declared
+#: with. Validated together by :func:`_validate_policy_declaration` because
+#: they share a failure mode, not because they share a purpose.
+#:
+#: Every one of them is consumed directly -- a bare ``==`` comparison, a
+#: ``frozenset`` union, an ``in`` test, a ``.items()`` walk -- so a
+#: misdeclared value does not fail, it quietly means something else. The
+#: shared trap is that ``str`` is itself iterable and itself supports ``in``:
+#:
+#: * ``_INPUT_KEYS = "connection_string"`` unions in ten single characters,
+#:   accepts each of them, and still rejects the alias it was written to
+#:   declare -- wrong in both directions at once.
+#: * ``_SENSITIVE_FIELDS = "api_key"`` does the same to the redaction set,
+#:   and additionally turns the field-name test into a *substring* match, so
+#:   an unrelated field named ``key`` is masked while the interior set holds
+#:   only letters.
+#: * ``_UNKNOWN_KEYS = "Raise"`` compares unequal to ``"raise"`` and so means
+#:   ``"ignore"`` -- a class that reads as opted in to the strict policy while
+#:   silently running the lenient one.
+#:
+#: Checked at runtime rather than left to the type checker for the same
+#: reason ``_MAX_REDACT_DEPTH`` already is: the subclasses that matter are
+#: consumers', and a library cannot assume its consumers run mypy.
+_POLICY_SHAPES: Mapping[str, str] = types.MappingProxyType(
+    {
+        "_UNKNOWN_KEYS": "policy",
+        "_INPUT_KEYS": "names",
+        "_SENSITIVE_FIELDS": "names",
+        "_polymorphic_fields": "mapping",
+        "_MAX_REDACT_DEPTH": "depth",
+    }
+)
+
+
+def _declared_without_classvar(cls: type, name: str) -> bool:
+    """Whether this class annotates ``name`` as something other than a ClassVar.
+
+    ``__init_subclass__`` runs before ``@dataclass``, so this is the only
+    moment the mistake is still cheap: without ``ClassVar`` the decorator
+    turns a policy attribute into a *field*, and it then shows up in
+    ``dataclasses.fields()``, in ``to_dict()``, and -- the reason this is
+    more than cosmetic -- in the accepted-key list of the very error
+    messages the policy produces.
+
+    An absent annotation is not a finding: the attribute inherits its
+    base's ``ClassVar`` declaration, which is how a subclass assigning a
+    bare ``_UNKNOWN_KEYS = "raise"`` stays correct.
+    """
+    # ``object`` rather than typeshed's ``AnnotationForm``: an annotation
+    # slot holds whatever was written there -- a string under PEP 563, a
+    # type, or a bare special form -- and ``AnnotationForm`` excludes the
+    # unsubscripted ``ClassVar`` the next line has to recognize.
+    annotation: object = inspect.get_annotations(cls).get(name)
+    if annotation is None:
+        return False
+    if isinstance(annotation, str):
+        # ``from __future__ import annotations`` in the defining module, so
+        # the annotation arrives unevaluated. Substring rather than parse:
+        # it must match ``ClassVar``, ``typing.ClassVar`` and any alias of
+        # the two, and a false negative here only declines to complain.
+        return "ClassVar" not in annotation
+    return annotation is not ClassVar and get_origin(annotation) is not ClassVar
+
+
+def _validate_policy_declaration(cls: type) -> None:
+    """Reject a policy attribute this class declares with the wrong shape.
+
+    Only attributes in ``cls.__dict__`` are checked -- an inherited value is
+    already known-valid, having been checked when its own class was created.
+    """
+    for name, shape in _POLICY_SHAPES.items():
+        if _declared_without_classvar(cls, name):
+            raise ValueError(
+                f"{cls.__qualname__}.{name} must be annotated ClassVar; "
+                "without it the dataclass decorator makes this policy "
+                "attribute a field, and it then appears in fields(), in "
+                "to_dict(), and in the accepted-key list of error messages."
+            )
+        if name not in cls.__dict__:
+            continue
+        value = cls.__dict__[name]
+        if shape == "policy" and value not in ("ignore", "raise"):
+            raise ValueError(
+                f"{cls.__qualname__}.{name} must be exactly 'ignore' or "
+                f"'raise'; got {value!r}. Any other value compares unequal "
+                "to 'raise' and so silently selects the lenient policy."
+            )
+        if shape == "names" and (isinstance(value, str) or not isinstance(value, Iterable)):
+            raise ValueError(
+                f"{cls.__qualname__}.{name} must be an iterable of names "
+                f"(a frozenset), not {value!r}. A bare string is iterable, "
+                "so it would be taken apart into one entry per character."
+            )
+        if shape == "mapping" and not isinstance(value, Mapping):
+            raise ValueError(f"{cls.__qualname__}.{name} must be a Mapping; got {value!r}.")
+        if shape == "depth" and (
+            not isinstance(value, int)
+            or isinstance(value, bool)  # a bool is an int but a nonsensical depth
+            or value < _DEFAULT_MAX_REDACT_DEPTH
+        ):
+            raise ValueError(
+                f"{cls.__qualname__}.{name} must be an int "
+                f">= {_DEFAULT_MAX_REDACT_DEPTH} (the fail-closed floor); "
+                f"got {value!r}. The depth bound may be raised for an "
+                "unusually deep raw section but never lowered - lowering "
+                "reduces credential masking."
+            )
 
 
 # Default (and minimum) safety bound on ``_redact_value`` recursion. Config
@@ -575,7 +700,7 @@ class StructuredConfig:
     _INPUT_KEYS: ClassVar[frozenset[str]] = frozenset()
 
     def __init_subclass__(cls, **kwargs: Any) -> None:
-        """Install the redacting ``__repr__`` and validate ``_MAX_REDACT_DEPTH``.
+        """Install the redacting ``__repr__`` and validate the policy attributes.
 
         Runs at class-creation time, *before* the subclass's
         ``@dataclass`` decorator is applied. Writing ``__repr__`` into the
@@ -597,6 +722,13 @@ class StructuredConfig:
         which redaction's fail-closed posture forbids. A non-int or
         below-floor value raises ``ValueError`` at class definition, so the
         misuse surfaces immediately rather than as a silent leak at repr time.
+
+        That check now generalizes: :func:`_validate_policy_declaration`
+        applies the same class-definition-time rejection to every attribute
+        in :data:`_POLICY_SHAPES`. They are checked together because they
+        fail together -- each is consumed directly enough that a wrong
+        shape means something else instead of raising, and ``str`` being
+        both iterable and ``in``-testable is the shared way that happens.
         """
         super().__init_subclass__(**kwargs)
         if "__repr__" not in cls.__dict__:
@@ -607,23 +739,11 @@ class StructuredConfig:
             # Deliberate: see the comment above. Both codes are mypy
             # objecting to the assignment itself, which is the mechanism.
             cls.__repr__ = StructuredConfig._redacted_repr  # type: ignore[method-assign,assignment]
-        # Validate an explicitly-overridden depth only (an inherited value is
-        # already known-valid). ``bool`` is an ``int`` subclass but a
-        # nonsensical depth, so reject it explicitly.
-        if "_MAX_REDACT_DEPTH" in cls.__dict__:
-            depth = cls.__dict__["_MAX_REDACT_DEPTH"]
-            if (
-                not isinstance(depth, int)
-                or isinstance(depth, bool)
-                or depth < _DEFAULT_MAX_REDACT_DEPTH
-            ):
-                raise ValueError(
-                    f"{cls.__qualname__}._MAX_REDACT_DEPTH must be an int "
-                    f">= {_DEFAULT_MAX_REDACT_DEPTH} (the fail-closed floor); "
-                    f"got {depth!r}. The depth bound may be raised for an "
-                    "unusually deep raw section but never lowered — lowering "
-                    "reduces credential masking."
-                )
+        # Validate every explicitly-declared policy attribute (an inherited
+        # one is already known-valid). ``_MAX_REDACT_DEPTH`` was the first to
+        # need this and is now one of five: each is read directly enough that
+        # a misdeclaration means something else rather than failing.
+        _validate_policy_declaration(cls)
 
     def _redacted_repr(self) -> str:
         """Dataclass-style repr that masks sensitive values, scalar and nested.
@@ -767,6 +887,17 @@ class StructuredConfig:
 
         The argument is a shallow copy of the caller's dict — overrides
         may mutate it freely.
+
+        **An override in a class with ``_UNKNOWN_KEYS = "raise"`` must
+        remove every input key it consumes.** The unknown-key check runs
+        after this method, on what it returns, so a consumed key left in
+        place is reported as unrecognised and a previously-working config
+        starts failing. Every override in the tree does remove its keys
+        today, which is what makes an *undeclared* ``_INPUT_KEYS`` alias
+        cost only a less helpful message rather than a wrongly rejected
+        config — but that is a property of these implementations, not
+        something the base can enforce, so it is stated here as a
+        requirement on the next one.
         """
         return raw
 
