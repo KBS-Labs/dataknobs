@@ -111,11 +111,10 @@ class ChunkMerger:
             heading_path = list(heading_path_tuple)
 
             # Sort by position if available
-            if self.config.preserve_order:
-                chunks = self._sort_by_position(chunks)
+            ordered = self._sort_by_position(chunks) if self.config.preserve_order else chunks
 
             # Merge chunks respecting size limit
-            merged = self._merge_chunk_group(chunks, source, heading_path)
+            merged = self._merge_chunk_group(ordered, source, heading_path)
             merged_chunks.extend(merged)
 
         # Sort by average similarity (descending)

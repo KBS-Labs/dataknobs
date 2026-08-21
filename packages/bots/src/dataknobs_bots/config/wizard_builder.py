@@ -925,6 +925,7 @@ class WizardConfigBuilder:
             extra_transitions = transitions_by_stage.get(stage.name, [])
             intent_override = intents_by_stage.get(stage.name)
 
+            merged = stage
             if extra_transitions or intent_override:
                 # Rebuild stage with merged transitions and/or intent.
                 # Uses dataclasses.replace to avoid manually enumerating
@@ -932,12 +933,12 @@ class WizardConfigBuilder:
                 # grows).
                 new_transitions = stage.transitions + tuple(extra_transitions)
                 new_intent = intent_override or stage.intent_detection
-                stage = replace(
+                merged = replace(
                     stage,
                     transitions=new_transitions,
                     intent_detection=new_intent,
                 )
-            assembled.append(stage)
+            assembled.append(merged)
 
         # Check for transitions referencing non-existent source stages
         for from_stage, _ in self._pending_transitions:

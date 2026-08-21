@@ -201,13 +201,12 @@ class Config:
             self._settings_manager.load_settings(data["settings"])
 
         # Process other types
-        for type_name, configs in data.items():
+        for type_name, declared in data.items():
             if type_name == "settings":
                 continue
 
             # Ensure configs is a list
-            if not isinstance(configs, list):
-                configs = [configs]
+            configs = declared if isinstance(declared, list) else [declared]
 
             # Initialize the type list if it doesn't exist
             if type_name not in self._data:
@@ -217,10 +216,13 @@ class Config:
             start_count = len(self._data[type_name])
 
             # Process each atomic configuration
-            for idx, config in enumerate(configs):
+            for idx, atomic in enumerate(configs):
                 # Handle file references
-                if isinstance(config, str) and config.startswith("@"):
-                    config = self._load_referenced_file(config[1:])
+                config = (
+                    self._load_referenced_file(atomic[1:])
+                    if isinstance(atomic, str) and atomic.startswith("@")
+                    else atomic
+                )
 
                 # Validate and normalize atomic config
                 # Pass the absolute position (start_count + idx)

@@ -286,9 +286,8 @@ class JSONChunker:
     ) -> Iterator[JSONChunk]:
         """Yield chunks from each non-empty JSONL line in ``stream``."""
         for line_num, raw in enumerate(stream):
-            if isinstance(raw, bytes):
-                raw = raw.decode("utf-8")
-            line = raw.strip()
+            text = raw.decode("utf-8") if isinstance(raw, bytes) else raw
+            line = text.strip()
             if not line:
                 continue
             try:

@@ -302,16 +302,17 @@ class ParallelLLMExecutor:
         results: list[TaskResult] = []
         for i, task in enumerate(tasks):
             tag = task.tag or f"step_{i}"
+            chained = task
             if pass_result and results and results[-1].success:
                 prev_response = results[-1].value
-                task = LLMTask(
+                chained = LLMTask(
                     messages=list(task.messages)
                     + [LLMMessage(role="assistant", content=prev_response.content)],
                     config_overrides=task.config_overrides,
                     retry=task.retry,
                     tag=tag,
                 )
-            result = await self._execute_single_llm(tag, task)
+            result = await self._execute_single_llm(tag, chained)
             results.append(result)
             if effective_fail_fast and not result.success:
                 logger.info(

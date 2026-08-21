@@ -314,11 +314,6 @@ ignore = [
     # flake8-eradicate - allow commented code with TODOs
     "ERA001", # [presentational] Found commented-out code — a comment does not run
 
-    # Pylint warnings - loop variables
-    "PLW2901", # [provisional] Loop variable overwritten by assignment target — 19
-               # findings, 15 in src/, none read. Rebinding the loop name is as often
-               # a silent bug as a deliberate narrowing, and only the site says which.
-
     # Physical-line rules — these measure a line of the file, so a finding inside a
     # triple-quoted string is a statement about that string's *content*, not about
     # layout. `ruff format` is enforced at 0 across all nine cells and has never
