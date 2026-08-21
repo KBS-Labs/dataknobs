@@ -16,12 +16,33 @@ pytestmark = requires_real_elasticsearch
 
 @pytest.fixture
 def elasticsearch_config():
-    """Elasticsearch configuration for testing."""
+    """Connection config both Elasticsearch backends accept.
+
+    Only ``index`` and ``refresh`` are shared surface beyond host/port --
+    the sync and async backends diverge past that, so anything else goes
+    in the backend-specific fixture below. Feeding one dict to both is
+    how ``settings`` (a sync-only field) came to be sent to the async
+    backend, which has no field for it and hardcodes its index settings.
+    """
     return {
         "host": os.environ.get("ELASTICSEARCH_HOST", "localhost"),
         "port": int(os.environ.get("ELASTICSEARCH_PORT", "9200")),
         "index": f"test_records_{uuid.uuid4().hex[:8]}",  # Unique index per test
         "refresh": True,  # Immediate refresh for testing
+    }
+
+
+@pytest.fixture
+def sync_elasticsearch_config(elasticsearch_config):
+    """Add the sync-only index settings to the shared connection config.
+
+    ``settings`` is a field on ``SyncElasticsearchDatabaseConfig`` alone.
+    The async backend hardcodes these same two values in ``_ensure_index``
+    and has never read a caller-supplied override, so the async fixtures
+    deliberately do not pass it.
+    """
+    return {
+        **elasticsearch_config,
         "settings": {
             "number_of_shards": 1,
             "number_of_replicas": 0,
@@ -30,9 +51,9 @@ def elasticsearch_config():
 
 
 @pytest.fixture
-def sync_db(elasticsearch_config):
+def sync_db(sync_elasticsearch_config):
     """Create a synchronous Elasticsearch database for testing."""
-    db = SyncDatabase.from_backend("elasticsearch", elasticsearch_config)
+    db = SyncDatabase.from_backend("elasticsearch", sync_elasticsearch_config)
     yield db
     # Cleanup: delete the test index
     try:
@@ -62,9 +83,9 @@ async def async_db(elasticsearch_config):
 class TestSyncElasticsearchDatabase:
     """Test synchronous Elasticsearch database."""
 
-    def test_create_database(self, elasticsearch_config):
+    def test_create_database(self, sync_elasticsearch_config):
         """Test creating an Elasticsearch database."""
-        db = SyncDatabase.from_backend("elasticsearch", elasticsearch_config)
+        db = SyncDatabase.from_backend("elasticsearch", sync_elasticsearch_config)
         assert db is not None
         assert hasattr(db, "es_index")
         assert hasattr(db, "index_name")
