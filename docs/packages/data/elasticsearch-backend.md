@@ -18,14 +18,30 @@ The Elasticsearch Backend provides powerful full-text search, analytics, and dis
 from dataknobs_data.backends.elasticsearch import SyncElasticsearchDatabase
 
 config = {
-    "hosts": ["http://localhost:9200"],
+    "host": "localhost",
+    "port": 9200,
     "index": "records",
-    "auth": ("elastic", "password"),
-    "verify_certs": True,
-    "pool_size": 10
 }
 
 db = SyncElasticsearchDatabase(config)
+```
+
+The two Elasticsearch backends do not take the same keys, and the difference
+is not cosmetic: the **sync** config addresses a single node through
+`host`/`port` and has no authentication surface at all, while the **async**
+one accepts a `hosts` list plus `basic_auth`/`api_key` and the TLS settings.
+A key belonging to the other one is rejected rather than ignored, so a
+sample cannot be moved between them unchanged.
+
+```python
+from dataknobs_data.backends.elasticsearch_async import AsyncElasticsearchDatabase
+
+db = AsyncElasticsearchDatabase({
+    "hosts": ["https://localhost:9200"],
+    "index": "records",
+    "basic_auth": ("elastic", "password"),
+    "verify_certs": True,
+})
 ```
 
 ## Index Mapping

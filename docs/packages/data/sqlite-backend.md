@@ -119,9 +119,6 @@ db = SyncSQLiteDatabase({
     # Options: FULL (safest), NORMAL (balanced), OFF (fastest)
     "synchronous": "NORMAL",
     
-    # For async only - connection pool size (default: 5)
-    "pool_size": 10,
-
     # Create the records table on connect if missing (default: True).
     # Set to False when an external migration tool owns DDL.
     "auto_create_table": True

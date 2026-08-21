@@ -667,7 +667,7 @@ storage = DataknobsConversationStorage(AsyncMemoryDatabase())
 
 # File-based storage (local development)
 storage = DataknobsConversationStorage(
-    AsyncFileDatabase(path="conversations/")
+    AsyncFileDatabase(path="conversations/store.json")
 )
 
 # PostgreSQL (production)

@@ -2291,8 +2291,8 @@ conversation_storage:
   database: ${DB_NAME}
   user: ${DB_USER}
   password: ${DB_PASSWORD}
-  pool_size: 20
-  max_overflow: 10
+  min_pool_size: 5
+  max_pool_size: 20
 
 memory:
   type: buffer

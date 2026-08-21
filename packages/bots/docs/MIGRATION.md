@@ -128,7 +128,7 @@ resources:
     conversations:
       backend: postgres
       connection_string: ${DATABASE_URL}
-      pool_size: 20
+      max_pool_size: 20
 
   vector_stores:
     knowledge:

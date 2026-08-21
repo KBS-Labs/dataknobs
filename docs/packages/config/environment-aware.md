@@ -369,7 +369,7 @@ resources:
     default:
       backend: postgres
       connection_string: ${DATABASE_URL}
-      pool_size: 20
+      max_pool_size: 20
 
     conversations:
       backend: postgres

@@ -405,10 +405,16 @@ To supply a key only some backends have, ask first:
 ```python
 from dataknobs_data.backends import sync_backends
 
-config_cls = sync_backends.get_factory(backend_name).CONFIG_CLS
-if config_cls.accepts("table"):
+backend_class = sync_backends.get_factory(backend_name)
+config_cls = getattr(backend_class, "CONFIG_CLS", None)
+if config_cls is not None and config_cls.accepts("table"):
     backend_config.setdefault("table", collection_name)
 ```
+
+`get_factory` returns `None` — it does not raise — for a name this
+installation cannot build, so reading `CONFIG_CLS` off it directly raises
+`AttributeError` in exactly the case a reader is most likely to hit: a real
+backend whose optional driver is not installed.
 
 ## Testing with Factory
 
