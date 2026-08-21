@@ -10,7 +10,8 @@ from dataknobs_data.validation import (
     Required, Range, Length, Pattern, Enum, Unique, Custom,
     ValidationResult, Coercer
 )
-from dataknobs_data import Record, MemoryDatabase
+from dataknobs_data import Record
+from dataknobs_data.backends import SyncMemoryDatabase
 from datetime import datetime
 import re
 ```

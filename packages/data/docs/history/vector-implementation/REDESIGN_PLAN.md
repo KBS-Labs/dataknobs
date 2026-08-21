@@ -1,5 +1,9 @@
 # Validation and Migration Module Redesign Plan
 
+> **Historical record.** This document describes the design as of its
+> writing. Its code samples are not guaranteed to resolve against the
+> current packages, and are deliberately left as written.
+
 ## Context
 
 During Phase 9 (Testing & Quality) implementation, we discovered significant design issues in both the validation and migration modules while attempting to write tests. The APIs were inconsistent, unpredictable, and difficult to test. Since this code hasn't been released yet, we can do a complete redesign without backwards compatibility concerns.

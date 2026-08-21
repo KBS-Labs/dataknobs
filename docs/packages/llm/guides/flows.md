@@ -183,7 +183,9 @@ sales_flow = ConversationFlow(
 The conversation flows are built on dataknobs-fsm, providing access to all FSM features:
 
 ```python
-from dataknobs_fsm import StateMachine, State, Transition
+from dataknobs_fsm.core import Arc
+from dataknobs_fsm import FSM
+from dataknobs_fsm.core import State
 
 # Convert flow to FSM
 fsm = flow.to_fsm()

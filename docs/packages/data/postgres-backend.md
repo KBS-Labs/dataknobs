@@ -15,7 +15,7 @@ The PostgreSQL Backend provides production-ready storage with full SQL capabilit
 ## Configuration
 
 ```python
-from dataknobs_data import PostgresDatabase
+from dataknobs_data.backends.postgres import SyncPostgresDatabase
 
 config = {
     "host": "localhost",
@@ -27,7 +27,7 @@ config = {
     "max_overflow": 20
 }
 
-db = PostgresDatabase(config)
+db = SyncPostgresDatabase(config)
 ```
 
 The postgres backends (sync and async) accept any input shape
@@ -95,12 +95,12 @@ own both the records table and the embeddings table.
 ### Connection Pooling
 
 ```python
-from dataknobs_data import PostgresDatabase
-from dataknobs_data.pooling import PostgresConnectionPool
+from dataknobs_data.backends.postgres import SyncPostgresDatabase
+from dataknobs_data.pooling import ConnectionPoolManager
 
 # With connection pooling
-pool = PostgresConnectionPool(config)
-db = PostgresDatabase(config, pool=pool)
+pool = ConnectionPoolManager(config)
+db = SyncPostgresDatabase(config, pool=pool)
 
 # Automatic connection management
 record = Record({"name": "Alice"})
@@ -141,11 +141,12 @@ with db.transaction() as tx:
 ## Migration from Other Backends
 
 ```python
-from dataknobs_data import SyncFileDatabase, PostgresDatabase
+from dataknobs_data.backends.file import SyncFileDatabase
+from dataknobs_data.backends.postgres import SyncPostgresDatabase
 
 # Migrate from file to PostgreSQL
 file_db = SyncFileDatabase({"path": "data.json"})
-postgres_db = PostgresDatabase(postgres_config)
+postgres_db = SyncPostgresDatabase(postgres_config)
 
 # Transfer all records
 records = file_db.search(Query())

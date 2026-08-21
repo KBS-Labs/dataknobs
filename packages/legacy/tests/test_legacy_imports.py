@@ -1,7 +1,10 @@
 """Test that legacy package re-exports work correctly."""
 
+import importlib
 import sys
 import warnings
+
+import pytest
 
 
 def test_legacy_package_deprecation_warning():
@@ -109,3 +112,82 @@ def test_backward_compatibility_file_utils():
         tmp.write(b"test content")
         tmp.flush()
         assert is_gzip_file(tmp.name) is False
+
+
+# The submodules each shim re-exports, as ``legacy package -> submodule names``.
+# Taken from the ``from <modular package> import ...`` list in each shim's
+# ``__init__``: the shim already decides what it publishes, and these are the
+# names a pre-split import could reach.
+LEGACY_SUBMODULES = {
+    "dataknobs.structures": ("conditional_dict", "document", "record_store", "tree"),
+    "dataknobs.utils": (
+        "elasticsearch_utils",
+        "emoji_utils",
+        "file_utils",
+        "json_extractor",
+        "json_utils",
+        "llm_utils",
+        "pandas_utils",
+        "requests_utils",
+        "resource_utils",
+        "sql_utils",
+        "stats_utils",
+        "subprocess_utils",
+        "sys_utils",
+        "xml_utils",
+    ),
+    "dataknobs.xization": (
+        "annotations",
+        "authorities",
+        "lexicon",
+        "masking_tokenizer",
+        "normalize",
+    ),
+}
+
+DOTTED_PATHS = [
+    f"{package}.{name}" for package, names in LEGACY_SUBMODULES.items() for name in names
+]
+
+
+@pytest.mark.parametrize("dotted_path", DOTTED_PATHS)
+def test_legacy_submodule_resolves_as_a_dotted_module_path(dotted_path: str) -> None:
+    """Every re-exported submodule is reachable as ``dataknobs.<pkg>.<name>``.
+
+    The tests above assert ``hasattr(structures, "tree")``, which passes on an
+    attribute binding alone. Pre-split code does not use attribute access -- it
+    writes ``from dataknobs.structures.tree import Tree``, and Python resolves
+    that through ``sys.modules``, not through the parent's attributes. Asserting
+    only the attribute form is why the dotted form could be broken for the whole
+    life of the package while the suite stayed green.
+    """
+    importlib.import_module(dotted_path)
+
+
+def test_documented_legacy_import_form_works() -> None:
+    """The exact ``from`` form the migration guide and READMEs publish.
+
+    These lines are what a pre-split user's code contains verbatim, so they are
+    the contract the legacy package exists to honour.
+    """
+    from dataknobs.structures.tree import Tree
+    from dataknobs.utils.json_utils import get_value
+    from dataknobs.xization.normalize import basic_normalization_fn
+
+    assert get_value({"a": {"b": 7}}, "a.b") == 7
+    assert Tree("root").data == "root"
+    assert callable(basic_normalization_fn)
+
+
+def test_legacy_submodule_is_the_modular_module_itself() -> None:
+    """The alias is the same object, not a copy.
+
+    Isinstance checks and module-level state have to agree across the two import
+    paths, or the shim would introduce a split-brain of its own.
+    """
+    import dataknobs_structures.tree
+
+    from dataknobs.structures import tree
+
+    assert tree is dataknobs_structures.tree
+    assert sys.modules["dataknobs.structures.tree"] is dataknobs_structures.tree

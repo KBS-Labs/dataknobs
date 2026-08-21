@@ -1,5 +1,9 @@
 # FSM Project Context Guide
 
+> **Historical record.** This document describes the design as of its
+> writing. Its code samples are not guaranteed to resolve against the
+> current packages, and are deliberately left as written.
+
 ## Purpose
 This guide provides a roadmap for navigating the FSM project documentation and understanding the current state, next steps, and how to use each document effectively.
 

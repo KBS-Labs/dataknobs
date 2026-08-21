@@ -1193,7 +1193,6 @@ result = builder.render_system_prompt("prompt_name", params={...})
 ### Error Handling
 
 ```python
-from dataknobs_llm.prompts import PromptNotFoundError
 
 try:
     result = await builder.render_user_prompt(
@@ -1753,7 +1752,7 @@ from dataknobs_llm.conversations import (
     LoggingMiddleware,
     ValidationMiddleware
 )
-from dataknobs_data.backends import AsyncPostgresDatabase
+from dataknobs_data.backends.postgres import AsyncPostgresDatabase
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
@@ -1861,7 +1860,7 @@ from dataknobs_llm.conversations import (
     DataknobsConversationStorage,
     ContentFilterMiddleware
 )
-from dataknobs_data.backends import AsyncSQLiteDatabase
+from dataknobs_data.backends.sqlite_async import AsyncSQLiteDatabase
 
 async def create_support_bot():
     # Define prompts

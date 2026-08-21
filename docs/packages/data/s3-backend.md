@@ -70,7 +70,7 @@ databases:
 ### Using LocalStack for Testing
 ```python
 # For local development with LocalStack
-db = S3Database.from_config({
+db = SyncS3Database.from_config({
     "bucket": "test-bucket",
     "prefix": "records/",
     "region": "us-east-1",
@@ -90,10 +90,10 @@ docker run -p 4566:4566 localstack/localstack
 ### Basic CRUD Operations
 ```python
 from dataknobs_data import Record, Query
-from dataknobs_data.backends.s3 import S3Database
+from dataknobs_data.backends.s3 import SyncS3Database
 
 # Initialize
-db = S3Database.from_config({
+db = SyncS3Database.from_config({
     "bucket": "my-bucket",
     "prefix": "app/records/"
 })
@@ -186,7 +186,7 @@ db.batch_create(records)  # Parallel API calls
 ### 2. Prefix Organization
 ```python
 # Organize data with prefixes for efficient listing
-db = S3Database.from_config({
+db = SyncS3Database.from_config({
     "bucket": "my-bucket",
     "prefix": "data/2024/01/"  # Date-based organization
 })
@@ -234,7 +234,7 @@ db.batch_create(records)  # $0.04
 ### Storage Classes
 ```python
 # Configure storage class for cost optimization
-db = S3Database.from_config({
+db = SyncS3Database.from_config({
     "bucket": "archive-bucket",
     "prefix": "archive/",
     "storage_class": "GLACIER"  # For infrequent access
@@ -301,14 +301,14 @@ results = db.select_query(query)  # Coming soon
 
 ```python
 import os
-from dataknobs_data.backends.s3 import S3Database
+from dataknobs_data.backends.s3 import SyncS3Database
 
 # Set environment for LocalStack
 os.environ["AWS_ACCESS_KEY_ID"] = "test"
 os.environ["AWS_SECRET_ACCESS_KEY"] = "test"
 
 # Create test database
-test_db = S3Database.from_config({
+test_db = SyncS3Database.from_config({
     "bucket": "test-bucket",
     "prefix": "test/",
     "region": "us-east-1",

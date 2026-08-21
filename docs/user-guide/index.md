@@ -102,9 +102,7 @@ Utility functions for JSON manipulation, file operations, HTTP requests, and mor
 
 Text normalization, tokenization, masking, and lexical analysis for NLP and data processing.
 
-- [Tokenization](../packages/xization/tokenization.md) - Text tokenization strategies
 - [Normalization](../packages/xization/normalization.md) - Text normalization functions
-- [Masking](../packages/xization/masking.md) - PII and sensitive data masking
 
 **Use Cases**: Data anonymization, text preprocessing, NLP pipelines, search indexing
 
@@ -145,10 +143,10 @@ Combine Bots, LLM, and Data packages:
 
 ```python
 from dataknobs_bots import BotRegistry
-from dataknobs_data import PostgresDatabase
+from dataknobs_data.backends.postgres import SyncPostgresDatabase
 
 # Persistent storage for conversations
-db = PostgresDatabase(connection_string="...")
+db = SyncPostgresDatabase(connection_string="...")
 
 # Configure bot with memory and RAG
 bot_config = {
@@ -170,11 +168,11 @@ Combine FSM, Data, and Xization packages:
 
 ```python
 from dataknobs_fsm import SimpleFSM
-from dataknobs_data import S3Database
+from dataknobs_data.backends.s3 import SyncS3Database
 from dataknobs_xization import normalize
 
 # Read from S3, process, write back
-s3_db = S3Database(bucket="documents")
+s3_db = SyncS3Database(bucket="documents")
 
 fsm_config = {
     "name": "text_processor",

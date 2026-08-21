@@ -757,6 +757,6 @@ def process_records_batch(records, batch_size=1000):
 ## See Also
 
 - [Field Types](field-types.md) - Detailed field type documentation
-- [Schema Validation](validation.md) - Record validation with schemas
+- [Schema Validation](../../api/reference/data.md) - Record validation with schemas
 - [Pandas Integration](pandas-integration.md) - Converting records to DataFrames
 - [Migration Utilities](migration.md) - Record transformation and migration

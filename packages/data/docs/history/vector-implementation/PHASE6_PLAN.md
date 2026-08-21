@@ -1,5 +1,9 @@
 # Phase 6: Advanced Features - Implementation Plan
 
+> **Historical record.** This document describes the design as of its
+> writing. Its code samples are not guaranteed to resolve against the
+> current packages, and are deliberately left as written.
+
 ## Overview
 Phase 6 introduces advanced features that enhance the data package with asynchronous operations, data migration capabilities, schema validation, and performance optimizations.
 

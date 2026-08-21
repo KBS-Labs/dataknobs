@@ -319,7 +319,7 @@ db = Database.from_config(config.get_section("database"))
 
 ### Utils Package
 ```python
-from dataknobs_utils import RequestHelper
+from dataknobs_utils.requests_utils import RequestHelper
 
 # Reuses utility components
 helper = RequestHelper(host, port)

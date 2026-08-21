@@ -105,6 +105,7 @@ dataknobs-xization = "^1.0.0"
 Update all import statements in your code:
 
 **Before:**
+<!-- dk-imports: illustrative -- pre-split imports, shown as the code being migrated away from -->
 ```python
 from dataknobs.structures.tree import Tree
 from dataknobs.utils.json_utils import get_value
@@ -174,15 +175,16 @@ from dataknobs_structures import Tree, Text, TextMetaData, RecordStore, cdict
 # Old
 from dataknobs.utils.json_utils import get_value
 from dataknobs.utils.file_utils import filepath_generator
-from dataknobs.utils.elasticsearch_utils import ElasticsearchClient
+from dataknobs.utils.elasticsearch_utils import ElasticsearchIndex
 
 # New
 from dataknobs_utils.json_utils import get_value
 from dataknobs_utils.file_utils import filepath_generator
-from dataknobs_utils.elasticsearch_utils import ElasticsearchClient
+from dataknobs_utils.elasticsearch_utils import ElasticsearchIndex
 ```
 
 #### Xization
+<!-- dk-imports: illustrative -- the Old block is pre-split code by design -->
 ```python
 # Old
 from dataknobs.xization.normalize import normalize_text

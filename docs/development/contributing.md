@@ -197,6 +197,7 @@ Why is this feature needed? What problem does it solve?
 ## Proposed Implementation
 How should this feature work? Include API examples.
 
+<!-- dk-imports: illustrative -- a placeholder name in a feature-request template -->
 ```python
 # Example of proposed API
 from dataknobs_utils import new_feature

@@ -294,10 +294,10 @@ fsm.context["db"] = config.get_instance("databases", "primary")
 
 # Bots + LLM + Data: Chatbot with persistence
 from dataknobs_bots import BotRegistry
-from dataknobs_data import MemoryDatabase
+from dataknobs_data.backends import SyncMemoryDatabase
 
 registry = BotRegistry()
-db = MemoryDatabase()  # For conversation history
+db = SyncMemoryDatabase()  # For conversation history
 
 bot = registry.create_bot("assistant", {
     "llm": {"provider": "openai"},

@@ -65,7 +65,9 @@ modern_order = {
 ### Implementation
 
 ```python
-from dataknobs_data import Record, MemoryDatabase, Migration, Migrator
+from dataknobs_data import Record
+from dataknobs_data.backends import SyncMemoryDatabase
+from dataknobs_data.migration import Migration, Migrator
 from dataknobs_data.migration import Transformer, CompositeOperation
 from dataknobs_data.validation import Schema, Pattern, Range, Enum
 from datetime import datetime
@@ -75,8 +77,8 @@ class EcommerceMigration:
     """Migrate e-commerce orders from v1 to v2 schema"""
     
     def __init__(self):
-        self.source_db = MemoryDatabase()
-        self.target_db = MemoryDatabase()
+        self.source_db = SyncMemoryDatabase()
+        self.target_db = SyncMemoryDatabase()
         self.setup_validation_schemas()
     
     def setup_validation_schemas(self):
@@ -282,10 +284,10 @@ class HealthcareDataMigration:
     """Migrate and consolidate healthcare records from multiple sources"""
     
     def __init__(self):
-        self.hospital_a_db = MemoryDatabase()  # Hospital A format
-        self.hospital_b_db = MemoryDatabase()  # Hospital B format
-        self.clinic_db = MemoryDatabase()      # Clinic format
-        self.unified_db = MemoryDatabase()     # Unified platform
+        self.hospital_a_db = SyncMemoryDatabase()  # Hospital A format
+        self.hospital_b_db = SyncMemoryDatabase()  # Hospital B format
+        self.clinic_db = SyncMemoryDatabase()      # Clinic format
+        self.unified_db = SyncMemoryDatabase()     # Unified platform
     
     def migrate_hospital_a(self):
         """Migrate Hospital A records (uses SSN as ID)"""
@@ -531,9 +533,9 @@ class FinancialDataMigration:
     """Migrate financial transactions with precision and compliance"""
     
     def __init__(self):
-        self.legacy_db = MemoryDatabase()
-        self.modern_db = MemoryDatabase()
-        self.audit_db = MemoryDatabase()  # Audit trail
+        self.legacy_db = SyncMemoryDatabase()
+        self.modern_db = SyncMemoryDatabase()
+        self.audit_db = SyncMemoryDatabase()  # Audit trail
     
     def create_migration_pipeline(self):
         """Create multi-stage migration pipeline"""
@@ -679,8 +681,8 @@ class IoTDataMigration:
     """Migrate and optimize IoT sensor data"""
     
     def __init__(self):
-        self.raw_sensor_db = MemoryDatabase()
-        self.optimized_db = MemoryDatabase()
+        self.raw_sensor_db = SyncMemoryDatabase()
+        self.optimized_db = SyncMemoryDatabase()
         self.converter = DataFrameConverter()
         self.batch_ops = BatchOperations(self.optimized_db)
     
@@ -772,10 +774,10 @@ class MultiDatabaseSync:
     """Synchronize data across multiple database systems"""
     
     def __init__(self):
-        self.postgres_db = MemoryDatabase()  # Primary
-        self.mongodb_db = MemoryDatabase()   # Document store
-        self.redis_db = MemoryDatabase()     # Cache
-        self.elasticsearch_db = MemoryDatabase()  # Search
+        self.postgres_db = SyncMemoryDatabase()  # Primary
+        self.mongodb_db = SyncMemoryDatabase()   # Document store
+        self.redis_db = SyncMemoryDatabase()     # Cache
+        self.elasticsearch_db = SyncMemoryDatabase()  # Search
     
     def create_sync_pipeline(self):
         """Create transformers for each target database"""

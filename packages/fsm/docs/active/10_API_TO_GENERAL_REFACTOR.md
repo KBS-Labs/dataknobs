@@ -1,5 +1,9 @@
 # API to General Level Refactor Plan
 
+> **Historical record.** This document describes the design as of its
+> writing. Its code samples are not guaranteed to resolve against the
+> current packages, and are deliberately left as written.
+
 ## Overview
 
 During the process of fixing Simple and Advanced API tests, we discovered several cases where logic had been created or repeated at the API level that should be implemented at the general execution engine level instead. This document outlines the identified areas and provides a checklist for refactoring them.

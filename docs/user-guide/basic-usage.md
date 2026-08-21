@@ -100,7 +100,7 @@ file_utils.write_json("config.json", data)
 ### Normalization
 
 ```python
-from dataknobs_xization import basic_normalization_fn
+from dataknobs_xization.normalize import basic_normalization_fn
 
 # Basic text normalization
 text = "  HELLO   World!!!  "

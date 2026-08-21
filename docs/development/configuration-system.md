@@ -197,9 +197,9 @@ The data package demonstrates comprehensive config integration:
 ```python
 # All backends inherit from ConfigurableBase
 from dataknobs_config import ConfigurableBase
-from dataknobs_data.database import Database
+from dataknobs_data import SyncDatabase
 
-class PostgresDatabase(Database, ConfigurableBase):
+class PostgresDatabase(SyncDatabase, ConfigurableBase):
     def __init__(self, config: dict = None):
         super().__init__(config)
         # PostgreSQL-specific initialization

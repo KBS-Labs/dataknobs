@@ -1,5 +1,9 @@
 # Transform Functions Reference Guide
 
+> **Historical record.** This document describes the design as of its
+> writing. Its code samples are not guaranteed to resolve against the
+> current packages, and are deliberately left as written.
+
 ## Overview
 
 The DataKnobs FSM supports two distinct types of data transformation functions that serve different purposes in the execution pipeline:

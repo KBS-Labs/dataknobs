@@ -46,9 +46,9 @@ response = await provider.complete(
 ### Prompt Templates
 
 ```python
-from dataknobs_llm.prompts import PromptRenderer
+from dataknobs_llm.prompts import TemplateRenderer
 
-renderer = PromptRenderer()
+renderer = TemplateRenderer()
 result = renderer.render(
     "Hello {{name}}((, you are {{age}} years old))",
     {"name": "Alice", "age": 30}
@@ -293,6 +293,7 @@ dataknobs_llm/
 The `fsm_integration` module contains code that was previously in the `dataknobs-fsm` package. It has been moved here to consolidate all LLM functionality in one package and eliminate duplication.
 
 **Old imports** (from dataknobs-fsm):
+<!-- dk-imports: illustrative -- pre-move imports, shown as the code being migrated away from -->
 ```python
 from dataknobs_fsm.llm import LLMProvider, LLMConfig
 from dataknobs_fsm.patterns.llm_workflow import RAGWorkflow

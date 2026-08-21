@@ -168,6 +168,15 @@ _WORKSPACE_ONLY_QUALITY_INPUTS = [
     ".gitattributes",  # ditto, for the merge-driver guard
     "bin/internal-label-allowlist.txt",  # suppressions the lint step honours
     ".dataknobs/quality-contract.json",  # the ceilings the contract check compares against
+    # The root README, read by the documented-import guard along with every
+    # package README and the site tree. The per-package copies ride their own
+    # package scope and docs/ rides the docs scope; this one is reached by no
+    # directory entry at all. It belongs to this tier rather than the docs one
+    # despite being documentation: DOCS_PATTERNS does not list it, so the
+    # shadowing hazard the note below describes does not apply, and the check it
+    # actually moves is a workspace guard rather than one of the three recorded
+    # documentation checks.
+    "README.md",
 ]
 
 # The inputs to the three documentation checks the gate records: the site build,

@@ -7,7 +7,7 @@ Complex templates, RAG integration, and advanced patterns.
 ### Template with Filters
 
 ```python
-from dataknobs_llm.prompts import InMemoryPromptLibrary, AsyncPromptBuilder, PromptTemplateDict
+from dataknobs_llm.prompts import ConfigPromptLibrary, AsyncPromptBuilder, PromptTemplateDict
 
 # Template using Jinja2 filters
 template = PromptTemplateDict(
@@ -32,7 +32,7 @@ template = PromptTemplateDict(
     }
 )
 
-library = InMemoryPromptLibrary(prompts={"user": {"code_analysis": template}})
+library = ConfigPromptLibrary(prompts={"user": {"code_analysis": template}})
 builder = AsyncPromptBuilder(library=library)
 
 result = await builder.render_user_prompt(
@@ -323,7 +323,7 @@ code_review_template = PromptTemplateDict(
 )
 
 # Template inheritance
-class InheritingLibrary(InMemoryPromptLibrary):
+class InheritingLibrary(ConfigPromptLibrary):
     def __init__(self):
         super().__init__(prompts={
             "system": {
@@ -537,11 +537,11 @@ result = await render_with_fallback(builder, "qa_with_docs", params)
 ### Template Debugging
 
 ```python
-from dataknobs_llm.prompts import TemplateRenderError
+from dataknobs_llm.prompts import TemplateSyntaxError
 
 try:
     result = await builder.render_user_prompt("complex_template", params)
-except TemplateRenderError as e:
+except TemplateSyntaxError as e:
     print(f"Template error: {e}")
     print(f"Template: {e.template_name}")
     print(f"Line: {e.line_number}")

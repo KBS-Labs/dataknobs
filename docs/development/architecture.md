@@ -156,7 +156,7 @@ graph LR
 # Example: Document processing pipeline
 from dataknobs_utils import file_utils
 from dataknobs_xization import normalize
-from dataknobs_structures import Document, Tree
+from dataknobs_structures import Text, TextMetaData, Tree
 from dataknobs_utils import elasticsearch_utils
 
 # 1. Read input
@@ -166,7 +166,7 @@ content = file_utils.read_file("input.txt")
 normalized = normalize.basic_normalization_fn(content)
 
 # 3. Create structure
-doc = Document(normalized, metadata={"source": "input.txt"})
+doc = Text(normalized, TextMetaData(text_id="input.txt"))
 tree = Tree(doc)
 
 # 4. Process (application-specific)

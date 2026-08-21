@@ -590,7 +590,7 @@ class CachedTreeProcessor:
 
 ```python
 from concurrent.futures import ProcessPoolExecutor
-from dataknobs_xization import basic_normalization_fn
+from dataknobs_xization.normalize import basic_normalization_fn
 
 def process_batch(texts):
     return [basic_normalization_fn(text) for text in texts]

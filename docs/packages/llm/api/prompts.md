@@ -141,7 +141,7 @@ print(result)
 ### In-Memory Library
 
 ```python
-from dataknobs_llm.prompts import InMemoryPromptLibrary, PromptTemplateDict
+from dataknobs_llm.prompts import ConfigPromptLibrary, PromptTemplateDict
 
 # Create templates
 templates = {
@@ -153,7 +153,7 @@ templates = {
 }
 
 # Create library
-library = InMemoryPromptLibrary(prompts={"system": templates})
+library = ConfigPromptLibrary(prompts={"system": templates})
 
 # Use with builder
 builder = AsyncPromptBuilder(library=library)

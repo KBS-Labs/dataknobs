@@ -1,5 +1,9 @@
 # Data Package - Linting & Type Checking Errors Checklist
 
+> **Historical record.** This document describes the design as of its
+> writing. Its code samples are not guaranteed to resolve against the
+> current packages, and are deliberately left as written.
+
 This document tracks specific errors that need to be addressed in the data package.
 
 Last Updated: August 31, 2025

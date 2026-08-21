@@ -1,5 +1,9 @@
 # FSM Package - Loose Ends Checklist
 
+> **Historical record.** This document describes the design as of its
+> writing. Its code samples are not guaranteed to resolve against the
+> current packages, and are deliberately left as written.
+
 This document tracks incomplete implementations, TODOs, placeholders, and other missing functionality in the FSM package that needs to be addressed.
 
 **Last Updated**: December 2024  

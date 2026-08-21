@@ -17,7 +17,7 @@ The Sensor Dashboard example showcases:
 ## Quick Start
 
 ```python
-from dataknobs_data import SyncMemoryDatabase
+from dataknobs_data.backends import SyncMemoryDatabase
 from examples.sensor_dashboard import (
     SensorDashboard, 
     SensorDataGenerator,

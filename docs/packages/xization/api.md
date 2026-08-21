@@ -51,8 +51,6 @@ from dataknobs_xization.markdown.md_streaming import StreamingMarkdownProcessor
 - [chunking](chunking-abstraction.md) - Pluggable chunker abstraction and registry
 - [markdown](markdown-chunking.md) - Markdown parsing and chunking for RAG
 - [normalize](normalization.md) - Text normalization and standardization
-- [masking_tokenizer](masking.md) - Character-level features and masking
-- [tokenization](tokenization.md) - Advanced tokenization capabilities
 
 ### Supporting Modules
 - **annotations** - Text annotation and markup tools
@@ -138,25 +136,6 @@ char_df = features.cdf
 text_features = TextFeatures("Analysis text")
 ```
 
-### Tokenization
-```python
-from dataknobs_xization import tokenization
-
-# Different tokenization levels
-chars = tokenization.tokenize_characters("Hello world!")
-words = tokenization.tokenize_words("Hello, world!", lowercase=True)
-sentences = tokenization.tokenize_sentences("Hello world. How are you?")
-
-# Feature extraction
-char_features = tokenization.extract_character_features("Text")
-token_features = tokenization.extract_token_features(["word1", "word2"])
-
-# N-gram generation
-bigrams = tokenization.generate_ngrams(["a", "b", "c", "d"], 2)
-trigrams = tokenization.generate_ngrams(["a", "b", "c", "d"], 3)
-```
-
-## Detailed Module APIs
 
 ### chunking Module
 
@@ -467,10 +446,6 @@ class TextProcessingPipeline:
         char_analysis = self._analyze_characters(normalized)
         results['character_analysis'] = char_analysis
         
-        # Step 4: Tokenization
-        tokens = self._tokenize_text(normalized)
-        results['tokens'] = tokens
-        
         return results
     
     def _normalize_text(self, text: str) -> str:
@@ -521,16 +496,6 @@ class TextProcessingPipeline:
             'punct_chars': cdf['is_punct'].sum(),
             'alpha_ratio': cdf['is_alpha'].mean(),
             'digit_ratio': cdf['is_digit'].mean()
-        }
-    
-    def _tokenize_text(self, text: str) -> dict:
-        """Tokenize text at multiple levels."""
-        from dataknobs_xization import tokenization
-        
-        return {
-            'characters': tokenization.tokenize_characters(text),
-            'words': tokenization.tokenize_words(text, lowercase=True),
-            'sentences': tokenization.tokenize_sentences(text)
         }
     
     def process_documents(self, documents: List[dk_doc.Document]) -> List[dict]:

@@ -1,5 +1,9 @@
 # PostgreSQL Backend Code Sharing Analysis
 
+> **Historical record.** This document describes the design as of its
+> writing. Its code samples are not guaranteed to resolve against the
+> current packages, and are deliberately left as written.
+
 ## Current Implementation Overview
 
 ### Class Hierarchy

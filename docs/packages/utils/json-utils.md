@@ -460,4 +460,3 @@ def process_api_data():
 
 - [File Utils](file-utils.md) - File system utilities
 - [Utils Overview](index.md) - Complete utils package documentation
-- [Document Processing Examples](../../examples/document-processing.md) - Document handling with JSON

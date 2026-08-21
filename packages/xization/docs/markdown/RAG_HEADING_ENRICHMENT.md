@@ -103,7 +103,7 @@ text = build_enriched_text(
 Convenience function that creates fully enriched chunk data:
 
 ```python
-from dataknobs_xization import enrich_chunk
+from dataknobs_xization.markdown import enrich_chunk
 
 enriched = enrich_chunk(
     content="Configure OAuth settings...",
@@ -192,7 +192,7 @@ display = get_dynamic_heading_display(
 Get heading list for display:
 
 ```python
-from dataknobs_xization import get_relevant_headings_for_display
+from dataknobs_xization.markdown import get_relevant_headings_for_display
 
 # Small chunk: full heading path
 headings = get_relevant_headings_for_display(
@@ -382,7 +382,7 @@ is_multiword("OAuth 2.0")       # True
 Format headings with different styles:
 
 ```python
-from dataknobs_xization import format_heading_for_display
+from dataknobs_xization.markdown import format_heading_for_display
 
 # Path style
 format_heading_for_display(

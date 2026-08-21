@@ -15,7 +15,7 @@ The File Backend provides JSON-based file storage with full query capabilities. 
 ## Configuration
 
 ```python
-from dataknobs_data import SyncFileDatabase
+from dataknobs_data.backends.file import SyncFileDatabase
 
 # Configure with file path
 config = {
@@ -32,7 +32,8 @@ db = SyncFileDatabase(config)
 ### Basic Operations
 
 ```python
-from dataknobs_data import SyncFileDatabase, Record
+from dataknobs_data import Record
+from dataknobs_data.backends.file import SyncFileDatabase
 
 # Setup database
 db = SyncFileDatabase({"path": "data.json"})

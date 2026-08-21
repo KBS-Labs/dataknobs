@@ -1,5 +1,9 @@
 # Phase 8: Integration & Documentation - Progress Tracker
 
+> **Historical record.** This document describes the design as of its
+> writing. Its code samples are not guaranteed to resolve against the
+> current packages, and are deliberately left as written.
+
 ## Summary
 **Status**: ⚠️ PARTIALLY COMPLETE  
 **Date Started**: 2025-08-28  

@@ -62,9 +62,9 @@ pip install dataknobs
 from dataknobs_config import Config
 from dataknobs_data import Record, Query, database_factory
 from dataknobs_fsm import SimpleFSM, DataHandlingMode
-from dataknobs_structures import Tree, Document
+from dataknobs_structures import Tree
 from dataknobs_utils import json_utils, file_utils
-from dataknobs_xization import MaskingTokenizer
+from dataknobs_xization import normalize
 
 # Configuration with environment variables and factories
 config = Config("config.yaml")

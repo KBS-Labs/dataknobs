@@ -1,5 +1,9 @@
 # Data Package API Improvements
 
+> **Historical record.** This document describes the design as of its
+> writing. Its code samples are not guaranteed to resolve against the
+> current packages, and are deliberately left as written.
+
 Based on implementing the Sensor Dashboard example, here are observations about the data package API and potential improvements:
 
 ## 1. Nested Field Queries ✅ FIXED

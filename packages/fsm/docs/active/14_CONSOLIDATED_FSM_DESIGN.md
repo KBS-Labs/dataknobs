@@ -1,5 +1,9 @@
 # DataKnobs FSM Package - Consolidated Design Document
 
+> **Historical record.** This document describes the design as of its
+> writing. Its code samples are not guaranteed to resolve against the
+> current packages, and are deliberately left as written.
+
 **Version**: 1.0  
 **Last Updated**: December 2024  
 **Status**: Complete Implementation

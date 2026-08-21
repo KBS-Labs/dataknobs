@@ -1,5 +1,9 @@
 # Getting Started with DataKnobs Vector Store
 
+> **Historical record.** This document describes the design as of its
+> writing. Its code samples are not guaranteed to resolve against the
+> current packages, and are deliberately left as written.
+
 This guide will help you quickly get started with vector search capabilities in DataKnobs. Vector search enables semantic similarity search, allowing you to find records based on meaning rather than exact keyword matches.
 
 ## Table of Contents

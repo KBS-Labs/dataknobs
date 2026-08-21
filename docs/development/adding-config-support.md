@@ -170,8 +170,8 @@ class ComplexConfigurableClass(ConfigurableBase):
     def _init_database(self):
         """Initialize database from nested config."""
         if self.database_config:
-            from dataknobs_data import Database
-            self.db = Database.create(
+            from dataknobs_data import SyncDatabase
+            self.db = SyncDatabase.create(
                 self.database_config.get("backend", "memory"),
                 self.database_config
             )

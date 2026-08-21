@@ -1,5 +1,9 @@
 # FSM Implementation Status
 
+> **Historical record.** This document describes the design as of its
+> writing. Its code samples are not guaranteed to resolve against the
+> current packages, and are deliberately left as written.
+
 ## Overall Progress: ~80% Complete (Phase 7 Complete, Phase 8 Complete)
 
 ## Phase Completion Status

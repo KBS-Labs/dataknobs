@@ -345,7 +345,7 @@ print(f"Normalized: {normalized}")
 
 ```python
 from dataknobs_xization import normalize
-from dataknobs_structures import Document
+from dataknobs_structures import Text, TextMetaData
 
 def batch_normalize(documents):
     """Normalize a batch of documents."""
@@ -353,9 +353,9 @@ def batch_normalize(documents):
     
     for doc in documents:
         normalized_text = normalize.basic_normalization_fn(doc.text)
-        normalized_doc = Document(
+        normalized_doc = Text(
             normalized_text,
-            metadata={**doc.metadata, "normalized": True}
+            TextMetaData(doc.text_id, doc.text_label, normalized=True),
         )
         normalized_docs.append(normalized_doc)
     
@@ -363,14 +363,14 @@ def batch_normalize(documents):
 
 # Example
 documents = [
-    Document("getUserName", metadata={"id": 1}),
-    Document("processData&SaveResults", metadata={"id": 2}),
-    Document("XMLHttpRequest", metadata={"id": 3})
+    Text("getUserName", TextMetaData(text_id=1)),
+    Text("processData&SaveResults", TextMetaData(text_id=2)),
+    Text("XMLHttpRequest", TextMetaData(text_id=3)),
 ]
 
 normalized = batch_normalize(documents)
 for doc in normalized:
-    print(f"Doc {doc.metadata['id']}: {doc.text}")
+    print(f"Doc {doc.text_id}: {doc.text}")
 ```
 
 ### Parallel Normalization
@@ -464,6 +464,5 @@ print(f"Processed: {normalized}")
 
 ## Related Examples
 
-- [Document Processing](document-processing.md)
 - [Basic Tree Operations](basic-tree.md)
 - [Elasticsearch Integration](elasticsearch-integration.md)

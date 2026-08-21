@@ -1,5 +1,7 @@
 """Re-export structures from dataknobs-structures package."""
 
+from dataknobs._aliasing import alias_submodules
+
 # Import the submodules explicitly to make them available
 from dataknobs_structures import conditional_dict, document, record_store, tree
 
@@ -9,7 +11,10 @@ from dataknobs_structures.document import MetaData, Text, TextMetaData
 from dataknobs_structures.record_store import RecordStore
 from dataknobs_structures.tree import Tree, build_tree_from_string
 
-# Make submodules available as attributes
+# Attribute binding alone leaves ``dataknobs.structures.<name>`` unresolvable as a
+# dotted module path, which is the form pre-split code uses.
+alias_submodules(__name__, (conditional_dict, document, record_store, tree))
+
 __all__ = [
     "MetaData",
     "RecordStore",

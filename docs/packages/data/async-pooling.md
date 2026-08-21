@@ -604,13 +604,13 @@ loop2.run_until_complete(db.connect())  # Error!
 
 ```python
 # Old implementation
-from dataknobs_data.backends.elasticsearch import AsyncElasticsearchDatabase
+from dataknobs_data.backends.elasticsearch_async import AsyncElasticsearchDatabase
 
 db = AsyncElasticsearchDatabase(config)
 await db.connect()
 
 # New implementation (automatic import)
-from dataknobs_data.backends.elasticsearch import AsyncElasticsearchDatabase
+from dataknobs_data.backends.elasticsearch_async import AsyncElasticsearchDatabase
 
 db = AsyncElasticsearchDatabase(config)
 await db.connect()  # Uses native client with pooling

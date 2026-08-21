@@ -1,5 +1,9 @@
 # Vector API Refactoring Plan
 
+> **Historical record.** This document describes the design as of its
+> writing. Its code samples are not guaranteed to resolve against the
+> current packages, and are deliberately left as written.
+
 ## Overview
 This document outlines the refactoring of vector-related APIs to make them more intuitive and easier to use, based on issues discovered during testing.
 

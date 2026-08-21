@@ -1,5 +1,9 @@
 # Advanced FSM Improvements
 
+> **Historical record.** This document describes the design as of its
+> writing. Its code samples are not guaranteed to resolve against the
+> current packages, and are deliberately left as written.
+
 ## Overview
 This document tracks the improvements needed for the AdvancedFSM API to fully support interactive debugging and monitoring scenarios as originally envisioned in the `advanced_debugging.py` example.
 

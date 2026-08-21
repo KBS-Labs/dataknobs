@@ -17,7 +17,8 @@ The Memory Backend provides an in-memory storage solution ideal for development,
 ### Basic Setup
 
 ```python
-from dataknobs_data import SyncMemoryDatabase, Record
+from dataknobs_data import Record
+from dataknobs_data.backends import SyncMemoryDatabase
 
 # Create database instance
 db = SyncMemoryDatabase()
@@ -34,7 +35,7 @@ print(retrieved["name"])  # "Alice"
 ### Async Version
 
 ```python
-from dataknobs_data import AsyncMemoryDatabase
+from dataknobs_data.backends import AsyncMemoryDatabase
 import asyncio
 
 async def main():

@@ -107,7 +107,7 @@ Check that packages are installed correctly:
 from dataknobs_config import Config
 from dataknobs_data import Record, Query
 from dataknobs_fsm import SimpleFSM
-from dataknobs_llm import LLM
+from dataknobs_llm import LLMProvider
 from dataknobs_bots import BotRegistry
 from dataknobs_structures import Tree
 from dataknobs_utils import json_utils

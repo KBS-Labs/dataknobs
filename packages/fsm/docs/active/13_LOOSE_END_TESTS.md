@@ -1,5 +1,9 @@
 # FSM Package - Loose End Implementation Tests Checklist
 
+> **Historical record.** This document describes the design as of its
+> writing. Its code samples are not guaranteed to resolve against the
+> current packages, and are deliberately left as written.
+
 This document tracks the test coverage needed for the completed loose end implementations documented in `11_LOOSE_ENDS.md`. Each completed feature needs comprehensive testing to ensure it works correctly.
 
 **Created**: December 2024  

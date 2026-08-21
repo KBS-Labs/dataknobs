@@ -25,7 +25,7 @@ Complete API documentation for all Dataknobs packages.
 All packages listed alphabetically:
 
 - [dataknobs-bots](dataknobs-bots.md) - AI chatbots and agents API
-- [dataknobs-common](dataknobs-common.md) - Common components, registries, and exceptions API
+- [dataknobs-common](reference/common.md) - Common components, registries, and exceptions API
 - [dataknobs-config](dataknobs-config.md) - Configuration management API
 - [dataknobs-data](dataknobs-data.md) - Data abstraction API
 - [dataknobs-fsm](dataknobs-fsm.md) - Finite State Machine framework API

@@ -701,7 +701,7 @@ class TestXizationFunctions:
     
     def test_document_integration(self):
         """Test integration with document structures."""
-        doc = dk_doc.Text("Test document", text_id="test1")
+        doc = dk_doc.Text("Test document", dk_doc.TextMetaData(text_id="test1"))
         
         class DocCharFeatures(masking_tokenizer.CharacterFeatures):
             @property

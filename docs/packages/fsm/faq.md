@@ -336,9 +336,10 @@ from dataknobs_fsm.api.simple import SimpleFSM
 
 ### ImportError: cannot import name 'DataMode'
 
+<!-- dk-imports: illustrative -- the first import is the mistake this entry is about -->
 ```python
 # Wrong:
-from dataknobs_fsm import DataMode  # Incorrect name
+from dataknobs_fsm.core.data_modes import DataHandlingMode
 
 # Correct:
 from dataknobs_fsm.core.data_modes import DataHandlingMode

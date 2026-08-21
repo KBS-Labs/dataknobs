@@ -1,5 +1,9 @@
 # Phase 7: Optimization & Performance - Completion Report
 
+> **Historical record.** This document describes the design as of its
+> writing. Its code samples are not guaranteed to resolve against the
+> current packages, and are deliberately left as written.
+
 ## Summary
 **Status**: ✅ COMPLETED  
 **Date**: 2025-08-28  

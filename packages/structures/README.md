@@ -18,7 +18,8 @@ pip install dataknobs-structures
 ## Usage
 
 ```python
-from dataknobs_structures import Tree, Document
+from dataknobs_structures import Tree
+from dataknobs_structures import Text, TextMetaData
 
 # Create a tree structure
 tree = Tree()
@@ -26,9 +27,9 @@ tree.add_node("root", "Root Node")
 tree.add_node("child1", "Child 1", parent="root")
 
 # Create a document
-doc = Document(
-    content="Sample document content",
-    metadata={"author": "John Doe", "date": "2024-01-01"}
+doc = Text(
+    "Sample document content",
+    TextMetaData(text_id="doc_001", author="John Doe", date="2024-01-01"),
 )
 ```
 

@@ -101,9 +101,9 @@ print(df.dtypes)
 Define custom type conversion logic:
 
 ```python
-from dataknobs_data.pandas import TypeConverter
+from dataknobs_data.pandas import TypeMapper
 
-class CustomTypeConverter(TypeConverter):
+class CustomTypeConverter(TypeMapper):
     """Custom type conversion logic"""
     
     def to_pandas_value(self, field):
@@ -242,31 +242,7 @@ print(f"Updated: {result.updated}")
 
 ### Query Results as DataFrame
 
-Get query results directly as DataFrame:
-
-```python
-from dataknobs_data.pandas import PandasDatabase
-
-# Wrap database with pandas support
-pandas_db = PandasDatabase(database)
-
-# Query returning DataFrame
-df = pandas_db.search_dataframe(
-    Query(
-        filters=[Filter("status", "=", "active")],
-        sort=[Sort("created_at", "desc")],
-        limit=1000
-    )
-)
-
-# Use pandas for analysis
-summary = df.groupby("category").agg({
-    "price": ["mean", "std", "count"],
-    "quantity": "sum"
-})
-```
-
-### Aggregation Queries
+## Aggregation Queries
 
 Perform aggregations with pandas:
 

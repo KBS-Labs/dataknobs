@@ -1,5 +1,9 @@
 # Vector Store Support - Enhanced Design V2
 
+> **Historical record.** This document describes the design as of its
+> writing. Its code samples are not guaranteed to resolve against the
+> current packages, and are deliberately left as written.
+
 ## Executive Summary
 
 This enhanced design document outlines a comprehensive approach for adding vector store capabilities to the DataKnobs data package. The design prioritizes seamless integration with existing backends, automatic vector-text association, and efficient synchronization mechanisms while maintaining backward compatibility and simplicity.

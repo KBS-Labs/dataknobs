@@ -12,73 +12,6 @@ Performance features include:
 - **Async Support**: Full async/await throughout
 - **Performance Profiling**: Identify bottlenecks
 
-## Quick Start
-
-```python
-from dataknobs_llm.benchmarks import (
-    PromptBenchmark,
-    RAGBenchmark,
-    ConversationBenchmark
-)
-
-# Benchmark prompt rendering
-benchmark = PromptBenchmark(iterations=1000)
-results = benchmark.run_all()
-
-for result in results:
-    print(f"{result.name}: {result.operations_per_second:.0f} ops/sec")
-```
-
-## Benchmarking
-
-### Prompt Rendering Benchmarks
-
-```python
-from dataknobs_llm.benchmarks import PromptBenchmark
-
-benchmark = PromptBenchmark(iterations=1000)
-
-# Run all benchmarks
-results = benchmark.run_all()
-
-# Or run specific benchmarks
-simple_result = benchmark.benchmark_simple_rendering()
-conditional_result = benchmark.benchmark_conditional_rendering()
-complex_result = benchmark.benchmark_complex_template()
-
-# View results
-print(f"Operations/sec: {simple_result.operations_per_second:.0f}")
-print(f"Mean time: {simple_result.mean_time * 1000:.2f}ms")
-print(f"Median time: {simple_result.median_time * 1000:.2f}ms")
-```
-
-### RAG Search Benchmarks
-
-```python
-from dataknobs_llm.benchmarks import RAGBenchmark
-
-benchmark = RAGBenchmark(iterations=100)
-
-# Benchmark RAG searches
-results = await benchmark.run_all_async()
-
-for result in results:
-    print(f"{result.name}:")
-    print(f"  {result.operations_per_second:.0f} ops/sec")
-    print(f"  {result.mean_time * 1000:.2f}ms avg")
-```
-
-### Conversation Benchmarks
-
-```python
-from dataknobs_llm.benchmarks import ConversationBenchmark
-
-benchmark = ConversationBenchmark(iterations=100)
-
-# Benchmark conversation operations
-results = await benchmark.run_all_async()
-```
-
 ## RAG Caching
 
 ### Conversation-Level Caching
@@ -209,7 +142,6 @@ Comprehensive performance documentation is available in the package:
 
 The LLM package includes detailed documentation in `packages/llm/docs/`:
 
-- **BENCHMARKING.md** - Benchmarking framework, metrics, profiling, and optimization techniques
 - **RAG_CACHING.md** - RAG metadata caching, query hashing, and cache configuration
 - **BEST_PRACTICES.md** - Performance best practices and optimization patterns
 
@@ -327,21 +259,6 @@ Typical performance on modern hardware:
 
 ## Monitoring
 
-### Track Performance Over Time
-
-```python
-from dataknobs_llm.benchmarks import run_benchmarks
-
-# Run periodically
-results = run_benchmarks()
-
-# Log to monitoring system
-for result in results:
-    metrics.gauge(f"benchmark.{result.name}.ops_per_sec",
-                  result.operations_per_second)
-    metrics.gauge(f"benchmark.{result.name}.mean_time",
-                  result.mean_time * 1000)  # ms
-```
 
 ### Real-Time Metrics
 

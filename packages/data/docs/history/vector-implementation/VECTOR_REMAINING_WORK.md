@@ -1,5 +1,9 @@
 # Vector Store Implementation - 🎉 COMPLETE 🎉
 
+> **Historical record.** This document describes the design as of its
+> writing. Its code samples are not guaranteed to resolve against the
+> current packages, and are deliberately left as written.
+
 ## Final Status
 **The vector store implementation is COMPLETE and production-ready.** All originally planned work has been finished, plus significant additional robustness improvements and comprehensive testing.
 

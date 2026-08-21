@@ -1,5 +1,9 @@
 # FSM Implementation Learnings
 
+> **Historical record.** This document describes the design as of its
+> writing. Its code samples are not guaranteed to resolve against the
+> current packages, and are deliberately left as written.
+
 ## Phase 7: API and Integration Learnings
 
 ### 1. Configuration Format Flexibility

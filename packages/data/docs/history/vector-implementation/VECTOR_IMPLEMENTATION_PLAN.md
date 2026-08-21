@@ -1,5 +1,9 @@
 # Vector Store Implementation Plan
 
+> **Historical record.** This document describes the design as of its
+> writing. Its code samples are not guaranteed to resolve against the
+> current packages, and are deliberately left as written.
+
 ## Overview
 This document provides a detailed, context-preserving implementation plan for the Vector Store Design V2, with comprehensive checklists for tracking progress through each phase.
 

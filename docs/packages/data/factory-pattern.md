@@ -272,11 +272,12 @@ def get_database_for_use_case(use_case: str):
 You can register custom backend implementations:
 
 ```python
-from dataknobs_data import Database, DatabaseFactory
+from dataknobs_data import DatabaseFactory
+from dataknobs_data import SyncDatabase
 from dataknobs_data.records import Record
 from typing import List, Optional
 
-class CustomDatabase(Database):
+class CustomDatabase(SyncDatabase):
     """Custom database implementation."""
     
     def __init__(self, **config):
@@ -474,7 +475,7 @@ from dataclasses import dataclass
 from typing import Protocol
 
 class DatabaseProtocol(Protocol):
-    """Database interface for dependency injection."""
+    """SyncDatabase interface for dependency injection."""
     def create(self, record: Record) -> str: ...
     def read(self, record_id: str) -> Optional[Record]: ...
     def update(self, record_id: str, record: Record) -> bool: ...

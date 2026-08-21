@@ -15,7 +15,7 @@ The Elasticsearch Backend provides powerful full-text search, analytics, and dis
 ## Configuration
 
 ```python
-from dataknobs_data import ElasticsearchDatabase
+from dataknobs_data.backends.elasticsearch import SyncElasticsearchDatabase
 
 config = {
     "hosts": ["http://localhost:9200"],
@@ -25,7 +25,7 @@ config = {
     "pool_size": 10
 }
 
-db = ElasticsearchDatabase(config)
+db = SyncElasticsearchDatabase(config)
 ```
 
 ## Index Mapping
