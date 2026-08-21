@@ -105,7 +105,9 @@ db.close()
 
 ### File Backend
 ```python
-db = await Database.create("file", {
+from dataknobs_data import AsyncDatabase
+
+db = await AsyncDatabase.from_backend("file", {
     "path": "/data/records.json",
     "pretty": True,
     "backup": True
@@ -114,7 +116,9 @@ db = await Database.create("file", {
 
 ### SQLite Backend
 ```python
-db = await Database.create("sqlite", {
+from dataknobs_data import AsyncDatabase
+
+db = await AsyncDatabase.from_backend("sqlite", {
     "path": "app.db",  # or ":memory:" for in-memory
     "journal_mode": "WAL",
     "synchronous": "NORMAL"
@@ -123,7 +127,9 @@ db = await Database.create("sqlite", {
 
 ### PostgreSQL Backend
 ```python
-db = await Database.create("postgres", {
+from dataknobs_data import AsyncDatabase
+
+db = await AsyncDatabase.from_backend("postgres", {
     "host": "localhost",
     "database": "mydb",
     "user": "user",
@@ -135,7 +141,9 @@ db = await Database.create("postgres", {
 
 ### S3 Backend
 ```python
-db = await Database.create("s3", {
+from dataknobs_data import AsyncDatabase
+
+db = await AsyncDatabase.from_backend("s3", {
     "bucket": "my-bucket",
     "prefix": "records/",
     "region": "us-west-2",
@@ -146,7 +154,9 @@ db = await Database.create("s3", {
 
 ### Elasticsearch Backend
 ```python
-db = await Database.create("elasticsearch", {
+from dataknobs_data import AsyncDatabase
+
+db = await AsyncDatabase.from_backend("elasticsearch", {
     "host": "localhost",
     "port": 9200,
     "index": "records",
@@ -359,7 +369,7 @@ Migrate data between backends with transformation support:
 ```python
 from datetime import datetime
 
-from dataknobs_data import async_database_factory
+from dataknobs_data import AsyncDatabase
 from dataknobs_data.migration import (
     AddField, Migration, Migrator, RenameField, TransformField,
 )
@@ -372,8 +382,8 @@ migration.add(TransformField("email", lambda x: x.lower()))
 
 # Migrate between backends
 async def migrate_data(postgres_config, s3_config):
-    source_db = async_database_factory.create(backend="postgres", **postgres_config)
-    target_db = async_database_factory.create(backend="s3", **s3_config)
+    source_db = await AsyncDatabase.from_backend("postgres", postgres_config)
+    target_db = await AsyncDatabase.from_backend("s3", s3_config)
 
     migrator = Migrator()
 

@@ -17,7 +17,7 @@ from dataknobs_data import AsyncDatabase, Record, Query
 
 # Simple usage - pooling is automatic!
 async def main():
-    db = await AsyncDatabase.create("elasticsearch", {
+    db = await AsyncDatabase.from_backend("elasticsearch", {
         "hosts": ["http://localhost:9200"],
         "index": "my_data"
     })
@@ -39,7 +39,7 @@ async def main():
 ```python
 # 5.3x faster for batch operations!
 async def s3_example():
-    db = await AsyncDatabase.create("s3", {
+    db = await AsyncDatabase.from_backend("s3", {
         "bucket": "my-bucket",
         "region": "us-east-1"
     })
@@ -56,7 +56,7 @@ async def s3_example():
 ```python
 # Native PostgreSQL performance
 async def postgres_example():
-    db = await AsyncDatabase.create("postgres", {
+    db = await AsyncDatabase.from_backend("postgres", {
         "host": "localhost",
         "database": "mydb",
         "user": "user",
@@ -169,7 +169,7 @@ class DataService:
         self.db = None
     
     async def initialize(self):
-        self.db = await AsyncDatabase.create("elasticsearch", config)
+        self.db = await AsyncDatabase.from_backend("elasticsearch", config)
     
     async def process_item(self, item):
         # Reuses pooled connection
