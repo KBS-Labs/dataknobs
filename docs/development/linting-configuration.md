@@ -45,7 +45,7 @@ The four categories:
 Do not infer a rule's disposition from this page or from reading the TOML. Ask:
 
 ```bash
-bin/quality-contract.py explain RUF012
+bin/quality-contract.py explain D203
 bin/quality-contract.py explain SIM115 packages/utils/src/dataknobs_utils/xml_utils.py
 ```
 

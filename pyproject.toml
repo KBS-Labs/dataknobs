@@ -527,9 +527,6 @@ ignore = [
               # program behaviour." Not abstract here -- NPY is in select, and for an
               # array `a + [b]` is elementwise addition while `[*a, b]` builds a list.
               # 22 findings, 21 carrying an unsafe fix.
-    "RUF012", # [provisional] Mutable class attributes should use ClassVar — 25 findings,
-              # 12 in src/, none read. Each is either a missing ClassVar annotation or a
-              # genuine shared-mutable-default bug, and only the site says which.
     "RUF013", # [covered-elsewhere] mypy's implicit-Optional check, which is on by
               # default. 39 of the 42 findings are in src/; the 3 outside sit in cells
               # mypy leaves unchecked, so this cover has the same hole the ANN block

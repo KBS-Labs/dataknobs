@@ -5,7 +5,7 @@ from __future__ import annotations
 import copy
 import json
 import logging
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, ClassVar
 
 from dataknobs_llm.llm.utils import CostCalculator
 
@@ -55,7 +55,7 @@ class CostTrackingMiddleware(Middleware):
     """
 
     # Default cost rates (USD per 1K tokens) - Updated Dec 2024
-    DEFAULT_RATES: dict[str, Any] = {
+    DEFAULT_RATES: ClassVar[dict[str, Any]] = {
         "ollama": {"input": 0.0, "output": 0.0},  # Free (infrastructure cost only)
         "openai": {
             "gpt-4o": {"input": 0.0025, "output": 0.01},

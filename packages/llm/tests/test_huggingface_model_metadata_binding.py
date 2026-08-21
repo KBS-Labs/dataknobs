@@ -20,7 +20,7 @@ following the sanctioned no-SDK transport-edge pattern of
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, ClassVar
 
 from dataknobs_llm.llm.base import LLMConfig, ModelCapability
 from dataknobs_llm.llm.model_profile import (
@@ -106,7 +106,7 @@ def _provider(session: Any = None, **config_kwargs: Any) -> HuggingFaceProvider:
 class TestConfigOverrideMatcherSeam:
     """A per-repo override map must not resolve a base repo to a variant override."""
 
-    PER_REPO = {
+    PER_REPO: ClassVar[dict[str, dict[str, int]]] = {
         "meta-llama/Llama-3.1-8B-Instruct": {"context_window": 4096},
     }
 

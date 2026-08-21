@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import pathlib
 import re
-from typing import Any
+from typing import Any, ClassVar
 
 import pytest
 
@@ -346,7 +346,7 @@ class _RecordingMiddleware(Middleware):
 
     #: Instances are found through this module-level list because the spec
     #: names a class, not an object — the factory constructs it.
-    seen: list[str] = []
+    seen: ClassVar[list[str]] = []
 
     def __init__(self, tag: str = "default") -> None:
         self.tag = tag
@@ -358,7 +358,7 @@ class _RecordingMiddleware(Middleware):
 class _RecordingConversationMiddleware(ConversationMiddleware):
     """The LLM-call-wrap analogue, recording that it wrapped a request."""
 
-    seen: list[str] = []
+    seen: ClassVar[list[str]] = []
 
     def __init__(self, tag: str = "default") -> None:
         self.tag = tag

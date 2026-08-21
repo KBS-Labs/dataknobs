@@ -123,7 +123,7 @@ class PgVectorStore(VectorStore):
     """
 
     # Default column mappings
-    DEFAULT_COLUMNS = {
+    DEFAULT_COLUMNS: ClassVar[dict[str, str]] = {
         "id": "id",
         "embedding": "embedding",
         "content": "content",

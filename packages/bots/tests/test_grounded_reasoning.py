@@ -6,7 +6,7 @@ test helper (real KnowledgeBase subclass, not a mock).
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, ClassVar
 
 import pytest
 
@@ -2126,7 +2126,7 @@ class TestDefaultProvenanceTemplate:
         strategy = GroundedReasoning(config)
 
         class _Mgr:
-            metadata: dict[str, Any] = {}
+            metadata: ClassVar[dict[str, Any]] = {}
             system_prompt = "Bot."
 
             def get_messages(self) -> list[dict[str, Any]]:
