@@ -271,8 +271,13 @@ class GroundedSourceConfig(StructuredConfig):
             Higher weights give a source proportionally more
             representation in the merged result set.
         options: Source-specific options passed to the constructor.
-            For ``"database"``: ``backend``, ``connection``,
-            ``content_field``, ``text_search_fields``, ``schema``.
+            For ``"database"``: ``content_field``, ``text_search_fields``,
+            ``schema`` and ``description`` configure the source; every
+            other key configures the backend it builds and is forwarded to
+            the database factory, which accepts or rejects it against the
+            backend ``backend`` names (``path`` for the file-backed ones,
+            ``connection_string`` or ``host``/``database``/``user`` for
+            Postgres, and so on).
             On ``from_dict``, any keys outside the reserved set
             (``type``/``source_type``, ``name``, ``weight``,
             ``topic_index``, ``options``) are collected here, preserving

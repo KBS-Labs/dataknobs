@@ -313,8 +313,8 @@ All packages support environment variables through Config:
 # config.yaml
 databases:
   primary:
-    backend: ${DB_BACKEND:memory}  # Default to memory
-    connection: ${DB_CONNECTION:}
+    backend: ${DB_BACKEND:sqlite}  # Default to a local file
+    path: ${DB_PATH:./app.db}
 
 llm:
   provider: ${LLM_PROVIDER:openai}

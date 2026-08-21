@@ -17,6 +17,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   point a file-backed bank failed to build. The bank name is now offered
   only where the backend's own config says it is accepted.
 
+- **A `database` grounded source only worked against the in-process store.**
+  The source builds its own backend, and the one configuration needing no
+  configuration was the only one it could express — which is also the only
+  one under which the three gaps below are invisible.
+
+  It forwarded `backend` and a `connection` string that no backend accepts
+  under any spelling, dropping every key that names a store: a source
+  declaring `backend: sqlite` with a file path got `:memory:`. It then never
+  connected what it built, and a backend that needs connecting raises on
+  every query — which `DatabaseSource` reports as an empty result set, so a
+  source grounded on a real database returned nothing on every turn and
+  nothing said so. And `schema.fields` written as the documented list of
+  `{name, type}` mappings raised `AttributeError`, because the builder read
+  only the mapping form.
+
+  Options that are the source's own (`content_field`, `text_search_fields`,
+  `schema`, `description`) stay with the source; every other option now goes
+  to the database factory, which is the only code that knows what each
+  backend takes. The backend it builds is connected, and both spellings of
+  `schema.fields` are read. **Breaking** for a config carrying an option
+  that no backend accepts and that was previously discarded: it is now an
+  error naming the source and the key.
+
 ## v0.11.0 - 2026-08-19
 
 ### Security

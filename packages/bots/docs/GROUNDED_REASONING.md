@@ -231,7 +231,9 @@ reasoning:
     - type: database
       name: case_studies
       weight: 1              # 1 result per cycle
-      backend: memory
+      backend: sqlite
+      path: ./case_studies.db
+      table: cases
       content_field: summary
       text_search_fields: [title, summary, tags]
       schema:
@@ -241,6 +243,29 @@ reasoning:
           - name: summary
             type: text
 ```
+
+A `database` source builds and connects its own backend. `content_field`,
+`text_search_fields`, `schema` and `description` configure the source;
+**every other key configures that backend and is passed to the database
+factory**, which accepts or rejects it against the backend `backend` names
+— `path` and `table` above, `connection_string` (or
+`host`/`database`/`user`) for `postgres`, `bucket` for `s3`. A key no
+backend accepts is an error naming the source, rather than a silently
+different configuration.
+
+`schema.fields` may be written either as the list of `{name, type}`
+mappings above or as a mapping of field name to type:
+
+```yaml
+      schema:
+        fields:
+          title: string
+          summary: {type: text}
+```
+
+Omitting `backend` builds the in-process store, which is unpersisted and
+answers every query with zero results until something writes to it. That
+case is reported at WARNING so it cannot be mistaken for a configured one.
 
 **Programmatic injection:**
 
