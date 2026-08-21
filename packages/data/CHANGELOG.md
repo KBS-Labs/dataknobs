@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Fixed
+
+- **`Not` is exported from `dataknobs_data.validation`.** The three logical
+  combinators are `All`, `AnyOf` and `Not`; the first two were exported and
+  the third was not, so the only one that negates was the only one
+  unreachable by the path the other two use. It was reachable as `~other`
+  and by importing the submodule directly, which is why the gap survived. A
+  test now derives the expected export set from the constraints module, so
+  a constraint added later is covered without anyone remembering to.
+
 ## v0.9.0 - 2026-08-19
 
 ### Added

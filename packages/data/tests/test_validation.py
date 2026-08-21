@@ -578,3 +578,46 @@ class TestIntegration:
         assert not all_results[2].valid  # Duplicate john_doe
         assert not all_results[3].valid  # Invalid email
         assert not all_results[4].valid  # Terms not accepted
+
+
+class TestConstraintExports:
+    """Every public constraint reaches consumers through the package.
+
+    ``Not`` was defined between ``AnyOf`` and ``Required`` and exported by
+    neither ``__init__`` import nor ``__all__``, so the one combinator that
+    negates was the one combinator no consumer could import by the path the
+    other two use. The second test is the recurrence guard: it derives the
+    expected set from the module rather than restating it, so a constraint
+    added later is covered without anyone remembering to add it here.
+    """
+
+    def test_not_is_importable_from_the_package(self):
+        """The specific omission, named so a regression reads plainly."""
+        from dataknobs_data.validation import Not
+
+        result = Not(Required()).check(None)
+        assert result.valid is True, "Not(Required()) should accept a missing value"
+        assert Not(Required()).check("present").valid is False
+
+    def test_every_public_constraint_is_exported(self):
+        """No public ``Constraint`` subclass is reachable only by submodule."""
+        import inspect
+
+        from dataknobs_data import validation
+        from dataknobs_data.validation import constraints as constraints_module
+        from dataknobs_data.validation.constraints import Constraint
+
+        defined = {
+            name
+            for name, obj in vars(constraints_module).items()
+            if not name.startswith("_")
+            and inspect.isclass(obj)
+            and issubclass(obj, Constraint)
+            and obj.__module__ == constraints_module.__name__
+        }
+        missing = sorted(name for name in defined if name not in validation.__all__)
+
+        assert not missing, (
+            "constraints defined but not exported from dataknobs_data.validation, "
+            f"so consumers cannot import them by the documented path: {missing}"
+        )
