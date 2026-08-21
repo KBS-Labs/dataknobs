@@ -4,6 +4,8 @@ Auto-advance allows the wizard to skip stages where all required schema
 fields already have values in the wizard state.
 """
 
+from typing import Any, ClassVar
+
 import pytest
 
 from dataknobs_bots.reasoning.wizard import WizardReasoning, WizardState
@@ -891,7 +893,7 @@ class TestSkipExtractionSurvivesTheTurnBoundary:
     separately maintained field list inside ``_save_wizard_state``.
     """
 
-    CONFIG = {
+    CONFIG: ClassVar[dict[str, Any]] = {
         "name": "test-wizard",
         "stages": [
             {

@@ -12,6 +12,7 @@ Validates that:
 
 import tempfile
 from pathlib import Path
+from typing import ClassVar
 
 import pytest
 import yaml
@@ -203,7 +204,7 @@ class TestEchoStreamToolsForwarding:
         class FakeTool:
             name = "my_tool"
             description = "A test tool"
-            schema = {"type": "object"}
+            schema: ClassVar[dict[str, str]] = {"type": "object"}
 
         _ = [c async for c in provider.stream_complete("test", tools=[FakeTool()])]
 
@@ -228,7 +229,7 @@ class TestManagerStreamToolPassing:
         class FakeTool:
             name = "my_tool"
             description = "A test tool"
-            schema = {"type": "object"}
+            schema: ClassVar[dict[str, str]] = {"type": "object"}
 
         _ = [c async for c in mgr.stream_complete(tools=[FakeTool()])]
 

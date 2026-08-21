@@ -305,19 +305,8 @@ ignore = [
             # in bin/, so the argparse __doc__ readers noted under D200 are untouched.
     "D417", # [presentational] Missing argument description in docstring
 
-    # flake8-bugbear
-    "B905", # [provisional] zip() without an explicit strict parameter — 36 findings,
-            # 17 of them in src/, and not one has been read. Silent truncation to the
-            # shorter iterable is a real defect shape, so this decline is unargued
-            # rather than argued, and naming that is what this category is for.
-
     # flake8-eradicate - allow commented code with TODOs
     "ERA001", # [presentational] Found commented-out code — a comment does not run
-
-    # Pylint warnings - loop variables
-    "PLW2901", # [provisional] Loop variable overwritten by assignment target — 19
-               # findings, 15 in src/, none read. Rebinding the loop name is as often
-               # a silent bug as a deliberate narrowing, and only the site says which.
 
     # Physical-line rules — these measure a line of the file, so a finding inside a
     # triple-quoted string is a statement about that string's *content*, not about
@@ -527,9 +516,6 @@ ignore = [
               # program behaviour." Not abstract here -- NPY is in select, and for an
               # array `a + [b]` is elementwise addition while `[*a, b]` builds a list.
               # 22 findings, 21 carrying an unsafe fix.
-    "RUF012", # [provisional] Mutable class attributes should use ClassVar — 25 findings,
-              # 12 in src/, none read. Each is either a missing ClassVar annotation or a
-              # genuine shared-mutable-default bug, and only the site says which.
     "RUF013", # [covered-elsewhere] mypy's implicit-Optional check, which is on by
               # default. 39 of the 42 findings are in src/; the 3 outside sit in cells
               # mypy leaves unchecked, so this cover has the same hole the ANN block

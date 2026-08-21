@@ -36,6 +36,19 @@ described above. Named, they are countable: the sum of the ``provisional``
 counts is a number whose target is zero, and it is the only figure here that is
 supposed to move.
 
+**That sum is zero, and the category stays anyway.** The three entries that
+held it were read and enforced, so nothing is filed there now. The contract
+next door strikes a tier its last cell leaves — and the reason a decline
+category is the opposite case is worth stating, because the two look alike and
+point in opposite directions. An empty *tier* is the first move of a retreat:
+drop a directory from a tool's target set, re-file its cell in a tier that
+tolerates a backlog, and both declarations agree with each other about code
+nobody checks any more. Removing the word makes that move unspellable. An empty
+*decline category* is the honest name for a decline nobody has read. Remove it
+and the next one is filed as ``behavioural`` with an invented argument, or
+``presentational`` with a claim that is simply false. The word going away would
+not stop an unargued decline; it would stop it being countable.
+
 **The parse is pinned.** ``parse_declines`` re-implements a read the toolchain
 also performs, which is a liability rather than a convenience, so the check
 below asserts that it and ``tomllib`` return the same code set in both
@@ -251,8 +264,24 @@ CHECKS = (uncategorized, unargued_behavioural)
 #: category to zero silently retires its check: ``uncounted_provisional`` over
 #: no provisional entries returns ``[]`` and passes, and emptying that category
 #: is this file's own stated goal, so the guard would go quiet at exactly the
-#: moment it was supposed to be confirming success. Real counts when written:
-#: 39 presentational, 29 behavioural, 12 covered-elsewhere, 3 provisional.
+#: moment it was supposed to be confirming success.
+#:
+#: ``provisional`` has no floor and never had one, which is what let it reach
+#: zero without failing this. That is the win, and it is also the cost: the
+#: check reading that category now has no live subject, so what holds its logic
+#: up is the synthetic-record case below rather than the real config. The one
+#: half nothing exercises any more is the *measuring* half — ruff actually
+#: counting a declined rule — whose refusal path is covered next door in
+#: ``tests/test_quality_contract.py``.
+#:
+#: Its success path is not merely waiting for the next entry filed here: that
+#: entry trips the zero-assertion above it first, so reaching the count needs
+#: the assertion edited too, and the two cannot be live at once. The red test
+#: is the forcing function — it makes a new provisional entry a decision stated
+#: in the pull request rather than a default — and the price is that the edit
+#: admitting one honestly looks exactly like the edit deleting an inconvenient
+#: guard. Real counts when written: 39 presentational, 29 behavioural, 12
+#: covered-elsewhere, 0 provisional.
 MINIMUM_PER_CATEGORY = {"presentational": 20, "behavioural": 15, "covered-elsewhere": 6}
 
 
@@ -382,19 +411,39 @@ def test_every_covered_decline_names_its_cover() -> None:
     )
 
 
-def test_every_provisional_decline_carries_its_count() -> None:
-    """The count, compared against the tree rather than matched as a numeral.
+def test_no_decline_is_unargued_and_one_that_returns_carries_its_count() -> None:
+    """The target, reached — and the check that has to survive reaching it.
 
-    This is the category whose target is zero, so its figures are the only ones
-    in the file that are supposed to move — which makes them the ones most able
-    to go stale unnoticed. Measured, they cannot.
+    This used to open by asserting the category was *non*-empty, with the
+    message: "no provisional declines remain. That is this category's stated
+    target, so it is good news — but delete this assertion deliberately rather
+    than letting the check below pass over an empty list." This is that
+    deliberate deletion. The three entries that held the category — B905 36,
+    PLW2901 19, RUF012 25 — were read site by site and enforced, so the sum the
+    category exists to report is zero.
+
+    Zero is asserted rather than merely observed, because the difference between
+    "nobody has filed one" and "nobody may file one without reading it" is the
+    whole product of this leg, and only the first of those survives on its own.
+    A new entry is not forbidden by policy — the honest way to decline a rule
+    nobody has read is still to say so in the category named for it — but it
+    does fail this test, and that is a forcing function rather than a
+    prohibition. Clearing the failure means editing the assertion below in the
+    same pull request that files the entry, and only then is the second half
+    reachable to check that the entry arrived with the figure that makes it
+    countable. The two cannot both be live, and the edit that admits an entry
+    honestly is indistinguishable from the edit that deletes an inconvenient
+    guard. What tells them apart is the pull request, not the diff.
     """
     declines = parse_declines(_config_text())
     provisional = [d.code for d in declines if d.category == "provisional"]
-    assert provisional, (
-        "no provisional declines remain. That is this category's stated target, "
-        "so it is good news — but delete this assertion deliberately rather than "
-        "letting the check below pass over an empty list."
+
+    assert not provisional, (
+        f"unargued declines are back: {', '.join(sorted(provisional))}. That is "
+        "allowed — it is the honest filing for a rule nobody has read — but the "
+        "sum of this category is a tracked number with a target of zero, so "
+        "adding to it is a decision to state in the pull request rather than a "
+        "default. Read the sites or say in the entry that you have not."
     )
 
     faults = uncounted_provisional(declines, _contract.measure_declines(provisional))
@@ -456,11 +505,13 @@ def test_every_per_file_waiver_carries_a_reason() -> None:
 def test_the_unargued_declines_are_countable() -> None:
     """The category's product: a number, not a posture.
 
-    Asserted as *reportable* rather than as a target, because the target is zero
-    and the whole point of naming these is that they are still above it. What
-    would be a defect is the count becoming unobtainable — a provisional entry
-    whose reason lost its figure, which the check above forbids, or the category
-    quietly disappearing from the vocabulary while its members stayed declined.
+    The number is zero now, so the loop below reads nothing and the live claim
+    is the line above it — the word is still in the vocabulary. That is the
+    assertion that matters at zero, and the reason it is not deleted along with
+    the last entry: unlike a contract *tier*, whose absence blocks a retreat,
+    this word's absence would only make the next unargued decline get filed
+    under a category that demands a claim its author cannot honestly make. The
+    check keeping it honest is the one above; this keeps it spellable.
     """
     provisional = [d for d in parse_declines(_config_text()) if d.category == "provisional"]
     assert "provisional" in DECLINE_CATEGORIES

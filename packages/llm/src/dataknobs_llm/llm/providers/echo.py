@@ -8,7 +8,7 @@ import re
 import warnings
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
-from typing import TYPE_CHECKING, Any, Dict, List, Union, AsyncIterator
+from typing import TYPE_CHECKING, Any, ClassVar, Dict, List, Union, AsyncIterator
 
 from ..base import (
     LLMConfig,
@@ -111,7 +111,7 @@ class EchoProvider(AsyncLLMProvider):
 
     # Class-level instance tracking
     _last_instance: EchoProvider | None = None
-    _instance_collectors: list[list[EchoProvider]] = []
+    _instance_collectors: ClassVar[list[list[EchoProvider]]] = []
 
     def __init__(
         self,

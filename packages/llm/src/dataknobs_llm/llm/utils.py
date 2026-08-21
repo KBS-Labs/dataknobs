@@ -7,7 +7,7 @@ to avoid circular dependencies.
 
 import re
 import json
-from typing import Any, Dict, List, Union
+from typing import Any, ClassVar, Dict, List, Union
 from dataclasses import dataclass, field
 
 from .base import LLMMessage, LLMResponse
@@ -375,7 +375,7 @@ class TokenCounter:
     """Estimate token counts for different models."""
 
     # Approximate tokens per character for different models
-    TOKENS_PER_CHAR = {
+    TOKENS_PER_CHAR: ClassVar[dict[str, float]] = {
         "gpt-4": 0.25,
         "gpt-3.5": 0.25,
         "claude": 0.25,
@@ -477,7 +477,7 @@ class CostCalculator:
     #: shape; superseded per-provider by profile-sourced pricing (pass ``pricing=``
     #: / use ``provider.estimate_cost``). Kept small and back-compatible so the
     #: provider-less :meth:`calculate_cost` / :meth:`estimate_cost` calls still work.
-    PRICING: dict[str, ModelPricing] = {
+    PRICING: ClassVar[dict[str, ModelPricing]] = {
         "gpt-4": ModelPricing(input_per_mtok=30.0, output_per_mtok=60.0),
         "gpt-4-32k": ModelPricing(input_per_mtok=60.0, output_per_mtok=120.0),
         "gpt-3.5-turbo": ModelPricing(input_per_mtok=1.5, output_per_mtok=2.0),

@@ -189,12 +189,12 @@ if __name__ == "__main__":
     print("=" * 60)
     test_lines = ["  UPPERCASE TEXT  ", "MiXeD cAsE", "   extra   spaces   "]
     normalized = normalize_lines(test_lines)
-    for original, norm in zip(test_lines, normalized):
+    for original, norm in zip(test_lines, normalized, strict=True):
         print(f"'{original}' -> '{norm}'")
 
     print("\n" + "=" * 60)
     print("Example 4: Batch processing")
     print("=" * 60)
     batch_normalized = normalize_batch(test_lines)
-    for original, norm in zip(test_lines, batch_normalized):
+    for original, norm in zip(test_lines, batch_normalized, strict=True):
         print(f"'{original}' -> '{norm}'")

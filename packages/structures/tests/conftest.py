@@ -46,8 +46,8 @@ def resource_as_list(
     result = []
     path = resource(package, filename)
     with open(path, encoding="utf-8") as infile:
-        for line in infile:
-            line = line.strip()
+        for raw_line in infile:
+            line = raw_line.strip()
             if not ignore_empties or line:
                 if not ignore_comments or not line.startswith(ignore_comments):
                     result.append(line)

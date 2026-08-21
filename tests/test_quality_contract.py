@@ -1068,7 +1068,13 @@ def test_the_contract_is_an_input_the_artifacts_are_hashed_over() -> None:
 #: whether the branch is reachable, and "reachable" is the whole claim — the
 #: command exists so a worker can ask instead of guessing.
 EXPLAIN_CASES = (
-    ("RUF012", None, "declined globally", "declined repo-wide, and unargued"),
+    # Pinned to a decline that cannot be worked off rather than one that can.
+    # This case used to name RUF012, an unargued `provisional` entry — and
+    # `provisional` is the category whose stated target is zero, so the example
+    # was guaranteed to stop being one. D203 is declined because D211 enforces
+    # its exact opposite and is enabled: the two are mutually exclusive by
+    # construction, so no amount of fixing makes this verdict change.
+    ("D203", None, "declined globally", "declined repo-wide; D211 enforces the opposite"),
     ("PGH004", None, "not selected", "the PGH family is in no select entry"),
     ("F841", "packages/llm/examples/fsm_conversation.py", "reported", "F is selected, undeclined"),
     (

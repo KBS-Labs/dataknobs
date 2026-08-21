@@ -123,7 +123,7 @@ class PgVectorStore(VectorStore):
     """
 
     # Default column mappings
-    DEFAULT_COLUMNS = {
+    DEFAULT_COLUMNS: ClassVar[dict[str, str]] = {
         "id": "id",
         "embedding": "embedding",
         "content": "content",
@@ -870,7 +870,7 @@ class PgVectorStore(VectorStore):
                 )
 
             # Batch insert
-            for i, (vec, vec_id, meta) in enumerate(zip(vectors, ids, metadata)):
+            for i, (vec, vec_id, meta) in enumerate(zip(vectors, ids, metadata, strict=True)):
                 # Extract document info from metadata if available
                 document_id = meta.get("document_id", meta.get("source"))
                 chunk_index = meta.get("chunk_index", i)
@@ -1240,7 +1240,10 @@ class PgVectorStore(VectorStore):
 
         updated = 0
         async with self._pool.acquire() as conn:
-            for vec_id, meta in zip(ids, metadata):
+            # strict=False, matching MemoryVectorStore and FaissVectorStore, whose
+            # update_metadata sizes the pairing by the metadata list on purpose so
+            # that a short one updates a prefix. Same contract, said out loud.
+            for vec_id, meta in zip(ids, metadata, strict=False):
                 result = await self._exec_with_id_type_guard(
                     conn,
                     "execute",

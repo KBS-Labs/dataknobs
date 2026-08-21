@@ -224,7 +224,7 @@ def format_heading_for_display(
 
     if format_style == "markdown" and heading_levels:
         lines = []
-        for heading, level in zip(headings, heading_levels):
+        for heading, level in zip(headings, heading_levels, strict=True):
             lines.append(f"{'#' * level} {heading}")
         return "\n".join(lines)
 

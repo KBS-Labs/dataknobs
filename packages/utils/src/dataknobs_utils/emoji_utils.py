@@ -281,29 +281,42 @@ class EmojiData:
     def _load_emoji_test(self, emoji_test_path: str) -> None:
         curgroup = ""
         cursubgroup = ""
+        # The status-count block is a run of "# name : count" lines that ends
+        # at the first line which is not one. That terminator is an ordinary
+        # line and has to be classified like every other, so the block is a
+        # mode of this loop rather than a nested one: a nested
+        # ``for line in f`` reads the same handle, so the line that breaks it
+        # has already been consumed by the time the outer loop resumes, and is
+        # never classified at all. In the shipped 15.0 data that line is blank
+        # and nothing is lost -- which is the whole problem with it, since what
+        # decides whether an emoji is dropped is a property of the input file
+        # that nothing states or checks.
+        counting = False
+        counts: Counter = Counter()
         with open(emoji_test_path, encoding="utf-8") as f:
             for line in f:
+                if counting:
+                    if line.startswith("# "):
+                        m = STATUS_COUNT_RE.match(line)
+                        if m:
+                            assert counts[m.group(1)] == int(m.group(2))
+                        continue
+                    counting = False
                 if line.startswith("# group:"):
                     curgroup = line[9:].strip()
                 elif line.startswith("# subgroup:"):
                     cursubgroup = line[12:].strip()
                 elif line.startswith("# Status Counts"):
-                    # Verify actual counts
-                    c: Counter = Counter()
+                    # Tally what was loaded; the lines that follow say what it
+                    # should have been.
+                    counts = Counter()
                     for e in self.emojis.values():
-                        c[e.status] += 1
-                    # with expectations
-                    for line in f:
-                        if line.startswith("# "):
-                            m = STATUS_COUNT_RE.match(line)
-                            if m:
-                                assert c[m.group(1)] == int(m.group(2))
-                        else:
-                            break
+                        counts[e.status] += 1
+                    counting = True
                 elif not line.startswith("#"):
-                    line = line.strip()
-                    if line:
-                        emoji_data: Emoji | None = build_emoji_dataclass(line)
+                    stripped = line.strip()
+                    if stripped:
+                        emoji_data: Emoji | None = build_emoji_dataclass(stripped)
                         if emoji_data is not None:
                             emoji_data.group = curgroup
                             emoji_data.subgroup = cursubgroup

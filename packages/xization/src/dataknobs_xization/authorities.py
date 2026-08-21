@@ -750,8 +750,7 @@ class RegexAuthority(Authority):
                             )
                         )
                 else:  # we have only numbers for groups
-                    for group_num, group_text in enumerate(match.groups()):
-                        group_num += 1
+                    for group_num, group_text in enumerate(match.groups(), start=1):
                         kwargs = {self.field_groups.get_field_type_col(self.name): group_num}
                         ann_dicts.append(
                             self.build_annotation(

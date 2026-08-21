@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-08-21T00:08:02Z",
+  "timestamp": "2026-08-21T02:13:32Z",
   "python_version": "Python 3.12.12",
   "uv_version": "uv 0.12.5 (Homebrew 2026-08-14 aarch64-apple-darwin)",
   "os": "Darwin",
   "os_version": "24.6.0",
-  "git_branch": "sbk/strike-ruff-deferred-tier",
-  "git_commit": "25bb3b0a088ad75c9d70ad2263301a825e1c80d2",
+  "git_branch": "sbk/argue-provisional-declines",
+  "git_commit": "d6d1bfe2f36ea39fef6209a27dae1dc8fccae37a",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }

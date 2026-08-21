@@ -2,7 +2,7 @@
 
 import os
 import threading
-from typing import Any
+from typing import Any, ClassVar
 
 import pytest
 import yaml
@@ -488,7 +488,7 @@ class TestSubstitutionProvenance:
     contains ``${...}``.
     """
 
-    PAYLOAD = {
+    PAYLOAD: ClassVar[dict[str, Any]] = {
         "name": "test",
         "resources": {"databases": {"main": {"password": "${PROV_PW}"}}},
         "settings": {"note": "${PROV_PW}"},

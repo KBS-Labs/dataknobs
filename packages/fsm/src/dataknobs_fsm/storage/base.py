@@ -4,7 +4,7 @@ from abc import ABC, abstractmethod
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any
+from typing import Any, ClassVar
 
 from dataknobs_common.structured_config import StructuredConfig
 
@@ -350,7 +350,7 @@ class BaseHistoryStorage(IHistoryStorage):
 class StorageFactory:
     """Factory for creating history storage instances."""
 
-    _registry: dict[StorageBackend, type[IHistoryStorage]] = {}
+    _registry: ClassVar[dict[StorageBackend, type[IHistoryStorage]]] = {}
 
     @classmethod
     def register(cls, backend: StorageBackend, storage_class: type[IHistoryStorage]) -> None:

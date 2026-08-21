@@ -991,13 +991,15 @@ class WizardExtractor:
 
                 # Wrap bare string -> list
                 if isinstance(value, str):
-                    value = [value]
-                    normalized[field_name] = value
+                    array_value: Any = [value]
+                    normalized[field_name] = array_value
                     logger.debug("Normalized %s: wrapped string -> list", field_name)
+                else:
+                    array_value = value
 
                 # Expand "all"/"none" shortcuts when enum is defined
-                if isinstance(value, list) and enum_values:
-                    lower_items = {v.strip().lower() for v in value if isinstance(v, str)}
+                if isinstance(array_value, list) and enum_values:
+                    lower_items = {v.strip().lower() for v in array_value if isinstance(v, str)}
                     if lower_items & self._ALL_KEYWORDS:
                         normalized[field_name] = list(enum_values)
                         logger.debug(
@@ -1272,6 +1274,7 @@ class WizardExtractor:
         for k, v in extraction_data.items():
             if v is None:
                 continue
+            merged_value = v
             if active_filter is not None:
                 existing = wizard_state.data.get(k)
                 prop_def = schema_props.get(k, {})
@@ -1292,16 +1295,16 @@ class WizardExtractor:
                     )
                     continue
                 if decision.action == "transform":
-                    v = decision.value
+                    merged_value = decision.value
                     logger.debug(
                         "Merge filter transformed %s -> %r: %s",
                         k,
-                        v,
+                        merged_value,
                         decision.reason,
                     )
-            if k not in wizard_state.data or wizard_state.data[k] != v:
+            if k not in wizard_state.data or wizard_state.data[k] != merged_value:
                 new_data_keys.add(k)
-                wizard_state.data[k] = v
+                wizard_state.data[k] = merged_value
         return new_data_keys
 
     # -----------------------------------------------------------------

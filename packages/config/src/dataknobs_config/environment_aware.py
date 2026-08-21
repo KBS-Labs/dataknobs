@@ -390,14 +390,14 @@ def _substitute_deferring_defaults(config: Any, *, defer_defaults: bool = True) 
     if isinstance(config, dict):
         deferring = defer_defaults and "$resource" in config
         substituted: dict[Any, Any] = {}
-        for key, value in config.items():
+        for declared_key, value in config.items():
             # :func:`substitute_env_vars` expands keys as well as values, and
             # this is a wrapper around it. Re-walking the structure here and
             # calling it only at the leaves would keep everything it does to a
             # value and silently drop everything it does at a container --
             # which is how expanding keys got lost. Handing the key back to it
             # is also what passes a non-string key through untouched.
-            key = substitute_env_vars(key)
+            key = substitute_env_vars(declared_key)
             if deferring:
                 substituted[key] = (
                     substitute_env_vars(value) if key in RESOURCE_MARKER_KEYS else value

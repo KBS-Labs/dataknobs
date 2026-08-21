@@ -3,7 +3,7 @@
 import copy
 import re
 from pathlib import Path
-from typing import Any, Dict, Union
+from typing import Any, ClassVar, Dict, Union
 
 
 class SettingsManager:
@@ -36,7 +36,7 @@ class SettingsManager:
     #: bounds it, which is not a check. They are refused rather than dropped:
     #: failing closed on a silent drop leaves an operator who wrote one in
     #: YAML watching their references raise with nothing pointing at why.
-    _CALLER_ONLY_SETTINGS = {
+    _CALLER_ONLY_SETTINGS: ClassVar[dict[str, str]] = {
         "allow_reference_outside_config_root": (
             "pass allow_reference_outside_config_root=True to Config(...) instead"
         ),

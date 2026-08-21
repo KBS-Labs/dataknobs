@@ -370,7 +370,7 @@ def build_heading_tree(
         # Build/find each node along the heading path
         path: list[tuple[int, str]] = []
         parent = root
-        for heading, level in zip(headings, levels):
+        for heading, level in zip(headings, levels, strict=True):
             path.append((level, heading))
             path_key = tuple(path)
 

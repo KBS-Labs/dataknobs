@@ -164,7 +164,7 @@ class TestElasticsearchVectorIntegration:
 
             # Create and store records
             ids = []
-            for i, (vec, cat) in enumerate(zip(vectors, categories)):
+            for i, (vec, cat) in enumerate(zip(vectors, categories, strict=True)):
                 record = Record(
                     {
                         "title": f"Document {i}",
@@ -346,7 +346,7 @@ class TestElasticsearchVectorIntegration:
             )
             vectors = _vectors(4, 8)
             keys = ["artifacts/a", "artifacts/b", "orders/1", "orders/2"]
-            for key, vec in zip(keys, vectors):
+            for key, vec in zip(keys, vectors, strict=True):
                 await db.create(
                     Record(
                         {"embedding": VectorField(vec, name="embedding")},

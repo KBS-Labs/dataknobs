@@ -4,6 +4,8 @@ Verifies that ConversationManager satisfies the ReasoningManagerProtocol,
 preventing interface drift.
 """
 
+from typing import ClassVar
+
 import pytest
 
 from dataknobs_bots.reasoning.base import ReasoningManagerProtocol
@@ -58,7 +60,7 @@ class TestRealManagerProtocol:
         class MockTool:
             name = "test_tool"
             description = "A test tool"
-            schema = {"type": "object"}
+            schema: ClassVar[dict[str, str]] = {"type": "object"}
 
         await manager.complete(tools=[MockTool()])
 

@@ -16,7 +16,7 @@ against HEAD (raw errors propagate) and pass after the fix.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, ClassVar
 
 import pytest
 
@@ -114,7 +114,9 @@ class TestFunctionCallErrorSurfacing:
     "does not support tools" signal.
     """
 
-    _FUNCTIONS = [{"name": "f", "description": "d", "parameters": {}}]
+    _FUNCTIONS: ClassVar[list[dict[str, Any]]] = [
+        {"name": "f", "description": "d", "parameters": {}}
+    ]
 
     async def test_rate_limit_surfaces_without_second_request(self) -> None:
         err = make_client_response_error(429, "slow down", headers={"retry-after": "4"})

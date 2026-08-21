@@ -23,7 +23,7 @@ from __future__ import annotations
 import json
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
 import pytest
 
@@ -561,7 +561,7 @@ class _RecordingRAG(RAGKnowledgeBase):
     code path that exposes one extra inspection seam.
     """
 
-    captured_extra_metadata: list[dict[str, Any] | None] = []
+    captured_extra_metadata: ClassVar[list[dict[str, Any] | None]] = []
 
     async def ingest_from_backend(self, *args: Any, **kwargs: Any) -> Any:
         self.captured_extra_metadata.append(

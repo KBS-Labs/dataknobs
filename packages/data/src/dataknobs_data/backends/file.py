@@ -444,7 +444,7 @@ class AsyncFileDatabase(  # type: ignore[misc]
     dataclass, so ``self.config`` is the typed config (not a dict).
     """
 
-    FORMAT_HANDLERS = {
+    FORMAT_HANDLERS: ClassVar[dict[str, type[FileFormat]]] = {
         ".json": JSONFormat,
         ".csv": CSVFormat,
         ".tsv": CSVFormat,
@@ -820,7 +820,7 @@ class SyncFileDatabase(  # type: ignore[misc]
     dataclass, so ``self.config`` is the typed config (not a dict).
     """
 
-    FORMAT_HANDLERS = {
+    FORMAT_HANDLERS: ClassVar[dict[str, type[FileFormat]]] = {
         ".json": JSONFormat,
         ".csv": CSVFormat,
         ".tsv": CSVFormat,

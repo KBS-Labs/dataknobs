@@ -279,8 +279,8 @@ class TestLargeFileProcessor:
 
     def test_create_and_read_sample_files(self):
         """Test sample file creation and chunked reading."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            tmpdir = Path(tmpdir)
+        with tempfile.TemporaryDirectory() as raw_tmpdir:
+            tmpdir = Path(raw_tmpdir)
 
             # Test JSONL file
             jsonl_path = tmpdir / "test.jsonl"

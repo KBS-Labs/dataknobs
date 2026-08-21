@@ -1799,7 +1799,7 @@ class ConfigOverrideMixin:
     """
 
     # Supported fields for config overrides (base set)
-    ALLOWED_CONFIG_OVERRIDES = {
+    ALLOWED_CONFIG_OVERRIDES: ClassVar[set[str]] = {
         # Core generation parameters
         "model",
         "temperature",
@@ -1820,10 +1820,10 @@ class ConfigOverrideMixin:
     }
 
     # Override presets registry (class-level, shared across all providers)
-    _override_presets: Dict[str, Dict[str, Any]] = {}
+    _override_presets: ClassVar[Dict[str, Dict[str, Any]]] = {}
 
     # Override event callbacks (class-level)
-    _override_callbacks: List[Callable[[Any, Dict[str, Any], LLMConfig], None]] = []
+    _override_callbacks: ClassVar[List[Callable[[Any, Dict[str, Any], LLMConfig], None]]] = []
 
     @classmethod
     def register_preset(cls, name: str, overrides: Dict[str, Any]) -> None:

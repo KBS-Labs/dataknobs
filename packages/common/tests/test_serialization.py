@@ -393,7 +393,7 @@ class TestRoundTrip:
         restored = deserialize_list(User, data_list)
 
         assert len(restored) == len(original)
-        for orig, rest in zip(original, restored):
+        for orig, rest in zip(original, restored, strict=True):
             assert rest.name == orig.name
             assert rest.email == orig.email
 

@@ -145,7 +145,12 @@ def cell_matches(path: PurePosixPath, pattern: str) -> bool:
     have = path.parts
     if len(want) > len(have):
         return False
-    return all(fnmatch.fnmatchcase(part, glob) for part, glob in zip(have, want))
+    # strict=False deliberately: the guard above admits a path with MORE
+    # segments than the pattern, and comparing the pattern against its leading
+    # segments is the whole operation. strict=True here rejects every cell
+    # whose pattern is shorter than the file it should match, which is all of
+    # them.
+    return all(fnmatch.fnmatchcase(part, glob) for part, glob in zip(have, want, strict=False))
 
 
 def partition(cells: list[dict[str, Any]], files: list[PurePosixPath]) -> dict[str, Any]:

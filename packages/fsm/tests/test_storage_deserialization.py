@@ -540,7 +540,7 @@ class TestExecutionHistoryDeserialization:
 
             assert len(deser_path) == len(orig_path)
 
-            for orig, deser in zip(orig_path, deser_path):
+            for orig, deser in zip(orig_path, deser_path, strict=True):
                 assert deser.step_id == orig.step_id
                 assert deser.state_name == orig.state_name
                 assert deser.network_name == orig.network_name

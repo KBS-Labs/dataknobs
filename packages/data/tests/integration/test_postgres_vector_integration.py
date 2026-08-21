@@ -235,7 +235,7 @@ class TestPostgresVectorIntegration:
                     source_field="description",
                 )
 
-            success = db.update_batch(list(zip(ids, retrieved)))
+            success = db.update_batch(list(zip(ids, retrieved, strict=True)))
             assert all(success)
 
             # Cleanup

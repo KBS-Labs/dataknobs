@@ -150,7 +150,9 @@ class Chunk:
 
         # Build heading hierarchy
         lines = []
-        for heading, level in zip(self.metadata.headings, self.metadata.heading_levels):
+        for heading, level in zip(
+            self.metadata.headings, self.metadata.heading_levels, strict=True
+        ):
             lines.append(f"{'#' * level} {heading}")
 
         # Add body text
@@ -407,7 +409,7 @@ class MarkdownChunker:
         if self.heading_inclusion in (HeadingInclusion.IN_TEXT, HeadingInclusion.BOTH):
             # Prepend headings to text
             heading_lines = []
-            for heading, level in zip(headings, heading_levels):
+            for heading, level in zip(headings, heading_levels, strict=True):
                 if self.chunk_format == ChunkFormat.MARKDOWN:
                     heading_lines.append(f"{'#' * level} {heading}")
                 else:

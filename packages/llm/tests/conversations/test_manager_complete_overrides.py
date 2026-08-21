@@ -9,7 +9,7 @@ Also tests CD-10: system_prompt_override persistence in assistant node metadata.
 
 import tempfile
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
 import pytest
 import yaml
@@ -173,7 +173,10 @@ class TestToolsParameter:
         class MockTool:
             name = "search"
             description = "Search for information"
-            schema = {"type": "object", "properties": {"query": {"type": "string"}}}
+            schema: ClassVar[dict[str, Any]] = {
+                "type": "object",
+                "properties": {"query": {"type": "string"}},
+            }
 
         await manager.complete(tools=[MockTool()])
 
@@ -208,7 +211,7 @@ class TestToolsParameter:
         class MockTool:
             name = "helper"
             description = "Help with tasks"
-            schema = {"type": "object", "properties": {}}
+            schema: ClassVar[dict[str, Any]] = {"type": "object", "properties": {}}
 
         await manager.complete(
             system_prompt_override="You are a wizard with tools",

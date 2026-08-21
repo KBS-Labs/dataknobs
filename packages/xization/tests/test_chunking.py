@@ -214,7 +214,7 @@ class TestMarkdownTreeChunker:
         ).chunk(SAMPLE_MARKDOWN)
 
         assert len(direct) == len(via_chunker)
-        for d, v in zip(direct, via_chunker):
+        for d, v in zip(direct, via_chunker, strict=True):
             assert d.text == v.text
             assert d.metadata.headings == v.metadata.headings
             assert d.metadata.embedding_text == v.metadata.embedding_text
@@ -713,7 +713,7 @@ class TestCompositeChunker:
         direct = inner.chunk(source)
         via_composite = composite.chunk(source)
         assert len(direct) == len(via_composite)
-        for d, c in zip(direct, via_composite):
+        for d, c in zip(direct, via_composite, strict=True):
             assert d.text == c.text
 
 

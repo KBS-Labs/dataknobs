@@ -112,7 +112,7 @@ class TestSQLiteVectorSupport:
             vectors.append(vec)
 
         ids = []
-        for i, (vec, cat) in enumerate(zip(vectors, categories)):
+        for i, (vec, cat) in enumerate(zip(vectors, categories, strict=True)):
             vector_field = VectorField(name="embedding", value=vec, dimensions=4)
 
             record = Record(

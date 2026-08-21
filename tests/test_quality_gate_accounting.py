@@ -117,7 +117,7 @@ def _sections(script: GateScript) -> list[tuple[int, str, list[str]]]:
         "marker rather than deleting it."
     )
     starts = [i for i, ln in enumerate(lines[:end]) if re.match(script.section, ln)]
-    bounds = zip(starts, starts[1:] + [end])
+    bounds = zip(starts, starts[1:] + [end], strict=True)
     return [(a + 1, lines[a].strip(), lines[a:b]) for a, b in bounds]
 
 
