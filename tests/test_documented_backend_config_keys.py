@@ -52,6 +52,18 @@ NOT COVERED
     wolf, and a guard that cries wolf gets deleted. Those sites are checked
     by hand when the surrounding page is edited.
 
+    A quoted dict literal handed to ``Config.load`` rather than to a factory
+    or a constructor -- ``{"databases": [{"factory": "database", "backend":
+    "memory", ...}]}`` -- which the object-graph layer builds later, by name.
+    This is a real gap rather than an undecidable one, and it is the largest
+    of the three: a sweep over the corpus finds 109 such blocks whose
+    enclosing key is a database context, against 77 it correctly declines.
+    Closing it needs the ancestry rule ``_ancestry`` applies to YAML rebuilt
+    for Python syntax, and a prototype of that still mistook two vector-store
+    blocks for database ones -- an unsound sweep is worse here than none,
+    for the crying-wolf reason above. Tracked separately; the one site of
+    the nine it flags that a runnable example actually builds is fixed.
+
 The accepted-key set is read from the config class through ``accepts()``, and
 the tolerated routing keys from the runtime's own ``_ROUTING_KEYS``, so this
 file cannot drift from the code it checks. Coverage is asserted rather than
@@ -62,6 +74,7 @@ config class, and the corpus floor counts the sites actually checked.
 from __future__ import annotations
 
 import re
+import textwrap
 from functools import cache
 from pathlib import Path
 from typing import Any
@@ -319,6 +332,14 @@ DB_CONTEXT = re.compile(r"^(databases?|conversation_storage|\w*_db)$")
 #: ``key:`` at some indentation, the unit both YAML helpers below work in.
 YAML_KEY = re.compile(r"^(?P<indent>\s*)(?P<dash>-\s+)?(?P<key>[\w-]+):(?P<rest>.*)$")
 
+#: The ``backend:`` line that opens a block. The optional dash matters: a
+#: block written as a list element puts ``backend:`` on the dash line itself
+#: (``- backend: postgres``), and a pattern anchored on ``\s*backend:`` does
+#: not match it -- so the block was not read as unchecked, it was not seen.
+BACKEND_LINE = re.compile(
+    r"^(?P<indent>\s*)(?P<dash>-\s+)?backend:\s*['\"]?(?P<b>[\w-]+)['\"]?\s*(#.*)?$"
+)
+
 
 def _ancestry(lines: list[str], at: int, indent: int) -> list[str]:
     """The mapping keys enclosing line ``at``, innermost first."""
@@ -340,7 +361,7 @@ def _ancestry(lines: list[str], at: int, indent: int) -> list[str]:
     return chain
 
 
-def _sibling_keys(lines: list[str], at: int, indent: str) -> set[str]:
+def _sibling_keys(lines: list[str], at: int, width: int) -> set[str]:
     """Every key in the mapping block that the ``backend:`` on line ``at`` is in.
 
     Deeper lines are stepped over rather than treated as the end of the
@@ -351,20 +372,44 @@ def _sibling_keys(lines: list[str], at: int, indent: str) -> set[str]:
     / ``use_ssl`` below it were never checked against anything.
     """
     keys: set[str] = set()
-    width = len(indent)
-    for direction in (range(at, len(lines)), range(at - 1, -1, -1)):
-        for j in direction:
+    opening = YAML_KEY.match(lines[at])
+    if opening is not None:
+        keys.add(opening.group("key"))
+    for forward in (True, False):
+        span = range(at + 1, len(lines)) if forward else range(at - 1, -1, -1)
+        for j in span:
             line = lines[j]
             if not line.strip() or line.strip().startswith("#"):
                 continue
-            depth = len(line) - len(line.lstrip())
+            m = YAML_KEY.match(line)
+            if m is None:
+                # Not a ``key:`` line -- a list element or a bare scalar.
+                # Deeper content belongs to one of this block's keys;
+                # anything shallower ends the block.
+                if len(line) - len(line.lstrip()) > width:
+                    continue
+                break
+            # Dash-aware, matching ``_ancestry``: ``  - name: cache`` puts a
+            # list item's first key two columns left of its siblings, so
+            # measuring raw whitespace both mismeasured that key and ended
+            # the walk on the very line that opens the block.
+            depth = len(m.group("indent")) + (len(m.group("dash")) if m.group("dash") else 0)
             if depth > width:
                 continue  # nested under one of this block's keys
-            m = YAML_KEY.match(line)
-            if m is not None and depth == width and not m.group("dash"):
-                keys.add(m.group("key"))
-                continue
-            break
+            if depth < width:
+                break
+            if m.group("dash"):
+                # A dash at this depth opens a list item, which is the
+                # block boundary a raw-whitespace measurement got right by
+                # accident. Backwards it opens *this* item, so its key is
+                # ours and the walk ends having taken it; forwards it opens
+                # the next one, whose keys are a different block's. Without
+                # this, a documented resource list reads as one block and
+                # every backend in it is checked against every other's keys.
+                if not forward:
+                    keys.add(m.group("key"))
+                break
+            keys.add(m.group("key"))
     return keys
 
 
@@ -375,12 +420,11 @@ def _yaml_sites() -> tuple[list[Site], int]:
     for path in documentation_files():
         lines = path.read_text(encoding="utf-8").split("\n")
         for i, line in enumerate(lines):
-            m = re.match(r"^(?P<indent>\s*)backend:\s*['\"]?(?P<b>[\w-]+)['\"]?\s*(#.*)?$", line)
+            m = BACKEND_LINE.match(line)
             if m is None:
                 continue
-            if not any(
-                DB_CONTEXT.match(key) for key in _ancestry(lines, i, len(m.group("indent")))
-            ):
+            width = len(m.group("indent")) + (len(m.group("dash")) if m.group("dash") else 0)
+            if not any(DB_CONTEXT.match(key) for key in _ancestry(lines, i, width)):
                 # Counted only when the name is one a database registry
                 # knows. A ``backend: faiss`` block is out of scope for a
                 # reason that needs no watching; a ``backend: memory`` one
@@ -389,11 +433,7 @@ def _yaml_sites() -> tuple[list[Site], int]:
                 if any(reg.is_known(m.group("b")) for reg in (sync_backends, async_backends)):
                     out_of_scope += 1
                 continue
-            sites.append(
-                Site(
-                    path, i + 1, m.group("b"), "unknown", _sibling_keys(lines, i, m.group("indent"))
-                )
-            )
+            sites.append(Site(path, i + 1, m.group("b"), "unknown", _sibling_keys(lines, i, width)))
     return sites, out_of_scope
 
 
@@ -525,6 +565,75 @@ def test_the_yaml_share_out_of_scope_stays_visible() -> None:
         f"skipped as belonging to another subsystem, against {len(sites)} "
         "read as database configs"
     )
+
+
+def _yaml(text: str) -> list[str]:
+    """A dedented YAML fixture as the scanners see it."""
+    return textwrap.dedent(text).strip("\n").split("\n")
+
+
+def test_a_list_items_leading_key_is_read() -> None:
+    """The dash puts it two columns left of its siblings, not outside the block.
+
+    ``_ancestry`` counted the dash from the start and ``_sibling_keys`` did
+    not, so a leading key measured shallower than the block it opens and
+    ended the walk instead of joining it. ``name`` leads every documented
+    list today and is routing, which is why nothing was being missed -- and
+    why nothing would have noticed when something was.
+    """
+    lines = _yaml(
+        """
+        databases:
+          - pool_size: 20
+            backend: postgres
+            host: db.internal
+        """
+    )
+    assert _sibling_keys(lines, 2, 4) == {"pool_size", "backend", "host"}
+
+
+def test_a_backend_on_the_dash_line_is_seen() -> None:
+    """``- backend: postgres`` is a block, not a non-match.
+
+    A pattern anchored on indentation-then-``backend:`` skipped it
+    silently: the site was not
+    recorded as unchecked, it was never recorded at all, so no coverage
+    assertion could notice its absence.
+    """
+    lines = _yaml(
+        """
+        databases:
+          - backend: postgres
+            pool_size: 20
+        """
+    )
+    m = BACKEND_LINE.match(lines[1])
+
+    assert m is not None and m.group("b") == "postgres"
+    assert _sibling_keys(lines, 1, 4) == {"backend", "pool_size"}
+
+
+def test_sibling_list_items_are_separate_blocks() -> None:
+    """The boundary a raw-whitespace measurement got right by accident.
+
+    Counting the dash without also stopping at one merges a resource list
+    into a single block, and every backend in it is then checked against
+    every other's keys -- nine documented sites reported keys belonging to
+    their neighbours the moment the depth fix landed without this one.
+    """
+    lines = _yaml(
+        """
+        databases:
+          - name: cache
+            backend: memory
+          - name: search
+            backend: elasticsearch
+            index: things
+        """
+    )
+
+    assert _sibling_keys(lines, 2, 4) == {"name", "backend"}
+    assert _sibling_keys(lines, 4, 4) == {"name", "backend", "index"}
 
 
 @pytest.mark.parametrize(

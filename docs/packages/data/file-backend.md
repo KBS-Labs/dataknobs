@@ -20,7 +20,7 @@ from dataknobs_data.backends.file import SyncFileDatabase
 # Configure with file path
 config = {
     "path": "/path/to/data.json",
-    "format": "json",       # json, jsonl, csv or parquet
+    "format": "json",       # json, csv, tsv or parquet; from the extension when unset
     "compression": None     # or "gzip"
 }
 

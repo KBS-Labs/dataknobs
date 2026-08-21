@@ -97,8 +97,7 @@ class ConfigurationDemo:
                 {
                     "name": "cache",
                     "factory": "database",
-                    "backend": "memory",
-                    "max_size": 100
+                    "backend": "memory"
                 },
                 {
                     "name": "audit",

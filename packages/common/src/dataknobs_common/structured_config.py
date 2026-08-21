@@ -373,7 +373,7 @@ def _validate_policy_declaration(cls: type) -> None:
                 f"{cls.__qualname__}.{name} must be an int "
                 f">= {_DEFAULT_MAX_REDACT_DEPTH} (the fail-closed floor); "
                 f"got {value!r}. The depth bound may be raised for an "
-                "unusually deep raw section but never lowered - lowering "
+                "unusually deep raw section but never lowered — lowering "
                 "reduces credential masking."
             )
 
