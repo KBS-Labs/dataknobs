@@ -667,7 +667,7 @@ storage = DataknobsConversationStorage(AsyncMemoryDatabase())
 
 # File-based storage (local development)
 storage = DataknobsConversationStorage(
-    AsyncFileDatabase(base_path="conversations/")
+    AsyncFileDatabase(path="conversations/store.json")
 )
 
 # PostgreSQL (production)
@@ -677,7 +677,7 @@ storage = DataknobsConversationStorage(
 
 # SQLite (simple persistence)
 storage = DataknobsConversationStorage(
-    AsyncSQLiteDatabase(db_path="conversations.db")
+    AsyncSQLiteDatabase(path="conversations.db")
 )
 ```
 
@@ -1886,7 +1886,7 @@ async def create_support_bot():
     })
 
     storage = DataknobsConversationStorage(
-        AsyncSQLiteDatabase(db_path="support.db")
+        AsyncSQLiteDatabase(path="support.db")
     )
 
     # Filter inappropriate content

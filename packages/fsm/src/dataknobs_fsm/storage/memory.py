@@ -1,71 +1,35 @@
 """In-memory storage backend for execution history.
 
-This is a thin wrapper around UnifiedDatabaseStorage that uses
-dataknobs_data's memory backend with sensible defaults.
+A thin registration over ``UnifiedDatabaseStorage`` that selects
+dataknobs_data's memory backend.
 """
 
 from __future__ import annotations
 
-from dataclasses import replace
-from typing import TYPE_CHECKING
-
-from dataknobs_fsm.storage.base import StorageBackend, StorageConfig, StorageFactory
+from dataknobs_fsm.storage.base import StorageBackend, StorageFactory
 from dataknobs_fsm.storage.database import UnifiedDatabaseStorage
-
-if TYPE_CHECKING:
-    from dataknobs_data.database import AsyncDatabase
 
 
 class InMemoryStorage(UnifiedDatabaseStorage):
     """In-memory storage implementation using dataknobs_data's memory backend.
 
-    Sets memory-specific config defaults (backend type, max size, indexing).
-    Record-type isolation when sharing a single database is handled by the
-    base class via ``_history_query()`` / ``_steps_query()`` EXISTS filters.
+    Backend selection is driven by ``StorageConfig.backend``, which this
+    class is registered against, so the base class needs nothing from here
+    to reach ``AsyncMemoryDatabase``. Record-type isolation when sharing a
+    single database is handled by the base via ``_history_query()`` /
+    ``_steps_query()`` EXISTS filters.
+
+    There is deliberately no ``__init__`` override. One used to inject
+    ``max_size=1000`` and ``enable_indexing=True`` into
+    ``connection_params``; ``AsyncMemoryDatabase`` accepts neither, so both
+    were dropped by the config projection and the store was never bounded
+    or indexed by them. That is the same defect the commit which fixed
+    ``compress`` -> ``compression`` in the sibling ``FileStorage`` was
+    written to remove (902d6eb5) — it repaired the instance in front of it
+    and left these two behind. The backend configs now reject an
+    unrecognised key rather than dropping it, so the class of defect
+    reports instead of accumulating.
     """
-
-    def __init__(
-        self,
-        config: StorageConfig,
-        *,
-        database: AsyncDatabase | None = None,
-        steps_database: AsyncDatabase | None = None,
-        owns_databases: bool | None = None,
-    ):
-        """Initialize in-memory storage.
-
-        Args:
-            config: Storage configuration.
-            database: Optional pre-built AsyncDatabase instance.
-            steps_database: Optional separate AsyncDatabase for step records.
-            owns_databases: Explicit ownership override (see base class).
-        """
-        # Build a local working copy of the connection params and apply
-        # memory-backend defaults, leaving the (immutable) caller config
-        # untouched.
-        #
-        # Backend selection is now driven by ``StorageConfig.backend``
-        # (the canonical enum), so no ``'type'`` injection is needed.
-        # This class is registered for
-        # ``StorageBackend.MEMORY`` and the parent's ``_setup_backend``
-        # reads from the enum, so the memory backend is selected
-        # automatically.
-        params = dict(config.connection_params)
-
-        # Set memory-specific defaults
-        params.setdefault("max_size", 1000)
-
-        # Enable indexing for fast queries
-        params.setdefault("enable_indexing", True)
-
-        config = replace(config, connection_params=params)
-
-        super().__init__(
-            config,
-            database=database,
-            steps_database=steps_database,
-            owns_databases=owns_databases,
-        )
 
 
 # Register memory backend

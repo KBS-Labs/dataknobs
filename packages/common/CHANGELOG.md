@@ -7,6 +7,63 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Added
+
+- **An unknown-key policy on `StructuredConfig`.** `from_dict` projects a
+  dict onto the declared fields and drops the rest, which is right for a
+  config travelling with the routing key that selected it and wrong
+  wherever every field has a working default — there a misspelled key does
+  not fail, it succeeds against the wrong thing. A class now says which of
+  the two it is:
+
+  - `_UNKNOWN_KEYS: ClassVar[Literal["ignore", "raise"]]` — `"ignore"` by
+    default, so no existing config class changes behaviour. Under
+    `"raise"`, a key matching no field after `_normalize_dict` is a
+    `ValueError` naming it, offering the nearest accepted spelling, and
+    listing the accepted set.
+  - `_INPUT_KEYS: ClassVar[frozenset[str]]` — input spellings
+    `_normalize_dict` consumes that are not themselves fields, unioned
+    across the MRO so a subclass declares only what it adds. It widens what
+    is accepted and what the error offers, so a caller who wrote
+    `connection` is answered with `connection_string` rather than with a
+    list that appears not to contain it.
+  - `accepts(key)` (classmethod) — whether `from_dict` will consume a key.
+    The question a caller composing a config for a statically-unknown
+    target has to be able to ask, since under `"raise"` an optional key
+    that only some targets have can no longer be supplied speculatively.
+
+  The discriminator and metadata keys the object-graph layer owns
+  (`backend`, `factory`, `name`, `type`) pass through under `"raise"`
+  without being declared, and are excluded from the error's accepted list —
+  none of them is a misspelling of a field, and offering `factory` as an
+  answer to a question about a connection field helps nobody. `name` is an
+  ordinary word, so tolerating it leaves a residual hole on the direct-call
+  path; the alternative would reject the documented resource-list shape
+  that writes `name:` beside `backend:`, which is the worse trade.
+
+- **A misdeclared class-level policy attribute is now refused at class
+  definition.** `__init_subclass__` already enforced a floor on
+  `_MAX_REDACT_DEPTH`; that check generalizes to `_UNKNOWN_KEYS`,
+  `_INPUT_KEYS`, `_SENSITIVE_FIELDS` and `_polymorphic_fields`, which share
+  its failure mode. Each is consumed directly enough — a bare `==`, a
+  `frozenset` union, an `in` test — that a wrong shape means something else
+  rather than raising:
+
+  - `_UNKNOWN_KEYS = "Raise"` compares unequal to `"raise"` and so selected
+    the lenient policy, in a class that read as opted in to the strict one.
+  - `str` is iterable, so `_INPUT_KEYS = "connection_string"` unioned in ten
+    single characters, accepted each of them, and still rejected the alias
+    it was written to declare. `_SENSITIVE_FIELDS` failed the same way, and
+    there it reduced the interior redaction set to single letters while
+    turning the field-name test into a substring match.
+  - Omitting `ClassVar` makes the dataclass decorator treat any of them as a
+    *field*, which then appears in `fields()`, in `to_dict()`, and in the
+    accepted-key list of the very errors the policy produces.
+
+  Validated at runtime rather than left to the type checker, for the reason
+  `_MAX_REDACT_DEPTH` already was: the subclasses that matter are
+  consumers', and a library cannot assume its consumers run mypy.
+
 ## v3.0.0 - 2026-08-19
 
 ### Added

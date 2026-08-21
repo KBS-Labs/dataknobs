@@ -25,13 +25,16 @@ class TestDatabaseFactoryPostgres:
         caplog.set_level(logging.DEBUG)
         factory = DatabaseFactory()
 
-        # Use real memory backend instead of mocking - tests same factory logic
-        db = factory.create(backend="memory", initial_data={"test": "data"})
+        # Use real memory backend instead of mocking - tests same factory logic.
+        # ``vector_enabled`` is a real field, so the assertion below observes
+        # config actually reaching the backend rather than a key being dropped.
+        db = factory.create(backend="memory", vector_enabled=True)
 
         # Verify factory created a database instance
         from dataknobs_data.backends.memory import SyncMemoryDatabase
 
         assert isinstance(db, SyncMemoryDatabase)
+        assert db.config.vector_enabled is True, "config did not reach the backend"
         assert any(
             record.levelno == logging.INFO
             and record.getMessage() == "Creating database with backend: memory"

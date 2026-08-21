@@ -843,9 +843,7 @@ factory = DatabaseFactory()
 db = factory.create(
     backend="file",
     path="/data/records.json",
-    format="json",
-    pretty=True,
-    backup=True
+    format="json"
 )
 db.connect()
 
@@ -1047,8 +1045,7 @@ db = factory.create(
     backend="elasticsearch",
     hosts=["https://elastic.example.com:9200"],
     index="records",
-    username="elastic",
-    password="changeme"
+    basic_auth=("elastic", "changeme")
 )
 await db.connect()
 

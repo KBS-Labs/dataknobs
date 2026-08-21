@@ -97,8 +97,7 @@ class ConfigurationDemo:
                 {
                     "name": "cache",
                     "factory": "database",
-                    "backend": "memory",
-                    "max_size": 100
+                    "backend": "memory"
                 },
                 {
                     "name": "audit",
@@ -267,7 +266,6 @@ databases:
   - name: cache
     factory: database
     backend: memory
-    max_size: ${CACHE_SIZE:1000}
   
   - name: search
     factory: database
@@ -540,7 +538,6 @@ databases:
     
   cache:
     backend: memory
-    max_size: ${CACHE_SIZE:1000}
     
   search:
     backend: elasticsearch

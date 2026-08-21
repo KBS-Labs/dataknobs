@@ -61,8 +61,8 @@ async def postgres_example():
         "database": "mydb",
         "user": "user",
         "password": "pass",
-        "min_connections": 10,
-        "max_connections": 20
+        "min_pool_size": 10,
+        "max_pool_size": 20
     })
     
     # Uses prepared statements automatically

@@ -16,8 +16,13 @@ class TestElasticsearchIdFiltering:
     @pytest.fixture
     def db(self):
         """Create database instance for Elasticsearch backend."""
+        # ``host``/``port``, not ``hosts``: the list form is a field on the
+        # async config only. The sync backend read neither and fell back to
+        # its localhost:9200 default, so ELASTICSEARCH_HOST was ignored here
+        # and a remote server would have been silently bypassed.
         config = {
-            "hosts": [os.environ.get("ELASTICSEARCH_HOST", "http://localhost:9200")],
+            "host": os.environ.get("ELASTICSEARCH_HOST", "localhost"),
+            "port": int(os.environ.get("ELASTICSEARCH_PORT", "9200")),
             "index": "test_id_filtering",
         }
 

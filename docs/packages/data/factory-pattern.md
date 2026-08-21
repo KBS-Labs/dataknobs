@@ -218,7 +218,8 @@ if env == "production":
 elif env == "staging":
     db = factory.create(
         backend="elasticsearch",
-        hosts=[os.environ["ES_HOST"]],
+        host=os.environ["ES_HOST"],
+        port=int(os.environ.get("ES_PORT", "9200")),
         index="staging"
     )
 else:  # development
@@ -242,7 +243,8 @@ def get_database_for_use_case(use_case: str):
         # Need advanced search capabilities
         return factory.create(
             backend="elasticsearch",
-            hosts=["localhost:9200"],
+            host="localhost",
+            port=9200,
             index="search"
         )
     
@@ -369,6 +371,51 @@ factory.create(backend="postgrez")
 
 Catching `ImportError` around `create()` catches nothing.
 
+### A key the backend does not accept
+
+A config key that matches no field on the chosen backend is a `ValueError`
+too, rather than being discarded:
+
+```python
+factory.create(backend="postgres", hosst="db.internal", database="app")
+# ValueError: PostgresDatabaseConfig does not accept 'hosst' (did you mean
+# 'host'?). Accepted keys: auto_create_table, command_timeout,
+# connection_string, database, ensure_database, host, max_pool_size,
+# min_pool_size, password, port, schema, schema_name, ssl, table,
+# table_name, user, vector_enabled, vector_metric.
+```
+
+This is the same event as an unrecognised backend name, one layer in, and
+it reports the same way. It matters more than a misspelt backend name does:
+every connection field has a working default, so a Postgres config built
+entirely from misspelled keys used to succeed against `localhost` and log
+nothing. The "synthesized default values" warning could not cover it — that
+warning fires when *recognized* explicit keys mix with defaults, and an
+unrecognized key enters neither bucket, so the config read as "nothing was
+configured".
+
+The accepted list includes input spellings the backend resolves away, so
+`connection` is answered with `connection_string` rather than with a list
+that appears not to contain it. The routing keys `backend`, `factory`,
+`name` and `type` pass through untouched, so a config dict may still carry
+the discriminator that selected it.
+
+To supply a key only some backends have, ask first:
+
+```python
+from dataknobs_data.backends import sync_backends
+
+backend_class = sync_backends.get_factory(backend_name)
+config_cls = getattr(backend_class, "CONFIG_CLS", None)
+if config_cls is not None and config_cls.accepts("table"):
+    backend_config.setdefault("table", collection_name)
+```
+
+`get_factory` returns `None` — it does not raise — for a name this
+installation cannot build, so reading `CONFIG_CLS` off it directly raises
+`AttributeError` in exactly the case a reader is most likely to hit: a real
+backend whose optional driver is not installed.
+
 ## Testing with Factory
 
 ```python
@@ -425,7 +472,8 @@ class DataService:
         )
         self.search = factory.create(
             backend="elasticsearch",
-            hosts=["search.example.com:9200"],
+            host="search.example.com",
+            port=9200,
             index="products"
         )
         self.archive = factory.create(

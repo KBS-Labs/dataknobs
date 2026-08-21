@@ -144,7 +144,7 @@ postgres_db:
   user: ${POSTGRES_USER:postgres}
   password: ${POSTGRES_PASSWORD}
   table: ${POSTGRES_TABLE:records}  # Optional
-  pool_size: ${DB_POOL_SIZE:5}  # Connection pool size
+  max_pool_size: ${DB_POOL_SIZE:5}  # Connection pool ceiling
 ```
 
 ### Elasticsearch Backend
@@ -155,9 +155,9 @@ elasticsearch_db:
     - ${ES_HOST1:localhost:9200}
     - ${ES_HOST2:}  # Optional second host
   index: ${ES_INDEX:records}
-  username: ${ES_USERNAME:}  # Optional
-  password: ${ES_PASSWORD:}  # Optional
-  use_ssl: ${ES_USE_SSL:false}
+  basic_auth:  # Optional; the field is a (username, password) pair
+    - ${ES_USERNAME:}
+    - ${ES_PASSWORD:}
   verify_certs: ${ES_VERIFY_CERTS:true}
 ```
 
@@ -391,7 +391,6 @@ databases:
   
   cache:
     backend: memory
-    enabled: ${features.use_cache}
   
   search:
     backend: ${features.search_backend}
@@ -545,7 +544,6 @@ databases:
   - name: cache
     factory: database
     backend: memory
-    max_size: ${CACHE_MAX_SIZE:1000}
   
   - name: search
     factory: database
@@ -553,8 +551,9 @@ databases:
     hosts:
       - ${ES_HOST:localhost:9200}
     index: ${ES_INDEX:${APP_ENV}_records}
-    username: ${ES_USERNAME:}
-    password: ${ES_PASSWORD:}
+    basic_auth:
+      - ${ES_USERNAME:}
+      - ${ES_PASSWORD:}
   
   - name: archive
     factory: database

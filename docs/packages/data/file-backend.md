@@ -20,8 +20,8 @@ from dataknobs_data.backends.file import SyncFileDatabase
 # Configure with file path
 config = {
     "path": "/path/to/data.json",
-    "auto_save": True,  # Save after each write
-    "pretty": True      # Pretty-print JSON
+    "format": "json",       # json, csv, tsv or parquet; from the extension when unset
+    "compression": None     # or "gzip"
 }
 
 db = SyncFileDatabase(config)

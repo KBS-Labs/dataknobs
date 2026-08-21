@@ -23,8 +23,8 @@ config = {
     "database": "myapp",
     "user": "postgres",
     "password": "secret",
-    "pool_size": 10,
-    "max_overflow": 20
+    "min_pool_size": 2,
+    "max_pool_size": 10
 }
 
 db = SyncPostgresDatabase(config)

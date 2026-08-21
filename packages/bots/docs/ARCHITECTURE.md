@@ -644,8 +644,8 @@ CREATE TABLE messages (
 ```python
 conversation_storage:
   backend: postgres
-  pool_size: 20          # Connections per instance
-  max_overflow: 10       # Extra connections
+  min_pool_size: 5       # Connections held open per instance
+  max_pool_size: 20      # Ceiling per instance
 ```
 
 **Load Distribution**:

@@ -109,8 +109,7 @@ from dataknobs_data import AsyncDatabase
 
 db = await AsyncDatabase.from_backend("file", {
     "path": "/data/records.json",
-    "pretty": True,
-    "backup": True
+    "format": "json"
 })
 ```
 

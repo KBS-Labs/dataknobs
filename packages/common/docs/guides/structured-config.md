@@ -73,9 +73,11 @@ Widget.from_config({"name": "x", "size": 4})
 
 Auto-derived projection. Each `@dataclass` field is read from `config`
 by name; absent fields use their declared default (or
-`default_factory`). Unknown keys in the dict are ignored — useful for
-registry-routing keys like `"backend"`. The caller's dict is
-shallow-copied before normalization, so it isn't mutated.
+`default_factory`). Unknown keys in the dict are ignored by default —
+useful for registry-routing keys like `"backend"` — unless the class opts
+into rejecting them; see [Unknown-key
+policy](#unknown-key-policy-_unknown_keys-_input_keys). The caller's dict
+is shallow-copied before normalization, so it isn't mutated.
 
 A field whose declared type is (or contains) a `StructuredConfig`
 subclass is rebuilt recursively from its raw dict shape — see
@@ -106,6 +108,108 @@ class RenamedConfig(StructuredConfig):
         if "legacy_key" in raw and "new_field" not in raw:
             raw["new_field"] = raw.pop("legacy_key")
         return raw
+```
+
+### Unknown-key policy (`_UNKNOWN_KEYS`, `_INPUT_KEYS`)
+
+`from_dict` discards a key that matches no field. That is right when a
+config travels with the routing key that selected it, and wrong when every
+field has a working default: there a misspelled key does not fail, it
+succeeds against the wrong thing. A Postgres config carrying `hosst`
+connects to `localhost` and logs nothing, because each field it meant to
+set fell through to a built-in default.
+
+Set `_UNKNOWN_KEYS = "raise"` to reject instead:
+
+```python
+@dataclass(frozen=True)
+class ServiceConfig(StructuredConfig):
+    host: str = "localhost"
+
+    _UNKNOWN_KEYS: ClassVar[Literal["ignore", "raise"]] = "raise"
+
+ServiceConfig.from_dict({"hosst": "db"})
+# ValueError: ServiceConfig does not accept 'hosst' (did you mean 'host'?).
+#             Accepted keys: host.
+```
+
+The default is `"ignore"`, so nothing changes for a class that does not opt
+in. Every `dataknobs_data` backend config opts in via `DatabaseConfig`.
+
+The check runs **after** `_normalize_dict`, so an alias that method
+translates is accepted. An alias it consumes without leaving behind is
+invisible to the check but also absent from the error's list of accepted
+keys — which would tell a caller who wrote `connection` that
+`connection_string` is not accepted. Declare those in `_INPUT_KEYS`:
+
+```python
+@dataclass(frozen=True)
+class ServiceConfig(StructuredConfig):
+    host: str = "localhost"
+
+    _UNKNOWN_KEYS: ClassVar[Literal["ignore", "raise"]] = "raise"
+    _INPUT_KEYS: ClassVar[frozenset[str]] = frozenset({"hostname"})
+
+    @classmethod
+    def _normalize_dict(cls, raw):
+        if "hostname" in raw:
+            raw.setdefault("host", raw.pop("hostname"))
+        return raw
+```
+
+`_INPUT_KEYS` is unioned across the MRO, so a subclass declares only the
+spellings it adds. It only ever widens what is accepted, so a declaration
+that lags the normalizer costs a less helpful message rather than a
+wrongly rejected config.
+
+That last property rests on a requirement `_normalize_dict` overrides in a
+`"raise"` class must meet: **remove every input key you consume.** The check
+runs on what the method returns, so a consumed key left in place is reported
+as unrecognised and a previously-working config starts failing. Every
+override in this repository does remove its keys; the base cannot enforce it,
+so it is a rule for the next one.
+
+The object-graph layer's own vocabulary — `backend`, `factory`, `name`,
+`type` — is tolerated under `"raise"` without being declared, since
+`ObjectBuilder` and the database factories strip those before construction
+and none of them is a misspelling of a field. They are excluded from the
+error's accepted-key list for the same reason.
+
+### Misdeclaring a policy is refused at class definition
+
+`_UNKNOWN_KEYS`, `_INPUT_KEYS`, `_SENSITIVE_FIELDS`, `_polymorphic_fields`
+and `_MAX_REDACT_DEPTH` are consumed directly — a bare `==`, a `frozenset`
+union, an `in` test, a `.items()` walk — so a wrong shape does not raise, it
+quietly means something else. `__init_subclass__` rejects each of the ways
+that happens:
+
+```python
+_UNKNOWN_KEYS: ClassVar[str] = "Raise"          # ValueError: not a policy
+_INPUT_KEYS: ClassVar[Any] = "connection_string"  # ValueError: a bare string
+_UNKNOWN_KEYS: Literal["ignore", "raise"] = "raise"  # ValueError: not ClassVar
+```
+
+The middle one is the trap worth naming: `str` is iterable, so the union
+would take the alias apart into ten single characters — accepting each of
+them, and still rejecting the spelling it was written to declare. The last
+one matters because without `ClassVar` the dataclass decorator turns a policy
+attribute into a *field*, which then shows up in `fields()`, in `to_dict()`,
+and in the accepted-key list of the errors the policy itself produces.
+
+### `accepts(key)` (classmethod)
+
+Whether `from_dict` will consume `key` rather than drop it — true for a
+declared field or an `_INPUT_KEYS` alias anywhere in the MRO, false for a
+routing key. The question a caller composing a config for a
+statically-unknown backend has to be able to ask, since under `"raise"` an
+optional key that only some backends have can no longer be supplied
+speculatively:
+
+```python
+backend_class = sync_backends.get_factory(backend_name)
+config_cls = getattr(backend_class, "CONFIG_CLS", None)
+if config_cls is not None and config_cls.accepts("table"):
+    backend_config.setdefault("table", bank_name)
 ```
 
 ### `to_dict()`

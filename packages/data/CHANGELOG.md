@@ -7,6 +7,90 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Changed
+
+- **BREAKING: every database backend config now rejects a key it does not
+  accept**, rather than discarding it. Set once on `DatabaseConfig`, so all fourteen
+  backends — seven sync, seven async — inherit it, and so does a backend
+  added later.
+
+  The default was wrong specifically for this family: every connection
+  field has a working default, so a config built from misspelled keys did
+  not fail, it succeeded against the wrong store. `create(backend="postgres",
+  hosst="db.internal")` connected to `localhost` and logged nothing. The
+  "synthesized default values" warning could not cover it — that warning
+  fires when *recognized* explicit keys mix with defaults, and an
+  unrecognized key enters neither bucket, so the config read as "nothing
+  was configured" and the case most in need of the warning was the one case
+  it structurally could not see.
+
+  The error names the offending key, suggests the nearest accepted
+  spelling, and lists the accepted set — including input spellings a
+  backend resolves away, so `connection` is answered with
+  `connection_string` and `region` is accepted on the S3 backends. Routing
+  keys (`backend`, `factory`, `name`, `type`) still pass through, so a
+  config dict may carry the discriminator that selected it.
+
+  Migration: a call that raises was already not doing what it read as
+  doing. The message names the accepted spelling. To supply a key only some
+  backends have, ask `CONFIG_CLS.accepts(key)` first.
+
+- **The backend registry's `config_options` metadata named keys the config
+  classes reject.** It is returned by `DatabaseFactory.get_backend_info()`,
+  so it is the programmatic equivalent of a documented sample — read by a
+  consumer building a config form or validating input, and until now read by
+  nothing that could tell it was wrong. It carried all three of the defects
+  found in the markdown: a field belonging to the sibling backend (`hosts`,
+  advertised on the *sync* Elasticsearch entry), another library's
+  vocabulary (`username` / `password` where the field is `basic_auth`), and
+  a field that never existed (`initial_data` on the memory backend). The two
+  Elasticsearch entries now differ from each other, because the two configs
+  do: the sync one shapes the index and has no auth surface, the async one
+  authenticates and hardcodes its index spec.
+
+### Fixed
+
+- **Sixteen documented factory calls named a field no backend has** (eighteen
+  counting the mirrored second copy of one page). They were
+  invisible while unknown keys were dropped: the sample ran, and what it
+  configured was the default. Two pooling pages set pool sizes with
+  `pool_size` / `max_overflow` (SQLAlchemy's spelling; the fields are
+  `min_pool_size` / `max_pool_size`), five Elasticsearch samples passed
+  `hosts` to the *sync* backend (a field on the async config — the sync one
+  takes `host` / `port`), two authenticated with `username` / `password`
+  instead of `basic_auth`, three named `connection` instead of
+  `connection_string`, and the file backend was documented with `pretty` and
+  `backup`, which have never existed.
+
+  The same three mistakes appeared in the two forms most consumers copy, and
+  those broke rather than merely misconfigured: a bot's
+  `conversation_storage:` block reaches the factory with every key it
+  carries, so the documented production Postgres sample — `pool_size`,
+  `max_overflow`, `pool_timeout`, none of them fields — raised at startup for
+  anyone who copied it. Corrected across the bot, environment-resource and
+  backend-reference pages, along with a `SyncSQLiteDatabase({...})` sample
+  passing the async-only `pool_size` and a sync Elasticsearch sample using
+  the async backend's `hosts` and an `auth` key that exists on neither.
+
+  `tests/test_documented_backend_config_keys.py` now checks every documented
+  factory call, backend constructor with an inline dict, and YAML config
+  block against the real config class via `accepts()`, so the accepted set is
+  read from the code rather than restated. Coverage is asserted rather than
+  assumed: a backend whose optional driver is absent is still read against
+  its declared config class instead of silently dropping out of the sweep,
+  and the corpus floors count the sites actually checked. What it does not
+  cover — a config bound to a variable and passed by name, where which
+  binding a name refers to is not decidable by reading a prose document — is
+  stated with the reason rather than listed.
+
+- **`Not` is exported from `dataknobs_data.validation`.** The three logical
+  combinators are `All`, `AnyOf` and `Not`; the first two were exported and
+  the third was not, so the only one that negates was the only one
+  unreachable by the path the other two use. It was reachable as `~other`
+  and by importing the submodule directly, which is why the gap survived. A
+  test now derives the expected export set from the constraints module, so
+  a constraint added later is covered without anyone remembering to.
+
 ## v0.9.0 - 2026-08-19
 
 ### Added

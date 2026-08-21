@@ -44,6 +44,7 @@ Environment-variable substitution:
 from __future__ import annotations
 
 import dataclasses
+import difflib
 import functools
 import inspect
 import logging
@@ -55,6 +56,7 @@ from typing import (
     Any,
     ClassVar,
     Generic,
+    Literal,
     Self,
     TypeVar,
     Union,
@@ -188,6 +190,192 @@ def _interior_sensitive_keys(cls: type) -> frozenset[str]:
     with _sensitive_keys_lock:
         extras = frozenset(_EXTRA_SENSITIVE_INTERIOR_KEYS)
     return _DEFAULT_SENSITIVE_KEYS | extras | frozenset(name.lower() for name in sensitive_fields)
+
+
+#: Discriminator and metadata keys the object-graph layer owns, tolerated by
+#: :meth:`StructuredConfig.from_dict` under ``_UNKNOWN_KEYS = "raise"``.
+#:
+#: An object builder pops ``factory``/``type``/``name`` and the database
+#: factories strip ``backend``, so a config reaching ``from_dict`` through the
+#: documented route carries none of them. A config handed to ``from_dict``
+#: directly still can -- a resource adapter that forwards
+#: ``{"type": backend, **config}`` verbatim, for instance -- and none of these
+#: is a misspelling of a field, which is what the check is for.
+#:
+#: Tolerated rather than *accepted*: they are excluded from the rejection but
+#: not from the error's list of accepted keys, which would otherwise offer
+#: ``factory`` as an answer to a question about a connection field.
+#:
+#: The tolerance leaves a residual hole, and it is worth naming rather than
+#: discovering: ``name`` is an ordinary English word, so
+#: ``create(backend="sqlite", name="app.db")`` passes the check and yields
+#: ``path=":memory:"`` -- the same "succeeds against the wrong store" ending
+#: this check exists to prevent. Narrowing the set is not the answer. A
+#: documented resource list writes ``- name: cache`` / ``factory: database``
+#: / ``backend: memory`` as one mapping, so ``name`` genuinely travels beside
+#: a database config; rejecting it would break the shape the docs teach. The
+#: object-graph layer pops these before ``from_dict`` sees them, which is why
+#: the hole exists only on the direct-call path.
+_ROUTING_KEYS = frozenset({"backend", "factory", "name", "type"})
+
+
+@functools.cache
+def _accepted_keys(cls: type) -> frozenset[str]:
+    """Every input key ``from_dict`` consumes, computed once and cached.
+
+    The dataclass field names, unioned with the ``_INPUT_KEYS`` declared
+    anywhere in the MRO. Both halves are class-definition-time facts, so
+    the result is stable per class and cached alongside
+    :func:`_resolved_hints` and :func:`_interior_sensitive_keys`.
+
+    The MRO walk is what lets a subclass declare only the spellings it
+    adds: the sync S3 config names its two pool aliases and still accepts
+    the four credential aliases its base normalizes.
+    """
+    fields: frozenset[str] = frozenset()
+    if dataclasses.is_dataclass(cls):
+        fields = frozenset(f.name for f in dataclasses.fields(cls))
+    declared: frozenset[str] = frozenset()
+    for base in cls.__mro__:
+        declared |= frozenset(base.__dict__.get("_INPUT_KEYS", ()))
+    return fields | declared
+
+
+def _unknown_keys_message(cls: type, unknown: list[str], accepted: frozenset[str]) -> str:
+    """Explain rejected keys by naming a likely intended spelling for each.
+
+    The accepted list alone is not enough on the path this guards. The
+    caller who wrote ``connection`` gets back a list containing
+    ``connection_string`` and has to spot it; a per-key suggestion puts
+    the answer beside the question.
+    """
+    candidates = sorted(accepted)
+    parts: list[str] = []
+    for key in unknown:
+        close = difflib.get_close_matches(key, candidates, n=1, cutoff=0.6)
+        if not close and key:
+            # A short key scores poorly against a longer canonical one
+            # (``connection`` against ``connection_string``), so fall back
+            # to a prefix relationship -- which is what an abbreviated or
+            # truncated spelling actually is.
+            #
+            # Guarded on a non-empty ``key`` because every candidate starts
+            # with the empty string: an empty key would otherwise be told it
+            # probably meant whichever field sorts first.
+            close = [c for c in candidates if c.startswith(key) or key.startswith(c)][:1]
+        parts.append(repr(key) + (f" (did you mean {close[0]!r}?)" if close else ""))
+    rendered = ", ".join(candidates) if candidates else "(none)"
+    return f"{cls.__name__} does not accept {', '.join(parts)}. Accepted keys: {rendered}."
+
+
+#: The class-level attributes that configure a subclass's *behaviour* rather
+#: than describing an instance's data, and the shape each must be declared
+#: with. Validated together by :func:`_validate_policy_declaration` because
+#: they share a failure mode, not because they share a purpose.
+#:
+#: Every one of them is consumed directly -- a bare ``==`` comparison, a
+#: ``frozenset`` union, an ``in`` test, a ``.items()`` walk -- so a
+#: misdeclared value does not fail, it quietly means something else. The
+#: shared trap is that ``str`` is itself iterable and itself supports ``in``:
+#:
+#: * ``_INPUT_KEYS = "connection_string"`` unions in ten single characters,
+#:   accepts each of them, and still rejects the alias it was written to
+#:   declare -- wrong in both directions at once.
+#: * ``_SENSITIVE_FIELDS = "api_key"`` does the same to the redaction set,
+#:   and additionally turns the field-name test into a *substring* match, so
+#:   an unrelated field named ``key`` is masked while the interior set holds
+#:   only letters.
+#: * ``_UNKNOWN_KEYS = "Raise"`` compares unequal to ``"raise"`` and so means
+#:   ``"ignore"`` -- a class that reads as opted in to the strict policy while
+#:   silently running the lenient one.
+#:
+#: Checked at runtime rather than left to the type checker for the same
+#: reason ``_MAX_REDACT_DEPTH`` already is: the subclasses that matter are
+#: consumers', and a library cannot assume its consumers run mypy.
+_POLICY_SHAPES: Mapping[str, str] = types.MappingProxyType(
+    {
+        "_UNKNOWN_KEYS": "policy",
+        "_INPUT_KEYS": "names",
+        "_SENSITIVE_FIELDS": "names",
+        "_polymorphic_fields": "mapping",
+        "_MAX_REDACT_DEPTH": "depth",
+    }
+)
+
+
+def _declared_without_classvar(cls: type, name: str) -> bool:
+    """Whether this class annotates ``name`` as something other than a ClassVar.
+
+    ``__init_subclass__`` runs before ``@dataclass``, so this is the only
+    moment the mistake is still cheap: without ``ClassVar`` the decorator
+    turns a policy attribute into a *field*, and it then shows up in
+    ``dataclasses.fields()``, in ``to_dict()``, and -- the reason this is
+    more than cosmetic -- in the accepted-key list of the very error
+    messages the policy produces.
+
+    An absent annotation is not a finding: the attribute inherits its
+    base's ``ClassVar`` declaration, which is how a subclass assigning a
+    bare ``_UNKNOWN_KEYS = "raise"`` stays correct.
+    """
+    # ``object`` rather than typeshed's ``AnnotationForm``: an annotation
+    # slot holds whatever was written there -- a string under PEP 563, a
+    # type, or a bare special form -- and ``AnnotationForm`` excludes the
+    # unsubscripted ``ClassVar`` the next line has to recognize.
+    annotation: object = inspect.get_annotations(cls).get(name)
+    if annotation is None:
+        return False
+    if isinstance(annotation, str):
+        # ``from __future__ import annotations`` in the defining module, so
+        # the annotation arrives unevaluated. Substring rather than parse:
+        # it must match ``ClassVar``, ``typing.ClassVar`` and any alias of
+        # the two, and a false negative here only declines to complain.
+        return "ClassVar" not in annotation
+    return annotation is not ClassVar and get_origin(annotation) is not ClassVar
+
+
+def _validate_policy_declaration(cls: type) -> None:
+    """Reject a policy attribute this class declares with the wrong shape.
+
+    Only attributes in ``cls.__dict__`` are checked -- an inherited value is
+    already known-valid, having been checked when its own class was created.
+    """
+    for name, shape in _POLICY_SHAPES.items():
+        if _declared_without_classvar(cls, name):
+            raise ValueError(
+                f"{cls.__qualname__}.{name} must be annotated ClassVar; "
+                "without it the dataclass decorator makes this policy "
+                "attribute a field, and it then appears in fields(), in "
+                "to_dict(), and in the accepted-key list of error messages."
+            )
+        if name not in cls.__dict__:
+            continue
+        value = cls.__dict__[name]
+        if shape == "policy" and value not in ("ignore", "raise"):
+            raise ValueError(
+                f"{cls.__qualname__}.{name} must be exactly 'ignore' or "
+                f"'raise'; got {value!r}. Any other value compares unequal "
+                "to 'raise' and so silently selects the lenient policy."
+            )
+        if shape == "names" and (isinstance(value, str) or not isinstance(value, Iterable)):
+            raise ValueError(
+                f"{cls.__qualname__}.{name} must be an iterable of names "
+                f"(a frozenset), not {value!r}. A bare string is iterable, "
+                "so it would be taken apart into one entry per character."
+            )
+        if shape == "mapping" and not isinstance(value, Mapping):
+            raise ValueError(f"{cls.__qualname__}.{name} must be a Mapping; got {value!r}.")
+        if shape == "depth" and (
+            not isinstance(value, int)
+            or isinstance(value, bool)  # a bool is an int but a nonsensical depth
+            or value < _DEFAULT_MAX_REDACT_DEPTH
+        ):
+            raise ValueError(
+                f"{cls.__qualname__}.{name} must be an int "
+                f">= {_DEFAULT_MAX_REDACT_DEPTH} (the fail-closed floor); "
+                f"got {value!r}. The depth bound may be raised for an "
+                "unusually deep raw section but never lowered — lowering "
+                "reduces credential masking."
+            )
 
 
 # Default (and minimum) safety bound on ``_redact_value`` recursion. Config
@@ -486,8 +674,33 @@ class StructuredConfig:
     #: See :meth:`validate`.
     _polymorphic_fields: ClassVar[Mapping[str, str]] = types.MappingProxyType({})
 
+    #: What :meth:`from_dict` does with an input key matching no field
+    #: after normalization. ``"ignore"`` (the default) discards it, which
+    #: is what lets a routing key travel alongside a config. ``"raise"``
+    #: rejects it.
+    #:
+    #: Opt in wherever a discarded key is indistinguishable from an absent
+    #: one *and* absence has a working default -- the combination that
+    #: makes a typo silent rather than loud. The database backend configs
+    #: opt in for exactly that reason: a Postgres config whose keys are all
+    #: misspelled reads as "nothing was configured" and connects to
+    #: ``localhost``.
+    _UNKNOWN_KEYS: ClassVar[Literal["ignore", "raise"]] = "ignore"
+
+    #: Input spellings :meth:`_normalize_dict` consumes that are not
+    #: themselves fields -- ``connection_string`` on the Postgres config,
+    #: the AWS credential aliases on the S3 ones. Unioned across the MRO by
+    #: :func:`_accepted_keys`, so a subclass declares only what it adds.
+    #:
+    #: Read only when ``_UNKNOWN_KEYS`` is ``"raise"``, and only to widen
+    #: what is accepted. A normalizer that removes the key it consumed is
+    #: already invisible to the check, so an undeclared alias costs a less
+    #: helpful message rather than a wrongly rejected config -- the
+    #: declaration is for the error text, and fails safe when it lags.
+    _INPUT_KEYS: ClassVar[frozenset[str]] = frozenset()
+
     def __init_subclass__(cls, **kwargs: Any) -> None:
-        """Install the redacting ``__repr__`` and validate ``_MAX_REDACT_DEPTH``.
+        """Install the redacting ``__repr__`` and validate the policy attributes.
 
         Runs at class-creation time, *before* the subclass's
         ``@dataclass`` decorator is applied. Writing ``__repr__`` into the
@@ -509,6 +722,13 @@ class StructuredConfig:
         which redaction's fail-closed posture forbids. A non-int or
         below-floor value raises ``ValueError`` at class definition, so the
         misuse surfaces immediately rather than as a silent leak at repr time.
+
+        That check now generalizes: :func:`_validate_policy_declaration`
+        applies the same class-definition-time rejection to every attribute
+        in :data:`_POLICY_SHAPES`. They are checked together because they
+        fail together -- each is consumed directly enough that a wrong
+        shape means something else instead of raising, and ``str`` being
+        both iterable and ``in``-testable is the shared way that happens.
         """
         super().__init_subclass__(**kwargs)
         if "__repr__" not in cls.__dict__:
@@ -519,23 +739,11 @@ class StructuredConfig:
             # Deliberate: see the comment above. Both codes are mypy
             # objecting to the assignment itself, which is the mechanism.
             cls.__repr__ = StructuredConfig._redacted_repr  # type: ignore[method-assign,assignment]
-        # Validate an explicitly-overridden depth only (an inherited value is
-        # already known-valid). ``bool`` is an ``int`` subclass but a
-        # nonsensical depth, so reject it explicitly.
-        if "_MAX_REDACT_DEPTH" in cls.__dict__:
-            depth = cls.__dict__["_MAX_REDACT_DEPTH"]
-            if (
-                not isinstance(depth, int)
-                or isinstance(depth, bool)
-                or depth < _DEFAULT_MAX_REDACT_DEPTH
-            ):
-                raise ValueError(
-                    f"{cls.__qualname__}._MAX_REDACT_DEPTH must be an int "
-                    f">= {_DEFAULT_MAX_REDACT_DEPTH} (the fail-closed floor); "
-                    f"got {depth!r}. The depth bound may be raised for an "
-                    "unusually deep raw section but never lowered — lowering "
-                    "reduces credential masking."
-                )
+        # Validate every explicitly-declared policy attribute (an inherited
+        # one is already known-valid). ``_MAX_REDACT_DEPTH`` was the first to
+        # need this and is now one of five: each is read directly enough that
+        # a misdeclaration means something else rather than failing.
+        _validate_policy_declaration(cls)
 
     def _redacted_repr(self) -> str:
         """Dataclass-style repr that masks sensitive values, scalar and nested.
@@ -593,7 +801,11 @@ class StructuredConfig:
         name. Fields absent from ``config`` use their declared default
         (or ``default_factory``). Keys in ``config`` that don't match
         any field are ignored — registry-routing keys like
-        ``"backend"`` pass through cleanly.
+        ``"backend"`` pass through cleanly — unless the class sets
+        ``_UNKNOWN_KEYS = "raise"``, in which case an unmatched key is
+        a ``ValueError`` naming it and the accepted spellings. The check
+        runs *after* :meth:`_normalize_dict`, so an alias that method
+        translates is accepted; one it does not is what gets reported.
 
         A field whose declared type is (or contains) a
         ``StructuredConfig`` subclass is rebuilt recursively from its raw
@@ -617,6 +829,16 @@ class StructuredConfig:
             ``config`` (and defaults where keys are absent).
         """
         normalized = cls._normalize_dict(dict(config))
+        if cls._UNKNOWN_KEYS == "raise":
+            # After normalization, because that is where an accepted alias
+            # becomes a field name. Checking the caller's dict instead would
+            # reject every spelling ``_normalize_dict`` exists to translate.
+            accepted = _accepted_keys(cls)  # type: ignore[arg-type]  # see _redacted_repr
+            unknown = sorted(
+                key for key in normalized if key not in accepted and key not in _ROUTING_KEYS
+            )
+            if unknown:
+                raise ValueError(_unknown_keys_message(cls, unknown, accepted))
         hints = _resolved_hints(cls)  # type: ignore[arg-type]  # see _redacted_repr
         kwargs: dict[str, Any] = {}
         for f in dataclasses.fields(cls):
@@ -631,6 +853,29 @@ class StructuredConfig:
         return cls(**kwargs)
 
     @classmethod
+    def accepts(cls, key: str) -> bool:
+        """Whether :meth:`from_dict` will consume ``key`` rather than drop it.
+
+        The question a caller composing a config for a backend it does not
+        know statically has to be able to ask. Under
+        ``_UNKNOWN_KEYS = "raise"`` an unrecognised key is an error, so a
+        caller supplying an optional key -- a default table name that only
+        the SQL backends have -- must be able to check first rather than
+        guess and be right for half the backends.
+
+        Args:
+            key: The input spelling to test.
+
+        Returns:
+            True when ``key`` is a declared field or a declared
+            ``_INPUT_KEYS`` alias, at any point in the MRO. Routing keys
+            (``backend``, ``type``, ...) are deliberately not included:
+            they are tolerated by ``from_dict`` but they are the
+            object-graph layer's vocabulary, not this config's surface.
+        """
+        return key in _accepted_keys(cls)  # type: ignore[arg-type]  # see _redacted_repr
+
+    @classmethod
     def _normalize_dict(cls, raw: dict[str, Any]) -> dict[str, Any]:
         """Per-class hook for dict-shape normalization before projection.
 
@@ -642,6 +887,17 @@ class StructuredConfig:
 
         The argument is a shallow copy of the caller's dict — overrides
         may mutate it freely.
+
+        **An override in a class with ``_UNKNOWN_KEYS = "raise"`` must
+        remove every input key it consumes.** The unknown-key check runs
+        after this method, on what it returns, so a consumed key left in
+        place is reported as unrecognised and a previously-working config
+        starts failing. Every override in the tree does remove its keys
+        today, which is what makes an *undeclared* ``_INPUT_KEYS`` alias
+        cost only a less helpful message rather than a wrongly rejected
+        config — but that is a property of these implementations, not
+        something the base can enforce, so it is stated here as a
+        requirement on the next one.
         """
         return raw
 

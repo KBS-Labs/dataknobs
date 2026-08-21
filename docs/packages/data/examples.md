@@ -187,7 +187,8 @@ config = {
             "name": "search",
             "factory": "database",
             "backend": "elasticsearch",
-            "hosts": ["localhost:9200"],
+            "host": "localhost",
+            "port": 9200,
             "index": "products"
         },
         {
@@ -418,7 +419,8 @@ class DataStreamProcessor:
         # Warm storage for processed data
         self.warm_storage = factory.create(
             backend="elasticsearch",
-            hosts=["localhost:9200"],
+            host="localhost",
+            port=9200,
             index="processed_data"
         )
         

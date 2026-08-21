@@ -719,9 +719,8 @@ conversation_storage:
   database: myapp_db
   user: postgres
   password: ${DB_PASSWORD}
-  pool_size: 20          # Optional, default: 10
-  max_overflow: 10       # Optional, default: 5
-  pool_timeout: 30       # Optional, default: 30 seconds
+  min_pool_size: 5       # Optional, default: 2
+  max_pool_size: 20      # Optional, default: 5
 ```
 
 **Environment Variables:**
@@ -3924,7 +3923,7 @@ conversation_storage:
   database: ${DB_NAME}
   user: ${DB_USER}
   password: ${DB_PASSWORD}
-  pool_size: 20
+  max_pool_size: 20
 
 # Memory
 memory:

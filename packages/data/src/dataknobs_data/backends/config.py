@@ -24,7 +24,7 @@ knobs shared by every backend except DuckDB (which has no vector support).
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, ClassVar
+from typing import Any, ClassVar, Literal
 
 from dataknobs_common import normalize_postgres_connection_config
 from dataknobs_common.structured_config import StructuredConfig
@@ -54,6 +54,21 @@ class DatabaseConfig(StructuredConfig):
     """
 
     schema: DatabaseSchema | None = None
+
+    #: Reject an input key no backend field claims, rather than dropping it.
+    #:
+    #: Declared once here so all fourteen backends -- seven sync, seven
+    #: async -- inherit it, and so a backend added later inherits it too.
+    #: The default (``"ignore"``) is wrong specifically for this family:
+    #: every connection field has a working default, so a config made of
+    #: misspelled keys does not fail, it succeeds against the wrong store.
+    #: A Postgres config carrying ``hosst`` used to connect to
+    #: ``localhost`` and log nothing, because the "synthesized default
+    #: values" warning fires only when *recognized* explicit keys mix with
+    #: defaults -- an unrecognized key enters neither bucket, so the config
+    #: reads as "nothing was configured" and the one case most in need of
+    #: the warning is the one case it cannot see.
+    _UNKNOWN_KEYS: ClassVar[Literal["ignore", "raise"]] = "raise"
 
     @classmethod
     def _normalize_dict(cls, raw: dict[str, Any]) -> dict[str, Any]:
@@ -245,6 +260,14 @@ class PostgresDatabaseConfig(VectorBackendConfig):
 
     # Redacted from ``repr`` by the StructuredConfig base.
     _SENSITIVE_FIELDS: ClassVar[frozenset[str]] = frozenset({"password"})
+
+    #: Accepted inputs ``_normalize_dict`` resolves away rather than
+    #: keeping: ``connection_string`` is decomposed into the individual
+    #: connection keys and popped, ``table_name`` is the legacy spelling
+    #: of ``table``. Declared so a caller who wrote ``connection`` is
+    #: pointed at ``connection_string`` instead of reading a field list
+    #: that does not contain it.
+    _INPUT_KEYS: ClassVar[frozenset[str]] = frozenset({"connection_string", "table_name"})
 
     @classmethod
     def _normalize_dict(cls, raw: dict[str, Any]) -> dict[str, Any]:
@@ -448,6 +471,14 @@ class S3DatabaseConfigBase(VectorBackendConfig):
         {"aws_access_key_id", "aws_secret_access_key", "aws_session_token"}
     )
 
+    # The legacy spellings ``_normalize_dict`` maps onto the canonical
+    # fields below and then deletes. Declared so the unknown-key error
+    # describes the surface a caller may actually write, not only the
+    # names that survive normalization.
+    _INPUT_KEYS: ClassVar[frozenset[str]] = frozenset(
+        {"region", "access_key_id", "secret_access_key", "session_token"}
+    )
+
     @classmethod
     def _normalize_dict(cls, raw: dict[str, Any]) -> dict[str, Any]:
         # Map the legacy region/credential aliases onto the canonical keys
@@ -499,6 +530,11 @@ class SyncS3DatabaseConfig(S3DatabaseConfigBase):
     max_attempts: int = 3
     retry_mode: str = "standard"
     extra_client_kwargs: dict[str, Any] = field(default_factory=dict)
+
+    # Only the two this class adds -- ``_accepted_keys`` unions
+    # ``_INPUT_KEYS`` across the MRO, so the base's credential aliases
+    # stay accepted without being restated here.
+    _INPUT_KEYS: ClassVar[frozenset[str]] = frozenset({"max_workers", "max_retries"})
 
     @classmethod
     def _normalize_dict(cls, raw: dict[str, Any]) -> dict[str, Any]:

@@ -16,7 +16,7 @@ class TestIdFieldFilteringAllBackends:
         if backend == "sqlite":
             # Use temporary SQLite database
             db_path = tmp_path / "test.db"
-            db = SyncDatabase.from_backend(backend, config={"db_path": str(db_path)})
+            db = SyncDatabase.from_backend(backend, config={"path": str(db_path)})
             db.connect()
         elif backend == "file":
             # Use temporary file database

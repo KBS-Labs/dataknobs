@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Fixed
+
+- **A memory bank no longer sends a table name to a backend that has no
+  table.** `_create_bank_db` set `table` to the bank name unconditionally.
+  That was meaningful for the SQL backends and meaningless for the file,
+  memory and S3 ones, where the key was silently discarded — harmless until
+  the backend configs began rejecting a key they do not accept, at which
+  point a file-backed bank failed to build. The bank name is now offered
+  only where the backend's own config says it is accepted.
+
 ## v0.11.0 - 2026-08-19
 
 ### Security

@@ -755,7 +755,7 @@ class TestFSMBuilder:
                 ResourceConfig(
                     name="test_db",
                     type="database",
-                    config={"connection_string": "sqlite:///:memory:"},
+                    config={"backend": "sqlite", "path": ":memory:"},
                 ),
             ],
             networks=[
@@ -851,8 +851,8 @@ def sample_config_dict():
                 "name": "main_db",
                 "type": "database",
                 "config": {
-                    "host": "localhost",
-                    "port": 5432,
+                    "backend": "sqlite",
+                    "path": ":memory:",
                 },
             },
         ],

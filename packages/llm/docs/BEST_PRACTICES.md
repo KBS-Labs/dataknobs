@@ -656,7 +656,7 @@ storage = DataknobsConversationStorage(AsyncMemoryDatabase())
 from dataknobs_data.backends.sqlite_async import AsyncSQLiteDatabase
 
 storage = DataknobsConversationStorage(
-    AsyncSQLiteDatabase(db_path="conversations.db")
+    AsyncSQLiteDatabase(path="conversations.db")
 )
 ```
 - Persistent across restarts
@@ -668,7 +668,7 @@ storage = DataknobsConversationStorage(
 from dataknobs_data.backends.sqlite_async import AsyncSQLiteDatabase
 
 storage = DataknobsConversationStorage(
-    AsyncSQLiteDatabase(db_path="/var/data/conversations.db")
+    AsyncSQLiteDatabase(path="/var/data/conversations.db")
 )
 ```
 - Simple deployment
@@ -1015,7 +1015,7 @@ def get_storage(env=None):
         )
     else:  # development
         return DataknobsConversationStorage(
-            AsyncSQLiteDatabase(db_path="dev_conversations.db")
+            AsyncSQLiteDatabase(path="dev_conversations.db")
         )
 ```
 
