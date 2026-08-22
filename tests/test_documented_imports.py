@@ -1,4 +1,4 @@
-"""Reproduce-first guard: an import shown in the docs must be one that resolves.
+"""Reproduce-first guard: a name shown in the docs must be one that resolves.
 
 A code sample is a promise that the reader can paste it and have it work. The
 first line of nearly every sample is an import, and an import is the one part of
@@ -83,9 +83,33 @@ that matched nothing would leave the import floor at its full value and report
 a clean sweep of an unread corpus -- the failure this file exists to refuse,
 wearing the guard's own clothes for the second time.
 
+**Both readers are scoped to fences, and a curated API reference is not
+written in fences.** It is written as a heading naming a fully-qualified path,
+followed by a block showing the class it names -- so the claim is in the
+heading and the illustration is in the fence, which is the wrong way round for
+everything above. One page had documented ``dataknobs_data.Database`` and five
+backends beneath it through the rename that made them ``SyncDatabase``,
+``SyncMemoryDatabase`` and the rest: six absent names, in the most
+authoritative kind of document the site has, none of them able to fail
+anything. That is the third of the four classes named above -- an API
+generation replaced wholesale -- recurring in a position no reader reached.
+
+**The definition was considered as the position, and measured, and it is not
+one.** ``class MemoryDatabase(Database, ConfigurableBase):`` looks like the
+claim, since the absent name is right there in it. But a fence is free to
+define its own base: ``factory-registration.md`` imports ``ABC`` on line 307,
+defines ``class AbstractDatabaseFactory(ABC)`` on 309, and subclasses it on
+320 and 327 -- so a reader treating a base as a library name reports that page
+twice for a class the page wrote eleven lines above its first use.
+A base is a claim only when the fence imports it -- at which point it is an
+ordinary import statement and the first reader already has it. So the
+definition adds no reach, and the heading, which is prose, has all of it.
+
 Scope is every markdown document a reader can reach: the site tree, each
 package's ``docs/``, and the READMEs. Two carve-outs, both narrow and both
-stated in the code below rather than left to a path convention.
+stated in the code below rather than left to a path convention: a document
+kept as a historical record, and a block or line declaring that its subject
+is the absence.
 """
 
 from __future__ import annotations
@@ -94,10 +118,18 @@ import ast
 import importlib
 import re
 from pathlib import Path
+from types import ModuleType
 
 import pytest
 
-from tests._workspace import HISTORICAL, ROOT, code_fences, documentation_files, rel
+from tests._workspace import (
+    HISTORICAL,
+    ROOT,
+    code_fences,
+    documentation_files,
+    prose_lines,
+    rel,
+)
 
 NAMESPACE = "dataknobs"
 #: The fence languages whose contents are read as Python.
@@ -156,6 +188,63 @@ LOADABLE = re.compile(
     """,
     re.VERBOSE,
 )
+
+#: A fully-qualified dataknobs path written as code in prose.
+#:
+#: The third position, and the one the other two readers are structurally
+#: unable to reach: it is not an ``import`` statement and it is not a
+#: directive value, because it is not in a fence at all. A curated API
+#: reference is written almost entirely in this form -- a heading naming the
+#: path, then a fence showing the class -- and the heading is the only part of
+#: it any reader here can check.
+#:
+#: Backticks are what make it a claim rather than prose. A sentence saying the
+#: memory backend lives in ``dataknobs_data`` is describing; ``a`` set in code
+#: font and spelled out to its last segment is naming, and a reader who cannot
+#: find what it names has been sent somewhere that does not exist. Requiring
+#: the backticks is also what keeps a URL and an ordinary sentence out, by the
+#: same construction the directive positions use above.
+#:
+#: The whole path must sit inside one pair of backticks. ``from x import y`` in
+#: code font is the import reader's claim in prose form and is left to it, and
+#: no call form -- ``module.function()`` -- appears in the tree at all.
+#:
+#: **The bare name is deliberately out of reach, and it is the larger corpus.**
+#: The other eight curated API pages head their sections ``DynaBot`` and
+#: ``BufferMemory`` rather than spelling the module, and a check for those has
+#: to ask whether the name exists *somewhere*, which is too weak to act on:
+#: swept that way the tree offers 44 unresolved base names across 171 sites, of
+#: which ``ConversationMiddleware``, ``AsyncLLMProvider``, ``DatabaseError``
+#: and most of the rest are real and merely not top-level. Worse, ``Database``
+#: does resolve -- at ``dataknobs_config.examples.Database``, which is not
+#: remotely what a data API reference means by it, so the sweep would have
+#: reported the page's single worst claim as fine. A qualified path says which
+#: module it means and can therefore be wrong about it; a bare name cannot,
+#: and a guard that cannot be wrong cannot be right either.
+PROSE_PATH = re.compile(r"`(?P<path>dataknobs[a-z_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)+)`")
+
+#: Marks a *line* whose path is not meant to resolve, as ``ILLUSTRATIVE``
+#: marks a fence.
+#:
+#: Two kinds of document name an absent thing on purpose, and both are the
+#: shape the fence marker already exists for -- the absence is the content:
+#:
+#: - A changelog's *Removed* entry. ``dataknobs.flask_api`` is named there
+#:   precisely because it is gone, and the entry would be false if the name
+#:   resolved.
+#: - Advice about a mistake. "Use ``dataknobs_package`` not ``dataknobs.package``"
+#:   has to spell the wrong form to warn about it.
+#:
+#: The marker trails the line rather than preceding it, which is the one place
+#: this departs from the fence form. A claim in prose is inline, so the line
+#: *is* the block; and both sites here sit inside a list, where an HTML comment
+#: on its own line interrupts the list in the renderer while the trailing form
+#: is invisible.
+#:
+#: A *Removed* section is where the next one will be, and a section-level
+#: exemption is what to reach for if these stop being two. One line each, with
+#: its own reason, is the cheaper answer while they are.
+PROSE_ILLUSTRATIVE = re.compile(r"<!--\s*dk-imports:\s*illustrative\b.*?-->")
 
 #: Cuts a line at the comment that ends it, in either YAML or shell.
 #:
@@ -273,40 +362,85 @@ def targets(statement: str) -> list[tuple[str, str | None]]:
     return found
 
 
-def unresolved(module: str, attribute: str | None) -> str | None:
-    """Why this target does not resolve, or ``None`` if it does.
+def _imported(module: str) -> tuple[ModuleType | None, BaseException | None]:
+    """The module, or the exception that stopped it loading.
+
+    Split out from ``unresolved`` when a third reader needed the same question
+    answered about a *prefix* of a path rather than about a whole module, and
+    the alternative was a second copy of the driver-vs-typo distinction below.
+    """
+    try:
+        return importlib.import_module(module), None
+    except Exception as exc:  # a module that imports but explodes is a finding
+        return None, exc
+
+
+def _absent(module: str, exc: BaseException) -> bool:
+    """Whether ``exc`` says *this* module is missing, rather than one under it.
 
     Every backend documented here imports an optional third-party driver, so a
     missing driver is an ordinary property of the environment rather than a
-    defect in the document. It is told apart from a wrong path the same way
+    defect in the document. The two are told apart the same way
     ``packages/data/tests/conftest.py`` tells them apart, and for the same
-    reason: conflating the two is what let a dead import sit unreported.
+    reason: conflating them is what let a dead import sit unreported.
     """
-    try:
-        loaded = importlib.import_module(module)
-    except ModuleNotFoundError as exc:
-        missing = exc.name
-        if missing and missing != module and not module.startswith(f"{missing}."):
-            return None
-        return f"no module {module!r}"
-    except Exception as exc:  # a module that imports but explodes is a finding
-        return f"{module!r} raised {type(exc).__name__}: {exc}"
+    return isinstance(exc, ModuleNotFoundError) and (
+        not exc.name or exc.name == module or module.startswith(f"{exc.name}.")
+    )
 
+
+def _why(module: str, exc: BaseException) -> str | None:
+    """Reader-facing text for a failed import, or ``None`` if it is the driver."""
+    if isinstance(exc, ModuleNotFoundError):
+        return f"no module {module!r}" if _absent(module, exc) else None
+    return f"{module!r} raised {type(exc).__name__}: {exc}"
+
+
+def unresolved(module: str, attribute: str | None) -> str | None:
+    """Why this target does not resolve, or ``None`` if it does."""
+    loaded, exc = _imported(module)
+    if exc is not None:
+        return _why(module, exc)
     if attribute is None or attribute == "*":
         return None
     if hasattr(loaded, attribute):
         return None
     submodule = f"{module}.{attribute}"
-    try:
-        importlib.import_module(submodule)
-    except ModuleNotFoundError as exc:
-        missing = exc.name
-        if missing and missing != submodule and not submodule.startswith(f"{missing}."):
-            return None
+    _, exc = _imported(submodule)
+    if exc is not None and _absent(submodule, exc):
         return f"{module!r} exports no {attribute!r}"
-    except Exception:  # importable at all is enough to call the name present
+    return None  # importable at all is enough to call the name present
+
+
+def unresolved_path(module_path: str) -> str | None:
+    """Why a bare dotted path names nothing, or ``None`` if it names something.
+
+    ``unresolved`` is handed a module and an attribute because ``ast`` knows
+    which is which. A path written in prose does not say, and the last dot is
+    the wrong guess: ``dataknobs_bots.memory.VectorMemory.add_message`` names a
+    method on a class in a module, and read by the last dot it asks
+    ``dataknobs_bots.memory.VectorMemory`` to import. Five such paths sit in
+    the tree, every one of them correct, and a last-dot reader reports all five
+    as broken -- a false positive indistinguishable from a true one, which is
+    the shape that gets a guard suppressed wholesale.
+
+    So the module boundary is found rather than assumed: the longest prefix
+    that imports, then attribute access for whatever is left.
+    """
+    parts = module_path.split(".")
+    for cut in range(len(parts), 0, -1):
+        head = ".".join(parts[:cut])
+        loaded, exc = _imported(head)
+        if exc is not None:
+            if _absent(head, exc):
+                continue  # not a module; try a shorter prefix
+            return _why(head, exc)  # present but broken, or an absent driver
+        for name in parts[cut:]:
+            if not hasattr(loaded, name):
+                return f"{head!r} has no {name!r}"
+            loaded = getattr(loaded, name)
         return None
-    return None
+    return f"nothing in {module_path!r} imports"
 
 
 def findings() -> list[str]:
@@ -381,6 +515,40 @@ def loadable_targets(path: Path) -> list[tuple[int, str, str, str | None]]:
                     module, _, attribute = module.rpartition(".")
                 found.append((fence.line + offset, match.group(0).strip(), module, attribute))
     return found
+
+
+def prose_targets(path: Path) -> list[tuple[int, str]]:
+    """``(line, dotted path)`` for each path named as code in this document's prose.
+
+    A line carrying the illustrative marker is skipped whole rather than
+    per-match: a line that has to spell one wrong name usually contrasts it
+    with the right one, and both are the sentence's subject.
+    """
+    return [
+        (number, match.group("path"))
+        for number, line in prose_lines(path)
+        if not PROSE_ILLUSTRATIVE.search(line)
+        for match in PROSE_PATH.finditer(line)
+    ]
+
+
+def prose_findings() -> list[str]:
+    """Every path named in prose that resolves to nothing."""
+    return [
+        f"{rel(path)}:{number}  {named}\n      {why}"
+        for path in documentation_files()
+        for number, named in prose_targets(path)
+        if (why := unresolved_path(named))
+    ]
+
+
+def prose_findings_in(path: Path) -> list[str]:
+    """``prose_findings`` for a single document, for the fixtures below."""
+    return [
+        f"{path.name}:{number}  {named}\n      {why}"
+        for number, named in prose_targets(path)
+        if (why := unresolved_path(named))
+    ]
 
 
 def path_findings() -> list[str]:
@@ -467,6 +635,122 @@ def test_the_loadable_scan_reads_a_meaningful_corpus() -> None:
         "the pattern going dark costs about ten, which is what this number is "
         "placed to catch"
     )
+
+
+def test_every_path_named_in_prose_resolves() -> None:
+    """A path a document sets in code font is a claim, and must resolve like one.
+
+    The two readers above are both scoped to fences, and a curated API
+    reference is not written in fences: it is written as a heading naming a
+    fully-qualified path, followed by a block showing the class's methods. The
+    heading is the claim -- "this is where this lives" -- and nothing here
+    could read it.
+
+    So one page documented an API generation that had been replaced wholesale.
+    ``dataknobs_data.Database`` and five backends under it kept their pre-split
+    spellings through the rename that made them ``SyncDatabase``,
+    ``SyncMemoryDatabase`` and the rest, in the most authoritative kind of
+    document the site has. That failure class is named in this file's own
+    docstring as one of the four the first sweep found, and it recurred here
+    for a reason the docstring also gives: the reader's scope was smaller than
+    the corpus, and it reported green over the difference.
+    """
+    broken = prose_findings()
+    assert not broken, (
+        f"{len(broken)} path(s) named in prose resolve to nothing, so a reader "
+        "sent to one finds an empty place where the document says a name "
+        "lives:\n  " + "\n  ".join(broken) + "\n\nRepoint the path, and rename "
+        "the symbol wherever the surrounding prose and fences use it. If the "
+        "absence is the point -- a changelog's Removed entry, advice about a "
+        "misspelling -- end the line with <!-- dk-imports: illustrative -- why -->."
+    )
+
+
+def test_the_prose_scan_reads_a_meaningful_corpus() -> None:
+    """Non-vacuity, and this reader needs its own for the same reason the last did.
+
+    Every path it reads sits outside a fence, where neither reader above looks,
+    so a ``PROSE_PATH`` that matched nothing would leave both their floors at
+    full value and report a clean sweep of an unread corpus.
+
+    The number is placed under what the tree holds and above what a reader
+    losing its harder half still reaches. 322 paths sit in 96 documents, and
+    the six that were broken were all in one -- so a floor set just under 322
+    would be met by a reader that had stopped visiting every file but the
+    largest. Two thirds is the share the ten biggest documents hold between
+    them; a floor of 250 fails if any of them stops being read.
+    """
+    found = sum(len(prose_targets(path)) for path in documentation_files())
+    assert found > 250, (
+        f"only {found} paths named in prose; the documents naming a module by "
+        "dotted path have not gone away, so the likelier reading is that "
+        "``PROSE_PATH`` or ``prose_lines`` has stopped reaching some of them"
+    )
+
+
+def test_a_path_in_a_fence_is_not_read_as_prose(tmp_path: Path) -> None:
+    """The two scopes are complements, and a claim belongs to exactly one.
+
+    An import inside a fence is the first reader's, and reading it here as well
+    would report the same defect twice -- and worse, would report a fence
+    carrying the illustrative marker, which this reader has no way to see.
+    """
+    doc = tmp_path / "sample.md"
+    doc.write_text(
+        "The record type is `dataknobs_data.Record`.\n\n"
+        "```python\n"
+        "# `dataknobs_data.NoSuchThing` is inside a fence\n"
+        "from dataknobs_data import Record\n"
+        "```\n"
+    )
+    assert [named for _, named in prose_targets(doc)] == ["dataknobs_data.Record"]
+    assert not prose_findings_in(doc)
+
+
+def test_a_broken_prose_path_is_detected(tmp_path: Path) -> None:
+    """The detector fires on the form the API reference was actually wrong in."""
+    doc = tmp_path / "sample.md"
+    doc.write_text("### `dataknobs_data.backends.memory.MemoryDatabase`\n")
+    assert prose_findings_in(doc)
+
+    doc.write_text("### `dataknobs_data.backends.memory.SyncMemoryDatabase`\n")
+    assert not prose_findings_in(doc)
+
+
+def test_a_method_path_is_not_split_at_its_last_dot(tmp_path: Path) -> None:
+    """The false positive that decided ``unresolved_path`` walks.
+
+    ``VectorMemory`` is a class, not a module, so the last dot is not the
+    module boundary -- and read as though it were, five correct paths in the
+    tree report as broken. A guard whose false positives look exactly like its
+    true ones is one nobody can act on.
+    """
+    doc = tmp_path / "sample.md"
+    doc.write_text("See `dataknobs_bots.memory.VectorMemory.add_message` for the write path.\n")
+    assert not prose_findings_in(doc)
+
+    doc.write_text("See `dataknobs_bots.memory.VectorMemory.no_such_method` for the write path.\n")
+    assert prose_findings_in(doc)
+
+
+def test_a_line_can_declare_its_path_illustrative(tmp_path: Path) -> None:
+    """A document that names an absent thing on purpose says so, and is believed.
+
+    Both real uses are lines whose subject is the absence: a changelog entry
+    recording a removal, and advice contrasting a wrong spelling with a right
+    one. The marker covers the whole line for the second of those -- a sentence
+    warning about ``dataknobs.package`` names ``dataknobs_package`` in the same
+    breath, and splitting the line would leave the warning half-checked.
+    """
+    doc = tmp_path / "sample.md"
+    line = "Use `dataknobs_data` not `dataknobs.data`"
+    doc.write_text(line + "\n")
+    assert prose_findings_in(doc)
+
+    doc.write_text(
+        line + " <!-- dk-imports: illustrative -- the wrong spelling is the subject -->\n"
+    )
+    assert not prose_targets(doc)
 
 
 def test_a_clone_url_is_not_read_as_a_path(tmp_path: Path) -> None:

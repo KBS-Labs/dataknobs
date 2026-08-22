@@ -280,7 +280,7 @@ Failures raise `DottedPathError` or `DottedPathTypeError` — both
 ### dataknobs-legacy [0.2.0]
 
 #### Removed
-- **Breaking:** `dataknobs.flask_api`, and with it the `flask` dependency it alone required. The module imported a `create_app` this package does not define, so `import dataknobs.flask_api` already raised `ImportError`
+- **Breaking:** `dataknobs.flask_api`, and with it the `flask` dependency it alone required. The module imported a `create_app` this package does not define, so `import dataknobs.flask_api` already raised `ImportError` <!-- dk-imports: illustrative -- a Removed entry names what is gone; the name resolving would falsify it -->
 
 ### dataknobs-llm [0.7.0]
 
