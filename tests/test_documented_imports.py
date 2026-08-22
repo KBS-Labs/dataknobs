@@ -58,6 +58,31 @@ assembles must itself parse -- an assembly that comes out wrong is a finding
 rather than a zero -- and that the floor below counts *targets*, which is the
 quantity a line-at-a-time reader cannot reach.
 
+**An import is not the only way a document names something to load**, and for
+a long time it was the only way this file could see one. A ``class:`` value in
+a YAML fence is handed to ``import_module`` exactly as an ``import`` line is.
+Forty-six such paths sit in the tree -- 33 under ``class:``, ten as a ``-m`` or
+``--flag`` argument in a shell fence, and the rest under ``function:`` and
+``factory:``. Eight named a class that is not there: five on one page of the
+development guide, and three in a single README beside two more entries
+spelling the same convention correctly. None could fail anything. The
+narrowing was the fence language, and it is the same shape as every other one
+this file records: a reader whose scope is smaller than the corpus, reporting
+green over the difference.
+
+What decides whether a dotted path is a claim is its POSITION, not its text.
+The identical token is a claim under ``class:``, a repository in
+``git clone https://.../dataknobs.git``, and prose in a comment -- and a sweep
+matching the token alone reports the clone URL of this repository as a broken
+import nine times over. So the loading positions are enumerated instead, and
+both non-claims fall out by construction rather than by an allowlist.
+
+**The second reader has its own floor**, because the first one cannot see it.
+Every path it reads sits in a fence the import reader skips, so a ``LOADABLE``
+that matched nothing would leave the import floor at its full value and report
+a clean sweep of an unread corpus -- the failure this file exists to refuse,
+wearing the guard's own clothes for the second time.
+
 Scope is every markdown document a reader can reach: the site tree, each
 package's ``docs/``, and the READMEs. Two carve-outs, both narrow and both
 stated in the code below rather than left to a path convention.
@@ -77,6 +102,67 @@ from tests._workspace import HISTORICAL, ROOT, code_fences, documentation_files,
 NAMESPACE = "dataknobs"
 #: The fence languages whose contents are read as Python.
 PYTHON_FENCE = frozenset({"python", "py"})
+
+#: A dotted path in a position that names something to LOAD.
+#:
+#: A ``class:`` value in YAML is the same claim as an ``import`` in Python --
+#: something will be handed this exact string and asked to produce the object
+#: -- but it is not Python, so the reader above never sees it. What decides is
+#: POSITION, not the token: the identical text is a claim under ``class:``, a
+#: repository in ``git clone https://.../dataknobs.git``, and prose in a
+#: comment. Matching the token alone reads all three as claims and reports the
+#: clone URL of this very repository as a broken import, nine times.
+#:
+#: So the value positions are enumerated instead, and the two non-claims fall
+#: out by construction rather than by an allowlist: a URL matches no directive,
+#: and a comment is cut from the line before this runs. Prose that names a
+#: module is the cross-reference guard's business, not this one's.
+#:
+#: The directives are the ones a runtime entry point actually resolves --
+#: ``class`` and ``factory`` (``Config.build_object``), ``chunker``
+#: (``create_chunker``), ``custom_class`` (``parse_derivation_rules``),
+#: ``merge_filter`` (``load_merge_filter``), and ``function``, which the
+#: corpus uses for a hook. ``tests/test_dotted_path_agreement.py`` is the
+#: table they come from, and is a better source than this corpus: a key with
+#: no dataknobs-namespace use today still resolves one tomorrow. ``chunker``
+#: is that case, and so are the last two, whose every documented value names
+#: a placeholder package.
+#:
+#: Three were considered and cut. ``handler`` and ``target`` appear nowhere in
+#: the tree, and a directive invented for a guard is surface that can only
+#: ever produce a false positive. ``function_ref`` is real -- the rubric
+#: registry resolves it -- but the corpus writes it as a keyword argument,
+#: ``function_ref="..."``, and an ``=`` is not a position this reads. Adding
+#: the word alone would match nothing while reading as coverage, which is the
+#: one outcome worse than leaving it out.
+#:
+#: A key is read with or without the quotes a literal puts around it, and both
+#: sides are needed rather than just the leading one: the opening quote is not
+#: the whitespace a bare YAML key sits behind, and the closing quote stands
+#: between the key and its colon. A config rendered as JSON or as a Python
+#: dict makes the same claim as the YAML beside it, and the tree holds one --
+#: a ``"class"`` naming an FSM resource provider, inside a python fence, which
+#: no reader here could see for as long as only the leading side was allowed.
+LOADABLE = re.compile(
+    r"""(?:
+          (?:^|["'{,\[\s])["']?
+          (?:custom_class|merge_filter|class|factory|chunker|function)
+          ["']?\s*:\s*["']?
+        | -m\s+
+        | --[\w-]+[=\s]\s*["']?
+        )
+        (?P<module>dataknobs[a-z_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)+)
+        (?::(?P<attribute>[A-Za-z_][A-Za-z0-9_]*))?
+    """,
+    re.VERBOSE,
+)
+
+#: Cuts a line at the comment that ends it, in either YAML or shell.
+#:
+#: Required before ``LOADABLE`` rather than after: ``# dataknobs_bots.middleware.base.``
+#: is prose, and a trailing ``# Environment variable with default`` sits on the
+#: same line as a real claim.
+COMMENT = re.compile(r"(?:^|\s)#.*$")
 
 #: Marks the *next* fence as one whose imports are not meant to resolve.
 #:
@@ -268,6 +354,54 @@ def unreadable() -> list[str]:
     ]
 
 
+def loadable_targets(path: Path) -> list[tuple[int, str, str, str | None]]:
+    """``(line, text, module, attribute)`` for each loadable path in a fence.
+
+    Every fence is read, including Python ones, and the reader above is not
+    duplicated by that: it collects ``import`` statements, and an ``import``
+    matches no directive here. What a Python fence *can* hold is a config
+    sample embedded in a string, and skipping the language to avoid a
+    double-count that cannot happen would have suppressed exactly that --
+    a claim nothing else reads either.
+
+    The module/attribute split is left as loose as the text allows. An explicit
+    ``module:attribute`` says where the boundary is; a bare dotted path does
+    not, so the last segment is offered as the attribute and ``unresolved``
+    settles it, because that function already knows a submodule and an exported
+    name are both acceptable answers.
+    """
+    found: list[tuple[int, str, str, str | None]] = []
+    for fence in code_fences(path):
+        if ILLUSTRATIVE.match(fence.marker or ""):
+            continue
+        for offset, raw in enumerate(fence.lines):
+            for match in LOADABLE.finditer(COMMENT.sub("", raw)):
+                module, attribute = match.group("module"), match.group("attribute")
+                if attribute is None:
+                    module, _, attribute = module.rpartition(".")
+                found.append((fence.line + offset, match.group(0).strip(), module, attribute))
+    return found
+
+
+def path_findings() -> list[str]:
+    """Every documented path naming something to load that does not resolve."""
+    return [
+        f"{rel(path)}:{number}  {text}\n      {why}"
+        for path in documentation_files()
+        for number, text, module, attribute in loadable_targets(path)
+        if (why := unresolved(module, attribute))
+    ]
+
+
+def path_findings_in(path: Path) -> list[str]:
+    """``path_findings`` for a single document, for the fixtures below."""
+    return [
+        f"{path.name}:{number}  {text}\n      {why}"
+        for number, text, module, attribute in loadable_targets(path)
+        if (why := unresolved(module, attribute))
+    ]
+
+
 def test_no_documented_import_is_unreadable() -> None:
     """The reader's own output must be Python, or its silence means nothing."""
     found = unreadable()
@@ -292,6 +426,168 @@ def test_every_documented_import_resolves() -> None:
         "later. If the import is not meant to resolve, mark the fence with "
         "<!-- dk-imports: illustrative -- why --> instead."
     )
+
+
+def test_every_loadable_path_resolves() -> None:
+    """A ``class:`` value in YAML is an import, and must resolve like one."""
+    broken = path_findings()
+    assert not broken, (
+        f"{len(broken)} documented path(s) name something to load and do not "
+        "resolve, so a reader who copies the config gets an error the moment "
+        "it is built:\n  " + "\n  ".join(broken) + "\n\nRepoint the path, and "
+        "rename the symbol at its uses in the same fence. If it is not meant "
+        "to resolve, mark the fence with <!-- dk-imports: illustrative -- why "
+        "--> as a python fence would be."
+    )
+
+
+def test_the_loadable_scan_reads_a_meaningful_corpus() -> None:
+    """Non-vacuity, and the reason this file needed a second floor at all.
+
+    The floor above counts import statements, and an ``import`` matches no
+    directive here -- so a ``LOADABLE`` that matched nothing would leave that
+    floor at its full value, the guard above green, and this one reporting a
+    clean sweep of nothing, which is the shape this file's own docstring calls
+    the failure it exists to prevent. That independence is a property of the
+    two readers matching disjoint syntax, and not of which fences each visits:
+    this one reads every fence, python included, and one path in the tree is
+    found in one.
+
+    The number is placed above what a reader with a dead arm still reaches.
+    Ten of the 46 are the ``-m`` and ``--flag`` forms, which appear only in
+    shell fences; both arms going dark leaves 36, and a floor of 30 accepts
+    that in silence -- the narrowing this file exists to refuse, sitting in
+    its own non-vacuity check.
+    """
+    found = sum(len(loadable_targets(path)) for path in documentation_files())
+    assert found > 40, (
+        f"only {found} loadable paths found; the documents naming something to "
+        "load by dotted path have not gone away, so the likelier reading is "
+        "that ``LOADABLE`` has stopped matching a form of them -- one arm of "
+        "the pattern going dark costs about ten, which is what this number is "
+        "placed to catch"
+    )
+
+
+def test_a_clone_url_is_not_read_as_a_path(tmp_path: Path) -> None:
+    """The nine-site false positive that decided the design.
+
+    ``dataknobs.git`` is this repository, and it parses as a module with an
+    attribute perfectly well -- ``unresolved`` says ``'dataknobs' exports no
+    'git'``, which is true and completely beside the point. Nothing excludes
+    it by name; it is excluded because ``git clone`` is not a position that
+    loads anything, and this test fails if that stops being what decides.
+    """
+    doc = tmp_path / "sample.md"
+    doc.write_text(
+        "```bash\ngit clone https://github.com/your-org/dataknobs.git\ncd dataknobs\n```\n"
+    )
+    assert not loadable_targets(doc)
+
+
+def test_a_commented_path_is_not_read_as_a_path(tmp_path: Path) -> None:
+    """A comment naming a module is prose, and prose is checked elsewhere.
+
+    Both halves matter: the comment on its own line is not a claim, and the
+    one trailing a real claim must not swallow it.
+    """
+    doc = tmp_path / "sample.md"
+    doc.write_text(
+        "```yaml\n"
+        "# class: dataknobs_data.backends.memory.NoSuchDatabase\n"
+        "databases:\n"
+        "  - class: dataknobs_data.backends.memory.SyncMemoryDatabase  # the cache\n"
+        "```\n"
+    )
+    assert [module for _, _, module, _ in loadable_targets(doc)] == [
+        "dataknobs_data.backends.memory"
+    ]
+    assert not path_findings_in(doc)
+
+
+def test_a_broken_class_value_is_detected(tmp_path: Path) -> None:
+    """The detector fires on the form the corpus was actually wrong in."""
+    doc = tmp_path / "sample.md"
+    doc.write_text("```yaml\ndatabases:\n  - class: dataknobs_data.backends.s3.S3Database\n```\n")
+    assert path_findings_in(doc)
+
+    doc.write_text(
+        "<!-- dk-imports: illustrative -- the pre-split spelling is the subject -->\n"
+        "```yaml\ndatabases:\n  - class: dataknobs_data.backends.s3.S3Database\n```\n"
+    )
+    assert not loadable_targets(doc)
+
+
+def test_an_explicit_split_is_honoured_over_the_last_dot(tmp_path: Path) -> None:
+    """``module:attribute`` says where the boundary is; a bare path does not.
+
+    Read by the last dot instead, ``task_injection:create_review_task_hook``
+    would ask ``dataknobs_bots.reasoning`` for a ``task_injection`` and get an
+    answer -- the right one, for the wrong reason, which stops being harmless
+    the moment the attribute after the colon is the part that is wrong.
+    """
+    doc = tmp_path / "sample.md"
+    doc.write_text(
+        "```yaml\nhooks:\n"
+        '  - function: "dataknobs_bots.reasoning.task_injection:no_such_hook"\n```\n'
+    )
+    assert [(m, a) for _, _, m, a in loadable_targets(doc)] == [
+        ("dataknobs_bots.reasoning.task_injection", "no_such_hook")
+    ]
+    assert path_findings_in(doc)
+
+
+def test_a_config_embedded_in_python_is_still_read(tmp_path: Path) -> None:
+    """The case that decided against skipping Python fences here.
+
+    A document that shows its YAML as a Python string is showing the same
+    claim, and neither reader would have seen it: the one above collects
+    ``import`` statements, and this one would have skipped the fence for its
+    language. An ``import`` matches no directive below, so reading every
+    fence double-counts nothing.
+    """
+    doc = tmp_path / "sample.md"
+    doc.write_text(
+        "```python\n"
+        'CONFIG = """\n'
+        "databases:\n"
+        "  - class: dataknobs_data.backends.s3.NoSuchDatabase\n"
+        '"""\n```\n'
+    )
+    assert path_findings_in(doc)
+
+    doc.write_text("```python\nfrom dataknobs_data.backends.s3 import SyncS3Database\n```\n")
+    assert not loadable_targets(doc), "an import is the other reader's claim"
+
+
+def test_a_quoted_key_is_read_as_a_directive(tmp_path: Path) -> None:
+    """A config shown as a literal quotes its keys, and names the same thing.
+
+    The directive is the same word in the same position; only the punctuation
+    around it differs, because a sample rendered as a Python or JSON literal
+    puts the key in quotes. Reading one spelling and not the other makes the
+    reader's scope a property of how a document happens to render its config
+    -- the narrowing this file's docstring names, arriving through the pattern
+    this time instead of through the fence language.
+
+    Both boundaries are load-bearing and both were wrong. The opening quote is
+    not the whitespace the pattern demanded ahead of the directive, and the
+    closing quote sits between the directive and its colon -- so widening only
+    the first leaves the form matching exactly as little as before.
+    """
+    doc = tmp_path / "sample.md"
+    doc.write_text(
+        "```python\n"
+        "CONFIG = {\n"
+        '    "resources": [\n'
+        '        {"class": "dataknobs_data.backends.s3:NoSuchDatabase"},\n'
+        "    ]\n"
+        "}\n```\n"
+    )
+    assert [(m, a) for _, _, m, a in loadable_targets(doc)] == [
+        ("dataknobs_data.backends.s3", "NoSuchDatabase")
+    ]
+    assert path_findings_in(doc)
 
 
 def test_no_documented_star_import() -> None:

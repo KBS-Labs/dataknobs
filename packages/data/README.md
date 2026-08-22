@@ -165,7 +165,7 @@ db = await AsyncDatabase.from_backend("elasticsearch", {
 
 ## Configuration Support
 
-The data package fully integrates with the DataKnobs configuration system. All backends inherit from `ConfigurableBase` and can be instantiated from configuration files.
+The data package fully integrates with the DataKnobs configuration system. All backends inherit from `StructuredConfigConsumer`, which validates a config mapping against the backend's config dataclass, so they can be instantiated from configuration files.
 
 ### Using Configuration Files
 
@@ -173,7 +173,7 @@ The data package fully integrates with the DataKnobs configuration system. All b
 # config.yaml
 databases:
   - name: primary
-    class: dataknobs_data.backends.postgres.PostgresDatabase
+    class: dataknobs_data.backends.postgres.SyncPostgresDatabase
     host: ${DB_HOST:localhost}  # Environment variable with default
     port: ${DB_PORT:5432}
     database: myapp
@@ -182,7 +182,7 @@ databases:
     table: records
     
   - name: cache
-    class: dataknobs_data.backends.memory.MemoryDatabase
+    class: dataknobs_data.backends.memory.SyncMemoryDatabase
     
   - name: archive
     class: dataknobs_data.backends.file.SyncFileDatabase
@@ -191,7 +191,7 @@ databases:
     compression: gzip
     
   - name: cloud_storage
-    class: dataknobs_data.backends.s3.S3Database
+    class: dataknobs_data.backends.s3.SyncS3Database
     bucket: ${S3_BUCKET:my-data-bucket}
     prefix: ${S3_PREFIX:records/}
     region: ${AWS_REGION:us-east-1}

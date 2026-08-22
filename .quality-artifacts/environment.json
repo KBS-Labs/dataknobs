@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-08-22T01:16:22Z",
+  "timestamp": "2026-08-22T03:30:02Z",
   "python_version": "Python 3.12.12",
   "uv_version": "uv 0.12.5 (Homebrew 2026-08-14 aarch64-apple-darwin)",
   "os": "Darwin",
   "os_version": "24.6.0",
-  "git_branch": "sbk/config-guard-reads-an-anonymous-block",
-  "git_commit": "4b20cc74726a60e8dda9a52fbbbb5f60b857d43d",
+  "git_branch": "sbk/config-guard-resolves-a-dotted-path",
+  "git_commit": "4888cb9638f4cacb5da8051de507c3cf6daac28a",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }

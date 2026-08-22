@@ -1,20 +1,14 @@
 {
-  "timestamp": "2026-08-22T01:16:22Z",
+  "timestamp": "2026-08-22T03:30:02Z",
   "overall_status": "PASS",
   "run_mode": "pr",
   "environment": "host",
-  "packages": "bots common config data fsm legacy llm structures utils xization",
+  "packages": "bots data fsm llm",
   "tested_packages": [
     "bots",
-    "common",
-    "config",
     "data",
     "fsm",
-    "legacy",
-    "llm",
-    "structures",
-    "utils",
-    "xization"
+    "llm"
   ],
   "coverage_percent": null,
   "package_hashes": {
@@ -32,16 +26,16 @@
   },
   "workspace_hashes": {
     "toolchain": "52c6f1c5a4b18ea1213fe609f83bf47cde5a791c282341ee0d3ab17d61c1b888",
-    "workspace_tests": "565a806a97a0fdda7b9adeff516590cb0943f38f47010762bf1c1f2741c3cdfc",
-    "docs": "2197d48e5e89dd482592dd45de97ea14d8b428737a7fb9acdee5d7a17172bb49"
+    "workspace_tests": "baa9712d30320bf32a43a81adbbdc8858d0a28be52365eaa560f46feb2e277e0",
+    "docs": "cf1d331682e9ad53f3c7affa0fbd30dc4db80e291a596c2c9dbec923910fabbf"
   },
-  "total_seconds": 268,
+  "total_seconds": 231,
   "checks": {
     "workflow_lint": {
       "status": "pass",
       "exit_code": 0,
       "tool": "lint-workflows.sh",
-      "duration_seconds": 1
+      "duration_seconds": 0
     },
     "shell_lint": {
       "status": "pass",
@@ -60,7 +54,7 @@
       "exit_code": 0,
       "skipped": false,
       "tool": "validate.sh",
-      "duration_seconds": 75
+      "duration_seconds": 61
     },
     "documentation": {
       "status": "pass",
@@ -87,14 +81,14 @@
       "status": "pass",
       "exit_code": 0,
       "skipped": false,
-      "duration_seconds": 101,
+      "duration_seconds": 80,
       "workspace_guards_seconds": 50
     },
     "integration_tests": {
       "status": "pass",
       "exit_code": 0,
       "skipped": false,
-      "duration_seconds": 55
+      "duration_seconds": 54
     }
   }
 }

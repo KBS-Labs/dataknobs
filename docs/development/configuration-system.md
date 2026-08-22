@@ -14,7 +14,7 @@ The DataKnobs configuration system provides a standardized way to configure and 
 
 ### 1. ConfigurableBase
 
-All configurable classes in DataKnobs inherit from `ConfigurableBase`, which provides:
+`ConfigurableBase` is the base for configurable classes you write, and provides:
 
 ```python
 from dataknobs_config import ConfigurableBase
@@ -56,12 +56,12 @@ Configurations are organized by type, with each type containing a list of named 
 ```yaml
 databases:
   - name: primary
-    class: dataknobs_data.backends.postgres.PostgresDatabase
+    class: dataknobs_data.backends.postgres.SyncPostgresDatabase
     host: localhost
     database: myapp
     
   - name: cache
-    class: dataknobs_data.backends.memory.MemoryDatabase
+    class: dataknobs_data.backends.memory.SyncMemoryDatabase
     
 services:
   - name: processor
@@ -195,18 +195,19 @@ Benefits of factory registration:
 The data package demonstrates comprehensive config integration:
 
 ```python
-# All backends inherit from ConfigurableBase
-from dataknobs_config import ConfigurableBase
-from dataknobs_data import SyncDatabase
+# The backends shipped here take their config through
+# StructuredConfigConsumer, which validates the mapping against the
+# backend's CONFIG_CLS. ConfigurableBase above is the base for the
+# classes you write; these use the structured-config path instead.
+from dataknobs_data.backends.postgres import SyncPostgresDatabase
 
-class PostgresDatabase(SyncDatabase, ConfigurableBase):
-    def __init__(self, config: dict = None):
-        super().__init__(config)
-        # PostgreSQL-specific initialization
-    
-    @classmethod
-    def from_config(cls, config: dict):
-        return cls(config)
+# CONFIG_CLS names the dataclass the mapping is checked against --
+# an unknown key is rejected rather than silently ignored.
+SyncPostgresDatabase.CONFIG_CLS  # -> PostgresDatabaseConfig
+
+db = SyncPostgresDatabase.from_config(
+    {"host": "localhost", "database": "myapp", "table": "records"}
+)
 ```
 
 Usage:
@@ -215,7 +216,7 @@ Usage:
 # config.yaml
 databases:
   - name: main
-    class: dataknobs_data.backends.postgres.PostgresDatabase
+    class: dataknobs_data.backends.postgres.SyncPostgresDatabase
     host: ${DB_HOST:localhost}  # Environment variable with default
     database: myapp
     user: ${DB_USER:postgres}
@@ -244,7 +245,7 @@ Utility classes can also be configured:
 ```yaml
 elasticsearch:
   - name: search_cluster
-    class: dataknobs_utils.elasticsearch_utils.SimplifiedElasticsearchClient
+    class: dataknobs_utils.elasticsearch_utils.SimplifiedElasticsearchIndex
     host: ${ES_HOST:localhost}
     port: ${ES_PORT:9200}
     timeout: 30
@@ -252,9 +253,14 @@ elasticsearch:
 
 ## Best Practices
 
-### 1. Always Inherit from ConfigurableBase
+### 1. Inherit from ConfigurableBase for Classes You Write
 
 When creating new classes that might be configured:
+
+> `ConfigurableBase` is deprecated in favour of
+> `dataknobs_common.structured_config.StructuredConfigConsumer`, which the
+> backends shipped here already use. No runtime warning is raised, so the
+> transition stays quiet; prefer the successor for new code.
 
 ```python
 from dataknobs_config import ConfigurableBase
@@ -327,7 +333,7 @@ Never hardcode secrets in configuration files:
 ```yaml
 database:
   - name: production
-    class: dataknobs_data.backends.postgres.PostgresDatabase
+    class: dataknobs_data.backends.postgres.SyncPostgresDatabase
     host: ${DB_HOST}
     user: ${DB_USER}
     password: ${DB_PASSWORD}  # From environment variable
