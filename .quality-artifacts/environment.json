@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-08-22T18:25:54Z",
+  "timestamp": "2026-08-22T21:48:44Z",
   "python_version": "Python 3.12.12",
   "uv_version": "uv 0.12.5 (Homebrew 2026-08-14 aarch64-apple-darwin)",
   "os": "Darwin",
   "os_version": "24.6.0",
-  "git_branch": "sbk/docs-teach-a-deprecated-base",
-  "git_commit": "d38cfb0512a371a20ff9389b4b297b94b1fdc9ed",
+  "git_branch": "main",
+  "git_commit": "4061c7d53e7ee37435c043aed5ab0137d34c17fa",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }

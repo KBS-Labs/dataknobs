@@ -610,7 +610,13 @@ if [[ "$QUICK" != true ]]; then
     if [[ "$mypy_ok" == true ]]; then
         echo -e "${GREEN}    ✓ Type checks passed${NC}"
     else
-        echo -e "${RED}    ✗ Type errors found${NC}"
+        # Not "type errors found". The contract's check fails a cell measuring
+        # *below* its ceiling as well as one above it, and that failure is
+        # progress nobody wrote down rather than a finding — so naming the cause
+        # here would be wrong for one of the two, at the exact moment somebody
+        # is reading it to decide what to do. Each reason prints its own
+        # sentence directly above; this line must not contradict either.
+        echo -e "${RED}    ✗ Type check failed — see the verdict above${NC}"
         FAILED=true
     fi
 fi

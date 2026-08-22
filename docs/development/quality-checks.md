@@ -577,6 +577,35 @@ clearing it, and doing it by rerunning a command is how that happens without
 anyone deciding to. Raising a ceiling is a hand edit, so the argument for it
 lands in a pull request where someone can read it.
 
+**Lowering it is not optional.** `check` fails on a cell that measures *below*
+its ceiling, in the same class as one that measures above it, and prints the
+`update-baseline` invocation that resolves it:
+
+```
+mypy/packages/data/src is under its ceiling: 545 findings against 549 declared,
+so 4 of headroom is left standing. Write the progress down with:
+    uv run python bin/quality-contract.py update-baseline --tool mypy --cell packages/data/src
+```
+
+Headroom is a regression budget nobody voted for. Four findings of slack left
+in a cell is four a later change can reintroduce with every run in between
+reporting green, because nothing the check compares will have moved. So the
+zero-headroom rule — *a cell that falls below its ceiling is re-baselined in
+the same pull request that lowered it* — is enforced rather than remembered.
+
+Two things follow from the arithmetic rather than from a flag. It can only fire
+on a cell whose ceiling is above zero, since nothing measures below zero — which
+is the `transitional` mypy cells and nothing else, every other cell in the
+declaration being pinned at zero. And a scoped run stays scoped:
+`bin/validate.sh` asks only about the cells its targets name, so work in one
+package is not failed by a merge that lowered another. The whole-tree catch is
+the gate's.
+
+The check never rewrites the declaration itself. Auto-lowering would take the
+one diff that records progress out of the pull request where somebody reads it,
+and a checker that edits what it is measuring against is the shape this harness
+refuses everywhere else.
+
 When a ceiling *is* breached, `check` names the files under it, most findings
 first, so a count you cannot act on does not send you to a second tool:
 
@@ -586,6 +615,62 @@ format/tests exceeds its ceiling: 21 findings against 20 allowed
     tests/test_docs_mirror_check.py (1)
     ... and 11 more
 ```
+
+### Asking what one file owes: `charge`
+
+A ceiling is a whole-cell property, so every command above answers about cells.
+`bin/validate.sh` handed a single filename deliberately measures the whole cell
+that file is in, for the same reason. That leaves two questions with no command
+behind them, and they are the two a per-file convention is made of: *what does
+this file owe?* and *have I paid it?*
+
+```bash
+# One file, or a directory of them
+uv run python bin/quality-contract.py charge --tool mypy packages/data/src/dataknobs_data/query.py
+uv run python bin/quality-contract.py charge --tool mypy packages/fsm/src/dataknobs_fsm/patterns
+
+# Machine-readable
+uv run python bin/quality-contract.py charge --tool mypy <path> --json
+```
+
+The cell is still measured **whole**, exactly as `check` measures it; only the
+display is filtered. So the number a file is charged is a term of the sum its
+ceiling is compared against, and not a second measurement that could disagree
+with the first. The cell's own total is printed beside it so that distinction
+stays visible:
+
+```
+mypy — 3 finding(s) charged to 1 path
+
+<path>/file_processing.py: 3 of N in packages/fsm/src (ceiling N), over 1 tracked file(s)
+  <path>/file_processing.py: 3
+      <path>/file_processing.py:110: error: Return type "dict[str, Any]" ...  [override]
+```
+
+The cell's total is written `N` on purpose. This repository has published a
+documentation page carrying counts nobody could date, which is the reason the
+census prints the conditions it was taken under; a live ceiling quoted here
+would go stale the first time somebody lowered it, and say nothing. The charge
+— the `3` — is the number the command exists to produce.
+
+For mypy the message lines come with it, filtered to the same paths. ruff and
+the formatter are read from JSON that *is* the tally, so those report counts and
+say that they have no message text to quote — rather than printing an empty
+block, which would read as a clean file.
+
+Three ways of naming a path are **refused** rather than answered, because the
+whole value of this command is that `0` means *paid* and each of these would
+render as `0` meaning something else:
+
+| Named | Why a zero would be wrong |
+|---|---|
+| A path in no cell, or a directory spanning several | There is no single ceiling its findings count toward |
+| A path in a tier the tool is not pointed at | Nothing measured it, so its zero is a silence |
+| A path naming no tracked `*.py` | A typo would otherwise report the file as clean |
+
+`charge` reports; it does not judge. It exits 0 whatever it finds, because a
+command run *before* doing the work must not be confusable with the failure it
+was run to avoid.
 
 ### Reading a backlog: `census`
 

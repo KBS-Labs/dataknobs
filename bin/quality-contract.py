@@ -58,6 +58,16 @@ logger = logging.getLogger(__name__)
 _ROOT = Path(__file__).resolve().parent.parent
 _CONTRACT = _ROOT / ".dataknobs" / "quality-contract.json"
 
+#: How this script is spelled inside advice that names a command to run.
+#:
+#: Through ``uv run``, because the toolchain is pinned behind it and a bare
+#: ``python bin/...`` resolves against ``PATH`` — which is
+#: ``tests/test_remediation_paths.py``'s opening failure, arriving in the one
+#: place that file cannot see, since it reads shell scripts and this is Python.
+#: Written once so that every command this module recommends is spelled the same
+#: way; the prose in ``docs/`` is not held to it by anything but review.
+_INVOCATION = "uv run python bin/quality-contract.py"
+
 #: Tiers whose files no tool reads. Their ceiling is not a backlog and must stay
 #: zero — a positive one would claim a measurement that nothing takes.
 _UNMEASURED_TIERS = frozenset({"unchecked"})
@@ -530,23 +540,34 @@ _MYPY_FINDING_RE = re.compile(r"([^:]+):\d+:(?:\d+:)?\s*error:(.*)$")
 _MYPY_CODE_RE = re.compile(r"\[([a-zA-Z0-9_-]+)\]\s*$")
 
 
-def mypy_findings(output: str) -> list[Finding]:
-    """Every finding in a mypy run's output, as a path and the rule it names.
+def mypy_lines(output: str) -> Iterator[tuple[str, str, str]]:
+    """Each finding line in a mypy run's output, as ``(path, body, line)``.
 
-    The single parse of that output, so the ratchet's counts and the census's
-    rules cannot come from two readings of the same text that disagree about
-    which lines are findings. mypy also emits ``note:`` continuations, and a
-    parse that treated one as a finding — or that dropped an ``error:`` line for
-    carrying no bracketed rule — would move the two apart silently.
+    The single scan of that output, and the reason it is a function rather than
+    a loop inside the one caller it used to have. Three readers now want
+    something from these lines — the ratchet wants the path, the census wants
+    the rule, and ``charge`` wants the message text to show a developer — and
+    three loops over the same text is three chances to disagree about which
+    lines are findings. mypy emits ``note:`` continuations, and a reader that
+    treated one as a finding, or dropped an ``error:`` line for carrying no
+    bracketed rule, would move them apart silently.
+
+    The path is normalised here rather than by each caller, so a run that
+    reported absolute paths cannot leave one reader matching against
+    repo-relative names and finding nothing.
     """
-    findings: list[Finding] = []
     for line in output.splitlines():
         match = _MYPY_FINDING_RE.match(line)
-        if not match:
-            continue
-        code = _MYPY_CODE_RE.search(match.group(2))
-        findings.append(Finding(_relative(match.group(1)), code.group(1) if code else UNCODED))
-    return findings
+        if match:
+            yield _relative(match.group(1)), match.group(2), line
+
+
+def mypy_findings(output: str) -> list[Finding]:
+    """Every finding in a mypy run's output, as a path and the rule it names."""
+    return [
+        Finding(path, code.group(1) if (code := _MYPY_CODE_RE.search(body)) else UNCODED)
+        for path, body, _line in mypy_lines(output)
+    ]
 
 
 def mypy_targets(
@@ -2126,6 +2147,13 @@ def check(
 ) -> dict[str, Any]:
     """Measure each tool, compare every cell against its ceiling, and report.
 
+    The comparison has two failing signs, not one. ``exceeded`` is a cell above
+    its ceiling; ``cleared`` is one below it, which the caller treats as a
+    failure too — a ceiling left standing above what the tree measures is
+    headroom a later regression can be absorbed into without any number moving.
+    Both are reported here; which of them ends a run is ``main``'s to say, and
+    it says so at the ``failed`` line.
+
     Two things are reported besides the comparison, and both are there because
     a number produced under conditions that have changed is not the number it
     claims to be:
@@ -2210,7 +2238,19 @@ def check(
                 "ceiling": cell["ceiling"],
                 "tier": tier,
             }
-            entry = {"cell": name, "measured": measured, "ceiling": cell["ceiling"], "tier": tier}
+            # ``tool`` and ``path`` beside the joined ``cell``, because the
+            # remediation printed for a cleared cell names them as two separate
+            # options. Splitting the joined name back apart at the printer would
+            # re-derive from a string what the loop is holding, and a cell path
+            # containing the separator would come apart at the wrong slash.
+            entry = {
+                "cell": name,
+                "tool": tool,
+                "path": cell["path"],
+                "measured": measured,
+                "ceiling": cell["ceiling"],
+                "tier": tier,
+            }
             if measured > cell["ceiling"]:
                 per_file = measurement.by_cell.get(cell["path"], Counter())
                 ranked = sorted(per_file.items(), key=lambda item: (-item[1], item[0]))
@@ -2322,6 +2362,183 @@ def scope_paths(
         else:
             resolved.append((SCOPE_MEASURED, given, cell))
     return resolved
+
+
+def _tracked_under(given: str, files: list[PurePosixPath]) -> list[str]:
+    """The tracked Python at or below a caller-named path.
+
+    Against the population git tracks rather than the filesystem, for the reason
+    ``tracked_python`` gives and one of its own: a misspelt path exists nowhere,
+    matches nothing here, and is refused — where a filesystem walk would have
+    found nothing either and reported it as a debt of zero, which is exactly
+    what a file with nothing left to fix reports.
+    """
+    name = _relative(given)
+    return [str(path) for path in files if str(path) == name or str(path).startswith(f"{name}/")]
+
+
+def charge(contract: dict[str, Any], tool: str, paths: list[str]) -> dict[str, Any]:
+    """What each caller-named path owes: its share of the count its cell carries.
+
+    The gap this closes sits between two questions nothing else in the CLI can
+    answer. ``census`` decomposes a cell by *rule*; ``check --show-findings``
+    echoes a whole cell's output; ``bin/validate.sh`` handed a single filename
+    deliberately measures the whole cell that file is in, because a ceiling is a
+    whole-cell property and a partial count compared against one is not a
+    verdict. All three are right, and none of them says:
+
+        *"What does this file owe?"* — which a per-file convention has to ask
+        before it can decide whether a file is worth clearing now.
+        *"Have I paid it?"* — which a cell verdict cannot say, since the cell
+        total moves for reasons that have nothing to do with this file.
+
+    So the cell is still measured **whole**, exactly as ``check`` measures it,
+    through the same ``_measure`` those two commands go through; only the
+    *display* is filtered to the named paths. The number reported here is
+    therefore a term of the sum the ceiling is compared against, and not a
+    second measurement that could quietly disagree with the first.
+
+    Every way of naming a path that cannot produce that number is refused rather
+    than answered with a zero, and the three refusals are three different lies a
+    zero would tell: a path in no cell owes nothing to any ceiling, a path in an
+    unread tier was never measured at all, and a path naming no tracked file was
+    almost certainly mistyped.
+    """
+    resolved = scope_paths(contract, tool, paths)
+
+    outside = sorted(path for kind, path, _cell in resolved if kind == SCOPE_OUTSIDE)
+    if outside:
+        raise SystemExit(
+            f"{outside} resolve to no single cell of {tool}'s — either outside "
+            "every one, or naming a directory that spans several — so there is "
+            "no ceiling their findings count toward and a total here would be a "
+            f"sum over a scope nobody asked for. `{_INVOCATION} scope --tool "
+            f"{tool} <path>` says which cell a path is in."
+        )
+
+    unread = sorted(path for kind, path, _cell in resolved if kind == SCOPE_UNMEASURED)
+    if unread:
+        raise SystemExit(
+            f"{unread} are in cells the contract puts in a tier {tool} is not "
+            "pointed at, so nothing measured them. A zero here would be a "
+            "silence rendered as a debt already paid, which is the one thing "
+            "this command must not be able to say."
+        )
+
+    files = tracked_python()
+    holdings = {given: _tracked_under(given, files) for _kind, given, _cell in resolved}
+    empty = sorted(given for given, held in holdings.items() if not held)
+    if empty:
+        raise SystemExit(
+            f"{empty} name no tracked *.py. A path that is merely misspelt would "
+            "otherwise be answered with a zero, which is what a file with "
+            "nothing left to fix is also answered with."
+        )
+
+    only = {cell for _kind, _given, cell in resolved}
+    measurement = _measure(contract, [tool], only)[tool]
+
+    # Merged across the named cells only. Every file under a named path is in
+    # exactly one of them, so nothing is double counted, and a finding in some
+    # other cell that this run reached by following imports stays out of a total
+    # the caller did not ask about.
+    counted: Counter[str] = Counter()
+    for cell in only:
+        counted += measurement.by_cell.get(cell, Counter())
+
+    # Keyed by the same normalised path the counts are, because that is the
+    # whole reason ``mypy_lines`` normalises rather than each reader doing it.
+    #
+    # Gated on the tool rather than on whether ``output`` is empty. Which
+    # measurers fill that field is decided in ``Measurement``, three hundred
+    # lines away, and only mypy does today — so an emptiness test reads as a
+    # test of *this* tool's output while actually testing that nobody upstream
+    # has changed their mind. The day one of the others starts filling it, this
+    # would parse a different tool's text with the type checker's regex and
+    # report whatever survived.
+    quotable = tool == "mypy"
+    messages: dict[str, list[str]] = defaultdict(list)
+    if quotable:
+        for path, _body, line in mypy_lines(measurement.output):
+            messages[path].append(line)
+
+    declared = {cell["path"]: cell for cell in contract["tools"][tool]["cells"]}
+    charged = []
+    for _kind, given, cell in resolved:
+        held = {name: counted[name] for name in holdings[given] if counted[name]}
+        charged.append(
+            {
+                "path": given,
+                "cell": cell,
+                "total": sum(held.values()),
+                "tracked": len(holdings[given]),
+                "cell_total": sum(measurement.by_cell.get(cell, Counter()).values()),
+                "cell_ceiling": declared[cell]["ceiling"],
+                "files": [
+                    {
+                        "file": name,
+                        "count": count,
+                        "findings": messages.get(name, []),
+                    }
+                    for name, count in sorted(held.items(), key=lambda i: (-i[1], i[0]))
+                ],
+            }
+        )
+
+    return {
+        "tool": tool,
+        # Whether this tool's findings carry message text at all — the same
+        # answer the parse above was gated on, so the report cannot claim prose
+        # the loop was never allowed to collect. ruff and the formatter are read
+        # from JSON that *is* the tally, so an empty ``findings`` list under them
+        # means "this tool reports no prose", not "this file has no findings",
+        # and those two must not render alike.
+        "messages": quotable,
+        "total": sum(entry["total"] for entry in charged),
+        "paths": charged,
+    }
+
+
+def _write_charge(report: dict[str, Any]) -> None:
+    """The charge as a table: one block per path named, its files under it."""
+    out = sys.stdout
+    named = len(report["paths"])
+    out.write(
+        f"{report['tool']} — {report['total']} finding(s) charged to "
+        f"{named} path{'' if named == 1 else 's'}\n"
+    )
+
+    for entry in report["paths"]:
+        out.write(
+            f"\n{entry['path']}: {entry['total']} of {entry['cell_total']} in "
+            f"{entry['cell']} (ceiling {entry['cell_ceiling']}), "
+            f"over {entry['tracked']} tracked file(s)\n"
+        )
+        if not entry["total"]:
+            # Said rather than left blank. "Nothing to show" and "nothing was
+            # measured" print identically as an absent block, and this command
+            # exists to be trusted on exactly that distinction.
+            out.write("  nothing outstanding — this path is clean under this tool\n")
+            continue
+        for held in entry["files"]:
+            out.write(f"  {held['file']}: {held['count']}\n")
+            for line in held["findings"]:
+                out.write(f"      {line}\n")
+            # Unreachable while the count and the messages come from one parse
+            # of one run, which they do: both are read from ``mypy_lines`` over
+            # the same ``output``. Kept as the statement of that invariant —
+            # were it ever broken, the alternative is a count printed with
+            # nothing under it, which reads as a file whose findings are simply
+            # not worth showing.
+            if not held["findings"] and report["messages"]:
+                out.write("      (reported against this file, but no message line named it)\n")
+
+    if report["total"] and not report["messages"]:
+        out.write(
+            f"\n{report['tool']} is read from JSON that is already the tally, so "
+            "there is no message text to quote — the counts above are the whole "
+            "of what it said.\n"
+        )
 
 
 def _selected(requested: str | None) -> list[str]:
@@ -2476,6 +2693,12 @@ def _build_parser() -> argparse.ArgumentParser:
     _add_contract(where)
     where.add_argument("paths", nargs="*", help="the paths to classify")
     _add_json(where)
+
+    owed = commands.add_parser("charge", help="what the named paths owe their cells' ceilings")
+    _add_tool(owed, "the tool to read; a charge is denominated in one tool's findings")
+    _add_contract(owed)
+    owed.add_argument("paths", nargs="+", help="the files or directories to ask about")
+    _add_json(owed)
 
     counted = commands.add_parser("census", help="break a cell's findings down by rule")
     _add_tool(counted, "the tool to read; a census reads one at a time")
@@ -2654,6 +2877,23 @@ def main() -> None:
         logger.error("The contract is not usable, so nothing was measured.")
         sys.exit(2)
 
+    if args.command == "charge":
+        if not args.tool:
+            parser.error("a charge is denominated in one tool's findings, so --tool is required")
+        owed = charge(contract, args.tool, args.paths)
+        if args.use_json:
+            json.dump(owed, sys.stdout, indent=2)
+            sys.stdout.write("\n")
+        else:
+            _write_charge(owed)
+        # A charge reports what is owed; the ceiling is what judges. Exiting
+        # non-zero on a file that has findings would make the command a
+        # developer runs *before* doing the work indistinguishable from the
+        # failure they ran it to avoid, and a caller learns to ignore a status
+        # that means both. Same reason the census exits zero over a tree with a
+        # backlog in it.
+        sys.exit(0)
+
     if args.command == "census":
         if not args.tool:
             parser.error("a census reads one tool at a time, so --tool is required")
@@ -2695,7 +2935,27 @@ def main() -> None:
         sys.exit(0)
 
     report = check(contract, _selected(args.tool), only, args.show_findings)
-    failed = bool(report["exceeded"] or report["unused_config"])
+    # A cell *under* its ceiling fails, in the same class as one over it. That is
+    # not a new practice being imposed: the zero-headroom operating condition —
+    # a cell that falls below its ceiling is re-baselined in the same pull
+    # request that lowered it — is already declared, and until now was honoured
+    # entirely by hand, across every commit that has moved one of these numbers.
+    # This is that condition machine-checked. It lands on nothing the day it
+    # arrives, because the tree measures exactly what the contract declares.
+    #
+    # It fails rather than lowering the ceiling itself, for two reasons, and the
+    # second stands alone. A checker that rewrites the declaration it is
+    # measuring against is the shape this harness refuses everywhere else. And
+    # auto-lowering takes the one diff that records progress out of the pull
+    # request where somebody reads it — ``update_baseline``'s own docstring
+    # makes the argument for the mirror case: "doing it by re-running a command
+    # is how that happens without anyone deciding to."
+    #
+    # Structurally this can only ever fire on a cell whose ceiling is above
+    # zero, since nothing can measure below zero — which today is the six
+    # transitional mypy cells and nothing else. No flag narrows it to them,
+    # because arithmetic already does.
+    failed = bool(report["exceeded"] or report["cleared"] or report["unused_config"])
     if args.use_json:
         json.dump(report, sys.stdout, indent=2)
         sys.stdout.write("\n")
@@ -2708,13 +2968,6 @@ def main() -> None:
         sys.stdout.write(report["findings"][tool])
         sys.stdout.flush()
 
-    for cleared in report["cleared"]:
-        logger.info(
-            "%s is under its ceiling (%d of %d) — lower it with --update-baseline",
-            cleared["cell"],
-            cleared["measured"],
-            cleared["ceiling"],
-        )
     for unread in report["unmeasured"]:
         logger.warning(
             "%s was not measured: its tier (%s) is outside %s's target set, so it "
@@ -2743,6 +2996,33 @@ def main() -> None:
             logger.error("    %s (%d)", offender["file"], offender["count"])
         if exceeded["further_files"]:
             logger.error("    ... and %d more", exceeded["further_files"])
+    # Beside the breaches rather than above the warnings, where it used to sit
+    # as a note. The two are one comparison with two signs, and reading them
+    # apart is most of what made "under its ceiling" look like good news that
+    # needed nothing doing about it.
+    #
+    # The advice carries `--contract` when this run was given one. Without it, a
+    # check pointed at one declaration prints a command that rewrites a
+    # different one — the defect
+    # `test_a_baseline_update_rewrites_the_declaration_it_was_pointed_at` pins
+    # for the write itself, arriving instead through the sentence that tells a
+    # developer which write to perform. A ceiling only falls, so following it
+    # would not be undone by re-running anything.
+    declared = f" --contract {args.contract}" if args.contract else ""
+    for cleared in report["cleared"]:
+        logger.error(
+            "%s is under its ceiling: %d findings against %d declared, so %d "
+            "of headroom is left standing. Write the progress down with:\n"
+            "    %s update-baseline --tool %s --cell %s%s",
+            cleared["cell"],
+            cleared["measured"],
+            cleared["ceiling"],
+            cleared["ceiling"] - cleared["measured"],
+            _INVOCATION,
+            cleared["tool"],
+            cleared["path"],
+            declared,
+        )
     for dead in report["unused_config"]:
         logger.error(
             "%s: the %s section for %r matched nothing, so it suppresses nothing "
@@ -2753,6 +3033,13 @@ def main() -> None:
             dead["section"],
         )
     if not failed:
+        # "measures exactly", not "is within". Now that both signs of the
+        # comparison end the run, a pass is the narrower fact: no cell is above
+        # its ceiling *and none is below one either*, so every measured cell is
+        # on its number. Saying "within" would understate a verdict this check
+        # has just been given the power to make, and understating a guarantee is
+        # how the next reader comes to believe there is slack that there is not.
+        #
         # Not "every cell", when some of them were never read. The count is the
         # whole point: a reader who is told the tree is within its ceilings while
         # four cells went unmeasured has been told the thing this leg exists to
@@ -2760,14 +3047,14 @@ def main() -> None:
         if report["unmeasured"]:
             unread_cells = len(report["unmeasured"])
             logger.info(
-                "Every measured cell is within its ceiling. %d %s not measured, "
-                "and %s contents are unknown rather than zero.",
+                "Every measured cell measures exactly what it declares. %d %s "
+                "not measured, and %s contents are unknown rather than zero.",
                 unread_cells,
                 "cell was" if unread_cells == 1 else "cells were",
                 "its" if unread_cells == 1 else "their",
             )
         else:
-            logger.info("Every cell is within its ceiling.")
+            logger.info("Every cell measures exactly what it declares.")
     sys.exit(1 if failed else 0)
 
 

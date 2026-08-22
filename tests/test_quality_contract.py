@@ -22,6 +22,7 @@ ratchet at all: that re-running the baseline command cannot raise a ceiling.
 from __future__ import annotations
 
 import json
+import shlex
 import subprocess
 import sys
 from collections import Counter
@@ -555,6 +556,279 @@ def test_a_baseline_update_rewrites_the_declaration_it_was_pointed_at(tmp_path: 
         f"update-baseline was pointed at {declaration} and rewrote "
         f"{rel(CONTRACT)} instead. A ceiling only falls, so this is not "
         "recoverable by re-running the command."
+    )
+
+
+def _declaration_with(tmp_path: Path, cell: str, delta: int) -> Path:
+    """The fixture declaration written out with one ceiling moved by ``delta``."""
+    declaration = write_quality_fixture_contract(tmp_path)
+    contract = json.loads(declaration.read_text(encoding="utf-8"))
+    moved = [c for c in contract["tools"]["ruff"]["cells"] if c["path"] == cell]
+    assert len(moved) == 1, f"{cell} is not a single cell of the fixture declaration"
+    moved[0]["ceiling"] += delta
+    declaration.write_text(
+        json.dumps(contract, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
+    )
+    return declaration
+
+
+def _check(declaration: Path, cell: str) -> subprocess.CompletedProcess[str]:
+    """``check`` over one cell of a named declaration, as the command line runs it."""
+    return subprocess.run(
+        [
+            sys.executable,
+            str(TOOL),
+            "check",
+            "--tool",
+            "ruff",
+            "--cell",
+            cell,
+            "--contract",
+            str(declaration),
+        ],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
+def test_a_cell_under_its_ceiling_ends_the_run(tmp_path: Path) -> None:
+    """Headroom is a failure, not a note. Both signs of the comparison stop the run.
+
+    A ceiling left standing above what the tree measures is capacity a later
+    regression is absorbed into without any number moving and without anything
+    reporting it: the cell rises back to its ceiling and the check stays green
+    the whole way, because nothing it compares has changed. That is the same
+    property the ratchet exists to deny in the other direction, and for as long
+    as this reported ``is under its ceiling`` at INFO it was denied in one
+    direction only.
+
+    The zero-headroom condition it enforces is not new — it has been declared
+    for as long as these ceilings have been moving, and honoured by hand every
+    time one moved. What was missing was anything that noticed when it was not.
+
+    Driven as a subprocess because what is asserted is the *exit status*.
+    ``report["cleared"]`` was populated before this change too; the question is
+    whether a run ends because of it, and only ``main`` answers that.
+    """
+    dense = QUALITY_FIXTURE_CELLS[0]
+    result = _check(_declaration_with(tmp_path, dense, +500), dense)
+
+    assert result.returncode == 1, (
+        f"a cell 500 under its ceiling exited {result.returncode}. Headroom that "
+        "reports success is a regression budget nobody voted for: the backlog "
+        "can climb 500 findings back up and every run in between stays green."
+    )
+    assert dense in result.stderr, (
+        f"the run failed without naming the cell that failed it: {result.stderr!r}"
+    )
+
+
+def test_the_advice_for_a_cleared_cell_is_the_command_that_clears_it(tmp_path: Path) -> None:
+    """Reproduce-first: the remediation is executed, not read.
+
+    ``tests/test_remediation_paths.py`` opens on advice that named a command
+    which could not work, and its point is that wrong advice is caught by
+    nothing — no test reads it, and the person who does is already dealing with
+    a failure. That file guards shell scripts; this string is printed from
+    Python, in the one place it cannot see.
+
+    Two things are wrong with the obvious implementation and both are silent.
+    The advice must carry ``--contract`` when the run was given one, or a check
+    pointed at one declaration tells a developer to rewrite a different one —
+    and since a ceiling only falls, following it is not undone by re-running
+    anything. And it must name ``--cell``, which ``update-baseline`` honours
+    only because a prior fix made it: before that, the command asking for the
+    narrowest edit performed the widest one available.
+
+    So the printed line is split and run verbatim rather than matched against a
+    pattern. A pattern asserts the sentence was written; running it asserts the
+    sentence is true.
+    """
+    dense, sparse = QUALITY_FIXTURE_CELLS
+    declaration = _declaration_with(tmp_path, dense, +500)
+    before = {
+        cell["path"]: cell["ceiling"]
+        for cell in json.loads(declaration.read_text(encoding="utf-8"))["tools"]["ruff"]["cells"]
+        if cell["path"] in QUALITY_FIXTURE_CELLS
+    }
+
+    printed = _check(declaration, dense).stderr
+    advice = next((line.strip() for line in printed.splitlines() if "update-baseline" in line), "")
+    assert advice.startswith(contract_module._INVOCATION), (
+        f"the remediation is spelled {advice!r}. It has to name the pinned "
+        "toolchain: a bare `python bin/...` resolves against PATH, which is "
+        "this repository's canonical instance of advice that cannot work."
+    )
+
+    argv = shlex.split(advice)[len(shlex.split(contract_module._INVOCATION)) :]
+    assert "--contract" in argv, (
+        f"the advice is {advice!r} — it does not name the declaration this run "
+        f"was pointed at ({declaration}), so it tells a developer to lower a "
+        "ceiling in the repository's own contract instead. A ceiling only "
+        "falls, so that is not recoverable by re-running anything."
+    )
+
+    repair = subprocess.run(
+        [sys.executable, str(TOOL), *argv], cwd=ROOT, capture_output=True, text=True, check=False
+    )
+    assert repair.returncode == 0, f"the advice exited {repair.returncode}: {repair.stderr}"
+
+    after = {
+        cell["path"]: cell["ceiling"]
+        for cell in json.loads(declaration.read_text(encoding="utf-8"))["tools"]["ruff"]["cells"]
+        if cell["path"] in QUALITY_FIXTURE_CELLS
+    }
+    assert after[dense] == before[dense] - 500, (
+        f"running the printed advice moved {dense} from {before[dense]} to "
+        f"{after[dense]}, not to what the tree measures. The command a failure "
+        "recommends has to be the command that resolves it."
+    )
+    assert after[sparse] == before[sparse], (
+        f"the advice named --cell {dense} and moved {sparse} as well: "
+        f"{before} -> {after}. The narrowest command must not perform the "
+        "widest edit available to it."
+    )
+    assert _check(declaration, dense).returncode == 0, (
+        "the cell still fails after the command its own failure recommended"
+    )
+
+
+def test_a_charge_is_a_term_of_the_sum_the_ceiling_is_compared_against() -> None:
+    """The per-file charge and the whole-cell verdict cannot disagree.
+
+    ``charge`` exists because nothing else answers *"what does this file owe?"*
+    — ``census`` decomposes a cell by rule, ``check --show-findings`` echoes a
+    whole cell, and ``bin/validate.sh`` handed one filename measures the whole
+    cell that file is in. The tempting implementation is to point the tool at
+    the named file, and it is wrong in a way that would not show: mypy follows
+    imports, so a finding's attribution depends on what else was in the pass,
+    and a per-file measurement would drift from the cell total that the ceiling
+    is actually compared against.
+
+    So the cell is measured whole and only the display is filtered, and this is
+    what pins that: every file's charge is a term of the cell's measured total,
+    and the cell's total is reported beside it rather than replaced by it.
+
+    Over the purpose-built cell, whose two files are what make "sums to" a
+    claim rather than an identity.
+    """
+    contract = quality_fixture_contract()
+    dense = QUALITY_FIXTURE_CELLS[0]
+
+    owed = contract_module.charge(contract, "ruff", [dense])
+    verdict = contract_module.check(contract, ["ruff"], only={dense})
+    measured = verdict["cells"][f"ruff/{dense}"]["measured"]
+    entry = owed["paths"][0]
+
+    assert entry["total"] == measured, (
+        f"charging {dense} reported {entry['total']} while check measures "
+        f"{measured} over the same cell. A per-file answer that does not sum to "
+        "the number the ceiling is compared against is a second measurement, "
+        "and the convention it exists to serve would be denominated in it."
+    )
+    assert sum(held["count"] for held in entry["files"]) == entry["total"], (
+        f"the per-file breakdown {entry['files']} does not sum to the total "
+        f"{entry['total']} it is a breakdown of."
+    )
+    assert len(entry["files"]) > 1, (
+        f"the fixture's dense half charged {len(entry['files'])} file(s), so "
+        "this cannot tell a filtered display from an unfiltered one. Either the "
+        "fixture was reduced to one file, or the filter is not filtering."
+    )
+
+    one = entry["files"][0]["file"]
+    single = contract_module.charge(contract, "ruff", [one])["paths"][0]
+    assert single["total"] == entry["files"][0]["count"], (
+        f"charging {one} alone reported {single['total']}, but as part of its "
+        f"cell it holds {entry['files'][0]['count']}. Naming one file must "
+        "narrow the display, never the measurement."
+    )
+    assert single["cell_total"] == measured, (
+        f"charging one file reported its cell as measuring {single['cell_total']} "
+        f"rather than {measured}. The cell is still measured whole; a caller who "
+        "cannot see that will read a file's charge as its cell's."
+    )
+
+
+def test_a_charge_reaches_the_same_answer_through_the_command_line(tmp_path: Path) -> None:
+    """The wiring is asserted separately from the function, because it has failed there.
+
+    ``update-baseline --cell`` validated the cell it was given and then called a
+    function it did not pass it to, so the narrowest command performed the
+    widest edit available — a defect entirely inside ``main``, with the function
+    beneath it correct all along. Every option this command declares is one more
+    place for that, and a caller of ``charge()`` exercises none of them.
+    """
+    declaration = write_quality_fixture_contract(tmp_path)
+    dense = QUALITY_FIXTURE_CELLS[0]
+    expected = contract_module.charge(quality_fixture_contract(), "ruff", [dense])
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(TOOL),
+            "charge",
+            "--tool",
+            "ruff",
+            dense,
+            "--contract",
+            str(declaration),
+            "--json",
+        ],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, (
+        f"charge exited {result.returncode} over a cell with findings in it. It "
+        "reports what is owed; the ceiling is what judges, and a command run "
+        f"before the work must not look like the failure it precedes: {result.stderr}"
+    )
+    through_cli = json.loads(result.stdout)
+    assert through_cli["total"] == expected["total"], (
+        f"the command line reported {through_cli['total']} where the function "
+        f"reports {expected['total']} over the same cell and declaration."
+    )
+    assert [entry["path"] for entry in through_cli["paths"]] == [dense], (
+        f"the command line charged {[e['path'] for e in through_cli['paths']]} "
+        f"rather than the one path it was given."
+    )
+
+
+@pytest.mark.parametrize(
+    ("tool", "path", "because"),
+    [
+        ("ruff", "README.md", "falls in no cell, so it owes nothing to any ceiling"),
+        ("mypy", "packages/bots/tests", "is in a tier the type checker is not pointed at"),
+        ("ruff", f"{QUALITY_FIXTURE}/dense/nosuchfile.py", "names no tracked file"),
+    ],
+)
+def test_a_charge_refuses_every_path_it_would_have_to_answer_with_a_bare_zero(
+    tool: str, path: str, because: str
+) -> None:
+    """Three ways of naming a path, three different lies the same zero would tell.
+
+    This command's whole value is that ``0`` means *paid*. Each of these would
+    render as ``0`` and mean something else: a path outside every cell owes
+    nothing to any ceiling and never will; a path in an unread tier was not
+    measured at all, so its zero is a silence; and a mistyped path is the one a
+    developer is most likely to produce, at the exact moment they are asking
+    whether they are finished.
+
+    The third is the one that decides whether the other two matter. A typo
+    answered with "nothing outstanding" is a convention that reports itself
+    satisfied by a misspelling — and unlike a wrong verdict, nothing downstream
+    ever disagrees with it.
+    """
+    contract = quality_fixture_contract() if tool == "ruff" else _contract()
+    with pytest.raises(SystemExit) as refused:
+        contract_module.charge(contract, tool, [path])
+    assert path in str(refused.value), (
+        f"a charge for a path that {because} was refused without naming it: {refused.value}"
     )
 
 
