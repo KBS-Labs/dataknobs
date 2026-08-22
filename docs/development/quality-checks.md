@@ -624,6 +624,11 @@ that file is in, for the same reason. That leaves two questions with no command
 behind them, and they are the two a per-file convention is made of: *what does
 this file owe?* and *have I paid it?*
 
+That convention is `.claude/rules/touched-file-cleanup.md`: a change that opens
+a file clears what it owes and lowers the ceiling in the same pull request,
+unless the file owes more than 25. This command is how the rule stays
+self-checkable instead of becoming a matter of estimate.
+
 ```bash
 # One file, or a directory of them
 uv run python bin/quality-contract.py charge --tool mypy packages/data/src/dataknobs_data/query.py

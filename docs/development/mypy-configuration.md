@@ -56,6 +56,11 @@ bin/quality-contract.py charge --tool mypy packages/data/src/dataknobs_data/quer
 alone and reported, so the argument for raising one lands in a pull request
 rather than in a re-run.
 
+Who lowers a ceiling, and when: `.claude/rules/touched-file-cleanup.md`. In
+short — a change that opens a file clears what that file owes and lowers the
+ceiling in the same pull request, unless the file owes more than 25. `charge`
+is how you ask which case you are in.
+
 ## How `bin/validate.sh` reaches a verdict
 
 It does not count findings itself. It asks the contract which cells its targets
