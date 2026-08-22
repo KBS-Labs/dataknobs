@@ -33,13 +33,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     that only some targets have can no longer be supplied speculatively.
 
   The discriminator and metadata keys the object-graph layer owns
-  (`backend`, `factory`, `name`, `type`) pass through under `"raise"`
-  without being declared, and are excluded from the error's accepted list —
-  none of them is a misspelling of a field, and offering `factory` as an
-  answer to a question about a connection field helps nobody. `name` is an
-  ordinary word, so tolerating it leaves a residual hole on the direct-call
-  path; the alternative would reject the documented resource-list shape
-  that writes `name:` beside `backend:`, which is the worse trade.
+  (`backend`, `class`, `factory`, `name`, `type`) pass through under
+  `"raise"` without being declared, and are excluded from the error's
+  accepted list — none of them is a misspelling of a field, and offering
+  `factory` as an answer to a question about a connection field helps
+  nobody. `class` and `factory` are alternatives rather than neighbours: the
+  object builder chooses between them in a single condition and pops
+  whichever it finds, so a config written either way reaches `from_dict` in
+  the same state. `name` is an ordinary word, so tolerating it leaves a
+  residual hole on the direct-call path; the alternative would reject the
+  documented resource-list shape that writes `name:` beside `backend:`,
+  which is the worse trade.
 
 - **A misdeclared class-level policy attribute is now refused at class
   definition.** `__init_subclass__` already enforced a floor on
@@ -63,23 +67,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Validated at runtime rather than left to the type checker, for the reason
   `_MAX_REDACT_DEPTH` already was: the subclasses that matter are
   consumers', and a library cannot assume its consumers run mypy.
-
-### Fixed
-
-- **`class` is tolerated under `_UNKNOWN_KEYS = "raise"`, alongside the
-  `factory` it is an alternative to.** The object-graph layer chooses
-  between the two in one condition — `if "class" in config or "factory" in
-  config` — and pops whichever it finds, so a config written the `class` way
-  reaches `from_dict` in exactly the state a config written the `factory`
-  way does. Only the second was tolerated, so the first raised
-  `ValueError: ... does not accept 'class'`.
-
-  A config assembled by hand and passed straight to `from_dict` is the
-  reachable path, matching the one already documented for the other routing
-  keys: an object builder strips them, so the gap is on the direct call.
-  `accepts("class")` continues to answer `False` — the key is tolerated, not
-  part of any config's surface, and offering it as a suggested spelling for
-  a connection field would help nobody.
 
 ## v3.0.0 - 2026-08-19
 
