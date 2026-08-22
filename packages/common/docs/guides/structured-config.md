@@ -169,11 +169,15 @@ as unrecognised and a previously-working config starts failing. Every
 override in this repository does remove its keys; the base cannot enforce it,
 so it is a rule for the next one.
 
-The object-graph layer's own vocabulary — `backend`, `factory`, `name`,
-`type` — is tolerated under `"raise"` without being declared, since
+The object-graph layer's own vocabulary — `backend`, `class`, `factory`,
+`name`, `type` — is tolerated under `"raise"` without being declared, since
 `ObjectBuilder` and the database factories strip those before construction
 and none of them is a misspelling of a field. They are excluded from the
 error's accepted-key list for the same reason.
+
+`class` and `factory` are alternatives rather than neighbours — the builder
+chooses between them in one condition and pops whichever it finds — so a
+config carrying either one reaches `from_dict` in the same state.
 
 ### Misdeclaring a policy is refused at class definition
 

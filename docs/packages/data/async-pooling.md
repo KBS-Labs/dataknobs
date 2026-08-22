@@ -406,26 +406,28 @@ Use configuration files for complex setups:
 # config.yaml
 databases:
   elasticsearch:
+    backend: elasticsearch
     hosts:
       - http://node1:9200
       - http://node2:9200
-    pool:
-      connections: 10
-      maxsize: 20
-      
+
   postgres:
+    backend: postgres
     host: localhost
     database: mydb
-    pool:
-      min_size: 10
-      max_size: 20
-      timeout: 30
-      
+    min_pool_size: 10
+    max_pool_size: 20
+    command_timeout: 30
+
   s3:
+    backend: s3
     bucket: my-bucket
-    pool:
-      max_connections: 50
+    max_pool_connections: 50
 ```
+
+Pool settings are ordinary connection fields, not a nested section: each
+backend derives its pool from them in `_setup`. Elasticsearch takes its sizing
+from the client rather than from config, so it has no pool key of its own.
 
 ## Error Handling
 

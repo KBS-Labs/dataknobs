@@ -195,9 +195,9 @@ def _interior_sensitive_keys(cls: type) -> frozenset[str]:
 #: Discriminator and metadata keys the object-graph layer owns, tolerated by
 #: :meth:`StructuredConfig.from_dict` under ``_UNKNOWN_KEYS = "raise"``.
 #:
-#: An object builder pops ``factory``/``type``/``name`` and the database
-#: factories strip ``backend``, so a config reaching ``from_dict`` through the
-#: documented route carries none of them. A config handed to ``from_dict``
+#: An object builder pops ``class``/``factory``/``type``/``name`` and the
+#: database factories strip ``backend``, so a config reaching ``from_dict``
+#: through the documented route carries none of them. A config handed to ``from_dict``
 #: directly still can -- a resource adapter that forwards
 #: ``{"type": backend, **config}`` verbatim, for instance -- and none of these
 #: is a misspelling of a field, which is what the check is for.
@@ -216,7 +216,17 @@ def _interior_sensitive_keys(cls: type) -> frozenset[str]:
 #: a database config; rejecting it would break the shape the docs teach. The
 #: object-graph layer pops these before ``from_dict`` sees them, which is why
 #: the hole exists only on the direct-call path.
-_ROUTING_KEYS = frozenset({"backend", "factory", "name", "type"})
+#:
+#: ``class`` is here because it is ``factory``'s *alternative*, not its
+#: neighbour: the builder chooses between them in one condition
+#: (``if "class" in config or "factory" in config``) and pops whichever it
+#: finds. Tolerating one and raising on the other split a single vocabulary
+#: down the middle, and the documentation writes the ``class`` half in the
+#: same position it writes the ``factory`` half. It was omitted when this set
+#: was first enumerated rather than excluded for a reason -- it satisfies both
+#: criteria stated then, being no misspelling of any field and no useful
+#: answer to a question about one.
+_ROUTING_KEYS = frozenset({"backend", "class", "factory", "name", "type"})
 
 
 @functools.cache

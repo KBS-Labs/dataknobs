@@ -64,6 +64,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `_MAX_REDACT_DEPTH` already was: the subclasses that matter are
   consumers', and a library cannot assume its consumers run mypy.
 
+### Fixed
+
+- **`class` is tolerated under `_UNKNOWN_KEYS = "raise"`, alongside the
+  `factory` it is an alternative to.** The object-graph layer chooses
+  between the two in one condition — `if "class" in config or "factory" in
+  config` — and pops whichever it finds, so a config written the `class` way
+  reaches `from_dict` in exactly the state a config written the `factory`
+  way does. Only the second was tolerated, so the first raised
+  `ValueError: ... does not accept 'class'`.
+
+  A config assembled by hand and passed straight to `from_dict` is the
+  reachable path, matching the one already documented for the other routing
+  keys: an object builder strips them, so the gap is on the direct call.
+  `accepts("class")` continues to answer `False` — the key is tolerated, not
+  part of any config's surface, and offering it as a suggested spelling for
+  a connection field would help nobody.
+
 ## v3.0.0 - 2026-08-19
 
 ### Added
