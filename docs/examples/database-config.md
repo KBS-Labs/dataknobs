@@ -13,7 +13,7 @@ databases:
     host: localhost
     port: 5432
     database: myapp
-    username: postgres
+    user: postgres
     password: secret
 ```
 
@@ -39,17 +39,12 @@ databases:
     host: ${DB_PRIMARY_HOST:localhost}
     port: ${DB_PRIMARY_PORT:5432}
     database: ${DB_PRIMARY_NAME:myapp}
-    username: ${DB_PRIMARY_USER:postgres}
+    user: ${DB_PRIMARY_USER:postgres}
     password: ${DB_PRIMARY_PASS}
-    pool:
-      min_size: 5
-      max_size: 20
-      timeout: 30
-      retry_attempts: 3
-    options:
-      sslmode: prefer
-      connect_timeout: 10
-      application_name: myapp
+    min_pool_size: 5
+    max_pool_size: 20
+    command_timeout: 30
+    ssl: prefer
     
   - name: analytics
     backend: duckdb
@@ -62,16 +57,15 @@ databases:
     host: ${DB_WAREHOUSE_HOST:localhost}
     port: ${DB_WAREHOUSE_PORT:5432}
     database: ${DB_WAREHOUSE_NAME:warehouse}
-    username: ${DB_WAREHOUSE_USER:readonly}
+    user: ${DB_WAREHOUSE_USER:readonly}
     password: ${DB_WAREHOUSE_PASS}
-    pool:
-      min_size: 2
-      max_size: 10
-      timeout: 60
-    options:
-      sslmode: require
-      statement_timeout: 300000  # 5 minutes
+    min_pool_size: 2
+    max_pool_size: 10
+    command_timeout: 60
+    ssl: require
 
+# Redis is not a database backend; it is configured on its own list.
+caches:
   - name: cache
     type: redis
     host: ${REDIS_HOST:localhost}
@@ -82,6 +76,10 @@ databases:
       max_connections: 50
       connection_class: redis.BlockingConnectionPool
 ```
+
+Pool bounds and `command_timeout` configure the **async** Postgres backend's
+asyncpg pool; the sync backend holds a single psycopg2 connection and ignores
+them. `ssl` is asyncpg-native — the sync backend translates it to `sslmode`.
 
 ## Database Factory Implementation
 
@@ -111,42 +109,35 @@ class PostgreSQLFactory(FactoryBase):
     
     def _create_sync(self, **config) -> pool.ThreadedConnectionPool:
         """Create synchronous connection pool."""
-        pool_config = config.pop("pool", {})
-        options = config.pop("options", {})
-        
-        # Build connection string
         conn_params = {
             "host": config.get("host", "localhost"),
             "port": config.get("port", 5432),
             "database": config.get("database", "postgres"),
-            "user": config.get("username", "postgres"),
+            "user": config.get("user", "postgres"),
             "password": config.get("password"),
-            **options
         }
         
         # Create connection pool
         return pool.ThreadedConnectionPool(
-            minconn=pool_config.get("min_size", 5),
-            maxconn=pool_config.get("max_size", 20),
+            minconn=config.get("min_pool_size", 5),
+            maxconn=config.get("max_pool_size", 20),
             **conn_params
         )
     
     async def _create_async(self, **config) -> asyncpg.Pool:
         """Create asynchronous connection pool."""
-        pool_config = config.pop("pool", {})
-        options = config.pop("options", {})
-        
-        # Create async pool
+        # asyncpg's own pool parameters are `min_size` / `max_size`; the
+        # config spells them `min_pool_size` / `max_pool_size`, which is the
+        # translation a factory exists to do.
         return await asyncpg.create_pool(
             host=config.get("host", "localhost"),
             port=config.get("port", 5432),
             database=config.get("database", "postgres"),
-            user=config.get("username", "postgres"),
+            user=config.get("user", "postgres"),
             password=config.get("password"),
-            min_size=pool_config.get("min_size", 5),
-            max_size=pool_config.get("max_size", 20),
-            timeout=pool_config.get("timeout", 30),
-            **options
+            min_size=config.get("min_pool_size", 5),
+            max_size=config.get("max_pool_size", 20),
+            command_timeout=config.get("command_timeout", 30),
         )
 ```
 
@@ -349,14 +340,10 @@ databases:
     host: localhost
     port: 5432
     database: myapp_dev
-    username: developer
+    user: developer
     password: devpass
-    pool:
-      min_size: 2
-      max_size: 5
-    options:
-      log_statement: all
-      log_duration: true
+    min_pool_size: 2
+    max_pool_size: 5
 ```
 
 ### Production Configuration
@@ -368,20 +355,12 @@ databases:
     host: ${DB_HOST}
     port: ${DB_PORT:5432}
     database: ${DB_NAME}
-    username: ${DB_USER}
+    user: ${DB_USER}
     password: ${DB_PASSWORD}
-    pool:
-      min_size: 20
-      max_size: 100
-      timeout: 30
-      retry_attempts: 5
-    options:
-      sslmode: require
-      sslcert: /etc/ssl/certs/client.crt
-      sslkey: /etc/ssl/private/client.key
-      connect_timeout: 10
-      statement_timeout: 60000
-      idle_in_transaction_session_timeout: 60000
+    min_pool_size: 20
+    max_pool_size: 100
+    command_timeout: 30
+    ssl: require
 ```
 
 ### Loading Environment-Specific Config
@@ -421,20 +400,18 @@ class AdaptivePoolFactory(FactoryBase):
     
     def create(self, **config):
         """Create pool with adaptive sizing."""
-        pool_config = config.get("pool", {})
-        
         # Calculate pool size based on metrics
-        base_size = pool_config.get("min_size", 5)
-        max_size = pool_config.get("max_size", 20)
+        base_size = config.get("min_pool_size", 5)
+        max_size = config.get("max_pool_size", 20)
         
         # Adaptive sizing logic
         if self.metrics["peak"] > base_size * 0.8:
-            pool_config["min_size"] = min(base_size + 2, max_size)
+            config["min_pool_size"] = min(base_size + 2, max_size)
         
         # Create pool with adjusted size
-        return self._create_pool(config, pool_config)
+        return self._create_pool(config)
     
-    def _create_pool(self, config, pool_config):
+    def _create_pool(self, config):
         # Implementation specific to database type
         pass
 ```
@@ -498,27 +475,22 @@ class HealthCheckWrapper:
 ### Common Issues
 
 1. **Connection Pool Exhausted**
-   ```python
-   # Increase pool size
-   pool:
-     min_size: 10
-     max_size: 50
+   ```yaml
+   # Raise the pool ceiling
+   min_pool_size: 10
+   max_pool_size: 50
    ```
 
 2. **Connection Timeouts**
-   ```python
-   # Increase timeout values
-   options:
-     connect_timeout: 30
-     statement_timeout: 120000
+   ```yaml
+   # Raise the per-command timeout, in seconds
+   command_timeout: 30
    ```
 
 3. **SSL Certificate Issues**
-   ```python
-   # Verify SSL configuration
-   options:
-     sslmode: require
-     sslrootcert: /path/to/ca.crt
+   ```yaml
+   # The sync backend translates this to psycopg2's sslmode
+   ssl: require
    ```
 
 ### Debug Logging

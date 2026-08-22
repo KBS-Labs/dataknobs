@@ -111,7 +111,7 @@ class TestOptingIn:
 class TestRoutingKeys:
     """The object-graph layer's vocabulary is tolerated, not advertised."""
 
-    @pytest.mark.parametrize("key", ["backend", "factory", "name", "type"])
+    @pytest.mark.parametrize("key", ["backend", "class", "factory", "name", "type"])
     def test_a_routing_key_passes_through(self, key: str) -> None:
         cfg = StrictConfig.from_dict({key: "whatever", "host": "h"})
         assert cfg.host == "h"
@@ -120,6 +120,20 @@ class TestRoutingKeys:
         with pytest.raises(ValueError) as excinfo:
             StrictConfig.from_dict({"wildly_unrelated": 1})
         assert "backend" not in str(excinfo.value)
+
+    def test_the_class_directive_passes_through_like_its_alternative(self) -> None:
+        """``class`` and ``factory`` are alternatives inside one condition.
+
+        The object-graph layer chooses between them in a single branch --
+        ``if "class" in config or "factory" in config`` -- and pops whichever
+        it finds before ``from_dict`` is reached. A resource list writes
+        ``- name: primary`` / ``class: pkg.mod.Thing`` / ``host: ...`` as one
+        mapping exactly as it writes the ``factory`` form, so tolerating one
+        alternative and raising on the other splits a single vocabulary in
+        half. Nine documented samples use the spelling that raised.
+        """
+        cfg = StrictConfig.from_dict({"class": "pkg.mod.Thing", "host": "h"})
+        assert cfg.host == "h"
 
 
 class TestInputKeys:

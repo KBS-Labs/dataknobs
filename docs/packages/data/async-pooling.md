@@ -382,21 +382,21 @@ info = manager.get_pool_info()
 
 ### Environment Variables
 
-Configure pooling behavior via environment variables:
+Pool settings are ordinary config attributes rather than a subsystem of their
+own, so they take the standard override convention --
+`DATAKNOBS_<TYPE>__<NAME>__<ATTRIBUTE>`, described under
+[Environment Variables](../config/environment-variables.md). There is no
+pool-specific variable, and nothing here reads one:
 
 ```bash
-# PostgreSQL
-export POSTGRES_POOL_MIN_SIZE=10
-export POSTGRES_POOL_MAX_SIZE=20
-export POSTGRES_POOL_TIMEOUT=30
-
-# Elasticsearch
-export ES_POOL_CONNECTIONS=10
-export ES_POOL_MAXSIZE=20
-
-# S3
-export S3_POOL_MAX_CONNECTIONS=50
+# Postgres pool sizing, on the database entry named `primary`
+export DATAKNOBS_DATABASE__PRIMARY__MIN_POOL_SIZE=10
+export DATAKNOBS_DATABASE__PRIMARY__MAX_POOL_SIZE=20
+export DATAKNOBS_DATABASE__PRIMARY__COMMAND_TIMEOUT=30
 ```
+
+Elasticsearch and the async S3 backend have no pool-sizing attribute at all,
+so for them there is nothing to override; the section below says why.
 
 ### Configuration Files
 
@@ -406,26 +406,30 @@ Use configuration files for complex setups:
 # config.yaml
 databases:
   elasticsearch:
+    backend: elasticsearch
     hosts:
       - http://node1:9200
       - http://node2:9200
-    pool:
-      connections: 10
-      maxsize: 20
-      
+
   postgres:
+    backend: postgres
     host: localhost
     database: mydb
-    pool:
-      min_size: 10
-      max_size: 20
-      timeout: 30
-      
+    min_pool_size: 10
+    max_pool_size: 20
+    command_timeout: 30
+
   s3:
+    backend: s3
     bucket: my-bucket
-    pool:
-      max_connections: 50
 ```
+
+Pool settings are ordinary connection fields, not a nested section: Postgres
+derives its pool from them in `_setup`. The other two backends have no pool
+key to write here -- Elasticsearch takes its sizing from the client, and
+`S3PoolConfig` is keyed on bucket, prefix, region and credentials with no
+sizing field at all. `max_pool_connections` belongs to the **sync** S3 config
+alone, so writing it in an async config raises rather than being ignored.
 
 ## Error Handling
 

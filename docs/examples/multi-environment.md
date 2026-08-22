@@ -32,11 +32,10 @@ application:
   
 databases:
   - name: primary
-    type: postgresql
+    factory: database
+    backend: postgres
     database: myapp
-    options:
-      connect_timeout: 10
-      statement_timeout: 30000
+    command_timeout: 10
       
 caches:
   - name: redis
@@ -85,13 +84,10 @@ databases:
   - name: primary
     host: localhost
     port: 5432
-    username: dev_user
+    user: dev_user
     password: dev_password
-    pool:
-      min_size: 2
-      max_size: 10
-    options:
-      log_statement: all
+    min_pool_size: 2
+    max_pool_size: 10
       
 caches:
   - name: redis
@@ -121,6 +117,9 @@ features:
     enabled: false
 ```
 
+Pool bounds and `command_timeout` bind the **async** Postgres backend's asyncpg
+pool; the sync backend ignores them.
+
 ### Staging Environment
 
 ```yaml
@@ -129,13 +128,11 @@ databases:
   - name: primary
     host: staging-db.internal
     port: 5432
-    username: ${DB_USER}
+    user: ${DB_USER}
     password: ${DB_PASSWORD}
-    pool:
-      min_size: 5
-      max_size: 20
-    options:
-      sslmode: require
+    min_pool_size: 5
+    max_pool_size: 20
+    ssl: require
       
 caches:
   - name: redis
@@ -175,25 +172,22 @@ databases:
   - name: primary
     host: ${DB_HOST}
     port: ${DB_PORT:5432}
-    username: ${DB_USER}
+    user: ${DB_USER}
     password: ${DB_PASSWORD}
     database: ${DB_NAME}
-    pool:
-      min_size: 20
-      max_size: 100
-      timeout: 30
-    options:
-      sslmode: require
-      sslcert: /etc/ssl/certs/client.crt
-      sslkey: /etc/ssl/private/client.key
+    min_pool_size: 20
+    max_pool_size: 100
+    command_timeout: 30
+    # Client certificates need an ssl.SSLContext, which `ssl` also accepts
+    # when the config is built in code rather than read from YAML.
+    ssl: require
       
   - name: replica
     host: ${DB_REPLICA_HOST}
     port: ${DB_PORT:5432}
-    username: ${DB_USER}
+    user: ${DB_USER}
     password: ${DB_PASSWORD}
     database: ${DB_NAME}
-    readonly: true
     
 caches:
   - name: redis

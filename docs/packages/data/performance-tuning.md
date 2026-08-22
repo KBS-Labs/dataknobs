@@ -260,10 +260,9 @@ async def process_large_dataset(db):
 ```python
 # Configure pools to minimize memory usage
 memory_optimized_config = {
-    "min_connections": 5,   # Lower minimum
-    "max_connections": 15,  # Lower maximum
-    "max_inactive_connection_lifetime": 300,  # Close idle connections after 5 minutes
-    "max_queries": 50000    # Recreate connection after 50k queries
+    "min_pool_size": 5,     # Lower minimum
+    "max_pool_size": 15,    # Lower maximum
+    "command_timeout": 30,  # Fail a stuck command rather than hold its slot
 }
 ```
 
@@ -457,37 +456,42 @@ PUT /my_index/_settings
 # high-performance.yaml
 databases:
   postgres:
+    backend: postgres
     host: localhost
     database: dataknobs
-    pool:
-      min_size: 20
-      max_size: 50
-      timeout: 10
-      max_queries: 100000
-      max_inactive_connection_lifetime: 600
-    
+    min_pool_size: 20
+    max_pool_size: 50
+    command_timeout: 10
+
   elasticsearch:
+    backend: elasticsearch
     hosts:
       - http://es1:9200
       - http://es2:9200
       - http://es3:9200
-    pool:
-      connections: 30
-      maxsize: 60
-    index:
+
+  s3:
+    backend: s3
+    bucket: dataknobs-prod
+    max_pool_connections: 100  # also bounds the search/write thread pool
+    multipart_threshold: 8388608  # 8MB
+    multipart_chunksize: 8388608
+```
+
+`hosts` is the async Elasticsearch backend's multi-node form. Index shard and
+replica settings belong to the **sync** backend, which composes a single host
+from `host` / `port` and takes them under `settings`:
+
+```yaml
+databases:
+  elasticsearch:
+    backend: elasticsearch
+    host: es1
+    port: 9200
+    settings:
       number_of_shards: 3
       number_of_replicas: 1
       refresh_interval: "30s"  # Batch refresh
-    
-  s3:
-    bucket: dataknobs-prod
-    pool:
-      max_connections: 100
-    transfer:
-      multipart_threshold: 8388608  # 8MB
-      max_concurrency: 10
-      multipart_chunksize: 8388608
-      max_io_queue: 100
 ```
 
 ### Memory-Optimized Configuration
@@ -496,24 +500,19 @@ databases:
 # memory-optimized.yaml
 databases:
   postgres:
-    pool:
-      min_size: 5
-      max_size: 15
-      max_inactive_connection_lifetime: 300
-      
+    backend: postgres
+    min_pool_size: 5
+    max_pool_size: 15
+
   elasticsearch:
-    pool:
-      connections: 10
-      maxsize: 20
-    index:
+    backend: elasticsearch
+    host: es1
+    settings:
       refresh_interval: "1s"
-      
+
   s3:
-    pool:
-      max_connections: 25
-    transfer:
-      max_concurrency: 5
-      max_io_queue: 50
+    backend: s3
+    max_pool_connections: 25
 ```
 
 ## Backend-Specific Optimizations

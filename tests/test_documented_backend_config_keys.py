@@ -38,16 +38,27 @@ COVERED
     dict. The class name settles sync-vs-async outright, so this is the one
     form where a sibling-backend field is provable rather than merely likely.
 
-    **Configuration-block form** -- a mapping that names a ``backend``, in a
-    YAML fence, in a quoted dict literal handed to ``Config.load`` or
-    ``from_config``, or in YAML written into a Python string literal. All
-    three are *parsed* and walked by one traversal, because they are one
-    question asked of two parsers: which mapping here is a database config,
-    and what keys does it hold. ``DB_CONTEXT`` answers the first from the
-    enclosing keys -- ``memory`` names a plugin in the vector-store and
-    rate-limiter registries too, so the backend name alone cannot -- and a
-    ``${DB_BACKEND:postgres}`` value is read through to the default an
-    unconfigured reader installs.
+    **Configuration-block form** -- a mapping in a YAML fence, in a quoted
+    dict literal handed to ``Config.load`` or ``from_config``, or in YAML
+    written into a Python string literal. All three are *parsed* and walked
+    by one traversal, because they are one question asked of two parsers:
+    which mapping here is a database config, and what keys does it hold.
+    ``DB_CONTEXT`` answers the first from the enclosing keys -- ``memory``
+    names a plugin in the vector-store and rate-limiter registries too, so
+    the backend name alone cannot -- and a ``${DB_BACKEND:postgres}`` value
+    is read through to the default an unconfigured reader installs.
+
+    **A block naming no backend**, which is most of them: ``databases:`` /
+    ``primary:`` / ``host: ...``. There is no class to ask, so the union of
+    every database config is asked instead, and a key *none* of them accepts
+    is wrong whichever backend the block turns out to be. Position settles
+    what a mapping is, and it has to, because a container of named configs
+    and a config are the same shape: ``DB_CONTAINER`` -- the plural member
+    of ``DB_CONTEXT`` -- holds entries, every other member holds a config,
+    and a mapping inside a config is a section of it whose own key is the
+    thing judged. A block that resembles no config is skipped and counted
+    rather than reported, because the context rule's trailing-``_db``
+    alternative matches a query filter as readily as a store.
 
 NOT COVERED
     A config bound to a variable and passed by name. Which binding a name
@@ -78,22 +89,12 @@ NOT COVERED
     so in a comment, found by reading the config class rather than by
     failing anything.
 
-    A block in a database context that names **no backend at all** --
-    ``database: {host: ..., port: ..., max_pool_size: ...}``. 136 such
-    blocks are in the tree. They cannot be read against a config class the
-    way a named one can, and the tempting fallback is unsound rather than
-    merely lenient: checking them against the union of every database config
-    flags 115, and the keys it flags most are ``conversations`` (19),
-    ``pool`` (17) and ``$resource`` (14) -- a container mapping keyed by
-    database name, a nesting level that does not exist, and a config-
-    reference directive. Telling a container of named configs from a config
-    is a design question, not a missing branch. Worth recording for whoever
-    takes it: a key rejected by *every* config class is sound whichever
-    backend the block turns out to be, so the unsound half is only the
-    decision that the block is a database config at all. One real defect was
-    found this way and fixed by hand -- a ``pool_size`` in a document that
-    spells the key correctly forty lines above, in the block the old
-    line-scanning reader could read.
+    Which of several backends an unnamed block *is*. A block naming no
+    ``backend:`` is read against the union of every config class, so a key
+    none of them accepts is reported and a key one of them accepts is not.
+    That asymmetry is deliberate and it is only half the question: whether
+    ``max_pool_size`` on an unnamed block is the *right* class's key needs
+    the backend, and the block does not say.
 
 The accepted-key set is read from the config class through ``accepts()``, and
 the tolerated routing keys from the runtime's own ``_ROUTING_KEYS``, so this
@@ -102,8 +103,10 @@ assumed: a backend whose driver is absent is still read against its declared
 config class, the corpus floor counts the sites actually checked, each front
 end is counted separately so one going silent cannot hide behind the other,
 and every way a block leaves unchecked -- skipped for its context, in a fence
-that would not parse, naming a backend that resolves to nothing -- is a
-number with a test watching it.
+that would not parse, naming a backend that resolves to nothing, resembling
+no config at all -- is a number with a test watching it, bounded above *and*
+below so that a judgement which stopped judging cannot read as a clean
+corpus.
 """
 
 from __future__ import annotations
@@ -380,6 +383,15 @@ def _scanned() -> tuple[list[Site], int]:
 #: guard that cries wolf is uninstalled by the second person to hit it.
 DB_CONTEXT = re.compile(r"^(databases?|conversation_storage|\w*_db)$")
 
+#: The plural member of ``DB_CONTEXT``, which holds *entries* rather than a
+#: config. Its keys are names a document invented -- ``primary``, ``cache``,
+#: ``archive`` -- so reading it as a config reports each of them as a
+#: rejected key. Measured: a version that did produced 49 findings on this
+#: corpus, 34 of them entry names. Every other member is singular and its
+#: value is the config itself, which is the whole distinction, and it is
+#: already spelled in ``DB_CONTEXT``'s own ``databases?``.
+DB_CONTAINER = re.compile(r"^databases$")
+
 #: The fence languages each parser reads.
 YAML_FENCE = frozenset({"yaml", "yml"})
 PYTHON_FENCE = frozenset({"python", "py"})
@@ -461,14 +473,44 @@ YAML_SHAPE = Shape(_yaml_items, _yaml_children, _yaml_scalar)
 PYTHON_SHAPE = Shape(_python_items, _python_children, _python_scalar)
 
 
+#: Where a mapping sits relative to the nearest ``DB_CONTEXT`` key.
+#: ``CONTAINER`` holds entries, ``PAYLOAD`` is a config, ``None`` is neither.
+CONTAINER, PAYLOAD = "container", "payload"
+
+
 class Block:
     """One mapping in a document, and what its ancestry says it is."""
 
-    def __init__(self, line: int, backend: str | None, named: bool, keys: set[str], db: bool):
+    def __init__(
+        self,
+        line: int,
+        backend: str | None,
+        named: bool,
+        keys: set[str],
+        db: bool,
+        payload: bool = False,
+        section: bool = False,
+    ):
         self.line, self.backend, self.named, self.keys, self.db = line, backend, named, keys, db
+        #: Sits where a config lives, so its keys are a config's keys.
+        self.payload = payload
+        #: Holds a nested mapping -- evidence it is a config even when not
+        #: one of its own keys is a spelling any config class accepts.
+        self.section = section
+        #: Keys whose value is a mapping *and* which open a database region
+        #: of their own. They name a nested config rather than a field of
+        #: this one, so they are not this config's to accept -- while
+        #: ``database: myapp``, a scalar, stays the ordinary field it is.
+        self.regions: set[str] = set()
 
 
-def _blocks(node: Any, shape: Shape, chain: tuple[str, ...] = (), line: int = 0) -> list[Block]:
+def _blocks(
+    node: Any,
+    shape: Shape,
+    chain: tuple[str, ...] = (),
+    line: int = 0,
+    level: str | None = None,
+) -> list[Block]:
     """Every mapping reachable from ``node``, with the ancestry it sits under.
 
     Descent is by *key*, so the chain carried down is the real ancestry
@@ -478,25 +520,54 @@ def _blocks(node: Any, shape: Shape, chain: tuple[str, ...] = (), line: int = 0)
     a preceding sibling from an enclosing parent. A prototype that did read
     two bot vector-memory blocks as database configs -- and an unsound sweep
     here is worse than none, for the crying-wolf reason above.
+
+    ``level`` carries the second question, which only a block naming no
+    backend has to ask: is this mapping a config, the container above one, or
+    a section inside one? The chain cannot answer it -- every one of the
+    three sits under the same ``databases:`` -- so the answer is threaded
+    down from the key that opened the region. A mapping inside a config is
+    left at ``None``: it belongs to that config's schema, so the question is
+    whether the *section* is accepted -- asked once, on the parent -- rather
+    than one question per interior key. The exception is a subsection whose
+    own key opens a region (``conversation_storage:`` inside a config), which
+    is a config in its own right and is read as one.
     """
     found: list[Block] = []
     pairs = shape.items(node)
     if pairs is not None:
         backend = next((shape.scalar(value) for key, value, _ in pairs if key == "backend"), None)
+        named = any(key == "backend" for key, _, _ in pairs)
         found.append(
             Block(
                 line,
                 backend,
-                any(key == "backend" for key, _, _ in pairs),
+                named,
                 {key for key, _, _ in pairs},
                 any(DB_CONTEXT.match(key) for key in chain),
+                payload=level == PAYLOAD,
+                section=any(shape.items(value) is not None for _, value, _ in pairs),
             )
         )
+        found[-1].regions = {
+            key
+            for key, value, _ in pairs
+            if shape.items(value) is not None and DB_CONTEXT.match(key)
+        }
         for key, value, at in pairs:
-            found.extend(_blocks(value, shape, (key, *chain), at))
+            below: str | None
+            if DB_CONTAINER.match(key):
+                below = CONTAINER
+            elif DB_CONTEXT.match(key):
+                below = PAYLOAD
+            else:
+                below = PAYLOAD if level == CONTAINER else None
+            found.extend(_blocks(value, shape, (key, *chain), at, below))
         return found
+    # A sequence under a container holds the entries themselves:
+    # ``databases:`` / ``- name: primary`` / ``host: ...`` is one config.
+    below = PAYLOAD if level == CONTAINER else level
     for child in shape.children(node):
-        found.extend(_blocks(child, shape, chain, line))
+        found.extend(_blocks(child, shape, chain, line, below))
     return found
 
 
@@ -518,6 +589,81 @@ def _backend_name(raw: str | None) -> str | None:
     return value or None
 
 
+class UnnamedSite:
+    """A documented config block that names no backend.
+
+    Most of this file resolves a block's ``backend:`` to a config class and
+    asks that class. A block naming none has no class to ask, which left the
+    whole population unchecked -- and a bare ``database:`` block teaching
+    ``pool_size`` was corrected by hand for exactly that reason, which is the
+    mechanism this file exists to make unnecessary.
+
+    The backend does not have to be known to answer *half* the question. A
+    key **no** config class accepts is wrong whichever backend the block
+    turns out to be, so that half is decidable outright; a key some class
+    accepts is left alone, because deciding whether it is the right class is
+    the half that needs the backend. That asymmetry is the whole design, and
+    it is why this reports a subset rather than guessing.
+    """
+
+    def __init__(self, path: Path, line: int, keys: set[str], regions: set[str] | None = None):
+        self.path, self.line, self.keys = path, line, keys - (regions or set())
+        self.backend: str | None = None
+
+    @property
+    def in_scope(self) -> bool:
+        """Recognisable as a database config, or it would not be here."""
+        return True
+
+    @property
+    def checked(self) -> bool:
+        """Every config class was consulted, so the answer is not partial."""
+        return True
+
+    @property
+    def rejected(self) -> list[str]:
+        """Keys not one config class in either registry claims."""
+        classes = _backend_classes().values()
+        return sorted(
+            key
+            for key in self.keys - ROUTING
+            # ``$resource`` / ``$required`` are the config layer's reference
+            # markers, resolved and removed before a backend config is built.
+            if not key.startswith("$") and not any(cls.accepts(key) for cls in classes)
+        )
+
+    def __str__(self) -> str:
+        return f"{rel(self.path)}:{self.line} (no backend named) no config class accepts {
+            self.rejected
+        }"
+
+
+#: What a config-block sweep returns. Two classes rather than one because
+#: they answer ``rejected`` from different evidence -- a named block from its
+#: own config class, an unnamed one from the union of all of them -- and
+#: collapsing that into a nullable ``backend`` would hide which question was
+#: asked of any given finding.
+AnySite = Site | UnnamedSite
+
+
+def _recognisable(block: Block) -> bool:
+    r"""Whether a block naming no backend resembles a database config at all.
+
+    ``DB_CONTEXT``'s ``\w*_db`` matches a query filter as readily as a store:
+    ``default_filters:`` / ``case_db:`` / ``status: published`` configures
+    nothing. Neither does a custom-``storage_class`` block, whose keys are
+    the consumer's class's business rather than any backend's.
+
+    Two kinds of evidence answer it, and either suffices. A key some config
+    class accepts says the block speaks the vocabulary. A nested section says
+    so too, and is needed on its own account: a config whose every key is a
+    subsection -- ``postgres:`` / ``pool:`` / ``min_size: 5`` -- has no
+    accepted spelling of its own, and it is the one carrying the finding.
+    """
+    classes = _backend_classes().values()
+    return block.section or any(cls.accepts(key) for key in block.keys for cls in classes)
+
+
 class Tally:
     """Every way a block left the sweep unchecked, kept as a number.
 
@@ -532,6 +678,7 @@ class Tally:
         self.out_of_scope = 0
         self.declined = 0
         self.undecided = 0
+        self.unrecognised = 0
 
 
 def _embedded_yaml(tree: ast.Module, offset: int) -> list[tuple[Any, Shape, int]]:
@@ -602,9 +749,9 @@ def _roots(path: Path) -> tuple[list[tuple[Any, Shape, int]], int]:
     return roots, declined
 
 
-def _config_blocks(path: Path) -> tuple[list[Site], Tally]:
+def _config_blocks(path: Path) -> tuple[list[AnySite], Tally]:
     """The database-config blocks in one document, and what it left unread."""
-    sites: list[Site] = []
+    sites: list[AnySite] = []
     tally = Tally()
     roots, tally.declined = _roots(path)
     for root, shape, offset in roots:
@@ -621,16 +768,26 @@ def _config_blocks(path: Path) -> tuple[list[Site], Tally]:
                 tally.out_of_scope += known
                 continue
             if backend is None:
-                # Named a backend the sweep cannot resolve to anything, or
-                # named none at all. The first is counted; the second is the
-                # separate gap the module docstring measures.
-                tally.undecided += block.named
+                if block.named:
+                    # Named a backend that resolves to nothing checkable --
+                    # ``${features.search_backend}`` supplies no default.
+                    tally.undecided += 1
+                elif not block.payload:
+                    pass  # a container, or a section inside a config
+                elif _recognisable(block):
+                    sites.append(UnnamedSite(path, block.line + offset, block.keys, block.regions))
+                else:
+                    # Sits where a config would and resembles none. Counted,
+                    # because a population that is only skipped is one no
+                    # assertion can report as missing -- which is how this
+                    # file's own dict-literal blind spot survived a year.
+                    tally.unrecognised += 1
                 continue
             sites.append(Site(path, block.line + offset, backend, "unknown", block.keys))
     return sites, tally
 
 
-def _config_block_sites() -> tuple[list[Site], Tally]:
+def _config_block_sites() -> tuple[list[AnySite], Tally]:
     """Every documented database-config block, and what the sweep left unread.
 
     ``"unknown"`` is the flavor, stated rather than inferred. A block handed
@@ -639,7 +796,7 @@ def _config_block_sites() -> tuple[list[Site], Tally]:
     give no signal either way, so a lenient-share counter here would count
     the whole population and mean nothing by it.
     """
-    sites: list[Site] = []
+    sites: list[AnySite] = []
     total = Tally()
     for path in documentation_files():
         found, tally = _config_blocks(path)
@@ -647,11 +804,12 @@ def _config_block_sites() -> tuple[list[Site], Tally]:
         total.out_of_scope += tally.out_of_scope
         total.declined += tally.declined
         total.undecided += tally.undecided
+        total.unrecognised += tally.unrecognised
     return sites, total
 
 
 @cache
-def _scanned_blocks() -> tuple[list[Site], Tally]:
+def _scanned_blocks() -> tuple[list[AnySite], Tally]:
     """Scan once; every block test below reads the same result."""
     return _config_block_sites()
 
@@ -776,6 +934,43 @@ def test_the_block_sweep_reads_a_meaningful_corpus() -> None:
     assert read <= suffix, f"blocks read from unexpected files: {sorted(read - suffix)}"
 
 
+def test_the_unnamed_block_sweep_reads_a_meaningful_corpus() -> None:
+    """The population that used to leave without being counted.
+
+    Counted separately from the named blocks, for the reason
+    ``test_both_syntaxes_are_actually_read`` gives: a floor on the total is
+    satisfied by either half alone, and this half is the one that has
+    already been silent once. ``DB_CONTAINER``, the payload level, or
+    ``_recognisable`` each going wrong takes out this number and leaves the
+    named floor healthy.
+    """
+    sites, _ = _scanned_blocks()
+    unnamed = [site for site in sites if isinstance(site, UnnamedSite)]
+    assert len(unnamed) >= 30, f"only {len(unnamed)} blocks naming no backend were read"
+
+
+def test_the_share_resembling_no_config_stays_visible() -> None:
+    """A block skipped for not resembling a config is counted, not dropped.
+
+    ``_recognisable`` is the one judgement here that says "not mine", and a
+    judgement that only skips is one no assertion can watch. Both bounds are
+    asserted: a floor, because the honest answer is not zero -- a query
+    filter under ``case_db:`` really does sit where a config would -- and a
+    ceiling, because a ``_recognisable`` that started answering ``False``
+    everywhere would empty the sweep while every other test stayed green.
+    """
+    _, tally = _scanned_blocks()
+    assert tally.unrecognised >= 1, (
+        "no block was skipped for resembling no config; either the tree "
+        "changed or ``_recognisable`` stopped judging, which would mean the "
+        "sweep is reporting on blocks it cannot read"
+    )
+    assert tally.unrecognised <= 40, (
+        f"{tally.unrecognised} blocks sit where a config would and resemble "
+        "none, which is more than this corpus should contain"
+    )
+
+
 def test_both_syntaxes_are_actually_read() -> None:
     """A floor on the total cannot see one parser going silent.
 
@@ -802,13 +997,25 @@ def test_the_share_out_of_scope_stays_visible() -> None:
     name has its blocks skipped, which is right -- ``rate_limiters/api`` and
     ``memory/strategies`` both carry ``backend: memory`` and neither holds
     database keys -- but it is also how coverage would quietly erode if the
-    expression stopped matching. The share is small; assert that it is.
+    expression stopped matching.
+
+    Both directions are asserted, because the expression fails both ways.
+    One that matched nothing would skip every block, which the ceiling
+    catches. One that matched everything would skip none -- and a ceiling
+    reading "the share is small" is satisfied most perfectly by a counter at
+    zero, which is the shape this file has already been caught by once.
     """
     sites, tally = _scanned_blocks()
     assert tally.out_of_scope * 2 <= len(sites), (
         f"{tally.out_of_scope} blocks naming a real database backend were "
         f"skipped as belonging to another subsystem, against {len(sites)} "
         "read as database configs"
+    )
+    assert tally.out_of_scope >= 20, (
+        f"only {tally.out_of_scope} blocks were skipped for their context; "
+        "the subsystems that carry a backend key without holding database "
+        "config have not gone away, so the likelier reading is that "
+        "``DB_CONTEXT`` has started matching them"
     )
 
 
@@ -820,12 +1027,19 @@ def test_the_share_that_would_not_parse_stays_visible() -> None:
     (optional, default: 0.7)`` is prose in YAML clothing -- and two Python
     fences elide their dict with ``...``. All six are non-configs, so
     declining them is right; a sweep that started declining fifty would be
-    reporting green over the difference.
+    reporting green over the difference, and one that stopped declining
+    anything would be reporting green over a counter that had stopped
+    being reached.
     """
     sites, tally = _scanned_blocks()
     assert tally.declined <= 10, (
         f"{tally.declined} fences claiming to hold a database block could "
         f"not be parsed, against {len(sites)} blocks read"
+    )
+    assert tally.declined >= 1, (
+        "no fence failed to parse, which is either the six known non-configs "
+        "having been repaired -- in which case lower this floor -- or the "
+        "counter no longer being reached, which is what it is here to catch"
     )
 
 
@@ -980,8 +1194,180 @@ def test_a_bare_fragment_is_read_by_wrapping_it() -> None:
     assert [block.keys for block in blocks] == [{"backend", "pool_size"}]
 
 
+# --- The block that names no backend -------------------------------------
+
+
+def test_a_block_that_names_no_backend_is_still_read(
+    document: Callable[[str], tuple[list[AnySite], Tally]],
+) -> None:
+    """The population this file could not reach, and its cost.
+
+    A config block is checked by resolving its ``backend:`` to a config class
+    and asking that class. A block naming none had no class, so it left the
+    sweep unchecked -- and a document teaching ``pool_size`` under a bare
+    ``database:`` key was corrected by hand for exactly that reason, which is
+    the mechanism this file exists to make unnecessary.
+
+    A key **no** config class accepts is wrong whichever backend the block
+    turns out to be, so the backend does not have to be known to answer.
+    """
+    sites, _ = document(
+        """
+        ```yaml
+        databases:
+          primary:
+            host: localhost
+            username: app
+        ```
+        """
+    )
+    assert [site.rejected for site in sites] == [["username"]]
+
+
+def test_an_entry_name_is_not_read_as_a_config_key(
+    document: Callable[[str], tuple[list[AnySite], Tally]],
+) -> None:
+    """``databases:`` holds entries; its keys are names a reader chose.
+
+    Reading the container as a config reports every name a document invents
+    -- ``primary``, ``cache``, ``archive`` -- as a rejected key. Measured on
+    this corpus, a version that did produced 49 findings of which 34 were
+    entry names.
+    """
+    sites, _ = document(
+        """
+        ```yaml
+        databases:
+          primary:
+            host: localhost
+          cache:
+            host: elsewhere
+        ```
+        """
+    )
+    assert [site.rejected for site in sites] == [[], []]
+
+
+def test_a_subsection_is_judged_by_its_own_key_not_its_contents(
+    document: Callable[[str], tuple[list[AnySite], Tally]],
+) -> None:
+    """``pool:`` is the finding; ``min_size`` inside it is not a second one.
+
+    A nested mapping under a config belongs to that config's schema, so the
+    question is whether the *section* is accepted -- once. Descending into it
+    reports each interior key separately and buries the one fact that
+    matters, and the interior of a section that does not exist has no
+    accepted spelling to be measured against.
+    """
+    sites, _ = document(
+        """
+        ```yaml
+        database:
+          host: localhost
+          pool:
+            min_size: 5
+            max_size: 20
+        ```
+        """
+    )
+    assert [site.rejected for site in sites] == [["pool"]]
+
+
+def test_a_config_whose_every_key_is_a_subsection_is_still_read(
+    document: Callable[[str], tuple[list[AnySite], Tally]],
+) -> None:
+    """The block carrying the finding can have no accepted key of its own.
+
+    ``postgres:`` / ``pool:`` / ``min_size: 5`` names nothing any config
+    class accepts -- ``pool`` is the finding, and it is the block's only key.
+    Requiring an accepted key as the price of being read would drop exactly
+    the block being reported on, so a nested section counts as evidence that
+    this is a config in its own right.
+    """
+    sites, _ = document(
+        """
+        ```yaml
+        databases:
+          postgres:
+            pool:
+              min_size: 5
+        ```
+        """
+    )
+    assert [site.rejected for site in sites] == [["pool"]]
+
+
+def test_a_subsection_that_opens_a_region_is_read_as_its_own_config(
+    document: Callable[[str], tuple[list[AnySite], Tally]],
+) -> None:
+    """``conversation_storage:`` inside a config is a config, not a section.
+
+    The rule that a subsection belongs to its parent's schema is about keys
+    the parent owns. A key that opens a database region of its own is the
+    exception, and it has to be, or nesting one config inside another hides
+    the inner one exactly the way this file's earlier blind spots did.
+    """
+    sites, _ = document(
+        """
+        ```yaml
+        database:
+          host: localhost
+          conversation_storage:
+            host: elsewhere
+            username: app
+        ```
+        """
+    )
+    assert [site.rejected for site in sites] == [[], ["username"]]
+
+
+def test_a_region_name_used_as_a_field_is_still_a_finding(
+    document: Callable[[str], tuple[list[AnySite], Tally]],
+) -> None:
+    """A region opens on a *mapping*; the same word on a scalar is a key.
+
+    ``conversation_storage:`` holding a block names a nested config and is
+    not this config's to accept. ``conversation_storage: memory`` is a key
+    with a value, no config class accepts it, and excluding it by name alone
+    would lose the finding -- so the mapping is what earns the exemption,
+    not the spelling.
+    """
+    sites, _ = document(
+        """
+        ```yaml
+        database:
+          host: localhost
+          conversation_storage: memory
+        ```
+        """
+    )
+    assert [site.rejected for site in sites] == [["conversation_storage"]]
+
+
+def test_a_block_resembling_no_config_is_left_alone(
+    document: Callable[[str], tuple[list[AnySite], Tally]],
+) -> None:
+    r"""``\w*_db`` matches a query filter as readily as a database.
+
+    ``default_filters:`` / ``case_db:`` / ``status: published`` is a filter
+    on a store, not a configuration of one, and the context rule cannot tell
+    them apart by name. A block carrying neither a key some config class
+    accepts nor a subsection is not recognisable as a config, and a guard
+    that cries wolf gets deleted -- so it is left alone rather than reported.
+    """
+    sites, _ = document(
+        """
+        ```yaml
+        case_db:
+          status: published
+        ```
+        """
+    )
+    assert sites == []
+
+
 @pytest.fixture
-def document(tmp_path: Path) -> Callable[[str], tuple[list[Site], Tally]]:
+def document(tmp_path: Path) -> Callable[[str], tuple[list[AnySite], Tally]]:
     """Write a markdown fixture and read it back through the real sweep.
 
     Driven through ``_config_blocks`` rather than through the helper under
@@ -990,7 +1376,7 @@ def document(tmp_path: Path) -> Callable[[str], tuple[list[Site], Tally]]:
     stayed green when its one call site was deleted.
     """
 
-    def write(text: str) -> tuple[list[Site], Tally]:
+    def write(text: str) -> tuple[list[AnySite], Tally]:
         path = tmp_path / "doc.md"
         path.write_text(textwrap.dedent(text).strip("\n") + "\n", encoding="utf-8")
         return _config_blocks(path)
@@ -999,7 +1385,7 @@ def document(tmp_path: Path) -> Callable[[str], tuple[list[Site], Tally]]:
 
 
 def test_a_config_written_into_a_python_string_is_read(
-    document: Callable[[str], tuple[list[Site], Tally]],
+    document: Callable[[str], tuple[list[AnySite], Tally]],
 ) -> None:
     """A YAML file shown by assigning it to a name is still a YAML file.
 
@@ -1029,7 +1415,7 @@ def test_a_config_written_into_a_python_string_is_read(
 
 
 def test_a_fence_that_will_not_parse_is_counted(
-    document: Callable[[str], tuple[list[Site], Tally]],
+    document: Callable[[str], tuple[list[AnySite], Tally]],
 ) -> None:
     """The one place this sweep can go blind, so it is a number and not a gap.
 
@@ -1061,7 +1447,7 @@ def test_a_fence_that_will_not_parse_is_counted(
 
 
 def test_a_block_skipped_for_its_context_is_counted(
-    document: Callable[[str], tuple[list[Site], Tally]],
+    document: Callable[[str], tuple[list[AnySite], Tally]],
 ) -> None:
     """``DB_CONTEXT`` declining a block is a judgement, not a non-event.
 
@@ -1088,7 +1474,7 @@ def test_a_block_skipped_for_its_context_is_counted(
 
 
 def test_a_backend_naming_nothing_checkable_is_counted(
-    document: Callable[[str], tuple[list[Site], Tally]],
+    document: Callable[[str], tuple[list[AnySite], Tally]],
 ) -> None:
     """``backend: ${features.search_backend}`` resolves to no name at all.
 

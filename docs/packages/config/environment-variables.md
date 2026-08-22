@@ -139,7 +139,7 @@ database:
   port: ${DB_PORT:5432}
 
   # Bash-style with default
-  username: ${DB_USER:-postgres}
+  user: ${DB_USER:-postgres}
   password: ${DB_PASS:-}
 
   # Bash-style required-with-message — fails fast at load time
@@ -225,14 +225,14 @@ Access deeply nested configuration attributes:
 ```bash
 # config.yaml:
 # databases:
-#   - name: primary
-#     connection:
-#       pool:
-#         min_size: 5
-#         max_size: 20
+#   - name: search
+#     backend: elasticsearch
+#     settings:
+#       number_of_shards: 3
+#       refresh_interval: 1s
 
-DATAKNOBS_DATABASE__PRIMARY__CONNECTION__POOL__MIN_SIZE=10
-DATAKNOBS_DATABASE__PRIMARY__CONNECTION__POOL__MAX_SIZE=50
+DATAKNOBS_DATABASE__SEARCH__SETTINGS__NUMBER_OF_SHARDS=5
+DATAKNOBS_DATABASE__SEARCH__SETTINGS__REFRESH_INTERVAL=30s
 ```
 
 ## Lists and Arrays
@@ -451,7 +451,7 @@ Create an environment variable reference:
 ## Database Configuration
 - `DATAKNOBS_DATABASE__PRIMARY__HOST`: Database host (default: localhost)
 - `DATAKNOBS_DATABASE__PRIMARY__PORT`: Database port (default: 5432)
-- `DATAKNOBS_DATABASE__PRIMARY__USERNAME`: Database username (required)
+- `DATAKNOBS_DATABASE__PRIMARY__USER`: Database user (required)
 - `DATAKNOBS_DATABASE__PRIMARY__PASSWORD`: Database password (required)
 
 ## Cache Configuration

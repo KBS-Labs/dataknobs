@@ -345,16 +345,14 @@ class DatabaseBuilder:
         self.config["host"] = host
         return self
     
-    def with_credentials(self, username, password):
-        self.config["username"] = username
+    def with_credentials(self, user, password):
+        self.config["user"] = user
         self.config["password"] = password
         return self
     
     def with_pool(self, min_size=5, max_size=20):
-        self.config["pool"] = {
-            "min_size": min_size,
-            "max_size": max_size
-        }
+        self.config["min_pool_size"] = min_size
+        self.config["max_pool_size"] = max_size
         return self
     
     def build(self):
@@ -368,14 +366,16 @@ class DatabaseFactory(FactoryBase):
         if "host" in config:
             builder.with_host(config["host"])
         
-        if "username" in config:
+        if "user" in config:
             builder.with_credentials(
-                config["username"], 
+                config["user"], 
                 config.get("password")
             )
         
-        if "pool" in config:
-            builder.with_pool(**config["pool"])
+        builder.with_pool(
+            config.get("min_pool_size", 5),
+            config.get("max_pool_size", 20),
+        )
         
         return builder.build()
 ```
@@ -436,7 +436,7 @@ class ValidatingFactory(FactoryBase):
     
     def validate_config(self, config):
         """Validate configuration before construction."""
-        required = ["host", "port", "username"]
+        required = ["host", "port", "user"]
         missing = [k for k in required if k not in config]
         
         if missing:
@@ -461,9 +461,9 @@ class DatabaseConfig:
     """Database configuration schema."""
     host: str
     port: int = 5432
-    username: str = "postgres"
+    user: str = "postgres"
     password: Optional[str] = None
-    pool_size: int = 20
+    max_pool_size: int = 20
 
 class TypedDatabaseFactory(FactoryBase):
     def create(self, **config):
@@ -472,9 +472,9 @@ class TypedDatabaseFactory(FactoryBase):
         return Database(
             host=db_config.host,
             port=db_config.port,
-            username=db_config.username,
+            user=db_config.user,
             password=db_config.password,
-            pool_size=db_config.pool_size
+            max_pool_size=db_config.max_pool_size
         )
 ```
 
@@ -510,7 +510,7 @@ def test_database_factory():
     db = factory.create(
         host="localhost",
         port=5432,
-        username="test"
+        user="test"
     )
     assert db.host == "localhost"
     
@@ -592,16 +592,16 @@ class DocumentedFactory(FactoryBase):
     Configuration:
         host (str): Database host (required)
         port (int): Database port (default: 5432)
-        username (str): Username (required)
+        user (str): Username (required)
         password (str): Password (optional)
-        pool_size (int): Connection pool size (default: 20)
+        max_pool_size (int): Connection pool ceiling (default: 20)
     
     Example:
         factory = DocumentedFactory()
         db = factory.create(
             host="localhost",
             port=5432,
-            username="user"
+            user="postgres"
         )
     """
     
@@ -627,7 +627,7 @@ class AsyncPostgresFactory(FactoryBase):
         return await asyncpg.create_pool(
             host=config.get("host", "localhost"),
             port=config.get("port", 5432),
-            user=config.get("username", "postgres"),
+            user=config.get("user", "postgres"),
             password=config.get("password"),
             database=config.get("database", "postgres"),
             min_size=config.get("min_pool_size", 5),
@@ -670,7 +670,7 @@ databases:
     factory: "postgres"
     host: ${DB_HOST:localhost}
     port: ${DB_PORT:5432}
-    username: ${DB_USER:postgres}
+    user: ${DB_USER:postgres}
     password: ${DB_PASSWORD}
     database: myapp
     min_pool_size: 10

@@ -40,7 +40,7 @@ database:
   port: ${DB_PORT:5432}           # Use DB_PORT or default to 5432
   password: ${DB_PASSWORD}        # Required - no default
   ssl: ${USE_SSL:true}            # Converts to boolean
-  max_connections: ${MAX_CONN:100} # Converts to integer
+  max_pool_size: ${MAX_POOL:100}  # Converts to integer
 ```
 
 Features:

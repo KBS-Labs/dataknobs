@@ -39,7 +39,7 @@ databases:
     host: ${DB_HOST:localhost}
     port: ${DB_PORT:5432}
     database: ${DB_NAME:myapp}
-    username: ${DB_USER:postgres}
+    user: ${DB_USER:postgres}
     password: ${DB_PASSWORD}
     
 caches:

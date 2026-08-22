@@ -33,13 +33,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     that only some targets have can no longer be supplied speculatively.
 
   The discriminator and metadata keys the object-graph layer owns
-  (`backend`, `factory`, `name`, `type`) pass through under `"raise"`
-  without being declared, and are excluded from the error's accepted list —
-  none of them is a misspelling of a field, and offering `factory` as an
-  answer to a question about a connection field helps nobody. `name` is an
-  ordinary word, so tolerating it leaves a residual hole on the direct-call
-  path; the alternative would reject the documented resource-list shape
-  that writes `name:` beside `backend:`, which is the worse trade.
+  (`backend`, `class`, `factory`, `name`, `type`) pass through under
+  `"raise"` without being declared, and are excluded from the error's
+  accepted list — none of them is a misspelling of a field, and offering
+  `factory` as an answer to a question about a connection field helps
+  nobody. `class` and `factory` are alternatives rather than neighbours: the
+  object builder chooses between them in a single condition and pops
+  whichever it finds, so a config written either way reaches `from_dict` in
+  the same state. `name` is an ordinary word, so tolerating it leaves a
+  residual hole on the direct-call path; the alternative would reject the
+  documented resource-list shape that writes `name:` beside `backend:`,
+  which is the worse trade.
 
 - **A misdeclared class-level policy attribute is now refused at class
   definition.** `__init_subclass__` already enforced a floor on
