@@ -637,8 +637,9 @@ BLOCK = re.compile(r"\n\s*\n")
 def deprecated(symbol: object | None) -> bool:
     """Whether this symbol's OWN docstring says it is on its way out.
 
-    Two narrowings, and each is the difference between a finding and a correct
-    document reported as one.
+    Three narrowings, and each is the difference between a finding and a
+    correct document reported as one. The last two are the same narrowing
+    applied at two levels, which is why neither is safe without the other.
 
     **A module is never the symbol.** A module docstring carrying the marker is
     almost always deprecating a *member*: ``dataknobs_data.pooling.s3`` marks
@@ -646,17 +647,38 @@ def deprecated(symbol: object | None) -> bool:
     named four times, correctly, by the AWS session guide. Read the module as
     deprecated and those four sentences all become findings.
 
-    **Its own docstring, not an inherited one.** ``inspect.getdoc`` walks the
-    MRO, so the first documented subclass of a deprecated base would be
-    reported for inheriting a warning about its parent -- which is the shape a
-    *successor* most often has. No documented name is such a subclass today, so
-    the two spellings return the same set and this costs nothing, which makes
-    it the cheapest moment there will ever be to choose the right one.
+    **Its own docstring, not one inherited from a base.** ``inspect.getdoc``
+    walks the MRO, so the first documented subclass of a deprecated base would
+    be reported for inheriting a warning about its parent -- which is the shape
+    a *successor* most often has.
+
+    **Nor one inherited from its type.** Plain ``__doc__`` lookup guards a
+    class against its base and an instance against nothing: an object that
+    authored no docstring answers with its class's. That reaches most of what
+    the readers resolve. Forty-four documented names are neither class,
+    function nor module -- string constants, pytest markers,
+    ``PluginRegistry`` instances, ``Annotated`` aliases, the sentinels -- and
+    each of them answers with the docstring of ``str``, ``MarkDecorator``,
+    ``PluginRegistry`` or ``_AnnotatedAlias``. Mark one of those types and
+    every documented instance of it becomes a finding citing a warning about
+    its container.
+
+    Both inheritance narrowings return today's set exactly, because nothing in
+    the tree is a documented subclass of a deprecated base and no such type
+    carries the directive -- which makes now the cheapest moment there will
+    ever be to choose the right spelling, and is the only reason both are
+    written before either has a case to answer.
+
+    The cost is a blind spot, and it is stated rather than hidden: a symbol
+    with nowhere to put a docstring cannot carry the directive, so a
+    deprecation meant to be machine-read belongs on a class or a function.
     """
     if symbol is None or isinstance(symbol, ModuleType):
         return False
     doc = getattr(symbol, "__doc__", None)
-    return bool(doc and DEPRECATED.search(doc))
+    if doc is None or doc is getattr(type(symbol), "__doc__", None):
+        return False
+    return bool(DEPRECATED.search(doc))
 
 
 def deprecated_symbols(path: Path) -> dict[str, list[int]]:
@@ -709,6 +731,15 @@ def deprecation_findings_in(path: Path, label: str | None = None) -> list[str]:
     physical line would reject the natural way to write one -- and would push
     an author toward the unnatural way, or toward giving up and writing four
     separate notices for four names that share a fate.
+
+    That width has one known cost, and it is the reason the paragraph above is
+    an argument rather than an assumption. A notice names two things and warns
+    about one -- "X is deprecated, use Y" -- so it clears the successor on the
+    same terms as its subject. ``bot-manager.md`` names ``BotRegistry`` inside
+    the notice warning about ``BotManager``, which is what a good notice looks
+    like and also what would hide the day ``BotRegistry`` is deprecated in
+    turn. Telling the two apart needs the block's subject, which its text does
+    not carry; the limit is pinned by a test below rather than guessed at.
     """
     blocks = BLOCK.split(path.read_text(encoding="utf-8"))
     found = []
@@ -1306,9 +1337,9 @@ def test_the_deprecation_scan_reads_a_meaningful_corpus() -> None:
     pattern produces, or a ``deprecated`` predicate narrowed by one clause too
     many, and it is indistinguishable from success without this.
 
-    The floor counts documents *reached*, not findings, so it holds steady as
-    the findings are repaired -- a repaired document still names the symbol and
-    still carries the notice, which is the whole point of the repair.
+    The floor counts documents *reached*, not findings, so it holds steady
+    across the repair this check asks for -- a document that gains its notice
+    still names the symbol and is still counted.
 
     Six documents are reached, and the number is placed to fail if either
     reader feeding this stops working. The two are not interchangeable and
@@ -1318,14 +1349,28 @@ def test_the_deprecation_scan_reads_a_meaningful_corpus() -> None:
     import reader leaves four and losing the prose reader leaves three -- and
     five is the floor that fails on either, where four would have sat quietly
     through the first.
+
+    **One repair does move it, and it is the other one this check offers.**
+    The failure message beside it names two remedies -- carry a notice, or
+    rewrite the sample against the successor -- and the second removes the
+    document from this count, correctly. Only ``configurable-base.md`` is
+    unmovable, being the page *about* its symbol; the two bots guides are
+    reached through a surface already scheduled for a rewrite against the
+    registry, and taking that pass drops this to four. That is a floor to
+    re-derive, not a guard to doubt, which is why the message below leads with
+    the reading it cannot distinguish from a broken reader.
     """
     reached = [rel(path) for path in documentation_files() if deprecated_symbols(path)]
     assert len(reached) >= 5, (
         f"only {len(reached)} document(s) name a deprecated symbol at all "
-        f"({', '.join(reached)}); the deprecated symbols have not gone away, "
-        "so the likelier reading is that ``deprecated`` or one of the three "
-        "readers feeding it has stopped recognising them -- in which case this "
-        "guard is reporting green over a corpus it never read"
+        f"({', '.join(reached)}). Two readings, and they need telling apart "
+        "before either is acted on. If a document was rewritten against a "
+        "successor -- the second remedy this check offers -- the corpus has "
+        "legitimately shrunk and this number wants re-deriving against the "
+        "documents that remain. If none was, the deprecated symbols have not "
+        "gone away, so ``deprecated`` or one of the three readers feeding it "
+        "has stopped recognising them, and this guard is reporting green over "
+        "a corpus it never read"
     )
 
 
@@ -1356,6 +1401,42 @@ def test_a_notice_naming_the_symbol_is_what_clears_a_document(tmp_path: Path) ->
         "> are deprecated; use the successor.\n\n" + sample
     )
     assert not deprecation_findings_in(doc), "a notice is a paragraph, and it wraps"
+
+
+def test_a_notice_also_clears_the_successor_it_names(tmp_path: Path) -> None:
+    """The known limit of block proximity, pinned so it stays deliberate.
+
+    A notice names two things and warns about one: "X is deprecated, use Y".
+    The block holds both names and the word, so it clears Y on the same terms
+    as X -- and Y is not some contrived case, it is the successor, which is
+    precisely the name most likely to be deprecated next.
+
+    The tree already has the shape, written by the repairs this check
+    prompted. The notice in ``bot-manager.md`` warns about ``BotManager`` and
+    the three singleton helpers, and names ``BotRegistry`` and
+    ``InMemoryBotRegistry`` as what to use instead. Deprecate either successor
+    and that document goes on passing in silence.
+
+    Separating the two needs the block's *subject*, which the text does not
+    carry -- and a heuristic that guesses it from "use" or "instead" would be
+    the contents-sniffing this file rejects everywhere else. The alternative
+    is to read the successor out of the deprecating symbol's own directive,
+    which is a second prose parser and wants its own justification.
+
+    So it is recorded instead of guessed at, and this test is the record: it
+    asserts the loose behaviour, so a later tightening announces itself here
+    rather than somewhere a reader has to go looking.
+    """
+    doc = tmp_path / "sample.md"
+    doc.write_text(
+        "> **Deprecated.** `LegacyThing` is deprecated.\n"
+        "> Use `ConfigurableBase` instead.\n\n"
+        "```python\nfrom dataknobs_config import ConfigurableBase\n```\n"
+    )
+    assert not deprecation_findings_in(doc), (
+        "the limit has been tightened -- update this test and the docstring "
+        "of deprecation_findings_in, which records it as standing"
+    )
 
 
 def test_a_module_marker_is_not_read_as_a_marker_on_the_module(tmp_path: Path) -> None:
@@ -1391,6 +1472,62 @@ def test_an_inherited_marker_is_not_read_as_the_subclass_own() -> None:
     assert deprecated(ConfigurableBase)
     assert not deprecated(Successor)
     assert inspect.getdoc(Successor) == inspect.getdoc(ConfigurableBase)
+
+
+def test_a_type_marker_is_not_read_as_a_marker_on_its_instances() -> None:
+    """The same leak as the one above, one level further down.
+
+    ``inspect.getdoc`` is rejected there for walking the MRO. Plain attribute
+    lookup does the identical thing between an object and its class: an
+    instance that authored no docstring answers with its type's, and
+    ``__doc__`` offers no protection against it -- the protection it does
+    offer is between a class and its base.
+
+    The corpus is full of the shape and none of it is a class. Forty-four
+    documented names resolve to something that is neither class, function nor
+    module -- sixteen string constants, eight pytest markers, six
+    ``PluginRegistry`` instances, two ``Annotated`` aliases, the sentinels --
+    and every one answers with the docstring of ``str``, ``MarkDecorator``,
+    ``PluginRegistry`` or ``_AnnotatedAlias``. Mark any one of those types
+    tomorrow and six correct registry mentions become findings citing a
+    warning about their container.
+
+    No such type carries the directive today, so both spellings return the
+    same set on the tree and choosing costs nothing -- which is the same
+    reason, and the same moment, as the narrowing above.
+    """
+
+    class Marked:
+        """A container.
+
+        .. deprecated:: 1.0
+           Use the successor.
+        """
+
+    assert deprecated(Marked)
+    assert not deprecated(Marked()), "an instance did not author its type's warning"
+
+
+def test_a_symbol_that_authors_no_docstring_cannot_be_read_as_deprecated() -> None:
+    """The limit the narrowing above leaves behind, stated rather than found.
+
+    A constant, a sentinel or a ``typing`` alias has nowhere to put a
+    docstring, so it cannot carry the directive and this check cannot see it.
+    ``BotManagerDep`` is the live instance: it is the deprecated half of a
+    pair, says so in a ``#`` comment no runtime reads, and is indistinguishable
+    here from ``BotRegistryDep``, the successor it is paired against.
+
+    That is a property of Python rather than of this predicate -- reading the
+    comment means reading source, which is a different guard. What follows
+    from it is a rule for authors: a deprecation that has to be machine-read
+    belongs on a class or a function, which is where every one in the tree
+    is today.
+    """
+    from dataknobs_bots.api import BotManagerDep, BotRegistryDep
+
+    assert not deprecated(BotManagerDep)
+    assert not deprecated(BotRegistryDep)
+    assert BotManagerDep.__doc__ == BotRegistryDep.__doc__
 
 
 def test_historical_documents_are_excluded_and_say_so() -> None:
