@@ -105,6 +105,27 @@ A base is a claim only when the fence imports it -- at which point it is an
 ordinary import statement and the first reader already has it. So the
 definition adds no reach, and the heading, which is prose, has all of it.
 
+**A name that resolves can still be the wrong one to hand a reader.** Every
+reader above asks whether a documented name is *there*; a deprecated one is,
+which is what makes it invisible to all three and what makes the silence
+dangerous rather than untidy. ``ConfigurableBase`` says in its own docstring
+that it is superseded, and says why no runtime warning is raised: so the
+transition stays quiet across a multi-cycle migration. That is defensible for
+consumers who already inherit it, and it has a consequence nobody chose --
+documentation becomes the only channel through which a *new* consumer could
+learn, and the documentation was the channel recommending it. The bots family
+is the same shape and worse, because those four names do warn at runtime: two
+guides taught an API that greets the first paste with a ``DeprecationWarning``.
+Eleven such silences sat in five documents when this was written.
+
+So the fourth check asks a question about the symbol rather than about the
+text, and reuses all three readers to find one. It is scoped per DOCUMENT, not
+per site, because a page documenting a deprecated API names it constantly and
+is right to -- what separates it from a page teaching the same class in good
+faith is whether one paragraph says the word. That also reaches where the
+readers cannot: a document is pulled in by any one qualified mention, and the
+notice it then has to carry covers every bare prose mention beside it.
+
 Scope is every markdown document a reader can reach: the site tree, each
 package's ``docs/``, and the READMEs. Two carve-outs, both narrow and both
 stated in the code below rather than left to a path convention: a document
@@ -116,6 +137,7 @@ from __future__ import annotations
 
 import ast
 import importlib
+import inspect
 import re
 from pathlib import Path
 from types import ModuleType
@@ -396,24 +418,35 @@ def _why(module: str, exc: BaseException) -> str | None:
     return f"{module!r} raised {type(exc).__name__}: {exc}"
 
 
-def unresolved(module: str, attribute: str | None) -> str | None:
-    """Why this target does not resolve, or ``None`` if it does."""
+def _resolved(module: str, attribute: str | None) -> tuple[object | None, str | None]:
+    """What this target names, and why it names nothing.
+
+    The object is handed back beside the reason because a *second* question is
+    asked of these same targets further down -- not whether the name resolves
+    but whether what it resolves to is deprecated -- and the alternative was a
+    second walk that could disagree with this one about where the module ends.
+    """
     loaded, exc = _imported(module)
     if exc is not None:
-        return _why(module, exc)
+        return None, _why(module, exc)
     if attribute is None or attribute == "*":
-        return None
+        return loaded, None
     if hasattr(loaded, attribute):
-        return None
+        return getattr(loaded, attribute), None
     submodule = f"{module}.{attribute}"
-    _, exc = _imported(submodule)
+    found, exc = _imported(submodule)
     if exc is not None and _absent(submodule, exc):
-        return f"{module!r} exports no {attribute!r}"
-    return None  # importable at all is enough to call the name present
+        return None, f"{module!r} exports no {attribute!r}"
+    return found, None  # importable at all is enough to call the name present
 
 
-def unresolved_path(module_path: str) -> str | None:
-    """Why a bare dotted path names nothing, or ``None`` if it names something.
+def unresolved(module: str, attribute: str | None) -> str | None:
+    """Why this target does not resolve, or ``None`` if it does."""
+    return _resolved(module, attribute)[1]
+
+
+def _resolved_path(module_path: str) -> tuple[object | None, str | None]:
+    """What a bare dotted path names, and why it names nothing.
 
     ``unresolved`` is handed a module and an attribute because ``ast`` knows
     which is which. A path written in prose does not say, and the last dot is
@@ -434,13 +467,20 @@ def unresolved_path(module_path: str) -> str | None:
         if exc is not None:
             if _absent(head, exc):
                 continue  # not a module; try a shorter prefix
-            return _why(head, exc)  # present but broken, or an absent driver
+            # present but broken, or an absent driver
+            return None, _why(head, exc)
+        found: object = loaded
         for name in parts[cut:]:
-            if not hasattr(loaded, name):
-                return f"{head!r} has no {name!r}"
-            loaded = getattr(loaded, name)
-        return None
-    return f"nothing in {module_path!r} imports"
+            if not hasattr(found, name):
+                return None, f"{head!r} has no {name!r}"
+            found = getattr(found, name)
+        return found, None
+    return None, f"nothing in {module_path!r} imports"
+
+
+def unresolved_path(module_path: str) -> str | None:
+    """Why a bare dotted path names nothing, or ``None`` if it names something."""
+    return _resolved_path(module_path)[1]
 
 
 def findings() -> list[str]:
@@ -567,6 +607,128 @@ def path_findings_in(path: Path) -> list[str]:
         f"{path.name}:{number}  {text}\n      {why}"
         for number, text, module, attribute in loadable_targets(path)
         if (why := unresolved(module, attribute))
+    ]
+
+
+#: The marker a symbol carries to say it is on its way out.
+#:
+#: The directive, not the word. A docstring that merely *contains* "deprecated"
+#: is usually describing something else, and the corpus has the case ready-made:
+#: ``VersionStatus`` is a live enum whose docstring documents a member called
+#: ``DEPRECATED``. Swept for the word, it adds six sites across five documents
+#: that are entirely correct -- 21 sites where the directive finds 15.
+#: ``.. deprecated::`` is authored deliberately and read by Sphinx; it states
+#: what the prose only implies.
+DEPRECATED = re.compile(r"\.\.\s*deprecated::")
+
+#: Says the document knows the symbol it is naming is on its way out.
+#:
+#: Deliberately the bare stem in rendered prose rather than a marker of our own.
+#: The audience for this one is the *reader*, so a marker would be exactly
+#: wrong: invisible in the built page, and therefore satisfying the guard by
+#: withholding the sentence the guard exists to require. Any spelling a human
+#: would reach for -- "deprecated", "soft-deprecated", "deprecation" -- counts.
+NOTICE = re.compile(r"deprecat", re.IGNORECASE)
+
+#: Splits a document into the blocks a notice has to share with its subject.
+BLOCK = re.compile(r"\n\s*\n")
+
+
+def deprecated(symbol: object | None) -> bool:
+    """Whether this symbol's OWN docstring says it is on its way out.
+
+    Two narrowings, and each is the difference between a finding and a correct
+    document reported as one.
+
+    **A module is never the symbol.** A module docstring carrying the marker is
+    almost always deprecating a *member*: ``dataknobs_data.pooling.s3`` marks
+    the single alias it re-exports, while the module itself is current and is
+    named four times, correctly, by the AWS session guide. Read the module as
+    deprecated and those four sentences all become findings.
+
+    **Its own docstring, not an inherited one.** ``inspect.getdoc`` walks the
+    MRO, so the first documented subclass of a deprecated base would be
+    reported for inheriting a warning about its parent -- which is the shape a
+    *successor* most often has. No documented name is such a subclass today, so
+    the two spellings return the same set and this costs nothing, which makes
+    it the cheapest moment there will ever be to choose the right one.
+    """
+    if symbol is None or isinstance(symbol, ModuleType):
+        return False
+    doc = getattr(symbol, "__doc__", None)
+    return bool(doc and DEPRECATED.search(doc))
+
+
+def deprecated_symbols(path: Path) -> dict[str, list[int]]:
+    """Every deprecated symbol this document names, and the lines naming it.
+
+    All three readers feed it, because which position names the symbol is not a
+    property of the symbol: ``ConfigurableBase`` arrives as an ``import``, the
+    module the AWS guide discusses arrives as a path in prose, and a ``class:``
+    value could name either tomorrow. Asking all three costs one predicate.
+
+    Keyed by the *name* rather than the object, because the notice the check
+    below looks for is written by a human naming the symbol, and because one
+    document naming a symbol six times needs one notice, not six.
+    """
+    found: dict[str, list[int]] = {}
+
+    def record(name: str, symbol: object | None, number: int) -> None:
+        if deprecated(symbol):
+            found.setdefault(name, []).append(number)
+
+    for number, statement in import_statements(path):
+        for module, attribute in targets(statement):
+            record(attribute or module, _resolved(module, attribute)[0], number)
+    for number, _text, module, attribute in loadable_targets(path):
+        record(attribute or module, _resolved(module, attribute)[0], number)
+    for number, dotted in prose_targets(path):
+        record(dotted.rsplit(".", 1)[-1], _resolved_path(dotted)[0], number)
+    return found
+
+
+def deprecation_findings_in(path: Path, label: str | None = None) -> list[str]:
+    """Every deprecated symbol this document names without saying it is one.
+
+    The check is per document rather than per site, and that is the whole
+    design. A page documenting a deprecated API names it constantly and is
+    *correct* to -- ``configurable-base.md`` names ``ConfigurableBase`` six
+    times and is the page telling you not to use it. What separates that page
+    from one teaching the same class in good faith is not where the name sits
+    or how often, but whether one paragraph of it says the word.
+
+    That also gives the check reach the readers themselves do not have: a
+    document is pulled in by any *one* qualified mention, and then every bare
+    prose mention of the same name is covered by the notice the document now
+    has to carry. The bots guide names ``BotManager`` in a heading, a diagram
+    and thirty sentences none of the readers can see; it is caught by the
+    single ``import`` on line 39.
+
+    The unit of proximity is the block, not the line. A notice is a paragraph
+    and a paragraph wraps, so a rule wanting the name and the word on one
+    physical line would reject the natural way to write one -- and would push
+    an author toward the unnatural way, or toward giving up and writing four
+    separate notices for four names that share a fate.
+    """
+    blocks = BLOCK.split(path.read_text(encoding="utf-8"))
+    found = []
+    for name, numbers in sorted(deprecated_symbols(path).items()):
+        if any(name in block and NOTICE.search(block) for block in blocks):
+            continue
+        sites = ", ".join(str(number) for number in numbers)
+        found.append(
+            f"{label or path.name}  names {name} at line(s) {sites}\n"
+            f"      {name} is deprecated and nothing in this document says so"
+        )
+    return found
+
+
+def deprecation_findings() -> list[str]:
+    """``deprecation_findings_in`` over every document a reader can reach."""
+    return [
+        finding
+        for path in documentation_files()
+        for finding in deprecation_findings_in(path, rel(path))
     ]
 
 
@@ -1103,6 +1265,132 @@ def test_the_illustrative_marker_suppresses_only_the_block_it_precedes(
     )
     found = import_statements(doc)
     assert [statement for _, statement in found] == ["from dataknobs_data import AlsoNotReal"]
+
+
+def test_no_document_teaches_a_deprecated_symbol_in_silence() -> None:
+    """A name that resolves can still be the wrong one to hand a reader.
+
+    Everything above asks whether a documented name is *there*. A deprecated
+    one is -- that is what makes it invisible to all three readers, and what
+    makes the silence dangerous rather than merely untidy. ``ConfigurableBase``
+    is soft-deprecated in as many words in its own docstring, and the docstring
+    says why the transition raises no runtime warning: so it stays quiet across
+    a multi-cycle migration. That is a defensible choice for the consumers who
+    already inherit it, and it has one consequence nobody chose -- documentation
+    becomes the ONLY channel through which a new consumer could learn the base
+    is going away, and the documentation was the channel recommending it. This
+    check found eleven such silences in five documents on its first run.
+
+    The bots family is the same shape and worse. ``BotManager`` and the three
+    singleton helpers around it *do* warn at runtime, so two guides were
+    teaching an API that greets the reader with a ``DeprecationWarning`` the
+    moment their first paste runs.
+    """
+    silent = deprecation_findings()
+    assert not silent, (
+        f"{len(silent)} document(s) teach a deprecated symbol without saying "
+        "it is deprecated, so a reader who follows the sample adopts a name "
+        "that is scheduled for removal:\n  " + "\n  ".join(silent) + "\n\nEither "
+        "rewrite the sample against the successor the symbol's docstring "
+        "names, or -- if the document is about the deprecated symbol -- say so "
+        "in a line that names it, which is what the reader needed anyway."
+    )
+
+
+def test_the_deprecation_scan_reads_a_meaningful_corpus() -> None:
+    """Non-vacuity, and here it guards the one thing a green result depends on.
+
+    This check reports green in two situations that look identical from the
+    outside: every document that names a deprecated symbol carries its notice,
+    and no document names one at all. The second is what a broken ``DEPRECATED``
+    pattern produces, or a ``deprecated`` predicate narrowed by one clause too
+    many, and it is indistinguishable from success without this.
+
+    The floor counts documents *reached*, not findings, so it holds steady as
+    the findings are repaired -- a repaired document still names the symbol and
+    still carries the notice, which is the whole point of the repair.
+
+    Six documents are reached, and the number is placed to fail if either
+    reader feeding this stops working. The two are not interchangeable and
+    neither dominates: three documents name their symbol only in prose (the
+    notices, which spell ``dataknobs_config.ConfigurableBase`` in running
+    text), two name one only inside a fence, and one does both. So losing the
+    import reader leaves four and losing the prose reader leaves three -- and
+    five is the floor that fails on either, where four would have sat quietly
+    through the first.
+    """
+    reached = [rel(path) for path in documentation_files() if deprecated_symbols(path)]
+    assert len(reached) >= 5, (
+        f"only {len(reached)} document(s) name a deprecated symbol at all "
+        f"({', '.join(reached)}); the deprecated symbols have not gone away, "
+        "so the likelier reading is that ``deprecated`` or one of the three "
+        "readers feeding it has stopped recognising them -- in which case this "
+        "guard is reporting green over a corpus it never read"
+    )
+
+
+def test_a_notice_naming_the_symbol_is_what_clears_a_document(tmp_path: Path) -> None:
+    """The pass condition, and it is the sentence the reader needed anyway.
+
+    Both halves are load-bearing. A document that says "deprecated" about
+    something else has not warned anyone about this symbol, and a document that
+    names the symbol without the word has not warned anyone at all.
+    """
+    doc = tmp_path / "sample.md"
+    sample = "```python\nfrom dataknobs_config import ConfigurableBase\n```\n"
+
+    doc.write_text(sample)
+    assert deprecation_findings_in(doc)
+
+    doc.write_text("Some other API is deprecated.\n\n" + sample)
+    assert deprecation_findings_in(doc), "a notice must name the symbol it is about"
+
+    doc.write_text("`ConfigurableBase` is the old base.\n\n" + sample)
+    assert deprecation_findings_in(doc), "naming the symbol is not warning about it"
+
+    doc.write_text("`ConfigurableBase` is deprecated; use the successor.\n\n" + sample)
+    assert not deprecation_findings_in(doc)
+
+    doc.write_text(
+        "> `ConfigurableBase` and the rest of that generation\n"
+        "> are deprecated; use the successor.\n\n" + sample
+    )
+    assert not deprecation_findings_in(doc), "a notice is a paragraph, and it wraps"
+
+
+def test_a_module_marker_is_not_read_as_a_marker_on_the_module(tmp_path: Path) -> None:
+    """The false positive that decided ``deprecated`` skips modules.
+
+    ``dataknobs_data.pooling.s3`` carries ``.. deprecated::`` in its module
+    docstring, about one alias it re-exports. The module is current, holds the
+    genuinely S3-specific surface, and is named four times by the AWS session
+    guide in sentences that are all correct -- and read as deprecated it turns
+    that guide into four findings requiring a notice that would be false.
+    """
+    doc = tmp_path / "sample.md"
+    doc.write_text("The pool config lives in `dataknobs_data.pooling.s3`.\n")
+    assert not deprecation_findings_in(doc)
+
+
+def test_an_inherited_marker_is_not_read_as_the_subclass_own() -> None:
+    """``inspect.getdoc`` walks the MRO; ``__doc__`` is the symbol's own word.
+
+    A subclass of a deprecated base is not thereby deprecated -- it is the most
+    likely shape of a *successor* -- so resolving the docstring through the MRO
+    would report the replacement for carrying its predecessor's warning.
+    """
+    # Imported here rather than at module scope: every other name this file
+    # touches is resolved dynamically with its ImportError caught, and one
+    # package promoted to a collection-time dependency would take the whole
+    # guard down with it.
+    from dataknobs_config import ConfigurableBase
+
+    class Successor(ConfigurableBase):
+        pass
+
+    assert deprecated(ConfigurableBase)
+    assert not deprecated(Successor)
+    assert inspect.getdoc(Successor) == inspect.getdoc(ConfigurableBase)
 
 
 def test_historical_documents_are_excluded_and_say_so() -> None:

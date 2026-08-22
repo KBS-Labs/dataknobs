@@ -2,9 +2,13 @@
 
 from .dependencies import (
     BotManagerDep,
+    BotRegistryDep,
     get_bot_manager,
+    get_bot_registry,
     init_bot_manager,
+    init_bot_registry,
     reset_bot_manager,
+    reset_bot_registry,
 )
 from .exceptions import (
     DEFAULT_ERROR_POLICY,
@@ -27,6 +31,11 @@ from .exceptions import (
 
 __all__ = [
     # Dependencies
+    "get_bot_registry",
+    "init_bot_registry",
+    "reset_bot_registry",
+    "BotRegistryDep",
+    # Dependencies (deprecated -- the four above replace these)
     "get_bot_manager",
     "init_bot_manager",
     "reset_bot_manager",

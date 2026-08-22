@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Documented
 
+- **The multi-tenancy guides now say that the API they document is
+  deprecated.** `BotManager` and the `dataknobs_bots.api` singleton helpers
+  around it warn at runtime, so a sample pasted from either guide raised a
+  `DeprecationWarning` on its first call — and neither page mentioned it. Both
+  now open with the notice and show the registry imports that replace them.
+  The guides still document the manager surface, because the registry API is
+  not a rename of it: it registers and looks up bots rather than
+  getting-or-creating them, and it owns an initialize/close lifecycle the
+  manager did not have.
+
 - **Grounded retrieval isolates sources from one another**, and the guide
   now says so: a source that raises is logged with its cause and dropped
   for that turn while every other source still contributes, and a source
@@ -21,6 +31,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a broken index.
 
 ### Fixed
+
+- **The successors named by a deprecation are now importable from the same
+  place as what they replace.** `dataknobs_bots.api` exported
+  `get_bot_manager`, `init_bot_manager`, `reset_bot_manager` and
+  `BotManagerDep` — each of whose docstring says to use the registry spelling
+  instead — while exporting none of the four registry names, all of which were
+  already defined in the same module. A consumer who read the
+  `DeprecationWarning`, changed the name and left the import path alone got an
+  `ImportError`, so the only working code was the deprecated code. The package
+  root had the same gap: `BotManager` points at `BotRegistry` or
+  `InMemoryBotRegistry`, and only the first of those was exported.
 
 - **A memory bank no longer sends a table name to a backend that has no
   table.** `_create_bank_db` set `table` to the bank name unconditionally.

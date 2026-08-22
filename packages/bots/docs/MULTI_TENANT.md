@@ -2,6 +2,29 @@
 
 Guide to deploying and managing multiple bot instances with BotManager.
 
+> **Deprecated.** `BotManager` is deprecated, together with the
+> `dataknobs_bots.api` singleton helpers `init_bot_manager`,
+> `get_bot_manager` and `reset_bot_manager`. Unlike most deprecations in
+> this repository these warn at runtime, so a sample pasted from this page
+> raises a `DeprecationWarning` on its first call. Use `BotRegistry` (or
+> `InMemoryBotRegistry`) and the registry helpers beside them:
+
+```python
+from dataknobs_bots import BotRegistry, InMemoryBotRegistry
+from dataknobs_bots.api import (
+    BotRegistryDep,
+    get_bot_registry,
+    init_bot_registry,
+    reset_bot_registry,
+)
+```
+
+> The registry API is not a rename of the manager API -- it registers and
+> looks up bots rather than getting-or-creating them, and it owns an
+> initialize/close lifecycle the manager did not have. So this page still
+> documents the manager surface, accurately, until it is rewritten against
+> the registry rather than renamed in place.
+
 ## Table of Contents
 
 - [Overview](#overview)
