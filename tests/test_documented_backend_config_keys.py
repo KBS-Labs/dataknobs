@@ -997,13 +997,25 @@ def test_the_share_out_of_scope_stays_visible() -> None:
     name has its blocks skipped, which is right -- ``rate_limiters/api`` and
     ``memory/strategies`` both carry ``backend: memory`` and neither holds
     database keys -- but it is also how coverage would quietly erode if the
-    expression stopped matching. The share is small; assert that it is.
+    expression stopped matching.
+
+    Both directions are asserted, because the expression fails both ways.
+    One that matched nothing would skip every block, which the ceiling
+    catches. One that matched everything would skip none -- and a ceiling
+    reading "the share is small" is satisfied most perfectly by a counter at
+    zero, which is the shape this file has already been caught by once.
     """
     sites, tally = _scanned_blocks()
     assert tally.out_of_scope * 2 <= len(sites), (
         f"{tally.out_of_scope} blocks naming a real database backend were "
         f"skipped as belonging to another subsystem, against {len(sites)} "
         "read as database configs"
+    )
+    assert tally.out_of_scope >= 20, (
+        f"only {tally.out_of_scope} blocks were skipped for their context; "
+        "the subsystems that carry a backend key without holding database "
+        "config have not gone away, so the likelier reading is that "
+        "``DB_CONTEXT`` has started matching them"
     )
 
 
@@ -1015,12 +1027,19 @@ def test_the_share_that_would_not_parse_stays_visible() -> None:
     (optional, default: 0.7)`` is prose in YAML clothing -- and two Python
     fences elide their dict with ``...``. All six are non-configs, so
     declining them is right; a sweep that started declining fifty would be
-    reporting green over the difference.
+    reporting green over the difference, and one that stopped declining
+    anything would be reporting green over a counter that had stopped
+    being reached.
     """
     sites, tally = _scanned_blocks()
     assert tally.declined <= 10, (
         f"{tally.declined} fences claiming to hold a database block could "
         f"not be parsed, against {len(sites)} blocks read"
+    )
+    assert tally.declined >= 1, (
+        "no fence failed to parse, which is either the six known non-configs "
+        "having been repaired -- in which case lower this floor -- or the "
+        "counter no longer being reached, which is what it is here to catch"
     )
 
 
