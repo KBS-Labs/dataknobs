@@ -22,6 +22,7 @@ ratchet at all: that re-running the baseline command cannot raise a ceiling.
 from __future__ import annotations
 
 import json
+import os
 import shlex
 import subprocess
 import sys
@@ -1786,8 +1787,17 @@ def test_the_audit_accounts_for_every_decline() -> None:
 # can only be pointed at its own history is tested against none of them.
 
 
-def _git(repo: Path, *args: str) -> subprocess.CompletedProcess[str]:
-    """Run git in ``repo`` with identity supplied, so it needs no global config."""
+def _git(repo: Path, *args: str, when: str | None = None) -> subprocess.CompletedProcess[str]:
+    """Run git in ``repo`` with identity supplied, so it needs no global config.
+
+    ``when`` stamps the commit at a chosen instant. Only the window tests need
+    it, and they need it because a boundary written as a calendar day is only
+    testable against commits whose time of day is known.
+    """
+    stamped = dict(os.environ)
+    if when is not None:
+        stamped["GIT_AUTHOR_DATE"] = when
+        stamped["GIT_COMMITTER_DATE"] = when
     return subprocess.run(
         [
             "git",
@@ -1803,6 +1813,7 @@ def _git(repo: Path, *args: str) -> subprocess.CompletedProcess[str]:
         capture_output=True,
         text=True,
         check=True,
+        env=stamped,
     )
 
 
@@ -1825,11 +1836,30 @@ def _declaration(ceilings: dict[str, int]) -> str:
     )
 
 
-def _commit(repo: Path, ceilings: dict[str, int], subject: str, leg: str | None = None) -> None:
+def _commit(
+    repo: Path,
+    ceilings: dict[str, int],
+    subject: str,
+    leg: str | None = None,
+    when: str | None = None,
+) -> None:
     """Write the declaration at these ceilings and commit it."""
     written = repo / ".dataknobs" / "quality-contract.json"
     written.parent.mkdir(parents=True, exist_ok=True)
     written.write_text(_declaration(ceilings), encoding="utf-8")
+    message = subject if leg is None else f"{subject}\n\nQuality-Leg: {leg}\n"
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-m", message, when=when)
+
+
+def _aside(repo: Path, subject: str, leg: str | None = None) -> None:
+    """Commit something that is not the declaration.
+
+    Which is the only way to build the one case a walk of the declaration's
+    history structurally cannot see: a commit that carries a leg trailer and
+    moves no ceiling.
+    """
+    (repo / subject.replace(" ", "-")).write_text(subject, encoding="utf-8")
     message = subject if leg is None else f"{subject}\n\nQuality-Leg: {leg}\n"
     _git(repo, "add", "-A")
     _git(repo, "commit", "-m", message)
@@ -1842,8 +1872,8 @@ def _repo(tmp_path: Path) -> Path:
     return repo
 
 
-def _ledger(repo: Path) -> dict[str, Any]:
-    recorded: dict[str, Any] = contract_module.ledger("mypy", "HEAD", repo)
+def _ledger(repo: Path, since: str | None = None) -> dict[str, Any]:
+    recorded: dict[str, Any] = contract_module.ledger("mypy", "HEAD", since, repo)
     return recorded
 
 
@@ -1917,8 +1947,8 @@ def test_a_leg_trailer_moves_its_merge_out_of_the_convention_population(tmp_path
     recorded = _ledger(repo)
 
     assert recorded["cleared"] == 70
-    assert recorded["populations"]["leg"] == {"steps": 1, "cleared": 60}
-    assert recorded["populations"]["convention"] == {"steps": 1, "cleared": 10}
+    assert recorded["populations"]["leg"] == {"merges": 1, "paying": 1, "cleared": 60}
+    assert recorded["populations"]["convention"] == {"merges": 1, "paying": 1, "cleared": 10}
     assert not recorded["faults"]
 
 
@@ -1967,10 +1997,11 @@ def test_a_correctly_spelled_trailer_raises_no_fault(tmp_path: Path) -> None:
 def test_two_clearings_in_one_pull_request_are_one_paying_merge(tmp_path: Path) -> None:
     """The unit is a merge, and reading per commit inflates the paying rate.
 
-    Against this repository's real history the two readings give 11 paying
-    events out of 67 and 21 out of 66 — and the fraction paying is the figure
-    the whole cost argument rests on. Counting per commit double-counts exactly
-    the population whose rate the number describes.
+    Measured against this repository's real history on the day the command was
+    written, the two readings gave 11 paying events out of 67 and 21 out of 66 —
+    and the fraction paying is the figure the whole cost argument rests on.
+    Counting per commit double-counts exactly the population whose rate the
+    number describes.
     """
     repo = _repo(tmp_path)
     _commit(repo, {"packages/data/src": 100}, "declare")
@@ -1986,6 +2017,146 @@ def test_two_clearings_in_one_pull_request_are_one_paying_merge(tmp_path: Path) 
     assert recorded["cleared"] == 30, "both commits' clearing is counted"
     assert recorded["paying"] == 1, "but they arrived in one pull request"
     assert len(recorded["steps"]) == 1
+
+
+def test_a_leg_that_cleared_nothing_still_leaves_the_convention_population(
+    tmp_path: Path,
+) -> None:
+    """The case a walk of the declaration's history structurally cannot see.
+
+    The convention's cost is a rate over the merges it applies to, so its
+    denominator is every merge that was *not* deliberate cleanup. A leg that
+    moved no ceiling never touches the declaration and so never appears as a
+    step — and counting it as ordinary work would charge the convention for a
+    merge whose purpose was cleanup, in the direction that flatters nothing and
+    misleads anyway.
+
+    ``merges`` and ``paying`` are therefore separate: the first is the
+    population, the second is the part of it that moved a ceiling.
+    """
+    repo = _repo(tmp_path)
+    _commit(repo, {"packages/data/src": 100}, "declare")
+    _commit(repo, {"packages/data/src": 90}, "ordinary work")
+
+    _git(repo, "checkout", "-b", "drain")
+    _aside(repo, "attempt a drain", leg="packages/data/src")
+    _git(repo, "checkout", "main")
+    _git(repo, "merge", "--no-ff", "drain", "-m", "Merge pull request #1 from drain")
+
+    recorded = _ledger(repo)
+
+    assert recorded["window"] == 2, "the ordinary commit and the merge"
+    assert recorded["populations"]["leg"] == {"merges": 1, "paying": 0, "cleared": 0}
+    assert recorded["populations"]["convention"] == {"merges": 1, "paying": 1, "cleared": 10}
+
+
+def test_a_window_reads_its_opening_balance_from_the_boundary_it_was_given(
+    tmp_path: Path,
+) -> None:
+    """``--since`` narrows the window, and the balance it opens at is exact.
+
+    Not interpolated and not carried forward from a wider reading: the
+    declaration does not move between two moving steps, so its state *at* the
+    boundary commit is the opening balance by construction. Everything before
+    the boundary — including a drain larger than the one inside the window —
+    has to leave no trace.
+    """
+    repo = _repo(tmp_path)
+    _commit(repo, {"packages/data/src": 100}, "declare")
+    _commit(repo, {"packages/data/src": 60}, "clear forty")
+    boundary = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    _commit(repo, {"packages/data/src": 55}, "clear five")
+    _commit(repo, {"packages/data/src": 50}, "clear five more")
+
+    recorded = _ledger(repo, since=boundary)
+
+    assert recorded["opened"] is not None
+    assert recorded["opened"]["total"] == 60, "the balance as it stood at the boundary"
+    assert recorded["standing"] == 50
+    assert recorded["cleared"] == 10, "the forty cleared before the window is not in it"
+    assert recorded["window"] == 2
+    assert recorded["clamped"] is False
+
+
+def test_a_boundary_older_than_the_declaration_opens_at_its_first_appearance(
+    tmp_path: Path,
+) -> None:
+    """A window wider than the history is clamped, and says which it did.
+
+    Before the declaration exists there is no state for a later revision to be
+    compared against, and reading its arrival as a cell set springing out of
+    zero would report the largest regression in the history. Silently narrowing
+    the window would be no better, so the report carries the fact.
+    """
+    repo = _repo(tmp_path)
+    _aside(repo, "before any declaration")
+    older = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    _commit(repo, {"packages/data/src": 100}, "declare")
+    _commit(repo, {"packages/data/src": 70}, "clear thirty")
+
+    recorded = _ledger(repo, since=older)
+
+    assert recorded["clamped"] is True
+    assert recorded["opened"] is not None
+    assert recorded["opened"]["total"] == 100
+    assert recorded["cleared"] == 30
+
+
+def test_a_boundary_day_keeps_the_merges_made_on_that_day(tmp_path: Path) -> None:
+    """The reason a day is resolved here instead of handed to git's ``--since``.
+
+    git fills the fields an approxidate leaves out from **now**, so a bare
+    ``--since=2026-08-22`` means *that day at the current time of day*. Measured
+    against this repository at 17:20 on the day in question, it reported 0 of
+    the 4 merges made that day — a window that silently shrinks by the hour it
+    is read at, reporting a plausible number either way.
+
+    So the day is pinned to midnight before git sees it, and the boundary is a
+    commit from then on. A window opening on a day contains every merge made on
+    that day, whatever time the reading happens to run.
+    """
+    repo = _repo(tmp_path)
+    _commit(repo, {"packages/data/src": 100}, "declare", when="2026-08-20T12:00:00-06:00")
+    _commit(repo, {"packages/data/src": 95}, "the evening before", when="2026-08-21T22:00:00-06:00")
+    eve = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    _commit(repo, {"packages/data/src": 90}, "first thing", when="2026-08-22T00:00:01-06:00")
+    _commit(repo, {"packages/data/src": 80}, "last thing", when="2026-08-22T23:59:59-06:00")
+
+    assert contract_module._opens_after("2026-08-22", "HEAD", repo) == eve
+
+    recorded = _ledger(repo, since="2026-08-22")
+
+    assert recorded["window"] == 2, "both of that day's commits are inside the window"
+    assert recorded["opened"] is not None
+    assert recorded["opened"]["total"] == 95, "the balance as the day opened"
+    assert recorded["cleared"] == 15
+
+
+def test_a_boundary_git_resolves_against_the_clock_is_refused(tmp_path: Path) -> None:
+    """The third form, and why it is not accepted rather than merely discouraged.
+
+    ``4 weeks ago`` names a different window every time it is run, which is the
+    one property a fixed-length reading cannot tolerate. Passing it through
+    would answer — plausibly, and differently each time. Both accepted forms are
+    absolute, and a typo in either fails here instead of moving the window.
+
+    ``HEAD@{4.weeks.ago}`` is refused with them, and it is the interesting case:
+    git resolves it, so it would have slipped through as an ordinary revision.
+    It resolves against *this machine's* reflog, so the same window read
+    elsewhere is a different window — and it is the form somebody redirected
+    away from a relative date reaches for next.
+    """
+    repo = _repo(tmp_path)
+    _commit(repo, {"packages/data/src": 100}, "declare")
+
+    with pytest.raises(ValueError, match="against the clock"):
+        _ledger(repo, since="4 weeks ago")
+
+    with pytest.raises(ValueError, match="neither a YYYY-MM-DD day nor a revision"):
+        _ledger(repo, since="packages/data/src")
+
+    with pytest.raises(ValueError, match="reflog expression"):
+        _ledger(repo, since="HEAD@{4.weeks.ago}")
 
 
 def test_the_ledger_reproduces_this_repository_s_own_drain() -> None:

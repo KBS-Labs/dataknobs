@@ -686,6 +686,10 @@ records:
 ```bash
 uv run python bin/quality-contract.py ledger --tool mypy
 uv run python bin/quality-contract.py ledger --tool ruff --json
+
+# Only what happened after a boundary — a revision, or a YYYY-MM-DD day
+uv run python bin/quality-contract.py ledger --tool mypy --since <sha>
+uv run python bin/quality-contract.py ledger --tool mypy --since 2026-08-22
 ```
 
 ```
@@ -694,9 +698,9 @@ mypy ledger — N at <sha> (<date>) to N now, over N merge(s)
 cleared N over N of N merges (N% paying, N% paying nothing), mean N per merge
 raised 0  — no cell has ever ended higher than it started
 
-by population
-  leg               N over N merge(s)
-  convention        N over N merge(s)
+by population — the convention is the second row, and only the second row
+  leg               N over N of N merge(s)
+  convention        N over N of N merge(s), mean N per merge, N% paying nothing
 ```
 
 Every count is written `N` for the same reason the charge sample above is: each
@@ -709,13 +713,14 @@ No new artifact backs this. The contract is committed, so `git log` over it
 already *is* the time series — and a per-run file would be a snapshot where the
 question is a series, conflicting on every run for the trouble.
 
-Three properties are worth knowing before quoting a number out of it.
+Five properties are worth knowing before quoting a number out of it.
 
-**The unit is a merge, not a commit.** Read per commit this repository shows 21
-paying events out of 66; read per first-parent step it shows 11 out of 67,
-because a pull request that moves a ceiling twice is one pull request. Since the
-figure being reported is a *rate over pull requests*, counting per commit
-double-counts exactly the population it describes.
+**The unit is a merge, not a commit.** Measured over this repository's history on
+the day the command was written: 21 paying events out of 66 read per commit,
+against 11 out of 67 read per first-parent step, because a pull request that
+moves a ceiling twice is one pull request. Since the figure being reported is a
+*rate over pull requests*, counting per commit double-counts exactly the
+population it describes.
 
 **Ceilings are compared per cell, never by sum.** Cells get added, removed, and
 split. When a glob cell covering the per-package test trees was replaced by one
@@ -728,6 +733,23 @@ its own section and never counted as progress.
 cell gaining 40 and a cell losing 40 report as a quiet zero, and *no cell ends
 higher than it started* is a property this is meant to be able to answer.
 
+**Each population carries its own rate.** A drain achieved entirely by scheduled
+cleanup would satisfy a threshold read off the total line while falsifying
+everything that total was quoted to show, so the mean and the idle fraction are
+printed per population rather than left to be divided out. Note the two
+denominators are different: `merges` is the population, `paying` is the part of
+it that moved a ceiling.
+
+**A window boundary is absolute, or refused.** `--since` takes a revision or a
+`YYYY-MM-DD` day, and nothing else. `4 weeks ago` names a different window every
+time it runs; `HEAD@{4.weeks.ago}` resolves against *this machine's* reflog, so
+the same window read elsewhere is a different window. The day form is pinned to
+midnight here rather than handed to git, because git fills the fields an
+approxidate leaves out from *now*: measured against this repository at 17:20, a
+bare `--since=2026-08-22` reported **0** of the 4 merges made that day. A
+boundary older than the declaration opens at its first appearance instead, and
+the report says that it did.
+
 `ledger` reads `Quality-Leg:` trailers over the commits each merge brought in —
 not off the merge commit, which carries the branch's subject and none of its
 trailers — to split deliberate cleanup from incidental. **Presence is the
@@ -735,6 +757,10 @@ discriminator**, so a misspelled value still counts as a leg; what it loses is
 the record of *which* cell the work went to, which is why a value naming no
 declared cell is reported as a fault. The command still exits 0: the commit is
 already merged, so there is nothing for a failing status to block.
+
+A leg that moved no ceiling never appears among the steps, since it never
+touched the declaration — but it is still not ordinary work, so it is counted
+in the leg population's `merges` and left out of the convention's denominator.
 
 ### Reading a backlog: `census`
 
