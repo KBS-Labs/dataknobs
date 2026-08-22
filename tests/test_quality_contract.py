@@ -695,6 +695,143 @@ def test_the_advice_for_a_cleared_cell_is_the_command_that_clears_it(tmp_path: P
     )
 
 
+def test_a_charge_is_a_term_of_the_sum_the_ceiling_is_compared_against() -> None:
+    """The per-file charge and the whole-cell verdict cannot disagree.
+
+    ``charge`` exists because nothing else answers *"what does this file owe?"*
+    — ``census`` decomposes a cell by rule, ``check --show-findings`` echoes a
+    whole cell, and ``bin/validate.sh`` handed one filename measures the whole
+    cell that file is in. The tempting implementation is to point the tool at
+    the named file, and it is wrong in a way that would not show: mypy follows
+    imports, so a finding's attribution depends on what else was in the pass,
+    and a per-file measurement would drift from the cell total that the ceiling
+    is actually compared against.
+
+    So the cell is measured whole and only the display is filtered, and this is
+    what pins that: every file's charge is a term of the cell's measured total,
+    and the cell's total is reported beside it rather than replaced by it.
+
+    Over the purpose-built cell, whose two files are what make "sums to" a
+    claim rather than an identity.
+    """
+    contract = quality_fixture_contract()
+    dense = QUALITY_FIXTURE_CELLS[0]
+
+    owed = contract_module.charge(contract, "ruff", [dense])
+    verdict = contract_module.check(contract, ["ruff"], only={dense})
+    measured = verdict["cells"][f"ruff/{dense}"]["measured"]
+    entry = owed["paths"][0]
+
+    assert entry["total"] == measured, (
+        f"charging {dense} reported {entry['total']} while check measures "
+        f"{measured} over the same cell. A per-file answer that does not sum to "
+        "the number the ceiling is compared against is a second measurement, "
+        "and the convention it exists to serve would be denominated in it."
+    )
+    assert sum(held["count"] for held in entry["files"]) == entry["total"], (
+        f"the per-file breakdown {entry['files']} does not sum to the total "
+        f"{entry['total']} it is a breakdown of."
+    )
+    assert len(entry["files"]) > 1, (
+        f"the fixture's dense half charged {len(entry['files'])} file(s), so "
+        "this cannot tell a filtered display from an unfiltered one. Either the "
+        "fixture was reduced to one file, or the filter is not filtering."
+    )
+
+    one = entry["files"][0]["file"]
+    single = contract_module.charge(contract, "ruff", [one])["paths"][0]
+    assert single["total"] == entry["files"][0]["count"], (
+        f"charging {one} alone reported {single['total']}, but as part of its "
+        f"cell it holds {entry['files'][0]['count']}. Naming one file must "
+        "narrow the display, never the measurement."
+    )
+    assert single["cell_total"] == measured, (
+        f"charging one file reported its cell as measuring {single['cell_total']} "
+        f"rather than {measured}. The cell is still measured whole; a caller who "
+        "cannot see that will read a file's charge as its cell's."
+    )
+
+
+def test_a_charge_reaches_the_same_answer_through_the_command_line(tmp_path: Path) -> None:
+    """The wiring is asserted separately from the function, because it has failed there.
+
+    ``update-baseline --cell`` validated the cell it was given and then called a
+    function it did not pass it to, so the narrowest command performed the
+    widest edit available — a defect entirely inside ``main``, with the function
+    beneath it correct all along. Every option this command declares is one more
+    place for that, and a caller of ``charge()`` exercises none of them.
+    """
+    declaration = write_quality_fixture_contract(tmp_path)
+    dense = QUALITY_FIXTURE_CELLS[0]
+    expected = contract_module.charge(quality_fixture_contract(), "ruff", [dense])
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(TOOL),
+            "charge",
+            "--tool",
+            "ruff",
+            dense,
+            "--contract",
+            str(declaration),
+            "--json",
+        ],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, (
+        f"charge exited {result.returncode} over a cell with findings in it. It "
+        "reports what is owed; the ceiling is what judges, and a command run "
+        f"before the work must not look like the failure it precedes: {result.stderr}"
+    )
+    through_cli = json.loads(result.stdout)
+    assert through_cli["total"] == expected["total"], (
+        f"the command line reported {through_cli['total']} where the function "
+        f"reports {expected['total']} over the same cell and declaration."
+    )
+    assert [entry["path"] for entry in through_cli["paths"]] == [dense], (
+        f"the command line charged {[e['path'] for e in through_cli['paths']]} "
+        f"rather than the one path it was given."
+    )
+
+
+@pytest.mark.parametrize(
+    ("tool", "path", "because"),
+    [
+        ("ruff", "README.md", "falls in no cell, so it owes nothing to any ceiling"),
+        ("mypy", "packages/bots/tests", "is in a tier the type checker is not pointed at"),
+        ("ruff", f"{QUALITY_FIXTURE}/dense/nosuchfile.py", "names no tracked file"),
+    ],
+)
+def test_a_charge_refuses_every_path_it_would_have_to_answer_with_a_bare_zero(
+    tool: str, path: str, because: str
+) -> None:
+    """Three ways of naming a path, three different lies the same zero would tell.
+
+    This command's whole value is that ``0`` means *paid*. Each of these would
+    render as ``0`` and mean something else: a path outside every cell owes
+    nothing to any ceiling and never will; a path in an unread tier was not
+    measured at all, so its zero is a silence; and a mistyped path is the one a
+    developer is most likely to produce, at the exact moment they are asking
+    whether they are finished.
+
+    The third is the one that decides whether the other two matter. A typo
+    answered with "nothing outstanding" is a convention that reports itself
+    satisfied by a misspelling — and unlike a wrong verdict, nothing downstream
+    ever disagrees with it.
+    """
+    contract = quality_fixture_contract() if tool == "ruff" else _contract()
+    with pytest.raises(SystemExit) as refused:
+        contract_module.charge(contract, tool, [path])
+    assert path in str(refused.value), (
+        f"a charge for a path that {because} was refused without naming it: {refused.value}"
+    )
+
+
 def _with_cell(tool: str, **overrides: Any) -> dict[str, Any]:
     """The real contract with one extra cell, for exercising a single fault.
 

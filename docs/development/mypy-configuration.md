@@ -47,6 +47,9 @@ bin/quality-contract.py check --tool mypy
 
 # After clearing findings, lower the ceilings to match
 bin/quality-contract.py update-baseline --tool mypy --cell packages/data/src
+
+# What one file or directory owes its cell's ceiling, with the messages
+bin/quality-contract.py charge --tool mypy packages/data/src/dataknobs_data/query.py
 ```
 
 `update-baseline` **lowers only**. A cell that measures above its ceiling is left
@@ -66,6 +69,10 @@ bin/validate.sh packages/utils/src/dataknobs_utils/file_utils.py
 The second form measures the whole containing cell, not the one file. A ceiling
 is a whole-cell property, so a partial count compared against it would not be a
 verdict.
+
+When the question really is about the one file — *what does it owe, and have I
+cleared it?* — `charge` answers it without changing that: it measures the cell
+whole, exactly as this does, and filters only what it prints.
 
 A path in **no** cell — a scratch file outside the repository, say — has no
 ceiling to be within, so any finding there fails. Imports are not followed for
