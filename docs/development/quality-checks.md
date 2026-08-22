@@ -677,6 +677,65 @@ render as `0` meaning something else:
 command run *before* doing the work must not be confusable with the failure it
 was run to avoid.
 
+### Reading the record: `ledger`
+
+Every command above measures the tree as it stands. `ledger` measures nothing —
+it reads the declaration at past revisions and reports what its own history
+records:
+
+```bash
+uv run python bin/quality-contract.py ledger --tool mypy
+uv run python bin/quality-contract.py ledger --tool ruff --json
+```
+
+```
+mypy ledger — N at <sha> (<date>) to N now, over N merge(s)
+
+cleared N over N of N merges (N% paying, N% paying nothing), mean N per merge
+raised 0  — no cell has ever ended higher than it started
+
+by population
+  leg               N over N merge(s)
+  convention        N over N merge(s)
+```
+
+Every count is written `N` for the same reason the charge sample above is: each
+one moves with the next merge, and a live figure quoted on this page would go
+stale without anyone finding out. The `0` is not a placeholder — a raised
+ceiling has never happened here, and that is a claim the command re-checks over
+the whole history every time it runs.
+
+No new artifact backs this. The contract is committed, so `git log` over it
+already *is* the time series — and a per-run file would be a snapshot where the
+question is a series, conflicting on every run for the trouble.
+
+Three properties are worth knowing before quoting a number out of it.
+
+**The unit is a merge, not a commit.** Read per commit this repository shows 21
+paying events out of 66; read per first-parent step it shows 11 out of 67,
+because a pull request that moves a ceiling twice is one pull request. Since the
+figure being reported is a *rate over pull requests*, counting per commit
+double-counts exactly the population it describes.
+
+**Ceilings are compared per cell, never by sum.** Cells get added, removed, and
+split. When a glob cell covering the per-package test trees was replaced by one
+cell per package, the ceilings fell by 255 by sum while the cells present in
+both revisions moved by 13 — so a sum-and-subtract reading credits the redraw
+with clearing 242 findings nobody cleared. Structural movement is reported in
+its own section and never counted as progress.
+
+**A raised ceiling is reported, not netted.** Summing signed deltas would let a
+cell gaining 40 and a cell losing 40 report as a quiet zero, and *no cell ends
+higher than it started* is a property this is meant to be able to answer.
+
+`ledger` reads `Quality-Leg:` trailers over the commits each merge brought in —
+not off the merge commit, which carries the branch's subject and none of its
+trailers — to split deliberate cleanup from incidental. **Presence is the
+discriminator**, so a misspelled value still counts as a leg; what it loses is
+the record of *which* cell the work went to, which is why a value naming no
+declared cell is reported as a fault. The command still exits 0: the commit is
+already merged, so there is nothing for a failing status to block.
+
 ### Reading a backlog: `census`
 
 A ceiling is denominated in findings, so `check` answers *whether* a cell is

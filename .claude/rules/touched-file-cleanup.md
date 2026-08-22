@@ -179,9 +179,17 @@ time series — what fell, when, and in which cell. No separate artifact records
 this and none should: a per-run file would be a snapshot where the question is
 a series, and one that changes on every run conflicts on every run.
 
+Read it with:
+
+```bash
+uv run python bin/quality-contract.py ledger --tool mypy
+```
+
 That history is why the rule can be evaluated rather than merely believed. If
 it turns out to charge more than it drains, the evidence for that is already
-being collected, by the ratchet, with nobody doing anything extra.
+being collected, by the ratchet, with nobody doing anything extra — and the
+`Quality-Leg:` trailer is what keeps the two populations apart in the reading,
+so the result can be stated as a pair rather than as a total.
 
 ## Related
 

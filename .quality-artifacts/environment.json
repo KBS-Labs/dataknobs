@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-08-22T22:41:12Z",
+  "timestamp": "2026-08-22T23:05:16Z",
   "python_version": "Python 3.12.12",
   "uv_version": "uv 0.12.5 (Homebrew 2026-08-14 aarch64-apple-darwin)",
   "os": "Darwin",
   "os_version": "24.6.0",
-  "git_branch": "sbk/clear-what-the-file-you-opened-owes",
-  "git_commit": "246c73aa7d86acb4b116ac0b963f03447ee66f81",
+  "git_branch": "sbk/read-the-ledger-the-ratchet-wrote",
+  "git_commit": "d89cba43aac3e7c0a47db12458d1f5a1a1c1a059",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }

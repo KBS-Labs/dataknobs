@@ -1773,3 +1773,238 @@ def test_the_audit_accounts_for_every_decline() -> None:
         "the audit grouped a decline under 'uncategorized' — test_lint_policy "
         "should have failed first; one of the two is not reading the config"
     )
+
+
+# --------------------------------------------------------------------------
+# The ledger — reading the declaration's own history
+# --------------------------------------------------------------------------
+#
+# Every guard below drives a purpose-built history rather than this
+# repository's, because the three events the ledger exists to distinguish have
+# never happened here: no ceiling has ever been raised, no commit has ever
+# carried a leg trailer, and no trailer has ever been misspelled. A reader that
+# can only be pointed at its own history is tested against none of them.
+
+
+def _git(repo: Path, *args: str) -> subprocess.CompletedProcess[str]:
+    """Run git in ``repo`` with identity supplied, so it needs no global config."""
+    return subprocess.run(
+        [
+            "git",
+            "-c",
+            "user.name=Ledger Test",
+            "-c",
+            "user.email=ledger@example.invalid",
+            "-c",
+            "commit.gpgsign=false",
+            *args,
+        ],
+        cwd=repo,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+
+def _declaration(ceilings: dict[str, int]) -> str:
+    """A minimal declaration holding one tool's cells at the given ceilings."""
+    return json.dumps(
+        {
+            "version": 1,
+            "about": "a purpose-built declaration",
+            "tools": {
+                "mypy": {
+                    "cells": [
+                        {"path": path, "tier": "transitional", "ceiling": ceiling}
+                        for path, ceiling in sorted(ceilings.items())
+                    ]
+                }
+            },
+        },
+        indent=2,
+    )
+
+
+def _commit(repo: Path, ceilings: dict[str, int], subject: str, leg: str | None = None) -> None:
+    """Write the declaration at these ceilings and commit it."""
+    written = repo / ".dataknobs" / "quality-contract.json"
+    written.parent.mkdir(parents=True, exist_ok=True)
+    written.write_text(_declaration(ceilings), encoding="utf-8")
+    message = subject if leg is None else f"{subject}\n\nQuality-Leg: {leg}\n"
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-m", message)
+
+
+def _repo(tmp_path: Path) -> Path:
+    repo = tmp_path / "history"
+    repo.mkdir()
+    _git(repo, "init", "-b", "main")
+    return repo
+
+
+def _ledger(repo: Path) -> dict[str, Any]:
+    recorded: dict[str, Any] = contract_module.ledger("mypy", "HEAD", repo)
+    return recorded
+
+
+def test_a_redrawn_cell_set_is_not_counted_as_findings_cleared() -> None:
+    """The defect the obvious implementation has, in the shape it really took.
+
+    Summing every ceiling and subtracting the previous sum is the reading this
+    command was sketched as, and it is wrong whenever the cell set moves. This
+    is the movement that actually occurred here: a glob cell covering the
+    per-package test trees was replaced by one cell per package.
+
+    By sum the ceilings fell by 255. By cell — counting only what is present in
+    both revisions, which is the only population where "the same thing measured
+    twice" is even meaningful — 13 findings were cleared. The other 242 is the
+    redraw, and a ledger that reports it as progress is reporting work nobody
+    did, in the direction that flatters the programme it is evidence for.
+    """
+    before = {"packages/*/tests": 1685, "packages/data/src": 50}
+    after = {"packages/bots/tests": 700, "packages/common/tests": 743, "packages/data/src": 37}
+
+    movement = contract_module._movement(before, after)
+
+    assert movement.cleared == 13, "only the cell present in both revisions moved"
+    assert movement.added == 1443
+    assert movement.removed == 1685
+    assert movement.structural
+    naive = sum(before.values()) - sum(after.values())
+    assert naive == 255, "the sum-and-subtract reading, kept here as the thing being refused"
+    assert movement.cleared != naive
+
+
+def test_a_raised_ceiling_is_reported_apart_from_the_drain(tmp_path: Path) -> None:
+    """A regression is never netted against progress.
+
+    Summing signed deltas would let a cell that gained 40 findings and one that
+    lost 40 report as a quiet zero, and "no cell ends higher than it started" is
+    a safety criterion this is supposed to be able to answer.
+    """
+    repo = _repo(tmp_path)
+    _commit(repo, {"packages/data/src": 100, "packages/fsm/src": 100}, "declare")
+    _commit(repo, {"packages/data/src": 60, "packages/fsm/src": 100}, "clear forty")
+    _commit(repo, {"packages/data/src": 60, "packages/fsm/src": 140}, "raise forty")
+
+    recorded = _ledger(repo)
+
+    assert recorded["cleared"] == 40
+    assert recorded["raised"] == 40, "the raise is reported, not subtracted from the drain"
+    assert recorded["standing"] == 200
+    assert recorded["opened"]["total"] == 200
+
+
+def test_a_leg_trailer_moves_its_merge_out_of_the_convention_population(tmp_path: Path) -> None:
+    """The split the trailer exists to make, and it is read over the range.
+
+    The trailer sits on the commit that did the clearing, which is inside the
+    branch; the merge commit carries the branch's subject and none of its
+    trailers. Reading trailers off the step itself finds nothing on every pull
+    request ever merged, which is every leg there will ever be.
+    """
+    repo = _repo(tmp_path)
+    _commit(repo, {"packages/data/src": 100, "packages/fsm/src": 100}, "declare")
+    _commit(repo, {"packages/data/src": 90, "packages/fsm/src": 100}, "ordinary work")
+
+    _git(repo, "checkout", "-b", "drain")
+    _commit(
+        repo, {"packages/data/src": 90, "packages/fsm/src": 40}, "drain fsm", leg="packages/fsm/src"
+    )
+    _git(repo, "checkout", "main")
+    _git(repo, "merge", "--no-ff", "drain", "-m", "Merge pull request #1 from drain")
+
+    recorded = _ledger(repo)
+
+    assert recorded["cleared"] == 70
+    assert recorded["populations"]["leg"] == {"steps": 1, "cleared": 60}
+    assert recorded["populations"]["convention"] == {"steps": 1, "cleared": 10}
+    assert not recorded["faults"]
+
+
+def test_a_trailer_naming_no_declared_cell_is_reported(tmp_path: Path) -> None:
+    """A trailer naming no cell, and the narrower harm it actually does.
+
+    This test was written asserting the wrong thing, and fixing it is the point
+    worth recording. The check was proposed on the grounds that a typo would
+    drop the commit out of the leg population and file it as incidental
+    clearing. It does not: **presence is the discriminator**, so a misspelled
+    trailer is still a leg and every total below is right.
+
+    What the typo destroys is the attribution. ``packages/fsm`` for
+    ``packages/fsm/src`` records nothing about which cell the scheduled work
+    went to, while reading exactly like a record — and because the counts stay
+    correct, nothing about the report invites anyone to look.
+    """
+    repo = _repo(tmp_path)
+    _commit(repo, {"packages/fsm/src": 100}, "declare")
+    _commit(repo, {"packages/fsm/src": 40}, "drain fsm", leg="packages/fsm")
+
+    recorded = _ledger(repo)
+
+    assert len(recorded["faults"]) == 1
+    assert "packages/fsm" in recorded["faults"][0]
+    assert "does not name as a cell" in recorded["faults"][0]
+    # Still a leg, and still counted. The fault reports an unusable attribution;
+    # it neither reclassifies the commit nor discards 60 findings really cleared.
+    assert recorded["cleared"] == 60
+    assert recorded["populations"]["leg"]["cleared"] == 60
+    assert recorded["populations"]["convention"]["cleared"] == 0
+
+
+def test_a_correctly_spelled_trailer_raises_no_fault(tmp_path: Path) -> None:
+    """The other half of the check above, without which it could pass by always firing."""
+    repo = _repo(tmp_path)
+    _commit(repo, {"packages/fsm/src": 100}, "declare")
+    _commit(repo, {"packages/fsm/src": 40}, "drain fsm", leg="packages/fsm/src")
+
+    recorded = _ledger(repo)
+
+    assert recorded["faults"] == []
+    assert recorded["populations"]["leg"]["cleared"] == 60
+
+
+def test_two_clearings_in_one_pull_request_are_one_paying_merge(tmp_path: Path) -> None:
+    """The unit is a merge, and reading per commit inflates the paying rate.
+
+    Against this repository's real history the two readings give 11 paying
+    events out of 67 and 21 out of 66 — and the fraction paying is the figure
+    the whole cost argument rests on. Counting per commit double-counts exactly
+    the population whose rate the number describes.
+    """
+    repo = _repo(tmp_path)
+    _commit(repo, {"packages/data/src": 100}, "declare")
+
+    _git(repo, "checkout", "-b", "work")
+    _commit(repo, {"packages/data/src": 90}, "clear ten")
+    _commit(repo, {"packages/data/src": 70}, "clear twenty more")
+    _git(repo, "checkout", "main")
+    _git(repo, "merge", "--no-ff", "work", "-m", "Merge pull request #1 from work")
+
+    recorded = _ledger(repo)
+
+    assert recorded["cleared"] == 30, "both commits' clearing is counted"
+    assert recorded["paying"] == 1, "but they arrived in one pull request"
+    assert len(recorded["steps"]) == 1
+
+
+def test_the_ledger_reproduces_this_repository_s_own_drain() -> None:
+    """The integration case: the real history, read end to end.
+
+    The purpose-built histories above pin each rule in isolation; this asserts
+    the walk survives contact with merges, a declaration that arrives partway
+    through a long history, and a cell set that was redrawn twice.
+    """
+    recorded = contract_module.ledger("mypy")
+
+    assert recorded["opened"] is not None
+    assert recorded["opened"]["total"] > recorded["standing"], "the backlog has fallen"
+    assert recorded["cleared"] == recorded["opened"]["total"] - recorded["standing"], (
+        "with no ceiling ever raised and no mypy cell added or removed, the drain "
+        "must reconcile exactly against the opening and standing balances"
+    )
+    assert recorded["raised"] == 0
+    assert recorded["paying"] <= recorded["window"]
+    assert recorded["faults"] == [], (
+        "a trailer in this repository names a cell that is not declared"
+    )
