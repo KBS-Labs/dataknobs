@@ -183,6 +183,9 @@ Read it with:
 
 ```bash
 uv run python bin/quality-contract.py ledger --tool mypy
+
+# A fixed window, opening after a named boundary rather than at the beginning
+uv run python bin/quality-contract.py ledger --tool mypy --since <sha>
 ```
 
 That history is why the rule can be evaluated rather than merely believed. If
@@ -190,6 +193,11 @@ it turns out to charge more than it drains, the evidence for that is already
 being collected, by the ratchet, with nobody doing anything extra — and the
 `Quality-Leg:` trailer is what keeps the two populations apart in the reading,
 so the result can be stated as a pair rather than as a total.
+
+**Read the convention's row, not the total.** The command prints a mean and an
+idle fraction for each population separately, because a drain achieved entirely
+by legs would clear the bar the total is quoted against while showing nothing
+at all about what this rule costs.
 
 ## Related
 

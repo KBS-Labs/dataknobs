@@ -2682,7 +2682,116 @@ def _legs_in(first_parent: str, sha: str, repo: Path = _ROOT) -> list[str]:
     return [line.strip() for line in listed.stdout.splitlines() if line.strip()]
 
 
-def ledger(tool: str, revision: str = "HEAD", repo: Path = _ROOT) -> dict[str, Any]:
+#: A window boundary written as a calendar day. The only date form accepted;
+#: everything else is resolved as a revision. See ``_opens_after``.
+_ISO_DAY = re.compile(r"\d{4}-\d{2}-\d{2}\Z")
+
+
+def _birth(revision: str, repo: Path = _ROOT) -> str | None:
+    """The first-parent commit where the declaration first appears."""
+    found = _run(
+        [
+            "git",
+            "log",
+            "--first-parent",
+            "--reverse",
+            "--format=%H",
+            revision,
+            "--",
+            _CONTRACT_IN_GIT,
+        ],
+        cwd=repo,
+    )
+    listed = found.stdout.split()
+    return listed[0] if listed else None
+
+
+def _stamped(sha: str, repo: Path = _ROOT) -> tuple[str, str]:
+    """One commit's short name and day, for a report that has to cite it."""
+    shown = _run(["git", "log", "-1", "--format=%h%x00%ad", "--date=short", sha], cwd=repo)
+    short, _, date = shown.stdout.strip().partition("\0")
+    return short, date
+
+
+def _opens_after(since: str, revision: str, repo: Path = _ROOT) -> str | None:
+    """Resolve a requested window to the commit it opens *after*.
+
+    Two forms are accepted, both absolute, and excluding the third is the point
+    of doing this here rather than handing the string to git's ``--since``.
+
+    A ``YYYY-MM-DD`` day is pinned to midnight before git sees it, because git
+    fills the fields an approxidate leaves out from **now**. Measured in this
+    repository, at 17:20 on the day in question: ``--since=2026-08-22`` reported
+    **0** merges and ``--since=2026-08-22T00:00:00`` reported **4**. A window
+    that quietly shrinks by the hour you read it at is the precise failure this
+    command exists to remove — and it fails silently, with a plausible number.
+
+    Anything else is a git revision, which is the better form and the one a
+    fixed window should use: it names the boundary event instead of
+    approximating it, and a typo fails here instead of moving the window. Once
+    resolved there are no dates left in the arithmetic, only commits.
+
+    One revision form is refused with the dates: ``HEAD@{4.weeks.ago}`` and its
+    relatives resolve against this machine's reflog, which is neither shared nor
+    stable, so two readings of the *same* window disagree by where they were
+    taken. It is the form somebody redirected away from a relative date reaches
+    for next, which is exactly why it is named rather than left to chance.
+    """
+    if _ISO_DAY.match(since):
+        found = _run(
+            ["git", "rev-list", "--first-parent", "-1", f"--before={since} 00:00:00", revision],
+            cwd=repo,
+        )
+        return found.stdout.strip() or None
+    if "@{" in since:
+        raise ValueError(
+            f"--since {since!r} is a reflog expression, which resolves against this "
+            "machine's reflog and against the clock; a window read on two machines "
+            "would not be the same window. Name the boundary commit instead"
+        )
+    resolved = _run(["git", "rev-parse", "--verify", "--quiet", f"{since}^{{commit}}"], cwd=repo)
+    if resolved.returncode != 0:
+        raise ValueError(
+            f"--since {since!r} is neither a YYYY-MM-DD day nor a revision in this "
+            "repository. Relative expressions such as '4 weeks ago' are refused "
+            "rather than passed through: git resolves them against the clock, so "
+            "the same command answers a different question every time it is run"
+        )
+    return resolved.stdout.strip()
+
+
+def _leg_merges(span: str, chain: list[str], repo: Path = _ROOT) -> int:
+    """How many first-parent steps in ``span`` carry a leg trailer at all.
+
+    A different population from the leg steps the walk below finds, and the
+    difference is why this exists. Those are steps that carried a trailer *and*
+    moved a ceiling. This is every step that carried one — which is the
+    denominator the convention's cost has to be measured against, because a
+    merge whose *purpose* was cleanup is not evidence about what ordinary work
+    costs, whether or not the cleanup ended up moving anything. A leg that
+    cleared nothing never touches the declaration, so no walk of the
+    declaration's history can see it.
+
+    Attribution costs a subprocess per step, so it runs only when one bulk walk
+    says there is something to attribute. For a window with no leg in it — which
+    is every window ending before the trailer was adopted — this answers 0 for
+    the price of a single git invocation.
+    """
+    carried = _run(
+        ["git", "log", f"--format=%(trailers:key={_LEG_TRAILER},valueonly)", span],
+        cwd=repo,
+    )
+    if not carried.stdout.strip():
+        return 0
+    return sum(1 for sha in chain if _legs_in(f"{sha}^", sha, repo))
+
+
+def ledger(
+    tool: str,
+    revision: str = "HEAD",
+    since: str | None = None,
+    repo: Path = _ROOT,
+) -> dict[str, Any]:
     """What the declaration's own history records, per merge, for one tool.
 
     The contract is committed, so ``git log`` over it *is* the time series and
@@ -2691,16 +2800,66 @@ def ledger(tool: str, revision: str = "HEAD", repo: Path = _ROOT) -> dict[str, A
     series anyway.
 
     **The unit is a first-parent step, not a commit**, and the difference is
-    not cosmetic. Read per commit, this repository's history shows 21 paying
-    events out of 66; read per step it shows 11 out of 67, because a pull
-    request that moves a ceiling twice is one pull request. The per-commit
-    figure double-counts exactly the population whose *rate* the number is
-    meant to describe, and it does so in the flattering direction.
+    not cosmetic. Measured over this repository's history on the day this was
+    written: 21 paying events out of 66 read per commit, against 11 out of 67
+    read per step, because a pull request that moves a ceiling twice is one
+    pull request. The per-commit figure double-counts exactly the population
+    whose *rate* the number is meant to describe, and it does so in the
+    flattering direction.
 
     Only steps where the declaration changed are read. Between them it is
-    constant by construction, so the arithmetic is identical and the walk costs
-    two subprocesses per moving step instead of two per merge.
+    constant by construction, so the arithmetic is identical either way while
+    the walk pays its per-step subprocesses over the merges that moved
+    something rather than over all of them — a small minority, and one that
+    shrinks as a share of the history with every merge that moves nothing.
+
+    ``since`` narrows the window to what happened after a boundary commit, which
+    a fixed-length reading needs and hand-rolled arithmetic over the full series
+    should not be asked to supply. The opening balance is then the declaration
+    as it stood *at* that boundary — exact, not interpolated, because between
+    two moving steps it does not move. A boundary older than the declaration is
+    clamped to its first appearance and the report says so.
     """
+    boundary = _opens_after(since, revision, repo) if since else _birth(revision, repo)
+    opening = _ceilings_at(boundary, tool, repo) if boundary else None
+    clamped = False
+    if opening is None:
+        # Either nothing was asked for that the declaration reaches, or the
+        # boundary predates it. There is no state to compare against before the
+        # declaration's first appearance — reading its arrival as a cell set
+        # springing out of zero would report it as the largest regression in the
+        # history — so the window opens there instead, and says which it did.
+        birth = _birth(revision, repo)
+        clamped = since is not None and birth is not None and birth != boundary
+        boundary = birth
+        opening = _ceilings_at(boundary, tool, repo) if boundary else None
+
+    populations: dict[str, dict[str, int]] = {
+        "leg": {"merges": 0, "paying": 0, "cleared": 0},
+        "convention": {"merges": 0, "paying": 0, "cleared": 0},
+    }
+    report: dict[str, Any] = {
+        "tool": tool,
+        "since": since,
+        "clamped": clamped,
+        "opened": None,
+        "standing": sum((_ceilings_at(revision, tool, repo) or {}).values()),
+        "window": 0,
+        "paying": 0,
+        "cleared": 0,
+        "raised": 0,
+        "populations": populations,
+        "months": {},
+        "faults": [],
+        "steps": [],
+    }
+    if boundary is None or opening is None:
+        return report
+
+    short, date = _stamped(boundary, repo)
+    report["opened"] = {"sha": short, "date": date, "total": sum(opening.values())}
+    span = f"{boundary}..{revision}"
+
     moved = _run(
         [
             "git",
@@ -2709,7 +2868,7 @@ def ledger(tool: str, revision: str = "HEAD", repo: Path = _ROOT) -> dict[str, A
             "--format=%H%x00%h%x00%ad%x00%s",
             "--date=short",
             "--reverse",
-            revision,
+            span,
             "--",
             _CONTRACT_IN_GIT,
         ],
@@ -2718,32 +2877,25 @@ def ledger(tool: str, revision: str = "HEAD", repo: Path = _ROOT) -> dict[str, A
     steps: list[dict[str, Any]] = []
     faults: list[str] = []
     months: Counter[str] = Counter()
-    populations = {
-        "leg": {"steps": 0, "cleared": 0},
-        "convention": {"steps": 0, "cleared": 0},
-    }
-    born: dict[str, Any] | None = None
-    latest: dict[str, int] | None = None
 
     for line in moved.stdout.splitlines():
         if not line:
             continue
         sha, short, date, subject = line.split("\0")
         after = _ceilings_at(sha, tool, repo)
-        if after is None:
-            continue
         before = _ceilings_at(f"{sha}^", tool, repo)
-        latest = after
-        if before is None:
-            # The declaration's first appearance. It has no predecessor, so it
-            # cleared nothing and regressed nothing; what it did was set the
-            # opening balance, which is what the report calls it.
-            born = {"sha": short, "date": date, "total": sum(after.values())}
+        if after is None or before is None:
+            # The declaration arriving or leaving. Neither end has a state to be
+            # compared against, and the window's opening balance was read above
+            # from the boundary rather than from whichever step this is.
             continue
 
         movement = _movement(before, after)
         legs = _legs_in(f"{sha}^", sha, repo)
-        faults += _leg_faults(short, date, legs, _declared_at(sha, repo))
+        if legs:
+            # Guarded because reading the declaration back is a subprocess, and
+            # a step with no trailer has nothing for it to validate.
+            faults += _leg_faults(short, date, legs, _declared_at(sha, repo))
 
         if movement.cleared or movement.raised or movement.structural:
             steps.append(
@@ -2761,32 +2913,21 @@ def ledger(tool: str, revision: str = "HEAD", repo: Path = _ROOT) -> dict[str, A
         if movement.cleared:
             months[date[:7]] += movement.cleared
             side = "leg" if legs else "convention"
-            populations[side]["steps"] += 1
+            populations[side]["paying"] += 1
             populations[side]["cleared"] += movement.cleared
 
-    window = 0
-    if born is not None:
-        counted = _run(
-            ["git", "rev-list", "--first-parent", "--count", f"{born['sha']}..{revision}"],
-            cwd=repo,
-        )
-        window = int(counted.stdout.strip() or 0)
+    chain = _run(["git", "rev-list", "--first-parent", span], cwd=repo).stdout.split()
+    populations["leg"]["merges"] = _leg_merges(span, chain, repo)
+    populations["convention"]["merges"] = max(len(chain) - populations["leg"]["merges"], 0)
 
-    paying = sum(side["steps"] for side in populations.values())
-    cleared = sum(side["cleared"] for side in populations.values())
-    return {
-        "tool": tool,
-        "opened": born,
-        "standing": sum(latest.values()) if latest else 0,
-        "window": window,
-        "paying": paying,
-        "cleared": cleared,
-        "raised": sum(step["raised"] for step in steps),
-        "populations": populations,
-        "months": dict(sorted(months.items())),
-        "faults": faults,
-        "steps": steps,
-    }
+    report["window"] = len(chain)
+    report["paying"] = sum(side["paying"] for side in populations.values())
+    report["cleared"] = sum(side["cleared"] for side in populations.values())
+    report["raised"] = sum(step["raised"] for step in steps)
+    report["months"] = dict(sorted(months.items()))
+    report["faults"] = faults
+    report["steps"] = steps
+    return report
 
 
 def _write_ledger(report: dict[str, Any]) -> None:
@@ -2802,6 +2943,14 @@ def _write_ledger(report: dict[str, Any]) -> None:
         f"{report['tool']} ledger — {opened['total']} at {opened['sha']} "
         f"({opened['date']}) to {report['standing']} now, over {window} merge(s)\n"
     )
+    if report["since"]:
+        # The resolution, not only the request. A boundary that moved without
+        # saying so is the failure this flag was added to remove, so the commit
+        # the window actually opened after is printed beside what was asked for.
+        note = f"  --since {report['since']} opens the window after {opened['sha']}"
+        if report["clamped"]:
+            note += ", clamped: it is older than the declaration itself"
+        out.write(note + "\n")
 
     paying = report["paying"]
     # Both halves, always. A rate is a fraction and a fraction printed without
@@ -2820,11 +2969,25 @@ def _write_ledger(report: dict[str, Any]) -> None:
     out.write(f"raised {report['raised']}")
     out.write("\n" if report["raised"] else "  — no cell has ever ended higher than it started\n")
 
-    out.write("\nby population\n")
+    # The second row is the one the convention is judged on, so it carries its
+    # own rate rather than leaving it to be divided out of the total above. A
+    # drain achieved entirely by scheduled cleanup would satisfy a threshold
+    # read off that total while falsifying everything the total was quoted for.
+    out.write("\nby population — the convention is the second row, and only the second row\n")
     for side in ("leg", "convention"):
         counts = report["populations"][side]
-        out.write(f"  {side:<12} {counts['cleared']:>6} over {counts['steps']} merge(s)\n")
-    if not report["populations"]["leg"]["steps"]:
+        line = (
+            f"  {side:<12} {counts['cleared']:>6} over {counts['paying']} "
+            f"of {counts['merges']} merge(s)"
+        )
+        if counts["merges"]:
+            idle = counts["merges"] - counts["paying"]
+            line += (
+                f", mean {counts['cleared'] / counts['merges']:.1f} per merge, "
+                f"{100 * idle / counts['merges']:.0f}% paying nothing"
+            )
+        out.write(line + "\n")
+    if not report["populations"]["leg"]["merges"]:
         # Said, not left as a zero row. Before the trailer was adopted no commit
         # could carry one, so an empty leg column is indistinguishable from a
         # leg column that nothing has been filed into yet — and the whole reason
@@ -3021,6 +3184,13 @@ def _build_parser() -> argparse.ArgumentParser:
         help="read the first-parent history ending here (default: HEAD)",
     )
     history.add_argument(
+        "--since",
+        help=(
+            "open the window after this boundary: a revision, or a YYYY-MM-DD day. "
+            "Relative expressions are refused — git resolves them against the clock"
+        ),
+    )
+    history.add_argument(
         "--repo",
         type=Path,
         default=_ROOT,
@@ -3179,7 +3349,12 @@ def main() -> None:
         # command reads the declaration at past revisions and never looks at the
         # tree, so the current file being unusable is not a reason to refuse —
         # it is a reason somebody would want the history.
-        recorded = ledger(args.tool, args.revision, args.repo)
+        try:
+            recorded = ledger(args.tool, args.revision, args.since, args.repo)
+        except ValueError as unresolved:
+            # An unresolvable boundary is a bad argument, not a finding: exit 2
+            # with the reason rather than reporting a window nobody asked for.
+            parser.error(str(unresolved))
         if args.use_json:
             json.dump(recorded, sys.stdout, indent=2)
             sys.stdout.write("\n")
