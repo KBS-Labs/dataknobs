@@ -577,6 +577,35 @@ clearing it, and doing it by rerunning a command is how that happens without
 anyone deciding to. Raising a ceiling is a hand edit, so the argument for it
 lands in a pull request where someone can read it.
 
+**Lowering it is not optional.** `check` fails on a cell that measures *below*
+its ceiling, in the same class as one that measures above it, and prints the
+`update-baseline` invocation that resolves it:
+
+```
+mypy/packages/data/src is under its ceiling: 545 findings against 549 declared,
+so 4 of headroom is left standing. Write the progress down with:
+    uv run python bin/quality-contract.py update-baseline --tool mypy --cell packages/data/src
+```
+
+Headroom is a regression budget nobody voted for. Four findings of slack left
+in a cell is four a later change can reintroduce with every run in between
+reporting green, because nothing the check compares will have moved. So the
+zero-headroom rule — *a cell that falls below its ceiling is re-baselined in
+the same pull request that lowered it* — is enforced rather than remembered.
+
+Two things follow from the arithmetic rather than from a flag. It can only fire
+on a cell whose ceiling is above zero, since nothing measures below zero — which
+is the `transitional` mypy cells and nothing else, every other cell in the
+declaration being pinned at zero. And a scoped run stays scoped:
+`bin/validate.sh` asks only about the cells its targets name, so work in one
+package is not failed by a merge that lowered another. The whole-tree catch is
+the gate's.
+
+The check never rewrites the declaration itself. Auto-lowering would take the
+one diff that records progress out of the pull request where somebody reads it,
+and a checker that edits what it is measuring against is the shape this harness
+refuses everywhere else.
+
 When a ceiling *is* breached, `check` names the files under it, most findings
 first, so a count you cannot act on does not send you to a second tool:
 

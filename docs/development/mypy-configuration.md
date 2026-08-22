@@ -36,12 +36,17 @@ have.
 Every ceiling equals what the tree currently measures, so there is no headroom:
 new code has to arrive clean, and the only way a ceiling moves is down.
 
+That is checked, not merely intended. `check` fails a cell measuring *below* its
+ceiling as well as one measuring above, so a change that clears findings without
+lowering the ceiling it cleared does not pass — and the slack it would otherwise
+have left behind is not available to absorb a later regression silently.
+
 ```bash
 # What every cell measures, against what it is allowed
 bin/quality-contract.py check --tool mypy
 
 # After clearing findings, lower the ceilings to match
-bin/quality-contract.py update-baseline --tool mypy
+bin/quality-contract.py update-baseline --tool mypy --cell packages/data/src
 ```
 
 `update-baseline` **lowers only**. A cell that measures above its ceiling is left

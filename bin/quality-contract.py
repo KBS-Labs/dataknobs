@@ -58,6 +58,16 @@ logger = logging.getLogger(__name__)
 _ROOT = Path(__file__).resolve().parent.parent
 _CONTRACT = _ROOT / ".dataknobs" / "quality-contract.json"
 
+#: How this script is spelled inside advice that names a command to run.
+#:
+#: Through ``uv run``, because the toolchain is pinned behind it and a bare
+#: ``python bin/...`` resolves against ``PATH`` — which is
+#: ``tests/test_remediation_paths.py``'s opening failure, arriving in the one
+#: place that file cannot see, since it reads shell scripts and this is Python.
+#: Written once so that every command this module recommends is spelled the same
+#: way; the prose in ``docs/`` is not held to it by anything but review.
+_INVOCATION = "uv run python bin/quality-contract.py"
+
 #: Tiers whose files no tool reads. Their ceiling is not a backlog and must stay
 #: zero — a positive one would claim a measurement that nothing takes.
 _UNMEASURED_TIERS = frozenset({"unchecked"})
@@ -2126,6 +2136,13 @@ def check(
 ) -> dict[str, Any]:
     """Measure each tool, compare every cell against its ceiling, and report.
 
+    The comparison has two failing signs, not one. ``exceeded`` is a cell above
+    its ceiling; ``cleared`` is one below it, which the caller treats as a
+    failure too — a ceiling left standing above what the tree measures is
+    headroom a later regression can be absorbed into without any number moving.
+    Both are reported here; which of them ends a run is ``main``'s to say, and
+    it says so at the ``failed`` line.
+
     Two things are reported besides the comparison, and both are there because
     a number produced under conditions that have changed is not the number it
     claims to be:
@@ -2210,7 +2227,19 @@ def check(
                 "ceiling": cell["ceiling"],
                 "tier": tier,
             }
-            entry = {"cell": name, "measured": measured, "ceiling": cell["ceiling"], "tier": tier}
+            # ``tool`` and ``path`` beside the joined ``cell``, because the
+            # remediation printed for a cleared cell names them as two separate
+            # options. Splitting the joined name back apart at the printer would
+            # re-derive from a string what the loop is holding, and a cell path
+            # containing the separator would come apart at the wrong slash.
+            entry = {
+                "cell": name,
+                "tool": tool,
+                "path": cell["path"],
+                "measured": measured,
+                "ceiling": cell["ceiling"],
+                "tier": tier,
+            }
             if measured > cell["ceiling"]:
                 per_file = measurement.by_cell.get(cell["path"], Counter())
                 ranked = sorted(per_file.items(), key=lambda item: (-item[1], item[0]))
@@ -2695,7 +2724,27 @@ def main() -> None:
         sys.exit(0)
 
     report = check(contract, _selected(args.tool), only, args.show_findings)
-    failed = bool(report["exceeded"] or report["unused_config"])
+    # A cell *under* its ceiling fails, in the same class as one over it. That is
+    # not a new practice being imposed: the zero-headroom operating condition —
+    # a cell that falls below its ceiling is re-baselined in the same pull
+    # request that lowered it — is already declared, and until now was honoured
+    # entirely by hand, across every commit that has moved one of these numbers.
+    # This is that condition machine-checked. It lands on nothing the day it
+    # arrives, because the tree measures exactly what the contract declares.
+    #
+    # It fails rather than lowering the ceiling itself, for two reasons, and the
+    # second stands alone. A checker that rewrites the declaration it is
+    # measuring against is the shape this harness refuses everywhere else. And
+    # auto-lowering takes the one diff that records progress out of the pull
+    # request where somebody reads it — ``update_baseline``'s own docstring
+    # makes the argument for the mirror case: "doing it by re-running a command
+    # is how that happens without anyone deciding to."
+    #
+    # Structurally this can only ever fire on a cell whose ceiling is above
+    # zero, since nothing can measure below zero — which today is the six
+    # transitional mypy cells and nothing else. No flag narrows it to them,
+    # because arithmetic already does.
+    failed = bool(report["exceeded"] or report["cleared"] or report["unused_config"])
     if args.use_json:
         json.dump(report, sys.stdout, indent=2)
         sys.stdout.write("\n")
@@ -2708,13 +2757,6 @@ def main() -> None:
         sys.stdout.write(report["findings"][tool])
         sys.stdout.flush()
 
-    for cleared in report["cleared"]:
-        logger.info(
-            "%s is under its ceiling (%d of %d) — lower it with --update-baseline",
-            cleared["cell"],
-            cleared["measured"],
-            cleared["ceiling"],
-        )
     for unread in report["unmeasured"]:
         logger.warning(
             "%s was not measured: its tier (%s) is outside %s's target set, so it "
@@ -2743,6 +2785,33 @@ def main() -> None:
             logger.error("    %s (%d)", offender["file"], offender["count"])
         if exceeded["further_files"]:
             logger.error("    ... and %d more", exceeded["further_files"])
+    # Beside the breaches rather than above the warnings, where it used to sit
+    # as a note. The two are one comparison with two signs, and reading them
+    # apart is most of what made "under its ceiling" look like good news that
+    # needed nothing doing about it.
+    #
+    # The advice carries `--contract` when this run was given one. Without it, a
+    # check pointed at one declaration prints a command that rewrites a
+    # different one — the defect
+    # `test_a_baseline_update_rewrites_the_declaration_it_was_pointed_at` pins
+    # for the write itself, arriving instead through the sentence that tells a
+    # developer which write to perform. A ceiling only falls, so following it
+    # would not be undone by re-running anything.
+    declared = f" --contract {args.contract}" if args.contract else ""
+    for cleared in report["cleared"]:
+        logger.error(
+            "%s is under its ceiling: %d findings against %d declared, so %d "
+            "of headroom is left standing. Write the progress down with:\n"
+            "    %s update-baseline --tool %s --cell %s%s",
+            cleared["cell"],
+            cleared["measured"],
+            cleared["ceiling"],
+            cleared["ceiling"] - cleared["measured"],
+            _INVOCATION,
+            cleared["tool"],
+            cleared["path"],
+            declared,
+        )
     for dead in report["unused_config"]:
         logger.error(
             "%s: the %s section for %r matched nothing, so it suppresses nothing "
@@ -2753,6 +2822,13 @@ def main() -> None:
             dead["section"],
         )
     if not failed:
+        # "measures exactly", not "is within". Now that both signs of the
+        # comparison end the run, a pass is the narrower fact: no cell is above
+        # its ceiling *and none is below one either*, so every measured cell is
+        # on its number. Saying "within" would understate a verdict this check
+        # has just been given the power to make, and understating a guarantee is
+        # how the next reader comes to believe there is slack that there is not.
+        #
         # Not "every cell", when some of them were never read. The count is the
         # whole point: a reader who is told the tree is within its ceilings while
         # four cells went unmeasured has been told the thing this leg exists to
@@ -2760,14 +2836,14 @@ def main() -> None:
         if report["unmeasured"]:
             unread_cells = len(report["unmeasured"])
             logger.info(
-                "Every measured cell is within its ceiling. %d %s not measured, "
-                "and %s contents are unknown rather than zero.",
+                "Every measured cell measures exactly what it declares. %d %s "
+                "not measured, and %s contents are unknown rather than zero.",
                 unread_cells,
                 "cell was" if unread_cells == 1 else "cells were",
                 "its" if unread_cells == 1 else "their",
             )
         else:
-            logger.info("Every cell is within its ceiling.")
+            logger.info("Every cell measures exactly what it declares.")
     sys.exit(1 if failed else 0)
 
 

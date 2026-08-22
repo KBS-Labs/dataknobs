@@ -2120,6 +2120,12 @@ def test_the_type_check_fails_when_mypy_does(tmp_path: Path) -> None:
     inside a cell the verdict is ``measured <= ceiling`` and a lone type error
     is absorbed by a backlog that already allows thousands. Both are correct;
     this pins the half where "any error fails" still holds.
+
+    What is matched is the verdict line rather than a diagnosis of it. The
+    contract's check now fails a cell measuring *below* its ceiling as well —
+    progress nobody wrote down, not a type error — so a summary line naming the
+    cause would be false for one of its two reasons. It names neither, and each
+    reason prints its own sentence above it.
     """
     probe = tmp_path / "type_error_probe.py"
     probe.write_text("def broken() -> int:\n    return undefined_symbol_xyz\n", encoding="utf-8")
@@ -2133,9 +2139,9 @@ def test_the_type_check_fails_when_mypy_does(tmp_path: Path) -> None:
     )
     combined = result.stdout + result.stderr
 
-    assert "Type errors found" in combined, (
-        "bin/validate.sh reported no type errors for a file mypy rejects. Its "
-        "mypy verdict must follow mypy's exit status, not a grep over output "
+    assert "Type check failed" in combined, (
+        "bin/validate.sh reported no type-check failure for a file mypy rejects. "
+        "Its mypy verdict must follow mypy's exit status, not a grep over output "
         "that `pipefail` then inverts.\n\n" + combined
     )
 
