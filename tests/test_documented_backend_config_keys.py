@@ -7,9 +7,10 @@ being wrong. A backend config key became mechanically checkable when
 call sites across eight documents.
 
 None of them could fail anything before. ``mkdocs build --strict`` validates
-links and nav, the doc-mirror manifest validates that two copies agree, and the
-import guard reads only the ``import`` lines. A sample whose imports resolve and
-whose keys are fiction passes all three -- and used to pass at runtime too,
+links and nav, the doc-mirror manifest validates that two copies agree, and
+``test_documented_imports.py`` reads the names a document loads -- imports,
+directive values, paths named in prose -- and never the keys beside them. A
+sample whose names all resolve and whose keys are fiction passes all three -- and used to pass at runtime too,
 because ``from_dict`` projected the dict onto the declared fields and dropped
 whatever was left. ``pool_size=20`` on a pooling page configured nothing.
 

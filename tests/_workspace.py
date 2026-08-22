@@ -477,6 +477,34 @@ class Fence:
         return self.body.split("\n") if self.body else []
 
 
+def prose_lines(path: Path) -> list[tuple[int, str]]:
+    """``(line number, text)`` for every line of ``path`` outside a code fence.
+
+    The complement of ``code_fences``. It lives here, beside that function and
+    on the same two patterns, because the two deciding where a fence begins by
+    different rules is how a guard ends up reading a fence as prose or a
+    paragraph as code -- and this file exists to stop a guard carrying its own
+    copy of an answer another one already has.
+
+    ``FENCE_OPEN`` requires a language, so an unlabelled fence only ever
+    closes and its contents are prose here. That is deliberate and is
+    the same choice ``code_fences`` makes: several documents open a fence and
+    embed a same-backtick-count fence inside it, so a reader that opened on a
+    bare one would invert every boundary after it.
+    """
+    found: list[tuple[int, str]] = []
+    inside = False
+    for number, raw in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+        if inside:
+            inside = not FENCE_CLOSE.match(raw)
+            continue
+        if FENCE_OPEN.match(raw):
+            inside = True
+            continue
+        found.append((number, raw))
+    return found
+
+
 def code_fences(path: Path) -> list[Fence]:
     """Every fenced code block in ``path``, in document order.
 

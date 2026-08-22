@@ -216,7 +216,7 @@ If you encounter import errors after installation:
 
 1. **Check Python version**: `python --version` (must be 3.12+)
 2. **Verify installation**: `pip list | grep dataknobs`
-3. **Check for naming**: Use `dataknobs_package` not `dataknobs.package`
+3. **Check for naming**: Use `dataknobs_package` not `dataknobs.package` <!-- dk-imports: illustrative -- the wrong spelling is what the advice is about -->
 4. **Clear pip cache**: `pip cache purge`
 5. **Reinstall**: `pip install --force-reinstall dataknobs-structures`
 
