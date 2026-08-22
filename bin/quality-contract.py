@@ -359,13 +359,20 @@ def _files_in(
     return [path for path in files if _cell_for(cells, str(path)) in only]
 
 
-def _run(command: list[str]) -> subprocess.CompletedProcess[str]:
+def _run(command: list[str], cwd: Path = _ROOT) -> subprocess.CompletedProcess[str]:
     """Run a measuring tool from the repository root.
 
     ``check=False`` throughout: every one of these exits non-zero precisely when
     it has findings, which is the ordinary case here rather than a failure.
+
+    ``cwd`` is a parameter for the ledger's sake, and only the ledger passes it.
+    That command reads git history rather than the tree, and the three events
+    the trial it serves actually turns on — a raised ceiling, a leg trailer, a
+    trailer naming a cell that does not exist — have never happened in this
+    repository. A reader that can only be pointed at its own history cannot be
+    tested against any of them.
     """
-    return subprocess.run(command, cwd=_ROOT, capture_output=True, text=True, check=False)
+    return subprocess.run(command, cwd=cwd, capture_output=True, text=True, check=False)
 
 
 def _refuse_non_verdict(tool: str, result: subprocess.CompletedProcess[str]) -> None:
@@ -2541,6 +2548,310 @@ def _write_charge(report: dict[str, Any]) -> None:
         )
 
 
+#: The declaration's path as git spells it. ``_CONTRACT`` is the copy on disk;
+#: the ledger reads this one at many revisions and never touches the tree.
+_CONTRACT_IN_GIT = ".dataknobs/quality-contract.json"
+
+#: The trailer a commit carries when clearing backlog was its *purpose* rather
+#: than something it did on the way past. Defined in
+#: ``.claude/rules/touched-file-cleanup.md``, where its value is specified as a
+#: cell path — which is the only reason ``_leg_faults`` below can exist. A
+#: planning identifier could be checked against nothing.
+_LEG_TRAILER = "Quality-Leg"
+
+
+class Movement(NamedTuple):
+    """What one revision did to a tool's ceilings, split four ways.
+
+    The split is the entire correctness argument for this command, because the
+    obvious implementation — sum every ceiling, subtract the previous sum — is
+    wrong in a way that flatters the result and leaves no trace.
+
+    A cell can be **added** or **removed** between two revisions, and a glob
+    cell can be replaced by the several cells it used to cover. When that last
+    thing happened here, one revision's ceilings fell by **255** by sum while
+    the cells present in both revisions moved by **13**: a glob covering the
+    per-package test trees was split into one cell per package, and the naive
+    reading credits the split with clearing 242 findings nobody cleared.
+
+    So ``cleared`` and ``raised`` are computed only over cells present in
+    *both* revisions, and the two structural quantities are reported beside
+    them rather than folded in. A ledger that cannot tell "somebody fixed 242
+    findings" from "somebody re-drew the cells" is not measuring the thing it
+    was built to measure.
+    """
+
+    cleared: int
+    raised: int
+    added: int
+    removed: int
+
+    @property
+    def structural(self) -> bool:
+        """Whether the cell set itself moved, which is not progress either way."""
+        return bool(self.added or self.removed)
+
+
+def _ceilings_at(sha: str, tool: str, repo: Path = _ROOT) -> dict[str, int] | None:
+    """One tool's ceilings, by cell, as the declaration stood at ``sha``.
+
+    ``None`` when the declaration did not exist there, which is emphatically
+    not an empty contract: before it was created there is nothing for a later
+    revision to be compared against, and reading that as "every cell at zero"
+    would report the file's arrival as the largest regression in the history.
+    """
+    shown = _run(["git", "show", f"{sha}:{_CONTRACT_IN_GIT}"], cwd=repo)
+    if shown.returncode != 0:
+        return None
+    declared = json.loads(shown.stdout)["tools"].get(tool, {}).get("cells", [])
+    return {cell["path"]: cell["ceiling"] for cell in declared}
+
+
+def _declared_at(sha: str, repo: Path = _ROOT) -> set[str]:
+    """Every cell path the declaration names at ``sha``, across all tools.
+
+    Across *all* tools deliberately. A leg draining a lint cell is still a leg
+    when the ledger is denominated in type findings, so validating its trailer
+    against one tool's cells would manufacture a fault out of a correct commit.
+    """
+    shown = _run(["git", "show", f"{sha}:{_CONTRACT_IN_GIT}"], cwd=repo)
+    if shown.returncode != 0:
+        return set()
+    contract = json.loads(shown.stdout)
+    return {cell["path"] for spec in contract["tools"].values() for cell in spec.get("cells", [])}
+
+
+def _leg_faults(short: str, date: str, legs: list[str], declared: set[str]) -> list[str]:
+    """Trailers on this step that name something the declaration does not.
+
+    What this does *not* catch is worth stating first, because it is the thing
+    the check was originally proposed to catch and it cannot happen: presence is
+    the discriminator, so a commit carrying a misspelled trailer is still
+    counted as a leg. The population split survives a typo.
+
+    What a typo destroys is the *attribution*. The value is the only record of
+    which cell a leg was aimed at, and one naming no cell records nothing while
+    reading exactly like a record — so the leg column stays right while the
+    question "which cell did the scheduled work go to?" quietly has no answer.
+
+    Nothing else can catch it. The value is prose in a commit message: it is
+    never parsed when written, the commit is merged before the ledger is next
+    read, and a total that is still correct is not going to prompt anyone to
+    look.
+    """
+    return [
+        f"{short} ({date}) carries {_LEG_TRAILER}: {named!r}, which the "
+        f"declaration at that revision does not name as a cell"
+        for named in legs
+        if named not in declared
+    ]
+
+
+def _movement(before: dict[str, int], after: dict[str, int]) -> Movement:
+    """Compare two revisions of one tool's ceilings, per cell."""
+    shared = before.keys() & after.keys()
+    return Movement(
+        cleared=sum(before[c] - after[c] for c in shared if after[c] < before[c]),
+        raised=sum(after[c] - before[c] for c in shared if after[c] > before[c]),
+        added=sum(after[c] for c in after.keys() - before.keys()),
+        removed=sum(before[c] for c in before.keys() - after.keys()),
+    )
+
+
+def _legs_in(first_parent: str, sha: str, repo: Path = _ROOT) -> list[str]:
+    """The cells named by ``Quality-Leg:`` trailers this step brought in.
+
+    Over the *range*, not the commit. A merge commit carries the branch's
+    subject and none of its trailers, and the commit that did the clearing is
+    inside the branch — so reading trailers off the step itself would find
+    nothing on every pull request, which is every leg there will ever be.
+
+    Git parses the trailer block, so the awkward parts of the format — folded
+    continuation lines, what counts as the last paragraph — are not reproduced
+    here.
+    """
+    listed = _run(
+        [
+            "git",
+            "log",
+            f"--format=%(trailers:key={_LEG_TRAILER},valueonly)",
+            f"{first_parent}..{sha}",
+        ],
+        cwd=repo,
+    )
+    return [line.strip() for line in listed.stdout.splitlines() if line.strip()]
+
+
+def ledger(tool: str, revision: str = "HEAD", repo: Path = _ROOT) -> dict[str, Any]:
+    """What the declaration's own history records, per merge, for one tool.
+
+    The contract is committed, so ``git log`` over it *is* the time series and
+    no separate artifact is needed — one that changed on every run would
+    conflict on every run, and a snapshot cannot answer a question about a
+    series anyway.
+
+    **The unit is a first-parent step, not a commit**, and the difference is
+    not cosmetic. Read per commit, this repository's history shows 21 paying
+    events out of 66; read per step it shows 11 out of 67, because a pull
+    request that moves a ceiling twice is one pull request. The per-commit
+    figure double-counts exactly the population whose *rate* the number is
+    meant to describe, and it does so in the flattering direction.
+
+    Only steps where the declaration changed are read. Between them it is
+    constant by construction, so the arithmetic is identical and the walk costs
+    two subprocesses per moving step instead of two per merge.
+    """
+    moved = _run(
+        [
+            "git",
+            "log",
+            "--first-parent",
+            "--format=%H%x00%h%x00%ad%x00%s",
+            "--date=short",
+            "--reverse",
+            revision,
+            "--",
+            _CONTRACT_IN_GIT,
+        ],
+        cwd=repo,
+    )
+    steps: list[dict[str, Any]] = []
+    faults: list[str] = []
+    months: Counter[str] = Counter()
+    populations = {
+        "leg": {"steps": 0, "cleared": 0},
+        "convention": {"steps": 0, "cleared": 0},
+    }
+    born: dict[str, Any] | None = None
+    latest: dict[str, int] | None = None
+
+    for line in moved.stdout.splitlines():
+        if not line:
+            continue
+        sha, short, date, subject = line.split("\0")
+        after = _ceilings_at(sha, tool, repo)
+        if after is None:
+            continue
+        before = _ceilings_at(f"{sha}^", tool, repo)
+        latest = after
+        if before is None:
+            # The declaration's first appearance. It has no predecessor, so it
+            # cleared nothing and regressed nothing; what it did was set the
+            # opening balance, which is what the report calls it.
+            born = {"sha": short, "date": date, "total": sum(after.values())}
+            continue
+
+        movement = _movement(before, after)
+        legs = _legs_in(f"{sha}^", sha, repo)
+        faults += _leg_faults(short, date, legs, _declared_at(sha, repo))
+
+        if movement.cleared or movement.raised or movement.structural:
+            steps.append(
+                {
+                    "sha": short,
+                    "date": date,
+                    "subject": subject,
+                    "cleared": movement.cleared,
+                    "raised": movement.raised,
+                    "added": movement.added,
+                    "removed": movement.removed,
+                    "legs": legs,
+                }
+            )
+        if movement.cleared:
+            months[date[:7]] += movement.cleared
+            side = "leg" if legs else "convention"
+            populations[side]["steps"] += 1
+            populations[side]["cleared"] += movement.cleared
+
+    window = 0
+    if born is not None:
+        counted = _run(
+            ["git", "rev-list", "--first-parent", "--count", f"{born['sha']}..{revision}"],
+            cwd=repo,
+        )
+        window = int(counted.stdout.strip() or 0)
+
+    paying = sum(side["steps"] for side in populations.values())
+    cleared = sum(side["cleared"] for side in populations.values())
+    return {
+        "tool": tool,
+        "opened": born,
+        "standing": sum(latest.values()) if latest else 0,
+        "window": window,
+        "paying": paying,
+        "cleared": cleared,
+        "raised": sum(step["raised"] for step in steps),
+        "populations": populations,
+        "months": dict(sorted(months.items())),
+        "faults": faults,
+        "steps": steps,
+    }
+
+
+def _write_ledger(report: dict[str, Any]) -> None:
+    """The ledger as a reading, with the two ambiguous quantities kept apart."""
+    out = sys.stdout
+    opened = report["opened"]
+    if opened is None:
+        out.write(f"{report['tool']}: the declaration has no history on this revision\n")
+        return
+
+    window = report["window"]
+    out.write(
+        f"{report['tool']} ledger — {opened['total']} at {opened['sha']} "
+        f"({opened['date']}) to {report['standing']} now, over {window} merge(s)\n"
+    )
+
+    paying = report["paying"]
+    # Both halves, always. A rate is a fraction and a fraction printed without
+    # its denominator is the shape of number that gets quoted back with a
+    # different one attached.
+    if window:
+        out.write(
+            f"\ncleared {report['cleared']} over {paying} of {window} merges "
+            f"({100 * paying / window:.0f}% paying, "
+            f"{100 * (window - paying) / window:.0f}% paying nothing), "
+            f"mean {report['cleared'] / window:.1f} per merge\n"
+        )
+
+    # Never summed with the drain. A raised ceiling is the safety criterion
+    # failing, not progress with a sign on it.
+    out.write(f"raised {report['raised']}")
+    out.write("\n" if report["raised"] else "  — no cell has ever ended higher than it started\n")
+
+    out.write("\nby population\n")
+    for side in ("leg", "convention"):
+        counts = report["populations"][side]
+        out.write(f"  {side:<12} {counts['cleared']:>6} over {counts['steps']} merge(s)\n")
+    if not report["populations"]["leg"]["steps"]:
+        # Said, not left as a zero row. Before the trailer was adopted no commit
+        # could carry one, so an empty leg column is indistinguishable from a
+        # leg column that nothing has been filed into yet — and the whole reason
+        # the trailer exists is that those two must not read alike.
+        out.write(
+            f"  no commit in this window carries a {_LEG_TRAILER}: trailer, so "
+            "everything above is attributed to incidental clearing\n"
+        )
+
+    if report["months"]:
+        out.write("\nper month\n")
+        for month, count in report["months"].items():
+            out.write(f"  {month}  {count}\n")
+
+    structural = [step for step in report["steps"] if step["added"] or step["removed"]]
+    if structural:
+        out.write("\nstructural — the cell set moved, which is neither clearing nor regression\n")
+        for step in structural:
+            out.write(
+                f"  {step['sha']} {step['date']}  +{step['added']} added, "
+                f"-{step['removed']} removed  {step['subject'][:52]}\n"
+            )
+
+    for fault in report["faults"]:
+        logger.error("%s", fault)
+
+
 def _selected(requested: str | None) -> list[str]:
     return [requested] if requested else sorted(MEASURERS)
 
@@ -2700,6 +3011,23 @@ def _build_parser() -> argparse.ArgumentParser:
     owed.add_argument("paths", nargs="+", help="the files or directories to ask about")
     _add_json(owed)
 
+    history = commands.add_parser(
+        "ledger", help="what the declaration's history records, per merge"
+    )
+    _add_tool(history, "the tool to read; a ledger is denominated in one tool's findings")
+    history.add_argument(
+        "--revision",
+        default="HEAD",
+        help="read the first-parent history ending here (default: HEAD)",
+    )
+    history.add_argument(
+        "--repo",
+        type=Path,
+        default=_ROOT,
+        help="read this repository's history instead of the one this script lives in",
+    )
+    _add_json(history)
+
     counted = commands.add_parser("census", help="break a cell's findings down by rule")
     _add_tool(counted, "the tool to read; a census reads one at a time")
     _add_cells(counted)
@@ -2842,6 +3170,25 @@ def main() -> None:
         else:
             for kind, path, cell in resolved:
                 sys.stdout.write(f"{kind}\t{path}\t{cell}\n")
+        sys.exit(0)
+
+    if args.command == "ledger":
+        if not args.tool:
+            parser.error("a ledger is denominated in one tool's findings, so --tool is required")
+        # Before the measuring gate below, and before `_scoped_cells`: this
+        # command reads the declaration at past revisions and never looks at the
+        # tree, so the current file being unusable is not a reason to refuse —
+        # it is a reason somebody would want the history.
+        recorded = ledger(args.tool, args.revision, args.repo)
+        if args.use_json:
+            json.dump(recorded, sys.stdout, indent=2)
+            sys.stdout.write("\n")
+        else:
+            _write_ledger(recorded)
+        # Exits zero on a fault. A trailer naming an undeclared cell is a defect
+        # in a commit that is already merged, so there is nothing for a non-zero
+        # status to block; it is reported to be fixed in the ledger's reader,
+        # not to fail a gate over history that cannot be edited.
         sys.exit(0)
 
     only = _scoped_cells(parser, contract, args)
