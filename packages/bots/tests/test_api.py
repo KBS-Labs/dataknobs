@@ -2343,3 +2343,52 @@ class TestBotManagerSingleton:
         _BotManagerSingleton.get()  # Create instance
         _BotManagerSingleton.reset()
         assert _BotManagerSingleton._instance is None
+
+
+class TestDeprecationSuccessorsAreReachable:
+    """A successor a deprecation names must be importable from the same place.
+
+    ``dataknobs_bots.api`` exported ``get_bot_manager``, ``init_bot_manager``,
+    ``reset_bot_manager`` and ``BotManagerDep`` -- every one of which carries a
+    docstring telling the reader to use the ``registry`` spelling instead --
+    while exporting none of the four successors. The advice was therefore
+    unfollowable at exactly the moment it was taken: a consumer who read the
+    ``DeprecationWarning``, changed the name and left the import path alone got
+    an ``ImportError`` for their trouble, and the working code they had before
+    was the deprecated one.
+
+    The names are all defined in ``dependencies`` and were reachable there, so
+    nothing was missing except the re-export beside the deprecated names that
+    point at them -- which is the one place a consumer looks.
+
+    The package root had the same gap and it is checked here too: ``BotManager``
+    says "use :class:`BotRegistry` or :class:`InMemoryBotRegistry`", and
+    ``dataknobs_bots`` exported the first of those two.
+    """
+
+    @pytest.mark.parametrize(
+        ("module", "successor"),
+        [
+            ("dataknobs_bots.api", "get_bot_registry"),
+            ("dataknobs_bots.api", "init_bot_registry"),
+            ("dataknobs_bots.api", "reset_bot_registry"),
+            ("dataknobs_bots.api", "BotRegistryDep"),
+            ("dataknobs_bots", "BotRegistry"),
+            ("dataknobs_bots", "InMemoryBotRegistry"),
+        ],
+    )
+    def test_the_successor_is_exported_beside_what_it_replaces(self, module, successor):
+        """Both halves: reachable as an attribute, and declared in ``__all__``."""
+        import importlib
+
+        loaded = importlib.import_module(module)
+
+        assert hasattr(loaded, successor), (
+            f"{module}.{successor} is named as the successor by a deprecated "
+            "symbol the same module exports, but cannot be imported from it"
+        )
+        assert successor in loaded.__all__, (
+            f"{successor} is reachable from {module} but undeclared, so "
+            "`from ... import *` and the tooling that reads __all__ still "
+            "cannot see it"
+        )

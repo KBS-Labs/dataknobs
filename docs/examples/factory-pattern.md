@@ -27,7 +27,7 @@ from dataknobs_data import (
     Query,
     database_factory
 )
-from dataknobs_config import Config, ConfigurableBase
+from dataknobs_config import Config
 
 class SmartDatabaseFactory:
     """

@@ -12,23 +12,45 @@ The DataKnobs configuration system provides a standardized way to configure and 
 
 ## Core Concepts
 
-### 1. ConfigurableBase
+### 1. Structured Configuration
 
-`ConfigurableBase` is the base for configurable classes you write, and provides:
+A configurable class is a pair: a frozen `StructuredConfig` dataclass holding
+the knobs, and a `StructuredConfigConsumer` reading them. The dataclass is the
+schema, so the field set and the construction surface cannot drift apart.
 
 ```python
-from dataknobs_config import ConfigurableBase
+from dataclasses import dataclass
+from typing import ClassVar, Literal
 
-class MyClass(ConfigurableBase):
-    def __init__(self, config: dict):
-        # Your initialization code
-        pass
-    
-    @classmethod
-    def from_config(cls, config: dict):
-        """Create instance from configuration dictionary."""
-        return cls(config)
+from dataknobs_common.structured_config import (
+    StructuredConfig,
+    StructuredConfigConsumer,
+)
+
+
+@dataclass(frozen=True)
+class MyClassConfig(StructuredConfig):
+    host: str = "localhost"
+    port: int = 5432
+
+    _UNKNOWN_KEYS: ClassVar[Literal["ignore", "raise"]] = "raise"
+
+
+class MyClass(StructuredConfigConsumer[MyClassConfig]):
+    CONFIG_CLS: ClassVar[type[MyClassConfig]] = MyClassConfig
+
+    def _setup(self) -> None:
+        self.dsn = f"postgresql://{self.config.host}:{self.config.port}"
 ```
+
+`from_config` is provided by the mixin, so nothing above hand-writes it. The
+backends shipped in `dataknobs_data` all use this pattern.
+
+> `dataknobs_config.ConfigurableBase` is the deprecated predecessor. It still
+> works and raises no runtime warning, but new code should use the pair above.
+> It appears below wherever a comparison is useful; see
+> [ConfigurableBase (deprecated)](../packages/config/configurable-base.md) and
+> [Adding Configuration Support](./adding-config-support.md) for the migration.
 
 ### 2. Environment Variable Substitution
 
@@ -89,42 +111,43 @@ db = config.get_instance("databases", "primary")
 
 ### Pattern 1: Simple Configuration
 
-For classes that accept configuration as a dictionary:
+For a class whose configuration is a flat set of typed knobs:
 
 ```python
-from dataknobs_config import ConfigurableBase
+@dataclass(frozen=True)
+class SimpleDatabaseConfig(StructuredConfig):
+    host: str = "localhost"
+    port: int = 5432
 
-class SimpleDatabase(ConfigurableBase):
-    def __init__(self, config: dict = None):
-        self.config = config or {}
-        self.host = self.config.get("host", "localhost")
-        self.port = self.config.get("port", 5432)
+    _UNKNOWN_KEYS: ClassVar[Literal["ignore", "raise"]] = "raise"
+
+
+class SimpleDatabase(StructuredConfigConsumer[SimpleDatabaseConfig]):
+    CONFIG_CLS: ClassVar[type[SimpleDatabaseConfig]] = SimpleDatabaseConfig
 ```
+
+No `_setup` is needed when the class only reads `self.config.*`.
 
 ### Pattern 2: Complex Initialization
 
-For classes requiring setup beyond simple attribute assignment:
+For a class requiring setup beyond holding its configuration. Derived state
+goes in `_setup()`; anything awaitable goes in `_ainit()`, which runs only on
+the `from_config_async` path:
 
 ```python
-from dataknobs_config import ConfigurableBase
+class ComplexService(StructuredConfigConsumer[SimpleDatabaseConfig]):
+    CONFIG_CLS: ClassVar[type[SimpleDatabaseConfig]] = SimpleDatabaseConfig
 
-class ComplexService(ConfigurableBase):
-    def __init__(self, config: dict = None):
-        self.config = config or {}
-        self._initialize()
-    
-    def _initialize(self):
-        # Complex initialization logic
-        self._setup_connections()
-        self._load_resources()
-    
-    @classmethod
-    def from_config(cls, config: dict):
-        """Custom configuration handling."""
-        # Pre-process config if needed
-        processed_config = cls._validate_config(config)
-        return cls(processed_config)
+    def _setup(self) -> None:
+        self._resources = self._load_resources()
+        self._connection = None
+
+    async def _ainit(self) -> None:
+        self._connection = await open_connection(self.config.host)
 ```
+
+Reshaping the *input* — a legacy key, an alias, a value assembled from several
+others — belongs on the config class in `_normalize_dict`, not here.
 
 ### Pattern 3: Factory Pattern
 
@@ -197,8 +220,8 @@ The data package demonstrates comprehensive config integration:
 ```python
 # The backends shipped here take their config through
 # StructuredConfigConsumer, which validates the mapping against the
-# backend's CONFIG_CLS. ConfigurableBase above is the base for the
-# classes you write; these use the structured-config path instead.
+# backend's CONFIG_CLS -- the same pattern Core Concepts describes for
+# the classes you write.
 from dataknobs_data.backends.postgres import SyncPostgresDatabase
 
 # CONFIG_CLS names the dataclass the mapping is checked against --
@@ -253,78 +276,83 @@ elasticsearch:
 
 ## Best Practices
 
-### 1. Inherit from ConfigurableBase for Classes You Write
+### 1. Give the Configuration a Schema
 
-When creating new classes that might be configured:
-
-> `ConfigurableBase` is deprecated in favour of
-> `dataknobs_common.structured_config.StructuredConfigConsumer`, which the
-> backends shipped here already use. No runtime warning is raised, so the
-> transition stays quiet; prefer the successor for new code.
+When creating new classes that might be configured, write the config dataclass
+first. It is what makes every other practice below mechanical rather than
+conventional:
 
 ```python
-from dataknobs_config import ConfigurableBase
+@dataclass(frozen=True)
+class MyNewClassConfig(StructuredConfig):
+    host: str = "localhost"
+    port: int = 8080
 
-class MyNewClass(ConfigurableBase):
-    def __init__(self, config: dict = None):
-        self.config = config or {}
-        # Your initialization
+    _UNKNOWN_KEYS: ClassVar[Literal["ignore", "raise"]] = "raise"
+
+
+class MyNewClass(StructuredConfigConsumer[MyNewClassConfig]):
+    CONFIG_CLS: ClassVar[type[MyNewClassConfig]] = MyNewClassConfig
 ```
 
 ### 2. Support Both Direct and Config-based Construction
 
-Allow flexibility in how objects are created:
+This one is free. The mixin's single `__init__` accepts a typed config, a
+mapping, or loose keyword arguments, and all of them reach the same state:
 
 ```python
-class FlexibleClass(ConfigurableBase):
-    def __init__(self, host=None, port=None, config=None):
-        if config:
-            self.host = config.get("host", host or "localhost")
-            self.port = config.get("port", port or 8080)
-        else:
-            self.host = host or "localhost"
-            self.port = port or 8080
+MyNewClass()                                    # all defaults
+MyNewClass(MyNewClassConfig(host="db"))         # typed
+MyNewClass({"host": "db", "port": 5432})        # a loaded mapping
+MyNewClass(host="db", port=5432)                # loose kwargs
+MyNewClass.from_config({"host": "db"})          # the registry path
 ```
 
 ### 3. Document Configuration Options
 
-Always document what configuration options your class accepts:
+Document the options on the dataclass, which is the thing that defines them —
+a docstring listing keys the constructor does not accept is the drift this
+pattern exists to remove:
 
 ```python
-class WellDocumentedClass(ConfigurableBase):
-    """A well-documented configurable class.
-    
-    Configuration Options:
-        host (str): Server hostname (default: localhost)
-        port (int): Server port (default: 8080)
-        timeout (int): Connection timeout in seconds (default: 30)
-        retry_count (int): Number of retries (default: 3)
+@dataclass(frozen=True)
+class WellDocumentedConfig(StructuredConfig):
+    """Configuration for WellDocumentedClass.
+
+    Attributes:
+        host: Server hostname.
+        port: Server port.
+        timeout: Connection timeout in seconds.
+        retry_count: Number of retries before giving up.
     """
-    def __init__(self, config: dict = None):
-        # Implementation
-        pass
+
+    host: str = "localhost"
+    port: int = 8080
+    timeout: int = 30
+    retry_count: int = 3
 ```
 
 ### 4. Validate Configuration
 
-Validate configuration values early:
+Per-class invariants go in `__post_init__`, so they run for every construction
+shape rather than only the one that arrives as a dict. Presence and type are
+already enforced by the field set:
 
 ```python
-from dataknobs_config import ConfigurableBase, ValidationError
+@dataclass(frozen=True)
+class ValidatedConfig(StructuredConfig):
+    host: str
+    port: int = 8080
 
-class ValidatedClass(ConfigurableBase):
-    @classmethod
-    def from_config(cls, config: dict):
-        # Validate required fields
-        if "host" not in config:
-            raise ValidationError("'host' is required in configuration")
-        
-        # Validate types
-        if not isinstance(config.get("port"), int):
-            raise ValidationError("'port' must be an integer")
-        
-        return cls(config)
+    _UNKNOWN_KEYS: ClassVar[Literal["ignore", "raise"]] = "raise"
+
+    def __post_init__(self) -> None:
+        if not 1 <= self.port <= 65535:
+            raise ValueError("'port' must be between 1 and 65535")
 ```
+
+`host` has no default, so omitting it is a `TypeError` from the dataclass
+itself — the "required field" check no longer needs writing.
 
 ### 5. Use Environment Variables for Secrets
 
@@ -381,7 +409,7 @@ def test_from_config_method():
 
 To add configuration support to existing classes:
 
-1. **Add ConfigurableBase inheritance**:
+1. **Lift the constructor parameters into a config dataclass**:
 ```python
 # Before
 class MyClass:
@@ -390,25 +418,31 @@ class MyClass:
         self.param2 = param2
 
 # After
-from dataknobs_config import ConfigurableBase
+@dataclass(frozen=True)
+class MyClassConfig(StructuredConfig):
+    param1: str = ""
+    param2: int = 0
 
-class MyClass(ConfigurableBase):
-    def __init__(self, param1=None, param2=None, config=None):
-        if config:
-            self.param1 = config.get("param1", param1)
-            self.param2 = config.get("param2", param2)
-        else:
-            self.param1 = param1
-            self.param2 = param2
-    
-    @classmethod
-    def from_config(cls, config: dict):
-        return cls(config=config)
+    _UNKNOWN_KEYS: ClassVar[Literal["ignore", "raise"]] = "raise"
+
+
+class MyClass(StructuredConfigConsumer[MyClassConfig]):
+    CONFIG_CLS: ClassVar[type[MyClassConfig]] = MyClassConfig
 ```
 
-2. **Update tests** to verify both construction methods work
-3. **Document** the configuration options in class docstring
-4. **Add examples** showing configuration-based usage
+Callers passing keyword arguments keep working — `MyClass(param1="x")` is one
+of the shapes the mixin's `__init__` accepts — and `from_config` arrives
+without being written.
+
+2. **Move the constructor body** into `_setup()`, reading `self.config.*`
+3. **Pin the adoption** with `assert_structured_config_consumer(MyClass)`, which
+   fails if the dataclass and the constructor disagree
+4. **Document** the configuration options on the dataclass
+5. **Add examples** showing configuration-based usage
+
+A class already inheriting `ConfigurableBase` migrates the same way; see
+[Adding Configuration Support](./adding-config-support.md#migrating-from-configurablebase)
+for the step-by-step.
 
 ## Advanced Features
 

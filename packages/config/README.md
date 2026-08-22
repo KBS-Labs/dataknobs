@@ -237,19 +237,59 @@ cache = config.build_object("xref:cache[redis]")
 
 ### Implementing Configurable Classes
 
-```python
-from dataknobs_config import ConfigurableBase
+`build_object` calls `from_config(config)` on the target class when it has
+one and falls back to `cls(**config)` otherwise. It dispatches on the
+*method*, not on a base class, so any class providing `from_config` is
+buildable from configuration.
 
-class MyDatabase(ConfigurableBase):
-    def __init__(self, host, port, **kwargs):
-        self.host = host
-        self.port = port
-        
-    @classmethod
-    def from_config(cls, config):
-        # Custom configuration logic
-        return cls(**config)
+`StructuredConfigConsumer` provides one, driven by a typed config dataclass:
+
+```python
+from dataclasses import dataclass
+from typing import ClassVar, Literal
+
+from dataknobs_common.structured_config import (
+    StructuredConfig,
+    StructuredConfigConsumer,
+)
+
+
+@dataclass(frozen=True)
+class MyDatabaseConfig(StructuredConfig):
+    host: str = "localhost"
+    port: int = 5432
+
+    _UNKNOWN_KEYS: ClassVar[Literal["ignore", "raise"]] = "raise"
+
+
+class MyDatabase(StructuredConfigConsumer[MyDatabaseConfig]):
+    CONFIG_CLS: ClassVar[type[MyDatabaseConfig]] = MyDatabaseConfig
+
+    def _setup(self) -> None:
+        self.dsn = f"postgresql://{self.config.host}:{self.config.port}"
 ```
+
+The dataclass is the schema, so `self.config` is typed and a misspelling is
+caught rather than defaulted:
+
+```python
+MyDatabase.from_config({"hosst": "db"})
+# ValueError: MyDatabaseConfig does not accept 'hosst' (did you mean 'host'?).
+#             Accepted keys: host, port.
+```
+
+The class is also constructible directly from a config object
+(`MyDatabase(MyDatabaseConfig(host="db"))`), which the config-driven path
+above does not have to know about. See
+[Structured Configuration](../common/docs/guides/structured-config.md) for
+the full API.
+
+> `dataknobs_config.ConfigurableBase` is the deprecated predecessor of this
+> pattern: it splats the mapping into the constructor with no schema to check
+> it against. Existing users keep working and no runtime warning is raised,
+> but new code should use the typed base above. See
+> [ConfigurableBase (deprecated)](docs/configurable-base.md) for what changes
+> and why.
 
 ### Implementing Factories
 

@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Documented
+
+- **The configuration guides teach `StructuredConfigConsumer` rather than
+  `ConfigurableBase`.** The deprecated base is soft-deprecated by design — no
+  runtime warning is raised, so the transition stays quiet — which left
+  documentation as the only channel through which a new adopter could learn it
+  is going away, and the guides were the channel recommending it. The
+  step-by-step guide, the system overview and the package README are now
+  written against the typed-dispatch successor, with the config dataclass as
+  the schema; each keeps `ConfigurableBase` visible as the predecessor it is,
+  with a migration path rather than a rename.
+
 ## v0.6.0 - 2026-08-19
 
 ### Added
