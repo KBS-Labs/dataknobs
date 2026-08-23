@@ -9,6 +9,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Extra arguments to `LLMProviderFactory.create()` reach the provider.**
+  The signature has taken `**kwargs` and the docstring has described
+  them as "Additional arguments passed to provider constructor" since before
+  the provider registry existed, and neither branch ever passed them on. A
+  caller supplying `prompt_builder=` or, on `EchoProvider`, `responses=` got a
+  provider built from defaults and no error saying so. Forwarded now, on both
+  the async and the sync-adapter branch.
+
+- **`create_llm_provider()` returns the one provider the call can produce.**
+  It is overloaded on `is_async`, so the default gives back an
+  `AsyncLLMProvider` and `is_async=False` a `SyncProviderAdapter`; a caller
+  passing a runtime `bool` still gets the honest union. This is the typed
+  entry point to prefer when the mode is known at the call site.
+  `LLMProviderFactory.create()` keeps returning the union — `is_async` is a
+  *constructor* flag there, and the method has to stay callable through the
+  `Config` factory protocol, where the caller holds a factory object and not
+  the flag that built it.
+
+- **The factory's sync arm names the class it actually returns.**
+  `create()` declared `AsyncLLMProvider | SyncLLMProvider`, but
+  `SyncProviderAdapter` wraps an async provider rather than subclassing
+  `LLMProvider`, and no `SyncLLMProvider` subclass exists in tree — so that arm
+  was uninhabited, held down by a `# type: ignore[return-value]` on the return.
+  The guide already described the real behaviour; only the signature disagreed.
+
+- **The provider registry produces providers, not provider classes.** Its type
+  parameter read `type[AsyncLLMProvider]`, carried across verbatim from the
+  plain `dict[str, type[AsyncLLMProvider] | None]` it replaced —
+  `PluginRegistry[T]`'s parameter is what a registration *produces*, and a
+  provider class is already a callable that produces one. Registering a
+  built-in provider was an argument-type error, and instantiating what
+  `get_factory` returned yielded a class rather than a provider.
+
+  Nothing about the registrations or lookups changes at runtime; what changes
+  is that the union this leaked no longer reaches callers. Inside the package
+  it had made `provider.complete(...)` statically ambiguous between a
+  coroutine and an `LLMResponse` wherever a sync provider was requested,
+  because the two halves of the interface differ in exactly that way.
+
 - **Documented examples named database config keys the backends do not
   have.** `file_path` in `DataknobsConversationStorage`'s docstring, and
   `db_path` / `base_path` across six conversation-storage examples in the

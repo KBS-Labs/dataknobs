@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Changed
+
+- **The three places a bot builds an LLM provider from config call
+  `create_llm_provider()`** — bot construction, summary memory, and the
+  grounded query transformer — rather than
+  `LLMProviderFactory(is_async=True).create(...)`. The two build the same
+  object, but `is_async` is an argument on the function and a constructor flag
+  on the factory, so only the function can say which provider comes back.
+  Each site had been absorbing the difference in its own way: bot construction
+  assigned the union to an attribute typed for one half of it and awaited
+  lifecycle methods that exist on only that half, while the other two erased
+  the result to `Any`, which reports nothing because it checks nothing. See
+  the `dataknobs-llm` entries for the typing that made this possible.
+
 ### Documented
 
 - **The multi-tenancy guides now say that the API they document is

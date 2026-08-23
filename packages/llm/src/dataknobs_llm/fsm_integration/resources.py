@@ -707,12 +707,16 @@ class LLMResource(BaseResourceProvider):
             embeddings = provider.embed(texts, **kwargs)
             provider.close()
 
-            # Ensure we return List[List[float]]
+            # Ensure we return List[List[float]]. The two casts that used to
+            # be here were doing the narrowing `isinstance` already implies;
+            # they were needed only because `create_provider` returned a union
+            # spanning the async provider, so `embed` returned a coroutine as
+            # well as the two list shapes and there was nothing to narrow.
             if isinstance(embeddings[0], list):
-                return cast("List[List[float]]", embeddings)
+                return embeddings
             else:
                 # Single text was embedded - wrap in list
-                return [cast("List[float]", embeddings)]
+                return [embeddings]
 
         except Exception:
             # Fallback to placeholder dimensions on error

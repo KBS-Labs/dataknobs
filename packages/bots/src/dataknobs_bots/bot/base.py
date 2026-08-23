@@ -963,9 +963,16 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
                 "provided."
             )
 
-        from dataknobs_llm.llm import LLMProviderFactory
+        # ``create_llm_provider``, not ``LLMProviderFactory(is_async=True)``
+        # — same object, but here ``is_async`` is an argument rather than a
+        # constructor flag, so the overload gives back the
+        # ``AsyncLLMProvider`` this path has always produced instead of a
+        # union. That is what ``self.llm`` is declared to hold, and what the
+        # ``initialize()`` and ``close()`` below are awaited on. See that
+        # function's docstring for why the factory cannot say the same.
+        from dataknobs_llm.llm import create_llm_provider
 
-        created_llm = LLMProviderFactory(is_async=True).create(self.config.llm)
+        created_llm = create_llm_provider(self.config.llm)
         await created_llm.initialize()
         self.llm = created_llm
         self._owns_llm = True

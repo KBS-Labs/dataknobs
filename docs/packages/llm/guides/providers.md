@@ -33,6 +33,50 @@ response = await provider.complete(messages)
 Accepts `LLMConfig`, `Config`, or `dict`. Returns an uninitialized provider —
 call `await provider.initialize()` before use.
 
+### Which of the two entry points to use
+
+`create_llm_provider()` and `LLMProviderFactory(is_async=...).create()` build
+the same object. What differs is where `is_async` lives, and that decides what
+a type checker can tell you:
+
+| Call | Returns |
+|---|---|
+| `create_llm_provider(config)` | `AsyncLLMProvider` |
+| `create_llm_provider(config, is_async=False)` | `SyncProviderAdapter` |
+| `create_llm_provider(config, is_async=some_bool)` | either — the union |
+| `LLMProviderFactory(is_async=...).create(config)` | either — the union |
+
+On the function, `is_async` is an argument, so overloads resolve the return
+type to the one provider the call can actually produce. On the factory it is a
+*constructor* flag, and `create()` has to stay callable through the `Config`
+factory protocol — where the caller holds a factory object and not the flag
+that built it — so it returns the union whatever the flag was set to.
+
+Reach for the factory when the mode genuinely is not known at the call site,
+or when registering it as a config factory. Otherwise prefer the function: a
+caller that narrows the union with a check that cannot fail, or that assigns it
+to something typed `Any`, is paying for an arm it can never receive.
+
+The sync arm is `SyncProviderAdapter`, not `SyncLLMProvider`. The adapter wraps
+an async provider rather than subclassing `LLMProvider`, and no
+`SyncLLMProvider` subclass exists in tree — so `initialize()` and `close()` are
+synchronous on that half and awaited only on the async one.
+
+### Passing constructor arguments
+
+`LLMProviderFactory.create()` forwards `**kwargs` to the provider constructor.
+Every built-in provider takes `(config, prompt_builder=None)`; `EchoProvider`
+takes several more:
+
+```python
+from dataknobs_llm import LLMProviderFactory
+
+provider = LLMProviderFactory().create(
+    {"provider": "echo", "model": "test"},
+    responses=["a scripted reply"],
+)
+```
+
 ## create_embedding_provider()
 
 Create and initialize an embedding provider from configuration. The provider is

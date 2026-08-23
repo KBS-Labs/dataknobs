@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal, overload
 
 from dataknobs_common.registry import PluginRegistry
 from dataknobs_common.structured_config import StructuredConfig, config_registries
@@ -45,7 +45,7 @@ _logger = logging.getLogger(__name__)
 
 
 def _register_builtin_providers(
-    registry: PluginRegistry[type[AsyncLLMProvider]],
+    registry: PluginRegistry[AsyncLLMProvider],
 ) -> None:
     """Register all built-in LLM providers."""
     for name, cls in [
@@ -59,9 +59,21 @@ def _register_builtin_providers(
         registry.register(name, cls)
 
 
-# Module-level provider registry — PluginRegistry stores provider *classes*
-# (not instances), so get() returns a class and create() is not used here.
-_provider_registry: PluginRegistry[type[AsyncLLMProvider]] = PluginRegistry(
+# Module-level provider registry. ``PluginRegistry[T]``'s parameter is what a
+# registration *produces*, not what the mapping stores — a provider class is
+# already a ``Callable[..., AsyncLLMProvider]``, which is the shape ``register``
+# accepts and ``get_factory`` hands back. The parameter used to read
+# ``type[AsyncLLMProvider]``, carried across verbatim from the plain
+# ``dict[str, type[AsyncLLMProvider] | None]`` this replaced; that made the
+# registry statically produce provider *classes*, so ``register`` wanted a
+# factory returning a class, and calling what ``get_factory`` returned yielded
+# a class rather than a provider. Six of this file's eight findings came from
+# those two words alone — measured by changing only them.
+#
+# Only ``register`` / ``get_factory`` / ``list_keys`` / ``unregister`` are used
+# here: instantiation is this module's job, because it — not the registry —
+# knows whether the sync adapter goes on top.
+_provider_registry: PluginRegistry[AsyncLLMProvider] = PluginRegistry(
     "llm_providers",
     canonicalize_keys=True,
     on_first_access=_register_builtin_providers,
@@ -151,12 +163,29 @@ class LLMProviderFactory:
         self,
         config: LLMConfig | Config | dict[str, Any],
         **kwargs: Any,
-    ) -> AsyncLLMProvider | SyncLLMProvider:
+    ) -> AsyncLLMProvider | SyncProviderAdapter:
         """Create an LLM provider from configuration.
+
+        The return type is a union because ``is_async`` is a *constructor*
+        flag, which no overload can discriminate — this method has to be
+        callable through the ``Config`` factory protocol, where the caller
+        holds a factory object and not the flag that built it. Code that
+        knows which half it wants should call :func:`create_llm_provider`
+        instead, whose ``is_async`` is an argument and is therefore typed.
+
+        The second arm names :class:`SyncProviderAdapter` rather than
+        ``SyncLLMProvider``: the adapter deliberately inherits from nothing,
+        and no ``SyncLLMProvider`` subclass exists in tree, so the arm this
+        replaces was uninhabited. A ``# type: ignore[return-value]`` on the
+        sync branch had been holding the mismatch down since before the
+        registry existed.
 
         Args:
             config: Configuration (LLMConfig, Config object, or dict)
             **kwargs: Additional arguments passed to provider constructor
+                (e.g. ``prompt_builder=``). Every built-in provider takes
+                ``(config, prompt_builder=None)``; ``EchoProvider`` takes
+                several more.
 
         Returns:
             LLM provider instance
@@ -178,13 +207,14 @@ class LLMProviderFactory:
                 f"Unknown provider: {llm_config.provider}. Available providers: {available}"
             )
 
-        # Create provider instance
+        # Create provider instance. ``**kwargs`` is forwarded — the signature
+        # and docstring have promised that since before the registry existed
+        # and neither branch did it, so a caller passing ``prompt_builder=``
+        # or ``responses=`` got a default-built provider and no error saying so.
+        async_provider = provider_class(llm_config, **kwargs)
         if self.is_async:
-            return provider_class(llm_config)
-        else:
-            # Wrap in sync adapter
-            async_provider = provider_class(llm_config)
-            return SyncProviderAdapter(async_provider)  # type: ignore[return-value]
+            return async_provider
+        return SyncProviderAdapter(async_provider)
 
     @staticmethod
     def register_provider(
@@ -229,7 +259,7 @@ class LLMProviderFactory:
         self,
         config: LLMConfig | Config | dict[str, Any],
         **kwargs: Any,
-    ) -> AsyncLLMProvider | SyncLLMProvider:
+    ) -> AsyncLLMProvider | SyncProviderAdapter:
         """Allow factory to be called directly.
 
         Makes the factory callable for convenience.
@@ -244,14 +274,48 @@ class LLMProviderFactory:
         return self.create(config, **kwargs)
 
 
+@overload
+def create_llm_provider(
+    config: LLMConfig | Config | dict[str, Any],
+    is_async: Literal[True] = ...,
+) -> AsyncLLMProvider: ...
+
+
+@overload
+def create_llm_provider(
+    config: LLMConfig | Config | dict[str, Any],
+    is_async: Literal[False],
+) -> SyncProviderAdapter: ...
+
+
+@overload
+def create_llm_provider(
+    config: LLMConfig | Config | dict[str, Any],
+    is_async: bool,
+) -> AsyncLLMProvider | SyncProviderAdapter: ...
+
+
 def create_llm_provider(
     config: LLMConfig | Config | dict[str, Any],
     is_async: bool = True,
-) -> AsyncLLMProvider | SyncLLMProvider:
+) -> AsyncLLMProvider | SyncProviderAdapter:
     """Create appropriate LLM provider based on configuration.
 
     Convenience function that uses LLMProviderFactory internally.
     Now supports LLMConfig, Config objects, and dictionaries.
+
+    Prefer this over ``LLMProviderFactory(is_async=...).create(config)``
+    when the mode is known at the call site. Here ``is_async`` is an
+    argument, so the overloads above resolve the return type to the one
+    provider the call can actually produce; on the factory it is a
+    constructor flag, and :meth:`LLMProviderFactory.create` has to return
+    the union whatever it was set to. Every caller of the union form then
+    pays for an arm it cannot receive — by narrowing the value with a check
+    that can never fail, or by erasing it to ``Any``.
+
+    The third overload keeps a caller passing a runtime ``bool`` working:
+    it matches neither ``Literal``, and without it the call would be an
+    error rather than the honest union.
 
     Args:
         config: LLM configuration (LLMConfig, Config, or dict)
@@ -371,9 +435,8 @@ async def create_embedding_provider(
     else:
         log_provider, log_model = provider_config["provider"], provider_config["model"]
 
-    factory = LLMProviderFactory(is_async=True)
     try:
-        provider = factory.create(provider_config)
+        provider = create_llm_provider(provider_config)
         await provider.initialize()
     except Exception:
         _logger.exception(
