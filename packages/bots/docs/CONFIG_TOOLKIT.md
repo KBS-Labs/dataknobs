@@ -68,6 +68,11 @@ flat = builder.build()
 # Portable format with bot wrapper
 portable = builder.build_portable()
 # {"bot": {"llm": {"$resource": "default", ...}}, "domain": {"id": "my-bot"}}
+
+# Flat format WITHOUT validating -- for callers that report a
+# ValidationResult rather than raise on one. Pair it with validate().
+draft = builder.build_config()
+result = builder.validate()
 ```
 
 ### Adding Tools by Name
@@ -447,13 +452,18 @@ Six ContextAwareTool implementations for wizard-driven config flows:
 | `ListTemplatesTool` | List available templates | `ConfigTemplateRegistry` |
 | `GetTemplateDetailsTool` | Get template details | `ConfigTemplateRegistry` |
 | `PreviewConfigTool` | Preview config being built | `builder_factory` callback |
-| `ValidateConfigTool` | Validate current config | `ConfigValidator` |
+| `ValidateConfigTool` | Validate current config | the `builder_factory`'s builder — its validator decides |
 | `SaveConfigTool` | Save/finalize config | `ConfigDraftManager` + `on_save` + `portable` |
 | `ListAvailableToolsTool` | List tools for bot config | `available_tools` catalog |
 
 ### Consumer Extension Points
 
 - **`builder_factory`**: `PreviewConfigTool` and `ValidateConfigTool` accept a `builder_factory: Callable[[dict], DynaBotConfigBuilder]` that encapsulates domain-specific config building logic.
+  When `ValidateConfigTool` has one, the builder's own validator decides the
+  verdict — the same validator `build_portable()` runs — so the validate tool
+  and `SaveConfigTool` cannot disagree about the same configuration. A
+  `ConfigValidator` passed to `ValidateConfigTool` is optional and runs *in
+  addition*, contributing extra errors only.
 - **`on_save`**: `SaveConfigTool` accepts an `on_save: Callable[[str, dict], Any]` callback for post-save actions (e.g., registering the bot with a manager).
 - **`portable`**: `SaveConfigTool` accepts `portable: bool = False`. When `True`, uses `build_portable()` to produce configs with a `bot` wrapper key.
 - **`available_tools`**: `ListAvailableToolsTool` accepts a list of tool descriptors (consumer-specific catalog).

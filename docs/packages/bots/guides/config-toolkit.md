@@ -124,10 +124,12 @@ Three built-in templates are included:
 
 `DynaBotConfigBuilder` provides fluent methods for all DynaBot components. Consumer extension via `set_custom_section()` — no subclassing needed.
 
-Two output formats:
+Three output methods:
 
 - `build()` — flat format compatible with `DynaBot.from_config()`
 - `build_portable()` — environment-aware format with `$resource` refs and `bot` wrapper
+- `build_config()` — the flat dict **without** validating, for callers that report
+  a `ValidationResult` rather than raise on one
 
 #### Custom Storage Classes
 
@@ -200,7 +202,7 @@ Six `ContextAwareTool` implementations for wizard-driven config flows:
 | `ListTemplatesTool` | List available templates | `ConfigTemplateRegistry` |
 | `GetTemplateDetailsTool` | Get template details | `ConfigTemplateRegistry` |
 | `PreviewConfigTool` | Preview config being built | `builder_factory` callback |
-| `ValidateConfigTool` | Validate current config | `ConfigValidator` |
+| `ValidateConfigTool` | Validate current config | the `builder_factory`'s builder — its validator decides |
 | `SaveConfigTool` | Save/finalize config | `ConfigDraftManager` + `on_save` + `portable` |
 | `ListAvailableToolsTool` | List tools for bot config | `available_tools` catalog |
 

@@ -17,7 +17,7 @@ from dataknobs_bots.config.templates import (
     ConfigTemplateRegistry,
     TemplateVariable,
 )
-from dataknobs_bots.config.validation import ConfigValidator
+from dataknobs_bots.config.validation import ConfigValidator, ValidationResult
 from dataknobs_bots.tools.config_tools import (
     GetTemplateDetailsTool,
     ListAvailableToolsTool,
@@ -88,6 +88,23 @@ def _make_registry() -> ConfigTemplateRegistry:
         )
     )
     return registry
+
+
+def _typo_builder_factory(wizard_data: dict[str, Any]) -> DynaBotConfigBuilder:
+    """Builder factory whose config carries a misspelled $resource marker.
+
+    ``$requred`` reads as *not required* to a resolver, so it survives to
+    whichever deployment lacks the resource. Only a schema-aware validator
+    catches it -- which is exactly the validator the builder carries and
+    ``ValidateConfigTool`` used to substitute away.
+    """
+    builder = (
+        DynaBotConfigBuilder()
+        .set_llm_resource(wizard_data.get("llm_resource", "default"))
+        .set_conversation_storage(wizard_data.get("storage_backend", "memory"))
+    )
+    builder.merge_overrides({"llm": {"$requred": True}})
+    return builder
 
 
 def _basic_builder_factory(wizard_data: dict[str, Any]) -> DynaBotConfigBuilder:
@@ -182,6 +199,24 @@ class TestGetTemplateDetailsTool:
         assert "template_name" in tool.schema["properties"]
         assert "template_name" in tool.schema["required"]
 
+    @pytest.mark.asyncio
+    async def test_omitted_template_name_reports_rather_than_raises(self) -> None:
+        """An LLM omitting a required argument gets an error, not a TypeError.
+
+        ``ContextAwareTool.execute`` forwards whatever the model sent
+        straight into ``execute_with_context``, so a required positional
+        parameter turns a routine omission into an exception escaping the
+        tool-execution path. Every sibling tool in this module defaults
+        its parameters for that reason; this one did not, which is also
+        the [override] incompatibility the type checker reports against
+        the base signature.
+        """
+        tool = GetTemplateDetailsTool(template_registry=_make_registry())
+        result = await tool.execute()
+        assert "error" in result
+        assert "template_name" in result["error"]
+        assert result["available"] == ["basic", "advanced"]
+
 
 class TestPreviewConfigTool:
     """Tests for PreviewConfigTool."""
@@ -257,6 +292,95 @@ class TestValidateConfigTool:
         )
         result = await tool.execute_with_context(context)
         assert result["valid"] is True
+
+    @pytest.mark.asyncio
+    async def test_agrees_with_save_on_a_schema_error(self, tmp_path: Path) -> None:
+        """validate_config must not say yes to what save_config refuses.
+
+        The tool built its own schema-less ``ConfigValidator`` and ran it
+        over ``builder._build_internal()``, while save ran the builder's
+        own schema-aware validator. An SME was told the config was valid
+        and then told it could not be saved, with no way to reconcile the
+        two. The builder already knows the answer: it exposes ``validate()``.
+        """
+        wizard_data = {"domain_id": "test-bot"}
+        validate_tool = ValidateConfigTool(
+            validator=ConfigValidator(),
+            builder_factory=_typo_builder_factory,
+        )
+        save_tool = SaveConfigTool(
+            draft_manager=ConfigDraftManager(output_dir=tmp_path),
+            builder_factory=_typo_builder_factory,
+            portable=True,
+        )
+        context = _make_context(wizard_data)
+
+        validated = await validate_tool.execute_with_context(context)
+        saved = await save_tool.execute_with_context(context)
+
+        assert saved["success"] is False
+        assert validated["valid"] is False, (
+            "validate_config reported valid while save_config refused the same config"
+        )
+        assert any("$requred" in e for e in validated["errors"])
+
+    @pytest.mark.asyncio
+    async def test_agrees_with_save_on_a_clean_config(self, tmp_path: Path) -> None:
+        """The false-positive guard for the test above.
+
+        Restoring agreement must not be achieved by making the tool
+        pessimistic -- a clean config still passes both.
+        """
+        wizard_data = {
+            "domain_id": "test-bot",
+            "llm_provider": "ollama",
+            "storage_backend": "memory",
+        }
+        validate_tool = ValidateConfigTool(
+            validator=ConfigValidator(),
+            builder_factory=_basic_builder_factory,
+        )
+        save_tool = SaveConfigTool(
+            draft_manager=ConfigDraftManager(output_dir=tmp_path),
+            builder_factory=_basic_builder_factory,
+            portable=True,
+        )
+        context = _make_context(wizard_data)
+
+        assert (await validate_tool.execute_with_context(context))["valid"] is True
+        assert (await save_tool.execute_with_context(context))["success"] is True
+
+    @pytest.mark.asyncio
+    async def test_explicit_validator_runs_in_addition_to_the_builders(self) -> None:
+        """An explicitly supplied validator adds to the builder's verdict.
+
+        It must not replace it. Replacing is what lets validate and save
+        disagree, and the failure directions are not symmetric: an extra
+        error blocks an SME, a missing one misleads them.
+        """
+
+        def reject_test_bots(config: dict[str, Any]) -> ValidationResult:
+            return ValidationResult.error("bots named in a test are not allowed")
+
+        explicit = ConfigValidator()
+        explicit.register_validator("no_test_bots", reject_test_bots)
+        tool = ValidateConfigTool(
+            validator=explicit,
+            builder_factory=_typo_builder_factory,
+        )
+
+        result = await tool.execute_with_context(_make_context({"domain_id": "test-bot"}))
+
+        assert result["valid"] is False
+        assert any("$requred" in e for e in result["errors"]), (
+            "the builder's schema-aware verdict was discarded"
+        )
+        assert "bots named in a test are not allowed" in result["errors"], (
+            "the explicitly supplied validator was discarded"
+        )
+        assert len(result["errors"]) == len(set(result["errors"])), (
+            f"duplicate errors from merging two overlapping validators: {result['errors']}"
+        )
 
 
 class TestSaveConfigTool:
@@ -466,7 +590,7 @@ class TestSaveConfigTool:
 
     @pytest.mark.asyncio
     async def test_save_non_portable(self, tmp_path: Path) -> None:
-        """Verify portable=False (default) uses _build_internal() (flat)."""
+        """Verify portable=False (default) uses build_config() (flat)."""
         manager = ConfigDraftManager(output_dir=tmp_path)
         tool = SaveConfigTool(
             draft_manager=manager,

@@ -289,18 +289,32 @@ class GetTemplateDetailsTool(ContextAwareTool):
     async def execute_with_context(
         self,
         context: ToolExecutionContext,
-        template_name: str,
+        template_name: str | None = None,
         **kwargs: Any,
     ) -> dict[str, Any]:
         """Get template details.
+
+        ``template_name`` is required by :attr:`schema` but optional in
+        this signature, as it is for every sibling tool in this module.
+        An LLM omitting a declared argument is routine, and the base
+        class forwards whatever the model sent straight through -- so a
+        required positional parameter turns that omission into a
+        ``TypeError`` escaping the tool-execution path instead of a
+        result the model can read and retry from.
 
         Args:
             context: Execution context.
             template_name: Name of the template.
 
         Returns:
-            Dict with template details, or error if not found.
+            Dict with template details, or error if missing or not found.
         """
+        if not template_name:
+            return {
+                "error": "Missing required parameter: template_name",
+                "available": [t.name for t in self._registry.list_templates()],
+            }
+
         template = self._registry.get(template_name)
         if template is None:
             return {
@@ -422,7 +436,7 @@ class PreviewConfigTool(ContextAwareTool):
 
         try:
             builder = self._builder_factory(wizard_data)
-            config = builder._build_internal()
+            config = builder.build_config()
         except Exception as e:
             logger.exception("Failed to build config for preview")
             return {"error": f"Failed to build configuration: {e}"}
@@ -446,8 +460,12 @@ class ValidateConfigTool(ContextAwareTool):
 
     Runs the full validation pipeline and returns errors and warnings.
 
+    When a ``builder_factory`` is supplied the builder's own validator
+    decides the verdict, so this tool and ``SaveConfigTool`` cannot
+    disagree about the same configuration.
+
     Attributes:
-        _validator: ConfigValidator instance.
+        _validator: Optional additional ConfigValidator.
         _builder_factory: Optional factory for building config from wizard data.
     """
 
@@ -463,13 +481,16 @@ class ValidateConfigTool(ContextAwareTool):
 
     def __init__(
         self,
-        validator: ConfigValidator,
+        validator: ConfigValidator | None = None,
         builder_factory: Callable[[dict[str, Any]], DynaBotConfigBuilder] | None = None,
     ) -> None:
         """Initialize the tool.
 
         Args:
-            validator: Validator to use for checking configs.
+            validator: Optional additional validator. When a
+                ``builder_factory`` is supplied the builder's own
+                validator is authoritative and this one runs in
+                addition to it, contributing extra errors only.
             builder_factory: Optional factory to build config from wizard
                 data before validation. If not provided, validates the
                 raw wizard data as a config dict.
@@ -530,16 +551,30 @@ class ValidateConfigTool(ContextAwareTool):
         if self._builder_factory is not None:
             try:
                 builder = self._builder_factory(wizard_data)
-                config = builder._build_internal()
             except Exception as e:
                 return {
                     "valid": False,
                     "errors": [f"Failed to build configuration: {e}"],
                 }
+            try:
+                # The builder's own validator is authoritative. It is the one
+                # `build_portable()` runs, so anything else here can report a
+                # verdict the save path contradicts -- which is precisely what
+                # a schema-less `ConfigValidator()` used to do.
+                result = builder.validate()
+                if self._validator is not None:
+                    # An explicitly supplied validator runs *in addition*,
+                    # never instead: it can only add errors, so it cannot
+                    # reintroduce the disagreement.
+                    result = result.merge(self._validator.validate(builder.build_config()))
+            except Exception as e:
+                return {
+                    "valid": False,
+                    "errors": [f"Failed to validate configuration: {e}"],
+                }
         else:
-            config = wizard_data
-
-        result = self._validator.validate(config)
+            validator = self._validator or ConfigValidator()
+            result = validator.validate(wizard_data)
 
         logger.debug(
             "Validated config: valid=%s, errors=%d, warnings=%d",
@@ -560,7 +595,7 @@ class SaveConfigTool(ContextAwareTool):
     registering the bot with a manager).
 
     When ``portable=True``, the builder's ``build_portable()`` method is
-    used instead of ``_build_internal()``, producing a config with a
+    used instead of ``build_config()``, producing a config with a
     ``bot`` wrapper key suitable for environment-aware deployment.
 
     Attributes:
@@ -598,7 +633,7 @@ class SaveConfigTool(ContextAwareTool):
                 wizard data before saving.
             portable: When True, use ``build_portable()`` for output
                 (wraps config under ``bot`` key with custom sections as
-                siblings). When False (default), use ``_build_internal()``
+                siblings). When False (default), use ``build_config()``
                 for flat format.
         """
         super().__init__(
@@ -709,7 +744,7 @@ class SaveConfigTool(ContextAwareTool):
                 if self._portable:
                     config = builder.build_portable()
                 else:
-                    config = builder._build_internal()
+                    config = builder.build_config()
             except Exception as e:
                 return {"success": False, "error": f"Failed to build configuration: {e}"}
         else:

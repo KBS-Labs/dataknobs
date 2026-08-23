@@ -38,6 +38,11 @@ class ValidatorFn(Protocol):
     def __call__(self, config: dict[str, Any]) -> ValidationResult: ...
 
 
+def _unique(messages: list[str]) -> list[str]:
+    """Return *messages* with duplicates removed, first occurrence kept."""
+    return list(dict.fromkeys(messages))
+
+
 @dataclass
 class ValidationResult:
     """Result of validating a configuration.
@@ -57,6 +62,14 @@ class ValidationResult:
 
         The merged result is valid only if both results are valid.
 
+        Identical messages are reported once. Two validators covering
+        overlapping ground -- a builder's schema-aware validator and a
+        caller-supplied one both run ``validate_completeness`` -- would
+        otherwise report every shared failure as many times as there are
+        validators, and a repeated string carries nothing the first
+        occurrence does not. Order is preserved, and distinct messages
+        are never collapsed.
+
         Args:
             other: Another validation result to merge.
 
@@ -65,8 +78,8 @@ class ValidationResult:
         """
         return ValidationResult(
             valid=self.valid and other.valid,
-            errors=self.errors + other.errors,
-            warnings=self.warnings + other.warnings,
+            errors=_unique(self.errors + other.errors),
+            warnings=_unique(self.warnings + other.warnings),
         )
 
     @classmethod

@@ -44,6 +44,26 @@ class TestValidationResult:
         assert merged.valid is False
         assert merged.errors == ["bad"]
 
+    def test_merge_deduplicates_identical_errors(self) -> None:
+        """Two results carrying the same error report it once.
+
+        ``ConfigValidator.validate`` and ``DynaBotConfigBuilder.validate``
+        both run ``validate_completeness`` over the same config, so any
+        caller merging their results gets every completeness failure twice.
+        Two identical strings carry nothing the first does not.
+        """
+        a = ValidationResult(valid=False, errors=["missing llm"], warnings=["w"])
+        b = ValidationResult(valid=False, errors=["missing llm"], warnings=["w"])
+        merged = a.merge(b)
+        assert merged.errors == ["missing llm"]
+        assert merged.warnings == ["w"]
+
+    def test_merge_preserves_order_of_distinct_messages(self) -> None:
+        """De-duplication must not reorder or drop distinct messages."""
+        a = ValidationResult(valid=False, errors=["one", "two"])
+        b = ValidationResult(valid=False, errors=["two", "three"])
+        assert a.merge(b).errors == ["one", "two", "three"]
+
     def test_merge_both_invalid(self) -> None:
         a = ValidationResult.error("err1")
         b = ValidationResult.error("err2")

@@ -271,6 +271,21 @@ class TestWizardConfigBuilderValidation:
         assert result.valid is False
         assert any("Duplicate stage name" in e for e in result.errors)
 
+    def test_thrice_duplicated_stage_name_reports_once(self) -> None:
+        """A repeated name is one problem, and merge now reports it once.
+
+        The duplicate check emits its message per offending stage, so three
+        stages sharing a name produced the identical string twice. The
+        second copy says nothing the first does not, and the name is
+        already in the message.
+        """
+        builder = WizardConfigBuilder("test")
+        builder._stages.append(StageConfig(name="dup", prompt="First", is_start=True, is_end=True))
+        builder._stages.append(StageConfig(name="dup", prompt="Second", is_end=True))
+        builder._stages.append(StageConfig(name="dup", prompt="Third", is_end=True))
+        errors = builder.validate().errors
+        assert errors.count("Duplicate stage name: 'dup'") == 1
+
     def test_invalid_transition_target_error(self) -> None:
         result = (
             WizardConfigBuilder("test")

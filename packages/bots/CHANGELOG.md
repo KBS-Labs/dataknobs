@@ -32,6 +32,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`validate_config` and `save_config` no longer disagree about the same
+  configuration.** `ValidateConfigTool` built its own schema-less
+  `ConfigValidator` and ran it over the builder's internal config, while
+  `SaveConfigTool(portable=True)` ran the builder's own schema-aware
+  validator. A config carrying a misspelled `$resource` marker was reported
+  valid and then refused at save, with nothing in either message to
+  reconcile the two — and it needed no consumer schema to reproduce, since
+  `DynaBotConfigBuilder` supplies `DynaBotConfigSchema` when none is given.
+  With a `builder_factory` present the builder's validator now decides, via
+  the public `validate()` the tool had been reimplementing three lines at a
+  time through a private method.
+
+  A `ConfigValidator` passed to `ValidateConfigTool` is now **additional**
+  rather than a replacement: its errors merge with the builder's instead of
+  standing in for them. That is the one behaviour change here — a consumer
+  who supplies both gets strictly more errors, never fewer. The parameter is
+  also now optional, since a tool with a `builder_factory` does not need one.
+
+- **`ValidationResult.merge` reports an identical message once.** It
+  concatenated, so any two validators covering overlapping ground — and
+  `validate_completeness` runs in every one — reported each shared failure
+  as many times as there were validators. Order is preserved and distinct
+  messages are never collapsed. Around twenty call sites across
+  `validation`, `schema`, `templates` and `wizard_builder` merge results, so
+  this is a correction for all of them, not only for the tool above. Almost
+  every message carries a discriminator and so was never a duplicate; the
+  one that repeats is `Duplicate stage name: 'x'`, emitted once per
+  offending stage, which now reports once per name.
+
+- **`GetTemplateDetailsTool` reports a missing `template_name` instead of
+  raising.** It was the only tool in the module with a required positional
+  parameter on `execute_with_context`, so an LLM omitting the argument it
+  declares raised a `TypeError` out of the tool-execution path rather than
+  returning a result the model could read and retry from. It now returns the
+  same shape as an unknown template name. This was also an `[override]`
+  incompatibility with `ContextAwareTool`, which every sibling avoids by
+  defaulting its parameters.
+
 - **The successors named by a deprecation are now importable from the same
   place as what they replace.** `dataknobs_bots.api` exported
   `get_bot_manager`, `init_bot_manager`, `reset_bot_manager` and
@@ -73,6 +111,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `schema.fields` are read. **Breaking** for a config carrying an option
   that no backend accepts and that was previously discarded: it is now an
   error naming the source and the key.
+
+### Added
+
+- **`DynaBotConfigBuilder.build_config()`** — the public name for building
+  the config without validating it. `build()` and `build_portable()`
+  validate and raise; callers that want to *report* a `ValidationResult`
+  rather than raise on one were reaching through `_build_internal` from
+  outside the class, which the config-toolkit tools all did. Pair it with
+  `validate()`. `_build_internal` remains the implementation and is
+  unchanged.
 
 ## v0.11.0 - 2026-08-19
 
