@@ -596,7 +596,7 @@ class ValidateConfigTool(ContextAwareTool):
 
     @classmethod
     def from_config(cls, config: dict[str, Any]) -> ValidateConfigTool:
-        """Create from YAML-compatible configuration.
+        """Create from configuration.
 
         No ``validator`` is constructed here. One built from no schema
         is the construct that let this tool contradict ``save_config``,

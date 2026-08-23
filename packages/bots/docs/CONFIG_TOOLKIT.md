@@ -337,7 +337,7 @@ Built on `Registry[ToolEntry]` from `dataknobs-common` for thread safety, metric
 
 ### Built-in Tools
 
-The `default_catalog` singleton is pre-populated with all 12 built-in tools:
+The `default_catalog` singleton is pre-populated with all 21 built-in tools:
 
 | Name | Class | Tags | Requires |
 |------|-------|------|----------|
@@ -353,6 +353,26 @@ The `default_catalog` singleton is pre-populated with all 12 built-in tools:
 | `add_kb_resource` | `AddKBResourceTool` | configbot, kb | — |
 | `remove_kb_resource` | `RemoveKBResourceTool` | configbot, kb | — |
 | `ingest_knowledge_base` | `IngestKnowledgeBaseTool` | configbot, kb | — |
+| `list_bank_records` | `ListBankRecordsTool` | wizard, bank | — |
+| `add_bank_record` | `AddBankRecordTool` | wizard, bank | — |
+| `update_bank_record` | `UpdateBankRecordTool` | wizard, bank | — |
+| `remove_bank_record` | `RemoveBankRecordTool` | wizard, bank | — |
+| `finalize_bank` | `FinalizeBankTool` | wizard, bank | — |
+| `compile_artifact` | `CompileArtifactTool` | wizard, bank, artifact | — |
+| `finalize_artifact` | `FinalizeArtifactTool` | wizard, bank, artifact | — |
+| `complete_wizard` | `CompleteWizardTool` | wizard | — |
+| `restart_wizard` | `RestartWizardTool` | wizard | — |
+
+An empty **Requires** cell says the tool declares nothing to be handed at
+construction — not that it needs nothing. The nine wizard tools at the foot of
+the table take whichever of `banks`, `catalog` and `artifact` they use as a
+constructor override, and otherwise read it from `context.extra` on the turn
+that calls them. That is a third channel alongside the two the next section
+describes, and it is why they declare no `requires`: by the time the value
+exists there is no constructor left to inject it into. They are registered here
+so a wizard stage can name them, and documented in
+[TOOLS.md](TOOLS.md#data-collection-tools-reference) — parameters, effects, and
+the two-layer stage wiring — rather than repeated here.
 
 ### Supplying a declared dependency
 
