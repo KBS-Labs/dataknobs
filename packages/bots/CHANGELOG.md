@@ -112,6 +112,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   that no backend accepts and that was previously discarded: it is now an
   error naming the source and the key.
 
+- **A tool handed the dependency it declares now uses it.** Five of the six
+  built-in tools with a `requires` entry define `from_config`, and all five
+  read only the YAML spelling of the key: `ListTemplatesTool`,
+  `GetTemplateDetailsTool` and `SaveConfigTool` discarded the live object
+  and built their own from a directory path, while `PreviewConfigTool` and
+  `ValidateConfigTool` put it through `resolve_callable` and raised
+  `DottedPathError` on a callable that was already resolved. Only
+  `KnowledgeSearchTool` worked, and only because it defines no `from_config`
+  and so reaches the constructor instead.
+
+  The two channels meet in one dict — `DynaBot._resolve_tool` copies the
+  objects named by `catalog_metadata()['requires']` into the same `params`
+  the YAML block fills, and `ToolCatalog.instantiate_tool` puts its keywords
+  there under any name at all — so every `from_config` has to tell them
+  apart. Each of the five now does, preferring the live object and keeping
+  its YAML path as the fallback. `SaveConfigTool` accepts a live `on_save`
+  and `builder_factory` on the same terms, since the catalog can supply
+  either. A guard parametrized off the catalog covers every entry that
+  declares a dependency, so a tool added later is covered when it is
+  registered.
+
+  One end of this is still shut: `DynaBot.from_config()` builds the
+  dependency map itself and puts only the configured `knowledge_base` in it,
+  with no route for a consumer to add to it. Code that constructs tools —
+  through `ToolCatalog.instantiate_tool`, `create_tool_registry(overrides=)`,
+  or `from_config` directly — is where the live spelling reaches a tool
+  today.
+
 ### Changed
 
 - **A `ConfigValidator` passed to `ValidateConfigTool` is additional, not a
@@ -148,6 +176,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   — the declared-required check and the result it returns, both overridable.
   A tool that can offer the model something to retry from (a list of valid
   names, say) adds it by overriding the latter.
+
+- **`dataknobs_bots.config.injected_dependency()` and `InjectedCallable`** —
+  the one line a `from_config` needs to tell a live dependency from config
+  data, and the constraint to pass it for a key whose YAML form is a dotted
+  path. Public rather than private because a consumer writing a tool with a
+  `requires` entry has the same problem and no way to discover the answer
+  otherwise.
 
 ## v0.11.0 - 2026-08-19
 

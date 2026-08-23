@@ -194,6 +194,8 @@ config = catalog.to_bot_config("knowledge_search", k=10)
 
 Tool classes can self-describe via `catalog_metadata()` classmethod (the `CatalogDescribable` protocol). `WizardConfigBuilder` validates stage tool names against the catalog when one is provided via `set_tool_catalog()`.
 
+A parameter a tool declares under `requires` has two spellings — the live object, or the YAML value the tool builds one from (`template_registry` or `template_dir`, `draft_manager` or `config_dir`, a `builder_factory` callable or a dotted path to it). Both arrive in the same params dict, and the tool prefers the live object. Writing your own tool with a `requires` entry? `injected_dependency(config, key, expected)` is the one line that tells the two apart; pass `InjectedCallable` as `expected` where the YAML form is a dotted path. See [CONFIG_TOOLKIT.md](https://github.com/KBS-Labs/dataknobs/blob/main/packages/bots/docs/CONFIG_TOOLKIT.md) for the full table.
+
 The `default_catalog` contains all 12 built-in tools with tag-based filtering, dependency validation, serialization, and self-describing tool support via `catalog_metadata()`.
 
 ### Tools

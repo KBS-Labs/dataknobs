@@ -46,9 +46,63 @@ from dataknobs_llm.tools.context_aware import ContextAwareTool
 from dataknobs_bots.config.builder import DynaBotConfigBuilder
 from dataknobs_bots.config.drafts import ConfigDraftManager
 from dataknobs_bots.config.templates import ConfigTemplateRegistry
+from dataknobs_bots.config.tool_catalog import InjectedCallable, injected_dependency
 from dataknobs_bots.config.validation import ConfigValidator
 
 logger = logging.getLogger(__name__)
+
+
+def _registry_from_config(config: dict[str, Any]) -> ConfigTemplateRegistry:
+    """Return the supplied template registry, or load one from disk.
+
+    Shared by the two template tools, which declare the same dependency
+    and had the same twelve lines each. An injected registry wins over
+    ``template_dir``: it is the live one the deployment already has
+    loaded, where the directory read is this tool's fallback for having
+    been given nothing.
+
+    Args:
+        config: The params dict handed to ``from_config``.
+
+    Returns:
+        The registry to hand the tool. Empty when neither channel
+        supplies one and ``template_dir`` does not exist.
+    """
+    injected = injected_dependency(config, "template_registry", ConfigTemplateRegistry)
+    if injected is not None:
+        return injected
+
+    registry = ConfigTemplateRegistry()
+    path = Path(config.get("template_dir", "configs/templates"))
+    if path.is_dir():
+        registry.load_from_directory(path)
+    return registry
+
+
+def _callable_from_config(config: dict[str, Any], key: str) -> Callable[..., Any] | None:
+    """Return the callable under *key*, live or resolved from a dotted path.
+
+    Both channels spell this key the same way, so unlike the object
+    dependencies it needs a discriminator rather than a distinct name:
+    a live callable is used as-is, a string goes to ``resolve_callable``.
+
+    Args:
+        config: The params dict handed to ``from_config``.
+        key: The parameter name to read.
+
+    Returns:
+        The callable, or ``None`` when *key* is absent. Callers for whom
+        the key is mandatory raise on the ``None``.
+
+    Raises:
+        DottedPathError: *key* holds a string that does not resolve.
+    """
+    live = injected_dependency(config, key, InjectedCallable)
+    if live is not None:
+        return live
+    if key in config:
+        return resolve_callable(config[key])
+    return None
 
 
 def _get_wizard_data(context: ToolExecutionContext) -> dict[str, Any]:
@@ -148,21 +202,18 @@ class ListTemplatesTool(ContextAwareTool):
 
     @classmethod
     def from_config(cls, config: dict[str, Any]) -> ListTemplatesTool:
-        """Create from YAML-compatible configuration.
+        """Create from configuration.
 
         Args:
-            config: Dict with ``template_dir`` key pointing to a
-                directory containing template YAML files.
+            config: Dict with either a live ``template_registry`` — the
+                dependency this tool declares, injected by
+                ``DynaBot._resolve_tool`` — or a ``template_dir`` key
+                pointing at a directory of template YAML files.
 
         Returns:
             Configured ListTemplatesTool instance.
         """
-        template_dir = config.get("template_dir", "configs/templates")
-        registry = ConfigTemplateRegistry()
-        path = Path(template_dir)
-        if path.is_dir():
-            registry.load_from_directory(path)
-        return cls(template_registry=registry)
+        return cls(template_registry=_registry_from_config(config))
 
     @property
     def schema(self) -> dict[str, Any]:
@@ -256,21 +307,18 @@ class GetTemplateDetailsTool(ContextAwareTool):
 
     @classmethod
     def from_config(cls, config: dict[str, Any]) -> GetTemplateDetailsTool:
-        """Create from YAML-compatible configuration.
+        """Create from configuration.
 
         Args:
-            config: Dict with ``template_dir`` key pointing to a
-                directory containing template YAML files.
+            config: Dict with either a live ``template_registry`` — the
+                dependency this tool declares, injected by
+                ``DynaBot._resolve_tool`` — or a ``template_dir`` key
+                pointing at a directory of template YAML files.
 
         Returns:
             Configured GetTemplateDetailsTool instance.
         """
-        template_dir = config.get("template_dir", "configs/templates")
-        registry = ConfigTemplateRegistry()
-        path = Path(template_dir)
-        if path.is_dir():
-            registry.load_from_directory(path)
-        return cls(template_registry=registry)
+        return cls(template_registry=_registry_from_config(config))
 
     @property
     def schema(self) -> dict[str, Any]:
@@ -403,18 +451,26 @@ class PreviewConfigTool(ContextAwareTool):
 
     @classmethod
     def from_config(cls, config: dict[str, Any]) -> PreviewConfigTool:
-        """Create from YAML-compatible configuration.
+        """Create from configuration.
 
         Args:
-            config: Dict with ``builder_factory`` key — a dotted
-                import path to a callable that accepts wizard data
-                and returns a ``DynaBotConfigBuilder``.
+            config: Dict with a required ``builder_factory`` key — the
+                live callable, injected by ``DynaBot._resolve_tool`` for
+                the dependency this tool declares, or a dotted import
+                path to one. Either way it accepts wizard data and
+                returns a ``DynaBotConfigBuilder``.
 
         Returns:
             Configured PreviewConfigTool instance.
+
+        Raises:
+            KeyError: No ``builder_factory`` was supplied.
         """
-        factory_ref = config["builder_factory"]
-        factory = resolve_callable(factory_ref)
+        factory = _callable_from_config(config, "builder_factory")
+        if factory is None:
+            # Mandatory for this tool. Same exception a caller omitting
+            # it has always seen, when the body indexed the dict.
+            raise KeyError("builder_factory")
         return cls(builder_factory=factory)
 
     @property
@@ -550,16 +606,15 @@ class ValidateConfigTool(ContextAwareTool):
         additional validator passes one to ``__init__``.
 
         Args:
-            config: Dict with optional ``builder_factory`` key — a
-                dotted import path to a callable.
+            config: Dict with an optional ``builder_factory`` key — the
+                live callable, injected by ``DynaBot._resolve_tool`` for
+                the dependency this tool declares, or a dotted import
+                path to one.
 
         Returns:
             Configured ValidateConfigTool instance.
         """
-        factory = None
-        if "builder_factory" in config:
-            factory = resolve_callable(config["builder_factory"])
-        return cls(builder_factory=factory)
+        return cls(builder_factory=_callable_from_config(config, "builder_factory"))
 
     @property
     def schema(self) -> dict[str, Any]:
@@ -699,36 +754,36 @@ class SaveConfigTool(ContextAwareTool):
 
     @classmethod
     def from_config(cls, config: dict[str, Any]) -> SaveConfigTool:
-        """Create from YAML-compatible configuration.
+        """Create from configuration.
+
+        Each dependency below may arrive as the live object instead of
+        its YAML form: ``draft_manager`` because
+        ``DynaBot._resolve_tool`` injects the dependency this tool
+        declares, and the two callables because
+        ``ToolCatalog.instantiate_tool`` passes its keywords straight
+        into this dict whatever the catalog declares.
 
         Args:
             config: Dict with keys:
+                - ``draft_manager`` (ConfigDraftManager, optional): The
+                  live manager, in place of ``config_dir``.
                 - ``config_dir`` (str): Output directory for configs.
-                - ``builder_factory`` (str, optional): Dotted import path.
-                - ``on_save`` (str, optional): Dotted import path.
+                - ``builder_factory`` (callable | str, optional).
+                - ``on_save`` (callable | str, optional).
                 - ``portable`` (bool, optional): Use portable output format.
 
         Returns:
             Configured SaveConfigTool instance.
         """
-        from pathlib import Path
+        manager = injected_dependency(config, "draft_manager", ConfigDraftManager)
+        if manager is None:
+            manager = ConfigDraftManager(output_dir=Path(config.get("config_dir", "configs")))
 
-        config_dir = config.get("config_dir", "configs")
-        manager = ConfigDraftManager(output_dir=Path(config_dir))
-
-        on_save = None
-        factory = None
-        if "on_save" in config:
-            on_save = resolve_callable(config["on_save"])
-        if "builder_factory" in config:
-            factory = resolve_callable(config["builder_factory"])
-
-        portable = config.get("portable", False)
         return cls(
             draft_manager=manager,
-            on_save=on_save,
-            builder_factory=factory,
-            portable=portable,
+            on_save=_callable_from_config(config, "on_save"),
+            builder_factory=_callable_from_config(config, "builder_factory"),
+            portable=config.get("portable", False),
         )
 
     @property
