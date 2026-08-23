@@ -182,7 +182,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   data, and the constraint to pass it for a key whose YAML form is a dotted
   path. Public rather than private because a consumer writing a tool with a
   `requires` entry has the same problem and no way to discover the answer
-  otherwise.
+  otherwise. Handing it a constraint that is not usable as one — a bare
+  function, an undecorated protocol — raises `TypeError` rather than
+  answering "not injected", and does so whether or not the key is present,
+  so the mistake cannot lurk until the first call that happens to inject.
 
 ## v0.11.0 - 2026-08-19
 

@@ -89,6 +89,23 @@ def injected_dependency(
         The value under *key* when it is already an *expected*, else
         ``None`` — meaning "not injected", so the caller falls through to
         its own handling of the key.
+
+    Raises:
+        TypeError: *expected* is not usable as an instance constraint — a
+            non-runtime-checkable protocol, or something that is not a
+            class at all (a factory function reaches here, since
+            :data:`~dataknobs_common.imports.ClassConstraint` cannot
+            exclude one statically). Deliberately **not** caught:
+            returning ``None`` would report "nothing was injected" about a
+            question that was never asked. Raised whether or not *key* is
+            present, so the defect surfaces on the first call rather than
+            on the first call that happens to inject.
+
+    Note:
+        A protocol with non-method members is usable here, unlike in
+        :func:`~dataknobs_common.imports.resolve_class` — that one tests
+        the constraint with ``issubclass``, which refuses a data protocol,
+        and this one with ``isinstance``, which does not.
     """
     # ``expected`` is declared ``ClassConstraint`` — ``Callable[..., _T]``,
     # not ``type[_T]`` — so a runtime-checkable protocol is accepted; see

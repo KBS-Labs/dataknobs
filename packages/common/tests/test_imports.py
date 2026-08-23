@@ -238,6 +238,35 @@ def test_a_non_runtime_checkable_base_raises_typeerror_unwrapped() -> None:
         resolve_class(f"{HERE}:Conforming", NotRuntimeCheckable)
 
 
+def test_a_non_class_base_raises_typeerror_unwrapped() -> None:
+    """The cause the alias makes reachable, which is why it is documented.
+
+    ``ClassConstraint`` is ``Callable[..., _T]``, so a factory function
+    satisfies the annotation at the call site and nothing before
+    ``issubclass`` rejects it. The signature cannot exclude one, so the
+    contract has to say what happens when a caller passes one.
+    """
+    with pytest.raises(TypeError):
+        resolve_class(f"{HERE}:Conforming", a_function)
+
+
+def test_a_data_protocol_base_raises_typeerror() -> None:
+    """``@runtime_checkable`` alone does not make a protocol a usable base.
+
+    ``issubclass`` refuses a protocol carrying non-method members even when
+    it is decorated, so the constraint must be methods-only here. This is a
+    restriction of ``issubclass`` rather than of the alias: a caller testing
+    the same constraint with ``isinstance`` is not subject to it.
+    """
+
+    @runtime_checkable
+    class HasAttribute(Protocol):
+        attribute: int
+
+    with pytest.raises(TypeError):
+        resolve_class(f"{HERE}:Conforming", HasAttribute)
+
+
 # ── resolve_optional_callable ─────────────────────────────────────────
 
 

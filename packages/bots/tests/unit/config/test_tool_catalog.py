@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol, runtime_checkable
 
 import pytest
 
@@ -927,3 +927,60 @@ class TestInjectedDependency:
 
     def test_injected_callable_rejects_a_non_callable(self) -> None:
         assert injected_dependency({"on_save": {"a": 1}}, "on_save", InjectedCallable) is None
+
+    def test_a_non_class_expected_raises_typeerror_unwrapped(self) -> None:
+        """A caller defect, deliberately not reported as "not injected".
+
+        ``ClassConstraint`` is ``Callable[..., _T]``, so a factory
+        function type-checks in this position and only ``isinstance``
+        rejects it. Swallowing that would answer "nothing was injected"
+        to a question the code never managed to ask.
+        """
+
+        def not_a_class(*args: Any, **kwargs: Any) -> Any:
+            return None
+
+        with pytest.raises(TypeError):
+            injected_dependency({"dep": object()}, "dep", not_a_class)
+
+    def test_a_non_runtime_checkable_protocol_raises_typeerror(self) -> None:
+        """The other way ``expected`` can be unusable — a missing decorator."""
+
+        class NotRuntimeCheckable(Protocol):
+            def __call__(self, *args: Any, **kwargs: Any) -> Any: ...
+
+        with pytest.raises(TypeError):
+            injected_dependency({"dep": lambda: None}, "dep", NotRuntimeCheckable)
+
+    def test_the_caller_defect_surfaces_with_the_key_absent(self) -> None:
+        """The property that keeps a bad constraint from lurking.
+
+        A short-circuit on the absent key — ``if key not in config:
+        return None`` ahead of the check — would look like a harmless
+        tidy and would hide a broken constraint until the first call that
+        happened to inject something. Which is this whole defect class:
+        code that reads correct until the day a live object arrives.
+        """
+
+        def not_a_class(*args: Any, **kwargs: Any) -> Any:
+            return None
+
+        with pytest.raises(TypeError):
+            injected_dependency({}, "dep", not_a_class)
+
+    def test_a_data_protocol_is_a_usable_constraint_here(self) -> None:
+        """Where this diverges from ``resolve_class``, and why.
+
+        That one tests with ``issubclass``, which refuses a protocol
+        carrying non-method members; this one tests with ``isinstance``,
+        which does not. A reader who carried the restriction over from
+        the alias's other consumer would rule out a constraint that works
+        — and unifying the two on ``issubclass`` would break it.
+        """
+
+        @runtime_checkable
+        class HasOutputDir(Protocol):
+            output_dir: Path
+
+        manager = ConfigDraftManager(output_dir=Path("unused"))
+        assert injected_dependency({"dep": manager}, "dep", HasOutputDir) is manager
