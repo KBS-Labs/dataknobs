@@ -102,13 +102,39 @@ class TestPreviewConfigToolFromConfig:
 class TestValidateConfigToolFromConfig:
     """Tests for ValidateConfigTool.from_config()."""
 
-    def test_from_config_minimal(self) -> None:
+    def test_from_config_mints_no_validator(self) -> None:
+        """The YAML path must not construct a schema-less validator.
+
+        It used to build one unconditionally. With a ``builder_factory``
+        present that validator ran as a second, weaker pass over the
+        same config -- the exact construct whose verdict contradicted
+        ``save_config``. A consumer wanting an additional validator
+        passes one to ``__init__``; nothing here supplies one for them.
+        """
         from dataknobs_bots.tools.config_tools import ValidateConfigTool
 
         tool = ValidateConfigTool.from_config({})
         assert tool.name == "validate_config"
-        assert tool._validator is not None
+        assert tool._validator is None
         assert tool._builder_factory is None
+
+    @pytest.mark.asyncio
+    async def test_from_config_minimal_still_validates(self) -> None:
+        """Minting no validator must not leave the tool unable to answer.
+
+        Without a ``builder_factory`` there is no builder to defer to,
+        so the tool falls back to validating the raw wizard data. That
+        fallback is internal now rather than injected, and it still has
+        to work.
+        """
+        from dataknobs_bots.tools.config_tools import ValidateConfigTool
+
+        tool = ValidateConfigTool.from_config({})
+
+        result = await tool.execute(wizard_data={"not": "a valid config"})
+
+        assert result["valid"] is False
+        assert result["errors"]
 
     def test_from_config_with_factory(self) -> None:
         from dataknobs_bots.tools.config_tools import ValidateConfigTool

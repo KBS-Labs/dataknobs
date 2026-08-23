@@ -133,6 +133,48 @@ class TestContextAwareTool:
 
         assert result["conversation_id"] == "conv-abc"
 
+    @pytest.mark.asyncio
+    async def test_omitted_required_argument_reports_rather_than_raises(self) -> None:
+        """An omitted declared-required argument must not raise.
+
+        ``execute`` forwarded whatever the model sent straight into
+        ``execute_with_context``, so a parameter the tool declares
+        ``required`` -- and that therefore has no default in the
+        signature -- turned a routine LLM omission into a ``TypeError``.
+        The model is the caller here, and the thing it can act on is a
+        result naming what it left out, not a Python binding message.
+        """
+        tool = SampleContextAwareTool()
+
+        result = await tool.execute()
+
+        assert result["error"] == "Missing required parameter: input"
+        assert result["missing"] == ["input"]
+
+    @pytest.mark.asyncio
+    async def test_explicit_none_counts_as_omitted(self) -> None:
+        """A required argument sent as ``null`` is as absent as one omitted.
+
+        An LLM emitting ``{"input": null}`` for a required string has
+        supplied nothing usable, and the signature default cannot tell
+        the two apart.
+        """
+        result = await SampleContextAwareTool().execute(input=None)
+
+        assert result["missing"] == ["input"]
+
+    @pytest.mark.asyncio
+    async def test_supplied_falsy_argument_is_not_treated_as_missing(self) -> None:
+        """The guard tests presence, not truthiness.
+
+        An empty string is a value the tool was given and must be free to
+        reject on its own terms -- collapsing it into "missing" reports
+        the wrong problem.
+        """
+        result = await SampleContextAwareTool().execute(input="")
+
+        assert result["input"] == ""
+
     def test_tool_properties(self) -> None:
         """Test that tool properties are correctly set."""
         tool = SampleContextAwareTool()

@@ -32,43 +32,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **`validate_config` and `save_config` no longer disagree about the same
-  configuration.** `ValidateConfigTool` built its own schema-less
-  `ConfigValidator` and ran it over the builder's internal config, while
-  `SaveConfigTool(portable=True)` ran the builder's own schema-aware
-  validator. A config carrying a misspelled `$resource` marker was reported
-  valid and then refused at save, with nothing in either message to
-  reconcile the two — and it needed no consumer schema to reproduce, since
-  `DynaBotConfigBuilder` supplies `DynaBotConfigSchema` when none is given.
-  With a `builder_factory` present the builder's validator now decides, via
-  the public `validate()` the tool had been reimplementing three lines at a
-  time through a private method.
+- **`validate_config` and `save_config` now reach one verdict.**
+  `ValidateConfigTool` built its own schema-less `ConfigValidator` and ran it
+  over the builder's internal config, while `SaveConfigTool(portable=True)`
+  ran the builder's own schema-aware validator. A config carrying a
+  misspelled `$resource` marker was reported valid and then refused at save,
+  with nothing in either message to reconcile the two — and it needed no
+  consumer schema to reproduce, since `DynaBotConfigBuilder` supplies
+  `DynaBotConfigSchema` when none is given. With a `builder_factory` present
+  the builder's validator now decides, via the public `validate()` the tool
+  had been reimplementing three lines at a time through a private method.
 
-  A `ConfigValidator` passed to `ValidateConfigTool` is now **additional**
-  rather than a replacement: its errors merge with the builder's instead of
-  standing in for them. That is the one behaviour change here — a consumer
-  who supplies both gets strictly more errors, never fewer. The parameter is
-  also now optional, since a tool with a `builder_factory` does not need one.
+  The disagreement was symmetrical and only half of it was the tool's.
+  `SaveConfigTool(portable=False)` — the constructor and `from_config`
+  default — built through the unvalidated path, so it wrote to disk exactly
+  the config `validate_config` had just refused, and reported success. Both
+  settings of the flag now validate: `portable` selects the output shape,
+  not whether the config is checked.
 
-- **`ValidationResult.merge` reports an identical message once.** It
-  concatenated, so any two validators covering overlapping ground — and
-  `validate_completeness` runs in every one — reported each shared failure
-  as many times as there were validators. Order is preserved and distinct
-  messages are never collapsed. Around twenty call sites across
-  `validation`, `schema`, `templates` and `wizard_builder` merge results, so
-  this is a correction for all of them, not only for the tool above. Almost
-  every message carries a discriminator and so was never a duplicate; the
-  one that repeats is `Duplicate stage name: 'x'`, emitted once per
-  offending stage, which now reports once per name.
+- **Every `ContextAwareTool` answers an omitted required argument.**
+  `ContextAwareTool.execute` forwarded the model's arguments straight into
+  `execute_with_context`, so any tool declaring a parameter `required` in its
+  schema without defaulting it in its signature raised `TypeError` from the
+  call itself when an LLM omitted it. Nine tools across `artifacts`,
+  `kb_tools`, `knowledge_search` and `config_tools` carried that shape. The
+  base class now checks the declared-required set before forwarding and
+  returns a result naming what is missing; `GetTemplateDetailsTool` overrides
+  `missing_arguments_result` to add the template names that would have
+  worked. This was also the `[override]` incompatibility the type checker
+  reported against the base signature at all nine sites.
 
-- **`GetTemplateDetailsTool` reports a missing `template_name` instead of
-  raising.** It was the only tool in the module with a required positional
-  parameter on `execute_with_context`, so an LLM omitting the argument it
-  declares raised a `TypeError` out of the tool-execution path rather than
-  returning a result the model could read and retry from. It now returns the
-  same shape as an unknown template name. This was also an `[override]`
-  incompatibility with `ContextAwareTool`, which every sibling avoids by
-  defaulting its parameters.
+- **A repeated wizard-validation message is emitted once.** `Duplicate stage
+  name: 'x'` was emitted per offending stage, so three stages sharing a name
+  reported it twice; `Stage 'x' has transition to unknown stage 'y'` was
+  emitted per transition, so two transitions to one missing stage reported it
+  twice. Both messages already name everything they have to say, so the
+  repeat was countable but not readable. Fixed where they are emitted —
+  once per duplicated name, once per `(stage, target)` pair.
 
 - **The successors named by a deprecation are now importable from the same
   place as what they replace.** `dataknobs_bots.api` exported
@@ -112,15 +112,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   that no backend accepts and that was previously discarded: it is now an
   error naming the source and the key.
 
+### Changed
+
+- **A `ConfigValidator` passed to `ValidateConfigTool` is additional, not a
+  replacement.** Its errors merge with the builder's instead of standing in
+  for them, so a consumer supplying both gets strictly more errors, never
+  fewer. "Instead" is what let the two tools disagree, and the failure
+  directions are not symmetric: an extra error stops an author, a missing one
+  misleads them. The parameter is now optional, and `from_config` no longer
+  constructs one — a schema-less validator built by default is the construct
+  whose verdict contradicted `save_config`. `catalog_metadata()` accordingly
+  declares `requires: ("builder_factory",)` rather than `("validator",)`.
+
+- **`ValidationResult.merge_unique` added; `merge` still concatenates.**
+  Composing two validators that cover overlapping ground reports each shared
+  failure twice — `validate_completeness` runs inside every `ConfigValidator`
+  — and `merge_unique` is the operation for that case. `merge` is unchanged:
+  whether a repeated message is one finding or two is a property of the
+  composition, and the ~20 call sites that accumulate findings from a single
+  validator would lose real findings if it decided otherwise.
+
 ### Added
 
-- **`DynaBotConfigBuilder.build_config()`** — the public name for building
-  the config without validating it. `build()` and `build_portable()`
+- **`DynaBotConfigBuilder.build_unvalidated()`** — the public name for
+  building the config without validating it. `build()` and `build_portable()`
   validate and raise; callers that want to *report* a `ValidationResult`
   rather than raise on one were reaching through `_build_internal` from
-  outside the class, which the config-toolkit tools all did. Pair it with
-  `validate()`. `_build_internal` remains the implementation and is
-  unchanged.
+  outside the class, which the config-toolkit tools all did. The name states
+  what separates it from `build()`, because the two are otherwise
+  indistinguishable at a call site and this is the one that can hand back a
+  config nothing has checked. Pair it with `validate()`. `_build_internal`
+  remains the implementation and is unchanged.
+
+- **`ContextAwareTool.missing_arguments()` and `missing_arguments_result()`**
+  — the declared-required check and the result it returns, both overridable.
+  A tool that can offer the model something to retry from (a list of valid
+  names, say) adds it by overriding the latter.
 
 ## v0.11.0 - 2026-08-19
 

@@ -286,6 +286,24 @@ class GetTemplateDetailsTool(ContextAwareTool):
             "required": ["template_name"],
         }
 
+    def missing_arguments_result(self, missing: list[str]) -> dict[str, Any]:
+        """Report the omission alongside the names that would have worked.
+
+        A model that omitted the template name is one turn from
+        succeeding, and the registry contents are what close that turn.
+        Same shape as the unknown-template branch below, so both
+        failures read the same way.
+
+        Args:
+            missing: Declared-required names the caller did not supply.
+
+        Returns:
+            The base result plus the available template names.
+        """
+        result: dict[str, Any] = super().missing_arguments_result(missing)
+        result["available"] = [t.name for t in self._registry.list_templates()]
+        return result
+
     async def execute_with_context(
         self,
         context: ToolExecutionContext,
@@ -295,12 +313,14 @@ class GetTemplateDetailsTool(ContextAwareTool):
         """Get template details.
 
         ``template_name`` is required by :attr:`schema` but optional in
-        this signature, as it is for every sibling tool in this module.
-        An LLM omitting a declared argument is routine, and the base
-        class forwards whatever the model sent straight through -- so a
-        required positional parameter turns that omission into a
-        ``TypeError`` escaping the tool-execution path instead of a
-        result the model can read and retry from.
+        this signature, as it is for every tool in the package. A
+        required positional parameter cannot be bound when the model
+        omits it, so the call raises ``TypeError`` before
+        :meth:`ContextAwareTool.execute` can report the omission -- the
+        default is what lets the base class answer instead.
+
+        The guard below covers the direct-call path only; through
+        ``execute`` the base class has already returned.
 
         Args:
             context: Execution context.
@@ -309,11 +329,8 @@ class GetTemplateDetailsTool(ContextAwareTool):
         Returns:
             Dict with template details, or error if missing or not found.
         """
-        if not template_name:
-            return {
-                "error": "Missing required parameter: template_name",
-                "available": [t.name for t in self._registry.list_templates()],
-            }
+        if template_name is None:
+            return self.missing_arguments_result(["template_name"])
 
         template = self._registry.get(template_name)
         if template is None:
@@ -436,7 +453,7 @@ class PreviewConfigTool(ContextAwareTool):
 
         try:
             builder = self._builder_factory(wizard_data)
-            config = builder.build_config()
+            config = builder.build_unvalidated()
         except Exception as e:
             logger.exception("Failed to build config for preview")
             return {"error": f"Failed to build configuration: {e}"}
@@ -461,8 +478,20 @@ class ValidateConfigTool(ContextAwareTool):
     Runs the full validation pipeline and returns errors and warnings.
 
     When a ``builder_factory`` is supplied the builder's own validator
-    decides the verdict, so this tool and ``SaveConfigTool`` cannot
-    disagree about the same configuration.
+    decides the verdict — the same validator ``build`` and
+    ``build_portable`` run — so wiring this tool and ``SaveConfigTool``
+    to **the same factory** makes the save outcome predictable from the
+    validate outcome, at either setting of ``portable``.
+
+    Two things fall outside that guarantee, both by construction:
+
+    - Each tool resolves its own ``builder_factory`` from its own config
+      block. Nothing checks that the two name the same callable, and two
+      different builders are entitled to two different verdicts.
+    - An explicitly supplied ``validator`` runs in addition to the
+      builder's, so this tool can refuse what save would accept. That
+      direction is deliberate. The failure modes are not symmetric: an
+      extra error stops an author, a missing one misleads them.
 
     Attributes:
         _validator: Optional additional ConfigValidator.
@@ -476,7 +505,10 @@ class ValidateConfigTool(ContextAwareTool):
             "name": "validate_config",
             "description": ("Validate the bot configuration being built."),
             "tags": ("configbot",),
-            "requires": ("validator",),
+            # The verdict comes from the builder's validator, so the
+            # factory that produces the builder is what this tool needs
+            # supplied. A `validator` is optional and additive.
+            "requires": ("builder_factory",),
         }
 
     def __init__(
@@ -510,6 +542,13 @@ class ValidateConfigTool(ContextAwareTool):
     def from_config(cls, config: dict[str, Any]) -> ValidateConfigTool:
         """Create from YAML-compatible configuration.
 
+        No ``validator`` is constructed here. One built from no schema
+        is the construct that let this tool contradict ``save_config``,
+        and supplying it unconditionally would run it as a second pass
+        over every YAML-wired instance — the "wire it twice and keep the
+        two in sync" this tool exists to avoid. A consumer that wants an
+        additional validator passes one to ``__init__``.
+
         Args:
             config: Dict with optional ``builder_factory`` key — a
                 dotted import path to a callable.
@@ -517,11 +556,10 @@ class ValidateConfigTool(ContextAwareTool):
         Returns:
             Configured ValidateConfigTool instance.
         """
-        validator = ConfigValidator()
         factory = None
         if "builder_factory" in config:
             factory = resolve_callable(config["builder_factory"])
-        return cls(validator=validator, builder_factory=factory)
+        return cls(builder_factory=factory)
 
     @property
     def schema(self) -> dict[str, Any]:
@@ -558,20 +596,31 @@ class ValidateConfigTool(ContextAwareTool):
                 }
             try:
                 # The builder's own validator is authoritative. It is the one
-                # `build_portable()` runs, so anything else here can report a
-                # verdict the save path contradicts -- which is precisely what
-                # a schema-less `ConfigValidator()` used to do.
+                # `build()` and `build_portable()` run, so anything else here
+                # can report a verdict the save path contradicts -- which is
+                # precisely what a schema-less `ConfigValidator()` used to do.
                 result = builder.validate()
-                if self._validator is not None:
-                    # An explicitly supplied validator runs *in addition*,
-                    # never instead: it can only add errors, so it cannot
-                    # reintroduce the disagreement.
-                    result = result.merge(self._validator.validate(builder.build_config()))
             except Exception as e:
                 return {
                     "valid": False,
                     "errors": [f"Failed to validate configuration: {e}"],
                 }
+
+            if self._validator is not None:
+                try:
+                    # An explicitly supplied validator runs *in addition*,
+                    # never instead: it can only add errors, so it cannot
+                    # reintroduce the disagreement. `merge_unique` because
+                    # both validators run `validate_completeness` over the
+                    # same config and would otherwise report each shared
+                    # failure twice.
+                    extra = self._validator.validate(builder.build_unvalidated())
+                except Exception as e:
+                    return {
+                        "valid": False,
+                        "errors": [f"Failed to validate configuration: {e}"],
+                    }
+                result = result.merge_unique(extra)
         else:
             validator = self._validator or ConfigValidator()
             result = validator.validate(wizard_data)
@@ -595,7 +644,7 @@ class SaveConfigTool(ContextAwareTool):
     registering the bot with a manager).
 
     When ``portable=True``, the builder's ``build_portable()`` method is
-    used instead of ``build_config()``, producing a config with a
+    used instead of ``build()``, producing a config with a
     ``bot`` wrapper key suitable for environment-aware deployment.
 
     Attributes:
@@ -633,8 +682,8 @@ class SaveConfigTool(ContextAwareTool):
                 wizard data before saving.
             portable: When True, use ``build_portable()`` for output
                 (wraps config under ``bot`` key with custom sections as
-                siblings). When False (default), use ``build_config()``
-                for flat format.
+                siblings). When False (default), use ``build()`` for
+                flat format. Both validate.
         """
         super().__init__(
             name="save_config",
@@ -737,14 +786,15 @@ class SaveConfigTool(ContextAwareTool):
                 ),
             }
 
-        # Build final config
+        # Build final config. Both branches validate and raise: the flag
+        # selects the output shape, not whether the config is checked.
+        # `build_unvalidated()` skips validation, and reaching for it
+        # here is what let this tool write to disk the config
+        # `validate_config` had just refused -- on the flag's default.
         if self._builder_factory is not None:
             try:
                 builder = self._builder_factory(wizard_data)
-                if self._portable:
-                    config = builder.build_portable()
-                else:
-                    config = builder.build_config()
+                config = builder.build_portable() if self._portable else builder.build()
             except Exception as e:
                 return {"success": False, "error": f"Failed to build configuration: {e}"}
         else:

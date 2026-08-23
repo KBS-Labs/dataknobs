@@ -110,6 +110,8 @@ result = validator.validate(config)
 validator.register_validator("my_check", my_validator_fn)
 ```
 
+--8<-- "packages/bots/docs/CONFIG_TOOLKIT.md:combining-results"
+
 ### Templates
 
 Templates use `{{variable}}` placeholders and `$resource` references for portability.
@@ -128,8 +130,9 @@ Three output methods:
 
 - `build()` — flat format compatible with `DynaBot.from_config()`
 - `build_portable()` — environment-aware format with `$resource` refs and `bot` wrapper
-- `build_config()` — the flat dict **without** validating, for callers that report
-  a `ValidationResult` rather than raise on one
+- `build_unvalidated()` — the flat dict **without** validating, for callers that
+  report a `ValidationResult` rather than raise on one. Pair it with `validate()`;
+  never use it on a path that writes or deploys
 
 #### Custom Storage Classes
 
@@ -202,11 +205,19 @@ Six `ContextAwareTool` implementations for wizard-driven config flows:
 | `ListTemplatesTool` | List available templates | `ConfigTemplateRegistry` |
 | `GetTemplateDetailsTool` | Get template details | `ConfigTemplateRegistry` |
 | `PreviewConfigTool` | Preview config being built | `builder_factory` callback |
-| `ValidateConfigTool` | Validate current config | the `builder_factory`'s builder — its validator decides |
+| `ValidateConfigTool` | Validate current config | `builder_factory` — the builder's validator decides |
 | `SaveConfigTool` | Save/finalize config | `ConfigDraftManager` + `on_save` + `portable` |
 | `ListAvailableToolsTool` | List tools for bot config | `available_tools` catalog |
 
 Consumer extension via `builder_factory`, `on_save`, `portable`, and `available_tools`.
+
+`ValidateConfigTool` and `SaveConfigTool` wired to the **same** `builder_factory`
+reach one verdict: the builder's own validator decides both, at either setting of
+`portable`. Two caveats, both by construction — each tool resolves its own factory
+from its own config block, so nothing checks that the two name the same callable;
+and a `ConfigValidator` passed to `ValidateConfigTool` is optional and runs *in
+addition*, so it can refuse what save accepts. That asymmetry is deliberate: an
+extra error stops an author, a missing one misleads them.
 
 ### KB Tools
 
@@ -228,7 +239,8 @@ The toolkit uses composition, not subclassing. Consumers provide:
 
 1. **`builder_factory`** callback — builds domain-specific config from wizard data
 2. **`on_save`** callback — performs post-save actions
-3. **`portable`** flag — use `build_portable()` for bot-wrapped output
+3. **`portable`** flag — use `build_portable()` for bot-wrapped output instead of
+   the flat `build()`. Both validate and refuse an invalid config
 4. **`available_tools`** catalog — consumer-specific tool list
 5. **`ToolCatalog`** — tool name → class path registry, extensible via `create_default_catalog()`
 6. **`knowledge_dir`** path — base directory for KB files

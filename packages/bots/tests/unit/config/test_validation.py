@@ -44,25 +44,54 @@ class TestValidationResult:
         assert merged.valid is False
         assert merged.errors == ["bad"]
 
-    def test_merge_deduplicates_identical_errors(self) -> None:
-        """Two results carrying the same error report it once.
+    def test_merge_keeps_every_message(self) -> None:
+        """``merge`` concatenates; it does not decide what is a duplicate.
 
-        ``ConfigValidator.validate`` and ``DynaBotConfigBuilder.validate``
-        both run ``validate_completeness`` over the same config, so any
-        caller merging their results gets every completeness failure twice.
-        Two identical strings carry nothing the first does not.
+        Whether a repeated string is one finding or two is a property of
+        the composition that produced it, and this primitive cannot see
+        that. Around twenty call sites merge results, most of them
+        accumulating findings from one validator, where dropping a
+        repeat would drop a real finding.
         """
         a = ValidationResult(valid=False, errors=["missing llm"], warnings=["w"])
         b = ValidationResult(valid=False, errors=["missing llm"], warnings=["w"])
+
         merged = a.merge(b)
+
+        assert merged.errors == ["missing llm", "missing llm"]
+        assert merged.warnings == ["w", "w"]
+
+    def test_merge_unique_deduplicates_identical_messages(self) -> None:
+        """``merge_unique`` is for composing validators that overlap.
+
+        ``ConfigValidator.validate`` and ``DynaBotConfigBuilder.validate``
+        both run ``validate_completeness`` over the same config, so a
+        caller running both gets every completeness failure twice. The
+        second copy is an artefact of running two validators, not a
+        second defect.
+        """
+        a = ValidationResult(valid=False, errors=["missing llm"], warnings=["w"])
+        b = ValidationResult(valid=False, errors=["missing llm"], warnings=["w"])
+
+        merged = a.merge_unique(b)
+
         assert merged.errors == ["missing llm"]
         assert merged.warnings == ["w"]
 
-    def test_merge_preserves_order_of_distinct_messages(self) -> None:
+    def test_merge_unique_preserves_order_of_distinct_messages(self) -> None:
         """De-duplication must not reorder or drop distinct messages."""
         a = ValidationResult(valid=False, errors=["one", "two"])
         b = ValidationResult(valid=False, errors=["two", "three"])
-        assert a.merge(b).errors == ["one", "two", "three"]
+
+        assert a.merge_unique(b).errors == ["one", "two", "three"]
+
+    def test_merge_unique_keeps_validity_semantics(self) -> None:
+        """Both operations agree on validity: invalid wins."""
+        ok = ValidationResult.ok()
+        bad = ValidationResult.error("nope")
+
+        assert ok.merge_unique(bad).valid is False
+        assert ok.merge_unique(ValidationResult.ok()).valid is True
 
     def test_merge_both_invalid(self) -> None:
         a = ValidationResult.error("err1")

@@ -272,19 +272,87 @@ class TestWizardConfigBuilderValidation:
         assert any("Duplicate stage name" in e for e in result.errors)
 
     def test_thrice_duplicated_stage_name_reports_once(self) -> None:
-        """A repeated name is one problem, and merge now reports it once.
+        """A repeated name is one problem, reported once.
 
-        The duplicate check emits its message per offending stage, so three
+        The check emitted its message per *offending* stage, so three
         stages sharing a name produced the identical string twice. The
-        second copy says nothing the first does not, and the name is
-        already in the message.
+        name is already in the message, so the second copy adds nothing
+        a reader can act on -- and counting stages is not what the
+        message claims to be counting.
         """
-        builder = WizardConfigBuilder("test")
-        builder._stages.append(StageConfig(name="dup", prompt="First", is_start=True, is_end=True))
-        builder._stages.append(StageConfig(name="dup", prompt="Second", is_end=True))
-        builder._stages.append(StageConfig(name="dup", prompt="Third", is_end=True))
+        builder = (
+            WizardConfigBuilder("test")
+            .add_stage(StageConfig(name="dup", prompt="First", is_start=True, is_end=True))
+            .add_stage(StageConfig(name="dup", prompt="Second", is_end=True))
+            .add_stage(StageConfig(name="dup", prompt="Third", is_end=True))
+        )
+
         errors = builder.validate().errors
+
         assert errors.count("Duplicate stage name: 'dup'") == 1
+
+    def test_two_names_duplicated_report_separately(self) -> None:
+        """Reporting once per name must not collapse to once per config.
+
+        The false-positive guard for the test above: two distinct
+        repeated names are two problems and both have to survive.
+        """
+        builder = (
+            WizardConfigBuilder("test")
+            .add_stage(StageConfig(name="a", prompt="1", is_start=True, is_end=True))
+            .add_stage(StageConfig(name="a", prompt="2", is_end=True))
+            .add_stage(StageConfig(name="b", prompt="3", is_end=True))
+            .add_stage(StageConfig(name="b", prompt="4", is_end=True))
+        )
+
+        errors = builder.validate().errors
+
+        assert errors.count("Duplicate stage name: 'a'") == 1
+        assert errors.count("Duplicate stage name: 'b'") == 1
+
+    def test_repeated_transition_to_one_unknown_stage_reports_once(self) -> None:
+        """Two transitions to the same missing stage are one missing stage.
+
+        The message names the source stage and the target and nothing
+        else, so emitting it per transition repeats a string that
+        already said everything it had to say. The reader's next action
+        -- create the stage, or fix the target -- is the same one either
+        way.
+        """
+        builder = WizardConfigBuilder("test").add_stage(
+            StageConfig(
+                name="start",
+                prompt="Go",
+                is_start=True,
+                transitions=(
+                    TransitionConfig(target="nowhere", condition="a"),
+                    TransitionConfig(target="nowhere", condition="b"),
+                ),
+            )
+        )
+
+        errors = builder.validate().errors
+
+        assert errors.count("Stage 'start' has transition to unknown stage 'nowhere'") == 1
+
+    def test_transitions_to_two_unknown_stages_report_separately(self) -> None:
+        """The false-positive guard: distinct targets stay distinct."""
+        builder = WizardConfigBuilder("test").add_stage(
+            StageConfig(
+                name="start",
+                prompt="Go",
+                is_start=True,
+                transitions=(
+                    TransitionConfig(target="nowhere", condition="a"),
+                    TransitionConfig(target="elsewhere", condition="b"),
+                ),
+            )
+        )
+
+        errors = builder.validate().errors
+
+        assert errors.count("Stage 'start' has transition to unknown stage 'nowhere'") == 1
+        assert errors.count("Stage 'start' has transition to unknown stage 'elsewhere'") == 1
 
     def test_invalid_transition_target_error(self) -> None:
         result = (

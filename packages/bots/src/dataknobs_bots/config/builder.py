@@ -475,18 +475,22 @@ class DynaBotConfigBuilder:
         config = self._build_internal()
         return self._validator.validate(config)
 
-    def build_config(self) -> dict[str, Any]:
-        """Build the configuration without validating it.
+    def build_unvalidated(self) -> dict[str, Any]:
+        """Build the flat configuration without validating it.
 
-        The public name for the unvalidated build. ``build`` and
-        ``build_portable`` validate and raise; a caller that wants to
-        report validation results rather than raise on them -- the
-        config-toolkit tools do -- needs the config and the
-        ``ValidationResult`` separately, and was reaching through
-        ``_build_internal`` from outside the class to get it.
+        ``build`` and ``build_portable`` validate and raise; a caller
+        that wants to *report* a ``ValidationResult`` rather than raise
+        on one needs the config and the verdict separately, and was
+        reaching through ``_build_internal`` from outside the class to
+        get it.
 
-        Pair it with :meth:`validate` when a verdict is wanted; do not
-        use it to skip validation on a path that writes or deploys.
+        The name says what separates this from :meth:`build`, because
+        that is the part a reader has to notice: the two are otherwise
+        indistinguishable at a call site, and this is the one that can
+        hand you a config nothing has checked. Pair it with
+        :meth:`validate` when a verdict is wanted, and do not reach for
+        it on a path that writes or deploys -- ``save_config`` did, and
+        wrote to disk a config ``validate_config`` had just refused.
 
         Returns:
             Flat configuration dictionary, custom sections merged in.
