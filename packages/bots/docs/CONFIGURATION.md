@@ -769,10 +769,15 @@ and `"module.path.ClassName"` formats are supported for the import path.
 When `storage_class` is set, the `backend` key is ignored. The referenced class
 must:
 
-1. **Implement `ConversationStorage`** (from `dataknobs_llm.conversations`)
-2. **Implement the abstract `create(config)` classmethod** — receives the
-   remaining config dict (with `storage_class` already removed) and returns an
-   initialized instance
+1. **Provide an async `create(config)` classmethod** — the one requirement
+   checked when the config loads. It receives the remaining config dict (with
+   `storage_class` already removed) and returns an initialized instance. A
+   resolved class without it raises `ConfigurationError`, naming the key and
+   what the dotted path resolved to
+2. **Implement `ConversationStorage`** (from `dataknobs_llm.conversations`) —
+   expected, but deliberately not gated with an `issubclass` check, so a
+   duck-typed class providing the same methods is accepted. The trade is that
+   a partial implementation is caught at first use rather than at load
 3. **Optionally override `close()`** — called by `DynaBot.close()` for resource
    cleanup (the default is a no-op)
 

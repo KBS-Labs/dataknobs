@@ -192,8 +192,9 @@ class ConversationStorage(ABC):
 `AsyncDatabase` backend (memory, SQLite, PostgreSQL, S3, etc.).
 
 **Pluggable**: Custom implementations can be provided via the `storage_class`
-config key. The class must implement `ConversationStorage` and provide an async
-`create(config)` classmethod.
+config key. The async `create(config)` classmethod is required and checked at
+load; implementing `ConversationStorage` is expected but not gated, so a
+duck-typed class is accepted.
 
 **Backends** (via default DataknobsConversationStorage):
 - Memory (in-process dictionary)

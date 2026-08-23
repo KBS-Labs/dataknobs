@@ -10,7 +10,7 @@ from collections.abc import AsyncGenerator, AsyncIterator, Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import TracebackType
-from typing import TYPE_CHECKING, Any, Self, TypeVar, cast
+from typing import TYPE_CHECKING, Any, Protocol, Self, TypeVar, cast, runtime_checkable
 
 from dataknobs_common.bounded_cache import BoundedLRUCache
 from dataknobs_common.exceptions import (
@@ -49,6 +49,7 @@ from .turn import ToolExecution, TurnMode, TurnState
 
 if TYPE_CHECKING:
     from dataknobs_config import EnvironmentAwareConfig, EnvironmentConfig
+    from dataknobs_llm.prompts import AbstractPromptLibrary
 
     from ..prompts.resolver import PromptResolver
     from ..reasoning.base import ProcessResult
@@ -209,6 +210,25 @@ class _CheckpointLog:
         return self.dropped + len(self.entries)
 
 
+@runtime_checkable
+class _StorageFactory(Protocol):
+    """What a configured ``storage_class`` has to provide, and no more.
+
+    The config path resolves ``storage_class`` with ``resolve_callable``
+    rather than ``resolve_class`` on purpose: whether ``ConversationStorage``
+    admits duck-typed implementations is an open question, and an
+    ``issubclass`` gate could reject configurations that work today. Declaring
+    no base left the one method the path actually calls unchecked, so a
+    dotted path aimed at the wrong class failed with a bare ``AttributeError``
+    that named neither the config key nor the path. A runtime-checkable
+    protocol keeps the duck typing and asks only for what gets used.
+    """
+
+    async def create(self, config: dict[str, Any]) -> ConversationStorage:
+        """Build the storage instance from its config block."""
+        ...
+
+
 def _node_depth(node_id: str) -> int:
     """Depth of a node in the conversation tree. Root ("") is 0."""
     return len(node_id.split(".")) if node_id else 0
@@ -242,6 +262,18 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
     """
 
     CONFIG_CLS = DynaBotConfig
+
+    #: Collaborators every construction path guarantees, declared here so the
+    #: guarantee is the type checker's rather than a comment's. Both are
+    #: ``| None`` *parameters* — omittable by a caller — but not ``| None``
+    #: *attributes*: the pre-built shape rejects a missing one up front in
+    #: :meth:`_assign_collaborators`, and the config-driven shape builds both
+    #: in :meth:`_build_collaborators`. Inferring these from the parameter
+    #: types instead made every read of them an error, which is what the
+    #: seven ``union-attr``/``arg-type`` findings this replaces were.
+    llm: AsyncLLMProvider
+    prompt_builder: AsyncPromptBuilder
+    conversation_storage: ConversationStorage
 
     _DEFAULT_MAX_TOOL_ITERATIONS = 5
     """Default maximum number of tool execution rounds before returning."""
@@ -545,15 +577,20 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
         builds these in :meth:`_build_collaborators` instead and never
         reaches this method.
         """
-        missing = [
-            name
-            for name, value in (
-                ("prompt_builder", prompt_builder),
-                ("conversation_storage", conversation_storage),
-            )
-            if value is None
-        ]
-        if missing:
+        if prompt_builder is None or conversation_storage is None:
+            # Spelled as an explicit disjunction rather than a comprehension
+            # over the pair so the checker narrows both past this point. The
+            # comprehension form reads identically and rejects the same
+            # inputs, but leaves every later read of the two attributes
+            # looking optional -- which is the state this replaces.
+            missing = [
+                name
+                for name, value in (
+                    ("prompt_builder", prompt_builder),
+                    ("conversation_storage", conversation_storage),
+                )
+                if value is None
+            ]
             raise TypeError(
                 f"{type(self).__name__}: pre-built construction requires "
                 f"{' and '.join(missing)} — a built bot needs a prompt "
@@ -1030,12 +1067,21 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
             )
 
         if storage_class_path:
-            # `resolve_callable`, not `resolve_class`: this resolves a
-            # storage *class* but declares no base, because whether
-            # `ConversationStorage` admits duck-typed implementations is an
-            # open question and an `issubclass` gate here could reject
-            # configurations that work today. Tracked separately.
-            storage_class = resolve_callable(storage_class_path)
+            # `resolve_callable`, not `resolve_class`: see `_StorageFactory`
+            # for why this declares no base and asks only for `create`. Held
+            # as `object` rather than the `Callable[..., Any]` that function
+            # returns, because callability is not what this path needs of the
+            # result — and a protocol carrying no `__call__` has no
+            # intersection with a bare `Callable` for the checker to narrow.
+            storage_class: object = resolve_callable(storage_class_path)
+            if not isinstance(storage_class, _StorageFactory):
+                raise ConfigurationError(
+                    f"conversation_storage.storage_class resolved "
+                    f"{storage_class_path!r} to {getattr(storage_class, '__name__', storage_class)!r}, "
+                    "which has no 'create'. A storage class must provide an "
+                    "async create(config) classmethod returning a "
+                    "ConversationStorage."
+                )
             conversation_storage: ConversationStorage = await storage_class.create(storage_config)
         else:
             # Default: use DataknobsConversationStorage with database backend
@@ -1048,15 +1094,22 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
         #   4. Extraction default library — extraction prompts (lowest)
         from dataknobs_llm.prompts.implementations import ConfigPromptLibrary
 
-        composed_libraries = []
-        library_names = []
+        # Annotated to the base the composite accepts: the list is filled with
+        # ConfigPromptLibrary, FileSystemPromptLibrary and the two defaults,
+        # and inferring it from whichever happens to be appended first makes
+        # every other kind an error.
+        composed_libraries: list[AbstractPromptLibrary] = []
+        library_names: list[str] = []
 
         # 1. Inline prompts from config (highest priority)
         if self.config.prompts is not None:
             prompts_config = self.config.prompts
 
             if isinstance(prompts_config, dict):
-                structured_config = {"system": {}, "user": {}}
+                structured_config: dict[str, dict[str, Any]] = {
+                    "system": {},
+                    "user": {},
+                }
 
                 for prompt_name, prompt_content in prompts_config.items():
                     if isinstance(prompt_content, dict):
@@ -1084,7 +1137,7 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
                     library_names.append(f"filesystem:{lib_path}")
                 elif lib_type == "config":
                     lib_prompts = lib_config.get("prompts", {})
-                    structured = {"system": {}}
+                    structured: dict[str, dict[str, Any]] = {"system": {}}
                     for name, content in lib_prompts.items():
                         if isinstance(content, dict):
                             structured["system"][name] = content
@@ -1522,14 +1575,15 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
             portable = DynaBot.get_portable_config({"bot": {...}})
             ```
         """
-        # Import here to avoid circular dependency at module level
-        try:
-            from dataknobs_config import EnvironmentAwareConfig
+        # Import here to avoid circular dependency at module level. Not
+        # guarded: dataknobs-config is a hard dependency of this package, and
+        # :meth:`from_environment_config` imports the same name unguarded a
+        # few methods up. The ImportError arm this replaces could not fire,
+        # and swallowing it left the dict arm below unnarrowed.
+        from dataknobs_config import EnvironmentAwareConfig
 
-            if isinstance(config, EnvironmentAwareConfig):
-                return config.get_portable_config()
-        except ImportError:
-            pass
+        if isinstance(config, EnvironmentAwareConfig):
+            return config.get_portable_config()
 
         # Dict passes through (assumed already portable)
         return config
@@ -1921,7 +1975,7 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
         strategy = self.reasoning_strategy
         assert strategy is not None
 
-        handle = await strategy.begin_turn(  # type: ignore[union-attr]
+        handle = await strategy.begin_turn(
             turn.manager,
             self.llm,
             tools=list(self.tool_registry) or None,
@@ -1947,7 +2001,7 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
         budget = self._finalize_budget(loop_start)
         try:
             response = await asyncio.wait_for(
-                strategy.finalize_turn(handle, tool_results),  # type: ignore[union-attr]
+                strategy.finalize_turn(handle, tool_results),
                 timeout=budget,
             )
         except TimeoutError:
@@ -3517,12 +3571,19 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
         For direct instantiation, if the tool class defines a
         ``from_config(cls, config: dict)`` classmethod, it will be
         called with ``params`` instead of ``tool_class(**params)``.
-        This allows tools to construct complex internal dependencies
-        from simple YAML-compatible parameters.
+        This lets a tool build its own internal dependencies rather than
+        take them all as constructor arguments.
 
         If the tool class defines ``catalog_metadata()`` with a ``requires``
         tuple, matching entries from ``dependencies`` are injected into
         the constructor parameters (unless already provided in ``params``).
+        That injection happens *before* the ``from_config`` call below, so
+        ``params`` is not the YAML block: a declared dependency arrives in it
+        as a live object under the same key its YAML spelling would use. A
+        ``from_config`` that assumes the YAML spelling and rebuilds the value
+        discards the one it was handed;
+        :func:`~dataknobs_bots.config.tool_catalog.injected_dependency` is
+        what tells the two apart.
 
         Args:
             tool_config: Tool configuration (dict or string xref).
@@ -3690,8 +3751,10 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
                                 params[dep_name] = dependencies[dep_name]
 
                 # Instantiate the tool — prefer from_config() if available,
-                # which allows tools to construct complex internal
-                # dependencies from simple YAML-compatible params.
+                # which lets a tool build its own internal dependencies. Note
+                # what `params` now holds: the injection loop above has
+                # already put any live `requires` object into it, so this is
+                # not the YAML block a from_config() may once have assumed.
                 if hasattr(tool_class, "from_config") and callable(tool_class.from_config):
                     tool = tool_class.from_config(params)
                 else:
