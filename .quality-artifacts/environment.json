@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-08-23T00:54:05Z",
+  "timestamp": "2026-08-23T02:04:54Z",
   "python_version": "Python 3.12.12",
   "uv_version": "uv 0.12.5 (Homebrew 2026-08-14 aarch64-apple-darwin)",
   "os": "Darwin",
   "os_version": "24.6.0",
-  "git_branch": "sbk/validate-tool-and-save-disagree",
-  "git_commit": "343d48680a69ad1e43d2c19805e9003a3699156f",
+  "git_branch": "sbk/tools-honour-declared-requires",
+  "git_commit": "07e9eda4cf642311fe54443a0edab681399e56e8",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }

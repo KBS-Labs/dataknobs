@@ -729,3 +729,67 @@ class TestListAvailableToolsTool:
         tool = ListAvailableToolsTool(available_tools=[])
         assert tool.schema["type"] == "object"
         assert "category" in tool.schema["properties"]
+
+
+class TestDeclaredDependencyInjection:
+    """Each tool that declares ``requires`` must use what is injected.
+
+    ``DynaBot._resolve_tool`` reads ``catalog_metadata()['requires']``,
+    copies matching entries out of its ``dependencies`` map into the same
+    ``params`` dict that carries YAML scalars, and hands the dict to
+    ``from_config``. A ``from_config`` that reads only the YAML keys
+    throws the live object away — silently for the three tools that
+    ignore the key, and with a ``DottedPathError`` for the two that run
+    every value through ``resolve_callable``.
+
+    Every assertion here is behavioural: the injected object has to be
+    the one the tool *uses*, not merely the one it stored.
+    """
+
+    @pytest.mark.asyncio
+    async def test_list_templates_uses_the_injected_registry(self) -> None:
+        registry = _make_registry()
+        tool = ListTemplatesTool.from_config({"template_registry": registry})
+        result = await tool.execute_with_context(_make_context())
+        assert {t["name"] for t in result["templates"]} == {"basic", "advanced"}
+
+    @pytest.mark.asyncio
+    async def test_get_template_details_uses_the_injected_registry(self) -> None:
+        registry = _make_registry()
+        tool = GetTemplateDetailsTool.from_config({"template_registry": registry})
+        result = await tool.execute_with_context(_make_context(), template_name="basic")
+        assert result["name"] == "basic"
+
+    @pytest.mark.asyncio
+    async def test_preview_config_uses_the_injected_factory(self) -> None:
+        tool = PreviewConfigTool.from_config({"builder_factory": _basic_builder_factory})
+        context = _make_context({"llm_provider": "openai", "storage_backend": "memory"})
+        result = await tool.execute_with_context(context, format="full")
+        assert result["config"]["llm"]["provider"] == "openai"
+
+    @pytest.mark.asyncio
+    async def test_validate_config_uses_the_injected_factory(self) -> None:
+        # The typo factory is the one whose verdict differs from a
+        # factory-less validation, so a passing assertion here can only
+        # mean the injected factory ran.
+        tool = ValidateConfigTool.from_config({"builder_factory": _typo_builder_factory})
+        context = _make_context({"llm_resource": "main", "storage_backend": "memory"})
+        result = await tool.execute_with_context(context)
+        assert result["valid"] is False
+        assert any("requred" in e for e in result["errors"])
+
+    @pytest.mark.asyncio
+    async def test_save_config_uses_the_injected_draft_manager(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # chdir so that a tool falling back to its relative default
+        # ("configs") writes under tmp_path rather than into the repo.
+        monkeypatch.chdir(tmp_path)
+        injected = ConfigDraftManager(output_dir=tmp_path / "injected")
+        # No ``builder_factory``: the draft manager is the only injected
+        # dependency, so the assertion below can only be about it.
+        tool = SaveConfigTool.from_config({"draft_manager": injected})
+        context = _make_context({"llm_provider": "ollama", "storage_backend": "memory"})
+        result = await tool.execute_with_context(context, config_name="mybot")
+        assert result["success"] is True
+        assert Path(result["file_path"]).parent == tmp_path / "injected"

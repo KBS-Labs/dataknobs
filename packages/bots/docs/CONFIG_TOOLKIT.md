@@ -354,6 +354,59 @@ The `default_catalog` singleton is pre-populated with all 12 built-in tools:
 | `remove_kb_resource` | `RemoveKBResourceTool` | configbot, kb | — |
 | `ingest_knowledge_base` | `IngestKnowledgeBaseTool` | configbot, kb | — |
 
+### Supplying a declared dependency
+
+The **Requires** column names what a tool needs handed to it, and each of
+those parameters has two spellings: the live object, or the YAML value the
+tool builds one from. A tool takes whichever it is given, preferring the
+live object.
+
+```python
+# Live: the catalog passes keywords straight into the tool's params.
+tool = default_catalog.instantiate_tool("list_templates", template_registry=registry)
+registry_of_tools = default_catalog.create_tool_registry(
+    ["save_config"], overrides={"save_config": {"draft_manager": manager}}
+)
+
+# YAML: the same parameters, spelled as config data.
+tool = default_catalog.instantiate_tool("list_templates", template_dir="configs/templates")
+```
+
+The two spellings, per parameter:
+
+| Parameter | Live form | YAML form |
+|---|---|---|
+| `template_registry` | `ConfigTemplateRegistry` | `template_dir` — a directory to load |
+| `draft_manager` | `ConfigDraftManager` | `config_dir` — an output directory |
+| `builder_factory` | the callable | a dotted import path to it |
+| `on_save` | the callable | a dotted import path to it |
+
+`DynaBot._resolve_tool` fills the same dict from a `dependencies` map,
+matching on the names the entry's `requires` declares, before handing it to
+`from_config`. **Its supply side is not yet open**: `DynaBot.from_config()`
+builds that map itself and puts exactly one thing in it, the configured
+`knowledge_base`. So a bot built from config today reaches the four
+parameters above through their YAML spelling; the live spelling is for code
+that constructs tools itself, through the catalog or directly.
+
+Writing a tool with a `requires` entry of your own? `from_config` has to
+tell the two channels apart, and
+`dataknobs_bots.config.injected_dependency` is the one line that does it:
+
+```python
+from dataknobs_bots.config import InjectedCallable, injected_dependency
+
+@classmethod
+def from_config(cls, config: dict[str, Any]) -> MyTool:
+    store = injected_dependency(config, "vector_store", VectorStore)
+    if store is None:
+        store = build_store_from(config["store_path"])
+    # `InjectedCallable` for a key whose YAML form is a dotted path:
+    # a live callable satisfies it, a string does not.
+    hook = injected_dependency(config, "on_event", InjectedCallable)
+    return cls(vector_store=store, on_event=hook)
+```
+
 ### Usage with Builders
 
 ```python

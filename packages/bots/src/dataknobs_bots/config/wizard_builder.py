@@ -106,9 +106,15 @@ class IntentDetectionConfig(StructuredConfig):
     intents: tuple[dict[str, Any], ...] = ()
 
     def __post_init__(self) -> None:
-        """Coerce ``intents`` to a tuple (raw dicts arrive as a list)."""
-        if not isinstance(self.intents, tuple):
-            object.__setattr__(self, "intents", tuple(self.intents))
+        """Coerce ``intents`` to a tuple (raw dicts arrive as a list).
+
+        Unconditional: the annotation says this is already a tuple, so a
+        type guard around the coercion reads as dead code while existing
+        for the untyped load path. ``tuple`` of a tuple returns the one
+        it was given, so dropping the guard changes nothing but the
+        contradiction.
+        """
+        object.__setattr__(self, "intents", tuple(self.intents))
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to dict compatible with WizardConfigLoader."""
@@ -323,11 +329,15 @@ class WizardConfig(StructuredConfig):
     subflows: dict[str, list[dict[str, Any]]] | None = None
 
     def __post_init__(self) -> None:
-        """Coerce ``stages``/``global_tasks`` to tuples (lists when loaded)."""
-        if not isinstance(self.stages, tuple):
-            object.__setattr__(self, "stages", tuple(self.stages))
-        if not isinstance(self.global_tasks, tuple):
-            object.__setattr__(self, "global_tasks", tuple(self.global_tasks))
+        """Coerce ``stages``/``global_tasks`` to tuples (lists when loaded).
+
+        Unconditional, for the reason given on
+        ``IntentDetectionConfig``: the guard was dead under the
+        annotations and ``tuple`` of a tuple returns the one it was
+        given.
+        """
+        object.__setattr__(self, "stages", tuple(self.stages))
+        object.__setattr__(self, "global_tasks", tuple(self.global_tasks))
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to dict compatible with WizardConfigLoader.load_from_dict()."""

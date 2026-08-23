@@ -31,13 +31,90 @@ from __future__ import annotations
 import logging
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Any, Protocol, runtime_checkable
+from typing import Any, Protocol, TypeVar, cast, runtime_checkable
 
-from dataknobs_common.imports import resolve_callable
+from dataknobs_common.imports import ClassConstraint, resolve_callable
 from dataknobs_common.registry import Registry
 from dataknobs_common.structured_config import StructuredConfig
 
 logger = logging.getLogger(__name__)
+
+_T = TypeVar("_T")
+
+
+@runtime_checkable
+class InjectedCallable(Protocol):
+    """Constraint for a dependency whose live form is any callable.
+
+    Pass this to :func:`injected_dependency` for a key whose YAML form is
+    a dotted path — ``builder_factory``, ``on_save``. A live callable
+    satisfies it and a dotted-path string does not, which is exactly the
+    distinction the caller needs; the signature is deliberately open
+    because the discrimination is "already resolved or still a string",
+    not "callable of this shape".
+    """
+
+    def __call__(self, *args: Any, **kwargs: Any) -> Any: ...
+
+
+def injected_dependency(
+    config: dict[str, Any], key: str, expected: ClassConstraint[_T]
+) -> _T | None:
+    """Return the live dependency supplied under *key*, if there is one.
+
+    A tool's ``from_config`` receives one dict carrying two channels.
+    YAML puts scalars and dotted paths in it; ``DynaBot._resolve_tool``
+    puts *live objects* in it, under the names
+    ``catalog_metadata()['requires']`` declares, and
+    :meth:`ToolCatalog.instantiate_tool` puts whatever its caller passed
+    as a keyword under any name at all. A ``from_config`` that reads only
+    the YAML form silently drops the object on the first channel and
+    raises ``DottedPathError`` on the second, so every one of them has to
+    ask this question first.
+
+    Consumers writing a tool with a ``requires`` entry have the same
+    problem and no way to discover the answer, which is why this is
+    public.
+
+    Args:
+        config: The params dict handed to ``from_config``.
+        key: The parameter name, spelled as both channels spell it.
+        expected: The class the live form must satisfy, or
+            :class:`InjectedCallable` where the live form is a callable
+            and the YAML form is a dotted path. Typed as
+            :data:`~dataknobs_common.imports.ClassConstraint` so a
+            protocol type-checks in this position; see that alias.
+
+    Returns:
+        The value under *key* when it is already an *expected*, else
+        ``None`` — meaning "not injected", so the caller falls through to
+        its own handling of the key.
+
+    Raises:
+        TypeError: *expected* is not usable as an instance constraint — a
+            non-runtime-checkable protocol, or something that is not a
+            class at all (a factory function reaches here, since
+            :data:`~dataknobs_common.imports.ClassConstraint` cannot
+            exclude one statically). Deliberately **not** caught:
+            returning ``None`` would report "nothing was injected" about a
+            question that was never asked. Raised whether or not *key* is
+            present, so the defect surfaces on the first call rather than
+            on the first call that happens to inject.
+
+    Note:
+        A protocol with non-method members is usable here, unlike in
+        :func:`~dataknobs_common.imports.resolve_class` — that one tests
+        the constraint with ``issubclass``, which refuses a data protocol,
+        and this one with ``isinstance``, which does not.
+    """
+    # ``expected`` is declared ``ClassConstraint`` — ``Callable[..., _T]``,
+    # not ``type[_T]`` — so a runtime-checkable protocol is accepted; see
+    # ``resolve_class``, which casts for the same reason. A non-class
+    # lands on ``isinstance``'s own ``TypeError``, naming the defect in
+    # the calling code rather than dressing it as a config failure.
+    constraint = cast("type[_T]", expected)
+    value = config.get(key)
+    return value if isinstance(value, constraint) else None
 
 
 @dataclass(frozen=True)
@@ -64,13 +141,21 @@ class ToolEntry(StructuredConfig):
     requires: frozenset[str] = frozenset()
 
     def __post_init__(self) -> None:
-        """Normalize ``default_params`` and the ``tags``/``requires`` sets."""
-        if self.default_params is None:
-            object.__setattr__(self, "default_params", {})
-        if not isinstance(self.tags, frozenset):
-            object.__setattr__(self, "tags", frozenset(self.tags or ()))
-        if not isinstance(self.requires, frozenset):
-            object.__setattr__(self, "requires", frozenset(self.requires or ()))
+        """Normalize ``default_params`` and the ``tags``/``requires`` sets.
+
+        Coerces unconditionally rather than behind a type guard. The
+        guards read as dead code to the type checker — the annotations
+        above say the fields already hold a ``dict`` and two
+        ``frozenset``s — while at runtime they exist for the untyped
+        inputs (``from_dict`` over YAML, ``catalog_metadata()``) that
+        reach here with lists and tuples. Coercing every time says the
+        same thing without the contradiction: ``frozenset`` of a
+        ``frozenset`` and ``dict or {}`` of a non-empty dict both return
+        the object they were given.
+        """
+        object.__setattr__(self, "default_params", self.default_params or {})
+        object.__setattr__(self, "tags", frozenset(self.tags or ()))
+        object.__setattr__(self, "requires", frozenset(self.requires or ()))
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize to dict (suitable for YAML output).

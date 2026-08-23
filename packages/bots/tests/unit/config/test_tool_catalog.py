@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Any
+from pathlib import Path
+from typing import Any, Protocol, runtime_checkable
 
 import pytest
 
@@ -14,12 +15,18 @@ from dataknobs_common.exceptions import (
     OperationError,
 )
 
+from dataknobs_bots import DynaBot
+from dataknobs_bots.config.builder import DynaBotConfigBuilder
+from dataknobs_bots.config.drafts import ConfigDraftManager
+from dataknobs_bots.config.templates import ConfigTemplateRegistry
 from dataknobs_bots.config.tool_catalog import (
     CatalogDescribable,
+    InjectedCallable,
     ToolCatalog,
     ToolEntry,
     create_default_catalog,
     default_catalog,
+    injected_dependency,
 )
 
 
@@ -802,3 +809,178 @@ class TestCatalogSerialization:
         e2 = restored.get("t2")
         assert e2.class_path == "m.T2"
         assert e2.tags == frozenset({"c"})
+
+
+# -- Declared-dependency recurrence guard --
+
+
+def _sentinel_for(key: str, tmp_path: Path) -> Any:
+    """Build the live object a tool declaring *key* is entitled to receive.
+
+    Only identity is asserted, so nothing here needs to be usable beyond
+    surviving whatever type check the receiving ``from_config`` applies.
+    ``knowledge_base`` has no such check — ``KnowledgeSearchTool`` takes
+    it as ``Any`` — which is why a bare object suffices there and matches
+    the stand-in ``test_tool_resolution.py`` already uses for the same
+    mechanism.
+    """
+    if key == "template_registry":
+        return ConfigTemplateRegistry()
+    if key == "draft_manager":
+        return ConfigDraftManager(output_dir=tmp_path / key)
+    if key == "builder_factory":
+        return lambda data: DynaBotConfigBuilder()
+    if key == "knowledge_base":
+        return object()
+    pytest.fail(
+        f"No sentinel registered for declared dependency {key!r}. "
+        "A tool in the default catalog declares it, so this guard cannot "
+        "check that it survives construction. Add a sentinel here rather "
+        "than letting the tool go unchecked."
+    )
+
+
+def _declared_dependencies() -> list[tuple[str, str]]:
+    """Every ``(tool name, declared dependency)`` pair in the default catalog."""
+    return sorted(
+        (entry.name, key) for entry in default_catalog.list_items() for key in entry.requires
+    )
+
+
+@pytest.mark.parametrize(("tool_name", "dep_key"), _declared_dependencies())
+def test_declared_dependency_reaches_the_tool(tool_name: str, dep_key: str, tmp_path: Path) -> None:
+    """A catalog entry that declares ``requires`` must receive it.
+
+    ``DynaBot._resolve_tool`` injects entries named by
+    ``catalog_metadata()['requires']`` into ``params`` and then dispatches
+    on whether the class defines ``from_config``. Only the constructor
+    branch was ever tested, so five of the six entries here dropped or
+    choked on the dependency they declare while the suite stayed green.
+
+    Parametrized off the catalog rather than a hand-written list, so a
+    tool added tomorrow is covered the moment it is registered — and an
+    unrecognized dependency name fails loudly in ``_sentinel_for``
+    instead of being silently skipped.
+    """
+    sentinel = _sentinel_for(dep_key, tmp_path)
+    tool_config = default_catalog.to_bot_config(tool_name)
+
+    tool = DynaBot._resolve_tool(tool_config, {}, dependencies={dep_key: sentinel})
+
+    assert tool is not None
+    held = [name for name, value in vars(tool).items() if value is sentinel]
+    assert held, (
+        f"{tool_name} declares requires=({dep_key!r},) but the injected "
+        f"object reached none of its attributes: {sorted(vars(tool))}"
+    )
+
+
+class TestInjectedDependency:
+    """Tests for injected_dependency() and the InjectedCallable constraint."""
+
+    def test_returns_the_live_object(self) -> None:
+        registry = ConfigTemplateRegistry()
+        got = injected_dependency(
+            {"template_registry": registry}, "template_registry", ConfigTemplateRegistry
+        )
+        assert got is registry
+
+    def test_absent_key_is_not_injected(self) -> None:
+        assert injected_dependency({}, "template_registry", ConfigTemplateRegistry) is None
+
+    def test_yaml_value_under_the_same_key_is_not_injected(self) -> None:
+        """A string is config data, so the caller keeps its own handling.
+
+        This is the whole discrimination: ``builder_factory`` names the
+        live callable and the dotted path to it with one key, so the
+        value's type is all there is to go on.
+        """
+        assert (
+            injected_dependency({"builder_factory": "m:f"}, "builder_factory", InjectedCallable)
+            is None
+        )
+
+    def test_wrong_live_type_is_not_injected(self) -> None:
+        manager = ConfigDraftManager(output_dir=Path("unused"))
+        assert (
+            injected_dependency(
+                {"template_registry": manager}, "template_registry", ConfigTemplateRegistry
+            )
+            is None
+        )
+
+    def test_injected_callable_accepts_a_function(self) -> None:
+        def factory(data: dict[str, Any]) -> DynaBotConfigBuilder:
+            return DynaBotConfigBuilder()
+
+        got = injected_dependency({"builder_factory": factory}, "builder_factory", InjectedCallable)
+        assert got is factory
+
+    def test_injected_callable_accepts_a_callable_object(self) -> None:
+        class Factory:
+            def __call__(self, data: dict[str, Any]) -> DynaBotConfigBuilder:
+                return DynaBotConfigBuilder()
+
+        factory = Factory()
+        got = injected_dependency({"builder_factory": factory}, "builder_factory", InjectedCallable)
+        assert got is factory
+
+    def test_injected_callable_rejects_a_non_callable(self) -> None:
+        assert injected_dependency({"on_save": {"a": 1}}, "on_save", InjectedCallable) is None
+
+    def test_a_non_class_expected_raises_typeerror_unwrapped(self) -> None:
+        """A caller defect, deliberately not reported as "not injected".
+
+        ``ClassConstraint`` is ``Callable[..., _T]``, so a factory
+        function type-checks in this position and only ``isinstance``
+        rejects it. Swallowing that would answer "nothing was injected"
+        to a question the code never managed to ask.
+        """
+
+        def not_a_class(*args: Any, **kwargs: Any) -> Any:
+            return None
+
+        with pytest.raises(TypeError):
+            injected_dependency({"dep": object()}, "dep", not_a_class)
+
+    def test_a_non_runtime_checkable_protocol_raises_typeerror(self) -> None:
+        """The other way ``expected`` can be unusable — a missing decorator."""
+
+        class NotRuntimeCheckable(Protocol):
+            def __call__(self, *args: Any, **kwargs: Any) -> Any: ...
+
+        with pytest.raises(TypeError):
+            injected_dependency({"dep": lambda: None}, "dep", NotRuntimeCheckable)
+
+    def test_the_caller_defect_surfaces_with_the_key_absent(self) -> None:
+        """The property that keeps a bad constraint from lurking.
+
+        A short-circuit on the absent key — ``if key not in config:
+        return None`` ahead of the check — would look like a harmless
+        tidy and would hide a broken constraint until the first call that
+        happened to inject something. Which is this whole defect class:
+        code that reads correct until the day a live object arrives.
+        """
+
+        def not_a_class(*args: Any, **kwargs: Any) -> Any:
+            return None
+
+        with pytest.raises(TypeError):
+            injected_dependency({}, "dep", not_a_class)
+
+    def test_a_data_protocol_is_a_usable_constraint_here(self) -> None:
+        """Where this diverges from ``resolve_class``, and why.
+
+        That one tests with ``issubclass``, which refuses a protocol
+        carrying non-method members; this one tests with ``isinstance``,
+        which does not. A reader who carried the restriction over from
+        the alias's other consumer would rule out a constraint that works
+        — and unifying the two on ``issubclass`` would break it.
+        """
+
+        @runtime_checkable
+        class HasOutputDir(Protocol):
+            output_dir: Path
+
+        manager = ConfigDraftManager(output_dir=Path("unused"))
+        assert injected_dependency({"dep": manager}, "dep", HasOutputDir) is manager
