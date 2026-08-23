@@ -1,5 +1,7 @@
 """Tests for LLM providers infrastructure."""
 
+import asyncio
+
 import pytest
 from dataknobs_llm.llm.base import LLMConfig, LLMMessage, AsyncLLMProvider
 from dataknobs_llm.llm.providers import (
@@ -90,6 +92,30 @@ class TestLLMProviderFactory:
         provider = factory(config)
 
         assert isinstance(provider, EchoProvider)
+
+    def test_factory_forwards_extra_kwargs_to_the_provider(self):
+        """``create(**kwargs)`` promises the extras reach the constructor.
+
+        The signature has taken ``**kwargs`` and the docstring has described
+        them as "Additional arguments passed to provider constructor" since
+        before the registry existed, but neither branch of ``create`` ever
+        passed them on. A caller supplying one got a provider built from
+        defaults and no error saying so -- the failure is silent, which is why
+        no test noticed.
+
+        Asserted through ``responses``, not ``prompt_builder``: a scripted
+        response the provider actually returns proves the argument reached the
+        constructor *and* took effect, where an attribute read would only
+        prove it was stored.
+        """
+        factory = LLMProviderFactory(is_async=True)
+        config = LLMConfig(provider="echo", model="echo-model")
+
+        provider = factory.create(config, responses=["scripted reply"])
+
+        assert isinstance(provider, EchoProvider)
+        response = asyncio.run(provider.complete("anything"))
+        assert response.content == "scripted reply"
 
     def test_factory_register_custom_provider(self):
         """Test registering a custom provider class."""

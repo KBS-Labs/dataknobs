@@ -154,10 +154,9 @@ class QueryTransformer:
         if not self.config.enabled:
             return
 
-        from dataknobs_llm.llm import LLMProviderFactory
+        from dataknobs_llm.llm import create_llm_provider
 
-        factory = LLMProviderFactory(is_async=True)
-        self._llm = factory.create(
+        self._llm = create_llm_provider(
             {
                 "provider": self.config.llm_provider,
                 "model": self.config.llm_model,

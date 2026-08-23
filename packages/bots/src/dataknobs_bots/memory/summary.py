@@ -42,10 +42,9 @@ async def _resolve_summary_llm(
             available.
     """
     if llm_config is not None:
-        from dataknobs_llm.llm import LLMProviderFactory
+        from dataknobs_llm.llm import create_llm_provider
 
-        factory = LLMProviderFactory(is_async=True)
-        provider = factory.create(llm_config)
+        provider = create_llm_provider(llm_config)
         await provider.initialize()
         return provider
 
