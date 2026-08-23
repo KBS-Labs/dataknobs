@@ -30,6 +30,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   gap, so the turn fell back to plain text retrieval instead of reporting
   a broken index.
 
+- **The built-in tool table is the catalog again.** `CONFIG_TOOLKIT.md` gave
+  twelve rows for the twenty-one tools `default_catalog` registers, and stated
+  twelve as the count above them; the site page repeated the count. The nine
+  wizard tools — bank CRUD, artifact lifecycle, and the two completion signals
+  — were therefore absent from the one page that claims to enumerate the
+  catalog, and a subset is the worst shape this can take,
+  because twelve rows under the words "all 12 built-in tools" reads as a closed
+  set rather than an obviously partial one. The rows are in, both counts are
+  right, and a workspace guard now compares the table and every documented
+  count against the registry in both directions, so the next tool registered
+  cannot land unlisted.
+
+  An empty **Requires** cell also now says what it means: the tool declares
+  nothing to be handed at *construction*, not that it needs nothing. Those nine
+  read whichever of `banks`, `catalog` and `artifact` they use from
+  `context.extra` on the turn that calls them, taking a constructor argument
+  only as an override, which is why they declare no `requires` — by the time
+  the value exists there is no constructor left to inject it into. Their
+  parameters and effects stay documented in `TOOLS.md`, which the table now
+  points at.
+
 ### Fixed
 
 - **`validate_config` and `save_config` now reach one verdict.**
