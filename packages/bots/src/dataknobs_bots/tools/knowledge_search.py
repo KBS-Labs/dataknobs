@@ -89,7 +89,7 @@ class KnowledgeSearchTool(ContextAwareTool):
     async def execute_with_context(
         self,
         context: ToolExecutionContext,
-        query: str,
+        query: str | None = None,
         max_results: int = 3,
         **kwargs: Any,
     ) -> dict[str, Any]:
@@ -118,6 +118,9 @@ class KnowledgeSearchTool(ContextAwareTool):
                 print(f"{chunk['heading_path']}: {chunk['text']}")
             ```
         """
+        if query is None:
+            return self.missing_arguments_result(self.missing_arguments({"query": query}))
+
         # Clamp max_results to valid range
         max_results = max(1, min(10, max_results))
 

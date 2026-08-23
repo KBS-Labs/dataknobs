@@ -158,7 +158,7 @@ class CheckKnowledgeSourceTool(ContextAwareTool):
     async def execute_with_context(
         self,
         context: ToolExecutionContext,
-        source_path: str,
+        source_path: str | None = None,
         file_patterns: list[str] | None = None,
         **kwargs: Any,
     ) -> dict[str, Any]:
@@ -172,6 +172,11 @@ class CheckKnowledgeSourceTool(ContextAwareTool):
         Returns:
             Dict with verification results.
         """
+        if source_path is None:
+            return self.missing_arguments_result(
+                self.missing_arguments({"source_path": source_path})
+            )
+
         wizard_data = _get_wizard_data_ref(context)
         patterns = file_patterns or _DEFAULT_GLOB_PATTERNS
 
@@ -362,7 +367,7 @@ class AddKBResourceTool(ContextAwareTool):
     async def execute_with_context(
         self,
         context: ToolExecutionContext,
-        path: str,
+        path: str | None = None,
         title: str = "",
         resource_type: str = "file",
         content: str | None = None,
@@ -382,6 +387,9 @@ class AddKBResourceTool(ContextAwareTool):
         Returns:
             Dict with add result.
         """
+        if path is None:
+            return self.missing_arguments_result(self.missing_arguments({"path": path}))
+
         wizard_data = _get_wizard_data_ref(context)
         resources: list[dict[str, Any]] = wizard_data.setdefault("_kb_resources", [])
 
@@ -498,7 +506,7 @@ class RemoveKBResourceTool(ContextAwareTool):
     async def execute_with_context(
         self,
         context: ToolExecutionContext,
-        path: str,
+        path: str | None = None,
         **kwargs: Any,
     ) -> dict[str, Any]:
         """Remove a KB resource.
@@ -510,6 +518,9 @@ class RemoveKBResourceTool(ContextAwareTool):
         Returns:
             Dict with removal result.
         """
+        if path is None:
+            return self.missing_arguments_result(self.missing_arguments({"path": path}))
+
         wizard_data = _get_wizard_data_ref(context)
         resources: list[dict[str, Any]] = wizard_data.get("_kb_resources", [])
 

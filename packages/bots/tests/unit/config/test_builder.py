@@ -145,6 +145,28 @@ class TestDynaBotConfigBuilder:
         # Custom sections should NOT be inside bot
         assert "domain" not in portable["bot"]
 
+    def test_build_unvalidated_returns_the_config(self) -> None:
+        """``build_unvalidated`` is the public name for the unvalidated build.
+
+        Three call sites outside the class reached ``_build_internal``
+        because it was the only output method that does not validate.
+        A private name is not an API, so the callers that legitimately
+        need an unvalidated config get a public one.
+        """
+        builder = (
+            DynaBotConfigBuilder()
+            .set_llm("ollama", model="llama3.2")
+            .set_custom_section("domain", {"id": "test-bot"})
+        )
+        config = builder.build_unvalidated()
+        assert config["llm"]["provider"] == "ollama"
+        assert config["domain"] == {"id": "test-bot"}
+
+    def test_build_unvalidated_does_not_validate(self) -> None:
+        """Unlike ``build``/``build_portable``, it returns an invalid config."""
+        config = DynaBotConfigBuilder().build_unvalidated()
+        assert config == {}
+
     def test_build_fails_without_required(self) -> None:
         builder = DynaBotConfigBuilder()
         with pytest.raises(ValueError, match="validation failed"):

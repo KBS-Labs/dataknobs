@@ -68,6 +68,11 @@ flat = builder.build()
 # Portable format with bot wrapper
 portable = builder.build_portable()
 # {"bot": {"llm": {"$resource": "default", ...}}, "domain": {"id": "my-bot"}}
+
+# Flat format WITHOUT validating -- for callers that report a
+# ValidationResult rather than raise on one. Pair it with validate().
+draft = builder.build_unvalidated()
+result = builder.validate()
 ```
 
 ### Adding Tools by Name
@@ -141,6 +146,33 @@ def check_domain_id(config):
 
 validator.register_validator("domain_id", check_domain_id)
 ```
+
+<!-- --8<-- [start:combining-results] -->
+### Combining results
+
+`ValidationResult` offers two ways to combine, and the difference matters when
+two validators cover overlapping ground:
+
+| Method | Repeated message | Use when |
+|---|---|---|
+| `merge` | kept | accumulating findings from one validator |
+| `merge_unique` | reported once | composing two validators over the same config |
+
+`merge` concatenates and keeps every message, because whether a repeat is one
+finding or two is a property of the composition, which the method cannot see.
+Most call sites accumulate findings from a single pass, where dropping a repeat
+would drop a real finding.
+
+`merge_unique` is for the other case. `validate_completeness` runs inside every
+`ConfigValidator`, so running two of them over one config finds the same missing
+key twice — an artefact of running two validators, not a second defect. Distinct
+messages are never collapsed and order is preserved either way.
+
+```python
+builder_result = builder.validate()
+combined = builder_result.merge_unique(my_validator.validate(config))
+```
+<!-- --8<-- [end:combining-results] -->
 
 ## Templates
 
@@ -313,7 +345,7 @@ The `default_catalog` singleton is pre-populated with all 12 built-in tools:
 | `list_templates` | `ListTemplatesTool` | configbot | template_registry |
 | `get_template_details` | `GetTemplateDetailsTool` | configbot | template_registry |
 | `preview_config` | `PreviewConfigTool` | configbot | builder_factory |
-| `validate_config` | `ValidateConfigTool` | configbot | validator |
+| `validate_config` | `ValidateConfigTool` | configbot | builder_factory |
 | `save_config` | `SaveConfigTool` | configbot | draft_manager |
 | `list_available_tools` | `ListAvailableToolsTool` | configbot | — |
 | `check_knowledge_source` | `CheckKnowledgeSourceTool` | configbot, kb | — |
@@ -447,15 +479,28 @@ Six ContextAwareTool implementations for wizard-driven config flows:
 | `ListTemplatesTool` | List available templates | `ConfigTemplateRegistry` |
 | `GetTemplateDetailsTool` | Get template details | `ConfigTemplateRegistry` |
 | `PreviewConfigTool` | Preview config being built | `builder_factory` callback |
-| `ValidateConfigTool` | Validate current config | `ConfigValidator` |
+| `ValidateConfigTool` | Validate current config | the `builder_factory`'s builder — its validator decides |
 | `SaveConfigTool` | Save/finalize config | `ConfigDraftManager` + `on_save` + `portable` |
 | `ListAvailableToolsTool` | List tools for bot config | `available_tools` catalog |
 
 ### Consumer Extension Points
 
 - **`builder_factory`**: `PreviewConfigTool` and `ValidateConfigTool` accept a `builder_factory: Callable[[dict], DynaBotConfigBuilder]` that encapsulates domain-specific config building logic.
+  When `ValidateConfigTool` has one, the builder's own validator decides the
+  verdict — the same validator `build()` and `build_portable()` run — so wiring
+  `ValidateConfigTool` and `SaveConfigTool` to the **same** factory makes the
+  save outcome predictable from the validate outcome, at either setting of
+  `portable`.
+
+  Two things fall outside that, both by construction. Each tool resolves its own
+  `builder_factory` from its own config block, and nothing checks that the two
+  name the same callable. And a `ConfigValidator` passed to `ValidateConfigTool`
+  is optional and runs *in addition* to the builder's — merged with
+  `merge_unique`, so overlapping validators do not report a shared failure twice
+  — which means it can refuse what save would accept. That direction is
+  deliberate: an extra error stops an author, a missing one misleads them.
 - **`on_save`**: `SaveConfigTool` accepts an `on_save: Callable[[str, dict], Any]` callback for post-save actions (e.g., registering the bot with a manager).
-- **`portable`**: `SaveConfigTool` accepts `portable: bool = False`. When `True`, uses `build_portable()` to produce configs with a `bot` wrapper key.
+- **`portable`**: `SaveConfigTool` accepts `portable: bool = False`. When `True`, uses `build_portable()` to produce configs with a `bot` wrapper key; when `False`, `build()` produces the flat format. The flag selects the output shape, not whether the config is validated — both refuse an invalid config rather than writing it.
 - **`available_tools`**: `ListAvailableToolsTool` accepts a list of tool descriptors (consumer-specific catalog).
 
 ```python

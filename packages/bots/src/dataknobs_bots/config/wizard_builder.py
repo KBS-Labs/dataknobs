@@ -958,13 +958,17 @@ class WizardConfigBuilder:
 
         stage_names = {s.name for s in stages}
 
-        # Check for duplicate stage names
+        # Check for duplicate stage names. Reported once per repeated
+        # name, not once per offending stage: the name is the whole
+        # content of the message, so a second copy repeats itself.
         seen: set[str] = set()
+        reported: set[str] = set()
         for stage in stages:
-            if stage.name in seen:
+            if stage.name in seen and stage.name not in reported:
                 result = result.merge(
                     ValidationResult.error(f"Duplicate stage name: '{stage.name}'")
                 )
+                reported.add(stage.name)
             seen.add(stage.name)
 
         # Exactly one start stage
@@ -979,16 +983,23 @@ class WizardConfigBuilder:
                 ValidationResult.error(f"Wizard has multiple start stages: {names}")
             )
 
-        # All transition targets reference existing stages
+        # All transition targets reference existing stages. Reported once
+        # per (stage, target): the message names both and nothing else,
+        # so two transitions to the same missing stage are one finding.
+        unknown_targets: set[tuple[str, str]] = set()
         for stage in stages:
             for transition in stage.transitions:
-                if transition.target not in stage_names and transition.target != "_subflow":
-                    result = result.merge(
-                        ValidationResult.error(
-                            f"Stage '{stage.name}' has transition to "
-                            f"unknown stage '{transition.target}'"
-                        )
+                if transition.target in stage_names or transition.target == "_subflow":
+                    continue
+                if (stage.name, transition.target) in unknown_targets:
+                    continue
+                unknown_targets.add((stage.name, transition.target))
+                result = result.merge(
+                    ValidationResult.error(
+                        f"Stage '{stage.name}' has transition to "
+                        f"unknown stage '{transition.target}'"
                     )
+                )
 
         # Check for transitions from non-existent source stages
         for from_stage, transition in self._pending_transitions:

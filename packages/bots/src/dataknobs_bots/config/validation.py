@@ -38,6 +38,11 @@ class ValidatorFn(Protocol):
     def __call__(self, config: dict[str, Any]) -> ValidationResult: ...
 
 
+def _unique(messages: list[str]) -> list[str]:
+    """Return *messages* with duplicates removed, first occurrence kept."""
+    return list(dict.fromkeys(messages))
+
+
 @dataclass
 class ValidationResult:
     """Result of validating a configuration.
@@ -56,6 +61,12 @@ class ValidationResult:
         """Merge another validation result into this one.
 
         The merged result is valid only if both results are valid.
+        Messages are concatenated in order and kept as they are: a
+        validator reporting the same string twice is reporting two
+        findings, and deciding they are one is a judgement this
+        primitive is in no position to make. Use :meth:`merge_unique`
+        where the repetition comes from the composition rather than
+        from the config.
 
         Args:
             other: Another validation result to merge.
@@ -67,6 +78,33 @@ class ValidationResult:
             valid=self.valid and other.valid,
             errors=self.errors + other.errors,
             warnings=self.warnings + other.warnings,
+        )
+
+    def merge_unique(self, other: ValidationResult) -> ValidationResult:
+        """Merge *other*, reporting an identical message once.
+
+        For composing validators that cover overlapping ground. Two
+        validators both running ``validate_completeness`` over one
+        config each find the same missing key, and the second copy of
+        that message tells the reader nothing -- the repetition is an
+        artefact of running two validators, not a second defect.
+
+        Distinct messages are never collapsed and order is preserved,
+        so this is only safe where a repeated string genuinely means one
+        finding. That is a property of the composition, which is why the
+        caller chooses it rather than :meth:`merge` deciding for every
+        caller in the package.
+
+        Args:
+            other: Another validation result to merge.
+
+        Returns:
+            A new ValidationResult with combined messages, de-duplicated.
+        """
+        return ValidationResult(
+            valid=self.valid and other.valid,
+            errors=_unique(self.errors + other.errors),
+            warnings=_unique(self.warnings + other.warnings),
         )
 
     @classmethod

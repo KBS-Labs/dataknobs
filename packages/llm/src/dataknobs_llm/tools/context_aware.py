@@ -5,11 +5,14 @@ access to conversation state, wizard data, or other runtime context
 during execution.
 """
 
+import logging
 from abc import abstractmethod
 from typing import Any
 
 from dataknobs_llm.tools.base import Tool
 from dataknobs_llm.tools.context import ToolExecutionContext
+
+logger = logging.getLogger(__name__)
 
 
 class ContextAwareTool(Tool):
@@ -125,12 +128,20 @@ class ContextAwareTool(Tool):
 
         When neither is provided, an empty context is created.
 
+        Arguments the tool's :attr:`schema` declares ``required`` are
+        checked before forwarding. An LLM omitting one is routine, and
+        forwarding the omission raises ``TypeError`` from the call
+        itself for any subclass whose signature does not default the
+        parameter — an exception where the caller needs a result. See
+        :meth:`missing_arguments_result`.
+
         Args:
             **kwargs: Tool parameters, optionally including
                 ``_context`` or ``wizard_data``.
 
         Returns:
-            Tool execution result
+            Tool execution result, or the missing-argument result when
+            the caller omitted a required parameter.
         """
         # Extract context from kwargs if provided
         context = kwargs.pop("_context", None)
@@ -143,7 +154,64 @@ class ContextAwareTool(Tool):
             else:
                 context = ToolExecutionContext.empty()
 
+        missing = self.missing_arguments(kwargs)
+        if missing:
+            logger.info(
+                "Tool %s called without required parameter(s): %s",
+                self.name,
+                ", ".join(missing),
+                extra={"tool": self.name, "missing_arguments": missing},
+            )
+            return self.missing_arguments_result(missing)
+
         return await self.execute_with_context(context, **kwargs)
+
+    def missing_arguments(self, arguments: dict[str, Any]) -> list[str]:
+        """Return the declared-required parameters *arguments* does not supply.
+
+        Presence is decided against :attr:`schema`, which is what the
+        model was told to send — not against the signature, whose
+        defaults exist to keep the override compatible with this base
+        class and so cannot distinguish "omitted" from "defaulted".
+
+        ``None`` counts as absent: a model emitting ``null`` for a
+        required parameter has supplied nothing the tool can use, and
+        the signature default renders the two cases identical anyway.
+        Any other value counts as present, empty strings included — a
+        supplied-but-empty value is the tool's to reject on its own
+        terms, and reporting it as missing names the wrong problem.
+
+        Args:
+            arguments: The parameters the caller supplied.
+
+        Returns:
+            Declared-required names that are absent, in schema order.
+        """
+        required = self.schema.get("required") or ()
+        return [name for name in required if arguments.get(name) is None]
+
+    def missing_arguments_result(self, missing: list[str]) -> dict[str, Any]:
+        """Build the result returned when required arguments are absent.
+
+        Override to add whatever would let the model succeed on its next
+        turn — the set of valid values, for instance. Keep the ``error``
+        key: it is what the reasoning strategies surface to the model.
+
+        The return is narrower than ``execute``'s, deliberately. A tool
+        may return anything it likes on success, but a failure the model
+        has to act on needs a shape it can read, and every tool in the
+        packages reports one as a mapping.
+
+        Args:
+            missing: Declared-required names the caller did not supply.
+
+        Returns:
+            A JSON-serializable result describing the omission.
+        """
+        return {
+            "error": f"Missing required parameter: {', '.join(missing)}",
+            "missing": list(missing),
+        }
 
 
 class ContextEnhancedTool(ContextAwareTool):

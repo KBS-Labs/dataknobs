@@ -87,8 +87,8 @@ class CreateArtifactTool(ContextAwareTool):
     async def execute_with_context(
         self,
         context: ToolExecutionContext,
-        content: dict[str, Any],
-        name: str,
+        content: dict[str, Any] | None = None,
+        name: str | None = None,
         artifact_type: str = "content",
         tags: list[str] | None = None,
         **kwargs: Any,
@@ -105,6 +105,11 @@ class CreateArtifactTool(ContextAwareTool):
         Returns:
             Dict with artifact_id, status, name, version, and message.
         """
+        if content is None or name is None:
+            return self.missing_arguments_result(
+                self.missing_arguments({"content": content, "name": name})
+            )
+
         try:
             created_by = f"user:{context.user_id}" if context.user_id else "system:tool"
             provenance = create_provenance(
@@ -185,8 +190,8 @@ class UpdateArtifactTool(ContextAwareTool):
     async def execute_with_context(
         self,
         context: ToolExecutionContext,
-        artifact_id: str,
-        content: dict[str, Any],
+        artifact_id: str | None = None,
+        content: dict[str, Any] | None = None,
         reason: str | None = None,
         **kwargs: Any,
     ) -> dict[str, Any]:
@@ -201,6 +206,11 @@ class UpdateArtifactTool(ContextAwareTool):
         Returns:
             Dict with artifact_id, previous version, and status.
         """
+        if artifact_id is None or content is None:
+            return self.missing_arguments_result(
+                self.missing_arguments({"artifact_id": artifact_id, "content": content})
+            )
+
         try:
             triggered_by = f"user:{context.user_id}" if context.user_id else "system:tool"
             updated = await self._registry.revise(
@@ -370,7 +380,7 @@ class SubmitForReviewTool(ContextAwareTool):
     async def execute_with_context(
         self,
         context: ToolExecutionContext,
-        artifact_id: str,
+        artifact_id: str | None = None,
         **kwargs: Any,
     ) -> dict[str, Any]:
         """Submit artifact for review.
@@ -382,6 +392,11 @@ class SubmitForReviewTool(ContextAwareTool):
         Returns:
             Dict with artifact_id, status, evaluations, and message.
         """
+        if artifact_id is None:
+            return self.missing_arguments_result(
+                self.missing_arguments({"artifact_id": artifact_id})
+            )
+
         try:
             evaluations = await self._registry.submit_for_review(artifact_id)
 
@@ -457,7 +472,7 @@ class GetArtifactTool(ContextAwareTool):
     async def execute_with_context(
         self,
         context: ToolExecutionContext,
-        artifact_id: str,
+        artifact_id: str | None = None,
         include_evaluations: bool = False,
         **kwargs: Any,
     ) -> dict[str, Any]:
@@ -471,6 +486,11 @@ class GetArtifactTool(ContextAwareTool):
         Returns:
             Dict with full artifact data.
         """
+        if artifact_id is None:
+            return self.missing_arguments_result(
+                self.missing_arguments({"artifact_id": artifact_id})
+            )
+
         artifact = await self._registry.get(artifact_id)
         if not artifact:
             return {

@@ -371,7 +371,10 @@
         {
           "package": "CONFIG_TOOLKIT.md",
           "site": "guides/config-toolkit.md",
-          "reason": "Same opening and title; the site page is a condensation (4 top-level sections against the source's 10, roughly half the length). Recorded so both files are existence-checked -- as 'package_only' the site copy was invisible to this guard, since it lives under guides/ and bots is not recursive. Reconciling the two, or replacing the copy with a transclusion, is its own task."
+          "reason": "Same opening and title; the site page is a condensation (4 top-level sections against the source's 10, roughly half the length). Recorded so both files are existence-checked -- as 'package_only' the site copy was invisible to this guard, since it lives under guides/ and bots is not recursive. Reconciling the two, or replacing the copy with a transclusion, is its own task.",
+          "shared_sections": [
+            "combining-results"
+          ]
         },
         {
           "package": "CONTEXT_AWARE_WIZARDS.md",
