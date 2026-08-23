@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import random
 from typing import Any
 
 import pytest
@@ -45,11 +46,17 @@ def _unit_vector(dim: int, index: int) -> list[float]:
 
 
 def _make_similar(base: list[float], noise: float = 0.05) -> list[float]:
-    """Create a vector similar to base by adding small perturbation."""
-    import random
+    """Create a vector similar to base by adding small perturbation.
 
-    random.seed(42)
-    result = [v + random.uniform(-noise, noise) for v in base]
+    Draws from its own ``random.Random`` rather than seeding the global
+    one. This runs at import time to build the module constants below,
+    so seeding the global left every later test in the session drawing
+    from a stream this module had chosen -- the hazard
+    ``dataknobs_data.testing`` documents. The values are unchanged: a
+    fresh ``Random(42)`` yields the sequence ``seed(42)`` did.
+    """
+    rng = random.Random(42)
+    result = [v + rng.uniform(-noise, noise) for v in base]
     # Normalize
     norm = math.sqrt(sum(x * x for x in result))
     return [x / norm for x in result] if norm > 0 else result

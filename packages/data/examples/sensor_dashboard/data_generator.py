@@ -18,9 +18,23 @@ class SensorDataGenerator:
     """Generate synthetic sensor data for testing."""
 
     def __init__(self, seed: int | None = None):
-        """Initialize generator with optional seed for reproducibility."""
-        if seed:
-            random.seed(seed)
+        """Initialize generator with optional seed for reproducibility.
+
+        The generator draws from its **own** ``random.Random``, not from
+        the ``random`` module's global stream. Seeding the global made
+        reproducibility a property of the whole process rather than of
+        this object: any other code drawing between construction and use
+        shifted the sequence, and the constructor silently reseeded every
+        other consumer in return. That is what made
+        ``test_duplicate_handling`` fail in full-suite runs and pass on
+        its own.
+
+        Args:
+            seed: Seed for reproducible output. ``None`` leaves the
+                stream unseeded. ``0`` is a seed like any other -- the
+                previous ``if seed:`` read it as "none given".
+        """
+        self._rng = random.Random(seed)
 
         self.sensor_types = ["TH100", "TH200", "ENV-SENSOR-X"]
         self.locations = ["room_a", "room_b", "warehouse", "lobby", "server_room"]
@@ -33,10 +47,10 @@ class SensorDataGenerator:
         for i in range(count):
             sensor = SensorInfo(
                 sensor_id=f"sensor_{i:03d}",
-                sensor_type=random.choice(self.sensor_types),
+                sensor_type=self._rng.choice(self.sensor_types),
                 location=self.locations[i % len(self.locations)],
-                installed=base_date + timedelta(days=random.randint(0, 30)),
-                status="active" if random.random() > 0.1 else "maintenance",
+                installed=base_date + timedelta(days=self._rng.randint(0, 30)),
+                status="active" if self._rng.random() > 0.1 else "maintenance",
             )
             sensors.append(sensor)
 
@@ -59,8 +73,8 @@ class SensorDataGenerator:
 
         for i in range(count):
             # Add realistic variations
-            temp_variation = random.gauss(0, 1.5)  # ±1.5°C variation
-            humidity_variation = random.gauss(0, 5)  # ±5% variation
+            temp_variation = self._rng.gauss(0, 1.5)  # ±1.5°C variation
+            humidity_variation = self._rng.gauss(0, 5)  # ±5% variation
 
             # Simulate time-of-day effects
             hour = current_time.hour
@@ -74,7 +88,7 @@ class SensorDataGenerator:
                 timestamp=current_time,
                 temperature=round(base_temp + temp_variation, 1),
                 humidity=round(max(0, min(100, base_humidity + humidity_variation)), 1),
-                battery=max(10, 100 - i // 10) if random.random() > 0.1 else None,  # Slow drain
+                battery=max(10, 100 - i // 10) if self._rng.random() > 0.1 else None,  # Slow drain
                 location=location,
             )
             readings.append(reading)
@@ -90,28 +104,30 @@ class SensorDataGenerator:
         current_time = start_time
 
         for _ in range(count):
-            anomaly_type = random.choice(["extreme_temp", "extreme_humidity", "sensor_fault"])
+            anomaly_type = self._rng.choice(["extreme_temp", "extreme_humidity", "sensor_fault"])
 
             if anomaly_type == "extreme_temp":
-                temperature = random.choice([random.uniform(-10, 5), random.uniform(40, 60)])
-                humidity = random.uniform(30, 70)
+                temperature = self._rng.choice(
+                    [self._rng.uniform(-10, 5), self._rng.uniform(40, 60)]
+                )
+                humidity = self._rng.uniform(30, 70)
             elif anomaly_type == "extreme_humidity":
-                temperature = random.uniform(18, 25)
-                humidity = random.choice([random.uniform(0, 10), random.uniform(90, 100)])
+                temperature = self._rng.uniform(18, 25)
+                humidity = self._rng.choice([self._rng.uniform(0, 10), self._rng.uniform(90, 100)])
             else:  # sensor_fault
-                temperature = random.choice([0.0, -999.0, 999.0])  # Fault values
-                humidity = random.choice([0.0, -1.0, 200.0])
+                temperature = self._rng.choice([0.0, -999.0, 999.0])  # Fault values
+                humidity = self._rng.choice([0.0, -1.0, 200.0])
 
             reading = SensorReading(
                 sensor_id=sensor_id,
                 timestamp=current_time,
                 temperature=round(temperature, 1),
                 humidity=round(humidity, 1),
-                battery=random.randint(0, 100) if random.random() > 0.3 else None,
+                battery=self._rng.randint(0, 100) if self._rng.random() > 0.3 else None,
                 location=location,
             )
             readings.append(reading)
-            current_time += timedelta(minutes=random.randint(10, 60))
+            current_time += timedelta(minutes=self._rng.randint(10, 60))
 
         return readings
 
@@ -123,10 +139,10 @@ class SensorDataGenerator:
 
         for reading in base_readings:
             with_duplicates.append(reading)
-            if random.random() < duplicate_rate:
+            if self._rng.random() < duplicate_rate:
                 # Add duplicate
                 with_duplicates.append(reading)
-                if random.random() < 0.3:  # Sometimes triple
+                if self._rng.random() < 0.3:  # Sometimes triple
                     with_duplicates.append(reading)
 
         return with_duplicates
@@ -138,7 +154,7 @@ class SensorDataGenerator:
         result = readings.copy()
 
         for i in range(len(result) - 1):
-            if random.random() < disorder_rate:
+            if self._rng.random() < disorder_rate:
                 # Swap with next reading
                 result[i], result[i + 1] = result[i + 1], result[i]
 
@@ -158,12 +174,12 @@ class SensorDataGenerator:
         base_temp, base_humidity = self._get_location_baseline(location)
 
         for i in range(count):
-            if random.random() > gap_probability:
+            if self._rng.random() > gap_probability:
                 reading = SensorReading(
                     sensor_id=sensor_id,
                     timestamp=current_time,
-                    temperature=round(base_temp + random.gauss(0, 1.5), 1),
-                    humidity=round(base_humidity + random.gauss(0, 5), 1),
+                    temperature=round(base_temp + self._rng.gauss(0, 1.5), 1),
+                    humidity=round(base_humidity + self._rng.gauss(0, 5), 1),
                     battery=max(10, 100 - i // 10),
                     location=location,
                 )
@@ -207,9 +223,9 @@ class SensorDataGenerator:
                 reading = SensorReading(
                     sensor_id=sensor_id,
                     timestamp=current_time,
-                    temperature=round(20.0 + random.gauss(0, 2), 1),
-                    humidity=round(50.0 + random.gauss(0, 5), 1),
-                    battery=random.randint(50, 100),
+                    temperature=round(20.0 + self._rng.gauss(0, 2), 1),
+                    humidity=round(50.0 + self._rng.gauss(0, 5), 1),
+                    battery=self._rng.randint(50, 100),
                     location=location,
                 )
 
@@ -236,13 +252,15 @@ class SensorDataGenerator:
                     base_temp, base_humidity = self._get_location_baseline(sensor.location)
 
                     # Occasionally skip a reading (sensor offline)
-                    if random.random() > 0.02:
+                    if self._rng.random() > 0.02:
                         yield SensorReading(
                             sensor_id=sensor.sensor_id,
                             timestamp=current_time,
-                            temperature=round(base_temp + random.gauss(0, 1.5), 1),
-                            humidity=round(base_humidity + random.gauss(0, 5), 1),
-                            battery=random.randint(20, 100) if random.random() > 0.1 else None,
+                            temperature=round(base_temp + self._rng.gauss(0, 1.5), 1),
+                            humidity=round(base_humidity + self._rng.gauss(0, 5), 1),
+                            battery=self._rng.randint(20, 100)
+                            if self._rng.random() > 0.1
+                            else None,
                             location=sensor.location,
                         )
 

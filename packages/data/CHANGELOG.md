@@ -9,6 +9,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`SensorDataGenerator` draws from its own stream, so a seed means what it
+  says.** The sensor-dashboard example's generator called
+  `random.seed(seed)` in its constructor and then drew from the module
+  global across every later method call, which made its output a property
+  of the whole process rather than of the object: anything else drawing in
+  between shifted the sequence, and constructing one silently reseeded every
+  other consumer in return. `test_duplicate_handling` failed intermittently
+  in full-suite runs and passed on its own for exactly that reason —
+  `generate_duplicate_readings` produces no duplicates at all with
+  probability `0.7 ** 20`, about one run in 1,250, once the seed has stopped
+  deciding the draws. Measured across 3,000 constructions with an unrelated
+  draw interleaved: six distinct outcomes before, one after.
+
+  `seed=0` also now seeds. The guard was `if seed:`, which read zero as "no
+  seed given" — the one seed value that silently did nothing.
+
+  `tests/test_cluster_index.py` had the narrower form of the same defect: a
+  helper reseeding the global at import time, so every test in the session
+  after that module loaded drew from a stream it had chosen. Its vectors are
+  unchanged — a fresh `Random(42)` yields the sequence `seed(42)` did.
+
 - **A `DatabaseSource` no longer reports a store it cannot reach as a store
   with nothing in it.** Both of its searches were wrapped and logged: the
   structural-only one returned an empty list, and the text-search loop
