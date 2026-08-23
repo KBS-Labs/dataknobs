@@ -51,7 +51,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   parameters and effects stay documented in `TOOLS.md`, which the table now
   points at.
 
+- **What a custom `storage_class` actually has to provide.** Three pages
+  listed implementing `ConversationStorage` and supplying an async
+  `create(config)` classmethod as equal requirements, when only the second is
+  checked. The loader resolves the path without an
+  `issubclass` gate on purpose — duck-typed storage is meant to work — so
+  `create` is the only thing it can insist on, and it now says which is which
+  on each page. The same distinction reached the two comments in `bot/base.py`
+  that still described a tool's `from_config` as receiving "simple
+  YAML-compatible parameters": a declared `requires` dependency is injected
+  into that dict as a live object before `from_config` sees it, and the phrase
+  described the contract that a tool rebuilding the value from its YAML
+  spelling was violating. Those were the last two sites describing it that
+  way in the source.
+
 ### Fixed
+
+- **A `storage_class` with no `create` names itself.** The config path
+  resolved the dotted path and called `create` on whatever came back, so a key
+  pointed at a resolvable class lacking the method failed with a bare
+  `AttributeError` naming neither the config key nor the path that produced
+  it. It now raises `ConfigurationError` carrying both, checked through a
+  runtime protocol that asks only for the method the path calls — the duck
+  typing the missing `issubclass` gate was there to preserve is unchanged.
+
+- **Both tool-loop deliveries answer "what is pending" the same way.** The
+  buffered delivery read `tool_calls` defensively for `has_pending()` and
+  directly for `pending_calls()`, so a provider response object carrying no
+  such attribute made the first return `False` and the second raise
+  `AttributeError`; the streaming delivery was `None`-safe in both. Nothing
+  reached it, because the loop asks the boolean first every time — but the
+  declared `list[Any] | None` return advertised a `None` that one of the two
+  would have thrown rather than produced. Both now return an empty list when
+  nothing is pending.
 
 - **`validate_config` and `save_config` now reach one verdict.**
   `ValidateConfigTool` built its own schema-less `ConfigValidator` and ran it

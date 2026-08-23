@@ -94,8 +94,16 @@ class _ToolLoopDelivery(ABC):
         """Whether there are pending tool_calls to execute this iteration."""
 
     @abstractmethod
-    def pending_calls(self) -> list[Any] | None:
-        """The pending tool_calls to hand to ``_execute_tools``."""
+    def pending_calls(self) -> list[Any]:
+        """The pending tool_calls to hand to ``_execute_tools``.
+
+        Empty when nothing is pending -- never ``None``, and never raising.
+        ``_execute_tools`` takes a list, and the ``| None`` this used to
+        declare had no caller that could act on it: the loop asks
+        ``has_pending()`` first and every implementation answered that one
+        without raising, so the optional half of the return type described a
+        value the buffered mode would have thrown rather than produced.
+        """
 
     @abstractmethod
     def accumulate_usage(self, turn: TurnState) -> None:
@@ -146,8 +154,12 @@ class _BufferedDelivery(_ToolLoopDelivery):
     def has_pending(self) -> bool:
         return bool(getattr(self.response, "tool_calls", None))
 
-    def pending_calls(self) -> list[Any] | None:
-        return self.response.tool_calls
+    def pending_calls(self) -> list[Any]:
+        # ``getattr`` with a default, matching ``has_pending`` above: a
+        # response object without the attribute has no pending calls, which
+        # is not the same thing as being an error to ask.
+        calls: list[Any] | None = getattr(self.response, "tool_calls", None)
+        return calls or []
 
     def accumulate_usage(self, turn: TurnState) -> None:
         turn.accumulate_usage(self.response)
@@ -200,8 +212,8 @@ class _StreamingDelivery(_ToolLoopDelivery):
     def has_pending(self) -> bool:
         return bool(self.pending)
 
-    def pending_calls(self) -> list[Any] | None:
-        return self.pending
+    def pending_calls(self) -> list[Any]:
+        return self.pending or []
 
     def accumulate_usage(self, turn: TurnState) -> None:
         turn.accumulate_usage_from_stream()

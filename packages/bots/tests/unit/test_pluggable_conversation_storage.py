@@ -13,7 +13,7 @@ from typing import Any
 import pytest
 from dataknobs_common.imports import dotted_path
 
-from dataknobs_common.exceptions import DottedPathError
+from dataknobs_common.exceptions import ConfigurationError, DottedPathError
 
 from dataknobs_bots.bot.base import DynaBot
 from dataknobs_bots.config.builder import DynaBotConfigBuilder
@@ -201,3 +201,32 @@ def test_existing_builder_method_unchanged() -> None:
     assert sc["backend"] == "sqlite"
     assert sc["path"] == "/tmp/test.db"
     assert "storage_class" not in sc
+
+
+@pytest.mark.asyncio
+async def test_storage_class_without_create_reports_the_missing_method() -> None:
+    """A resolvable, callable class that has no ``create`` is a config error.
+
+    ``storage_class`` is resolved with ``resolve_callable`` rather than
+    ``resolve_class`` on purpose -- see the comment at the resolution site --
+    so duck-typed storage implementations are admitted without an
+    ``issubclass`` gate. The cost of declaring no base is that nothing checked
+    the one method the config path actually calls, and a class missing it
+    failed with a bare ``AttributeError`` naming ``create`` but not the config
+    key, the dotted path, or what a caller should do about it.
+
+    ``ConversationState`` stands in for any resolvable class a consumer might
+    point the key at by mistake: real, importable, callable, and no ``create``.
+    """
+    config = (
+        DynaBotConfigBuilder()
+        .set_llm(provider="echo", model="echo-test")
+        .set_conversation_storage_class("dataknobs_llm.conversations.storage:ConversationState")
+        .build()
+    )
+    with pytest.raises(ConfigurationError, match="create") as exc_info:
+        await DynaBot.from_config(config)
+
+    message = str(exc_info.value)
+    assert "storage_class" in message, "the error should name the config key at fault"
+    assert "ConversationState" in message, "the error should name what it resolved"
