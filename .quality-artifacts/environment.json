@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-08-24T12:52:48Z",
+  "timestamp": "2026-08-24T13:59:38Z",
   "python_version": "Python 3.12.12",
   "uv_version": "uv 0.12.5 (Homebrew 2026-08-14 aarch64-apple-darwin)",
   "os": "Darwin",
   "os_version": "24.6.0",
-  "git_branch": "sbk/wizard-condition-load-time-check",
-  "git_commit": "ea8e9ea9c5b19870b8925a880eeb65414a0b79dc",
+  "git_branch": "main",
+  "git_commit": "9599a44b2cbbea8b9c88ed652319a3bcc13a1f0d",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }
