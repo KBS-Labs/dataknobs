@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
-from dataknobs_common.expressions import safe_eval
+from dataknobs_common.expressions import safe_eval, safe_eval_validate
 from dataknobs_llm import LLMStreamResponse
 
 from .base import ReasoningStrategy, StreamStageContext
@@ -894,11 +894,26 @@ class WizardResponder:
             default=False,
         )
         if not result.success:
-            logger.debug(
-                "Condition evaluation failed for '%s': %s",
-                condition,
-                result.error,
-            )
+            # These conditions never pass through WizardConfigLoader, so
+            # there is no load-time moment at which to say this once; the
+            # check runs here instead, on the failure path only.
+            static_reason = safe_eval_validate(condition)
+            if static_reason is not None:
+                # The expression cannot run on any data, so this condition
+                # can never be satisfied -- an author has to change it.
+                logger.warning(
+                    "Condition %r cannot be evaluated and will never be satisfied: %s",
+                    condition,
+                    static_reason,
+                )
+            else:
+                # Failed on this turn's data: "not satisfied yet", which is
+                # what a guard looks like before its input arrives.
+                logger.debug(
+                    "Condition evaluation failed for '%s': %s",
+                    condition,
+                    result.error,
+                )
         return result.value
 
     def calculate_progress(self, state: WizardState) -> float:

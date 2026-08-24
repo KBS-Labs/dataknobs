@@ -14,7 +14,7 @@ from typing import Any
 
 import yaml
 
-from dataknobs_common.expressions import safe_eval
+from dataknobs_common.expressions import safe_eval, safe_eval_validate
 from dataknobs_common.paths import PathAnchor, PathEscapeError
 from dataknobs_fsm.api.advanced import AdvancedFSM
 from dataknobs_fsm.config.builder import FSMBuilder
@@ -879,11 +879,38 @@ class WizardConfigLoader:
                     actual_target = target
                 func_name = f"condition_{stage['name']}_{actual_target}_{idx}"
 
+                # The static half of safe_eval, run once here instead of
+                # once per turn.  A reason means the expression cannot run
+                # on any data, so this transition can never be taken -- and
+                # since a refusal degrades to default=False, that is
+                # indistinguishable at run time from a condition that is
+                # simply not satisfied yet.  Saying so at load says it
+                # while the author is still in the build loop, which is the
+                # only moment it is actionable.
+                #
+                # A report, not a rejection: one unusable transition must
+                # not take the whole wizard down, and the condition behaves
+                # exactly as it did before this check existed.
+                static_reason = safe_eval_validate(condition_code)
+                if static_reason is not None:
+                    logger.warning(
+                        "Condition for transition '%s' -> '%s' cannot be "
+                        "evaluated and will never be satisfied: %s (code=%r)",
+                        stage["name"],
+                        actual_target,
+                        static_reason,
+                        condition_code,
+                    )
+
                 # Create the function
                 try:
                     # Create a function that evaluates the condition
                     # using the shared safe expression engine.
-                    def make_condition(code: str, name: str) -> Callable[[Any, Any], bool]:
+                    def make_condition(
+                        code: str,
+                        name: str,
+                        refusal: str | None,
+                    ) -> Callable[[Any, Any], bool]:
                         def condition_func(data: dict[str, Any], context: Any = None) -> bool:
                             result = safe_eval(
                                 code,
@@ -896,7 +923,16 @@ class WizardConfigLoader:
                                 default=False,
                             )
                             if not result.success:
-                                logger.warning(
+                                # Two failures wear the same success=False.
+                                # A refusal was already reported at load and
+                                # will not resolve itself, so it stays at
+                                # WARNING; anything else failed on *this
+                                # turn's* data, which is the ordinary state
+                                # of a guard whose input has not arrived.
+                                # Warning on that every turn is how a log
+                                # teaches its reader to ignore it.
+                                logger.log(
+                                    logging.WARNING if refusal is not None else logging.DEBUG,
                                     "Condition '%s' evaluation failed: %s (code=%r, data_keys=%s)",
                                     name,
                                     result.error,
@@ -915,7 +951,10 @@ class WizardConfigLoader:
 
                         return condition_func
 
-                    builder.register_function(func_name, make_condition(condition_code, func_name))
+                    builder.register_function(
+                        func_name,
+                        make_condition(condition_code, func_name, static_reason),
+                    )
                 except Exception as e:
                     logger.warning("Failed to register condition '%s': %s", func_name, e)
 

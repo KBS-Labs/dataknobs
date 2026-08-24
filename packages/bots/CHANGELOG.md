@@ -7,7 +7,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Added
+
+- **Wizard transition conditions are checked when the wizard is loaded.** A
+  condition the expression engine will refuse — multiline, a syntax error,
+  dunder access — is reported once, at load, as a `WARNING` naming the stage,
+  the target and the reason. The wizard still loads and the transition still
+  registers: this is a report, not a rejection, so one unusable condition does
+  not take the rest of the config down.
+
+  Nothing said so before the condition was evaluated, and by then a refusal is
+  indistinguishable from a condition that is merely unsatisfied — every wizard
+  condition site passes `default=False`, so both are `False`. A stage guarded
+  by a refused condition therefore never advances, and the person who can fix
+  it is the config's author, who is no longer in the loop by the time a turn
+  runs. Load time is the last moment the report reaches them.
+
 ### Changed
+
+- **A condition that fails on a turn's data is logged at `DEBUG` rather than
+  `WARNING`.** `data['name']` before `name` has been captured is the ordinary
+  state of a guard whose input has not arrived; warning on it every turn, for
+  a config that is entirely correct, is how a log teaches its reader to skip
+  it. `WARNING` is now reserved for a condition the engine refuses — which no
+  data can satisfy and which an author has to change.
+
+  `WizardResponder.evaluate_condition` makes the same split. Its conditions
+  reach it from the auto-advance gate and from subflow guards, neither of
+  which passes through the loader, so it has no load-time moment and runs the
+  static check itself, on the failure path only.
+
+  One consequence is worth stating: a condition naming something that never
+  resolves — `artifact`, which the FSM arc does not bind — is a *runtime*
+  failure by this split and so lands at `DEBUG`, where it used to warn. The
+  load-time check reports what the engine will refuse, not whether every name
+  in the expression exists. `CONFIGURATION.md` now documents both the split
+  and the `artifact` case.
 
 - **The three places a bot builds an LLM provider from config call
   `create_llm_provider()`** — bot construction, summary memory, and the
