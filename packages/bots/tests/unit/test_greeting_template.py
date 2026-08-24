@@ -128,7 +128,7 @@ class TestCreateReasoningFromConfig:
         strategy = create_reasoning_from_config(config)
 
         assert isinstance(strategy, SimpleReasoning)
-        assert strategy._greeting_template == "Hello {{ name }}!"
+        assert strategy.greeting_template == "Hello {{ name }}!"
 
     def test_react_with_greeting_template(self) -> None:
         """Config-created ReActReasoning has greeting_template."""
@@ -139,7 +139,7 @@ class TestCreateReasoningFromConfig:
         strategy = create_reasoning_from_config(config)
 
         assert isinstance(strategy, ReActReasoning)
-        assert strategy._greeting_template == "Hi there!"
+        assert strategy.greeting_template == "Hi there!"
 
     def test_simple_without_greeting_template(self) -> None:
         """Config without greeting_template creates strategy with None."""
@@ -147,7 +147,7 @@ class TestCreateReasoningFromConfig:
         strategy = create_reasoning_from_config(config)
 
         assert isinstance(strategy, SimpleReasoning)
-        assert strategy._greeting_template is None
+        assert strategy.greeting_template is None
 
 
 def _wizard_config(

@@ -752,18 +752,6 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
         self._wizard_fsm = wizard_fsm
         self._wizard_fsm.set_transform_context_factory(self._build_transform_context)
 
-    def _setup(self) -> None:
-        """Bind the greeting template from the typed config.
-
-        Runs from the mixin's cooperative init, after
-        ``ReasoningStrategy.__init__`` has defaulted the attribute to
-        ``None`` — the same hook and the same one line the four sibling
-        strategies use, so the universal field arrives here the way it
-        arrives everywhere else.  What the wizard does with it afterwards is
-        its own (see :meth:`greet`).
-        """
-        self._greeting_template = self.config.greeting_template
-
     # -----------------------------------------------------------------
     # Per-conversation bank-state resolution
     # -----------------------------------------------------------------
@@ -2164,8 +2152,8 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
         # Applied to a copy because ``current_metadata`` is the FSM's own
         # stage dict, which outlives this turn and is shared with every other
         # reader of the stage.
-        if self._greeting_template and not stage.get("greeting_template"):
-            stage = {**stage, "greeting_template": self._greeting_template}
+        if self.greeting_template and not stage.get("greeting_template"):
+            stage = {**stage, "greeting_template": self.greeting_template}
         await self._navigator.branch_for_revisited_stage(manager, stage.get("name", ""))
         stage_result = await self._response.generate_stage_response(
             manager,

@@ -257,7 +257,6 @@ class GroundedReasoning(StructuredConfigConsumer[GroundedReasoningConfig], Reaso
         applied, preventing the double-wrap with DynaBot's source loop).
         """
         config = self.config
-        self._greeting_template = config.greeting_template
         prompt_resolver: PromptResolver | None = self.components.get("prompt_resolver")
         self._prompt_resolver = prompt_resolver
         # Prompt envelope collaborator — wraps the KB block in the
@@ -594,7 +593,7 @@ class GroundedReasoning(StructuredConfigConsumer[GroundedReasoningConfig], Reaso
 
         plan = self.resolve_synthesis(context, manager, provenance)
 
-        if plan.effective_style == "structured":
+        if plan.effective_style == "structured" and plan.template_text is not None:
             yield LLMResponse(
                 content=plan.template_text,
                 model="template",
@@ -608,7 +607,7 @@ class GroundedReasoning(StructuredConfigConsumer[GroundedReasoningConfig], Reaso
             ):
                 yield chunk
 
-            if plan.effective_style == "hybrid":
+            if plan.effective_style == "hybrid" and plan.template_text:
                 yield LLMResponse(
                     content="\n\n" + plan.template_text,
                     model="template",
@@ -856,8 +855,17 @@ class GroundedReasoning(StructuredConfigConsumer[GroundedReasoningConfig], Reaso
         if cfg.domain_context:
             context["domain"] = cfg.domain_context
 
+        # Narrowed once, not per use. The sole caller reaches this method
+        # through `elif self._extractor is not None` (:720), so None here is a
+        # caller bug rather than a state this method handles — and asserting it
+        # raises where the attribute access would have raised anyway, one frame
+        # earlier and saying which invariant broke. Same idiom as react.py's
+        # `assert cfg is not None  # guarded by _compaction_enabled at callers`.
+        extractor = self._extractor
+        assert extractor is not None  # guarded by the mode dispatch at :720
+
         try:
-            result = await self._extractor.extract(
+            result = await extractor.extract(
                 text=extraction_input,
                 schema=schema,
                 context=context,
@@ -1333,13 +1341,13 @@ class GroundedReasoning(StructuredConfigConsumer[GroundedReasoningConfig], Reaso
         raw_data = intent_data.get("raw_data")
         if isinstance(raw_data, dict):
             per_turn = raw_data.get("output_style")
-            if per_turn in _VALID_STYLES:
+            if isinstance(per_turn, str) and per_turn in _VALID_STYLES:
                 logger.debug("Using per-turn synthesis style: %s", per_turn)
                 return per_turn
 
         # 2. Session-level
         session_style = manager.metadata.get("synthesis_style")
-        if session_style in _VALID_STYLES:
+        if isinstance(session_style, str) and session_style in _VALID_STYLES:
             logger.debug(
                 "Using session-level synthesis style: %s",
                 session_style,

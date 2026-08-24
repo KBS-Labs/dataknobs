@@ -94,7 +94,9 @@ class HybridReasoning(StructuredConfigConsumer[HybridReasoningConfig], Reasoning
                 "Hybrid strategy: top-level 'sources' key ignored; "
                 "sources must be under 'grounded.sources'.",
             )
-        return config.get("grounded", {}).get("sources", [])
+        grounded: dict[str, Any] = config.get("grounded", {})
+        sources: list[dict[str, Any]] = grounded.get("sources", [])
+        return sources
 
     def _setup(self) -> None:
         """Build the grounded + ReAct child strategies and auto-wrap the KB.
@@ -114,7 +116,6 @@ class HybridReasoning(StructuredConfigConsumer[HybridReasoningConfig], Reasoning
         former ``from_config`` applied.
         """
         config = self.config
-        self._greeting_template = config.greeting_template
         prompt_resolver: PromptResolver | None = self.components.get("prompt_resolver")
         # Forward the bot-wide envelope so the grounded child renders
         # its synthesis-prompt KB block in the same style as the bot's

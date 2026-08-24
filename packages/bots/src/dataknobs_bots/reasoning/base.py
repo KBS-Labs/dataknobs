@@ -407,6 +407,16 @@ class ReasoningStrategy(ABC):
     registry by ``test_reasoning_greeting_contract.py``, so this paragraph
     and that test cite each other.
 
+    **A strategy neither declares the field nor reads it directly.** It is
+    declared once, on
+    :class:`~dataknobs_bots.reasoning.config_base.ReasoningConfig`, which
+    every strategy config inherits; and it is read once, through
+    :attr:`greeting_template` here, which resolves the typed-config route
+    and the constructor-keyword route so no strategy has to know there are
+    two.  Five strategies used to copy the value onto themselves in
+    ``_setup``, which is what made "universal" a thing each of them could
+    silently fail to be.
+
     Strategies that need DynaBot to interleave tool execution within
     the generation lifecycle can implement
     :class:`PhasedReasoningProtocol`, which splits ``generate()`` into
@@ -480,6 +490,28 @@ class ReasoningStrategy(ABC):
         self._greeting_template = greeting_template
         self._tool_executions: list[ToolExecution] = []
         self._pipeline_context: str = ""
+
+    @property
+    def greeting_template(self) -> str | None:
+        """The strategy's greeting template, from whichever route supplied it.
+
+        Two routes reach one field, and this is the only place that knows
+        there are two.  A strategy built from a typed config carries the
+        value on ``self.config`` (the ``StructuredConfigConsumer`` path);
+        a strategy subclassed directly carries it in the attribute
+        :meth:`__init__` sets, which is the pattern ``CUSTOM_STRATEGIES.md``
+        documents.  Every read goes through here, so neither route needs a
+        strategy to copy the value onto itself -- which is what five
+        strategies each used to do, and what a sixth could have forgotten
+        to do without anything noticing.
+
+        A config value of ``""`` is a configured empty template and wins,
+        so the fallback tests ``is not None`` rather than truthiness.  The
+        two are equivalent for every other value.
+        """
+        config = getattr(self, "_config", None)
+        configured = getattr(config, "greeting_template", None)
+        return configured if configured is not None else self._greeting_template
 
     # ------------------------------------------------------------------
     # Pipeline composition support
@@ -561,11 +593,12 @@ class ReasoningStrategy(ABC):
         Returns:
             LLMResponse if a greeting was generated, or None
         """
-        if self._greeting_template is None:
+        template = self.greeting_template
+        if template is None:
             return None
         context = initial_context or {}
         env = create_template_env()
-        text = env.from_string(self._greeting_template).render(**context)
+        text = env.from_string(template).render(**context)
         return LLMResponse(content=text, model="template", finish_reason="stop")
 
     def add_source(self, source: Any) -> None:

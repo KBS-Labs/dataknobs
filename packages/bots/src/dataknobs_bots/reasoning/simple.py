@@ -37,10 +37,6 @@ class SimpleReasoning(StructuredConfigConsumer[SimpleReasoningConfig], Reasoning
     #: ``cls(greeting_template=...)`` all reach the same typed ``self.config``.
     CONFIG_CLS: ClassVar[type[SimpleReasoningConfig]] = SimpleReasoningConfig
 
-    def _setup(self) -> None:
-        """Bind the greeting template from the typed config."""
-        self._greeting_template = self.config.greeting_template
-
     async def generate(
         self,
         manager: Any,
