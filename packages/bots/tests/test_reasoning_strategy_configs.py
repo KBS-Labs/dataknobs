@@ -17,6 +17,7 @@ their own.
 from __future__ import annotations
 
 import dataclasses
+import inspect
 import logging
 
 import pytest
@@ -37,7 +38,9 @@ from dataknobs_bots.reasoning.hybrid_config import HybridReasoningConfig
 from dataknobs_bots.reasoning.react import ReActReasoning
 from dataknobs_bots.reasoning.react_config import ReActReasoningConfig
 from dataknobs_bots.reasoning.simple import SimpleReasoning
+from dataknobs_bots.reasoning.config_base import ReasoningConfig
 from dataknobs_bots.reasoning.simple_config import SimpleReasoningConfig
+from dataknobs_bots.reasoning.wizard_config import WizardReasoningConfig
 
 
 class TestConfigClsPointers:
@@ -267,3 +270,100 @@ class TestHybridReasoningConfig:
                 store_provenance=True,
             )
         assert not [rec for rec in caplog.records if "store_provenance" in rec.message]
+
+
+# ===================================================================
+# TestReasoningConfigBase
+# ===================================================================
+
+
+class TestReasoningConfigBase:
+    """The family's shared base, and the one field it exists to declare.
+
+    ``ReasoningStrategy`` calls ``greeting_template`` universal.  Before
+    this base, every strategy config re-declared it, and a config that
+    forgot to lost the field silently -- ``StructuredConfig`` ignores an
+    undeclared key rather than reporting it.  Declaring it once removes
+    the opportunity rather than guarding against taking it.
+    """
+
+    def test_the_base_declares_the_universal_field(self) -> None:
+        names = {f.name for f in dataclasses.fields(ReasoningConfig)}
+        assert names == {"greeting_template"}
+
+    @pytest.mark.parametrize(
+        "config_cls",
+        [
+            SimpleReasoningConfig,
+            ReActReasoningConfig,
+            GroundedReasoningConfig,
+            HybridReasoningConfig,
+            WizardReasoningConfig,
+        ],
+        ids=["simple", "react", "grounded", "hybrid", "wizard"],
+    )
+    def test_every_strategy_config_inherits_it(self, config_cls: type[ReasoningConfig]) -> None:
+        """Both halves of "declared once": inherited, and not re-declared.
+
+        The second half is the recurrence guard.  A subclass that
+        re-declares the field still *works* -- which is exactly why
+        nothing would notice the family drifting back to five
+        declarations, and why this asserts on ``__annotations__`` (the
+        class's own — that is what ``inspect.get_annotations`` returns)
+        rather than on ``fields()``, which includes inherited.
+        """
+        assert issubclass(config_cls, ReasoningConfig)
+        assert "greeting_template" in {f.name for f in dataclasses.fields(config_cls)}
+        assert "greeting_template" not in inspect.get_annotations(config_cls), (
+            f"{config_cls.__name__} re-declares greeting_template. It is "
+            f"declared once on ReasoningConfig; a second declaration is the "
+            f"state this base was introduced to end."
+        )
+
+    def test_a_subclass_may_declare_a_required_field(self) -> None:
+        """T2 -- what ``kw_only=True`` on the base buys.
+
+        Without it, ``@dataclass`` refuses the whole *class*, at import:
+        ``TypeError: non-default argument 'wizard_config' follows default
+        argument``.  The base's field is defaulted, so any subclass field
+        that is not would follow a default -- and the wizard has one.
+        Delete ``kw_only=True`` and this fails at collection, not here.
+        """
+
+        @dataclasses.dataclass(frozen=True)
+        class RequiresSomething(ReasoningConfig):
+            needed: str
+
+        cfg = RequiresSomething(needed="x")
+        assert cfg.needed == "x"
+        assert cfg.greeting_template is None
+
+        with pytest.raises(TypeError):
+            RequiresSomething()  # type: ignore[call-arg]
+
+    def test_the_shipped_required_field_survives_both_paths(self) -> None:
+        """T6 -- the wizard is the real instance of the case above.
+
+        Both construction paths, because they are different code: the
+        generated ``__init__`` and ``StructuredConfig.from_dict``.
+        """
+        direct = WizardReasoningConfig(wizard_config="w.yaml", greeting_template="Hi {{ who }}!")
+        assert direct.wizard_config == "w.yaml"
+        assert direct.greeting_template == "Hi {{ who }}!"
+
+        loaded = WizardReasoningConfig.from_dict(
+            {"wizard_config": "w.yaml", "greeting_template": "Hi {{ who }}!"}
+        )
+        assert loaded == direct
+
+    def test_the_field_is_keyword_only(self) -> None:
+        """A positional ``greeting_template`` was never reachable anyway.
+
+        It sat at a different index in each of the five configs, so no
+        call site could have passed it positionally and stayed correct
+        across the family -- an AST scan of the tree finds zero positional
+        constructions of any of them.  Pinning it keyword-only records
+        that the base took nothing away.
+        """
+        (field,) = dataclasses.fields(ReasoningConfig)
+        assert field.kw_only is True

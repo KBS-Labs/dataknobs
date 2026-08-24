@@ -18,6 +18,7 @@ from .base import (
     ToolCallSpec,
     TurnHandle,
 )
+from .config_base import ReasoningConfig
 from .focus_guard import FocusContext, FocusEvaluation, FocusGuard
 from .grounded import GroundedReasoning, SynthesisPlan
 from .grounded_config import (
@@ -122,6 +123,7 @@ __all__ = [
     "list_strategies",
     "get_strategy_factory",
     "get_registry",
+    "ReasoningConfig",
     "SimpleReasoning",
     "SimpleReasoningConfig",
     "ReActReasoning",

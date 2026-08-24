@@ -7,7 +7,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
-from dataknobs_common.structured_config import StructuredConfig
+from dataknobs_bots.reasoning.config_base import ReasoningConfig
 
 from dataknobs_bots.reasoning.grounded_config import GroundedReasoningConfig
 
@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
-class HybridReasoningConfig(StructuredConfig):
+class HybridReasoningConfig(ReasoningConfig):
     """Top-level configuration for :class:`HybridReasoning`.
 
     The hybrid strategy composes grounded retrieval (mandatory KB lookup)
@@ -30,8 +30,9 @@ class HybridReasoningConfig(StructuredConfig):
         react_store_trace: Store ReAct reasoning trace in metadata.
         store_provenance: Record merged provenance (grounded + tool
             executions) in ``manager.metadata["retrieval_provenance"]``.
-        greeting_template: Optional Jinja2 template for bot-initiated
-            greetings.
+        greeting_template: Declared once for the whole family on
+            :class:`~dataknobs_bots.reasoning.config_base.ReasoningConfig`;
+            inherited here.
     """
 
     grounded: GroundedReasoningConfig = field(
@@ -41,7 +42,6 @@ class HybridReasoningConfig(StructuredConfig):
     react_verbose: bool = False
     react_store_trace: bool = False
     store_provenance: bool = True
-    greeting_template: str | None = None
 
     def __post_init__(self) -> None:
         """Warn when grounded's ``store_provenance`` differs from hybrid's.

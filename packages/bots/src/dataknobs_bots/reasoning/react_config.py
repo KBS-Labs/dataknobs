@@ -7,6 +7,8 @@ from typing import Any
 
 from dataknobs_common.structured_config import StructuredConfig
 
+from dataknobs_bots.reasoning.config_base import ReasoningConfig
+
 #: The compaction strategies ``HistoryCompactionConfig.strategy`` accepts.
 _COMPACTION_STRATEGIES: frozenset[str] = frozenset({"window", "summarize"})
 
@@ -81,7 +83,7 @@ class HistoryCompactionConfig(StructuredConfig):
 
 
 @dataclass(frozen=True)
-class ReActReasoningConfig(StructuredConfig):
+class ReActReasoningConfig(ReasoningConfig):
     """Configuration for :class:`ReActReasoning`.
 
     Captures the config-derived scalars that ``ReActReasoning.from_config``
@@ -94,8 +96,9 @@ class ReActReasoningConfig(StructuredConfig):
         max_iterations: Maximum reasoning/action iterations.
         verbose: Enable debug-level logging for reasoning steps.
         store_trace: Store the reasoning trace in conversation metadata.
-        greeting_template: Optional Jinja2 template for bot-initiated
-            greetings (same semantics as other strategies).
+        greeting_template: Declared once for the whole family on
+            :class:`~dataknobs_bots.reasoning.config_base.ReasoningConfig`;
+            inherited here.
         truncation_retry_max_tokens: When set, a tool-call turn the provider
             truncated at the token budget (``LLMResponse.truncated``) is
             retried **once per truncated tool-call iteration** at this
@@ -117,7 +120,6 @@ class ReActReasoningConfig(StructuredConfig):
     max_iterations: int = 5
     verbose: bool = False
     store_trace: bool = False
-    greeting_template: str | None = None
     truncation_retry_max_tokens: int | None = None
     #: Opt-in in-loop history compaction. ``None`` / disabled → byte-identical
     #: to today (no estimation, no compaction). See

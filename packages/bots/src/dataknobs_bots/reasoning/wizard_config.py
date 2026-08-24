@@ -21,15 +21,16 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
-from dataknobs_common.structured_config import StructuredConfig
+from dataknobs_bots.reasoning.config_base import ReasoningConfig
 
 
 @dataclass(frozen=True)
-class WizardReasoningConfig(StructuredConfig):
+class WizardReasoningConfig(ReasoningConfig):
     """Typed envelope for the wizard reasoning-section config.
 
     Mirrors the keys read by :meth:`WizardReasoning.from_config`.
-    ``from_dict``/``to_dict`` are inherited from :class:`StructuredConfig`;
+    ``from_dict``/``to_dict`` are inherited from ``StructuredConfig`` via
+    :class:`ReasoningConfig`;
     the opaque sub-sections remain raw dicts (or, for ``wizard_config``, a
     path string).  Credentials nested inside ``extraction_config`` are
     masked by the base repr's interior-key descent, so no field-level
@@ -40,7 +41,11 @@ class WizardReasoningConfig(StructuredConfig):
             wizard-definition dict (compatible with
             ``WizardConfigLoader.load_from_dict``).  Required.
         greeting_template: Optional Jinja2 template for the bot-initiated
-            greeting, rendered with ``initial_context``.  The universal
+            greeting, rendered with ``initial_context``.  Declared for the
+            whole family on
+            :class:`~dataknobs_bots.reasoning.config_base.ReasoningConfig`
+            and inherited here; the wizard gives it a meaning of its own,
+            which is why this entry stays.  It is the universal
             :class:`~dataknobs_bots.reasoning.base.ReasoningStrategy` field,
             which the wizard reads as the **start stage's default**
             ``greeting_template``: a start stage that sets one of its own
@@ -98,7 +103,6 @@ class WizardReasoningConfig(StructuredConfig):
     """
 
     wizard_config: str | dict[str, Any]
-    greeting_template: str | None = None
     config_base_path: str | None = None
     custom_functions: dict[str, Any] | None = None
     extraction_config: dict[str, Any] | None = None

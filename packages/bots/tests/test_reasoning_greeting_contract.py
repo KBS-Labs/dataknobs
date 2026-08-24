@@ -104,21 +104,21 @@ def assert_accepts_universal_greeting(
     Returns the constructed strategy so a caller can drive tier 2 against the
     same instance.
 
-    Reads the private ``_greeting_template``.  That is a deliberate,
-    temporary compromise of this guard landing *before* the consolidation it
-    protects: the public read-only property that makes this assertion honest
-    on both populations does not exist yet.  Until it does, this attribute
-    means "the constructor keyword" on a directly-subclassed strategy and
-    "the bound config value" on a mixin adopter, and reads correctly on both
-    only because every current binding happens to agree.  Re-point this at
-    the property as part of introducing it — not as a follow-up.
+    Reads the public :attr:`ReasoningStrategy.greeting_template` property,
+    which resolves both routes — the typed config on a mixin adopter, the
+    constructor keyword on a directly-subclassed strategy.  This assertion
+    was written against the private ``_greeting_template`` while the guard
+    ran ahead of the consolidation it protects; that attribute meant
+    different things on the two populations and agreed only by accident of
+    five separate bindings.  Those bindings are gone and the property is
+    now the single read, so the compromise is discharged, not carried.
     """
     config: dict[str, Any] = {"greeting_template": GREETING}
     config.update(extra_config or {})
 
     strategy = factory.from_config(config)
 
-    bound = getattr(strategy, "_greeting_template", None)
+    bound = strategy.greeting_template
     assert bound == GREETING, (
         f"{factory!r} did not accept the universal greeting_template: "
         f"expected {GREETING!r}, got {bound!r}. Either its config class does "
@@ -234,12 +234,9 @@ class TestTheGuardCatchesEachWayOfFailingTheContract:
         class SilentlyDroppingReasoning(SimpleReasoning):
             CONFIG_CLS = ForgetfulConfig
 
-            def _setup(self) -> None:
-                pass
-
         # The defect itself: it constructs, and the greeting is gone.
         dropped = SilentlyDroppingReasoning.from_config({"greeting_template": GREETING})
-        assert dropped._greeting_template is None
+        assert dropped.greeting_template is None
 
         with pytest.raises(AssertionError, match="did not accept the universal"):
             assert_accepts_universal_greeting(SilentlyDroppingReasoning)
@@ -351,6 +348,14 @@ class TestTheGuardReachesConsumerStrategies:
         assert_accepts_universal_greeting(factory)
 
     async def test_it_renders_the_greeting_too(self, registered_consumer_strategy: str) -> None:
+        """Also the property's fallback branch, end to end.
+
+        This strategy carries no typed config, so ``greet()`` reaches its
+        template only through the constructor-keyword half of
+        :attr:`ReasoningStrategy.greeting_template`.  Before that property
+        existed the assertion was weaker — ``greet()`` read the attribute
+        directly, so nothing here could have distinguished the two routes.
+        """
         factory = get_strategy_factory(registered_consumer_strategy)
         assert factory is not None
         strategy = assert_accepts_universal_greeting(factory)
@@ -359,3 +364,51 @@ class TestTheGuardReachesConsumerStrategies:
 
         assert result is not None
         assert result.content == RENDERED
+
+
+# ------------------------------------------------------------------
+# The property that resolves the two routes
+# ------------------------------------------------------------------
+
+
+class TestTheStrategyResolvesBothRoutesToOneField:
+    """``ReasoningStrategy.greeting_template`` is the single read.
+
+    Two routes supply the field and one property resolves them, which is
+    what let the five per-strategy bindings be deleted.  Tested directly
+    because the guard above exercises each route in isolation and never
+    the choice between them.
+    """
+
+    def test_the_typed_config_route(self) -> None:
+        strategy = SimpleReasoning.from_config({"greeting_template": GREETING})
+        assert strategy.greeting_template == GREETING
+
+    def test_the_constructor_keyword_route(self) -> None:
+        class Direct(ReasoningStrategy):
+            async def generate(
+                self,
+                manager: Any,
+                llm: Any,
+                tools: list[Any] | None = None,
+                **kwargs: Any,
+            ) -> Any:
+                return None
+
+        assert Direct(greeting_template=GREETING).greeting_template == GREETING
+
+    def test_neither_route_supplied_reads_none(self) -> None:
+        assert SimpleReasoning.from_config({}).greeting_template is None
+
+    def test_a_configured_empty_template_is_not_treated_as_absent(self) -> None:
+        """Why the property tests ``is not None`` rather than truthiness.
+
+        An empty template is a configured value: it renders to an empty
+        greeting, which is what it did before the property existed. Falling
+        back on falsiness would silently substitute a different route's
+        value for one the config set deliberately — and for every value
+        other than ``""`` the two spellings agree, so nothing else would
+        have caught the difference.
+        """
+        strategy = SimpleReasoning.from_config({"greeting_template": ""})
+        assert strategy.greeting_template == ""

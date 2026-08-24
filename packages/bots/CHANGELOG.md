@@ -66,6 +66,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`greeting_template` is declared once for the reasoning-strategy family, and
+  read from one place.** A new `ReasoningConfig` base carries the field and
+  every strategy config inherits it; `ReasoningStrategy.greeting_template` is
+  a read-only property resolving the two routes that supply it — the typed
+  config, and the constructor keyword a directly-subclassed strategy uses.
+
+  `ReasoningStrategy` has always documented the field as universal, but each
+  of the five configs declared it and each of the five strategies copied it
+  onto itself. A strategy that skipped either half was not reported: a config
+  class that omits a key does not reject it, it drops it. "Universal" was
+  therefore a property every strategy had to re-establish by hand, and the
+  wizard's config had already lost it once.
+
+  No behaviour changes for any built-in strategy. Consumers writing their own
+  strategy get a shorter obligation: inherit `ReasoningConfig` and the field
+  arrives, instead of declaring it and binding it correctly. The
+  constructor-keyword pattern in `CUSTOM_STRATEGIES.md` is unchanged and
+  remains supported — and is now checked, along with the config route, over
+  every registered strategy.
+
+  Read the value through `ReasoningStrategy.greeting_template`.
+  `_greeting_template` is private, is half of one route, and no longer holds
+  the config value.
+
+- **`ReasoningConfig` is exported from `dataknobs_bots.reasoning`.** It is the
+  base a consumer's own strategy config inherits.
+
 - **Wizard bots honour the strategy-level `greeting_template`.** A wizard
   configured with `reasoning: {strategy: wizard, greeting_template: ...}` now
   opens with that line instead of ignoring it. It stands in as the start

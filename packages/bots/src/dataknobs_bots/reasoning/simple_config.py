@@ -4,20 +4,17 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from dataknobs_common.structured_config import StructuredConfig
+from dataknobs_bots.reasoning.config_base import ReasoningConfig
 
 
 @dataclass(frozen=True)
-class SimpleReasoningConfig(StructuredConfig):
+class SimpleReasoningConfig(ReasoningConfig):
     """Configuration for :class:`SimpleReasoning`.
 
     The simple strategy makes a direct LLM call with no extra reasoning
-    steps, so its only configurable surface is the optional greeting
-    template shared by every strategy.
-
-    Attributes:
-        greeting_template: Optional Jinja2 template for bot-initiated
-            greetings (same semantics as other strategies).
+    steps, so it adds nothing to :class:`ReasoningConfig` -- its whole
+    configurable surface is the universal ``greeting_template`` declared
+    there.  The class still exists because ``CONFIG_CLS`` is what the
+    ``StructuredConfigConsumer`` machinery dispatches on, and because a
+    strategy that later gains a knob of its own has somewhere to put it.
     """
-
-    greeting_template: str | None = None

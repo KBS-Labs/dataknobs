@@ -762,7 +762,6 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
         arrives everywhere else.  What the wizard does with it afterwards is
         its own (see :meth:`greet`).
         """
-        self._greeting_template = self.config.greeting_template
 
     # -----------------------------------------------------------------
     # Per-conversation bank-state resolution
@@ -2164,8 +2163,8 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
         # Applied to a copy because ``current_metadata`` is the FSM's own
         # stage dict, which outlives this turn and is shared with every other
         # reader of the stage.
-        if self._greeting_template and not stage.get("greeting_template"):
-            stage = {**stage, "greeting_template": self._greeting_template}
+        if self.greeting_template and not stage.get("greeting_template"):
+            stage = {**stage, "greeting_template": self.greeting_template}
         await self._navigator.branch_for_revisited_stage(manager, stage.get("name", ""))
         stage_result = await self._response.generate_stage_response(
             manager,

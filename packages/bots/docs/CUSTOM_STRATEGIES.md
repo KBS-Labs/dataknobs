@@ -105,6 +105,41 @@ class SummarizeReasoning(ReasoningStrategy):
 
 The `**kwargs` may contain context from DynaBot (e.g. `knowledge_base`). Ignore what you don't need.
 
+#### `greeting_template` is universal, and it is checked
+
+`ReasoningStrategy` documents `greeting_template` as a field *every* strategy
+supports. That is not advice — `test_reasoning_greeting_contract.py` drives it
+over `list_strategies()`, so registering your strategy brings it under the
+same guard as the built-in five. There is nothing to opt into.
+
+Two routes satisfy it, and you pick one:
+
+| | What you write | What the guard checks |
+|---|---|---|
+| **Constructor keyword** (the pattern above) | `greeting_template` in `__init__`, forwarded to `super().__init__()`, and read back out of `config` in `from_config` | all three sites — omit any one and construction from config raises `TypeError` |
+| **Typed config** | a config class inheriting `ReasoningConfig`, pointed at by `CONFIG_CLS` | nothing to write; the field is inherited |
+
+```python
+from dataclasses import dataclass
+from dataknobs_bots.reasoning import ReasoningConfig
+
+
+@dataclass(frozen=True)
+class SummarizeConfig(ReasoningConfig):
+    max_summary_tokens: int = 200        # greeting_template is inherited
+```
+
+**Prefer the typed-config route.** It is the one that cannot go wrong: the
+field arrives by inheritance, so there is no site to forget. The constructor
+route stays fully supported and stays checked — it is what the example above
+uses — but it is three hand-written sites, and a strategy that got two of them
+right and one wrong is exactly the failure this guard was added for.
+
+Read the value back through `self.greeting_template`, never through
+`self._greeting_template`. The property resolves both routes; the attribute is
+only half of one.
+
+
 ### Step 3: Register the Strategy
 
 ```python

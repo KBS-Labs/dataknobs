@@ -209,7 +209,6 @@ class ReActReasoning(
         ``components`` channel and default to ``None`` when not injected.
         """
         config = self.config
-        self._greeting_template = config.greeting_template
         self.max_iterations = config.max_iterations
         self.verbose = config.verbose
         self.store_trace = config.store_trace
@@ -528,7 +527,11 @@ class ReActReasoning(
         # checked under the lock — the fast path above stays lock-free once set.
         async with self._compaction_lock:
             if self._compaction_strategy is not None:
-                return self._compaction_strategy
+                # mypy narrowed this to None at the lock-free return above and
+                # cannot see another task setting it while we awaited the lock.
+                # The re-check is the point of double-checked locking; deleting
+                # it to satisfy the checker reinstates the leak described above.
+                return self._compaction_strategy  # type: ignore[unreachable]
             cfg = self._history_compaction
             assert cfg is not None  # guarded by _compaction_enabled at callers
             provider = llm
@@ -989,7 +992,7 @@ class ReActReasoning(
 
         # Initialize trace if enabled (before the no-tools fast path so it, too,
         # can write a fresh trace).
-        trace = [] if self.store_trace else None
+        trace: list[dict[str, Any]] | None = [] if self.store_trace else None
 
         if not tools:
             # No tools available, fall back to simple generation
@@ -1032,7 +1035,7 @@ class ReActReasoning(
 
         # ReAct loop
         for iteration in range(self.max_iterations):
-            iteration_trace = {
+            iteration_trace: dict[str, Any] = {
                 "iteration": iteration + 1,
                 "tool_calls": [],
             }
