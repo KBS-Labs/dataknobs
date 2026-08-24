@@ -89,7 +89,13 @@ Wizard stages support several response modes. Choose the **simplest mode** that 
 | 3 | **Template + context** | `response_template` + `context_generation` | Dynamic flavor (personalized remarks, creative content) |
 | 4 | **Template + LLM assist** | `response_template` + `llm_assist: true` | User may ask help questions during a stage |
 | 5 | **LLM-driven** | `prompt` only (no template) | Open-ended conversation stages (`mode: conversation`) |
-| 6 | **Conversation + greeting** | `mode: conversation` + `response_template` | Conversation stages with a deterministic greeting — template renders once (first turn), then LLM mode |
+| 6 | **Conversation + greeting** | `mode: conversation` + `response_template` (or `greeting_template`) | Conversation stages with a deterministic greeting — template renders once (first turn), then LLM mode. Add a `clarification_template` to render a different fixed nudge on the later turns instead of calling the LLM |
+| 7 | **Structured + greeting** | `greeting_template` + `schema` (with or without `response_template`) | A data-collection stage that needs a fixed opening line. Unlike a `response_template` on a structured stage — which is the stage's *response* and re-renders every turn — a `greeting_template` renders once and steps aside, leaving extraction and confirmation untouched |
+
+A `greeting_template` may be set on any stage, in any mode, and renders on the
+turn that stage first speaks. On a `mode: conversation` stage it takes the
+opening that a `response_template` would have had, leaving that
+`response_template` unreachable — the loader reports that pair at load time.
 
 **Template-first is strongly recommended.** LLM-driven data-collection stages are unreliable — the LLM may ignore stage instructions, ask for different fields, or hallucinate data. The `response_template` produces consistent, deterministic output while the `schema` handles extraction.
 

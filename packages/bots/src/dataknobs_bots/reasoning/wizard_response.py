@@ -213,6 +213,15 @@ class WizardResponder:
         predicate about "does a template live here" rather than about
         mode is what lets a template kind be added without revisiting it.
 
+        ``greeting_template`` is the exception, and it is not an
+        oversight: a greeting is selected on its *own* count, kept apart
+        so that greeting a stage does not consume the first render its
+        confirmation is waiting for (see
+        :meth:`~.wizard_types.WizardState.increment_greeting_count`).  A
+        stage whose only template is a greeting therefore has no
+        render-count-dependent selection to serve, and counting its
+        renders here would answer a question nothing asks.
+
         Args:
             stage: Stage metadata dict.
 
@@ -223,12 +232,20 @@ class WizardResponder:
         return bool(stage.get("response_template") or stage.get("clarification_template"))
 
     @staticmethod
-    def _select_active_template(stage: dict[str, Any], state: WizardState) -> str | None:
+    def _select_active_template(
+        stage: dict[str, Any], state: WizardState
+    ) -> tuple[str | None, bool]:
         """Pick the template this stage renders now, or ``None`` for LLM mode.
 
         Single source of the selection rule for all three render paths —
         buffered, streaming, and the auto-advance collector — so a new
         template kind is added in one place instead of three.
+
+        A ``greeting_template`` wins on the stage's first render, whatever
+        its mode.  It is an *opening line* rather than a response: the
+        stage still extracts, still confirms, and still converses
+        afterwards, which is what separates it from a
+        ``response_template`` pressed into the same job.
 
         Structured stages (the default) render ``response_template`` on
         every turn: the template *is* the response, and a review summary
@@ -238,26 +255,37 @@ class WizardResponder:
         opening line, then hand the turn to the LLM so the stage can
         actually converse.  A ``clarification_template`` takes those later
         turns instead when one is set, letting the stage nudge differently
-        when the user has not engaged.
+        when the user has not engaged.  A greeting occupies that opening,
+        so a conversation stage setting both leaves its
+        ``response_template`` unreachable — which the loader reports at
+        load time rather than leaving to a transcript.
 
         Args:
             stage: Stage metadata dict.
-            state: Current wizard state, read for the stage's render count.
+            state: Current wizard state, read for the stage's counts.
 
         Returns:
-            The template string to render, or ``None`` when this turn
-            belongs to the LLM.
+            ``(template, is_greeting)``.  ``template`` is ``None`` when
+            this turn belongs to the LLM.  ``is_greeting`` tells the
+            caller which count to move, and is returned rather than
+            re-derived so that incrementing cannot change the answer.
         """
+        stage_name = stage.get("name", "unknown")
+        greeting: str | None = stage.get("greeting_template")
+        already_greeted = state.get_greeting_count(stage_name) > 0
+        if greeting and not already_greeted:
+            return greeting, True
+
         template: str | None
         if stage.get("mode") == "conversation":
-            stage_name = stage.get("name", "unknown")
-            if state.get_render_count(stage_name) == 0:
-                template = stage.get("response_template")
-            else:
+            has_spoken = state.get_render_count(stage_name) > 0 or already_greeted
+            if has_spoken:
                 template = stage.get("clarification_template")
+            else:
+                template = stage.get("response_template")
         else:
             template = stage.get("response_template")
-        return template
+        return template, False
 
     # =====================================================================
     # Public API — called by wizard.py orchestrator
@@ -308,7 +336,7 @@ class WizardResponder:
         wizard_snapshot = {"wizard": self._build_wizard_metadata(state)}
 
         # ── Template mode ────────────────────────────────────────
-        active_template = self._select_active_template(stage, state)
+        active_template, is_greeting = self._select_active_template(stage, state)
 
         if active_template:
             content, llm_response = await self._resolve_template_content(
@@ -325,7 +353,9 @@ class WizardResponder:
                 else (self.create_template_response(content))
             )
             self.add_wizard_metadata(response, state, stage)
-            if track_render and self._stage_tracks_renders(stage):
+            if is_greeting:
+                state.increment_greeting_count(stage_name)
+            elif track_render and self._stage_tracks_renders(stage):
                 state.increment_render_count(stage_name)
             return StageResponseResult(response=response)
 
@@ -1998,7 +2028,7 @@ class WizardResponder:
         wizard_snapshot = {"wizard": self._build_wizard_metadata(state)}
 
         # ── Template mode ────────────────────────────────────────
-        active_template = self._select_active_template(stage, state)
+        active_template, is_greeting = self._select_active_template(stage, state)
 
         if active_template:
             content, llm_response = await self._resolve_template_content(
@@ -2024,7 +2054,9 @@ class WizardResponder:
                 if model:
                     chunk_kwargs["model"] = model
             yield LLMStreamResponse(**chunk_kwargs)
-            if track_render and self._stage_tracks_renders(stage):
+            if is_greeting:
+                state.increment_greeting_count(stage_name)
+            elif track_render and self._stage_tracks_renders(stage):
                 state.increment_render_count(stage_name)
             return
 
@@ -2165,7 +2197,7 @@ class WizardResponder:
         Returns:
             Rendered template string, or None if no template applies
         """
-        template = self._select_active_template(stage, state)
+        template, is_greeting = self._select_active_template(stage, state)
         if not template:
             return None
 
@@ -2176,8 +2208,11 @@ class WizardResponder:
             stage_name,
             len(rendered),
         )
-        # Track render count so re-visiting won't re-confirm
-        state.increment_render_count(stage_name)
+        if is_greeting:
+            state.increment_greeting_count(stage_name)
+        else:
+            # Track render count so re-visiting won't re-confirm
+            state.increment_render_count(stage_name)
         return rendered
 
     def _build_clarification_groups(

@@ -129,6 +129,11 @@ _STAGE_FIELDS: tuple[_StageField, ...] = (
     # scope (later-wins) so response templates can reference computed
     # values without a consumer subclassing the renderer.
     _StageField("inputs"),
+    # Rendered once when the stage first speaks, then stepped over.  The
+    # opening line for a stage of any mode — where response_template is
+    # the stage's *response*, which a structured stage re-renders every
+    # turn because the data behind it changes.
+    _StageField("greeting_template"),
     _StageField("response_template"),
     _StageField("clarification_template"),
     _StageField("confirmation_template"),
@@ -439,7 +444,10 @@ class WizardConfigLoader:
         2. Non-end stages with no ``schema`` and no ``response_template``
            (pure LLM-driven — unreliable for data collection)
         3. Conditions that look like English rather than Python
-        4. Template syntax using Python str.format() instead of Jinja2
+        4. Invalid ``re_extract_on_entry`` values
+        5. A ``response_template`` made unreachable by a
+           ``greeting_template`` on a conversation-mode stage
+        6. Template syntax using Python str.format() instead of Jinja2
 
         All issues are logged as warnings, not errors — the config will
         still load.
@@ -510,8 +518,32 @@ class WizardConfigLoader:
                     re_extract,
                 )
 
-            # 5. Python str.format() syntax in templates and prompts
-            for field_name in ("response_template", "prompt"):
+            # 5. A greeting occupies a conversation stage's opening, so
+            #    the response_template that would have filled it never
+            #    renders.  Reported here rather than left to a transcript:
+            #    a template that silently never appears is the defect this
+            #    field exists to remove, not one to reintroduce.
+            if (
+                stage.get("mode") == "conversation"
+                and stage.get("greeting_template")
+                and stage.get("response_template")
+            ):
+                logger.warning(
+                    "Stage '%s': 'greeting_template' and 'response_template' "
+                    "are both set on a conversation-mode stage; "
+                    "'response_template' is unreachable — use "
+                    "'clarification_template' for later turns.",
+                    stage_name,
+                )
+
+            # 6. Python str.format() syntax in templates and prompts
+            for field_name in (
+                "greeting_template",
+                "response_template",
+                "clarification_template",
+                "confirmation_template",
+                "prompt",
+            ):
                 text = stage.get(field_name, "")
                 if text and _PYTHON_FORMAT_PATTERN.search(text):
                     matches = _PYTHON_FORMAT_PATTERN.findall(text)

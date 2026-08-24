@@ -9,6 +9,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`greeting_template`: a wizard stage field for an opening line the stage
+  says once.** It renders on the turn the stage first speaks — the start stage
+  on `greet()`, any other stage on the turn it is entered — and is then stepped
+  over, whatever the stage's mode.
+
+  A structured stage had no way to open with fixed text. Its
+  `response_template` is the stage's *response*, deliberately re-rendered every
+  turn so a review summary tracks the data behind it, and pressed into service
+  as a greeting it repeats the same sentence for as long as the wizard stays
+  there. The only escape was `mode: conversation`, which turns extraction off.
+  A `greeting_template` opens the stage and steps aside: extraction,
+  confirmation and transitions behave exactly as they would without it.
+
+  Two things follow from "steps aside" and are worth stating, because a shared
+  counter would break both. Greeting a stage does not consume the first render
+  its `confirm_first_render` is waiting for, so a stage that greets still
+  confirms on the user's first answer. And a greeting delivered on the subflow
+  push path — which deliberately leaves the render count at 0, so the pushed
+  stage's template reads as an unanswered question — is still recorded as
+  delivered, so it is not said twice.
+
+  Available as `greeting_template` on the stage config, on
+  `WizardConfigBuilder.add_structured_stage()` and `.add_conversation_stage()`,
+  and on the test builder's `stage()` (which also gains the
+  `clarification_template` parameter it was missing). The strategy-level
+  `greeting_template` under `reasoning:` is still not read by wizard bots.
+
+- **The loader reports a `response_template` that a `greeting_template` has
+  made unreachable.** On a `mode: conversation` stage both fields mean "first
+  render" and the greeting wins, so the `response_template` beside it never
+  appears. That is the same silent inertness the new field exists to remove,
+  so it is named at load time — a `WARNING` on the stage, pointing at
+  `clarification_template` for the later turns. `WizardConfigBuilder.validate()`
+  reports the same warning, so a config built in Python hears it before it is
+  ever loaded.
+
+  The loader's existing `str.format()`-vs-Jinja2 check now covers
+  `greeting_template`, `clarification_template` and `confirmation_template` as
+  well as `response_template` and `prompt`; it had enumerated template fields
+  by name and never caught up. Same for the builder-side copy.
+
 - **Wizard transition conditions are checked when the wizard is loaded.** A
   condition the expression engine will refuse — multiline, a syntax error,
   dunder access — is reported once, at load, as a `WARNING` naming the stage,

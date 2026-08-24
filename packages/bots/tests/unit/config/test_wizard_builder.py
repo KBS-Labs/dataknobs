@@ -424,6 +424,72 @@ class TestWizardConfigBuilderValidation:
         assert result.valid is True
         assert any("never be followed" in w for w in result.warnings)
 
+    def test_greeting_makes_a_conversation_response_template_unreachable(self) -> None:
+        """The builder raises the warning the loader would, before loading.
+
+        On a conversation stage the greeting takes the opening turn, so
+        the response_template beside it never renders.
+        """
+        result = (
+            WizardConfigBuilder("test")
+            .add_conversation_stage(
+                "chat",
+                "Converse",
+                is_start=True,
+                greeting_template="Hello!",
+                response_template="Never rendered.",
+            )
+            .validate()
+        )
+        assert result.valid is True
+        assert any("response_template is unreachable" in w for w in result.warnings)
+
+    def test_greeting_and_response_on_a_structured_stage_is_silent(self) -> None:
+        """Both fields on a structured stage is the supported shape."""
+        result = (
+            WizardConfigBuilder("test")
+            .add_structured_stage(
+                "collect",
+                "Collect",
+                is_start=True,
+                is_end=True,
+                greeting_template="Hello!",
+                response_template="Recorded: {{ topic }}",
+            )
+            .validate()
+        )
+        assert not [w for w in result.warnings if "unreachable" in w]
+
+    @pytest.mark.parametrize(
+        "field_name",
+        [
+            "greeting_template",
+            "response_template",
+            "clarification_template",
+            "confirmation_template",
+        ],
+    )
+    def test_python_format_syntax_warns_on_every_template_field(self, field_name: str) -> None:
+        """The str.format()-vs-Jinja2 check enumerates fields by name.
+
+        It had listed only ``response_template``, so a ``{name}`` in any
+        of its three siblings went unreported.
+        """
+        result = (
+            WizardConfigBuilder("test")
+            .add_structured_stage(
+                "start",
+                "Go",
+                is_start=True,
+                is_end=True,
+                **{field_name: "Hello {name}"},
+            )
+            .validate()
+        )
+        assert any(field_name in w and "Python format syntax" in w for w in result.warnings), (
+            result.warnings
+        )
+
     def test_max_iterations_without_reasoning_warning(self) -> None:
         result = (
             WizardConfigBuilder("test")

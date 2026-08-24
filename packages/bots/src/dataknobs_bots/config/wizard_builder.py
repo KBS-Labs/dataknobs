@@ -218,6 +218,7 @@ class StageConfig(StructuredConfig):
     # scope at render time.
     inputs: dict[str, str] | None = None
     # Response generation
+    greeting_template: str | None = None
     response_template: str | None = None
     clarification_template: str | None = None
     confirmation_template: str | None = None
@@ -491,6 +492,7 @@ class WizardConfigBuilder:
         is_start: bool = False,
         suggestions: list[str] | None = None,
         intent_detection: dict[str, Any] | None = None,
+        greeting_template: str | None = None,
         **kwargs: Any,
     ) -> Self:
         """Add a conversation-mode stage.
@@ -506,6 +508,11 @@ class WizardConfigBuilder:
             suggestions: Quick-reply suggestions.
             intent_detection: Intent detection config dict with
                 ``method`` and ``intents`` keys.
+            greeting_template: Template rendered once, as this stage's
+                opening line, before the stage starts conversing.  Takes
+                precedence over ``response_template``, which is therefore
+                unreachable on a conversation stage that sets both — use
+                ``clarification_template`` for the later turns.
             **kwargs: Additional StageConfig fields.
 
         Returns:
@@ -525,6 +532,7 @@ class WizardConfigBuilder:
             is_start=is_start,
             suggestions=tuple(suggestions) if suggestions else (),
             intent_detection=intent_cfg,
+            greeting_template=greeting_template,
             **kwargs,
         )
         self._stages.append(stage)
@@ -541,6 +549,7 @@ class WizardConfigBuilder:
         can_skip: bool = False,
         skip_default: Any = None,
         suggestions: list[str] | None = None,
+        greeting_template: str | None = None,
         response_template: str | None = None,
         help_text: str | None = None,
         reasoning: str | None = None,
@@ -561,6 +570,11 @@ class WizardConfigBuilder:
             can_skip: Whether the user can skip this stage.
             skip_default: Default value if skipped.
             suggestions: Quick-reply suggestions.
+            greeting_template: Template rendered once, as this stage's
+                opening line, and not repeated afterwards.  Unlike
+                ``response_template`` it does not stand in for the
+                stage's response, so the stage still extracts and still
+                confirms on the user's first turn.
             response_template: Template-driven response (bypasses LLM).
             help_text: Help message for the user.
             reasoning: Registered strategy name (e.g. ``"react"``,
@@ -590,6 +604,7 @@ class WizardConfigBuilder:
             can_skip=can_skip,
             skip_default=skip_default,
             suggestions=tuple(suggestions) if suggestions else (),
+            greeting_template=greeting_template,
             response_template=response_template,
             help_text=help_text,
             reasoning=reasoning,
@@ -1101,15 +1116,37 @@ class WizardConfigBuilder:
                     )
                 )
 
+        # Warnings: a greeting leaves a conversation stage's
+        # response_template unreachable (mirrors the loader's check, so a
+        # config built here is told before it is ever loaded)
+        for stage in stages:
+            if stage.mode == "conversation" and stage.greeting_template and stage.response_template:
+                result = result.merge(
+                    ValidationResult.warning(
+                        f"Stage '{stage.name}' sets both greeting_template "
+                        f"and response_template on a conversation-mode "
+                        f"stage — response_template is unreachable; use "
+                        f"clarification_template for later turns"
+                    )
+                )
+
         # Warnings: Python str.format() in templates (should be Jinja2)
         _fmt_re = re.compile(r"(?<!\{)\{(\w+)\}(?!\})")
         for stage in stages:
-            if stage.response_template:
-                match = _fmt_re.search(stage.response_template)
+            for field_name in (
+                "greeting_template",
+                "response_template",
+                "clarification_template",
+                "confirmation_template",
+            ):
+                text = getattr(stage, field_name)
+                if not text:
+                    continue
+                match = _fmt_re.search(text)
                 if match:
                     result = result.merge(
                         ValidationResult.warning(
-                            f"Stage '{stage.name}' response_template uses "
+                            f"Stage '{stage.name}' {field_name} uses "
                             f"Python format syntax {{{match.group(1)}}} — "
                             f"did you mean Jinja2 {{{{ {match.group(1)} }}}}?"
                         )

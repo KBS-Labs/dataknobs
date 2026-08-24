@@ -1,5 +1,6 @@
 """Tests for WizardConfigLoader."""
 
+import logging
 import tempfile
 from dataclasses import fields as dataclass_fields
 from pathlib import Path
@@ -869,3 +870,105 @@ class TestStageFieldRegistrySync:
             f"{sorted(missing)}. Add them to StageConfig in "
             f"wizard_builder.py so the typed builder API exposes them."
         )
+
+
+class TestGreetingTemplateValidation:
+    """The one collision ``greeting_template`` creates, reported at load.
+
+    On a conversation-mode stage both fields mean "first render", and
+    precedence gives the greeting — so the ``response_template`` beside
+    it never renders.  That is the same silent inertness the field was
+    added to remove, so the loader says so rather than leaving the
+    author to discover it in a transcript.
+    """
+
+    def test_greeting_and_response_on_a_conversation_stage_warns(
+        self, wizard_loader: WizardConfigLoader, caplog
+    ) -> None:
+        config: dict = {
+            "name": "test-wizard",
+            "stages": [
+                {
+                    "name": "chat",
+                    "is_start": True,
+                    "is_end": True,
+                    "mode": "conversation",
+                    "prompt": "Converse.",
+                    "greeting_template": "Hello!",
+                    "response_template": "Never rendered.",
+                }
+            ],
+        }
+        with caplog.at_level(logging.WARNING):
+            wizard_loader.load_from_dict(config)
+
+        assert any(
+            "'response_template' is unreachable" in r.getMessage()
+            for r in caplog.records
+            if r.levelname == "WARNING"
+        ), f"no unreachable-template warning in {[r.getMessage() for r in caplog.records]}"
+
+    def test_greeting_and_response_on_a_structured_stage_is_silent(
+        self, wizard_loader: WizardConfigLoader, caplog
+    ) -> None:
+        """Both fields on a structured stage is the supported shape.
+
+        The greeting opens; the ``response_template`` renders from the
+        first user turn onward.  Neither is unreachable, so nothing is
+        reported.
+        """
+        config: dict = {
+            "name": "test-wizard",
+            "stages": [
+                {
+                    "name": "collect",
+                    "is_start": True,
+                    "is_end": True,
+                    "prompt": "Collect.",
+                    "greeting_template": "Hello!",
+                    "response_template": "Recorded: {{ topic }}",
+                    "schema": {"type": "object", "properties": {"topic": {"type": "string"}}},
+                }
+            ],
+        }
+        with caplog.at_level(logging.WARNING):
+            wizard_loader.load_from_dict(config)
+
+        assert not [r.getMessage() for r in caplog.records if "unreachable" in r.getMessage()]
+
+    @pytest.mark.parametrize(
+        "field_name",
+        [
+            "greeting_template",
+            "response_template",
+            "clarification_template",
+            "confirmation_template",
+        ],
+    )
+    def test_python_format_syntax_warns_on_every_template_field(
+        self, wizard_loader: WizardConfigLoader, caplog, field_name: str
+    ) -> None:
+        """The str.format()-vs-Jinja2 check enumerates fields by name.
+
+        It had listed only ``response_template`` and ``prompt``, so a
+        ``{name}`` in any of the other template fields went unreported.
+        """
+        config: dict = {
+            "name": "test-wizard",
+            "stages": [
+                {
+                    "name": "start",
+                    "is_start": True,
+                    "is_end": True,
+                    "prompt": "Go",
+                    field_name: "Hello {name}",
+                }
+            ],
+        }
+        with caplog.at_level(logging.WARNING):
+            wizard_loader.load_from_dict(config)
+
+        assert any(
+            field_name in r.getMessage() and "Python format syntax" in r.getMessage()
+            for r in caplog.records
+        ), [r.getMessage() for r in caplog.records]
