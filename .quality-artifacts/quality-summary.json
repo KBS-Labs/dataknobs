@@ -1,5 +1,5 @@
 {
-  "timestamp": "2026-08-24T17:31:04Z",
+  "timestamp": "2026-08-24T17:52:19Z",
   "overall_status": "PASS",
   "run_mode": "pr",
   "environment": "host",
@@ -9,7 +9,7 @@
   ],
   "coverage_percent": null,
   "package_hashes": {
-    "bots": "c85583ece4a7bd4a82408be4c7ba59c9083884f622e06b2916200735c9e47e65",
+    "bots": "da8f325af994225c44c4d200679b182196fe0f8d7f96c5232e012052884394b9",
     "common": "3cbc20435ffdc448ede2e93ee74c21de740730aab4b7e70ee50264838d0970b4",
     "config": "33fdf8a284304b52cfa3c91265fcaa8126741c7ee555dcba2b44fe3468e27bfd",
     "data": "d98e77f690b9e77711f63d9aae1384887beca4a55e49f36807234a8ec8be2e22",
@@ -24,15 +24,15 @@
   "workspace_hashes": {
     "toolchain": "5f0fe9459553efff1fbb0ca11dc37a8b13e58e8d73c02abc90eb6663a15f9d25",
     "workspace_tests": "385b90a1fdfd1dfab0a67db8b7c80f154d751f670ab12383ae15aeb14c0e1dde",
-    "docs": "8f31053b8b69608e76f6c4e7f435055adc7deb15f140a2394195dbffb3410d5a"
+    "docs": "3fa3b98e6226833a6e34a73d3d7d88d0d89a98e70440794ce6f513a1626806e0"
   },
-  "total_seconds": 152,
+  "total_seconds": 149,
   "checks": {
     "workflow_lint": {
       "status": "pass",
       "exit_code": 0,
       "tool": "lint-workflows.sh",
-      "duration_seconds": 0
+      "duration_seconds": 1
     },
     "shell_lint": {
       "status": "pass",
@@ -44,7 +44,7 @@
       "status": "pass",
       "exit_code": 0,
       "tool": "quality-contract.py",
-      "duration_seconds": 1
+      "duration_seconds": 0
     },
     "validation": {
       "status": "pass",
@@ -58,7 +58,7 @@
       "exit_code": 0,
       "skipped": false,
       "tool": "mkdocs",
-      "duration_seconds": 25
+      "duration_seconds": 24
     },
     "documentation_versions": {
       "status": "pass",
@@ -78,8 +78,8 @@
       "status": "pass",
       "exit_code": 0,
       "skipped": false,
-      "duration_seconds": 80,
-      "workspace_guards_seconds": 59
+      "duration_seconds": 77,
+      "workspace_guards_seconds": 56
     },
     "integration_tests": {
       "status": "pass",

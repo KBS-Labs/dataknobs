@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-08-24T17:31:04Z",
+  "timestamp": "2026-08-24T17:52:19Z",
   "python_version": "Python 3.12.12",
   "uv_version": "uv 0.12.5 (Homebrew 2026-08-14 aarch64-apple-darwin)",
   "os": "Darwin",
   "os_version": "24.6.0",
   "git_branch": "sbk/reasoning-config-shared-base",
-  "git_commit": "2b1847801b52841a8d0f8fc3d7320a0fa7a2e5c3",
+  "git_commit": "23323d4ff2ed8c4dcaca6cfab4920b8f67b3832c",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }
