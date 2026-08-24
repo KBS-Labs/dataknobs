@@ -101,8 +101,10 @@ class SubflowManager:
 
         active_fsm = self.get_active_fsm()
         stage_meta = active_fsm.current_metadata
+        stage_name = stage_meta.get("name", "?")
 
         # Check each transition for subflow marker
+        declined: list[str] = []
         for transition in stage_meta.get("transitions", []):
             if not transition.get("is_subflow_transition"):
                 continue
@@ -113,11 +115,30 @@ class SubflowManager:
                 condition,
                 wizard_state.data,
             ):
+                declined.append(condition)
                 continue
 
             # This transition matches and is a subflow transition
             subflow_config: dict[str, Any] = transition.get("subflow_config", {})
+            logger.debug(
+                "Subflow guard on stage '%s' satisfied by %s: pushing '%s'",
+                stage_name,
+                f"condition {condition!r}" if condition else "an unconditional transition",
+                subflow_config.get("network", "?"),
+            )
             return subflow_config
+
+        # A decline is otherwise indistinguishable from there being no
+        # subflow transition at all, from a misspelled condition, and from
+        # one that raised -- every one of them shows up as nothing
+        # happening. Name the conditions that were asked and said no.
+        if declined:
+            logger.debug(
+                "Subflow guard on stage '%s' declined: %d condition(s) not satisfied: %s",
+                stage_name,
+                len(declined),
+                ", ".join(repr(c) for c in declined),
+            )
 
         return None
 

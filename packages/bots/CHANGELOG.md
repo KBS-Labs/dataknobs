@@ -9,6 +9,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A subflow guard now reads what its own stage prepared.** The condition on
+  a `_subflow` transition was evaluated *before* the stage's pre-transition
+  preparation ran, while every other transition condition is evaluated after
+  it. A guard reading a key written by its stage's `routing_transforms:` or by
+  a transition's `derive:` block therefore could not fire on the turn the key
+  was written; it fired on the next one, against a message the user had
+  written in answer to a prompt they never saw -- which was extracted against
+  the wrong stage's schema and discarded when the push finally replaced the
+  data. The guard is now a step of a shared pre-transition sequence
+  (`_prepare_and_route`), after the preparation and still before the FSM step,
+  so a push continues to pre-empt the self-loop arc a subflow transition
+  compiles into. `WIZARD_SUBFLOWS.md` states the resulting visibility boundary
+  per writer.
+
+- **`advance()` can push a subflow.** The non-conversational API ran the
+  pre-transition preparation but never asked whether a subflow should be
+  pushed, while reaching `should_pop` through the shared post-transition
+  sequence -- so it could be carried *out* of a subflow it had no way to enter.
+  Given one config and one data value it stayed where `chat()` pushed. Both
+  paths now run the same sequence.
+
 - **A wizard tool's writes to collected data are no longer discarded.** A
   `ContextAwareTool` running in a wizard turn reached wizard state through
   `ToolExecutionContext`, which rebuilt it from the *persisted* conversation
@@ -71,7 +92,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   every turn driver executes, so it covers the success, error and
   stream-abandon paths alike.
 
+### Changed
+
+- **`WizardFSM` no longer reports a matched subflow transition as "none
+  matched".** A subflow transition compiles to a self-loop arc, so a matched
+  one leaves the FSM where it started -- indistinguishable, in the DEBUG log,
+  from a condition that failed. The step-outcome log now names the subflow
+  transitions the stage holds and says their push is decided before the step.
+  The message was written twice, once in `step` and once in `step_async`; both
+  now call one `_log_step_outcome`.
+
+- **A declined subflow push says so.** `SubflowManager` logs the guard's
+  decision at DEBUG on both branches, naming the conditions that were asked.
+  A decline previously left no trace at all, so it looked the same as a stage
+  with no subflow transition, as a misspelled condition, and as one that
+  raised.
+
+- **A `WizardFSM` stage accessor returns the type it declares.** Stage
+  metadata is authored config carried through uncoerced, so a stage written
+  `can_skip: "no"` gave a *truthy string* from a method declared `-> bool` and
+  the stage the author marked unskippable was skippable; `tools:` written as a
+  bare string iterated character by character. The seven typed accessors now
+  share one `_stage_field` read that returns the field's documented default
+  when the authored value is of the wrong type, and warns once per stage and
+  field. `get_transition_condition` reports a non-string condition as `None`
+  rather than writing it into a transition record as the expression that
+  fired, and `resolve_function` treats a non-callable registry entry as
+  absent instead of handing it to a caller that will call it.
+
+- **Loading a config with an ill-typed text field no longer raises.** Two of
+  the loader's *warning* heuristics — the Python-format check over the
+  template fields and the natural-language check over conditions — searched an
+  authored value with a regex directly, so a non-string prompt or condition
+  took the whole load down with a `TypeError` out of `re`. A check that exists
+  to advise about a config now skips what it cannot read.
+
 ### Added
+
+- **`BotTestHarness.create(custom_functions=...)`** threads transition
+  functions -- routing transforms, transforms, validators -- into the wizard
+  reasoning config, so a test exercising them stays on the harness rather than
+  hand-building a bot config. **`WizardConfigBuilder.transition(derive=...)`**
+  declares a transition's derivation rules.
 
 - **`WizardState.replace_data()`** -- replaces a wizard's collected data in
   place, keeping the dict's identity. `WizardState.data` is handed out by

@@ -2800,8 +2800,14 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
                     first_state_key = next(iter(trm_entry.mapping.values()))
                     wizard_state.data[first_state_key] = result_data
 
-        # Check for subflow push BEFORE regular FSM transition
-        subflow_config = self._subflows.should_push(wizard_state, user_message)
+        # Get current stage for transition derivations and routing
+        active_fsm = self._subflows.get_active_fsm()
+        stage = active_fsm.current_metadata
+
+        # Pre-transition preparation, then the subflow guard: one shared
+        # sequence, also run by advance().  See _prepare_and_route for why
+        # the guard sits after the preparation and before the FSM step.
+        subflow_config = await self._prepare_and_route(stage, wizard_state, user_message)
         if subflow_config and self._subflows.handle_push(
             wizard_state, subflow_config, user_message
         ):
@@ -2817,14 +2823,6 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
                 subflow_pushed=True,
                 subflow_new_stage=new_stage,
             )
-
-        # Get current stage for transition derivations and routing
-        active_fsm = self._subflows.get_active_fsm()
-        stage = active_fsm.current_metadata
-
-        # Pre-transition preparation: derivations, routing transforms,
-        # and snapshot update (shared with advance).
-        await self._prepare_transition(stage, wizard_state)
 
         # Log pre-transition state
         logger.debug(
@@ -3304,25 +3302,36 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
                 await self._hooks.trigger_exit(state.current_stage, state.data)
             update_stage_exit_tasks(state, state.current_stage)
 
-            # Pre-transition preparation: derivations, routing transforms,
-            # and snapshot update (shared with _finalize_preamble).
-            await self._prepare_transition(stage, state)
+            # Pre-transition preparation, then the subflow guard: the same
+            # shared sequence _finalize_preamble runs.  This path had the
+            # preparation and not the guard, so it could be carried *out*
+            # of a subflow -- should_pop reaches it through the shared
+            # post-transition sequence -- that it had no way to enter.
+            raw_message = user_input if isinstance(user_input, str) else ""
+            subflow_config = await self._prepare_and_route(stage, state, raw_message)
 
-            # Execute FSM step (shared method)
-            await self._execute_fsm_step(state, llm=llm)
+            if subflow_config and self._subflows.handle_push(state, subflow_config, raw_message):
+                # A push replaces the stage, the data and the active FSM.
+                # The FSM step and the post-transition sequence belong to
+                # the transition that did not happen; _finalize_preamble
+                # returns at this point for the same reason.
+                transitioned = state.current_stage != from_stage
+            else:
+                # Execute FSM step (shared method)
+                await self._execute_fsm_step(state, llm=llm)
 
-            transitioned = state.current_stage != from_stage
+                transitioned = state.current_stage != from_stage
 
-            # Post-transition sequence: auto-save, re-extraction, lifecycle
-            # (shared method — see also _finalize_preamble()).
-            # A dict user_input was merged directly, so there is no raw text
-            # to re-extract from and re-extraction is skipped.
-            auto_advance_messages = await self._run_post_transition_sequence(
-                state,
-                from_stage,
-                user_input if isinstance(user_input, str) else None,
-                llm=llm,
-            )
+                # Post-transition sequence: auto-save, re-extraction,
+                # lifecycle (shared method — see also _finalize_preamble()).
+                # A dict user_input was merged directly, so there is no raw
+                # text to re-extract from and re-extraction is skipped.
+                auto_advance_messages = await self._run_post_transition_sequence(
+                    state,
+                    from_stage,
+                    user_input if isinstance(user_input, str) else None,
+                    llm=llm,
+                )
 
         # Build result.  Every field below that describes the stage is read
         # out of `metadata` rather than derived a second time: this method
@@ -4468,6 +4477,50 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
         await self._execute_routing_transforms(stage, state)
         if stage.get("confirm_on_new_data"):
             self._confirmation.save_snapshot(stage, state)
+
+    async def _prepare_and_route(
+        self,
+        stage: dict[str, Any],
+        state: WizardState,
+        user_message: str,
+    ) -> dict[str, Any] | None:
+        """Prepare the transition, then decide whether a subflow is pushed.
+
+        The whole pre-transition sequence, in one place, for the same
+        reason :meth:`_prepare_transition` gives: both transition paths
+        call it, so a step added here cannot reach one and miss the other.
+        That is not hypothetical -- the subflow guard was the one step
+        left outside, and :meth:`advance` consequently never had it.
+
+        **The guard runs after the preparation** so that a subflow
+        condition reads what every other transition condition reads.
+        ``a10dbddb`` inserted the routing transforms with the comment
+        *"before condition evaluation"*; a subflow guard is a condition
+        evaluation, and it was already sitting above them.
+
+        **It still runs before the FSM step**, which is what
+        ``a05edd98``'s ordering was protecting.  A subflow transition
+        compiles to a *self-loop* arc (``wizard_loader.py:677``), so the
+        FSM cannot perform the push -- and an ordinary transition
+        declared alongside it would consume the turn first.
+
+        What a guard can see follows from where this sits, and the
+        boundary is worth stating because it is not the obvious one:
+        extraction, tool results and ``tool_result_mapping`` all land
+        before this method is called and are visible; the derivations and
+        routing transforms it runs are visible from here on.
+
+        Args:
+            stage: Current stage metadata.
+            state: Wizard state, mutated in place by the preparation.
+            user_message: Raw user text for the guard's context, empty on
+                the non-conversational path when the input was a dict.
+
+        Returns:
+            The subflow config to push, or ``None`` to transition normally.
+        """
+        await self._prepare_transition(stage, state)
+        return self._subflows.should_push(state, user_message)
 
     def _apply_transition_derivations(
         self,
