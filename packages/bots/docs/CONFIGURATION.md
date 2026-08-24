@@ -2187,12 +2187,12 @@ boolean literals are accepted. Python builtins like `len`, `str`, `int` are
 also available.
 
 **When a condition is reported.** Conditions are checked once, when the wizard
-is loaded. One the expression engine refuses outright — a multiline expression,
-a syntax error, dunder access — is reported as a `WARNING` naming the stage,
-the target and the reason. The wizard still loads and the transition still
-registers; it simply never fires, exactly as before the check existed. Load
-time is where the report is actionable, because the fix is to the config and
-the author is still holding it.
+is loaded. A condition the expression engine refuses outright — a multiline
+expression, a syntax error, dunder access — is reported as a `WARNING` naming
+the stage, the target and the reason. The wizard still loads and the transition
+still registers; it simply never fires, exactly as before the check existed.
+Load time is where the report is actionable, because the fix is to the config
+and the author is still holding it.
 
 A condition the engine *accepts* but that fails on a given turn's data —
 `data['name']` before `name` has been captured — is logged at `DEBUG`, not
