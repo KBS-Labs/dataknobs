@@ -10,7 +10,7 @@ Classes:
     ToolRegistry: Registry for managing available tools
     ToolExecutionContext: Context passed to context-aware tools
     ToolWizardState: The wizard state a tool is allowed to see
-    WizardStateSnapshot: Deprecated alias for ToolWizardState
+    WizardStateSnapshot: Deprecated alias for ToolWizardState; warns on use
 
 Observability:
     ToolExecutionRecord: Record of a single tool execution
@@ -19,11 +19,13 @@ Observability:
     ExecutionTracker: Standalone tracker for tool executions
 """
 
+import warnings
+from typing import TYPE_CHECKING
+
 from dataknobs_llm.tools.base import Tool
 from dataknobs_llm.tools.context import (
     ToolExecutionContext,
     ToolWizardState,
-    WizardStateSnapshot,
 )
 from dataknobs_llm.tools.context_aware import (
     ContextAwareTool,
@@ -38,6 +40,10 @@ from dataknobs_llm.tools.observability import (
 )
 from dataknobs_llm.tools.registry import ToolRegistry
 
+if TYPE_CHECKING:
+    # Resolved at runtime by ``__getattr__`` below, which warns.
+    from dataknobs_llm.tools.context import WizardStateSnapshot
+
 __all__ = [
     # Core tool classes
     "Tool",
@@ -46,7 +52,8 @@ __all__ = [
     "ContextEnhancedTool",
     "ToolExecutionContext",
     "ToolWizardState",
-    # Deprecated alias for ToolWizardState; removed after one minor version.
+    # Deprecated alias for ToolWizardState; warns on access, then removed
+    # after one minor version.
     "WizardStateSnapshot",
     "default_wizard_data_injector",
     # Observability
@@ -55,3 +62,23 @@ __all__ = [
     "ExecutionStats",
     "ExecutionTracker",
 ]
+
+
+def __getattr__(name: str) -> type:
+    """Resolve the deprecated ``WizardStateSnapshot`` name, warning on access.
+
+    The name is re-exported from this package for import-site stability,
+    but it is temporary rather than permanent, so it warns here as well as
+    on :mod:`dataknobs_llm.tools.context`. Importing it eagerly above
+    would fire that warning on every import of this package and name our
+    own file rather than the caller's.
+    """
+    if name == "WizardStateSnapshot":
+        warnings.warn(
+            "WizardStateSnapshot is deprecated; use ToolWizardState instead. "
+            "The alias resolves for one minor version and is then removed.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return ToolWizardState
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

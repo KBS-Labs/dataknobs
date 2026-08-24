@@ -8,8 +8,13 @@ published one.
 """
 
 import dataclasses
+import importlib
+import warnings
 
 import pytest
+
+import dataknobs_llm.tools
+import dataknobs_llm.tools.context as context_module
 
 from dataknobs_data.backends.memory import AsyncMemoryDatabase
 from dataknobs_llm.conversations import (
@@ -23,7 +28,6 @@ from dataknobs_llm.prompts import AsyncPromptBuilder, ConfigPromptLibrary
 from dataknobs_llm.tools.context import (
     ToolExecutionContext,
     ToolWizardState,
-    WizardStateSnapshot,
 )
 from dataknobs_structures.tree import Tree
 
@@ -196,28 +200,57 @@ class TestToolWizardState:
 
 
 class TestDeprecatedWizardStateSnapshotAlias:
-    """``WizardStateSnapshot`` keeps resolving for one minor version."""
+    """``WizardStateSnapshot`` resolves for one minor version, and warns."""
 
     def test_alias_is_the_renamed_class(self) -> None:
         """The alias is the class itself, not a subclass or a copy."""
-        assert WizardStateSnapshot is ToolWizardState
+        with pytest.warns(DeprecationWarning, match="use ToolWizardState"):
+            alias = context_module.WizardStateSnapshot
+
+        assert alias is ToolWizardState
 
     def test_alias_is_still_exported_from_the_package(self) -> None:
         """Existing import sites keep working without a code change."""
-        import dataknobs_llm.tools as tools_pkg
+        assert "WizardStateSnapshot" in dataknobs_llm.tools.__all__
+        assert "ToolWizardState" in dataknobs_llm.tools.__all__
 
-        assert "WizardStateSnapshot" in tools_pkg.__all__
-        assert "ToolWizardState" in tools_pkg.__all__
-        assert tools_pkg.WizardStateSnapshot is tools_pkg.ToolWizardState
+        with pytest.warns(DeprecationWarning, match="use ToolWizardState"):
+            alias = dataknobs_llm.tools.WizardStateSnapshot
+
+        assert alias is dataknobs_llm.tools.ToolWizardState
+
+    def test_importing_the_package_does_not_warn(self) -> None:
+        """The warning has to name a caller, not us.
+
+        An eager re-export of the deprecated name would fire the warning
+        on every ``import dataknobs_llm.tools``, pointing at our own
+        ``__init__`` rather than at the consumer who has not migrated --
+        which is noise, not a signal. Serving it from ``__getattr__``
+        is what keeps the import quiet.
+        """
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            importlib.reload(dataknobs_llm.tools)
+
+        assert [w for w in caught if issubclass(w.category, DeprecationWarning)] == []
 
     def test_instances_built_through_the_alias_are_accepted(self) -> None:
         """A context built with the old name is the same context."""
-        context = ToolExecutionContext(
-            wizard_state=WizardStateSnapshot(collected_data={"a": 1}),
-        )
+        with pytest.warns(DeprecationWarning):
+            alias = context_module.WizardStateSnapshot
+
+        context = ToolExecutionContext(wizard_state=alias(collected_data={"a": 1}))
 
         assert isinstance(context.wizard_state, ToolWizardState)
         assert context.wizard_data() == {"a": 1}
+
+    def test_an_unknown_attribute_still_raises(self) -> None:
+        """``__getattr__`` must not turn typos into silent successes."""
+        with pytest.raises(AttributeError, match="no attribute"):
+            _ = context_module.NoSuchName
+
+        with pytest.raises(AttributeError, match="no attribute"):
+            _ = dataknobs_llm.tools.NoSuchName
 
 
 class TestToolExecutionContext:

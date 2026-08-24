@@ -10,8 +10,9 @@ decides whether the tool is looking at live state or at the last save;
 :meth:`ToolExecutionContext.wizard_data` is the supported way to read it.
 """
 
+import warnings
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 
 @dataclass
@@ -82,20 +83,6 @@ class ToolWizardState:
             # it in; see the class docstring.
             stage_metadata={},
         )
-
-
-# Deprecated alias.
-#
-# ``WizardStateSnapshot`` is also the name of an unrelated and much larger
-# observability dataclass in ``dataknobs_bots.reasoning.observability``.
-# The two are routinely confused — shipped prose already documents a field
-# of the ``bots`` class under an import of this one — so the tool-facing
-# class is now spelled ``ToolWizardState``.
-#
-# .. deprecated::
-#    Use :class:`ToolWizardState`. This alias resolves for one minor
-#    version and is then removed.
-WizardStateSnapshot = ToolWizardState
 
 
 @dataclass
@@ -300,3 +287,44 @@ class ToolExecutionContext:
             request_metadata=self.request_metadata,
             extra=new_extra,
         )
+
+
+# ---------------------------------------------------------------------------
+# Deprecated alias (PEP 562 module-level ``__getattr__``)
+# ---------------------------------------------------------------------------
+
+if TYPE_CHECKING:
+    # Type checkers resolve the old name to the class directly, so a
+    # consumer that has not migrated keeps full type precision. At runtime
+    # the name is served by ``__getattr__`` below, which warns.
+    WizardStateSnapshot = ToolWizardState
+
+_DEPRECATED_ALIASES: dict[str, type] = {"WizardStateSnapshot": ToolWizardState}
+
+
+def __getattr__(name: str) -> type:
+    """Resolve the deprecated ``WizardStateSnapshot`` name, warning on access.
+
+    ``WizardStateSnapshot`` is also the name of an unrelated and much
+    larger observability dataclass in
+    ``dataknobs_bots.reasoning.observability``. The two are routinely
+    confused — shipped prose already documents a field of the ``bots``
+    class under an import of this one — so the tool-facing class is now
+    spelled :class:`ToolWizardState`.
+
+    The old name keeps resolving for one minor version and is then
+    removed. Warning on access rather than aliasing silently follows the
+    ``S3SessionConfig`` precedent in :mod:`dataknobs_data.pooling.s3`:
+    there, the package-root alias is *permanent* and resolves quietly,
+    while the deep module path warns. This one is temporary, so it warns.
+    """
+    target = _DEPRECATED_ALIASES.get(name)
+    if target is not None:
+        warnings.warn(
+            f"{name} is deprecated; use ToolWizardState instead. The alias "
+            "resolves for one minor version and is then removed.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return target
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

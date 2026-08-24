@@ -44,7 +44,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   already names a field on `WizardStateSnapshot` that only one of the two has.
   The tool-facing class is the one that moved, since it is the one whose name did
   not say what it was. `WizardStateSnapshot` remains as an alias in
-  `dataknobs_llm.tools` and `dataknobs_llm.tools.context` for one minor version.
+  `dataknobs_llm.tools` and `dataknobs_llm.tools.context` for one minor version,
+  and emits a `DeprecationWarning` when read from either. Type checkers still
+  resolve it to the class, so an unmigrated call site keeps full type precision
+  while it lasts.
 
 ### Fixed
 
