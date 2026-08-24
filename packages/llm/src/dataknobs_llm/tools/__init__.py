@@ -9,7 +9,8 @@ Classes:
     ContextEnhancedTool: Wrapper to add context awareness to existing tools
     ToolRegistry: Registry for managing available tools
     ToolExecutionContext: Context passed to context-aware tools
-    WizardStateSnapshot: Snapshot of wizard state for tool context
+    ToolWizardState: The wizard state a tool is allowed to see
+    WizardStateSnapshot: Deprecated alias for ToolWizardState
 
 Observability:
     ToolExecutionRecord: Record of a single tool execution
@@ -19,7 +20,11 @@ Observability:
 """
 
 from dataknobs_llm.tools.base import Tool
-from dataknobs_llm.tools.context import ToolExecutionContext, WizardStateSnapshot
+from dataknobs_llm.tools.context import (
+    ToolExecutionContext,
+    ToolWizardState,
+    WizardStateSnapshot,
+)
 from dataknobs_llm.tools.context_aware import (
     ContextAwareTool,
     ContextEnhancedTool,
@@ -40,6 +45,8 @@ __all__ = [
     "ContextAwareTool",
     "ContextEnhancedTool",
     "ToolExecutionContext",
+    "ToolWizardState",
+    # Deprecated alias for ToolWizardState; removed after one minor version.
     "WizardStateSnapshot",
     "default_wizard_data_injector",
     # Observability

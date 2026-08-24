@@ -5,7 +5,7 @@ from typing import Any
 import pytest
 
 from dataknobs_llm.tools import Tool
-from dataknobs_llm.tools.context import ToolExecutionContext, WizardStateSnapshot
+from dataknobs_llm.tools.context import ToolExecutionContext, ToolWizardState
 from dataknobs_llm.tools.context_aware import (
     ContextAwareTool,
     ContextEnhancedTool,
@@ -90,7 +90,7 @@ class TestContextAwareTool:
         """Test that execute passes context to execute_with_context."""
         tool = SampleContextAwareTool()
 
-        wizard_state = WizardStateSnapshot(
+        wizard_state = ToolWizardState(
             current_stage="configure",
             collected_data={"domain_id": "test-bot"},
         )
@@ -254,7 +254,7 @@ class TestDefaultWizardDataInjector:
 
     def test_injects_wizard_data_when_present(self) -> None:
         """Test that wizard data is injected when available."""
-        wizard_state = WizardStateSnapshot(
+        wizard_state = ToolWizardState(
             current_stage="configure",
             collected_data={"domain_id": "test-bot", "name": "Test Bot"},
         )
@@ -283,7 +283,7 @@ class TestDefaultWizardDataInjector:
             context_injector=default_wizard_data_injector,
         )
 
-        wizard_state = WizardStateSnapshot(
+        wizard_state = ToolWizardState(
             current_stage="review",
             collected_data={"template": "tutor", "name": "My Bot"},
         )

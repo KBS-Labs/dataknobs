@@ -9,7 +9,7 @@ from typing import Any
 import pytest
 import yaml
 from dataknobs_common.testing import assert_no_blocking
-from dataknobs_llm.tools.context import ToolExecutionContext, WizardStateSnapshot
+from dataknobs_llm.tools.context import ToolExecutionContext, ToolWizardState
 
 from dataknobs_bots.config.builder import DynaBotConfigBuilder
 from dataknobs_bots.config.drafts import ConfigDraftManager
@@ -34,7 +34,7 @@ def _make_context(
 ) -> ToolExecutionContext:
     """Create a ToolExecutionContext with wizard state."""
     if wizard_data is not None:
-        wizard_state = WizardStateSnapshot(
+        wizard_state = ToolWizardState(
             current_stage="test",
             collected_data=wizard_data,
             history=["test"],

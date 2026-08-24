@@ -237,9 +237,10 @@ class ContextEnhancedTool(ContextAwareTool):
 
         # Wrap it to inject wizard_data from context
         def inject_wizard_data(context: ToolExecutionContext) -> dict:
-            if context.wizard_state:
-                return {"wizard_data": context.wizard_state.collected_data}
-            return {}
+            wizard_data = context.wizard_data()
+            if wizard_data is None:
+                return {}
+            return {"wizard_data": wizard_data}
 
         enhanced_tool = ContextEnhancedTool(
             LegacyPreviewTool(),
@@ -309,6 +310,12 @@ def default_wizard_data_injector(context: ToolExecutionContext) -> dict[str, Any
     This is a convenience injector for tools that expect a
     `wizard_data` parameter containing the wizard's collected data.
 
+    The dict is the one the context is backed by, held by reference — so
+    when a reasoning strategy published a live view, the wrapped tool's
+    writes reach wizard state.  When the context carries no wizard state
+    at all, nothing is injected and the wrapped tool sees whatever default
+    it declares.
+
     Args:
         context: Execution context
 
@@ -323,6 +330,7 @@ def default_wizard_data_injector(context: ToolExecutionContext) -> dict[str, Any
         )
         ```
     """
-    if context.wizard_state:
-        return {"wizard_data": context.wizard_state.collected_data}
-    return {}
+    wizard_data = context.wizard_data()
+    if wizard_data is None:
+        return {}
+    return {"wizard_data": wizard_data}
