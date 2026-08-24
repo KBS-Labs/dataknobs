@@ -97,10 +97,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`WizardFSM` no longer reports a matched subflow transition as "none
   matched".** A subflow transition compiles to a self-loop arc, so a matched
   one leaves the FSM where it started -- indistinguishable, in the DEBUG log,
-  from a condition that failed. The step-outcome log now names the subflow
-  transitions the stage holds and says their push is decided before the step.
-  The message was written twice, once in `step` and once in `step_async`; both
-  now call one `_log_step_outcome`.
+  from a condition that failed. The step-outcome log now decides from the
+  step's own reported transition rather than from what the stage declares: a
+  step that matched nothing still says so -- the ordinary case, since a guard
+  that carries pushes the subflow and a push skips the step entirely -- and a
+  step that stood still on an arc names that arc and the subflow transitions
+  the stage holds, whose push is decided before the step. The message was
+  written twice, once in `step` and once in `step_async`; both now call one
+  `_log_step_outcome`.
 
 - **A declined subflow push says so.** `SubflowManager` logs the guard's
   decision at DEBUG on both branches, naming the conditions that were asked.

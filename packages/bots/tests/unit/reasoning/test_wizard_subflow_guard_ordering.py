@@ -397,6 +397,49 @@ async def test_none_matched_is_not_logged_when_a_subflow_transition_matched(
     )
 
 
+@pytest.mark.parametrize("step_is_async", [False, True], ids=["step", "step_async"])
+@pytest.mark.asyncio
+async def test_a_declined_guard_is_reported_as_nothing_matching(
+    caplog: pytest.LogCaptureFixture,
+    step_is_async: bool,
+) -> None:
+    """The converse: holding a subflow transition is not taking one.
+
+    This is the ordinary case rather than the exotic one. A guard that
+    carries pushes the subflow, and a push skips the FSM step entirely --
+    so a step that runs at all, on a stage that declares a subflow
+    transition, is nearly always a step where the guard declined and
+    nothing matched.
+
+    Deciding the message from what the stage *declares* describes every
+    one of those turns as a self-loop absorbing the turn, which sends a
+    reader looking for a push that was never attempted. The step's own
+    ``transition`` is what tells the two apart.
+    """
+    fsm = _fsm_with_a_subflow_transition()
+    try:
+        with caplog.at_level(logging.DEBUG, logger="dataknobs_bots.reasoning.wizard_fsm"):
+            # No 'name', so has('name') is false and the guard declines.
+            if step_is_async:
+                await fsm.step_async({})
+            else:
+                fsm.step({})
+
+        assert fsm.current_stage == "gather", "the FSM moved; nothing should have matched"
+    finally:
+        fsm.close()
+
+    messages = [record.getMessage() for record in caplog.records]
+    assert any("none matched" in m for m in messages), (
+        f"the guard declined and nothing matched; the FSM did not say so: {messages}"
+    )
+    self_loop_claims = [m for m in messages if "self-loop" in m]
+    assert not self_loop_claims, (
+        "nothing matched, but the FSM described the turn as a subflow "
+        f"self-loop because the stage merely declares one: {self_loop_claims}"
+    )
+
+
 @pytest.mark.asyncio
 async def test_a_declined_push_says_so(caplog: pytest.LogCaptureFixture) -> None:
     """A guard that declines leaves a trace naming itself.

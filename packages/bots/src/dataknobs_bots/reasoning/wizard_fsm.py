@@ -190,6 +190,14 @@ class WizardFSM:
         Warning once per stage and field keeps a broken config from
         filling the log a turn at a time.
 
+        The check is on the container, not its contents: ``tools: [1, 2]``
+        is a list and passes. What it is written to catch is a value of
+        the wrong *shape* -- a string where a list belongs, iterated one
+        character at a time -- which is the failure a YAML author actually
+        produces. An element check would need each accessor to declare its
+        element type, which is a different contract from the one the
+        ``default`` argument carries here.
+
         Args:
             stage: Stage name, or ``None`` for the current stage.
             key: Metadata field to read.
@@ -439,7 +447,7 @@ class WizardFSM:
             )
         return None
 
-    def _log_step_outcome(self, before_stage: str, after_stage: str) -> None:
+    def _log_step_outcome(self, before_stage: str, after_stage: str, transition: str) -> None:
         """Say what the step did, at DEBUG, for both ``step`` variants.
 
         Standing still is not the same as matching nothing, and the case
@@ -451,9 +459,22 @@ class WizardFSM:
         was satisfied and the push is somebody else's job --
         ``SubflowManager.should_push``, which runs before this step.
 
+        The two are told apart by *what the step reports*, not by what the
+        stage declares. A stage holding a subflow transition whose guard
+        **declined** matched nothing, and is the ordinary case rather than
+        the exotic one: a guard that carries pushes the subflow, and a push
+        skips this step entirely, so a step that runs at all is one where
+        no push was performed. Reading the declaration instead would
+        describe every declined turn as a self-loop.
+        ``StepResult.transition`` is ``"none"`` exactly when the engine
+        found no arc whose condition passed (``api/advanced.py``), which
+        also keeps a regular arc back to its own stage off the
+        "none matched" line.
+
         Args:
             before_stage: Stage the step started from.
             after_stage: Stage the step ended on.
+            transition: ``StepResult.transition`` from the step just taken.
         """
         stage_meta = self._stage_metadata.get(before_stage, {})
         transitions = stage_meta.get("transitions", [])
@@ -474,21 +495,22 @@ class WizardFSM:
         if not transitions:
             return
 
-        subflow_transitions = [t for t in transitions if t.get("is_subflow_transition")]
-        if subflow_transitions:
-            logger.debug(
-                "WizardFSM stayed at '%s': %d transitions defined, %d of them "
-                "subflow transitions, whose push is decided before this step "
-                "and whose arc is a self-loop",
-                before_stage,
-                len(transitions),
-                len(subflow_transitions),
-            )
-        else:
+        if transition == "none":
             logger.debug(
                 "WizardFSM no transition from '%s': %d transitions defined, none matched",
                 before_stage,
                 len(transitions),
+            )
+        else:
+            subflow_transitions = [t for t in transitions if t.get("is_subflow_transition")]
+            logger.debug(
+                "WizardFSM stayed at '%s': step reports transition '%s'; %d "
+                "transitions defined, %d of them subflow transitions, whose "
+                "arc is a self-loop and whose push is decided before this step",
+                before_stage,
+                transition,
+                len(transitions),
+                len(subflow_transitions),
             )
 
         for trans in transitions:
@@ -535,7 +557,7 @@ class WizardFSM:
 
         after_stage = self.current_stage
 
-        self._log_step_outcome(before_stage, after_stage)
+        self._log_step_outcome(before_stage, after_stage, result.transition)
 
         return result
 
@@ -574,7 +596,7 @@ class WizardFSM:
 
         after_stage = self.current_stage
 
-        self._log_step_outcome(before_stage, after_stage)
+        self._log_step_outcome(before_stage, after_stage, result.transition)
 
         return result
 
