@@ -462,7 +462,12 @@ class TestWizardConfigBuilderValidation:
 
     @pytest.mark.parametrize(
         "field_name",
-        ["greeting_template", "response_template", "clarification_template", "confirmation_template"],
+        [
+            "greeting_template",
+            "response_template",
+            "clarification_template",
+            "confirmation_template",
+        ],
     )
     def test_python_format_syntax_warns_on_every_template_field(self, field_name: str) -> None:
         """The str.format()-vs-Jinja2 check enumerates fields by name.
@@ -481,9 +486,9 @@ class TestWizardConfigBuilderValidation:
             )
             .validate()
         )
-        assert any(
-            field_name in w and "Python format syntax" in w for w in result.warnings
-        ), result.warnings
+        assert any(field_name in w and "Python format syntax" in w for w in result.warnings), (
+            result.warnings
+        )
 
     def test_max_iterations_without_reasoning_warning(self) -> None:
         result = (

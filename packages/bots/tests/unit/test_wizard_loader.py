@@ -934,9 +934,7 @@ class TestGreetingTemplateValidation:
         with caplog.at_level(logging.WARNING):
             wizard_loader.load_from_dict(config)
 
-        assert not [
-            r.getMessage() for r in caplog.records if "unreachable" in r.getMessage()
-        ]
+        assert not [r.getMessage() for r in caplog.records if "unreachable" in r.getMessage()]
 
     @pytest.mark.parametrize(
         "field_name",
