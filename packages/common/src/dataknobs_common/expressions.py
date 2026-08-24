@@ -46,6 +46,7 @@ from __future__ import annotations
 import ast
 import logging
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
@@ -278,7 +279,7 @@ def safe_eval_validate(
 
 def safe_eval(
     code: str,
-    scope: dict[str, Any] | None = None,
+    scope: Mapping[str, Any] | None = None,
     *,
     coerce_bool: bool = False,
     restrict_builtins: bool = True,
@@ -371,7 +372,7 @@ def safe_eval(
 
 def safe_eval_value(
     code: str,
-    scope: dict[str, Any] | None = None,
+    scope: Mapping[str, Any] | None = None,
     **kwargs: Any,
 ) -> Any:
     """Convenience wrapper returning just the value.

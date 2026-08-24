@@ -3,6 +3,7 @@
 Covers core functionality, security restrictions, and edge cases.
 """
 
+from types import MappingProxyType
 from typing import Any
 
 import pytest
@@ -34,6 +35,23 @@ class TestCoreFunctionality:
     def test_scope_variables(self) -> None:
         result = safe_eval("x + y", scope={"x": 1, "y": 2})
         assert result.value == 3
+
+    def test_scope_accepts_any_mapping(self) -> None:
+        """``scope`` is a ``Mapping``, not a ``dict``.
+
+        The merge into the execution globals is a single ``update()``,
+        which never needed a ``dict`` — so a caller holding a read-only
+        mapping over shared state does not have to copy it.
+
+        Pinned because the guarantee is documented. What it catches is a
+        future change that *mutates* ``scope`` or calls a dict-only method
+        on it: a read-only mapping raises there, where a ``dict`` would
+        silently accept. Merge style is not the hazard — ``dict(**scope)``
+        and ``{**scope}`` both accept any string-keyed mapping.
+        """
+        read_only = MappingProxyType({"x": 41})
+        assert safe_eval("x + 1", read_only).value == 42
+        assert safe_eval_value("x + 1", read_only) == 42
 
     def test_return_prefix_auto(self) -> None:
         result = safe_eval("42")

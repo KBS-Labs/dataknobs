@@ -62,7 +62,7 @@ Evaluate a Python expression string safely.
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `code` | `str` | (required) | Python expression string. `return` is prepended unless the expression already *is* a `return` statement. The test is on the `return` **token**, so an expression starting with a name such as `returned_value` is treated as an expression. |
-| `scope` | `dict[str, Any] \| None` | `None` | Variables available in the expression. Merged on top of `SAFE_BUILTINS` and `YAML_ALIASES`. |
+| `scope` | `Mapping[str, Any] \| None` | `None` | Variables available in the expression. Merged on top of `SAFE_BUILTINS` and `YAML_ALIASES`. Any `Mapping` is accepted, including a read-only `MappingProxyType`. |
 | `coerce_bool` | `bool` | `False` | If True, coerce result to `bool` (for condition evaluation). |
 | `restrict_builtins` | `bool` | `True` | If True, restrict `__builtins__` and validate AST. Set to False only for trusted code. |
 | `default` | `Any` | `None` | Value to return on evaluation failure. |

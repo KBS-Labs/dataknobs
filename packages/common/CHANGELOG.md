@@ -117,6 +117,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a bare `return` are still recognised as statements while `returned_value`,
   `return_code`, `returns` and `returning` are evaluated as expressions.
 
+### Changed
+
+- **`safe_eval` and `safe_eval_value` accept any `Mapping` as `scope`**,
+  widened from `dict[str, Any] | None`. The merge into the execution globals
+  never needed a `dict`, so a caller holding a read-only mapping — a
+  `MappingProxyType` over shared state, say — no longer has to copy it to
+  satisfy the annotation.
+
 ## v3.0.0 - 2026-08-19
 
 ### Added
