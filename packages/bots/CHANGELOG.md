@@ -7,7 +7,65 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Fixed
+
+- **A wizard tool's writes to collected data are no longer discarded.** A
+  `ContextAwareTool` running in a wizard turn reached wizard state through
+  `ToolExecutionContext`, which rebuilt it from the *persisted* conversation
+  metadata. The wizard rewrites that metadata from its own state when the turn
+  is saved, so anything the tool wrote there was overwritten -- while the tool
+  reported success. `WizardReasoning` now publishes its live state on
+  `ConversationState.live_wizard_state` for the duration of the turn, so a
+  tool's writes land in wizard state and survive the save. The channel is
+  cleared at the end of the turn beside `turn_data`.
+
+- **A flow change mid-turn no longer strands a tool on abandoned data.**
+  `WizardState.data` was *rebound* on a subflow push, a subflow pop and a
+  restart, so a flow change between the start of a turn and a tool call left
+  the tool reading the collected data of the run the user had just finished
+  and writing where nothing would read it again -- both indistinguishable
+  from success. `begin_turn` auto-restarts a completed wizard when
+  `allow_post_completion_edits` is off and then continues the turn, which is
+  the shortest path to it. The three sites now call the new
+  `WizardState.replace_data()`, which empties and refills the dict in place.
+
+- **A wizard tool's reads are no longer a turn behind.** The same rebuild made
+  every read as old as the last save, which was hardest to diagnose where a
+  stage declared `tool_result_mapping`: `params:` read live state, so the tool
+  was *called* with this turn's values and *read* the previous turn's. One
+  call, two channels, one turn apart. Both now read the same state.
+
+- **A tool on the first turn of a wizard that does not greet gets real state.**
+  There was no `"wizard"` key in metadata until the first save, so
+  `context.wizard_state` was `None` and the shared accessor handed back a fresh
+  empty dict on every call -- a tool wrote into a throwaway and reported
+  success. Two shipped behaviours were wrong because of it: KB resources added
+  on the first turn vanished, and `AddBankRecordTool` /
+  `UpdateBankRecordTool` stamped `source_stage` / `modified_in_stage` as `""`
+  on the first record of every such conversation, against a comment stating
+  the opposite intent. The bank tools needed no change; they start working
+  because the strategy publishes.
+
+- **The KB tools report missing wizard state instead of writing into nothing.**
+  The five tools in `kb_tools` now reach wizard data through the public
+  `ToolExecutionContext.wizard_data()` and return an error result when it is
+  `None`. The private reference-returning accessor they shared with
+  `config_tools`, and the cross-module private import that reached it, are
+  gone; the read-only accessor `config_tools` uses for its own three tools
+  remains and still hands out a copy.
+
+- **`AddBankRecordTool`'s documented constructor arguments are the real ones.**
+  `TOOLS.md` showed `banks_override=` / `catalog_override=` /
+  `artifact_override=`, which are the internal helper's parameter names. The
+  constructor takes `banks=` / `catalog=` / `artifact=`; the example as
+  published raised `TypeError`.
+
 ### Added
+
+- **`WizardState.replace_data()`** -- replaces a wizard's collected data in
+  place, keeping the dict's identity. `WizardState.data` is handed out by
+  reference, so code holding it across a subflow push, a subflow pop or a
+  restart keeps the dict the wizard is actually using.
 
 - **`greeting_template`: a wizard stage field for an opening line the stage
   says once.** It renders on the turn the stage first speaks — the start stage

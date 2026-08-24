@@ -1916,10 +1916,14 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
                 turn.response_content, turn.context, **mw_kwargs
             )
 
-        # Clean up transient turn_data on the manager to avoid leaking
-        # between turns (the manager is cached across turns).
+        # Clean up transient per-turn channels on the manager to avoid
+        # leaking between turns (the manager is cached across turns).
+        # live_wizard_state holds a reference to the strategy's own state
+        # dict, so leaving it set would let the next turn's tools write
+        # into the previous turn's wizard state.
         if turn.manager and turn.manager.state is not None:
             turn.manager.state.turn_data = {}
+            turn.manager.state.live_wizard_state = None
 
     async def _generate_response(
         self,

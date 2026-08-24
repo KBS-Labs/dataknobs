@@ -4,9 +4,12 @@ Provides reusable LLM-callable tools for managing RAG resources during
 wizard flows. These tools operate on wizard collected data to track
 knowledge sources, add/remove resources, and trigger ingestion.
 
-All tools use ``_get_wizard_data_ref()`` from ``config_tools`` to mutate
-wizard state directly (not a copy), since they need to persist changes
-across tool invocations within a wizard session.
+All tools reach wizard state through
+``ToolExecutionContext.wizard_data()``, which returns the wizard's own dict
+while a reasoning strategy is publishing one -- so a resource added here is
+still there on the next tool call and after the turn is saved. When there
+is no wizard state the accessor returns ``None`` and these tools report an
+error rather than writing into a dict nobody will read.
 
 Tools:
 - CheckKnowledgeSourceTool: Verify a knowledge source directory exists
@@ -41,12 +44,34 @@ from dataknobs_common.paths import safe_join
 from dataknobs_llm.tools.context import ToolExecutionContext
 from dataknobs_llm.tools.context_aware import ContextAwareTool
 
-from .config_tools import _get_wizard_data_ref
 
 logger = logging.getLogger(__name__)
 
 # Default file glob patterns for knowledge sources
 _DEFAULT_GLOB_PATTERNS = ["*.md", "*.txt", "*.pdf", "*.html", "*.json", "*.csv"]
+
+
+def _no_wizard_state_result() -> dict[str, Any]:
+    """The result these tools return when there is no wizard state.
+
+    Every tool in this module records what it did in wizard collected
+    data, so without a wizard there is nowhere for the work to go. Saying
+    so is the whole point: the accessor used to hand back an empty dict,
+    which let a tool write into a throwaway and report success -- a
+    failure indistinguishable, to the model and to the user, from the
+    thing working.
+
+    Returns:
+        An error result in the shape the reasoning strategies surface to
+        the model.
+    """
+    return {
+        "success": False,
+        "error": (
+            "No wizard state is available. This tool records its result in "
+            "wizard collected data and can only run in a wizard conversation."
+        ),
+    }
 
 
 def _resolve_knowledge_dir(
@@ -177,7 +202,9 @@ class CheckKnowledgeSourceTool(ContextAwareTool):
                 self.missing_arguments({"source_path": source_path})
             )
 
-        wizard_data = _get_wizard_data_ref(context)
+        wizard_data = context.wizard_data()
+        if wizard_data is None:
+            return _no_wizard_state_result()
         patterns = file_patterns or _DEFAULT_GLOB_PATTERNS
 
         # Resolve + stat + glob are blocking disk I/O; run them off the loop.
@@ -275,7 +302,9 @@ class ListKBResourcesTool(ContextAwareTool):
         Returns:
             Dict with resource list and source path.
         """
-        wizard_data = _get_wizard_data_ref(context)
+        wizard_data = context.wizard_data()
+        if wizard_data is None:
+            return _no_wizard_state_result()
         resources = wizard_data.get("_kb_resources", [])
         source_path = wizard_data.get("_source_path_resolved")
 
@@ -390,7 +419,9 @@ class AddKBResourceTool(ContextAwareTool):
         if path is None:
             return self.missing_arguments_result(self.missing_arguments({"path": path}))
 
-        wizard_data = _get_wizard_data_ref(context)
+        wizard_data = context.wizard_data()
+        if wizard_data is None:
+            return _no_wizard_state_result()
         resources: list[dict[str, Any]] = wizard_data.setdefault("_kb_resources", [])
 
         # Check for duplicate
@@ -521,7 +552,9 @@ class RemoveKBResourceTool(ContextAwareTool):
         if path is None:
             return self.missing_arguments_result(self.missing_arguments({"path": path}))
 
-        wizard_data = _get_wizard_data_ref(context)
+        wizard_data = context.wizard_data()
+        if wizard_data is None:
+            return _no_wizard_state_result()
         resources: list[dict[str, Any]] = wizard_data.get("_kb_resources", [])
 
         original_count = len(resources)
@@ -626,7 +659,9 @@ class IngestKnowledgeBaseTool(ContextAwareTool):
         Returns:
             Dict with ingestion result.
         """
-        wizard_data = _get_wizard_data_ref(context)
+        wizard_data = context.wizard_data()
+        if wizard_data is None:
+            return _no_wizard_state_result()
         domain_id = wizard_data.get("domain_id", "default")
         resources = wizard_data.get("_kb_resources", [])
         source_path = wizard_data.get("_source_path_resolved")

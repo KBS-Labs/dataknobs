@@ -164,7 +164,17 @@ result_data = _apply_result_mapping(
     wizard_state.data, subflow_context.result_mapping
 )
 parent_data.update(result_data)
+...
+wizard_state.replace_data(parent_data)
 ```
+
+Note the last line: a push and a pop both replace the collected data
+through `WizardState.replace_data()`, which empties and refills the
+existing dict rather than assigning a new one to `wizard_state.data`. The
+dict is handed out by reference -- a wizard turn publishes it so a
+`ContextAwareTool` can read and write live wizard state -- so rebinding it
+mid-turn would leave a tool operating on the flow the turn started in.
+Hold `wizard_state.data` across a flow change and it stays the right dict.
 
 ## SubflowContext
 

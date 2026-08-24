@@ -337,6 +337,35 @@ class WizardState:
         if not self.history:
             self.history = [self.current_stage]
 
+    def replace_data(self, new_data: dict[str, Any]) -> None:
+        """Replace the collected data **in place**, keeping the dict's identity.
+
+        Every flow change that starts a stage with different data -- a
+        subflow push, a subflow pop, a restart -- goes through here rather
+        than assigning to :attr:`data`, because ``data`` is handed out by
+        reference and rebinding it silently strands whoever is holding it.
+
+        The holder that makes this load-bearing is a tool: a reasoning
+        strategy publishes this dict for the duration of a turn so a
+        ``ContextAwareTool`` can read and write live wizard state, and
+        those two things happen at *different points* in the same turn.
+        A rebinding in between leaves the tool reading the answers of the
+        run the user just finished and writing where nothing will read --
+        both of which look like success from inside the tool.
+
+        Callers must pass a dict they own. Each of the three call sites
+        already builds a fresh one, and passing ``state.data`` itself
+        would clear the source before copying it back.
+
+        Args:
+            new_data: The data to hold from here on. Copied into the
+                existing dict, which is emptied first.
+        """
+        if new_data is self.data:
+            return
+        self.data.clear()
+        self.data.update(new_data)
+
     @property
     def is_in_subflow(self) -> bool:
         """Check if currently executing within a subflow.
