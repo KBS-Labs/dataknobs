@@ -75,14 +75,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Such a stage renders the LLM's answer on its opening turn, as before, and
   the clarification from the second turn on.
 
-- **A stage the wizard auto-advances past contributes the text it would have
-  said had the turn stopped on it.** The collector that captures a stage's
-  output on the way past read `response_template` directly, which is the same
-  rule the two response paths use only until a stage has spoken once. So a
+- **A stage the wizard auto-advances past no longer repeats an opening line it
+  has already delivered.** The collector that captures a stage's output on the
+  way past read `response_template` directly, which is the rule the two
+  response paths follow only until a stage has spoken once. So a
   conversation-mode stage being advanced past re-contributed its opening line
   however many turns it had already taken, rather than its
   `clarification_template`. It now selects through the same helper as the
   buffered and streaming paths — the third and last copy of the rule.
+
+  One consequence is worth stating: such a stage with no
+  `clarification_template` now contributes *nothing* on a later pass, where it
+  used to repeat itself. That is not what the turn would have said — the turn
+  would have gone to the LLM — but a collector cannot call one, and the
+  interstitial line is dropped rather than duplicated. The turn is never
+  silent either way: these lines are only a prefix to the landing stage's own
+  response, which is unaffected.
 
 - **The wizard loader no longer prepends `return` to a condition before
   handing it to the expression engine.** The engine has done this since it was

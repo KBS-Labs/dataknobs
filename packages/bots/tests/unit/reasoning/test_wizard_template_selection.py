@@ -195,6 +195,15 @@ async def test_conversation_stage_without_clarification_falls_through_to_llm() -
 # ---------------------------------------------------------------------------
 
 
+def _responder_for(**stage_kwargs: Any) -> tuple[Any, dict[str, Any]]:
+    """A responder and its start stage, built without a bot around them."""
+    from dataknobs_bots.reasoning.wizard import WizardReasoning
+    from dataknobs_bots.reasoning.wizard_loader import WizardConfigLoader
+
+    fsm = WizardConfigLoader().load_from_dict(_conversation_wizard(**stage_kwargs))
+    return WizardReasoning(wizard_fsm=fsm)._response, fsm.current_metadata
+
+
 def test_auto_advance_collects_the_template_the_turn_would_have_rendered() -> None:
     """The collector goes through the same selection rule as the turn.
 
@@ -205,17 +214,12 @@ def test_auto_advance_collects_the_template_the_turn_would_have_rendered() -> No
     advanced past contributed its opening line again however many times
     it had already spoken.
     """
-    from dataknobs_bots.reasoning.wizard import WizardReasoning, WizardState
-    from dataknobs_bots.reasoning.wizard_loader import WizardConfigLoader
+    from dataknobs_bots.reasoning.wizard import WizardState
 
-    fsm = WizardConfigLoader().load_from_dict(
-        _conversation_wizard(
-            response_template=GREETING,
-            clarification_template=CLARIFY,
-        )
+    responder, stage = _responder_for(
+        response_template=GREETING,
+        clarification_template=CLARIFY,
     )
-    responder = WizardReasoning(wizard_fsm=fsm)._response
-    stage = fsm.current_metadata
 
     fresh = WizardState(current_stage="opening", data={})
     assert responder._render_auto_advance_template(stage, fresh) == GREETING
@@ -223,3 +227,29 @@ def test_auto_advance_collects_the_template_the_turn_would_have_rendered() -> No
     spoken = WizardState(current_stage="opening", data={})
     spoken.increment_render_count("opening")
     assert responder._render_auto_advance_template(stage, spoken) == CLARIFY
+
+
+def test_auto_advance_drops_a_spoken_stage_rather_than_repeating_it() -> None:
+    """A stage with nothing left to say contributes nothing, not its opening.
+
+    The same conversation-mode stage without a ``clarification_template``.
+    Had the turn stopped here the stage would have fallen through to LLM
+    mode, which a collector cannot do — so the honest contribution is
+    none.  Before the selection rule was shared, the collector read
+    ``response_template`` directly and re-contributed the opening line on
+    every pass, which is the shape an ``intent_confirm:`` stage takes when
+    ``on_no_match.clarification_template`` is left unset.
+    """
+    from dataknobs_bots.reasoning.wizard import WizardState
+
+    responder, stage = _responder_for(response_template=GREETING)
+
+    fresh = WizardState(current_stage="opening", data={})
+    assert responder._render_auto_advance_template(stage, fresh) == GREETING
+    assert fresh.get_render_count("opening") == 1
+
+    spoken = WizardState(current_stage="opening", data={})
+    spoken.increment_render_count("opening")
+    assert responder._render_auto_advance_template(stage, spoken) is None
+    # Nothing rendered, so nothing counted.
+    assert spoken.get_render_count("opening") == 1

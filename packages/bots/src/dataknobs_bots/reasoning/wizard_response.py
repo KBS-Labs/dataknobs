@@ -204,6 +204,15 @@ class WizardResponder:
         ``clarification_template``, which has no first-render form and is
         therefore reachable *only* once the count has moved.
 
+        Deliberately mode-agnostic, where selection is not: a structured
+        stage setting only a ``clarification_template`` counts its renders
+        even though selection will never pick that template for it.  The
+        surplus count is read by nothing —
+        :meth:`~.wizard_confirmation.ConfirmationEvaluator.evaluate` gates on
+        ``response_template`` before consulting it — and keeping the
+        predicate about "does a template live here" rather than about
+        mode is what lets a template kind be added without revisiting it.
+
         Args:
             stage: Stage metadata dict.
 
@@ -2139,8 +2148,15 @@ class WizardResponder:
 
         Used during auto-advance to capture message stage content before
         the stage is advanced past.  Selection goes through
-        :meth:`_select_active_template`, so a stage contributes the same
-        text here that it would have produced had the turn stopped on it.
+        :meth:`_select_active_template`, so a stage contributes the
+        template the turn would have rendered rather than whichever one it
+        rendered first.
+
+        A stage that has no template left to offer contributes nothing.
+        That is not the same as what the turn would have said — the turn
+        would have fallen through to LLM mode — but a collector cannot
+        call the LLM, and re-offering an opening line the stage has
+        already delivered is the worse of the two answers.
 
         Args:
             stage: Stage metadata dict
