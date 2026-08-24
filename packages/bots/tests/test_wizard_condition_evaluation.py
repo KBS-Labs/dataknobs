@@ -11,6 +11,8 @@ Bug context (2026-02-02):
 """
 
 from dataknobs_bots.reasoning.wizard_loader import WizardConfigLoader
+from typing import Any
+import logging
 import pytest
 
 
@@ -577,3 +579,117 @@ class TestYamlBooleanLiterals:
 
         fsm.step({"is_true": "yes"})
         assert fsm.current_stage == "end"
+
+
+# ---------------------------------------------------------------------------
+# Load-time reporting of conditions the expression engine will refuse
+# ---------------------------------------------------------------------------
+
+LOADER_LOGGER = "dataknobs_bots.reasoning.wizard_loader"
+
+#: A condition ``safe_eval`` refuses statically, before evaluating anything.
+#: Multiline is the realistic case: conditions live in YAML, and both a ``|``
+#: literal block and a ``>`` folded block containing a blank line produce a
+#: newline that survives ``.strip()``.
+UNEVALUABLE_CONDITION = "(data.get('a')\n and data.get('b'))"
+
+#: A condition the engine accepts and that fails at evaluation, on this data.
+#: The distinction this file is about: "not satisfied yet", not "will never
+#: run".
+RUNTIME_FAILING_CONDITION = "data['absent']"
+
+
+def _wizard_with_condition(condition: str) -> dict[str, Any]:
+    """A two-stage wizard whose only transition carries ``condition``.
+
+    Every stage is terminal or has a transition, and the start stage
+    carries a ``response_template``, so none of the loader's *other*
+    config warnings can fire. That lets the assertions below be made
+    against every WARNING the loader emits rather than against a
+    hand-picked subset — which is what makes "no warning" mean it.
+    """
+    return {
+        "name": "test-wizard",
+        "stages": [
+            {
+                "name": "start",
+                "is_start": True,
+                "prompt": "Start",
+                "response_template": "Start",
+                "transitions": [{"target": "end", "condition": condition}],
+            },
+            {"name": "end", "is_end": True, "prompt": "Done"},
+        ],
+    }
+
+
+RESPONDER_LOGGER = "dataknobs_bots.reasoning.wizard_response"
+
+
+def _warnings(
+    caplog: pytest.LogCaptureFixture,
+    logger: str = LOADER_LOGGER,
+) -> list[str]:
+    """Every WARNING (or worse) ``logger`` emitted, as rendered text.
+
+    Scoped to one logger on purpose. ``caplog`` collects everything that
+    propagates, and a whole-bot build emits warnings from several modules;
+    an unscoped "nothing was warned" assertion would then be reporting on
+    code the test is not about.
+    """
+    return [
+        record.getMessage()
+        for record in caplog.records
+        if record.levelno >= logging.WARNING and record.name == logger
+    ]
+
+
+class TestConditionReturnPrefix:
+    """The engine owns the ``return`` wrap; the loader no longer copies it.
+
+    These pass both before and after the loader's copy is deleted — which
+    is the point. They are what makes the deletion checkable rather than
+    merely asserted.
+    """
+
+    def test_explicit_return_prefix_is_accepted(
+        self,
+        wizard_loader: WizardConfigLoader,
+    ):
+        """``return <expr>`` is a supported spelling for a condition.
+
+        This is the case the loader's own prefix wrap existed to handle,
+        and the case that breaks if the engine's wrap is ever re-derived
+        with a ``mode="eval"`` parse instead of reused.
+        """
+        fsm = wizard_loader.load_from_dict(_wizard_with_condition("return data.get('ready')"))
+
+        fsm.step({"ready": True})
+        assert fsm.current_stage == "end"
+
+    def test_name_beginning_with_return_is_reported_not_silently_false(
+        self,
+        wizard_loader: WizardConfigLoader,
+        caplog: pytest.LogCaptureFixture,
+    ):
+        """An identifier merely *starting* with ``return`` is an expression.
+
+        ``return_code`` is not in the condition scope, so this is a
+        NameError — a runtime failure, reported as one. What matters is
+        that it is reported at all: while the engine's prefix rule was a
+        substring test this exact string was left unwrapped, so the
+        generated body was a bare expression statement, the function
+        returned None, and ``coerce_bool=True`` turned that into False
+        with ``success=True`` and nothing logged anywhere.
+        """
+        fsm = wizard_loader.load_from_dict(_wizard_with_condition("return_code == 0"))
+
+        caplog.clear()
+        with caplog.at_level(logging.DEBUG, logger=LOADER_LOGGER):
+            fsm.step({"return_code": 0})
+
+        assert fsm.current_stage == "start"
+        assert any(
+            "return_code" in r.getMessage() and "not defined" in r.getMessage()
+            for r in caplog.records
+        ), [r.getMessage() for r in caplog.records]

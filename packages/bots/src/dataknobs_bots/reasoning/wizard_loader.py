@@ -879,10 +879,6 @@ class WizardConfigLoader:
                     actual_target = target
                 func_name = f"condition_{stage['name']}_{actual_target}_{idx}"
 
-                # Wrap in return statement if not already
-                if not condition_code.strip().startswith("return"):
-                    condition_code = f"return {condition_code}"
-
                 # Create the function
                 try:
                     # Create a function that evaluates the condition

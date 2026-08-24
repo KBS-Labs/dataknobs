@@ -21,6 +21,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the result to `Any`, which reports nothing because it checks nothing. See
   the `dataknobs-llm` entries for the typing that made this possible.
 
+### Fixed
+
+- **The wizard loader no longer prepends `return` to a condition before
+  handing it to the expression engine.** The engine has done this since it was
+  introduced; the loader's copy predated the engine and was never removed when
+  the loader was pointed at it, so the rule was written in two places and both
+  copies carried the same defect — a substring test where a token test was
+  meant, which left `return_code == 0` unwrapped and silently `False`. The
+  engine's half is fixed in `dataknobs-common`; this deletes the copy, so the
+  rule is written once.
+
+  A visible side effect: the expression logged alongside a failed condition is
+  now the one the author wrote, rather than the loader's rewrite of it.
+
 ### Documented
 
 - **The multi-tenancy guides now say that the API they document is
