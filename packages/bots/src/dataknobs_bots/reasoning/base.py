@@ -396,6 +396,17 @@ class ReasoningStrategy(ABC):
     ``greet()`` entirely; an override is expected to honour the field
     rather than discard it, which is what makes it universal.
 
+    That expectation has one legitimate exception, and it is shipped: a
+    ``greet()`` written to raise (``ErrorRaisingStrategy``) discards the
+    field by design.  What survives the exception, and holds for every
+    strategy without one, is that the field must still be **accepted at
+    construction** — a strategy whose config class does not declare it
+    drops it silently, and a directly-subclassed strategy that does not
+    accept the constructor keyword raises ``TypeError`` from the
+    ``from_config`` inherited here.  Both halves are driven over the
+    registry by ``test_reasoning_greeting_contract.py``, so this paragraph
+    and that test cite each other.
+
     Strategies that need DynaBot to interleave tool execution within
     the generation lifecycle can implement
     :class:`PhasedReasoningProtocol`, which splits ``generate()`` into
