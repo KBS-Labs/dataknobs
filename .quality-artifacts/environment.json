@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-08-24T16:53:52Z",
+  "timestamp": "2026-08-24T17:31:04Z",
   "python_version": "Python 3.12.12",
   "uv_version": "uv 0.12.5 (Homebrew 2026-08-14 aarch64-apple-darwin)",
   "os": "Darwin",
   "os_version": "24.6.0",
-  "git_branch": "sbk/reasoning-greeting-contract-guard",
-  "git_commit": "cbd27380c932e3fa86e806b12a227de66870692b",
+  "git_branch": "sbk/reasoning-config-shared-base",
+  "git_commit": "2b1847801b52841a8d0f8fc3d7320a0fa7a2e5c3",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }
