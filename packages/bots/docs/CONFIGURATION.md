@@ -2815,6 +2815,8 @@ The `context_template` supports two syntaxes:
 If no `context_template` is specified, the wizard uses a default format that includes
 stage info, collected data, and navigation hints.
 
+<a id="bot-initiated-greeting"></a>
+
 **Bot-Initiated Greeting:**
 
 Wizard bots can send an initial greeting before the user speaks. This is useful when the
@@ -2829,17 +2831,30 @@ if greeting:
 # User's first message now answers the wizard's question
 ```
 
-The greeting is generated from the wizard's **start stage**:
+The greeting is generated from the wizard's **start stage**, taking the first
+of these that applies:
 
-- If the start stage has a `response_template`, that template is rendered as the greeting
-- If no template is present, the start stage's `prompt` is sent to the LLM to generate one
+1. The start stage's `greeting_template`, rendered once and not repeated.
+2. The start stage's `response_template`. What happens *after* the greeting
+   then depends on the stage's mode: a `mode: conversation` stage renders it
+   only on that opening turn, but a structured stage renders it again on every
+   turn — the template is the stage's response, not its opening line, so the
+   bot repeats it for as long as the wizard stays on that stage.
+3. The start stage's `prompt`, sent to the LLM to generate one.
+
+> The strategy-level `greeting_template` under `reasoning:` is not consulted by
+> wizard bots. See [FSM-driven greetings](#fsm-driven-greetings) below.
+
+`greeting_template` is the field to reach for on a stage that also collects data:
+it opens the stage and steps aside, leaving extraction, confirmation and
+transitions to behave exactly as they would without it.
 
 ```yaml
 stages:
   - name: welcome
     is_start: true
     prompt: "Ask the user for their name"
-    response_template: "Hello! Welcome to the setup wizard. What is your name?"
+    greeting_template: "Hello! Welcome to the setup wizard. What is your name?"
     schema:
       type: object
       properties:
@@ -2850,6 +2865,14 @@ stages:
         condition: "data.get('name')"
 ```
 
+A `greeting_template` is not restricted to the start stage. Any stage may set
+one, and it renders on the turn that stage first speaks — including a stage
+entered mid-flow, or the first stage of a subflow. On a `mode: conversation`
+stage it takes the opening that a `response_template` would otherwise have
+had, which leaves that `response_template` unreachable; the loader reports
+that pair at load time, and `clarification_template` is what covers the later
+turns there.
+
 **Greeting behavior:**
 
 | Aspect | Behavior |
@@ -2857,7 +2880,8 @@ stages:
 | Supported strategies | Wizard only. Non-wizard bots return `None`. |
 | Conversation history | Greeting is added as an assistant message. No user message is created. |
 | Wizard state | Initialized at the start stage, ready for the user's first input. |
-| Render count | If using `response_template`, the render count is incremented to prevent duplicate rendering on the user's first turn. |
+| Greeting template | A stage's `greeting_template` renders once. Its own counter is kept separately from the render count, so greeting a stage does not consume the first render its confirmation is waiting for. |
+| Render count | Incremented when a `response_template` or `clarification_template` renders — not when a greeting does. On a `mode: conversation` stage this is what makes the template render only on the opening turn. On a structured stage the template is the stage's response and re-renders every turn regardless; use `greeting_template` for text that should be said once. |
 | Middleware | Both `before_message` and `after_message` hooks are called. |
 | Memory | If memory is configured, the greeting is stored in conversation history. |
 
@@ -2976,7 +3000,9 @@ When `mode: conversation` is set on a stage:
 2. **Response is generated via LLM** -- The stage prompt becomes part of the system prompt
    context, and `manager.complete()` generates a response directly.  If the stage also
    has a `response_template`, it is rendered once as the initial greeting (first turn
-   only); subsequent turns use LLM mode for natural conversation.
+   only); subsequent turns use LLM mode for natural conversation, or render the
+   stage's `clarification_template` when one is set.  A `greeting_template` takes
+   that opening turn instead when the stage sets one.
 3. **No clarification loop** -- Clarification attempts are never incremented. The user
    isn't failing to provide data; they're having a conversation.
 4. **Transitions evaluate normally** -- Transition conditions are checked each turn. Use
@@ -3286,18 +3312,31 @@ result = await bot.greet(
 
 When no `greeting_template` is configured, `greet()` returns `None`.
 
+<a id="fsm-driven-greetings"></a>
+
 **FSM-driven greetings** (Wizard strategy):
 
-Wizard bots generate greetings from the start stage's `response_template` or LLM
-prompt. The `greeting_template` config option is not used — wizard greetings are
-controlled entirely by the FSM definition. See the wizard `response_template`
-documentation for details.
+Wizard bots take their greeting from the FSM definition rather than from this
+strategy-level option, which they do not read. Set `greeting_template` on the
+start stage instead — the same field name, at stage scope, meaning the same
+thing:
 
 ```yaml
 reasoning:
   strategy: wizard
   wizard_config: path/to/wizard.yaml  # Start stage defines the greeting
 ```
+
+```yaml
+# path/to/wizard.yaml
+stages:
+  - name: welcome
+    is_start: true
+    greeting_template: "Hello! Welcome to the setup wizard."
+```
+
+See [Bot-Initiated Greeting](#bot-initiated-greeting) for the full order the
+wizard resolves a greeting in.
 
 **initial_context** seeds data into the strategy's state before greeting
 generation. For wizard strategies, values are merged into `wizard_state.data` and

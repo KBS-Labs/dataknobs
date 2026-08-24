@@ -213,6 +213,7 @@ builder.add_conversation_stage(
 | `is_start` | `bool` | Whether this is the start stage |
 | `suggestions` | `list[str] \| None` | Quick-reply suggestions |
 | `intent_detection` | `dict \| None` | Intent detection config (method + intents) |
+| `greeting_template` | `str \| None` | Opening line, rendered once before the stage starts conversing. Takes the opening turn from `response_template`, which is then unreachable — use `clarification_template` for later turns |
 | `**kwargs` | `Any` | Additional `StageConfig` fields |
 
 #### `add_structured_stage()`
@@ -248,7 +249,8 @@ builder.add_structured_stage(
 | `can_skip` | `bool` | Whether the user can skip |
 | `skip_default` | `Any` | Default value when skipped |
 | `suggestions` | `list[str] \| None` | Quick-reply suggestions |
-| `response_template` | `str \| None` | Template-driven response (bypasses LLM) |
+| `greeting_template` | `str \| None` | Opening line, rendered once when the stage first speaks and not repeated |
+| `response_template` | `str \| None` | Template-driven response (bypasses LLM), re-rendered every turn on a structured stage |
 | `help_text` | `str \| None` | Help message |
 | `reasoning` | `str \| None` | Strategy name: `"single"`, `"react"`, `"grounded"`, or any registered strategy |
 | `reasoning_config` | `dict \| None` | Strategy-specific config (forwarded to `from_config()`) |
@@ -503,7 +505,9 @@ All fields available on `StageConfig`:
 | `reasoning_config` | `dict[str, Any] \| None` | `None` | Strategy-specific config (forwarded to `from_config()`) |
 | `max_iterations` | `int \| None` | `None` | Max ReAct iterations |
 | `extraction_model` | `str \| None` | `None` | Model for extraction |
+| `greeting_template` | `str \| None` | `None` | Opening line, rendered once when the stage first speaks |
 | `response_template` | `str \| None` | `None` | Template-driven response |
+| `clarification_template` | `str \| None` | `None` | Rendered on a `mode: conversation` stage's later turns in place of the LLM |
 | `confirmation_template` | `str \| None` | `None` | Jinja2 template for confirmation. Overrides auto-generated confirmation |
 | `llm_assist` | `bool` | `False` | Enable LLM-assisted responses |
 | `llm_assist_prompt` | `str \| None` | `None` | Custom LLM assist prompt |

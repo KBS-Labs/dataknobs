@@ -113,7 +113,9 @@ class WizardConfigBuilder:
         is_start: bool = False,
         is_end: bool = False,
         prompt: str = "",
+        greeting_template: str | None = None,
         response_template: str | None = None,
+        clarification_template: str | None = None,
         confirmation_template: str | None = None,
         mode: str | None = None,
         extraction_scope: str | None = None,
@@ -144,8 +146,13 @@ class WizardConfigBuilder:
             is_start: Whether this is the start stage.
             is_end: Whether this is an end stage.
             prompt: Stage prompt text.
+            greeting_template: Jinja2 template rendered once, as this
+                stage's opening line, and not repeated afterwards.
             response_template: Jinja2 template rendered after extraction
                 to confirm captured data.
+            clarification_template: Jinja2 template rendered on a
+                conversation-mode stage's later turns, in place of
+                handing them to the LLM.
             confirmation_template: Optional Jinja2 template rendered
                 during confirmation instead of the auto-generated
                 summary.  Requires ``response_template`` to also be
@@ -207,8 +214,12 @@ class WizardConfigBuilder:
             stage["is_start"] = True
         if is_end:
             stage["is_end"] = True
+        if greeting_template is not None:
+            stage["greeting_template"] = greeting_template
         if response_template is not None:
             stage["response_template"] = response_template
+        if clarification_template is not None:
+            stage["clarification_template"] = clarification_template
         if confirmation_template is not None:
             stage["confirmation_template"] = confirmation_template
         if mode is not None:
@@ -1370,7 +1381,7 @@ class CaptureReplay:
         """
         provider = EchoProvider({"provider": "echo", "model": "capture-replay"})
         if self._main_responses:
-            provider.set_responses(self._main_responses)
+            provider.set_responses(list(self._main_responses))
         return provider
 
     def extraction_provider(self) -> EchoProvider:
@@ -1381,7 +1392,7 @@ class CaptureReplay:
         """
         provider = EchoProvider({"provider": "echo", "model": "capture-replay"})
         if self._extraction_responses:
-            provider.set_responses(self._extraction_responses)
+            provider.set_responses(list(self._extraction_responses))
         return provider
 
     def inject_into_bot(self, bot: Any) -> None:

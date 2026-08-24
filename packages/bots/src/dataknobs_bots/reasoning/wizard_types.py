@@ -377,7 +377,33 @@ class WizardState:
 
     def get_render_count(self, stage_name: str) -> int:
         """Get the current render count for a stage."""
-        return self.data.get("_stage_render_counts", {}).get(stage_name, 0)
+        counts: dict[str, int] = self.data.get("_stage_render_counts", {})
+        return counts.get(stage_name, 0)
+
+    def increment_greeting_count(self, stage_name: str) -> int:
+        """Increment and return the greeting-render count for a stage.
+
+        Kept apart from the render count because the two answer
+        different questions.  The render count is also read as "has this
+        stage rendered its ``response_template`` yet?" — the gate for
+        ``confirm_first_render`` — so counting a greeting there would
+        silently switch off a stage's confirmation because an unrelated
+        field was set.
+
+        It is also incremented regardless of the caller's
+        ``track_render``, which exists to keep a *question* unanswered
+        until the user replies.  Whether a greeting has already been
+        said is not a question, and suppressing the fact would show the
+        greeting twice.
+        """
+        counts: dict[str, int] = self.data.setdefault("_stage_greeting_counts", {})
+        counts[stage_name] = counts.get(stage_name, 0) + 1
+        return counts[stage_name]
+
+    def get_greeting_count(self, stage_name: str) -> int:
+        """Get the number of times a stage has rendered its greeting."""
+        counts: dict[str, int] = self.data.get("_stage_greeting_counts", {})
+        return counts.get(stage_name, 0)
 
     def save_stage_snapshot(self, stage_name: str, schema_props: set[str]) -> None:
         """Save current schema property values for confirm_on_new_data comparison."""
@@ -388,7 +414,8 @@ class WizardState:
 
     def get_stage_snapshot(self, stage_name: str) -> dict[str, Any]:
         """Get saved schema snapshot for a stage."""
-        return self.data.get("_stage_rendered_snapshot", {}).get(stage_name, {})
+        snapshots: dict[str, dict[str, Any]] = self.data.get("_stage_rendered_snapshot", {})
+        return snapshots.get(stage_name, {})
 
     def set_stage_snapshot(
         self,
@@ -811,7 +838,8 @@ class StageSchema:
     @property
     def required_fields(self) -> list[str]:
         """Required field names (empty list if none or no schema)."""
-        return self._raw.get("required", [])
+        required: list[str] = self._raw.get("required", [])
+        return required
 
     @property
     def has_required_fields(self) -> bool:
@@ -821,7 +849,8 @@ class StageSchema:
     @property
     def properties(self) -> dict[str, Any]:
         """Schema properties dict (empty if none or no schema)."""
-        return self._raw.get("properties", {})
+        properties: dict[str, Any] = self._raw.get("properties", {})
+        return properties
 
     @property
     def property_names(self) -> set[str]:
@@ -830,7 +859,8 @@ class StageSchema:
 
     def get_property(self, name: str) -> dict[str, Any]:
         """Get a single property definition (empty dict if not found)."""
-        return self.properties.get(name, {})
+        definition: dict[str, Any] = self.properties.get(name, {})
+        return definition
 
     def field_type(self, name: str) -> str | None:
         """Get the declared type of a field (None if not found)."""
@@ -884,12 +914,13 @@ class NavigationCommandConfig(StructuredConfig):
         """Coerce ``keywords`` to a tuple (raw config arrives as a list).
 
         The ``from_dict`` path already coerces ``tuple[str, ...]`` fields via
-        the base ``_coerce_field``; this guard covers the direct-construction
-        path (``NavigationCommandConfig(keywords=[...])``).  Running on the
-        dict path too is a harmless no-op (the value is already a tuple).
+        the base ``_coerce_field``; this covers the direct-construction path
+        (``NavigationCommandConfig(keywords=[...])``).  Coercing
+        unconditionally is a no-op on the dict path — ``tuple()`` of a tuple
+        is that same tuple — and matches how every sibling config in the
+        package normalises its sequence fields.
         """
-        if not isinstance(self.keywords, tuple):
-            object.__setattr__(self, "keywords", tuple(self.keywords))
+        object.__setattr__(self, "keywords", tuple(self.keywords))
 
 
 @dataclass(frozen=True)
