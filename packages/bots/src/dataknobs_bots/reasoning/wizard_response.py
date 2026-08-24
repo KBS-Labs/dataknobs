@@ -190,6 +190,67 @@ class WizardResponder:
         )
 
     # =====================================================================
+    # Template selection — shared by every render path
+    # =====================================================================
+
+    @staticmethod
+    def _stage_tracks_renders(stage: dict[str, Any]) -> bool:
+        """Whether this stage's renders are counted.
+
+        The count answers "has this stage produced output before?", which
+        is the question :meth:`_select_active_template` asks on every
+        turn.  Any stage that can render a template needs that answer —
+        including one whose only template is a
+        ``clarification_template``, which has no first-render form and is
+        therefore reachable *only* once the count has moved.
+
+        Args:
+            stage: Stage metadata dict.
+
+        Returns:
+            ``True`` when the stage configures a template whose selection
+            depends on the render count.
+        """
+        return bool(stage.get("response_template") or stage.get("clarification_template"))
+
+    @staticmethod
+    def _select_active_template(stage: dict[str, Any], state: WizardState) -> str | None:
+        """Pick the template this stage renders now, or ``None`` for LLM mode.
+
+        Single source of the selection rule for all three render paths —
+        buffered, streaming, and the auto-advance collector — so a new
+        template kind is added in one place instead of three.
+
+        Structured stages (the default) render ``response_template`` on
+        every turn: the template *is* the response, and a review summary
+        is expected to re-render as the data behind it changes.
+
+        Conversation-mode stages render ``response_template`` once, as an
+        opening line, then hand the turn to the LLM so the stage can
+        actually converse.  A ``clarification_template`` takes those later
+        turns instead when one is set, letting the stage nudge differently
+        when the user has not engaged.
+
+        Args:
+            stage: Stage metadata dict.
+            state: Current wizard state, read for the stage's render count.
+
+        Returns:
+            The template string to render, or ``None`` when this turn
+            belongs to the LLM.
+        """
+        template: str | None
+        if stage.get("mode") == "conversation":
+            stage_name = stage.get("name", "unknown")
+            if state.get_render_count(stage_name) == 0:
+                template = stage.get("response_template")
+            else:
+                template = stage.get("clarification_template")
+        else:
+            template = stage.get("response_template")
+        return template
+
+    # =====================================================================
     # Public API — called by wizard.py orchestrator
     # =====================================================================
 
@@ -204,25 +265,18 @@ class WizardResponder:
     ) -> StageResponseResult:
         """Generate response appropriate for current stage.
 
-        Supports three response paths:
+        Two response paths, chosen by :meth:`_select_active_template`,
+        which owns the rule for this method, its streaming counterpart
+        and the auto-advance collector alike:
 
-        1. **Template mode** (structured stages with ``response_template``):
-           Renders the template with Jinja2 using wizard state data,
-           bypassing the LLM entirely.  Template is rendered on every
-           turn — the template IS the response (e.g. review summaries).
+        1. **Template mode** — the selected template is rendered with
+           Jinja2 from wizard state data, bypassing the LLM entirely.
            If the stage also has ``llm_assist: true`` and the user's
            last message is a question, the LLM is invoked with a
            scoped assist prompt.
 
-        2. **Conversation greeting** (``mode: conversation`` with
-           ``response_template``): The template is rendered only on
-           the first turn (render count == 0) as a greeting.
-           Subsequent turns fall through to LLM mode so the bot
-           can actually converse.
-
-        3. **LLM mode** (default, or conversation stages after first
-           render): Calls the LLM with stage context injected into
-           the system prompt.
+        2. **LLM mode** — no template applies this turn, so the LLM is
+           called with stage context injected into the system prompt.
 
         Args:
             manager: ConversationManager instance
@@ -242,28 +296,10 @@ class WizardResponder:
             :class:`StageResponseResult` with response and lifecycle signals.
         """
         stage_name = stage.get("name", "unknown")
-        response_template = stage.get("response_template")
-        clarification_template = stage.get("clarification_template")
         wizard_snapshot = {"wizard": self._build_wizard_metadata(state)}
 
         # ── Template mode ────────────────────────────────────────
-        is_conversation_mode = stage.get("mode") == "conversation"
-        is_first_render = state.get_render_count(stage_name) == 0
-
-        # Conversation-mode stages render `response_template` on first
-        # render only. On subsequent renders, use `clarification_template`
-        # when set (lets the stage nudge differently when the user hasn't
-        # engaged — e.g. intent_confirm's "Was that a yes or no?"
-        # reprompt). Stages without a clarification_template fall through
-        # to LLM mode after the first render (existing behaviour).
-        active_template: str | None = None
-        if is_conversation_mode:
-            if is_first_render:
-                active_template = response_template
-            elif clarification_template:
-                active_template = clarification_template
-        else:
-            active_template = response_template
+        active_template = self._select_active_template(stage, state)
 
         if active_template:
             content, llm_response = await self._resolve_template_content(
@@ -280,7 +316,7 @@ class WizardResponder:
                 else (self.create_template_response(content))
             )
             self.add_wizard_metadata(response, state, stage)
-            if track_render and response_template:
+            if track_render and self._stage_tracks_renders(stage):
                 state.increment_render_count(stage_name)
             return StageResponseResult(response=response)
 
@@ -344,10 +380,11 @@ class WizardResponder:
         # Add wizard metadata to response
         self.add_wizard_metadata(response, state, stage)
 
-        # Only fires for conversation-mode stages where response_template
-        # is truthy but use_template was False (past first render).  For
-        # pure LLM stages response_template is falsy so this is a no-op.
-        if track_render and response_template:
+        # Only fires for stages that configure a template but did not
+        # render one this turn (a conversation stage past its first
+        # render).  For pure LLM stages the predicate is False, so this
+        # is a no-op.
+        if track_render and self._stage_tracks_renders(stage):
             state.increment_render_count(stage_name)
 
         return StageResponseResult(
@@ -1285,7 +1322,7 @@ class WizardResponder:
         llm: Any,
         stage: dict[str, Any],
         state: WizardState,
-        response_template: str,
+        template: str,
         wizard_snapshot: dict[str, Any],
     ) -> tuple[str, Any | None]:
         """Resolve template mode content for a stage.
@@ -1300,7 +1337,9 @@ class WizardResponder:
             llm: LLM provider.
             stage: Current stage metadata.
             state: Current wizard state.
-            response_template: The template string to render.
+            template: The template string to render.  Any of the stage's
+                templates may arrive here — see
+                :meth:`_select_active_template`.
             wizard_snapshot: Wizard metadata dict for persistence.
 
         Returns:
@@ -1315,7 +1354,7 @@ class WizardResponder:
 
         extra_context = await self._generate_context_variables(stage, state, llm)
         rendered = self._render_response_template(
-            response_template, stage, state, extra_context=extra_context
+            template, stage, state, extra_context=extra_context
         )
 
         user_message = self._get_last_user_message(manager)
@@ -1509,8 +1548,15 @@ class WizardResponder:
             state: Current wizard state
 
         Returns:
-            Rendered context string
+            Rendered context string, or ``""`` when no custom template is
+            configured.  :meth:`_build_context` routes to
+            :meth:`_build_default_context` in that case and never calls
+            this method, so the empty return is for direct callers.
         """
+        template = self._context_template
+        if not template:
+            return ""
+
         extra_context = {
             "can_skip": self._fsm.can_skip() if self._fsm else False,
             "can_go_back": (self._fsm.can_go_back() if self._fsm else True)
@@ -1518,7 +1564,7 @@ class WizardResponder:
         }
 
         return self._renderer.render(
-            self._context_template,
+            template,
             stage,
             state,
             extra_context=extra_context,
@@ -1904,8 +1950,9 @@ class WizardResponder:
     ) -> AsyncIterator[LLMStreamResponse]:
         """Stream response appropriate for current stage.
 
-        Streaming counterpart of :meth:`generate_stage_response`.  Three
-        response paths:
+        Streaming counterpart of :meth:`generate_stage_response`, and
+        selects its template through the same
+        :meth:`_select_active_template`.  Three response paths:
 
         1. **Template mode** — renders template, yields single chunk.
         2. **Strategy mode** — delegates to
@@ -1939,20 +1986,18 @@ class WizardResponder:
             :class:`LLMStreamResponse` chunks.
         """
         stage_name = stage.get("name", "unknown")
-        response_template = stage.get("response_template")
         wizard_snapshot = {"wizard": self._build_wizard_metadata(state)}
 
         # ── Template mode ────────────────────────────────────────
-        is_conversation_mode = stage.get("mode") == "conversation"
-        is_first_render = state.get_render_count(stage_name) == 0
+        active_template = self._select_active_template(stage, state)
 
-        if response_template and (not is_conversation_mode or is_first_render):
+        if active_template:
             content, llm_response = await self._resolve_template_content(
                 manager,
                 llm,
                 stage,
                 state,
-                response_template,
+                active_template,
                 wizard_snapshot,
             )
             # Propagate LLM metadata (usage, model) when llm_assist fired
@@ -1970,7 +2015,7 @@ class WizardResponder:
                 if model:
                     chunk_kwargs["model"] = model
             yield LLMStreamResponse(**chunk_kwargs)
-            if track_render and response_template:
+            if track_render and self._stage_tracks_renders(stage):
                 state.increment_render_count(stage_name)
             return
 
@@ -2014,10 +2059,11 @@ class WizardResponder:
         # fully consumed.  If the caller abandons via aclose(),
         # GeneratorExit is thrown at the yield point and this code
         # is skipped.
-        # Only fires for conversation-mode stages where response_template
-        # is truthy but use_template was False (past first render).  For
-        # pure LLM stages response_template is falsy so this is a no-op.
-        if track_render and response_template:
+        # Only fires for stages that configure a template but did not
+        # render one this turn (a conversation stage past its first
+        # render).  For pure LLM stages the predicate is False, so this
+        # is a no-op.
+        if track_render and self._stage_tracks_renders(stage):
             state.increment_render_count(stage_name)
 
     async def _stream_strategy_stage_response(
@@ -2089,20 +2135,21 @@ class WizardResponder:
     def _render_auto_advance_template(
         self, stage: dict[str, Any], state: WizardState
     ) -> str | None:
-        """Render a stage's response_template for auto-advance collection.
+        """Render a stage's active template for auto-advance collection.
 
         Used during auto-advance to capture message stage content before
-        the stage is advanced past. Only renders if the stage has a
-        response_template.
+        the stage is advanced past.  Selection goes through
+        :meth:`_select_active_template`, so a stage contributes the same
+        text here that it would have produced had the turn stopped on it.
 
         Args:
             stage: Stage metadata dict
             state: Current wizard state
 
         Returns:
-            Rendered template string, or None if the stage has no template
+            Rendered template string, or None if no template applies
         """
-        template = stage.get("response_template")
+        template = self._select_active_template(stage, state)
         if not template:
             return None
 

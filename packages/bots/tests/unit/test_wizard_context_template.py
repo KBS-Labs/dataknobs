@@ -51,6 +51,23 @@ class TestRenderCustomContext:
         assert "Stage: welcome" in result
         assert "Goal: Tell me about your bot" in result
 
+    def test_render_custom_context_without_a_template_returns_empty(
+        self, simple_fsm: WizardFSM
+    ) -> None:
+        """No custom template configured: an empty string, not ``None``.
+
+        ``_build_context`` routes to the default builder when nothing is
+        configured, so this method is not reached that way.  A direct
+        caller used to get ``None`` back from a method annotated ``-> str``
+        — the renderer returns a falsy template unchanged.
+        """
+        reasoning = WizardReasoning(wizard_fsm=simple_fsm)
+
+        stage = simple_fsm.current_metadata
+        state = WizardState(current_stage="welcome", data={})
+
+        assert reasoning._render_custom_context(stage, state) == ""
+
     def test_render_custom_context_collected_data(self, simple_fsm: WizardFSM) -> None:
         """Custom template renders collected data with Jinja2 loop."""
         reasoning = WizardReasoning(

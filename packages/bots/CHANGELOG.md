@@ -58,6 +58,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A conversation-mode stage renders its `clarification_template` when the
+  turn is streamed, not only when it is buffered.** The two response paths
+  each carried their own copy of the template-selection rule, and only the
+  buffered copy was updated when `clarification_template` was introduced, so
+  the same stage config nudged on `chat()` and called the LLM on
+  `stream_chat()`. Both paths now go through one selection helper, so a
+  template kind is added in one place rather than two.
+
+- **A `clarification_template` set without a `response_template` renders.**
+  The render count only advanced for stages that configured a
+  `response_template`, so a stage with only a clarification template was
+  permanently on its "first" render and the clarification branch was
+  unreachable on every turn: the field loaded, validated, and did nothing.
+  The count now advances for any stage whose template choice depends on it.
+  Such a stage renders the LLM's answer on its opening turn, as before, and
+  the clarification from the second turn on.
+
+- **A stage the wizard auto-advances past contributes the text it would have
+  said had the turn stopped on it.** The collector that captures a stage's
+  output on the way past read `response_template` directly, which is the same
+  rule the two response paths use only until a stage has spoken once. So a
+  conversation-mode stage being advanced past re-contributed its opening line
+  however many turns it had already taken, rather than its
+  `clarification_template`. It now selects through the same helper as the
+  buffered and streaming paths — the third and last copy of the rule.
+
 - **The wizard loader no longer prepends `return` to a condition before
   handing it to the expression engine.** The engine has done this since it was
   introduced; the loader's copy predated the engine and was never removed when
