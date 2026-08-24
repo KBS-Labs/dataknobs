@@ -752,6 +752,18 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
         self._wizard_fsm = wizard_fsm
         self._wizard_fsm.set_transform_context_factory(self._build_transform_context)
 
+    def _setup(self) -> None:
+        """Bind the greeting template from the typed config.
+
+        Runs from the mixin's cooperative init, after
+        ``ReasoningStrategy.__init__`` has defaulted the attribute to
+        ``None`` — the same hook and the same one line the four sibling
+        strategies use, so the universal field arrives here the way it
+        arrives everywhere else.  What the wizard does with it afterwards is
+        its own (see :meth:`greet`).
+        """
+        self._greeting_template = self.config.greeting_template
+
     # -----------------------------------------------------------------
     # Per-conversation bank-state resolution
     # -----------------------------------------------------------------
@@ -1669,8 +1681,8 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
         # Close every resident conversation's banks + catalog. Each slot's
         # teardown is error-isolated (per :meth:`_close_conversation_slot`), so
         # one conversation's failing close does not leak another's dbs.
-        for key, state in list(self._conv_state.items()):
-            self._close_conversation_slot(key, state)
+        for conv_key, state in list(self._conv_state.items()):
+            self._close_conversation_slot(conv_key, state)
         self._conv_state.clear()
 
     def _partition_data(self, data: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -2095,9 +2107,13 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
         """Generate a bot-initiated greeting from the wizard's start stage.
 
         Initializes wizard state (restarting the FSM to the start stage) and
-        generates a response using the start stage's ``response_template`` or
-        LLM prompt — exactly as ``generate()`` would, but without a user
-        message.
+        generates a response from the start stage — exactly as ``generate()``
+        would, but without a user message.  The stage resolves its opening
+        line in the usual order, with one addition that applies only here:
+        the strategy-level ``greeting_template`` stands in as the start
+        stage's ``greeting_template`` when the stage sets none, so the
+        universal :class:`~dataknobs_bots.reasoning.base.ReasoningStrategy`
+        field reaches a wizard instead of being discarded.
 
         This enables wizard scenarios to begin with the bot greeting the user
         (e.g. "Welcome! What is your name?") so the user's first turn answers
@@ -2136,6 +2152,20 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
         # (and any consumer hooks) apply on the greeting turn too.
         await self._fire_turn_start_hook(manager, wizard_state)
         stage = active_fsm.current_metadata
+        # The strategy-level ``greeting_template`` is the start stage's
+        # *default*: a start stage carrying its own wins, and this one
+        # otherwise becomes the stage's greeting rather than a value
+        # ``greet()`` renders for itself. Standing it up as stage data is
+        # what keeps the rest of the turn intact — selection stays the one
+        # rule in ``WizardResponder._select_active_template``, and the
+        # greeting is followed by auto-advance, revisit branching and wizard
+        # metadata exactly as a stage-level greeting is.
+        #
+        # Applied to a copy because ``current_metadata`` is the FSM's own
+        # stage dict, which outlives this turn and is shared with every other
+        # reader of the stage.
+        if self._greeting_template and not stage.get("greeting_template"):
+            stage = {**stage, "greeting_template": self._greeting_template}
         await self._navigator.branch_for_revisited_stage(manager, stage.get("name", ""))
         stage_result = await self._response.generate_stage_response(
             manager,
@@ -3223,8 +3253,7 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
             (``on_enter`` / ``on_exit``) continue to fire on their
             own surface, distinct from the turn-lifecycle surface.
         """
-        extract_mode = isinstance(user_input, str)
-        if extract_mode and llm is None and navigation is None:
+        if isinstance(user_input, str) and llm is None and navigation is None:
             raise ValueError(
                 "llm parameter is required when user_input is a string "
                 "and no navigation command is provided"
@@ -3263,7 +3292,11 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
             active_fsm = self._subflows.get_active_fsm()
             stage = active_fsm.current_metadata
 
-            if extract_mode:
+            # The string/dict distinction *is* the mode: a string is raw
+            # user text to extract from, a dict is data to merge directly.
+            # Testing it inline rather than through a captured boolean keeps
+            # that correlation visible to the reader and the type checker.
+            if isinstance(user_input, str):
                 # Extraction mode: run the full pipeline
                 pipeline_result = await self._extraction.run_extraction_pipeline(
                     user_input,
@@ -3291,12 +3324,12 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
 
             # Post-transition sequence: auto-save, re-extraction, lifecycle
             # (shared method — see also _finalize_preamble()).
-            # extract_mode=False when user_input is a dict (direct merge),
-            # so re-extraction is skipped (no raw text to extract from).
+            # A dict user_input was merged directly, so there is no raw text
+            # to re-extract from and re-extraction is skipped.
             auto_advance_messages = await self._run_post_transition_sequence(
                 state,
                 from_stage,
-                user_input if extract_mode else None,
+                user_input if isinstance(user_input, str) else None,
                 llm=llm,
             )
 
@@ -4783,7 +4816,7 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
     @staticmethod
     def snapshot_from_metadata(
         metadata: dict[str, Any],
-        stage_definitions: dict[str, Any] | None = None,
+        stage_definitions: dict[str, Any] | list[dict[str, Any]] | None = None,
     ) -> WizardStateSnapshot | None:
         """Create snapshot from conversation manager metadata.
 
@@ -4792,7 +4825,9 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
 
         Args:
             metadata: Conversation manager metadata dict
-            stage_definitions: Optional stage definitions for index calculation
+            stage_definitions: Optional stage definitions for index
+                calculation.  Either the wizard config's ``stages`` list
+                (as the example below passes) or a name-keyed dict.
 
         Returns:
             WizardStateSnapshot if wizard metadata exists, None otherwise

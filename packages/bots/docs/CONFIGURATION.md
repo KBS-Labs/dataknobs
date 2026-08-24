@@ -2835,15 +2835,20 @@ The greeting is generated from the wizard's **start stage**, taking the first
 of these that applies:
 
 1. The start stage's `greeting_template`, rendered once and not repeated.
-2. The start stage's `response_template`. What happens *after* the greeting
+2. The strategy-level `greeting_template` under `reasoning:`, which stands in
+   as the start stage's `greeting_template` when that stage sets none. It
+   behaves exactly like (1) from there on — rendered once, then stepped over.
+3. The start stage's `response_template`. What happens *after* the greeting
    then depends on the stage's mode: a `mode: conversation` stage renders it
    only on that opening turn, but a structured stage renders it again on every
    turn — the template is the stage's response, not its opening line, so the
    bot repeats it for as long as the wizard stays on that stage.
-3. The start stage's `prompt`, sent to the LLM to generate one.
+4. The start stage's `prompt`, sent to the LLM to generate one.
 
-> The strategy-level `greeting_template` under `reasoning:` is not consulted by
-> wizard bots. See [FSM-driven greetings](#fsm-driven-greetings) below.
+> Only the **start** stage has a greeting turn, so the strategy-level field
+> reaches only that stage. To open a mid-flow stage with a fixed line, set
+> `greeting_template` on the stage itself. See
+> [FSM-driven greetings](#fsm-driven-greetings) below.
 
 `greeting_template` is the field to reach for on a stage that also collects data:
 it opens the stage and steps aside, leaving extraction, confirmation and
@@ -3316,24 +3321,31 @@ When no `greeting_template` is configured, `greet()` returns `None`.
 
 **FSM-driven greetings** (Wizard strategy):
 
-Wizard bots take their greeting from the FSM definition rather than from this
-strategy-level option, which they do not read. Set `greeting_template` on the
-start stage instead — the same field name, at stage scope, meaning the same
-thing:
+Wizard bots read this strategy-level option as their **start stage's default**
+greeting. The same field name exists at stage scope and means the same thing,
+so the two compose: set it here for a wizard whose opening line does not depend
+on the FSM definition, and set it on a stage when the greeting belongs with the
+stage — a start stage that carries its own wins over this one.
 
 ```yaml
 reasoning:
   strategy: wizard
-  wizard_config: path/to/wizard.yaml  # Start stage defines the greeting
+  wizard_config: path/to/wizard.yaml
+  greeting_template: "Hello! Welcome to the setup wizard."
 ```
 
 ```yaml
-# path/to/wizard.yaml
+# path/to/wizard.yaml — a stage-level greeting takes precedence
 stages:
   - name: welcome
     is_start: true
     greeting_template: "Hello! Welcome to the setup wizard."
 ```
+
+Either way the greeting is rendered once and stepped over, leaving extraction,
+confirmation and transitions to behave as they would without it. Only the start
+stage has a greeting turn, so the strategy-level field never reaches a mid-flow
+stage; that is what the stage-level field is for.
 
 See [Bot-Initiated Greeting](#bot-initiated-greeting) for the full order the
 wizard resolves a greeting in.

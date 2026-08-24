@@ -34,7 +34,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `WizardConfigBuilder.add_structured_stage()` and `.add_conversation_stage()`,
   and on the test builder's `stage()` (which also gains the
   `clarification_template` parameter it was missing). The strategy-level
-  `greeting_template` under `reasoning:` is still not read by wizard bots.
+  `greeting_template` under `reasoning:` composes with it — see *Changed*.
 
 - **The loader reports a `response_template` that a `greeting_template` has
   made unreachable.** On a `mode: conversation` stage both fields mean "first
@@ -65,6 +65,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   runs. Load time is the last moment the report reaches them.
 
 ### Changed
+
+- **Wizard bots honour the strategy-level `greeting_template`.** A wizard
+  configured with `reasoning: {strategy: wizard, greeting_template: ...}` now
+  opens with that line instead of ignoring it. It stands in as the start
+  stage's `greeting_template` when that stage sets none, so it renders once and
+  is stepped over — and a start stage carrying its own greeting still wins.
+
+  `ReasoningStrategy` documents the field as universal and every other strategy
+  reads it, but `WizardReasoning` overrides `greet()` and had nowhere to put
+  it: until a stage could carry a greeting, "render this once at the opening"
+  had no wizard-shaped meaning. So the value was discarded — silently on the
+  config-driven path, where `WizardReasoningConfig` projected the unknown key
+  away, and as a `TypeError` on the direct constructor.
+
+  **This is a documented limitation lifted, not a bug fixed.** The old
+  behaviour was stated in the configuration guide, which now documents the
+  precedence chain instead. Nothing can have depended on the old behaviour —
+  the value never reached anything — but a bot that sets the field today will
+  start greeting with it.
 
 - **A condition that fails on a turn's data is logged at `DEBUG` rather than
   `WARNING`.** `data['name']` before `name` has been captured is the ordinary

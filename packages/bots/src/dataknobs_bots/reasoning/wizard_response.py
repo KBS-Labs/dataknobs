@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import logging
 import time
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable, Set as AbstractSet
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
@@ -1248,7 +1248,7 @@ class WizardResponder:
         self,
         stage: dict[str, Any],
         state: WizardState,
-        new_data_keys: set[str],
+        new_data_keys: AbstractSet[str],
     ) -> str:
         """Build confirmation content for extracted data.
 
@@ -1261,7 +1261,8 @@ class WizardResponder:
         Args:
             stage: Current stage metadata.
             state: Current wizard state (data already merged).
-            new_data_keys: Set of field names extracted this turn.
+            new_data_keys: Field names extracted this turn.  Any set —
+                the caller's is a ``frozenset``, and this only reads it.
 
         Returns:
             Rendered confirmation string.
