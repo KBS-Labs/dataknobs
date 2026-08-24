@@ -1,9 +1,11 @@
 """Tests for wizard transition observability and task tracking."""
 
 import time
+from typing import Any
 
 import pytest
 
+from dataknobs_bots.reasoning import WizardReasoning
 from dataknobs_bots.reasoning.observability import (
     TransitionHistoryQuery,
     TransitionRecord,
@@ -1507,3 +1509,75 @@ class TestConversionUtilities:
         assert restored.condition_result == original.condition_result
         # user_input is lost in round-trip (FSM doesn't have it)
         assert restored.user_input is None
+
+
+class TestSnapshotFromMetadata:
+    """``WizardReasoning.snapshot_from_metadata`` accepts both stage shapes.
+
+    The published example passes ``wizard_config.get("stages")``, which is a
+    list — but the parameter was annotated ``dict[str, Any] | None``, so the
+    type checker reported the branch handling that list as unreachable. It was
+    not: annotations do not run, and the documented call took it every time.
+    The annotation is now the union, and these pin both shapes so the branch
+    cannot be deleted on the strength of a stale annotation.
+    """
+
+    @staticmethod
+    def _metadata() -> dict[str, Any]:
+        return {
+            "wizard": {
+                "fsm_state": {
+                    "current_stage": "configure",
+                    "history": ["welcome"],
+                    "transitions": [],
+                    "tasks": {},
+                },
+            },
+        }
+
+    def test_stage_definitions_as_a_list(self) -> None:
+        """The shape the docstring and the observability guide both pass."""
+        snapshot = WizardReasoning.snapshot_from_metadata(
+            self._metadata(),
+            stage_definitions=[
+                {"name": "welcome", "label": "Welcome"},
+                {"name": "configure", "label": "Configure"},
+                {"name": "done"},
+            ],
+        )
+
+        assert snapshot is not None
+        assert snapshot.current_stage == "configure"
+        assert [s["name"] for s in snapshot.stages] == ["welcome", "configure", "done"]
+        assert [s["status"] for s in snapshot.stages] == ["completed", "current", "pending"]
+        assert snapshot.stages[0]["label"] == "Welcome"
+        # The list is read twice — once for the roadmap above, once for the
+        # position below — so both branches are pinned.
+        assert (snapshot.stage_index, snapshot.total_stages) == (1, 3)
+
+    def test_stage_definitions_as_a_dict(self) -> None:
+        """The name-keyed shape, which the annotation already allowed."""
+        snapshot = WizardReasoning.snapshot_from_metadata(
+            self._metadata(),
+            stage_definitions={
+                "welcome": {"label": "Welcome"},
+                "configure": {"label": "Configure"},
+                "done": {},
+            },
+        )
+
+        assert snapshot is not None
+        assert [s["status"] for s in snapshot.stages] == ["completed", "current", "pending"]
+        assert (snapshot.stage_index, snapshot.total_stages) == (1, 3)
+
+    def test_no_stage_definitions(self) -> None:
+        """Without definitions there is no roadmap, but there is a snapshot."""
+        snapshot = WizardReasoning.snapshot_from_metadata(self._metadata())
+
+        assert snapshot is not None
+        assert snapshot.current_stage == "configure"
+        assert snapshot.stages == []
+
+    def test_metadata_without_a_wizard_block(self) -> None:
+        """A conversation that never ran a wizard yields ``None``."""
+        assert WizardReasoning.snapshot_from_metadata({}) is None

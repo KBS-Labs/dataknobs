@@ -393,7 +393,8 @@ class ReasoningStrategy(ABC):
     template string rendered with ``initial_context`` variables when
     ``greet()`` is called.  Strategies that need richer greeting behavior
     (e.g. ``WizardReasoning`` with FSM-driven stage responses) override
-    ``greet()`` entirely.
+    ``greet()`` entirely; an override is expected to honour the field
+    rather than discard it, which is what makes it universal.
 
     Strategies that need DynaBot to interleave tool execution within
     the generation lifecycle can implement
@@ -461,7 +462,8 @@ class ReasoningStrategy(ABC):
         Returns:
             List of source configuration dicts (may be empty).
         """
-        return config.get("sources", [])
+        sources: list[dict[str, Any]] = config.get("sources", [])
+        return sources
 
     def __init__(self, *, greeting_template: str | None = None) -> None:
         self._greeting_template = greeting_template
@@ -533,8 +535,9 @@ class ReasoningStrategy(ABC):
         result as an ``LLMResponse``.  Returns ``None`` when no template
         is configured.
 
-        ``WizardReasoning`` fully overrides this with FSM-driven greeting
-        generation from the wizard's start stage.
+        ``WizardReasoning`` overrides this with FSM-driven generation from
+        the wizard's start stage, and reads ``greeting_template`` as that
+        stage's default greeting — a start stage carrying its own wins.
 
         Args:
             manager: ConversationManager or compatible manager instance

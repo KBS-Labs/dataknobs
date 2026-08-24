@@ -5,7 +5,7 @@ Validates:
 - ReActReasoning renders greeting_template with initial_context
 - No template configured returns None
 - DynaBot.greet() delegates template greetings correctly
-- WizardReasoning ignores base template (uses FSM-driven greetings)
+- WizardReasoning resolves stage-level and strategy-level greetings in order
 """
 
 from __future__ import annotations
@@ -20,7 +20,9 @@ from dataknobs_bots.reasoning import (
     WizardReasoning,
     create_reasoning_from_config,
 )
+from dataknobs_bots.reasoning.wizard_config import WizardReasoningConfig
 from dataknobs_bots.reasoning.wizard_loader import WizardConfigLoader
+from dataknobs_bots.testing import BotTestHarness
 from dataknobs_llm import LLMResponse
 from dataknobs_llm.conversations import ConversationManager
 from dataknobs_llm.llm.providers.echo import EchoProvider
@@ -148,42 +150,192 @@ class TestCreateReasoningFromConfig:
         assert strategy._greeting_template is None
 
 
-class TestWizardGreetingIgnoresBase:
-    """WizardReasoning uses FSM greetings, not base template."""
+def _wizard_config(
+    *,
+    stage_greeting: str | None = None,
+    response_template: str | None = None,
+) -> dict[str, Any]:
+    """A two-stage wizard whose start stage carries the given templates."""
+    start: dict[str, Any] = {
+        "name": "start",
+        "is_start": True,
+        "prompt": "Ask user something",
+        "transitions": [{"target": "done"}],
+    }
+    if stage_greeting:
+        start["greeting_template"] = stage_greeting
+    if response_template:
+        start["response_template"] = response_template
+    return {
+        "name": "greeting-test",
+        "version": "1.0",
+        "stages": [start, {"name": "done", "is_end": True, "prompt": "Done"}],
+    }
+
+
+#: ``(stage greeting, strategy greeting, response_template, expected)``.
+#:
+#: Row 3 is the contract this file used to pin as *"WizardReasoning ignores
+#: base template"* — a start stage with a ``response_template`` and nothing
+#: else still greets with it, which is why that row is unchanged. Rows 2 and 4
+#: are what supersedes the old one: the strategy-level field is now the start
+#: stage's default rather than a discarded value.
+_PRECEDENCE_TABLE: list[tuple[str | None, str | None, str | None, str]] = [
+    ("STAGE", "STRATEGY", "RESPONSE", "STAGE"),
+    (None, "STRATEGY", "RESPONSE", "STRATEGY"),
+    (None, None, "RESPONSE", "RESPONSE"),
+    (None, "STRATEGY", None, "STRATEGY"),
+]
+
+
+class TestWizardGreetingPrecedence:
+    """A wizard resolves its greeting from the stage, then the strategy.
+
+    ``ReasoningStrategy`` documents ``greeting_template`` as universal, and
+    ``WizardReasoning`` overrides ``greet()`` — so until the stage-level field
+    existed there was nowhere for the strategy-level one to land, and it was
+    discarded. Now the two compose: the stage field is the mechanism, and the
+    strategy field is the start stage's default.
+    """
+
+    @pytest.mark.parametrize("case", _PRECEDENCE_TABLE)
+    @pytest.mark.asyncio
+    async def test_greeting_precedence(
+        self,
+        case: tuple[str | None, str | None, str | None, str],
+        conversation_manager_pair: tuple[ConversationManager, EchoProvider],
+    ) -> None:
+        """The first template that applies wins, and only that one renders."""
+        stage_greeting, strategy_greeting, response_template, expected = case
+        manager, provider = conversation_manager_pair
+        loader = WizardConfigLoader()
+        fsm = loader.load_from_dict(
+            _wizard_config(
+                stage_greeting=stage_greeting,
+                response_template=response_template,
+            )
+        )
+        kwargs: dict[str, Any] = {}
+        if strategy_greeting:
+            kwargs["greeting_template"] = strategy_greeting
+        reasoning = WizardReasoning(wizard_fsm=fsm, strict_validation=False, **kwargs)
+
+        response = await reasoning.greet(manager, llm=provider)
+
+        assert response is not None
+        assert response.content == expected
 
     @pytest.mark.asyncio
-    async def test_wizard_uses_fsm_not_base_template(
+    async def test_the_strategy_greeting_renders_with_initial_context(
         self,
-        conversation_manager: ConversationManager,
+        conversation_manager_pair: tuple[ConversationManager, EchoProvider],
     ) -> None:
-        """WizardReasoning.greet() generates FSM start stage response."""
-        config: dict[str, Any] = {
-            "name": "greeting-test",
+        """It is a Jinja2 template at stage scope, as it is at strategy scope."""
+        manager, provider = conversation_manager_pair
+        loader = WizardConfigLoader()
+        fsm = loader.load_from_dict(_wizard_config())
+        reasoning = WizardReasoning(
+            wizard_fsm=fsm,
+            strict_validation=False,
+            greeting_template="Hello {{ user_name }}!",
+        )
+
+        response = await reasoning.greet(
+            manager, llm=provider, initial_context={"user_name": "Alice"}
+        )
+
+        assert response is not None
+        assert response.content == "Hello Alice!"
+
+    @pytest.mark.asyncio
+    async def test_the_strategy_greeting_is_said_once(self) -> None:
+        """It goes through the stage's greeting count, so it is stepped over.
+
+        A greeting bolted onto ``greet()`` alone would be re-rendered the next
+        time the start stage produced output. Routing the strategy-level
+        default through the same per-stage counter is what makes "once" mean
+        once, rather than "once per call to greet()".
+        """
+        bot_config: dict[str, Any] = {
+            "llm": {"provider": "echo", "model": "test"},
+            "conversation_storage": {"backend": "memory"},
+            "reasoning": {
+                "strategy": "wizard",
+                "wizard_config": _wizard_config(),
+                "greeting_template": "STRATEGY GREETING",
+                "strict_validation": False,
+            },
+        }
+        async with await BotTestHarness.create(
+            bot_config=bot_config,
+            main_responses=["LLM-1", "LLM-2"],
+        ) as harness:
+            opening = await harness.greet()
+            assert opening.response == "STRATEGY GREETING"
+
+            answer = await harness.chat("something")
+            assert "STRATEGY GREETING" not in answer.response
+
+    @pytest.mark.asyncio
+    async def test_the_greeting_travels_the_ordinary_stage_path(self) -> None:
+        """It is the start stage's greeting, not a shortcut around the stage.
+
+        A greeting rendered and returned directly from ``greet()`` produces
+        the same opening line, and every test above still passes against
+        that version — the difference only shows when the start stage does
+        something *after* speaking. Auto-advance is that case: the wizard
+        must greet, step through the message stage, and land on the next
+        stage in the same turn.
+        """
+        wizard: dict[str, Any] = {
+            "name": "greeting-auto-advance",
             "version": "1.0",
             "stages": [
                 {
-                    "name": "start",
+                    "name": "welcome",
                     "is_start": True,
-                    "prompt": "Ask user something",
-                    "response_template": "Welcome to the wizard!",
-                    "transitions": [{"target": "done"}],
+                    "auto_advance": True,
+                    "prompt": "Say hello",
+                    "transitions": [{"target": "collect"}],
                 },
                 {
-                    "name": "done",
-                    "is_end": True,
-                    "prompt": "Done",
+                    "name": "collect",
+                    "prompt": "Ask for a name",
+                    "response_template": "COLLECT",
+                    "transitions": [{"target": "done"}],
                 },
+                {"name": "done", "is_end": True, "prompt": "Done"},
             ],
         }
-        loader = WizardConfigLoader()
-        fsm = loader.load_from_dict(config)
-        reasoning = WizardReasoning(wizard_fsm=fsm, strict_validation=False)
+        bot_config: dict[str, Any] = {
+            "llm": {"provider": "echo", "model": "test"},
+            "conversation_storage": {"backend": "memory"},
+            "reasoning": {
+                "strategy": "wizard",
+                "wizard_config": wizard,
+                "greeting_template": "STRATEGY",
+                "strict_validation": False,
+            },
+        }
+        async with await BotTestHarness.create(
+            bot_config=bot_config,
+            main_responses=["LLM-1"],
+        ) as harness:
+            opening = await harness.greet()
 
-        response = await reasoning.greet(conversation_manager, llm=None)
+            assert "STRATEGY" in opening.response
+            assert "COLLECT" in opening.response
+            assert opening.response.index("STRATEGY") < opening.response.index("COLLECT")
+            assert harness.wizard_stage == "collect"
 
-        # Wizard uses its own FSM-driven greeting, not base template
-        assert response is not None
-        assert response.content == "Welcome to the wizard!"
+    @pytest.mark.asyncio
+    async def test_wizard_reasoning_config_carries_the_field(self) -> None:
+        """``from_dict`` used to project the key away without complaint."""
+        config = WizardReasoningConfig.from_dict(
+            {"wizard_config": "some/path.yaml", "greeting_template": "Hi!"}
+        )
+
+        assert config.greeting_template == "Hi!"
 
 
 class TestDynaBotGreetingIntegration:
