@@ -11,7 +11,11 @@ MRO traversal attacks like ``().__class__.__bases__[0].__subclasses__()``).
 
 Example::
 
-    from dataknobs_common.expressions import safe_eval, safe_eval_value
+    from dataknobs_common.expressions import (
+        safe_eval,
+        safe_eval_validate,
+        safe_eval_value,
+    )
 
     # Simple expression with scope variables
     result = safe_eval("x + y", scope={"x": 1, "y": 2})
@@ -31,6 +35,10 @@ Example::
         scope={"value": "hard"},
     )
     assert val == 120
+
+    # Pre-check an expression without evaluating it
+    assert safe_eval_validate("data.get('a')") is None
+    assert safe_eval_validate("().__class__") is not None
 """
 
 from __future__ import annotations
@@ -172,6 +180,102 @@ def _validate_ast(code: str) -> str | None:
 _RETURN_STATEMENT = re.compile(r"return\b")
 
 
+def _to_exec_code(stripped: str) -> str:
+    """Wrap a stripped, single-line expression in the function body.
+
+    ``return`` is prepended unless the expression is already a return
+    statement.  Shared by :func:`safe_eval` and :func:`safe_eval_validate`
+    so the two cannot disagree about what will be parsed.
+    """
+    if not _RETURN_STATEMENT.match(stripped):
+        stripped = f"return {stripped}"
+    return f"def _fn():\n    {stripped}\n_result = _fn()"
+
+
+def safe_eval_validate(
+    expression: str,
+    *,
+    restrict_builtins: bool = True,
+) -> str | None:
+    """Report why :func:`safe_eval` would refuse an expression.
+
+    Runs the same static pass :func:`safe_eval` runs before it evaluates
+    anything, without evaluating anything.  Use it to pre-check a
+    config-authored or generated expression while the author is still in
+    the build loop, rather than discovering the refusal as a stalled
+    condition at run time.
+
+    The contract is definitional: this returns *the reason ``safe_eval``
+    would refuse this expression before evaluating it*, or ``None`` if
+    ``safe_eval`` would proceed to evaluation.  When the static rules are
+    tightened, both answers change together.
+
+    The static pass rejects, in order:
+
+    1. an empty expression;
+    2. a multiline expression;
+    3. a syntax error (``restrict_builtins=True`` only);
+    4. dunder attribute access (``restrict_builtins=True`` only);
+    5. a ``.format()`` / ``.format_map()`` call (``restrict_builtins=True``
+       only);
+    6. a dunder name (``restrict_builtins=True`` only).
+
+    ``None`` is not a safety review, and not a promise the expression will
+    succeed.  An expression that reads a missing key is accepted here and
+    raises at evaluation — that is the point of the distinction: it is
+    "not satisfied yet", not "will not run".  In particular this does not
+    check that the expression is free of side effects: ``safe_eval``
+    blocks assignment but permits mutation by method call, so
+    ``data.update(...)`` is reported as acceptable and will take effect.
+    Nor does it check that names resolve.
+
+    Args:
+        expression: Python expression string, as it would be passed to
+            :func:`safe_eval`.
+        restrict_builtins: Must match the value :func:`safe_eval` will be
+            called with.  Rules 3-6 live behind the AST pass, which the
+            unrestricted path skips.
+
+    Returns:
+        The refusal reason, or ``None`` if ``safe_eval`` would evaluate.
+        Never raises — an input :func:`safe_eval` would reject outright,
+        such as a non-string, is reported as a reason like any other.
+
+    Example::
+
+        reason = safe_eval_validate("data.get('a').__class__")
+        if reason is not None:
+            raise ValueError(f"unusable condition: {reason}")
+    """
+    try:
+        stripped = expression.strip()
+        if not stripped:
+            return "Empty expression"
+
+        # Reject multiline expressions — config-authored expressions
+        # should be single-line.  Multiline strings could inject
+        # module-scope code past the function wrapper.
+        if "\n" in stripped:
+            return "Multiline expressions are not allowed"
+
+        # The remaining rules are the AST pass, which the unrestricted
+        # path does not run.
+        if not restrict_builtins:
+            return None
+
+        return _validate_ast(_to_exec_code(stripped))
+
+    except Exception as e:
+        # safe_eval wraps its whole body in the same guard and degrades a
+        # bad input to a failed result rather than raising, so this must
+        # too: a pre-check that crashes where evaluation would not is
+        # worse than no pre-check.  Reachable from config — an unquoted
+        # YAML scalar (``condition: true``) arrives as a bool, which has
+        # no .strip(), and a lone surrogate escapes ast.parse as a
+        # UnicodeEncodeError rather than a SyntaxError.
+        return str(e)
+
+
 def safe_eval(
     code: str,
     scope: dict[str, Any] | None = None,
@@ -191,7 +295,12 @@ def safe_eval(
     1. ``__builtins__`` restricted to ``SAFE_BUILTINS`` (blocks
        ``exec``, ``eval``, ``__import__``, ``open``, etc.)
     2. AST validation blocks dunder attribute access (prevents
-       MRO traversal via ``__class__.__bases__.__subclasses__``)
+       MRO traversal via ``__class__.__bases__.__subclasses__``),
+       dunder names, and ``.format()`` / ``.format_map()`` calls
+
+    The checks that run before evaluation are also available on their
+    own — see :func:`safe_eval_validate`, which reports why an
+    expression would be refused without evaluating it.
 
     Args:
         code: Python expression string.  Unless it is already a
@@ -219,43 +328,21 @@ def safe_eval(
         ExpressionResult with the evaluated value and success status.
     """
     try:
-        stripped = code.strip()
-        if not stripped:
+        # The static pass, in callable form.  Consumers can run the same
+        # check ahead of time via safe_eval_validate().
+        reason = safe_eval_validate(code, restrict_builtins=restrict_builtins)
+        if reason is not None:
             return ExpressionResult(
                 value=default,
                 success=False,
-                error="Empty expression",
+                error=reason,
             )
-
-        # Reject multiline expressions — config-authored expressions
-        # should be single-line.  Multiline strings could inject
-        # module-scope code past the function wrapper.
-        if "\n" in stripped:
-            return ExpressionResult(
-                value=default,
-                success=False,
-                error="Multiline expressions are not allowed",
-            )
-
-        if not _RETURN_STATEMENT.match(stripped):
-            stripped = f"return {stripped}"
 
         if not restrict_builtins:
             logger.warning(
                 "safe_eval called with restrict_builtins=False — "
                 "full Python builtins available (trusted code only)"
             )
-
-        # AST validation: block dunder access when builtins restricted
-        if restrict_builtins:
-            exec_code = f"def _fn():\n    {stripped}\n_result = _fn()"
-            ast_error = _validate_ast(exec_code)
-            if ast_error:
-                return ExpressionResult(
-                    value=default,
-                    success=False,
-                    error=ast_error,
-                )
 
         global_vars: dict[str, Any] = {}
         if restrict_builtins:
@@ -265,7 +352,7 @@ def safe_eval(
             global_vars.update(scope)
 
         local_vars: dict[str, Any] = {}
-        exec_code = f"def _fn():\n    {stripped}\n_result = _fn()"
+        exec_code = _to_exec_code(code.strip())
         exec(exec_code, global_vars, local_vars)  # nosec B102
 
         result = local_vars.get("_result", default)

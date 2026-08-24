@@ -10,6 +10,7 @@ import pytest
 from dataknobs_common.expressions import (
     ExpressionResult,
     safe_eval,
+    safe_eval_validate,
     safe_eval_value,
 )
 
@@ -432,6 +433,138 @@ class TestSecurity:
         result = safe_eval("1 + 2\nimport os")
         assert result.success is False
         assert "Multiline" in (result.error or "")
+
+
+# ---------------------------------------------------------------------------
+# The static pass, as a callable
+# ---------------------------------------------------------------------------
+
+
+#: Every expression ``safe_eval`` refuses before it evaluates anything,
+#: paired with a distinctive fragment of the reason it gives.  Rules 1-2
+#: apply on both paths; rules 3-6 only when ``restrict_builtins=True``.
+STATIC_REJECTIONS: list[tuple[str, str, str]] = [
+    ("empty", "", "Empty expression"),
+    (
+        "multiline",
+        "data.get('a')\nand data.get('b')",
+        "Multiline expressions are not allowed",
+    ),
+    ("syntax", "data.get('a' ==", "Syntax error:"),
+    ("dunder attribute", "().__class__", "Access to dunder attribute '__class__'"),
+    ("format call", "'{0}'.format(())", "Call to '.format()'"),
+    ("dunder name", "__builtins__", "Access to dunder name '__builtins__'"),
+]
+
+#: The subset that survives ``restrict_builtins=False`` — the other four
+#: live behind the AST pass, which that path skips.
+ALWAYS_REJECTED = {"empty", "multiline"}
+
+
+class TestStaticValidator:
+    """``safe_eval_validate`` answers what the static pass would say.
+
+    Its contract is definitional: the reason ``safe_eval`` would refuse the
+    expression *before evaluating it*, or ``None`` if it would proceed to
+    evaluation.  So the tests below assert agreement with ``safe_eval``
+    rather than an independently-written rule list — if the two ever
+    disagree, one of them is wrong and the test says which input showed it.
+    """
+
+    def test_exported_from_package_root(self) -> None:
+        """A consumer reaches it without importing a private module."""
+        from dataknobs_common import safe_eval_validate as exported
+
+        assert exported is safe_eval_validate
+
+    @pytest.mark.parametrize(
+        ("name", "expression", "fragment"),
+        STATIC_REJECTIONS,
+        ids=[row[0] for row in STATIC_REJECTIONS],
+    )
+    def test_every_static_rejection_is_reported(
+        self, name: str, expression: str, fragment: str
+    ) -> None:
+        reason = safe_eval_validate(expression)
+        assert reason is not None, f"{name}: expected a reason"
+        assert fragment in reason
+
+    @pytest.mark.parametrize(
+        ("name", "expression", "fragment"),
+        STATIC_REJECTIONS,
+        ids=[row[0] for row in STATIC_REJECTIONS],
+    )
+    def test_reason_matches_safe_eval_exactly(
+        self, name: str, expression: str, fragment: str
+    ) -> None:
+        """One implementation, so the two answers cannot drift."""
+        assert safe_eval_validate(expression) == safe_eval(expression).error
+
+    @pytest.mark.parametrize(
+        ("name", "expression", "fragment"),
+        STATIC_REJECTIONS,
+        ids=[row[0] for row in STATIC_REJECTIONS],
+    )
+    def test_unrestricted_path_has_a_smaller_rule_set(
+        self, name: str, expression: str, fragment: str
+    ) -> None:
+        """``restrict_builtins=False`` skips the AST pass, and so must this."""
+        reason = safe_eval_validate(expression, restrict_builtins=False)
+        if name in ALWAYS_REJECTED:
+            assert reason is not None
+            assert reason == safe_eval(expression, restrict_builtins=False).error
+        else:
+            assert reason is None
+
+    def test_runtime_failure_is_not_a_refusal(self) -> None:
+        """A missing key is "not satisfied yet", not "will not run".
+
+        This is the distinction the validator exists to draw.  If it ever
+        reports a refusal here, every caller that warns on a refusal starts
+        warning on ordinary misses and consumers learn to ignore it.
+        """
+        assert safe_eval_validate("data['x']") is None
+
+        result = safe_eval("data['x']", {"data": {}})
+        assert result.success is False
+        assert result.error is not None
+
+    def test_accepted_expressions_report_no_reason(self) -> None:
+        for expression in ("1 + 2", "data.get('a')", "value in ('a', 'b')"):
+            assert safe_eval_validate(expression) is None
+
+    @pytest.mark.parametrize(
+        "expression",
+        [
+            True,  # an unquoted YAML scalar: `condition: true`
+            42,
+            None,
+            ["data.get('a')"],
+            "\ud800",  # a lone surrogate escapes ast.parse as UnicodeEncodeError
+        ],
+        ids=["yaml-bool", "int", "none", "list", "lone-surrogate"],
+    )
+    def test_never_raises_where_safe_eval_degrades(self, expression: Any) -> None:
+        """A pre-check that crashes where evaluation would not is worse than none.
+
+        ``safe_eval`` degrades any bad input to ``success=False`` rather
+        than raising.  The validator mirrors that boundary, so a consumer
+        looping over config-loaded conditions does not have to guard the
+        pre-check it added to avoid guarding evaluation.
+        """
+        reason = safe_eval_validate(expression)
+        assert reason is not None
+        assert reason == safe_eval(expression).error
+
+    def test_explicit_return_prefix_is_accepted(self) -> None:
+        """The validator must reuse ``safe_eval``'s wrap, not re-derive it.
+
+        ``safe_eval`` accepts an explicitly-prefixed expression, and that
+        spelling is reachable from config.  A ``compile(expr, mode="eval")``
+        probe would false-reject every one of them.
+        """
+        assert safe_eval_validate("return 42") is None
+        assert safe_eval("return 42").value == 42
 
 
 # ---------------------------------------------------------------------------

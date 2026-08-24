@@ -38,6 +38,7 @@ from dataknobs_common.expressions import (
     YAML_ALIASES,
     ExpressionResult,
     safe_eval,
+    safe_eval_validate,
     safe_eval_value,
 )
 from dataknobs_common.events import (
@@ -290,6 +291,7 @@ __all__ = [
     "YAML_ALIASES",
     "ExpressionResult",
     "safe_eval",
+    "safe_eval_validate",
     "safe_eval_value",
     # Events
     "Event",

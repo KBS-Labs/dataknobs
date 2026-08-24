@@ -68,6 +68,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `_MAX_REDACT_DEPTH` already was: the subclasses that matter are
   consumers', and a library cannot assume its consumers run mypy.
 
+- **`safe_eval_validate(expression, *, restrict_builtins=True)`** — the
+  static pass `safe_eval` runs before it evaluates anything, as a callable.
+  Returns the reason the expression would be refused, or `None` if
+  `safe_eval` would proceed to evaluation. `safe_eval` now calls it, so
+  there is one implementation and the two answers cannot drift.
+
+  The contract is definitional — *what `safe_eval` refuses* — rather than an
+  enumerated rule list, so tightening a rule later tightens both together.
+  The six rules it reports are empty, multiline, syntax error, dunder
+  attribute access, `.format()` / `.format_map()`, and dunder name; the last
+  four are the AST pass, which `restrict_builtins=False` skips.
+
+  A refusal and a runtime failure both arrive as `success=False` with an
+  unstructured `error`, so a caller holding only an `ExpressionResult`
+  cannot tell "this will never run" from "not satisfied yet". That mattered:
+  a config-authored condition the engine refuses degrades to the caller's
+  `default`, which for a wizard transition is `False` — indistinguishable
+  from a condition that is simply not met, so the stage never fires and
+  nothing reports why. The check is now available *before* the expression is
+  ever evaluated, which is where an author can still act on it.
+
+  `None` is not a safety review. It does not check that the expression is
+  free of side effects — `safe_eval` blocks assignment but permits mutation
+  by method call — nor that names resolve.
+
+  It never raises. `safe_eval` degrades a bad input to `success=False`
+  rather than raising, and the pre-check mirrors that boundary, so a
+  consumer looping over config-loaded conditions does not have to guard the
+  pre-check it added in order to avoid guarding evaluation — an unquoted
+  YAML scalar (`condition: true`) arrives as a `bool` and is reported as a
+  reason like any other.
+
 ### Fixed
 
 - **`safe_eval`'s `return` prefix is a token test.** It prepends `return`
