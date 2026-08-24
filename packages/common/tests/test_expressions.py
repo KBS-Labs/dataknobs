@@ -3,6 +3,7 @@
 Covers core functionality, security restrictions, and edge cases.
 """
 
+from types import MappingProxyType
 from typing import Any
 
 import pytest
@@ -10,6 +11,7 @@ import pytest
 from dataknobs_common.expressions import (
     ExpressionResult,
     safe_eval,
+    safe_eval_validate,
     safe_eval_value,
 )
 
@@ -33,6 +35,23 @@ class TestCoreFunctionality:
     def test_scope_variables(self) -> None:
         result = safe_eval("x + y", scope={"x": 1, "y": 2})
         assert result.value == 3
+
+    def test_scope_accepts_any_mapping(self) -> None:
+        """``scope`` is a ``Mapping``, not a ``dict``.
+
+        The merge into the execution globals is a single ``update()``,
+        which never needed a ``dict`` — so a caller holding a read-only
+        mapping over shared state does not have to copy it.
+
+        Pinned because the guarantee is documented. What it catches is a
+        future change that *mutates* ``scope`` or calls a dict-only method
+        on it: a read-only mapping raises there, where a ``dict`` would
+        silently accept. Merge style is not the hazard — ``dict(**scope)``
+        and ``{**scope}`` both accept any string-keyed mapping.
+        """
+        read_only = MappingProxyType({"x": 41})
+        assert safe_eval("x + 1", read_only).value == 42
+        assert safe_eval_value("x + 1", read_only) == 42
 
     def test_return_prefix_auto(self) -> None:
         result = safe_eval("42")
@@ -186,6 +205,63 @@ class TestCoreFunctionality:
             scope={"value": "accept"},
         )
         assert result.value is True
+
+
+# ---------------------------------------------------------------------------
+# The ``return`` prefix rule
+# ---------------------------------------------------------------------------
+
+
+class TestReturnPrefixTokenRule:
+    """The prefix rule is a token test, not a substring test.
+
+    ``safe_eval`` prepends ``return`` unless the expression already *is* a
+    return statement.  Deciding that with ``startswith("return")`` also
+    matches any identifier merely beginning with those characters
+    (``returned_value``, ``return_code``), which leaves the expression
+    unwrapped: the generated body becomes a bare expression statement,
+    ``_fn()`` returns ``None``, and ``coerce_bool=True`` yields ``False``.
+
+    The failure is silent — ``success`` is ``True``, so no caller logs
+    anything and the wrong answer propagates as if it were the right one.
+    """
+
+    def test_identifier_beginning_with_return_is_evaluated(self) -> None:
+        """A name that merely starts with ``return`` is an expression."""
+        result = safe_eval(
+            "returned_value > 1",
+            {"returned_value": 5},
+            coerce_bool=True,
+            default=False,
+        )
+        assert result.success is True
+        assert result.value is True
+
+    @pytest.mark.parametrize(
+        ("expression", "scope", "expected"),
+        [
+            # Already a return statement — must not be prepended.
+            ("return 42", {}, 42),
+            ("return(42)", {}, 42),
+            ("return  42", {}, 42),
+            # An expression whose first token only starts with the
+            # characters ``return`` — must be prepended.
+            ("returned_value", {"returned_value": 7}, 7),
+            ("return_code == 0", {"return_code": 0}, True),
+            ("returns", {"returns": "yes"}, "yes"),
+            ("returning(1)", {"returning": lambda n: n + 1}, 2),
+        ],
+    )
+    def test_prefix_boundaries(self, expression: str, scope: dict[str, Any], expected: Any) -> None:
+        result = safe_eval(expression, scope)
+        assert result.success is True, result.error
+        assert result.value == expected
+
+    def test_bare_return_is_not_prepended(self) -> None:
+        """``return`` alone is a valid return statement yielding None."""
+        result = safe_eval("return")
+        assert result.success is True
+        assert result.value is None
 
 
 # ---------------------------------------------------------------------------
@@ -375,6 +451,138 @@ class TestSecurity:
         result = safe_eval("1 + 2\nimport os")
         assert result.success is False
         assert "Multiline" in (result.error or "")
+
+
+# ---------------------------------------------------------------------------
+# The static pass, as a callable
+# ---------------------------------------------------------------------------
+
+
+#: Every expression ``safe_eval`` refuses before it evaluates anything,
+#: paired with a distinctive fragment of the reason it gives.  Rules 1-2
+#: apply on both paths; rules 3-6 only when ``restrict_builtins=True``.
+STATIC_REJECTIONS: list[tuple[str, str, str]] = [
+    ("empty", "", "Empty expression"),
+    (
+        "multiline",
+        "data.get('a')\nand data.get('b')",
+        "Multiline expressions are not allowed",
+    ),
+    ("syntax", "data.get('a' ==", "Syntax error:"),
+    ("dunder attribute", "().__class__", "Access to dunder attribute '__class__'"),
+    ("format call", "'{0}'.format(())", "Call to '.format()'"),
+    ("dunder name", "__builtins__", "Access to dunder name '__builtins__'"),
+]
+
+#: The subset that survives ``restrict_builtins=False`` — the other four
+#: live behind the AST pass, which that path skips.
+ALWAYS_REJECTED = {"empty", "multiline"}
+
+
+class TestStaticValidator:
+    """``safe_eval_validate`` answers what the static pass would say.
+
+    Its contract is definitional: the reason ``safe_eval`` would refuse the
+    expression *before evaluating it*, or ``None`` if it would proceed to
+    evaluation.  So the tests below assert agreement with ``safe_eval``
+    rather than an independently-written rule list — if the two ever
+    disagree, one of them is wrong and the test says which input showed it.
+    """
+
+    def test_exported_from_package_root(self) -> None:
+        """A consumer reaches it without importing a private module."""
+        from dataknobs_common import safe_eval_validate as exported
+
+        assert exported is safe_eval_validate
+
+    @pytest.mark.parametrize(
+        ("name", "expression", "fragment"),
+        STATIC_REJECTIONS,
+        ids=[row[0] for row in STATIC_REJECTIONS],
+    )
+    def test_every_static_rejection_is_reported(
+        self, name: str, expression: str, fragment: str
+    ) -> None:
+        reason = safe_eval_validate(expression)
+        assert reason is not None, f"{name}: expected a reason"
+        assert fragment in reason
+
+    @pytest.mark.parametrize(
+        ("name", "expression", "fragment"),
+        STATIC_REJECTIONS,
+        ids=[row[0] for row in STATIC_REJECTIONS],
+    )
+    def test_reason_matches_safe_eval_exactly(
+        self, name: str, expression: str, fragment: str
+    ) -> None:
+        """One implementation, so the two answers cannot drift."""
+        assert safe_eval_validate(expression) == safe_eval(expression).error
+
+    @pytest.mark.parametrize(
+        ("name", "expression", "fragment"),
+        STATIC_REJECTIONS,
+        ids=[row[0] for row in STATIC_REJECTIONS],
+    )
+    def test_unrestricted_path_has_a_smaller_rule_set(
+        self, name: str, expression: str, fragment: str
+    ) -> None:
+        """``restrict_builtins=False`` skips the AST pass, and so must this."""
+        reason = safe_eval_validate(expression, restrict_builtins=False)
+        if name in ALWAYS_REJECTED:
+            assert reason is not None
+            assert reason == safe_eval(expression, restrict_builtins=False).error
+        else:
+            assert reason is None
+
+    def test_runtime_failure_is_not_a_refusal(self) -> None:
+        """A missing key is "not satisfied yet", not "will not run".
+
+        This is the distinction the validator exists to draw.  If it ever
+        reports a refusal here, every caller that warns on a refusal starts
+        warning on ordinary misses and consumers learn to ignore it.
+        """
+        assert safe_eval_validate("data['x']") is None
+
+        result = safe_eval("data['x']", {"data": {}})
+        assert result.success is False
+        assert result.error is not None
+
+    def test_accepted_expressions_report_no_reason(self) -> None:
+        for expression in ("1 + 2", "data.get('a')", "value in ('a', 'b')"):
+            assert safe_eval_validate(expression) is None
+
+    @pytest.mark.parametrize(
+        "expression",
+        [
+            True,  # an unquoted YAML scalar: `condition: true`
+            42,
+            None,
+            ["data.get('a')"],
+            "\ud800",  # a lone surrogate escapes ast.parse as UnicodeEncodeError
+        ],
+        ids=["yaml-bool", "int", "none", "list", "lone-surrogate"],
+    )
+    def test_never_raises_where_safe_eval_degrades(self, expression: Any) -> None:
+        """A pre-check that crashes where evaluation would not is worse than none.
+
+        ``safe_eval`` degrades any bad input to ``success=False`` rather
+        than raising.  The validator mirrors that boundary, so a consumer
+        looping over config-loaded conditions does not have to guard the
+        pre-check it added to avoid guarding evaluation.
+        """
+        reason = safe_eval_validate(expression)
+        assert reason is not None
+        assert reason == safe_eval(expression).error
+
+    def test_explicit_return_prefix_is_accepted(self) -> None:
+        """The validator must reuse ``safe_eval``'s wrap, not re-derive it.
+
+        ``safe_eval`` accepts an explicitly-prefixed expression, and that
+        spelling is reachable from config.  A ``compile(expr, mode="eval")``
+        probe would false-reject every one of them.
+        """
+        assert safe_eval_validate("return 42") is None
+        assert safe_eval("return 42").value == 42
 
 
 # ---------------------------------------------------------------------------
