@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-08-24T15:08:24Z",
+  "timestamp": "2026-08-24T15:48:25Z",
   "python_version": "Python 3.12.12",
   "uv_version": "uv 0.12.5 (Homebrew 2026-08-14 aarch64-apple-darwin)",
   "os": "Darwin",
   "os_version": "24.6.0",
-  "git_branch": "sbk/wizard-greeting-template",
-  "git_commit": "00dc4832fe72bc787d698256a83003e032f78ecf",
+  "git_branch": "sbk/wizard-strategy-greeting",
+  "git_commit": "1af51a9901b0fdf1d757a3792958795b1dbdfc1c",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }
