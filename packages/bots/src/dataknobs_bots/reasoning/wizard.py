@@ -3557,9 +3557,12 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
         configuration rather than turn state, and a tool has no business
         editing the wizard's definition of its stages.
 
-        The channel is transient. ``DynaBot`` clears it at the end of the
-        turn beside ``turn_data``, so nothing here outlives the turn or
-        reaches storage.
+        The channel is transient. ``DynaBot`` clears it beside
+        ``turn_data`` in the turn's teardown -- in the ``finally`` every
+        turn driver runs, not in finalization, which a stream abandoned
+        part-way skips by design -- so nothing here outlives the turn or
+        reaches storage.  Like ``turn_data``, it assumes one turn at a
+        time against a given manager.
 
         Holding the dict by reference is only sound because the flow
         changes that replace collected data -- a subflow push or pop, a

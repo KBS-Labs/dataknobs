@@ -355,3 +355,50 @@ async def test_tool_does_not_read_pre_restart_data() -> None:
             f"the first run's notes: {second}"
         )
         assert second.get("product_name") == "Gizmo"
+
+
+# ---------------------------------------------------------------------------
+# The channel's lifetime: published for a turn, and only for a turn
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_abandoning_a_stream_still_unpublishes_the_channel() -> None:
+    """A turn that ends without finalizing must not leave the channel set.
+
+    The channel aliases the strategy's own ``WizardState.data``, and the
+    manager holding it is cached across turns. Leaving it published hands
+    the *next* turn's tools a dict belonging to a turn that is over.
+
+    Abandoning a stream reaches this without any error: ``stream_chat``
+    finalizes only when the stream was fully consumed, so a caller that
+    breaks out -- a disconnected client, a UI cancelling a response --
+    skips the teardown that clears the channel.
+    """
+    tool = NoteRecordingTool()
+
+    async with await BotTestHarness.create(
+        wizard_config=_wizard_with_tool_stage(),
+        main_responses=["One moment...", "Got it."],
+        extraction_results=[[{"product_name": "Widget"}]],
+        tools=[tool],
+    ) as harness:
+        stream = harness.bot.stream_chat("I want a Widget", harness.context)
+
+        published = None
+        async for _chunk in stream:
+            manager = harness.bot.get_conversation_manager(harness.context.conversation_id)
+            published = manager.state.live_wizard_state
+            break
+        await stream.aclose()
+
+        assert published is not None, (
+            "the channel was never published during the stream, so this test "
+            "would pass whether or not teardown clears it"
+        )
+
+        manager = harness.bot.get_conversation_manager(harness.context.conversation_id)
+        assert manager.state.live_wizard_state is None, (
+            "the abandoned stream left the live channel published, so the next "
+            "turn's tools would read and write an abandoned turn's data"
+        )

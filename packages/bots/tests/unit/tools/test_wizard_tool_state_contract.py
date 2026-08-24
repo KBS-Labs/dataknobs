@@ -262,6 +262,27 @@ def test_replacing_data_with_itself_is_not_self_destruction() -> None:
     assert state.data == {"product_name": "Widget"}
 
 
+#: Names a wizard state is bound to in this package. The guard below reads
+#: source rather than types, so it recognises a receiver by name -- as a
+#: bare local (``state.data``) or as an attribute (``self._wizard_state
+#: .data``). A rebinding through a receiver named something else entirely
+#: would go unseen; the names here are the ones all three fixed sites and
+#: every caller in the package actually use.
+_WIZARD_STATE_NAMES = frozenset({"state", "wizard_state", "_wizard_state"})
+
+
+def _rebinds_wizard_state_data(target: ast.expr) -> bool:
+    """Is this assignment target a ``.data`` on something named like a state?"""
+    if not isinstance(target, ast.Attribute) or target.attr != "data":
+        return False
+    receiver = target.value
+    if isinstance(receiver, ast.Name):
+        return receiver.id in _WIZARD_STATE_NAMES
+    if isinstance(receiver, ast.Attribute):
+        return receiver.attr in _WIZARD_STATE_NAMES
+    return False
+
+
 def test_no_reasoning_module_rebinds_wizard_state_data() -> None:
     """No module assigns to ``.data`` on a wizard state — found, not listed.
 
@@ -270,6 +291,11 @@ def test_no_reasoning_module_rebinds_wizard_state_data() -> None:
     like ``state.data = ...`` restores exactly the defect the method was
     written to remove, and it would not fail any behavioural test that
     does not happen to run a tool across it.
+
+    Matching is by receiver *name* (see ``_WIZARD_STATE_NAMES``), which is
+    what keeps it off the unrelated ``.data`` assignments this package
+    also makes -- ``extraction.data``, ``self._context.data``. The cost of
+    that is the guard's one blind spot, recorded there.
     """
     reasoning_dir = Path(wizard_types.__file__).parent
     offenders: list[str] = []
@@ -280,12 +306,7 @@ def test_no_reasoning_module_rebinds_wizard_state_data() -> None:
             if not isinstance(node, ast.Assign):
                 continue
             for target in node.targets:
-                if (
-                    isinstance(target, ast.Attribute)
-                    and target.attr == "data"
-                    and isinstance(target.value, ast.Name)
-                    and target.value.id in {"state", "wizard_state"}
-                ):
+                if _rebinds_wizard_state_data(target):
                     offenders.append(f"{path.name}:{node.lineno}")
 
     assert not offenders, (
@@ -296,13 +317,31 @@ def test_no_reasoning_module_rebinds_wizard_state_data() -> None:
 
 
 def test_the_rebinding_guard_can_actually_see_an_assignment() -> None:
-    """Anti-vacuity: the guard's own pattern matches the shape it forbids."""
-    tree = ast.parse("state.data = {}\nwizard_state.data = other\n")
+    """Anti-vacuity: the pattern matches every shape it claims to forbid.
+
+    Including the attribute receiver, which the first version of this
+    guard did not see: a rebinding written ``self._wizard_state.data =``
+    rather than ``state.data =`` is the same defect.
+    """
+    tree = ast.parse("state.data = {}\nwizard_state.data = other\nself._wizard_state.data = {}\n")
     matched = [
         node
         for node in ast.walk(tree)
-        if isinstance(node, ast.Assign)
-        and isinstance(node.targets[0], ast.Attribute)
-        and node.targets[0].attr == "data"
+        if isinstance(node, ast.Assign) and _rebinds_wizard_state_data(node.targets[0])
     ]
-    assert len(matched) == 2
+    assert len(matched) == 3
+
+
+def test_the_rebinding_guard_ignores_unrelated_data_attributes() -> None:
+    """Anti-overreach: the shapes this package legitimately writes stay clean.
+
+    Both are real assignments in the reasoning package. If the guard grew
+    to flag them, the next person would silence it rather than read it.
+    """
+    tree = ast.parse("extraction.data = normalized\nself._context.data = data\n")
+    matched = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Assign) and _rebinds_wizard_state_data(node.targets[0])
+    ]
+    assert matched == []

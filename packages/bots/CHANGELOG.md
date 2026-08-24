@@ -17,7 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reported success. `WizardReasoning` now publishes its live state on
   `ConversationState.live_wizard_state` for the duration of the turn, so a
   tool's writes land in wizard state and survive the save. The channel is
-  cleared at the end of the turn beside `turn_data`.
+  cleared beside `turn_data` when the turn tears down.
 
 - **A flow change mid-turn no longer strands a tool on abandoned data.**
   `WizardState.data` was *rebound* on a subflow push, a subflow pop and a
@@ -59,6 +59,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `artifact_override=`, which are the internal helper's parameter names. The
   constructor takes `banks=` / `catalog=` / `artifact=`; the example as
   published raised `TypeError`.
+
+- **An abandoned stream no longer leaks a turn's `turn_data` into the next
+  one.** `ConversationState`'s per-turn channels are documented as cleared
+  when the turn completes, but the cleanup ran in turn *finalization*, which
+  `stream_chat()` skips when the stream was not fully consumed -- deliberately,
+  so partial output is never written to history. A caller that broke out of
+  the stream, or a client that disconnected, therefore left `turn_data`
+  populated on the cached manager, visible to anything reading that manager
+  before the next turn overwrote it. The cleanup now runs in the `finally`
+  every turn driver executes, so it covers the success, error and
+  stream-abandon paths alike.
 
 ### Added
 

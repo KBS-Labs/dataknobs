@@ -1916,15 +1916,6 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
                 turn.response_content, turn.context, **mw_kwargs
             )
 
-        # Clean up transient per-turn channels on the manager to avoid
-        # leaking between turns (the manager is cached across turns).
-        # live_wizard_state holds a reference to the strategy's own state
-        # dict, so leaving it set would let the next turn's tools write
-        # into the previous turn's wizard state.
-        if turn.manager and turn.manager.state is not None:
-            turn.manager.state.turn_data = {}
-            turn.manager.state.live_wizard_state = None
-
     async def _generate_response(
         self,
         manager: Any,
@@ -2553,6 +2544,23 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
                     )
                     await self._call_on_hook_error_middleware("finally_turn", exc, turn.context)
         finally:
+            # Clear the transient per-turn channels on the manager, which is
+            # cached across turns. ``live_wizard_state`` aliases the wizard
+            # strategy's own collected-data dict, so leaving it published
+            # hands the *next* turn's tools a dict belonging to a turn that
+            # is over. ``turn_data`` is rebound rather than emptied on
+            # purpose: it is the same object as ``turn.plugin_data``, which
+            # the turn record keeps.
+            #
+            # This runs here rather than in ``_finalize_turn`` for the same
+            # reason the pin release does — see below. A stream abandoned
+            # part-way skips finalization by design (partial output must not
+            # be written to history), and used to leave both channels set
+            # with no error raised anywhere.
+            if turn.manager and turn.manager.state is not None:
+                turn.manager.state.turn_data = {}
+                turn.manager.state.live_wizard_state = None
+
             # Release the in-flight pin taken in _get_or_create_conversation.
             # This is the one method every turn driver calls inside its
             # ``finally``, so the release runs on every path — success, error,
