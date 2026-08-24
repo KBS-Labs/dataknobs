@@ -30,6 +30,7 @@ from dataknobs_common.serialization import sanitize_for_json
 from dataknobs_common.structured_config import StructuredConfigConsumer
 from dataknobs_llm import LLMStreamResponse
 from dataknobs_llm.conversations.storage import ConversationNode, get_node_by_id
+from dataknobs_llm.tools.context import ToolWizardState
 
 from .base import (
     ProcessResult,
@@ -2262,6 +2263,8 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
             wizard_state.data.pop(key, None)
             wizard_state.transient.pop(key, None)
 
+        self._publish_live_state(manager, wizard_state)
+
         # Fire turn-start hooks AFTER the per-turn key clear (so a hook
         # re-populating an ephemeral key isn't immediately wiped) and
         # BEFORE the user-message read / early-return dispatch (so a
@@ -3534,6 +3537,61 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
             "phase": "end",
         }
         await self._hooks.trigger_turn_end(event)
+
+    def _publish_live_state(self, manager: Any, wizard_state: WizardState) -> None:
+        """Publish this turn's wizard state where a tool can reach it.
+
+        A tool reaches wizard state through ``ToolExecutionContext``, which
+        without this rebuilds it from the *persisted* conversation
+        metadata. That makes the tool's reads as old as the last save and
+        its writes worthless, because the wizard rewrites that metadata
+        from its own state when the turn is saved.
+
+        ``collected_data`` is therefore ``wizard_state.data`` itself, not a
+        copy. That is the whole point rather than an optimisation: a copy
+        would fix nothing on either side -- the tool's writes would land in
+        the copy and be dropped, and its reads would still miss values
+        extracted later in the same turn.
+
+        ``stage_metadata`` *is* copied, because it is the FSM's own stage
+        configuration rather than turn state, and a tool has no business
+        editing the wizard's definition of its stages.
+
+        The channel is transient. ``DynaBot`` clears it beside
+        ``turn_data`` in the turn's teardown -- in the ``finally`` every
+        turn driver runs, not in finalization, which a stream abandoned
+        part-way skips by design -- so nothing here outlives the turn or
+        reaches storage.  Like ``turn_data``, it assumes one turn at a
+        time against a given manager.
+
+        Holding the dict by reference is only sound because the flow
+        changes that replace collected data -- a subflow push or pop, a
+        restart -- go through :meth:`WizardState.replace_data`, which
+        empties and refills the dict rather than rebinding the attribute.
+        They are reachable *after* this publish and *before* a tool runs:
+        ``begin_turn``'s auto-restart arm is the shortest such path, and
+        rebinding there used to hand the tool the answers of the run the
+        user had just finished while its writes went to a dict nothing
+        would read again.
+
+        Args:
+            manager: ConversationManager instance for this turn.
+            wizard_state: The turn's restored wizard state.
+        """
+        state = getattr(manager, "state", None)
+        if state is None:
+            return
+
+        active_fsm = self._subflows.get_active_fsm()
+        stage_metadata = active_fsm.current_metadata if active_fsm else None
+
+        state.live_wizard_state = ToolWizardState(
+            current_stage=wizard_state.current_stage,
+            collected_data=wizard_state.data,
+            history=wizard_state.history,
+            completed=wizard_state.completed,
+            stage_metadata=dict(stage_metadata or {}),
+        )
 
     def _get_wizard_state(self, manager: Any) -> WizardState:
         """Get or create wizard state from conversation manager.

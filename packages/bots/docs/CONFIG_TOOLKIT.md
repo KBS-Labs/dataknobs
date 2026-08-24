@@ -646,6 +646,20 @@ KB tools read and write specific keys in wizard collected data:
 | `kb_resources` | Ingest | — | Finalized resource list (public key) |
 | `ingestion_complete` | Ingest | — | Whether ingestion manifest was written |
 
+These are writes to the wizard's own collected data, not to a copy of it,
+and the distinction has two halves that are worth separating:
+
+- **Within a turn**, one tool's write is visible to the next tool called on
+  the same turn — that is how Add and Remove see the `_kb_resources` list
+  Check created.
+- **Across turns**, the write survives being saved and reloaded, so a
+  resource added three turns ago is still in the list.
+
+Both halves require a wizard: the tools reach this data through
+`ToolExecutionContext.wizard_data()`, and outside a wizard conversation it
+returns `None` and the tool reports an error rather than writing somewhere
+nothing will read.
+
 ### Example
 
 ```python

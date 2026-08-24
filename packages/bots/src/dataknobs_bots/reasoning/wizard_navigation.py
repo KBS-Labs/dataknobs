@@ -427,7 +427,7 @@ class WizardNavigator:
         previous_transitions = [*state.transitions, transition]
 
         state.current_stage = to_stage
-        state.data = {}
+        state.replace_data({})
         state.history = [state.current_stage]
         state.completed = False
         state.clarification_attempts = 0

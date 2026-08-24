@@ -405,6 +405,14 @@ class ConversationState:
         is persisted, and nothing here may be relied on outside the turn
         that set it.
 
+        Both assume the same single-turn-at-a-time contract the rest of
+        this object does (see ``ConversationManager.scoped_middleware``):
+        one turn writes a channel, that turn's readers read it, and the
+        turn's teardown clears it.  Two turns running concurrently
+        against the same cached manager would share both channels, and
+        for ``live_wizard_state`` that means sharing wizard data that one
+        of them is going to persist.
+
         ``turn_data`` is cross-middleware communication state, populated
         by the bot layer before each LLM call.
 

@@ -508,7 +508,7 @@ async def test_a_greeting_is_not_repeated_after_a_subflow_push() -> None:
     ``track_render``: whether a greeting has been delivered is a fact,
     not a pending question.
     """
-    from tests.unit.test_wizard_subflow import _build_subflow_confirmation_config
+    from unit.test_wizard_subflow import _build_subflow_confirmation_config
 
     config = _build_subflow_confirmation_config()
     subflow_stages = config["subflows"]["team_details"]["stages"]

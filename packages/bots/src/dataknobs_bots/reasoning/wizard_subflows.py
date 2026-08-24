@@ -116,7 +116,8 @@ class SubflowManager:
                 continue
 
             # This transition matches and is a subflow transition
-            return transition.get("subflow_config", {})
+            subflow_config: dict[str, Any] = transition.get("subflow_config", {})
+            return subflow_config
 
         return None
 
@@ -198,7 +199,7 @@ class SubflowManager:
 
         # Update wizard state
         wizard_state.current_stage = to_stage
-        wizard_state.data = subflow_data
+        wizard_state.replace_data(subflow_data)
         wizard_state.history = [to_stage]
         wizard_state.stage_entry_time = time.time()
 
@@ -257,7 +258,7 @@ class SubflowManager:
 
         # Update wizard state
         wizard_state.current_stage = return_stage
-        wizard_state.data = parent_data
+        wizard_state.replace_data(parent_data)
         wizard_state.history = subflow_context.parent_history
         if return_stage not in wizard_state.history:
             wizard_state.history.append(return_stage)
