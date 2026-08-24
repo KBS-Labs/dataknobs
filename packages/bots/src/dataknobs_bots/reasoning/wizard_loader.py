@@ -612,7 +612,7 @@ class WizardConfigLoader:
                 "intent_detection": stage.get("intent_detection"),
                 "navigation": stage.get("navigation"),
             },
-            data_schema=stage.get("schema"),
+            schema=stage.get("schema"),
         )
 
         return state_config
@@ -947,7 +947,7 @@ class WizardConfigLoader:
                                     result.value,
                                     list(data.keys()),
                                 )
-                            return result.value
+                            return bool(result.value)
 
                         return condition_func
 
