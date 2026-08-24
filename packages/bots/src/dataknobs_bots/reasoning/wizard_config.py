@@ -36,6 +36,9 @@ class WizardReasoningConfig(StructuredConfig):
     ``_SENSITIVE_FIELDS`` entry is required.
 
     Attributes:
+        wizard_config: Path to a wizard YAML config file, or an inline
+            wizard-definition dict (compatible with
+            ``WizardConfigLoader.load_from_dict``).  Required.
         greeting_template: Optional Jinja2 template for the bot-initiated
             greeting, rendered with ``initial_context``.  The universal
             :class:`~dataknobs_bots.reasoning.base.ReasoningStrategy` field,
@@ -45,9 +48,6 @@ class WizardReasoningConfig(StructuredConfig):
             the greeting turn and then stepped over, exactly as a stage-level
             greeting is.  Mid-flow stages are unaffected — there is one
             greeting turn and it belongs to the start stage.
-        wizard_config: Path to a wizard YAML config file, or an inline
-            wizard-definition dict (compatible with
-            ``WizardConfigLoader.load_from_dict``).  Required.
         config_base_path: Base directory for resolving a relative
             ``wizard_config`` path.
         custom_functions: Custom transition functions (callables or
