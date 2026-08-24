@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
-from dataknobs_common.expressions import safe_eval
+from dataknobs_common.expressions import safe_eval, safe_eval_validate
 from dataknobs_llm import LLMStreamResponse
 
 from .base import ReasoningStrategy, StreamStageContext
@@ -265,9 +265,7 @@ class WizardResponder:
         else:
             active_template = response_template
 
-        use_template = bool(active_template)
-
-        if use_template:
+        if active_template:
             content, llm_response = await self._resolve_template_content(
                 manager,
                 llm,
@@ -894,12 +892,27 @@ class WizardResponder:
             default=False,
         )
         if not result.success:
-            logger.debug(
-                "Condition evaluation failed for '%s': %s",
-                condition,
-                result.error,
-            )
-        return result.value
+            # These conditions never pass through WizardConfigLoader, so
+            # there is no load-time moment at which to say this once; the
+            # check runs here instead, on the failure path only.
+            static_reason = safe_eval_validate(condition)
+            if static_reason is not None:
+                # The expression cannot run on any data, so this condition
+                # can never be satisfied -- an author has to change it.
+                logger.warning(
+                    "Condition %r cannot be evaluated and will never be satisfied: %s",
+                    condition,
+                    static_reason,
+                )
+            else:
+                # Failed on this turn's data: "not satisfied yet", which is
+                # what a guard looks like before its input arrives.
+                logger.debug(
+                    "Condition evaluation failed for '%s': %s",
+                    condition,
+                    result.error,
+                )
+        return bool(result.value)
 
     def calculate_progress(self, state: WizardState) -> float:
         """Calculate wizard completion progress (0.0 to 1.0).
@@ -1344,7 +1357,7 @@ class WizardResponder:
         stage: dict[str, Any],
         state: WizardState,
         tools: list[Any] | None,
-    ) -> tuple[str, list[Any], Any]:
+    ) -> tuple[str, list[Any] | None, ReasoningStrategy | None]:
         """Prepare LLM mode parameters for a stage.
 
         Shared by :meth:`generate_stage_response` and
@@ -1830,7 +1843,7 @@ class WizardResponder:
         enhanced_prompt: str,
         stage: dict[str, Any],
         state: WizardState,
-        tools: list[Any],
+        tools: list[Any] | None,
         metadata: dict[str, Any] | None = None,
     ) -> tuple[Any, bool, str, bool]:
         """Generate response by delegating to a registered strategy.
@@ -1845,7 +1858,9 @@ class WizardResponder:
             enhanced_prompt: Stage-aware system prompt.
             stage: Stage metadata dict.
             state: Current wizard state.
-            tools: Available tools for this stage.
+            tools: Available tools for this stage, or ``None`` when
+                the stage has none — ``filter_tools_for_stage``
+                normalises an empty result to ``None``.
             metadata: Optional metadata to persist on conversation nodes.
 
         Returns:
@@ -1930,9 +1945,8 @@ class WizardResponder:
         # ── Template mode ────────────────────────────────────────
         is_conversation_mode = stage.get("mode") == "conversation"
         is_first_render = state.get_render_count(stage_name) == 0
-        use_template = response_template and (not is_conversation_mode or is_first_render)
 
-        if use_template:
+        if response_template and (not is_conversation_mode or is_first_render):
             content, llm_response = await self._resolve_template_content(
                 manager,
                 llm,
@@ -2013,7 +2027,7 @@ class WizardResponder:
         enhanced_prompt: str,
         stage: dict[str, Any],
         state: WizardState,
-        tools: list[Any],
+        tools: list[Any] | None,
         stream_ctx: StreamStageContext,
         metadata: dict[str, Any] | None = None,
     ) -> AsyncIterator[LLMStreamResponse]:
@@ -2030,7 +2044,9 @@ class WizardResponder:
             enhanced_prompt: Stage-aware system prompt.
             stage: Stage metadata dict.
             state: Current wizard state.
-            tools: Available tools for this stage.
+            tools: Available tools for this stage, or ``None`` when
+                the stage has none — ``filter_tools_for_stage``
+                normalises an empty result to ``None``.
             stream_ctx: Mutable context populated with lifecycle signals.
             metadata: Optional metadata to persist on conversation nodes.
 
@@ -2195,7 +2211,7 @@ class WizardResponder:
                 metadata = msg.get("metadata") or {}
                 raw = metadata.get("raw_content")
                 if raw is not None:
-                    return raw
+                    return str(raw)
 
                 content = msg.get("content", "")
                 # Handle plain string content
@@ -2205,5 +2221,5 @@ class WizardResponder:
                 if isinstance(content, list):
                     for part in content:
                         if isinstance(part, dict) and part.get("type") == "text":
-                            return part.get("text", "")
+                            return str(part.get("text", ""))
         return ""

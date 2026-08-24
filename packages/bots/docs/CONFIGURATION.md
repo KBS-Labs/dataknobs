@@ -2155,9 +2155,18 @@ Available variables:
 |----------|-------------|
 | `data` | Wizard state data dict — use `data.get('field')` to access values |
 | `bank` | Memory bank accessor — use `bank('name').count()` etc. |
-| `artifact` | ArtifactBank instance (if configured) |
+| `has` | Field presence check — `has('field')` is `data.get('field') is not None` |
+| `artifact` | ArtifactBank instance (if configured) — see the note below |
 | `true` / `false` | Aliases for Python `True` / `False` (for YAML/JSON convention) |
 | `null` / `none` | Aliases for Python `None` |
+
+**`artifact` does not resolve in FSM transition conditions.** A transition's
+condition is evaluated in two different places and only one of them binds
+`artifact`: the auto-advance gate and subflow guards resolve it, while the FSM
+arc the loader registers does not. A condition naming `artifact` therefore
+fails with `name 'artifact' is not defined` whenever the FSM evaluates it —
+logged at `DEBUG`, so the transition simply never fires. Reach artifact state
+through `data` instead.
 
 Examples:
 
@@ -2176,6 +2185,22 @@ transitions:
 Both Python (`True`/`False`/`None`) and YAML/JSON (`true`/`false`/`null`)
 boolean literals are accepted. Python builtins like `len`, `str`, `int` are
 also available.
+
+**When a condition is reported.** Conditions are checked once, when the wizard
+is loaded. A condition the expression engine refuses outright — a multiline
+expression, a syntax error, dunder access — is reported as a `WARNING` naming
+the stage, the target and the reason. The wizard still loads and the transition
+still registers; it simply never fires, exactly as before the check existed.
+Load time is where the report is actionable, because the fix is to the config
+and the author is still holding it.
+
+A condition the engine *accepts* but that fails on a given turn's data —
+`data['name']` before `name` has been captured — is logged at `DEBUG`, not
+`WARNING`. That is the ordinary state of a guard whose input has not yet
+arrived, and it resolves itself when the data lands. The corollary is that a
+condition naming something that never resolves, such as the `artifact` case
+above, is also `DEBUG`: the load-time check reports what the engine will
+refuse, not whether every name in the expression exists.
 
 **Subflows:**
 
