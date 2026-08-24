@@ -82,7 +82,7 @@ class HistoryCompactionConfig(StructuredConfig):
             )
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, kw_only=True)
 class ReActReasoningConfig(ReasoningConfig):
     """Configuration for :class:`ReActReasoning`.
 

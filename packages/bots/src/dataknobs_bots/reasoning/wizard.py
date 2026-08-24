@@ -752,17 +752,6 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
         self._wizard_fsm = wizard_fsm
         self._wizard_fsm.set_transform_context_factory(self._build_transform_context)
 
-    def _setup(self) -> None:
-        """Bind the greeting template from the typed config.
-
-        Runs from the mixin's cooperative init, after
-        ``ReasoningStrategy.__init__`` has defaulted the attribute to
-        ``None`` — the same hook and the same one line the four sibling
-        strategies use, so the universal field arrives here the way it
-        arrives everywhere else.  What the wizard does with it afterwards is
-        its own (see :meth:`greet`).
-        """
-
     # -----------------------------------------------------------------
     # Per-conversation bank-state resolution
     # -----------------------------------------------------------------

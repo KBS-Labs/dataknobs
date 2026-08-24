@@ -24,6 +24,7 @@ import pytest
 
 from dataknobs_common.testing import assert_structured_config_roundtrip
 
+from dataknobs_bots.reasoning.config_base import ReasoningConfig
 from dataknobs_bots.reasoning.grounded import GroundedReasoning
 from dataknobs_bots.reasoning.grounded_config import (
     GroundedIntentConfig,
@@ -38,9 +39,21 @@ from dataknobs_bots.reasoning.hybrid_config import HybridReasoningConfig
 from dataknobs_bots.reasoning.react import ReActReasoning
 from dataknobs_bots.reasoning.react_config import ReActReasoningConfig
 from dataknobs_bots.reasoning.simple import SimpleReasoning
-from dataknobs_bots.reasoning.config_base import ReasoningConfig
 from dataknobs_bots.reasoning.simple_config import SimpleReasoningConfig
 from dataknobs_bots.reasoning.wizard_config import WizardReasoningConfig
+
+#: Every ``ReasoningConfig`` subclass shipped as a strategy config.  Named
+#: once because three tests below assert over the whole family, and a
+#: sixth strategy config added to only two of the three lists would be
+#: the exact silent gap this module exists to close.
+_FAMILY = [
+    SimpleReasoningConfig,
+    ReActReasoningConfig,
+    GroundedReasoningConfig,
+    HybridReasoningConfig,
+    WizardReasoningConfig,
+]
+_FAMILY_IDS = ["simple", "react", "grounded", "hybrid", "wizard"]
 
 
 class TestConfigClsPointers:
@@ -291,17 +304,7 @@ class TestReasoningConfigBase:
         names = {f.name for f in dataclasses.fields(ReasoningConfig)}
         assert names == {"greeting_template"}
 
-    @pytest.mark.parametrize(
-        "config_cls",
-        [
-            SimpleReasoningConfig,
-            ReActReasoningConfig,
-            GroundedReasoningConfig,
-            HybridReasoningConfig,
-            WizardReasoningConfig,
-        ],
-        ids=["simple", "react", "grounded", "hybrid", "wizard"],
-    )
+    @pytest.mark.parametrize("config_cls", _FAMILY, ids=_FAMILY_IDS)
     def test_every_strategy_config_inherits_it(self, config_cls: type[ReasoningConfig]) -> None:
         """Both halves of "declared once": inherited, and not re-declared.
 
@@ -357,13 +360,52 @@ class TestReasoningConfigBase:
         assert loaded == direct
 
     def test_the_field_is_keyword_only(self) -> None:
-        """A positional ``greeting_template`` was never reachable anyway.
+        """Keyword-only on the base is forced by inheritance.
 
-        It sat at a different index in each of the five configs, so no
-        call site could have passed it positionally and stayed correct
-        across the family -- an AST scan of the tree finds zero positional
-        constructions of any of them.  Pinning it keyword-only records
-        that the base took nothing away.
+        A base field is declared before every subclass field, so a
+        defaulted one would sit ahead of the wizard's required
+        ``wizard_config`` -- rejected at import with ``non-default
+        argument follows default argument``.  ``kw_only`` moves it behind
+        the ``*`` instead, which is what makes the shared base possible
+        at all.
         """
         (field,) = dataclasses.fields(ReasoningConfig)
         assert field.kw_only is True
+
+    @pytest.mark.parametrize("config_cls", _FAMILY, ids=_FAMILY_IDS)
+    def test_the_whole_family_is_keyword_only(self, config_cls: type) -> None:
+        """Every field of every strategy config, not just the shared one.
+
+        Inheriting ``greeting_template`` moves it behind the ``*``, which
+        shifts each subclass's own fields one position left.  Four of the
+        five configs raise on a call that relied on the old order.  The
+        wizard did not: its second positional was ``greeting_template``
+        and became ``config_base_path``, both ``str | None``, so
+        ``WizardReasoningConfig(cfg, "Hello!")`` still *constructed* --
+        with no greeting and a nonsense base path.  A silent rebind is
+        the failure this whole change exists to remove, so the family is
+        keyword-only throughout and every such call now raises.
+
+        This is the guard for that decision: a subclass that drops
+        ``kw_only`` re-opens the shift for its own fields.
+        """
+        for field in dataclasses.fields(config_cls):
+            assert field.kw_only is True, (
+                f"{config_cls.__name__}.{field.name} is positionally reachable; "
+                "the family is keyword-only so a stale positional call raises "
+                "instead of rebinding to the neighbouring field"
+            )
+
+    def test_a_positional_call_raises_rather_than_rebinding(self) -> None:
+        """The wizard case specifically, since it is the one that was quiet.
+
+        ``str | None`` next to ``str | None`` is invisible to the
+        dataclass machinery -- nothing about the value distinguishes a
+        greeting from a path.  Only the signature can reject it.
+        """
+        with pytest.raises(TypeError, match="positional"):
+            WizardReasoningConfig({"stages": {}}, "Hello!")  # type: ignore[misc]
+
+        ok = WizardReasoningConfig(wizard_config={"stages": {}}, greeting_template="Hello!")
+        assert ok.greeting_template == "Hello!"
+        assert ok.config_base_path is None

@@ -14,7 +14,7 @@ from dataknobs_bots.reasoning.grounded_config import GroundedReasoningConfig
 logger = logging.getLogger(__name__)
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, kw_only=True)
 class HybridReasoningConfig(ReasoningConfig):
     """Top-level configuration for :class:`HybridReasoning`.
 

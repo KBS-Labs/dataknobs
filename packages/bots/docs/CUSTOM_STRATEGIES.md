@@ -124,10 +124,16 @@ from dataclasses import dataclass
 from dataknobs_bots.reasoning import ReasoningConfig
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, kw_only=True)
 class SummarizeConfig(ReasoningConfig):
     max_summary_tokens: int = 200        # greeting_template is inherited
 ```
+
+`greeting_template` is keyword-only, because a base field is declared ahead of
+your own and a defaulted one would otherwise sit in front of any *required*
+field you add. Your own fields need not be — but `kw_only=True` is what the
+five shipped configs use, and it is the reason adding a field to
+`ReasoningConfig` later cannot silently renumber yours.
 
 **Prefer the typed-config route.** It is the one that cannot go wrong: the
 field arrives by inheritance, so there is no site to forget. The constructor

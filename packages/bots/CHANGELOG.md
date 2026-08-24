@@ -90,6 +90,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `_greeting_template` is private, is half of one route, and no longer holds
   the config value.
 
+- **BREAKING: the five reasoning-strategy configs are keyword-only.**
+  `SimpleReasoningConfig`, `ReActReasoningConfig`, `GroundedReasoningConfig`,
+  `HybridReasoningConfig` and `WizardReasoningConfig` no longer accept
+  positional arguments. Construct them by keyword, or by `from_dict` — which
+  is how they are built from YAML, and which is unaffected.
+
+  Inheriting `greeting_template` from a base is what forces it. A base field
+  is declared ahead of every subclass field, so a defaulted one would sit in
+  front of the wizard's required `wizard_config` and the class would be
+  rejected at import. `kw_only` moves it behind the `*` instead — and that
+  shifts each config's own fields one position left.
+
+  Four of the five would have raised on a call written against the old order.
+  The wizard would not: its second positional was `greeting_template` and
+  became `config_base_path`, both `str | None`, so
+  `WizardReasoningConfig(cfg, "Hello!")` would still have constructed, with no
+  greeting and a nonsense base path. Nothing about the value distinguishes a
+  greeting from a path, so only the signature can reject it. Making the whole
+  family keyword-only turns every stale positional call into a `TypeError` at
+  the call site rather than a wrong field somewhere downstream.
+
+  Migration is mechanical: name every argument, including the first.
+  `WizardReasoningConfig(wizard_config=cfg, greeting_template="Hello!")`.
+
 - **`ReasoningConfig` is exported from `dataknobs_bots.reasoning`.** It is the
   base a consumer's own strategy config inherits.
 

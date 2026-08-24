@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from dataknobs_bots.reasoning.config_base import ReasoningConfig
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, kw_only=True)
 class SimpleReasoningConfig(ReasoningConfig):
     """Configuration for :class:`SimpleReasoning`.
 

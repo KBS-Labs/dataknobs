@@ -24,7 +24,7 @@ from typing import Any
 from dataknobs_bots.reasoning.config_base import ReasoningConfig
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, kw_only=True)
 class WizardReasoningConfig(ReasoningConfig):
     """Typed envelope for the wizard reasoning-section config.
 

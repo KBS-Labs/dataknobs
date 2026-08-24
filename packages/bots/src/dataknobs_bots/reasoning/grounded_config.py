@@ -327,7 +327,7 @@ class GroundedSourceConfig(StructuredConfig):
         }
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, kw_only=True)
 class GroundedReasoningConfig(ReasoningConfig):
     """Top-level configuration for :class:`GroundedReasoning`.
 
