@@ -118,6 +118,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`ErrorRaisingStrategy` accepts `greeting_template`, so building it from
+  config no longer raises `TypeError`.** It is a direct `ReasoningStrategy`
+  subclass, so it inherits the base `from_config`, which calls
+  `cls(greeting_template=...)` — the base class's own universal field, which
+  its constructor did not accept. Any config-driven construction of the
+  shipped strategy failed on the way in. Its `greet()` still raises, which is
+  what the construct is for; the template it now accepts is never rendered.
+
+- **Every registered reasoning strategy is held to the universal
+  `greeting_template` contract.** `ReasoningStrategy` documents the field as
+  universal, but the family has no shared config base: each strategy config
+  re-declares the field and each strategy re-binds it, and a strategy that
+  skips either half fails silently, because an undeclared key is dropped
+  rather than reported. The parity guard already in place cannot see it — it
+  compares a config class against a constructor signature, and for a
+  consumer-mixin adopter that signature is the mixin's variadic one, so the
+  comparison is empty. A registry-driven test now asserts that every
+  registered strategy accepts the field at construction and renders it from
+  `greet()`, which also covers the three built-ins whose config-factory
+  greeting round-trip was untested. Because it iterates the registry, a
+  strategy a consumer registers is held to the same contract.
+
 - **A conversation-mode stage renders its `clarification_template` when the
   turn is streamed, not only when it is buffered.** The two response paths
   each carried their own copy of the template-selection rule, and only the

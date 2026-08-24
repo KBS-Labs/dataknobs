@@ -1419,6 +1419,12 @@ class ErrorRaisingStrategy(ReasoningStrategy):
 
     Args:
         error: The exception to raise. Defaults to ``ValueError("test error")``.
+        greeting_template: Accepted for parity with the universal
+            ``ReasoningStrategy`` field so that ``from_config`` — which the
+            reasoning registry calls with it — constructs rather than raising
+            ``TypeError``.  This strategy's ``greet()`` raises by design, so
+            the template is never rendered; accepting it is what keeps the
+            construct usable wherever a strategy is built from config.
 
     Example:
         ```python
@@ -1430,8 +1436,13 @@ class ErrorRaisingStrategy(ReasoningStrategy):
         ```
     """
 
-    def __init__(self, error: Exception | None = None) -> None:
-        super().__init__()
+    def __init__(
+        self,
+        error: Exception | None = None,
+        *,
+        greeting_template: str | None = None,
+    ) -> None:
+        super().__init__(greeting_template=greeting_template)
         self._error = error or ValueError("test error")
 
     async def generate(
