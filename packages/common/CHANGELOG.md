@@ -68,6 +68,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `_MAX_REDACT_DEPTH` already was: the subclasses that matter are
   consumers', and a library cannot assume its consumers run mypy.
 
+### Fixed
+
+- **`safe_eval`'s `return` prefix is a token test.** It prepends `return`
+  unless the expression already *is* a return statement, and decided that
+  with `startswith("return")` — a substring test that also matches any
+  identifier merely beginning with those characters. `returned_value > 1`
+  and `return_code == 0` were therefore left unwrapped, so the generated
+  body was a bare expression statement, `_fn()` returned `None`, and
+  `coerce_bool=True` turned it into `False`.
+
+  The failure was silent in the worst way: `success` was `True` and `error`
+  was `None`, so no caller logged anything. A wizard transition guarded by
+  such a condition evaluated `False` on every turn, forever, with a clean
+  log. The test is now on the `return` token, so `return x`, `return(x)` and
+  a bare `return` are still recognised as statements while `returned_value`,
+  `return_code`, `returns` and `returning` are evaluated as expressions.
+
 ## v3.0.0 - 2026-08-19
 
 ### Added

@@ -189,6 +189,63 @@ class TestCoreFunctionality:
 
 
 # ---------------------------------------------------------------------------
+# The ``return`` prefix rule
+# ---------------------------------------------------------------------------
+
+
+class TestReturnPrefixTokenRule:
+    """The prefix rule is a token test, not a substring test.
+
+    ``safe_eval`` prepends ``return`` unless the expression already *is* a
+    return statement.  Deciding that with ``startswith("return")`` also
+    matches any identifier merely beginning with those characters
+    (``returned_value``, ``return_code``), which leaves the expression
+    unwrapped: the generated body becomes a bare expression statement,
+    ``_fn()`` returns ``None``, and ``coerce_bool=True`` yields ``False``.
+
+    The failure is silent — ``success`` is ``True``, so no caller logs
+    anything and the wrong answer propagates as if it were the right one.
+    """
+
+    def test_identifier_beginning_with_return_is_evaluated(self) -> None:
+        """A name that merely starts with ``return`` is an expression."""
+        result = safe_eval(
+            "returned_value > 1",
+            {"returned_value": 5},
+            coerce_bool=True,
+            default=False,
+        )
+        assert result.success is True
+        assert result.value is True
+
+    @pytest.mark.parametrize(
+        ("expression", "scope", "expected"),
+        [
+            # Already a return statement — must not be prepended.
+            ("return 42", {}, 42),
+            ("return(42)", {}, 42),
+            ("return  42", {}, 42),
+            # An expression whose first token only starts with the
+            # characters ``return`` — must be prepended.
+            ("returned_value", {"returned_value": 7}, 7),
+            ("return_code == 0", {"return_code": 0}, True),
+            ("returns", {"returns": "yes"}, "yes"),
+            ("returning(1)", {"returning": lambda n: n + 1}, 2),
+        ],
+    )
+    def test_prefix_boundaries(self, expression: str, scope: dict[str, Any], expected: Any) -> None:
+        result = safe_eval(expression, scope)
+        assert result.success is True, result.error
+        assert result.value == expected
+
+    def test_bare_return_is_not_prepended(self) -> None:
+        """``return`` alone is a valid return statement yielding None."""
+        result = safe_eval("return")
+        assert result.success is True
+        assert result.value is None
+
+
+# ---------------------------------------------------------------------------
 # Security
 # ---------------------------------------------------------------------------
 

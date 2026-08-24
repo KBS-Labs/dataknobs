@@ -37,6 +37,7 @@ from __future__ import annotations
 
 import ast
 import logging
+import re
 from dataclasses import dataclass
 from typing import Any
 
@@ -164,6 +165,13 @@ def _validate_ast(code: str) -> str | None:
     return None
 
 
+#: Matches an expression that already *is* a ``return`` statement.  The
+#: word boundary is what separates ``return x`` from ``returned_value`` —
+#: a plain prefix test treats the latter as a statement, leaves it
+#: unwrapped, and silently evaluates it to ``None``.
+_RETURN_STATEMENT = re.compile(r"return\b")
+
+
 def safe_eval(
     code: str,
     scope: dict[str, Any] | None = None,
@@ -186,8 +194,11 @@ def safe_eval(
        MRO traversal via ``__class__.__bases__.__subclasses__``)
 
     Args:
-        code: Python expression string.  If it does not start with
-            ``return``, one is prepended automatically.
+        code: Python expression string.  Unless it is already a
+            ``return`` statement, ``return`` is prepended
+            automatically.  The test is on the ``return`` *token*, so
+            an expression starting with a name such as
+            ``returned_value`` is treated as an expression.
         scope: Variables available in the expression.  Merged on top
             of ``SAFE_BUILTINS`` and ``YAML_ALIASES``.  Callers
             provide context-specific variables here (e.g., ``data``,
@@ -226,7 +237,7 @@ def safe_eval(
                 error="Multiline expressions are not allowed",
             )
 
-        if not stripped.startswith("return"):
+        if not _RETURN_STATEMENT.match(stripped):
             stripped = f"return {stripped}"
 
         if not restrict_builtins:
