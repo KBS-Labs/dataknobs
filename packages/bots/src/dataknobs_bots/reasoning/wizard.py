@@ -4521,9 +4521,10 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
 
         **It still runs before the FSM step**, which is what
         ``a05edd98``'s ordering was protecting.  A subflow transition
-        compiles to a *self-loop* arc (``wizard_loader.py:677``), so the
-        FSM cannot perform the push -- and an ordinary transition
-        declared alongside it would consume the turn first.
+        compiles to a *self-loop* arc
+        (``WizardConfigLoader._translate_transition``), so the FSM cannot
+        perform the push -- and an ordinary transition declared alongside
+        it would consume the turn first.
 
         What a guard can see follows from where this sits, and the
         boundary is worth stating because it is not the obvious one:

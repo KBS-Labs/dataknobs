@@ -608,10 +608,11 @@ class WizardFSM:
         Standing still is not the same as matching nothing, and the case
         where they differ is the one worth naming: a **subflow**
         transition compiles to a self-loop arc carrying its condition
-        (``wizard_loader.py:677``), so a matched subflow transition leaves
-        the FSM exactly where it started. Reporting that as "none matched"
-        sends a reader looking for a broken condition when the condition
-        was satisfied and the push is somebody else's job --
+        (``WizardConfigLoader._translate_transition``), so a matched
+        subflow transition leaves the FSM exactly where it started.
+        Reporting that as "none matched" sends a reader looking for a
+        broken condition when the condition was satisfied and the push is
+        somebody else's job --
         ``SubflowManager.should_push``, which runs before this step.
 
         The two are told apart by *what the step reports*, not by what the
