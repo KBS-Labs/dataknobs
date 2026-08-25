@@ -3052,11 +3052,26 @@ for name, meta in wizard_fsm.stages.items():
 
 | Property | Type | Description |
 |----------|------|-------------|
-| `stages` | dict | All stage metadata (returns a copy) |
+| `stages` | dict | All stage metadata (shallow copy — see below) |
 | `stage_names` | list | Ordered list of stage names |
 | `stage_count` | int | Total number of stages |
 | `current_stage` | string | Current stage name |
 | `current_metadata` | dict | Metadata for current stage |
+
+`stages` copies the table, not the stages in it. Adding or removing a key on
+what it returns leaves the wizard's stage list alone, but the stage dicts are
+the live ones — so `meta["label"] = ...` while iterating edits the running
+wizard's configuration. Copy a stage before editing it:
+
+```python
+from copy import deepcopy
+
+welcome = deepcopy(wizard_fsm.stages["welcome"])
+welcome["label"] = "Start here"   # the wizard is unaffected
+```
+
+`current_metadata` and `stage_metadata_for()` return the live stage dict with
+no copy at all, and the same rule applies to them.
 
 **Conversation Stages:**
 
