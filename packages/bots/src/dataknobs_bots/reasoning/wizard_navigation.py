@@ -111,6 +111,10 @@ class WizardNavigator:
         self._run_post_transition_lifecycle = run_post_transition_lifecycle
         self._generate_stage_response = generate_stage_response
         self._prepend_messages_to_response = prepend_messages_to_response
+        #: ``(stage, field)`` pairs already reported by
+        #: :meth:`_resolve_navigation_config`, so an unreadable block is
+        #: named once rather than on every navigation check of every turn.
+        self._reported_navigation_types: set[tuple[str, str]] = set()
 
     # ------------------------------------------------------------------
     # Private — which FSM owns the stage being navigated
@@ -717,6 +721,16 @@ class WizardNavigator:
         for that command.  Commands not mentioned in the stage override
         inherit from the wizard-level config.
 
+        The block is authored config and is carried here uncoerced, so
+        each level is checked before it is used: ``navigation`` and each
+        command under it must be mappings, and ``keywords`` must be a
+        list of strings.  Anything else falls back to the wizard-level
+        value **for that field alone** -- a bad ``skip`` does not discard
+        a good ``back`` -- and is reported once per stage and field by
+        :meth:`_report_navigation_type`.  A bare ``keywords`` string is
+        the case worth naming: it is iterable, so before this it became
+        one keyword per character.
+
         Args:
             stage_name: Current stage name.
 
@@ -725,29 +739,79 @@ class WizardNavigator:
         """
         stage_meta = self._fsm_for().stage_metadata_for(stage_name)
         stage_nav = stage_meta.get("navigation")
+        if stage_nav is not None and not isinstance(stage_nav, dict):
+            self._report_navigation_type(stage_name, "navigation", stage_nav, "a mapping")
+            stage_nav = None
         if not stage_nav:
             return self._navigation_config
 
-        # Merge: per-command, stage overrides wizard-level
+        # Merge: per-command, stage overrides wizard-level.  The checks
+        # live on NavigationCommandConfig because the wizard-level reader
+        # needs the same ones; the base config supplies the defaults, so
+        # "unreadable" and "not declared" both mean "inherit".
         def _merge_command(
+            command: str,
             base: NavigationCommandConfig,
-            override_raw: dict[str, Any] | None,
+            override_raw: Any,
         ) -> NavigationCommandConfig:
             if override_raw is None:
                 return base
-            keywords_raw = override_raw.get("keywords")
-            keywords = (
-                tuple(k.lower() for k in keywords_raw)
-                if keywords_raw is not None
-                else base.keywords
+
+            def _report(field: str, value: Any, expected: str) -> None:
+                path = f"navigation.{command}.{field}" if field else f"navigation.{command}"
+                self._report_navigation_type(stage_name, path, value, expected)
+
+            return NavigationCommandConfig(
+                **NavigationCommandConfig.normalize_raw(
+                    override_raw,
+                    base.keywords,
+                    base.enabled,
+                    on_invalid=_report,
+                )
             )
-            enabled = override_raw.get("enabled", base.enabled)
-            return NavigationCommandConfig(keywords=keywords, enabled=enabled)
 
         return NavigationConfig(
-            back=_merge_command(self._navigation_config.back, stage_nav.get("back")),
-            skip=_merge_command(self._navigation_config.skip, stage_nav.get("skip")),
-            restart=_merge_command(self._navigation_config.restart, stage_nav.get("restart")),
+            back=_merge_command("back", self._navigation_config.back, stage_nav.get("back")),
+            skip=_merge_command("skip", self._navigation_config.skip, stage_nav.get("skip")),
+            restart=_merge_command(
+                "restart", self._navigation_config.restart, stage_nav.get("restart")
+            ),
+        )
+
+    def _report_navigation_type(
+        self,
+        stage_name: str,
+        field: str,
+        value: Any,
+        expected: str,
+    ) -> None:
+        """Say once that a stage's navigation config could not be read.
+
+        De-duplicated per ``(stage, field)`` because
+        :meth:`_resolve_navigation_config` runs on every navigation check
+        of every turn -- the same discipline, and for the same reason, as
+        the one-shot report in :meth:`WizardFSM._stage_field`.
+
+        A load-time check naming the stage would be better than any
+        runtime line, since a config author is not reading bot logs;
+        ``WizardConfigLoader._validate_config`` is where that belongs.
+
+        Args:
+            stage_name: The stage whose config could not be read.
+            field: Dotted path of the field, for the message.
+            value: The authored value, reported by type only.
+            expected: What the field must be, in words.
+        """
+        if (stage_name, field) in self._reported_navigation_types:
+            return
+        self._reported_navigation_types.add((stage_name, field))
+        logger.warning(
+            "Stage '%s' declares %s as %s; %s is required, using the "
+            "wizard-level navigation config for it",
+            stage_name,
+            field,
+            type(value).__name__,
+            expected,
         )
 
     def map_section_to_stage(self, section: str) -> str | None:

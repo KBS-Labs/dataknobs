@@ -2395,6 +2395,26 @@ keywords for that command. Commands not mentioned in the stage override inherit 
 wizard-level configuration. If no navigation configuration is provided at any level,
 the default keywords above are used.
 
+**Types are checked, and `keywords` must be a list.** `navigation` and each
+command under it must be mappings, `keywords` a list of strings, and `enabled`
+`true` or `false`. A field that does not match is ignored — it falls back to
+its default *alone*, so one bad field does not discard the others — and is
+reported at WARNING. Two of these are easy to write by accident:
+
+```yaml
+navigation:
+  skip:
+    keywords: ["done"]     # a list, even for a single word
+    # keywords: done       # NOT this — a string is iterated, arming
+    #                      # "d", "o", "n" and "e" as four keywords
+    enabled: false         # a bool
+    # enabled: "false"     # NOT this — a non-empty string is TRUE
+```
+
+The same rules apply wherever the block is written: `settings.navigation` and a
+stage's own `navigation:` are read through one implementation, so a field means
+the same thing in both.
+
 **Lifecycle Hooks:**
 ```yaml
 hooks:

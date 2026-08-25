@@ -26,6 +26,7 @@ never push through it.
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 import pytest
@@ -110,18 +111,25 @@ def _parent_pushing(subflow: dict[str, Any]) -> WizardConfigBuilder:
     return builder
 
 
+def _subflow_config_with(stage: dict[str, Any]) -> dict[str, Any]:
+    """A parent pushing a subflow whose start stage is *stage*.
+
+    Every subflow case in this file differs only in that head stage, so
+    it is the one thing this takes.
+    """
+    return _parent_pushing(
+        {"name": "detail", "stages": [stage, _SUB_NEXT, _SUB_DONE]},
+    ).build()
+
+
 def _skippable_subflow_config() -> dict[str, Any]:
     """A parent pushing a subflow whose start stage is the shared stage."""
-    return _parent_pushing(
-        {"name": "detail", "stages": [_SKIPPABLE_STAGE, _SUB_NEXT, _SUB_DONE]},
-    ).build()
+    return _subflow_config_with(_SKIPPABLE_STAGE)
 
 
 def _can_skip_only_subflow_config() -> dict[str, Any]:
     """A parent pushing a subflow that declares ``can_skip`` and no keywords."""
-    return _parent_pushing(
-        {"name": "detail", "stages": [_CAN_SKIP_ONLY_STAGE, _SUB_NEXT, _SUB_DONE]},
-    ).build()
+    return _subflow_config_with(_CAN_SKIP_ONLY_STAGE)
 
 
 def _skippable_standalone_config() -> dict[str, Any]:
@@ -522,3 +530,177 @@ async def test_after_a_restart_the_wizard_can_push_again() -> None:
             "and did not push; it can neither enter the subflow nor "
             f"leave it (stage: {harness.wizard_stage!r})"
         )
+
+
+# ---------------------------------------------------------------------------
+# 8-11. What resolving against the right FSM newly reaches
+# ---------------------------------------------------------------------------
+#
+# Cause A is what kept a subflow stage's ``navigation`` block from being
+# read at all: the main FSM does not have the stage, so
+# ``stage_metadata_for`` answered ``{}`` and the method returned at
+# ``if not stage_nav``. The block was therefore never *used*, and a
+# wrong-typed one was inert rather than wrong.
+#
+# Resolving against the FSM that owns the stage removes that mask, and
+# what it uncovers is a block read with no type check: ``stage_nav`` is
+# handed straight to ``.get()``, as is each command under it, and
+# ``keywords`` is iterated. Measured on this branch before the guards
+# below existed, with the stage placed at the head of a subflow:
+#
+#     navigation: "yes"               -> AttributeError on the turn after the push
+#     navigation: {skip: "yes"}       -> AttributeError, one level down
+#     navigation.skip.keywords: "done" -> ('d', 'o', 'n', 'e')
+#
+# and, evaluated on the same runtime state, the pre-fix expression
+# returns ``{}`` for all three. So these are not a new defect -- a
+# *main-flow* stage has always been able to reach them -- but the fix
+# above widens the set of configs that do, which is why the guards
+# belong with it rather than after it.
+#
+# The guards fall back to the wizard-level config, which is what
+# ``_stage_field`` does one file over for the same reason: a stage whose
+# config cannot be read gets the documented default, and the reader is
+# told once rather than every turn.
+
+
+def _navigation_stage(navigation: Any) -> dict[str, Any]:
+    """``_SKIPPABLE_STAGE`` with *navigation* replacing its own block."""
+    return {**_SKIPPABLE_STAGE, "navigation": navigation}
+
+
+@pytest.mark.asyncio
+async def test_a_mistyped_navigation_block_falls_back_to_the_wizard_level() -> None:
+    """A stage declaring ``navigation:`` as a scalar must not end the turn.
+
+    Before the guard this raised ``AttributeError: 'str' object has no
+    attribute 'get'`` out of ``stage_nav.get("back")`` -- on an ordinary
+    turn, inside the bot, from a config that loaded without complaint.
+
+    Falling back is asserted through *behaviour* rather than by reading
+    the returned config back: the wizard-level ``skip`` still has to
+    reach the stage, which is the whole content of "fall back to the
+    wizard-level config".
+    """
+    async with await BotTestHarness.create(
+        wizard_config=_subflow_config_with(_navigation_stage("yes")),
+        main_responses=["r"] * 8,
+        extraction_results=[[{"name": "Alice"}], [], []],
+    ) as harness:
+        await harness.chat("my name is Alice")
+        assert harness.wizard_stage == "sub_start", "the subflow was not pushed"
+
+        await harness.chat("skip")
+
+        assert harness.wizard_stage != "sub_start", (
+            "the stage's navigation block is unreadable, so the wizard-level "
+            "'skip' should have reached it"
+        )
+        assert harness.wizard_data.get("_skipped_sub_start") is True
+
+
+@pytest.mark.asyncio
+async def test_a_mistyped_command_block_falls_back_to_the_wizard_level() -> None:
+    """The same defect one level down: ``navigation.skip`` is a scalar.
+
+    ``stage_nav`` is a mapping here and passes the outer guard, so this
+    covers the second ``.get()`` -- the one inside ``_merge_command``,
+    which the outer guard cannot reach. ``back`` and ``restart`` are
+    absent and must keep inheriting, so a single bad command must not
+    discard the two beside it.
+    """
+    async with await BotTestHarness.create(
+        wizard_config=_subflow_config_with(_navigation_stage({"skip": "yes"})),
+        main_responses=["r"] * 8,
+        extraction_results=[[{"name": "Alice"}], [], []],
+    ) as harness:
+        await harness.chat("my name is Alice")
+        assert harness.wizard_stage == "sub_start", "the subflow was not pushed"
+
+        await harness.chat("skip")
+
+        assert harness.wizard_stage != "sub_start"
+        assert harness.wizard_data.get("_skipped_sub_start") is True
+
+
+@pytest.mark.asyncio
+async def test_a_keywords_string_is_not_one_keyword_per_character() -> None:
+    """``keywords: "done"`` iterated to ``('d', 'o', 'n', 'e')``.
+
+    The quiet half. Nothing raises, nothing is logged, and the stage
+    acquires four one-letter skip keywords -- so a user answering ``d``
+    skips a stage they meant to fill in. This is the failure mode the
+    crash above is preferable to, and it is the one a config author has
+    no way to notice.
+
+    Both halves are asserted: the characters must not skip, and the
+    documented fallback must.
+    """
+    async with await BotTestHarness.create(
+        wizard_config=_subflow_config_with(
+            _navigation_stage({"skip": {"keywords": "done"}}),
+        ),
+        main_responses=["r"] * 10,
+        extraction_results=[[{"name": "Alice"}], [], [], []],
+    ) as harness:
+        await harness.chat("my name is Alice")
+        assert harness.wizard_stage == "sub_start", "the subflow was not pushed"
+
+        await harness.chat("d")
+
+        assert harness.wizard_stage == "sub_start", (
+            "'d' is a character of the keyword 'done', not a keyword; the "
+            "stage was skipped by a letter"
+        )
+        assert "_skipped_sub_start" not in harness.wizard_data
+
+        await harness.chat("skip")
+
+        assert harness.wizard_stage != "sub_start", (
+            "the keywords are unreadable, so the wizard-level 'skip' should "
+            "have reached the stage"
+        )
+
+
+@pytest.mark.asyncio
+async def test_an_unreadable_navigation_block_is_reported_once_per_stage() -> None:
+    """Silence here would be the defect this item is a family of.
+
+    The report is at WARNING and is de-duplicated per ``(stage, field)``,
+    which is the discipline ``WizardFSM._stage_field`` uses for the same
+    problem: this method runs on every navigation check on every turn, so
+    an unthrottled line would say the same thing for the life of the
+    conversation.
+
+    A load-time check naming the stage would be better still and is not
+    this PR's -- ``_validate_config`` already runs six warning checks once
+    per load, and a seventh belongs with the rest of that work.
+    """
+    async with await BotTestHarness.create(
+        wizard_config=_subflow_config_with(_navigation_stage("yes")),
+        main_responses=["r"] * 10,
+        extraction_results=[[{"name": "Alice"}], [], [], []],
+    ) as harness:
+        await harness.chat("my name is Alice")
+
+        navigator = _strategy(harness)._navigator
+        records: list[str] = []
+
+        class _Collect(logging.Handler):
+            def emit(self, record: logging.LogRecord) -> None:
+                records.append(record.getMessage())
+
+        handler = _Collect()
+        nav_logger = logging.getLogger("dataknobs_bots.reasoning.wizard_navigation")
+        nav_logger.addHandler(handler)
+        try:
+            navigator._resolve_navigation_config("sub_start")
+            navigator._resolve_navigation_config("sub_start")
+        finally:
+            nav_logger.removeHandler(handler)
+
+        reported = [message for message in records if "navigation" in message]
+        assert len(reported) == 1, (
+            f"expected one report per stage and field, got {reported}"
+        )
+        assert "sub_start" in reported[0]

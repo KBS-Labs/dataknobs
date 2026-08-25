@@ -611,3 +611,102 @@ class TestSkipAdvancesFSM:
         await reasoning._handle_navigation("skip", state, conversation_manager, None)
         assert state.data.get("budget") == "flexible"
         assert state.data.get("_skipped_start") is True
+
+
+# ===================================================================
+# TestNavigationConfigWrongTypes
+# ===================================================================
+
+
+class TestNavigationConfigWrongTypes:
+    """What a wizard-level ``navigation:`` block does when mis-typed.
+
+    ``settings.navigation`` is authored config and arrives here uncoerced,
+    and every level of it used to be consumed without a check: the block
+    itself, each command under it, ``keywords`` and ``enabled``. Three of
+    the four raised out of somewhere unhelpful and the fourth was silent.
+
+    The silent one is the one to keep: ``keywords`` is *iterated*, so a
+    bare string arms one keyword per character and a user answering ``d``
+    triggers a command meant for ``done``. Nothing raises, nothing is
+    logged, and the config reads correctly.
+
+    The same four checks apply to a stage's ``navigation:`` block, which
+    is resolved by ``WizardNavigator``; both readers now share
+    :meth:`NavigationCommandConfig.normalize_raw`, so the answer cannot
+    depend on which of the two places the field was written in.
+    """
+
+    def test_a_keywords_string_is_not_one_keyword_per_character(self) -> None:
+        """``keywords: "done"`` yielded ``('d', 'o', 'n', 'e')``."""
+        config = NavigationConfig.from_dict({"skip": {"keywords": "done"}})
+
+        assert config.skip.keywords == DEFAULT_SKIP_KEYWORDS, (
+            "a bare string is not a keyword list; the command should keep "
+            "its documented default rather than answer to four letters"
+        )
+
+    def test_non_string_keywords_fall_back(self) -> None:
+        """``keywords: [1, 2]`` raised ``AttributeError`` out of ``.lower()``."""
+        config = NavigationConfig.from_dict({"skip": {"keywords": [1, 2]}})
+
+        assert config.skip.keywords == DEFAULT_SKIP_KEYWORDS
+
+    def test_a_command_declared_as_a_scalar_falls_back(self) -> None:
+        """``skip: "yes"`` raised ``AttributeError`` out of ``.get()``.
+
+        The commands beside it must survive: a bad ``skip`` is not a
+        reason to drop ``back`` and ``restart``.
+        """
+        config = NavigationConfig.from_dict({"skip": "yes"})
+
+        assert config.skip.keywords == DEFAULT_SKIP_KEYWORDS
+        assert config.back.keywords == DEFAULT_BACK_KEYWORDS
+        assert config.restart.keywords == DEFAULT_RESTART_KEYWORDS
+
+    def test_enabled_must_be_a_bool(self) -> None:
+        """``enabled`` is declared ``bool`` and held whatever was written.
+
+        ``enabled: "false"`` is a *truthy string*, so a command the author
+        turned off stayed on -- and the field then held a ``str`` on a
+        dataclass that declares a ``bool``.
+        """
+        config = NavigationConfig.from_dict(
+            {"skip": {"keywords": ["x"], "enabled": "false"}},
+        )
+
+        assert isinstance(config.skip.enabled, bool)
+        assert config.skip.enabled is True, (
+            "an unreadable 'enabled' takes the documented default; it must "
+            "not be a truthy string standing in for False"
+        )
+
+    def test_a_valid_block_is_untouched(self) -> None:
+        """The guards must not disturb a config that was already correct."""
+        config = NavigationConfig.from_dict(
+            {
+                "skip": {"keywords": ["Done", "FINISHED"], "enabled": False},
+                "back": {"keywords": ["undo"]},
+            },
+        )
+
+        assert config.skip.keywords == ("done", "finished"), "still lowercased"
+        assert config.skip.enabled is False
+        assert config.back.keywords == ("undo",)
+        assert config.restart.keywords == DEFAULT_RESTART_KEYWORDS
+
+    def test_a_navigation_setting_that_is_not_a_mapping_is_survivable(self) -> None:
+        """``settings.navigation: "yes"`` took the whole bot down.
+
+        ``StructuredConfig.from_dict`` calls ``dict(config)`` before any
+        of this class's own normalisation runs, so the failure was a
+        ``ValueError`` about *dictionary update sequences* raised from
+        common -- which names neither the wizard nor the field. The
+        wizard guards the value where it reads it, so the setting is
+        ignored with a message that says what was wrong.
+        """
+        reasoning = _build_reasoning(
+            _make_two_stage_config(settings={"navigation": "yes"}),
+        )
+
+        assert reasoning._navigation_config.skip.keywords == DEFAULT_SKIP_KEYWORDS

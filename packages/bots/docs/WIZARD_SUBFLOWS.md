@@ -193,6 +193,18 @@ against:
 Amendment jumps (`allow_amendments`) resolve the same way, so a section
 name may target a stage that lives in the active subflow.
 
+A subflow stage's `navigation:` block is read through the same
+implementation as the wizard-level one, and its fields are type-checked
+the same way — `keywords` must be a **list** of strings, and a bare
+string is iterated into one keyword per character. The full contract is
+under **Navigation Commands** in the configuration guide.
+<!-- Named rather than linked: this page is transcluded into the docs
+     site verbatim, so a relative .md link resolves in one tree and not
+     the other. That is why this file carries no cross-doc links. --> The reason it is worth repeating here is that a subflow stage
+is the position where it went unnoticed: before this fix the block was
+never read at all inside a push, so a wrong-typed one was inert rather
+than wrong.
+
 Before this was resolved against the active FSM, all of the above read
 from the main FSM — which does not have the subflow's stages. Asking it
 returns an empty metadata dict, and an empty dict is indistinguishable

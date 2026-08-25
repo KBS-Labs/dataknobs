@@ -36,6 +36,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   flow's start stage is not. Restart, the escape hatch of last resort, was
   what wedged the wizard. It now unwinds the stack before restarting.
 
+- **A `navigation:` block is type-checked before it is used, wherever it was
+  written.** The block is authored config and reached its readers uncoerced,
+  and every level of it was consumed without a check. `navigation: "yes"`
+  raised `AttributeError` on an ordinary turn (and, at wizard level, a
+  `ValueError` about *dictionary update sequences* out of `dataknobs-common`,
+  naming neither the wizard nor the field); a command declared as a scalar
+  raised one level down; `keywords: [1, 2]` raised out of `.lower()`; and
+  `enabled: "false"` is a **truthy string**, so a command the author turned off
+  stayed on while the field held a `str` on a dataclass declaring `bool`.
+  Quietest and worst: `keywords: "done"` was *iterated*, arming `d`, `o`, `n`
+  and `e` as four one-letter keywords, so a user answering `d` triggered a
+  command meant for `done` -- nothing raised, nothing was logged, and the
+  config read correctly.
+
+  A field that cannot be read now falls back to its documented default **alone**
+  -- a bad `skip` does not discard a good `back` -- and is reported at WARNING.
+  This is the contract `WizardFSM` gained for wrong-typed stage fields, applied
+  to the one config block that has two readers.
+
+  **The two readers now share one implementation.** Wizard-level
+  `settings.navigation` and a stage's own `navigation:` block had a copy of the
+  merge logic each, and both copies had all four defects; they now call
+  `NavigationCommandConfig.normalize_raw()`, so what a field means cannot
+  depend on which of the two places it was written in. The stage-level report
+  is de-duplicated per stage and field, because that reader runs on every
+  navigation check of every turn.
+
 - **A subflow guard now reads what its own stage prepared.** The condition on
   a `_subflow` transition was evaluated *before* the stage's pre-transition
   preparation ran, while every other transition condition is evaluated after

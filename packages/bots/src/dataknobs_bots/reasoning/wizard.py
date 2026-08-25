@@ -723,8 +723,20 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
         # is constructed (resolves the circular dependency).
         self._subflows.set_evaluate_condition(self._response.evaluate_condition)
 
-        # Build navigation keyword config from wizard-level settings
+        # Build navigation keyword config from wizard-level settings.
+        # Guarded here rather than inside NavigationConfig because
+        # StructuredConfig.from_dict calls dict(config) before any of that
+        # class's own normalisation runs -- so a scalar `navigation:` failed
+        # with a ValueError about dictionary update sequences, raised from
+        # common, naming neither the wizard nor the field.
         nav_settings = wizard_fsm.settings.get("navigation", {})
+        if nav_settings and not isinstance(nav_settings, dict):
+            logger.warning(
+                "settings.navigation is %s; a mapping is required, using the "
+                "default navigation keywords",
+                type(nav_settings).__name__,
+            )
+            nav_settings = {}
         self._navigation_config: NavigationConfig = NavigationConfig.from_dict(nav_settings or {})
 
         # Navigation module — handles back/skip/restart, amendments,
