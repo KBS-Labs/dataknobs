@@ -224,7 +224,17 @@ class WizardFSM:
     def stages(self) -> dict[str, dict[str, Any]]:
         """Get all stage metadata.
 
-        Returns a copy to prevent external modification.
+        The returned mapping is a **shallow** copy: adding or removing a
+        key does not change which stages this FSM has, but the stage
+        dicts inside it are the live ones, so writing through them does.
+        The guarantee is over the table's shape, not its contents -- a
+        caller that intends to edit a stage it read here must copy that
+        stage itself.
+
+        A deep copy is deliberately not taken. The three callers in this
+        package only iterate, one of them on a per-turn path, and
+        deepcopy measures ~2500x the shallow copy for a guarantee none of
+        them asks for.
 
         Returns:
             Dict mapping stage name to stage configuration dict.

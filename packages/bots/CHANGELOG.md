@@ -9,6 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`WizardFSM.stages` documented a stronger guarantee than it delivers.**
+  Both the property and the configuration guide said it returns a copy "to
+  prevent external modification". The copy is shallow, so it protects the
+  table's shape and nothing else: adding or removing a key leaves the wizard's
+  stage list alone, but the stage dicts are the live ones, and the natural
+  `for name, meta in fsm.stages.items(): meta[...] = ...` edits the running
+  wizard's configuration for the life of the process. `current_metadata` and
+  `stage_metadata_for()` hand out the same live dicts with no copy at all.
+
+  The documentation now states the boundary and shows the `deepcopy` a caller
+  needs before editing a stage it read. The behaviour is unchanged and
+  deliberately so -- the callers inside this package only iterate, one of them
+  on a per-turn path, and a deep copy measures roughly 2500x the shallow one
+  for a guarantee none of them asks for. Two tests pin the boundary, so
+  documenting a stronger guarantee again fails in this package rather than in
+  a consumer's wizard.
+
 - **`skip_default` no longer has to overwrite a value the user set.** The
   block was applied with a bare `dict.update`, which cannot be asked to do
   anything else: a key the user set five turns ago was replaced exactly as
