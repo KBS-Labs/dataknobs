@@ -34,6 +34,10 @@ SKIP_DEFAULT_FILL: Final[str] = "fill"
 #: Every mode a stage may declare, in the order they are documented.
 SKIP_DEFAULT_MODES: Final[tuple[str, ...]] = (SKIP_DEFAULT_OVERWRITE, SKIP_DEFAULT_FILL)
 
+#: Every key an annotated entry may name.  A mapping naming anything
+#: else is a value in its own right, however much of this it also names.
+_ANNOTATION_KEYS: Final[frozenset[str]] = frozenset({"value", "mode"})
+
 #: Called as ``(key, value, expected)`` when part of a block cannot be
 #: read.  ``key`` locates the offending field *within* the block --
 #: ``"kb_enabled.mode"`` for one key's own mode -- and is ``""`` for the
@@ -89,9 +93,20 @@ class SkipDefaults(StructuredConfig):
               kb_enabled: {value: false, mode: fill}       # annotated
 
         A bare value takes *block_mode*.  A mapping is an annotated entry
-        **only when it carries a ``value`` key**; any other mapping is
-        itself the value, which is what keeps a nested default such as
-        ``llm: {provider: "x"}`` meaning what it reads as.
+        **only when it carries a ``value`` key and names nothing besides
+        ``value`` and ``mode``**; any other mapping is itself the value,
+        which is what keeps a nested default meaning what it reads as --
+        both ``llm: {provider: "x"}``, which names no ``value`` at all,
+        and ``field: {value: "", label: "Email"}``, which does but is
+        plainly not an annotation.  Reading the second as an annotation
+        would drop ``label`` on the floor, which is the silent loss the
+        mode grammar exists to end.
+
+        One collision is irreducible: a nested default whose *only* keys
+        are ``value`` and optionally ``mode`` is indistinguishable from
+        an annotation, and is read as one.  Wrap it to say otherwise::
+
+            field: {value: {value: 3, mode: "off"}}   # the value, whole
 
         An unreadable mode falls back to the documented default for that
         key **alone**, so one typo does not discard the rest of the
@@ -116,7 +131,7 @@ class SkipDefaults(StructuredConfig):
 
         entries: dict[str, SkipDefaultEntry] = {}
         for key, raw in block.items():
-            if isinstance(raw, Mapping) and "value" in raw:
+            if isinstance(raw, Mapping) and "value" in raw and raw.keys() <= _ANNOTATION_KEYS:
                 mode = cls._mode(
                     raw.get("mode", resolved_block_mode),
                     resolved_block_mode,

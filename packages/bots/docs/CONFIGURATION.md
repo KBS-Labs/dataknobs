@@ -2573,9 +2573,18 @@ by giving `value` alongside `mode`; a bare value keeps the block's:
 | `overwrite` | Write the default over whatever is there. **The default.** |
 | `fill` | Write the default only where the key is absent. |
 
-A mapping is only read as `{value, mode}` when it carries a `value` key, so a
-nested default such as `llm: {provider: anthropic}` still means what it reads
-as.
+A mapping is read as `{value, mode}` only when it carries a `value` key **and
+names nothing besides `value` and `mode`**, so a nested default still means
+what it reads as — both `llm: {provider: anthropic}`, which names no `value`,
+and `field: {value: "", label: Email}`, which does but is plainly not an
+annotation. One collision is irreducible: a nested default whose only keys are
+`value` and optionally `mode` reads exactly like an annotation and is taken as
+one. Wrap it to say otherwise:
+
+```yaml
+    skip_default:
+      knob: {value: {value: 3, mode: "off"}}   # the mapping, whole
+```
 
 **The skip marker lands before the defaults do**, and that ordering is a
 guarantee rather than an implementation detail: `_skipped_<stage>` is in

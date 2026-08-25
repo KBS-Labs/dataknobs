@@ -498,6 +498,35 @@ def test_a_mapping_without_a_value_key_is_the_value() -> None:
     assert defaults.entries["llm"].value == {"provider": "x"}
 
 
+def test_a_mapping_naming_more_than_value_and_mode_is_the_value() -> None:
+    """Saying ``value`` is not enough; an entry says *only* value/mode.
+
+    ``{value: "", label: "Email"}`` is a nested default that happens to
+    have a field called ``value``. Reading it as an annotation keeps the
+    value and drops ``label`` on the floor -- silently, because the shape
+    is syntactically fine -- which is the loss the mode grammar exists
+    to end, one level further down.
+    """
+    field = {"value": "", "label": "Email"}
+
+    defaults = SkipDefaults.from_stage({"form_field": field}, SKIP_DEFAULT_OVERWRITE)
+
+    assert defaults.entries["form_field"].value == field
+
+
+def test_a_value_only_nested_default_can_be_wrapped_to_say_so() -> None:
+    """The one collision the grammar cannot see, and its escape hatch.
+
+    A nested default naming *only* ``value``/``mode`` reads exactly like
+    an annotation and is taken as one. Wrapping it says which was meant.
+    """
+    literal = {"value": 3, "mode": "off"}
+
+    defaults = SkipDefaults.from_stage({"knob": {"value": literal}}, SKIP_DEFAULT_OVERWRITE)
+
+    assert defaults.entries["knob"].value == literal
+
+
 def test_apply_reports_only_the_keys_whose_value_changed() -> None:
     """``apply`` is the one place that decides what "replaced" means."""
     defaults = SkipDefaults.from_stage(

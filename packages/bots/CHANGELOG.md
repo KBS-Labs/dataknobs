@@ -24,9 +24,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   while a flag guarding an unconfigured branch must be cleared by that same
   skip or the user is pushed back into the branch they were leaving.
   `overwrite` remains the default, so existing configs are unchanged; a
-  mapping is read as `{value, mode}` only when it carries a `value` key, so a
-  nested default keeps meaning what it reads as. Keys whose value is actually
-  replaced are logged at DEBUG.
+  mapping is read as `{value, mode}` only when it carries a `value` key and
+  names nothing besides `value` and `mode`, so a nested default keeps meaning
+  what it reads as -- including one that has a `value` field of its own
+  alongside others. Keys whose value is actually replaced are logged at DEBUG.
 
   Two things this makes explicit rather than incidental. The skip marker
   `_skipped_<stage>` is written **before** any default lands, and that
@@ -43,9 +44,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   documented default and warns; an *absent* field reaches it as `None`, which
   is not a wrong type but the registry's own marker for "not declared". Any
   accessor whose default is not `None` therefore accused every config leaving
-  the field out. No shipped accessor could reach it before, so nothing warned
-  in practice -- but it made `_stage_field` unusable for exactly the fields
-  most worth reading through it.
+  the field out. No accessor could reach the *absent* case before -- every
+  shipped one asks for a field the registry already defaults -- so nothing
+  warned in practice, but it made `_stage_field` unusable for exactly the
+  fields most worth reading through it. A field authored as an explicit
+  `null` did reach it, and is now read as unset rather than reported as
+  ill-typed, which is what a YAML `null` says.
 
 - **Stage-dependent state resolves against the FSM that owns the stage.**
   `WizardNavigator` holds both the main FSM and the subflow manager, and each
