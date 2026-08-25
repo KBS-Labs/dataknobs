@@ -215,10 +215,11 @@ class SkipDefaults(StructuredConfig):
         ``fill`` writes where the key is **unset**, which this package
         spells ``is None`` -- the reading
         :func:`~dataknobs_bots.reasoning.wizard_types.field_is_present`
-        centralises for the ``has()`` condition helper, the confidence
-        gate and ``_apply_schema_defaults``.  A key left holding ``None``
-        by extraction or by an earlier stage is one every other reader
-        calls absent, so ``fill`` fills it.
+        centralises for the ``has()`` condition helper, the confidence gate
+        and
+        :meth:`~dataknobs_bots.reasoning.wizard_extraction.WizardExtractor.apply_schema_defaults`.
+        A key left holding ``None`` by extraction or by an earlier stage is
+        one every other reader calls absent, so ``fill`` fills it.
 
         Each value is copied on the way in.  A mutable default belongs to
         the loaded config, and handing out the object itself lets one
