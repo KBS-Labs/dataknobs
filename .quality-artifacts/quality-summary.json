@@ -1,5 +1,5 @@
 {
-  "timestamp": "2026-08-25T03:13:13Z",
+  "timestamp": "2026-08-25T03:27:46Z",
   "overall_status": "PASS",
   "run_mode": "pr",
   "environment": "host",
@@ -9,7 +9,7 @@
   ],
   "coverage_percent": null,
   "package_hashes": {
-    "bots": "5cf4cae3dfcdc7070f510f4bbd457fd8ce853698d132e3c72f6e75c30bb370b6",
+    "bots": "c3d897c77a01e5a8272c571ded2876039652128034b3118f9dc14047428e86ad",
     "common": "3cbc20435ffdc448ede2e93ee74c21de740730aab4b7e70ee50264838d0970b4",
     "config": "33fdf8a284304b52cfa3c91265fcaa8126741c7ee555dcba2b44fe3468e27bfd",
     "data": "d98e77f690b9e77711f63d9aae1384887beca4a55e49f36807234a8ec8be2e22",
@@ -24,9 +24,9 @@
   "workspace_hashes": {
     "toolchain": "5f0fe9459553efff1fbb0ca11dc37a8b13e58e8d73c02abc90eb6663a15f9d25",
     "workspace_tests": "fd28340cf9443318f8a8e229ae2c3e82c4914584aabdf69811e439880153e452",
-    "docs": "d8f0ffc986cd726732e9fe72fe74e1a1aca894cc472260535a7b276d7f5841c1"
+    "docs": "901bfce8f26a981f3a853f12d4a9bf4ac30d7c7eb561cdfde0256824d79d00b5"
   },
-  "total_seconds": 153,
+  "total_seconds": 151,
   "checks": {
     "workflow_lint": {
       "status": "pass",
@@ -44,14 +44,14 @@
       "status": "pass",
       "exit_code": 0,
       "tool": "quality-contract.py",
-      "duration_seconds": 1
+      "duration_seconds": 0
     },
     "validation": {
       "status": "pass",
       "exit_code": 0,
       "skipped": false,
       "tool": "validate.sh",
-      "duration_seconds": 28
+      "duration_seconds": 29
     },
     "documentation": {
       "status": "pass",
