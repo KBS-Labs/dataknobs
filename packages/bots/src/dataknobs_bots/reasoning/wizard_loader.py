@@ -489,7 +489,7 @@ class WizardConfigLoader:
             # 3. English-language conditions
             for transition in stage.get("transitions", []):
                 condition = transition.get("condition", "")
-                if condition:
+                if condition and isinstance(condition, str):
                     for pattern in _ENGLISH_CONDITION_PATTERNS:
                         if pattern.search(condition):
                             logger.warning(
@@ -545,6 +545,12 @@ class WizardConfigLoader:
                 "prompt",
             ):
                 text = stage.get(field_name, "")
+                # These checks exist to WARN about a config; a value of the
+                # wrong type must not take the load down with a TypeError
+                # out of the regex engine. The type itself is reported
+                # where the field is read (WizardFSM._stage_field).
+                if not isinstance(text, str):
+                    continue
                 if text and _PYTHON_FORMAT_PATTERN.search(text):
                     matches = _PYTHON_FORMAT_PATTERN.findall(text)
                     logger.warning(

@@ -8,6 +8,7 @@ Reusable, nestable wizard flows that can be invoked from within a parent wizard.
 - [Configuration](#configuration)
   - [Transition Syntax](#transition-syntax)
   - [Subflow Block Fields](#subflow-block-fields)
+  - [When the Guard Is Evaluated, and What It Can See](#when-the-guard-is-evaluated-and-what-it-can-see)
 - [Data Flow](#data-flow)
   - [data_mapping (Parent to Child)](#data_mapping-parent-to-child)
   - [result_mapping (Child to Parent)](#result_mapping-child-to-parent)
@@ -112,6 +113,51 @@ When the condition evaluates to true, the wizard pushes the `kb_acquisition` sub
 | `return_stage` | `str` | No | Stage to transition to when the subflow completes. Defaults to the stage that pushed the subflow. |
 | `data_mapping` | `dict[str, str]` | No | Maps parent field names to subflow field names (parent -> child). |
 | `result_mapping` | `dict[str, str]` | No | Maps subflow field names back to parent field names (child -> parent). |
+
+### When the Guard Is Evaluated, and What It Can See
+
+The `condition` on a subflow transition — the **guard** — is evaluated at
+one fixed point in the turn: after the stage's pre-transition preparation
+and before the FSM step. Both halves of that matter, and neither is
+arbitrary.
+
+**After the preparation** means a guard reads the same state an ordinary
+transition condition reads. Everything below is visible to a guard on the
+turn it is written:
+
+| Written by | Visible to the guard |
+|---|---|
+| Extraction (`schema:` fields merged from the user's message) | ✅ |
+| Tool execution and `tool_result_mapping:` | ✅ |
+| A transition's `derive:` block | ✅ |
+| The stage's `routing_transforms:` | ✅ |
+
+The last two are the ones worth naming, because they run *as part of* the
+transition decision rather than before it. A guard reading a key its own
+stage's routing transform computes fires on that turn.
+
+**Before the FSM step** means a push pre-empts an ordinary transition
+declared on the same stage. A subflow transition compiles to a *self-loop*
+arc — its FSM target is the stage it came from — so the FSM cannot perform
+the push, and if the guard were asked afterwards an unconditional sibling
+transition would have consumed the turn first.
+
+Two consequences follow from the self-loop shape and are worth knowing
+when reading logs:
+
+- The FSM evaluates the guard's condition string **a second time**, on its
+  own arc, after the push decision was already taken. That evaluation
+  moves the FSM from the stage to itself and nothing acts on its result.
+  A `WizardFSM` DEBUG line reporting that the FSM *stayed* at a stage with
+  subflow transitions is describing this, not a failed condition.
+- A guard that declines is logged by `SubflowManager` at DEBUG, naming the
+  conditions that were asked and said no. Without it, a decline looks
+  exactly like a stage with no subflow transition at all.
+
+Both `chat()`/`stream_chat()` and the non-conversational `advance()` run
+this same sequence, so a subflow is pushed at the same point on either
+path. Before this was shared, `advance()` had no guard at all and could
+be carried *out* of a subflow it had no way to enter.
 
 ## Data Flow
 

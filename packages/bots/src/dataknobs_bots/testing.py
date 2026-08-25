@@ -334,6 +334,7 @@ class WizardConfigBuilder:
         condition: str | None = None,
         priority: int | None = None,
         *,
+        derive: dict[str, Any] | None = None,
         subflow_network: str | None = None,
         return_stage: str | None = None,
         data_mapping: dict[str, str] | None = None,
@@ -352,6 +353,9 @@ class WizardConfigBuilder:
             target: Target stage name (or return stage for subflows).
             condition: Python expression evaluated against wizard state.
             priority: Transition evaluation priority (lower = first).
+            derive: Data derivation rules applied before this stage's
+                transition conditions are evaluated. Keys already present
+                in the wizard state are left alone.
             subflow_network: Name of the subflow network to push.
                 When set, this becomes a subflow transition with
                 ``target="_subflow"``.
@@ -389,6 +393,8 @@ class WizardConfigBuilder:
             t["condition"] = condition
         if priority is not None:
             t["priority"] = priority
+        if derive is not None:
+            t["derive"] = derive
         transitions.append(t)
         return self
 
@@ -769,6 +775,7 @@ class BotTestHarness:
         platform_middleware: list[Any] | None = None,
         platform_conversation_middleware: list[Any] | None = None,
         strategy: ReasoningStrategy | None = None,
+        custom_functions: dict[str, Any] | None = None,
         strict_tools: bool = True,
         strict: bool = False,
     ) -> BotTestHarness:
@@ -823,6 +830,12 @@ class BotTestHarness:
                 custom strategy implementations (e.g. strategies that
                 implement ``StreamingPhasedProtocol`` with ``iterate=True``)
                 through the full DynaBot orchestration.
+            custom_functions: Transition functions -- routing transforms,
+                transition ``transform:`` names, validators -- as callables
+                or ``"module:function"`` strings, threaded into the wizard
+                reasoning config. Only applies when ``wizard_config`` is
+                used; a caller supplying ``bot_config`` places them in its
+                own ``reasoning:`` block.
             strict_tools: If True (default), the EchoProvider raises
                 ValueError when a scripted response contains tool_calls
                 but no tools were provided to complete(). Set to False
@@ -902,6 +915,8 @@ class BotTestHarness:
                     },
                 },
             }
+            if custom_functions:
+                bot_config["reasoning"]["custom_functions"] = custom_functions
 
         # Create bot. Platform middleware is routed through from_config so the
         # additive channel is exercised for real (the config-resolved

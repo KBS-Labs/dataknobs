@@ -210,7 +210,7 @@
         {
           "path": "packages/bots/src",
           "tier": "transitional",
-          "ceiling": 94,
+          "ceiling": 85,
           "reason": "ratchet group"
         },
         {

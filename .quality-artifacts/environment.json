@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-08-24T22:00:06Z",
+  "timestamp": "2026-08-24T23:39:41Z",
   "python_version": "Python 3.12.12",
   "uv_version": "uv 0.12.5 (Homebrew 2026-08-14 aarch64-apple-darwin)",
   "os": "Darwin",
   "os_version": "24.6.0",
-  "git_branch": "sbk/wizard-publishes-live-state",
-  "git_commit": "5b1ddc5dd97c76cf23255bd728d367fd32b118cf",
+  "git_branch": "sbk/subflow-guard-after-preparation",
+  "git_commit": "0efc1442419b9dd64a9a7a0ddedf535db82a5416",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }

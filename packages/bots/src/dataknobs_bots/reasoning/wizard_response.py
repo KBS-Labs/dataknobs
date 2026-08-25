@@ -968,9 +968,20 @@ class WizardResponder:
             default=False,
         )
         if not result.success:
-            # These conditions never pass through WizardConfigLoader, so
-            # there is no load-time moment at which to say this once; the
-            # check runs here instead, on the failure path only.
+            # Most conditions reaching this evaluator never pass through
+            # WizardConfigLoader, so there is no load-time moment at which
+            # to say this once; the check runs here instead, on the failure
+            # path only.
+            #
+            # Subflow guards are the exception, and it is worth naming
+            # because they are the larger half: a subflow transition IS
+            # registered inline (wizard_loader._register_inline_conditions
+            # handles SUBFLOW_TARGET explicitly), so a statically-refused
+            # subflow guard is already reported at load and is reported
+            # again here, once per failing turn. The duplicate is the
+            # accepted cost of one check that covers both populations
+            # rather than a second one keyed on provenance the evaluator
+            # cannot see.
             static_reason = safe_eval_validate(condition)
             if static_reason is not None:
                 # The expression cannot run on any data, so this condition
