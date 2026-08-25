@@ -144,6 +144,34 @@ class WizardFSM:
         """
         return self._stage_metadata.get(self.current_stage, {})
 
+    def stage_metadata_for(self, stage: str) -> dict[str, Any]:
+        """Get metadata for a named stage, or ``{}`` if this FSM has none.
+
+        The empty dict is the same answer :attr:`current_metadata` gives,
+        and it is deliberately not distinguished from a stage that
+        declared nothing -- callers reading one field with a default get
+        the documented default either way. A caller that needs to tell
+        "absent" from "empty" apart wants :meth:`has_stage`.
+
+        Args:
+            stage: Stage name.
+
+        Returns:
+            The stage's metadata dict, or ``{}``.
+        """
+        return self._stage_metadata.get(stage, {})
+
+    def has_stage(self, stage: str) -> bool:
+        """Whether this FSM defines *stage*.
+
+        Args:
+            stage: Stage name.
+
+        Returns:
+            ``True`` if the stage belongs to this FSM.
+        """
+        return stage in self._stage_metadata
+
     @property
     def stages(self) -> dict[str, dict[str, Any]]:
         """Get all stage metadata.

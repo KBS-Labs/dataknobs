@@ -9,6 +9,7 @@ Reusable, nestable wizard flows that can be invoked from within a parent wizard.
   - [Transition Syntax](#transition-syntax)
   - [Subflow Block Fields](#subflow-block-fields)
   - [When the Guard Is Evaluated, and What It Can See](#when-the-guard-is-evaluated-and-what-it-can-see)
+  - [Navigation Inside a Pushed Subflow](#navigation-inside-a-pushed-subflow)
 - [Data Flow](#data-flow)
   - [data_mapping (Parent to Child)](#data_mapping-parent-to-child)
   - [result_mapping (Child to Parent)](#result_mapping-child-to-parent)
@@ -158,6 +159,48 @@ Both `chat()`/`stream_chat()` and the non-conversational `advance()` run
 this same sequence, so a subflow is pushed at the same point on either
 path. Before this was shared, `advance()` had no guard at all and could
 be carried *out* of a subflow it had no way to enter.
+
+### Navigation Inside a Pushed Subflow
+
+**A stage config means the same thing wherever the stage is reached.** The
+navigation commands — back, skip, restart — resolve against the FSM that
+actually owns the current stage, which inside a push is the subflow's. So
+a subflow stage's `can_skip:` and its own `navigation:` block work exactly
+as they do when the same stage heads a wizard of its own:
+
+```yaml
+# In a subflow definition. Both fields are live once the subflow is pushed.
+stages:
+  - name: define_method
+    can_skip: true
+    navigation:
+      skip:
+        keywords: ["done", "that's it", "finished"]
+```
+
+Two things follow, and the second is the one to check an existing config
+against:
+
+- **Stage-level keywords replace the wizard-level ones**, per command, as
+  they always have outside a subflow. The stage above answers to `done`,
+  `that's it` and `finished` — and *not* to the default `skip`, because
+  it declared a `skip:` block and that block is the whole list. Keep
+  `skip` in the list if you want both.
+- **Restart leaves the subflow.** `restart` / `start over` returns the
+  user to the **main** flow's start stage and unwinds the subflow stack
+  with it; it is not a way to restart the subflow in place.
+
+Amendment jumps (`allow_amendments`) resolve the same way, so a section
+name may target a stage that lives in the active subflow.
+
+Before this was resolved against the active FSM, all of the above read
+from the main FSM — which does not have the subflow's stages. Asking it
+returns an empty metadata dict, and an empty dict is indistinguishable
+from a stage that declared nothing: `can_skip` read as `false`, a stage's
+own keywords read as absent, and the stage a back command landed on
+rendered with no prompt, schema or template. A subflow stage that
+declared both fields got neither, silently, and a config that was correct
+standalone became a dead end when pushed.
 
 ## Data Flow
 

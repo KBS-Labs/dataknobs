@@ -113,6 +113,42 @@ class WizardNavigator:
         self._prepend_messages_to_response = prepend_messages_to_response
 
     # ------------------------------------------------------------------
+    # Private — which FSM owns the stage being navigated
+    # ------------------------------------------------------------------
+
+    def _fsm_for(self) -> WizardFSM:
+        """The FSM that owns the stage being navigated.
+
+        This class holds a reference to the **main** FSM and to the
+        subflow manager, and every method that resolves a stage has to
+        pick one.  Picked by hand six times, six were wrong: inside a
+        push the stage belongs to the subflow's FSM, and asking the main
+        FSM about a stage it does not have returns ``{}`` -- which
+        ``.get(key, default)`` then reports as a stage that deliberately
+        declared nothing.  ``can_skip`` reads ``False``, stage-level
+        navigation keywords read as absent, and ``current_metadata``
+        reads as a stage with no name, prompt, schema or template.
+
+        There is no site in this class where the main FSM is the right
+        answer *while a subflow is active*.  The one that looks like an
+        exception is restart, which returns the user to the main flow's
+        start stage -- but it gets there by unwinding the subflow first
+        (see :meth:`restart_cleanup`), so by the time it resolves a stage
+        no subflow is active and this method answers with the main FSM
+        anyway.  Restart is therefore correct through this accessor
+        rather than in spite of it, and a subflow-scoped restart added
+        later would not have to remember to change the call.
+
+        Deliberately trivial today.  It exists so the choice has one name
+        and one docstring instead of six independent judgements, which is
+        what produced six wrong ones.
+
+        Returns:
+            The active subflow's FSM, or the main FSM outside a push.
+        """
+        return self._subflows.get_active_fsm()
+
+    # ------------------------------------------------------------------
     # Public API — conversational (used by generate())
     # ------------------------------------------------------------------
 
@@ -411,6 +447,24 @@ class WizardNavigator:
         if self._hooks:
             await self._hooks.trigger_restart()
 
+        # Unwind any subflow FIRST.  Restart returns the user to the MAIN
+        # flow's start stage, so restarting the main FSM is right -- but
+        # the subflow state around it has to come down with it, and it
+        # used not to.  What was left behind wedged the wizard: with the
+        # stack still loaded ``should_push`` declines (it refuses to push
+        # while already in a subflow) and ``should_pop`` cannot fire (the
+        # main flow's start stage is not an end stage of the subflow), so
+        # the wizard could neither enter a subflow nor leave one, while
+        # reporting the main stage's name and rendering the subflow
+        # stage's prompt, schema and template.  Restart is the escape
+        # hatch of last resort; it must not be what closes the exit.
+        #
+        # Clearing these two is sufficient: a later push calls
+        # ``subflow_fsm.restart()`` before use, so the subflow FSM's own
+        # stale stage never becomes reachable again.
+        state.subflow_stack.clear()
+        self._subflows.active_subflow_fsm = None
+
         self._fsm.restart()
         to_stage = self._fsm.current_stage
 
@@ -560,7 +614,7 @@ class WizardNavigator:
             back navigation is not possible.
         """
         if await self.navigate_back(state, user_message=message):
-            stage = self._fsm.current_metadata
+            stage = self._fsm_for().current_metadata
             await self.branch_for_revisited_stage(manager, state.current_stage)
             response = await self._generate_stage_response(manager, llm, stage, state, None)
             return response
@@ -597,7 +651,7 @@ class WizardNavigator:
             Response for the next stage, or an explanation if skip is
             not allowed.
         """
-        if not self._fsm.can_skip():
+        if not self._fsm_for().can_skip():
             return await manager.complete(
                 system_prompt_override=(
                     manager.system_prompt
@@ -646,7 +700,7 @@ class WizardNavigator:
         """
         await self.restart_cleanup(state, message)
 
-        stage = self._fsm.current_metadata
+        stage = self._fsm_for().current_metadata
         await self.branch_for_revisited_stage(manager, state.current_stage)
         response = await self._generate_stage_response(manager, llm, stage, state, None)
         return response
@@ -669,7 +723,7 @@ class WizardNavigator:
         Returns:
             Resolved ``NavigationConfig`` for the given stage.
         """
-        stage_meta = self._fsm._stage_metadata.get(stage_name, {})
+        stage_meta = self._fsm_for().stage_metadata_for(stage_name)
         stage_nav = stage_meta.get("navigation")
         if not stage_nav:
             return self._navigation_config
@@ -734,7 +788,7 @@ class WizardNavigator:
         }
 
         mapped_stage = default_mapping.get(section_lower)
-        if mapped_stage and mapped_stage in self._fsm._stage_metadata:
+        if mapped_stage and self._fsm_for().has_stage(mapped_stage):
             return mapped_stage
 
         return None

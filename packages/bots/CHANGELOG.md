@@ -9,6 +9,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Navigation inside a pushed subflow resolves against the subflow's stage.**
+  `WizardNavigator` holds both the main FSM and the subflow manager, and each
+  of its methods picked one by hand; six picked the main FSM, which inside a
+  push does not have the current stage. Asking it returned an empty metadata
+  dict, indistinguishable from a stage that declared nothing -- so a subflow
+  stage declaring `can_skip: true` was told it was required, its own
+  `navigation.skip.keywords` were never found (the wizard-level defaults
+  applied instead), back landed on the right stage and then rendered one with
+  no prompt, schema or template, and an amendment jump to a subflow stage
+  found nothing. The same stage config was correct standalone and a dead end
+  when pushed, with nothing in the config to say so. All five now resolve
+  through one `_fsm_for()` accessor, and `WizardFSM` grew `stage_metadata_for()`
+  and `has_stage()` so the navigator stops indexing another class's private
+  attribute. **Note for existing configs:** stage-level keywords replace the
+  wizard-level ones per command, as they always have outside a subflow, so a
+  subflow stage declaring `skip.keywords` now answers to those words and no
+  longer to the default `skip` -- keep `skip` in the list to have both.
+
+- **Restart inside a subflow leaves the subflow.** `restart_cleanup` reset the
+  main FSM and cleared data, history and banks, but left the subflow stack
+  loaded and the active subflow FSM set. The wizard then reported the main
+  flow's start stage while rendering the subflow stage's prompt, schema and
+  template -- and could not recover: `should_push` declines while already in a
+  subflow, and `should_pop` needs an end stage of the subflow, which the main
+  flow's start stage is not. Restart, the escape hatch of last resort, was
+  what wedged the wizard. It now unwinds the stack before restarting.
+
 - **A subflow guard now reads what its own stage prepared.** The condition on
   a `_subflow` transition was evaluated *before* the stage's pre-transition
   preparation ran, while every other transition condition is evaluated after
