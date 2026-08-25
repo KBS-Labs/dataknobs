@@ -32,8 +32,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   by `auto_advance` says the same thing as one reached by an ordinary
   transition. Unchanged: `auto_advance: true` on an end stage still does
   nothing, the auto-advance loop excluding end stages by design; and `prompt`
-  is still an instruction to the model rather than a template, so an end stage
-  carrying only a `prompt` is still silent.
+  is not among the templates a departing stage can offer -- only
+  `greeting_template`, `response_template` and `clarification_template` are --
+  so an end stage carrying only a `prompt` is still silent.
+
+  A template that fails to render no longer takes the departure with it.
+  Putting a render in front of the pop put it in front of a structural step
+  that never had one, and the render is reached for the first time by this
+  change: an end-stage template that raises -- `{{ data.x }}` does, the
+  render context exposing collected values as top-level names and defining no
+  `data` -- would have escaped before the pop, leaving the subflow unable to
+  exit on that turn or any later one. The message is decoration and the
+  departure is structural, so a failed render is logged and contributes
+  nothing. The same guard covers the auto-advance loop, which collects a
+  stage's message before stepping past it.
 
 - **`skip_default` no longer has to overwrite a value the user set.** The
   block was applied with a bare `dict.update`, which cannot be asked to do

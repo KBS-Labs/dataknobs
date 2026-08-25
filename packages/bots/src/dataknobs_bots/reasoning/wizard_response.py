@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING, Any
 
 from dataknobs_common.expressions import safe_eval, safe_eval_validate
 from dataknobs_llm import LLMStreamResponse
+from jinja2 import TemplateError
 
 from .base import ReasoningStrategy, StreamStageContext
 from .observability import create_transition_record
@@ -2242,8 +2243,23 @@ class WizardResponder:
         if not template:
             return None
 
-        rendered = self._render_response_template(template, stage, state)
         stage_name = stage.get("name", "unknown")
+        try:
+            rendered = self._render_response_template(template, stage, state)
+        except TemplateError:
+            # A collector must not be able to abort the structural step it
+            # decorates. Both callers leave the stage either way -- the
+            # auto-advance loop has already stepped past it, and the pop
+            # runs immediately after this returns -- so raising here would
+            # strand the wizard on a stage it has finished with rather
+            # than merely losing the message.
+            logger.warning(
+                "Stage '%s' template failed to render while leaving it; "
+                "the stage contributes no message",
+                stage_name,
+                exc_info=True,
+            )
+            return None
         logger.debug(
             "Rendered message stage '%s' template during auto-advance (%d chars)",
             stage_name,

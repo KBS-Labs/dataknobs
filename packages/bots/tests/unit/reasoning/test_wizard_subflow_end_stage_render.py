@@ -349,3 +349,99 @@ async def test_an_end_stage_with_only_a_prompt_still_says_nothing() -> None:
         assert _PARENT_TEMPLATE in response
     finally:
         await harness.close()
+
+
+# ---------------------------------------------------------------------------
+# 8. A template that raises must not take the pop down with it
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_a_raising_end_stage_template_still_pops() -> None:
+    """The pop is structural; the message it collects is decoration.
+
+    Rendering before the pop is what makes the message the subflow's own,
+    but it also puts a render in front of a structural step that never
+    had one. The render raises on more than a typo: ``{{ data.x }}``
+    raises ``UndefinedError`` even under ``strict=False``, because the
+    context exposes collected values as top-level names and defines no
+    ``data`` -- and that spelling is what the subflow guide taught until
+    the commit that fixed it, so it is what a consumer's config written
+    against that guide contains.
+
+    Before the guard the exception escaped ahead of ``handle_pop``: the
+    subflow never popped, the turn never saved, and the next turn re-ran
+    the same transition and raised again. An end stage with a bad
+    template made its subflow un-exitable rather than quiet, which is a
+    worse failure than the silence this suite exists to fix.
+    """
+    builder = WizardConfigBuilder("detail")
+    builder.stage(
+        "sub_start",
+        is_start=True,
+        prompt="Which detail?",
+        response_template="Entering detail.",
+        confirm_first_render=False,
+    )
+    builder.field("detail", field_type="string", required=True)
+    builder.transition("sub_done", condition="has('detail')")
+    builder.stage(
+        "sub_done",
+        is_end=True,
+        prompt="Done.",
+        # The pre-fix guide's spelling. `detail` alone would render.
+        response_template="SUBFLOW-END: captured {{ data.detail }}",
+    )
+    harness, response = await _run_to_pop(_parent(builder.build()))
+    try:
+        assert harness.wizard_stage == "wrap", (
+            "a raising end-stage template blocked the pop; the wizard is "
+            f"stuck inside the subflow at {harness.wizard_stage!r}"
+        )
+        assert _PARENT_TEMPLATE in response, (
+            f"the parent never resumed after the failed render: {response!r}"
+        )
+    finally:
+        await harness.close()
+
+
+@pytest.mark.asyncio
+async def test_a_raising_template_mid_auto_advance_still_advances() -> None:
+    """The same guard, at the other caller.
+
+    ``run_auto_advance_loop`` collects a stage's message *before* it
+    steps past it, so an unguarded raise there strands the chain on a
+    stage it had already decided to leave -- the auto-advance analogue of
+    the stranded pop, and the reason the guard belongs in
+    ``render_departing_stage`` rather than at the pop site.
+    """
+    builder = WizardConfigBuilder("detail")
+    builder.stage(
+        "sub_start",
+        is_start=True,
+        prompt="Which detail?",
+        response_template="Entering detail.",
+        confirm_first_render=False,
+    )
+    builder.field("detail", field_type="string", required=True)
+    builder.transition("sub_relay", condition="has('detail')")
+    builder.stage(
+        "sub_relay",
+        prompt="Relaying.",
+        response_template="RELAY: {{ data.detail }}",
+        auto_advance=True,
+        confirm_first_render=False,
+    )
+    builder.transition("sub_done")
+    builder.stage("sub_done", is_end=True, prompt="Done.", response_template=_END_TEMPLATE)
+    harness, response = await _run_to_pop(_parent(builder.build()), relay=True)
+    try:
+        assert harness.wizard_stage == "wrap", (
+            "a raising template on an auto-advanced stage stranded the "
+            f"chain at {harness.wizard_stage!r}"
+        )
+        assert _END_RENDERED in response, (
+            f"the surviving stages' messages were lost with it: {response!r}"
+        )
+    finally:
+        await harness.close()

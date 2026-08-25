@@ -99,10 +99,10 @@ A subflow's `is_end` stage is entered and left inside a single turn: reaching it
 
 A user completing that subflow sees the end stage's line, then the parent's. This is what makes a subflow's *failing* exit usable: a branch whose only job is to explain that nothing was built has nowhere else to say it.
 
-Two consequences follow from the stage being left as soon as it is reached:
+Three consequences follow from the stage being left as soon as it is reached:
 
 - The template renders against the subflow's data, which the pop then replaces with the parent's. A value that exists only inside the subflow -- `document_count` above -- is interpolated correctly here and is gone by the time the parent renders. Fields the parent needs must still travel through [`result_mapping`](#result_mapping-child-to-parent).
-- **`prompt` is not a template.** It instructs the model, and the pop has no LLM turn to give it -- so an end stage carrying only a `prompt` is still silent. A completion message goes in `response_template`.
+- **`prompt` is not one of the templates the pop can render.** The departing stage offers `greeting_template`, `response_template`, or `clarification_template` and nothing else, so an end stage carrying only a `prompt` is still silent. (`prompt` *is* rendered elsewhere -- into the turn's `stage_prompt` metadata -- and is handed to the model verbatim as the stage's goal. It is simply not a candidate here.) A completion message goes in `response_template`.
 - `auto_advance: true` on an end stage does nothing. The auto-advance loop excludes end stages by design; a flow that has ended has nothing to advance to. Set the template, not the flag.
 
 ## Configuration

@@ -4167,8 +4167,11 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
                 ``advance()`` path).
 
         Returns:
-            List of rendered template strings from auto-advanced
-            stages (empty when no transition occurred).
+            Rendered template strings collected from the stages this
+            turn left: those auto-advanced through, and a subflow's
+            ``is_end`` stage on the turn it is popped.  A pop can
+            contribute the only entry, so a non-empty list does not
+            imply an auto-advance happened.
         """
         # No transition — nothing to do
         if state.current_stage == from_stage:
