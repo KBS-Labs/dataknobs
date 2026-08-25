@@ -17,11 +17,13 @@ leave. So the mode is per key, with a block-level default, and
 ``overwrite`` stays the block-level default because making ``fill``
 the default would silently disarm every escape hatch that exists today.
 
-Two of the tests here are **guards rather than reproductions** and pass
-before the fix as well as after: the one pinning ``overwrite`` as the
-default, and the one pinning the fallback for a block with no modes in
-it. They are here because the failure they describe is a regression this
-change could plausibly introduce.
+Several tests here are **guards rather than reproductions** and pass
+before the change as well as after -- the ones pinning ``overwrite`` as
+the block default, the fallback for a block with no modes in it, the
+block-mode fallback for an unreadable per-key mode, a foreign ``mode``
+field staying a plain value, and the ``to_dict``/``from_dict`` round
+trip. They are here because the failure each describes is a regression
+this change could plausibly introduce.
 """
 
 from __future__ import annotations
@@ -39,7 +41,7 @@ from dataknobs_bots.reasoning.wizard_skip import (
     SkipDefaultEntry,
     SkipDefaults,
 )
-from dataknobs_bots.reasoning.wizard_types import WizardState
+from dataknobs_bots.reasoning.wizard_types import WizardState, field_is_present
 from dataknobs_bots.testing import BotTestHarness, WizardConfigBuilder
 
 # ---------------------------------------------------------------------------
@@ -514,15 +516,20 @@ def test_a_mapping_naming_more_than_value_and_mode_is_the_value() -> None:
     assert defaults.entries["form_field"].value == field
 
 
-def test_a_value_only_nested_default_can_be_wrapped_to_say_so() -> None:
+def test_a_value_and_mode_nested_default_can_be_wrapped_to_say_so() -> None:
     """The one collision the grammar cannot see, and its escape hatch.
 
-    A nested default naming *only* ``value``/``mode`` reads exactly like
-    an annotation and is taken as one. Wrapping it says which was meant.
+    A nested default naming *exactly* ``value`` and ``mode`` reads
+    exactly like an annotation and is taken as one. Wrapping it in a
+    real annotation says which was meant -- and the wrapper has to name
+    both keys too, because that is what an annotation is.
     """
     literal = {"value": 3, "mode": "off"}
 
-    defaults = SkipDefaults.from_stage({"knob": {"value": literal}}, SKIP_DEFAULT_OVERWRITE)
+    defaults = SkipDefaults.from_stage(
+        {"knob": {"value": literal, "mode": SKIP_DEFAULT_OVERWRITE}},
+        SKIP_DEFAULT_OVERWRITE,
+    )
 
     assert defaults.entries["knob"].value == literal
 
@@ -548,3 +555,343 @@ def test_apply_in_fill_mode_replaces_nothing() -> None:
 
     assert defaults.apply(data) == []
     assert data == {"a": 1}
+
+
+# ---------------------------------------------------------------------------
+# 9. What ``fill`` means by "absent"
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("existing", [None, False, 0, "", [], {}])
+def test_fill_writes_exactly_where_the_package_says_a_field_is_absent(
+    existing: Any,
+) -> None:
+    """``fill`` and ``has()`` must not disagree about what "set" means.
+
+    This package already has one answer and states it in one place:
+    :func:`field_is_present` -- "a field has been provided if its value
+    is not None" -- which is what the ``has()`` condition helper, the
+    confidence gate and ``_apply_schema_defaults`` all use.
+    ``wizard_derivations`` even carries a note naming the fork, because
+    ``_apply_transition_derivations`` picked the stricter key-presence
+    reading and the two have had to be told apart ever since.
+
+    So this is a pin rather than a preference: whatever
+    ``field_is_present`` says about a value is what ``fill`` does with
+    the key holding it, for every value, forever.
+    """
+    defaults = SkipDefaults.from_stage({"a": "the default"}, SKIP_DEFAULT_FILL)
+    data: dict[str, Any] = {"a": existing}
+
+    defaults.apply(data)
+
+    if field_is_present(existing):
+        assert data["a"] == existing, (
+            f"fill overwrote {existing!r}, which field_is_present() calls set"
+        )
+    else:
+        assert data["a"] == "the default", (
+            f"fill skipped {existing!r}, which field_is_present() calls absent -- "
+            "so has() reports the key missing while fill reports it taken"
+        )
+
+
+@pytest.mark.asyncio
+async def test_fill_writes_over_a_key_left_holding_none() -> None:
+    """A key can be present and unset, and a real turn produces one.
+
+    Extraction writes a property it saw mentioned but could not resolve;
+    a prior stage clears one it no longer applies to. Either leaves the
+    key in ``data`` with ``None`` beside it -- which every other reader
+    in this package calls absent, and which ``fill`` refused to write
+    because ``dict.setdefault`` asks a different question.
+    """
+    navigator = _navigator_for(
+        _wizard(
+            _stage(
+                skip_default={"kb_enabled": False},
+                skip_default_mode=SKIP_DEFAULT_FILL,
+            )
+        )
+    )
+    state = WizardState(current_stage="configure", data={"kb_enabled": None})
+
+    await navigator.navigate_skip(state)
+
+    assert state.data["kb_enabled"] is False, (
+        "fill left an unset key unset: the stage's default never landed"
+    )
+
+
+def test_replacing_an_unset_key_is_not_reported_as_a_replacement() -> None:
+    """``replaced`` names values the *user* chose, and ``None`` is not one.
+
+    The log line exists so a consumer can find the moment their value
+    was destroyed. A key holding ``None`` had no value to destroy, and
+    reporting it would put noise in the one line worth reading.
+    """
+    defaults = SkipDefaults.from_stage({"kb_enabled": False}, SKIP_DEFAULT_OVERWRITE)
+    data: dict[str, Any] = {"kb_enabled": None}
+
+    replaced = defaults.apply(data)
+
+    assert replaced == [], "an unset key was reported as a replaced user value"
+    assert data["kb_enabled"] is False, "the default should still be written"
+
+
+# ---------------------------------------------------------------------------
+# 10. An annotation names both keys
+# ---------------------------------------------------------------------------
+
+
+def test_a_mapping_naming_only_value_is_the_value() -> None:
+    """``{value: 3}`` is a nested default, and always has been.
+
+    Reading it as an annotation changes what already-deployed YAML
+    means: ``data["threshold"]`` was the mapping and would become ``3``,
+    so a template reading ``threshold.value`` breaks on upgrade. The
+    shape also carries no information -- an annotation naming no mode
+    takes the block's, which is exactly what the bare value does -- so
+    requiring both keys costs an author nothing and leaves only a
+    mapping naming *both* colliding.
+    """
+    literal = {"value": 3}
+
+    defaults = SkipDefaults.from_stage({"threshold": literal}, SKIP_DEFAULT_OVERWRITE)
+
+    assert defaults.entries["threshold"].value == literal, (
+        "a nested default naming only 'value' was read as an annotation"
+    )
+
+
+def test_a_mapping_naming_a_mode_that_is_not_ours_stays_a_value() -> None:
+    """``mode`` is a common field name, and most of them are not ours.
+
+    A guard rather than a reproduction. ``{provider: "x", mode: "chat"}``
+    names a mode, but not one of the two this grammar defines, so it is
+    a nested default like any other and must pass without a word.
+    """
+    literal = {"provider": "x", "mode": "chat"}
+    reports: list[tuple[str, Any, str, str]] = []
+
+    defaults = SkipDefaults.from_stage(
+        {"llm": literal},
+        SKIP_DEFAULT_OVERWRITE,
+        on_invalid=lambda *report: reports.append(report),
+    )
+
+    assert defaults.entries["llm"].value == literal
+    assert reports == [], f"a nested default with a foreign 'mode' was reported: {reports}"
+
+
+# ---------------------------------------------------------------------------
+# 11. A near-miss annotation is reported
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_a_misspelled_value_key_beside_a_mode_is_reported(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """``{values: false, mode: fill}`` is a broken annotation, not a value.
+
+    The typo is silent and the failure is the opposite of what the author
+    asked for: the whole mapping lands as the value, which is *truthy*
+    where they wrote ``false``, so the branch the skip was meant to leave
+    stays armed. This grammar rejects ``{value: "", label: "Email"}`` as
+    an annotation precisely so ``label`` is not dropped in silence; the
+    mirror case has to say something too.
+    """
+    config = _wizard(_stage(skip_default={"kb_enabled": {"values": False, "mode": "fill"}}))
+    navigator = _navigator_for(config)
+    state = WizardState(current_stage="configure", data={})
+
+    with caplog.at_level(logging.WARNING):
+        await navigator.navigate_skip(state)
+
+    warnings = [r.getMessage() for r in caplog.records if r.levelname == "WARNING"]
+    assert any("kb_enabled" in message for message in warnings), (
+        f"a mapping naming a mode but no value was stored in silence: {warnings}"
+    )
+    assert state.data["kb_enabled"] == {"values": False, "mode": "fill"}, (
+        "reporting must not change what is written -- a nested default whose "
+        "'mode' happens to name one of ours is still the value"
+    )
+
+
+# ---------------------------------------------------------------------------
+# 12. Which default an unreadable mode falls back to
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_an_unreadable_per_key_mode_falls_back_to_the_block_mode() -> None:
+    """The fallback is the block's mode, not ``overwrite``.
+
+    A pin rather than a reproduction: the code already does this and the
+    docstring said "the documented default", which reads as
+    ``overwrite``. Nothing could tell the two apart, because the only
+    test of a bad mode used a block with no mode of its own -- where
+    both readings give the same answer. They give opposite answers here,
+    on the key an author cared enough about to annotate.
+    """
+    config = _wizard(
+        _stage(
+            skip_default={"kb_enabled": {"value": False, "mode": "fil"}},
+            skip_default_mode=SKIP_DEFAULT_FILL,
+        )
+    )
+    navigator = _navigator_for(config)
+    state = WizardState(current_stage="configure", data={"kb_enabled": True})
+
+    await navigator.navigate_skip(state)
+
+    assert state.data["kb_enabled"] is True, (
+        "a typo in one key's mode fell back past the block's own mode to "
+        "'overwrite', destroying the value the block said to preserve"
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_blank_mode_falls_back_without_a_warning(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """``mode:`` left empty is unset, which is what a YAML null says.
+
+    ``_stage_field`` was taught this in the same change -- an authored
+    ``null`` reads as unset rather than as a wrong-typed value -- and the
+    rule has to hold one level down too, or the author who leaves a mode
+    blank to mean "use the block's" is warned for saying so.
+    """
+    config = _wizard(
+        _stage(
+            skip_default={"kb_enabled": {"value": False, "mode": None}},
+            skip_default_mode=SKIP_DEFAULT_FILL,
+        )
+    )
+    navigator = _navigator_for(config)
+    state = WizardState(current_stage="configure", data={"kb_enabled": True})
+
+    with caplog.at_level(logging.WARNING):
+        await navigator.navigate_skip(state)
+
+    warnings = [r.getMessage() for r in caplog.records if r.levelname == "WARNING"]
+    assert warnings == [], f"a deliberately blank mode was reported as unreadable: {warnings}"
+    assert state.data["kb_enabled"] is True, "the blank mode did not fall back to the block's"
+
+
+@pytest.mark.asyncio
+async def test_an_unknown_block_mode_is_reported_and_falls_back(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The block-level mode gets the same check the per-key one does."""
+    config = _wizard(_stage(skip_default={"kb_enabled": False}, skip_default_mode="fil"))
+    navigator = _navigator_for(config)
+    state = WizardState(current_stage="configure", data={"kb_enabled": True})
+
+    with caplog.at_level(logging.WARNING):
+        await navigator.navigate_skip(state)
+
+    warnings = [r.getMessage() for r in caplog.records if r.levelname == "WARNING"]
+    assert any("skip_default_mode" in message for message in warnings), (
+        f"an unreadable block mode was accepted in silence: {warnings}"
+    )
+    assert state.data["kb_enabled"] is False, "the block mode did not fall back to overwrite"
+
+
+@pytest.mark.asyncio
+async def test_a_non_string_block_mode_is_reported(caplog: pytest.LogCaptureFixture) -> None:
+    """``skip_default_mode: 3`` is caught by the field's type contract."""
+    config = _wizard(_stage(skip_default={"kb_enabled": False}, skip_default_mode=3))
+    navigator = _navigator_for(config)
+    state = WizardState(current_stage="configure", data={"kb_enabled": True})
+
+    with caplog.at_level(logging.WARNING):
+        await navigator.navigate_skip(state)
+
+    warnings = [r.getMessage() for r in caplog.records if r.levelname == "WARNING"]
+    assert any("skip_default_mode" in message for message in warnings), (
+        f"a wrong-typed block mode was accepted in silence: {warnings}"
+    )
+    assert state.data["kb_enabled"] is False, "the block mode did not fall back to overwrite"
+
+
+# ---------------------------------------------------------------------------
+# 13. ``from_dict`` is not the constructor for an authored block
+# ---------------------------------------------------------------------------
+
+
+def test_from_dict_rejects_an_authored_block() -> None:
+    """The authored shape and the dataclass shape are different shapes.
+
+    ``from_dict`` is the idiomatic entry point everywhere else in this
+    codebase, so a consumer reaches for it with the block they have --
+    and every key of that block is an unknown field, which
+    ``StructuredConfig`` ignores by default. The result was an empty
+    ``SkipDefaults`` that applied nothing, with no error and no log.
+    """
+    with pytest.raises(ValueError, match="entries"):
+        SkipDefaults.from_dict({"kb_enabled": False})
+
+
+def test_from_dict_still_accepts_what_to_dict_produces() -> None:
+    """Rejecting the authored shape must not break the round trip."""
+    original = SkipDefaults.from_stage(
+        {"a": {"value": 1, "mode": SKIP_DEFAULT_FILL}, "b": 2},
+        SKIP_DEFAULT_OVERWRITE,
+    )
+
+    assert SkipDefaults.from_dict(original.to_dict()) == original
+
+
+# ---------------------------------------------------------------------------
+# 14. A nested default belongs to the config, not to one conversation
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_a_nested_default_is_not_aliased_into_the_data() -> None:
+    """Writing a mutable default hands out the config's own object.
+
+    ``_StageField.extract`` already copies mutable list defaults for this
+    reason. Without the same care here, a transform doing
+    ``data["prefs"]["theme"] = ...`` edits the loaded stage metadata, and
+    every later conversation on that FSM starts from the edit.
+    """
+    config = _wizard(_stage(skip_default={"prefs": {"theme": "dark"}}))
+    wizard_fsm = WizardConfigLoader().load_from_dict(config)
+    navigator = WizardReasoning(wizard_fsm=wizard_fsm, strict_validation=False)._navigator
+
+    state = WizardState(current_stage="configure", data={})
+    await navigator.navigate_skip(state)
+    state.data["prefs"]["theme"] = "light"
+
+    assert wizard_fsm.get_skip_defaults("configure").entries["prefs"].value == {"theme": "dark"}, (
+        "one conversation's edit to a nested default reached the loaded "
+        "config: the value written was the config's own object, not a copy"
+    )
+
+
+# ---------------------------------------------------------------------------
+# 15. The grammar is reachable by name
+# ---------------------------------------------------------------------------
+
+
+def test_the_grammar_is_exported_from_the_package() -> None:
+    """``get_skip_defaults`` is public, so its return type has to be.
+
+    Without the export a consumer asserting on a mode has the bare
+    strings ``"fill"``/``"overwrite"`` and a reach into a private module
+    as the only options -- while ``NavigationConfig``, the class this one
+    is modelled on, is exported from right here.
+    """
+    from dataknobs_bots import reasoning
+
+    for name in (
+        "SkipDefaults",
+        "SkipDefaultEntry",
+        "SKIP_DEFAULT_FILL",
+        "SKIP_DEFAULT_OVERWRITE",
+    ):
+        assert hasattr(reasoning, name), f"{name} is not reachable from dataknobs_bots.reasoning"
+        assert name in reasoning.__all__, f"{name} is missing from reasoning.__all__"

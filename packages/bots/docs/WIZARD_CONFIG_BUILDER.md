@@ -248,7 +248,7 @@ builder.add_structured_stage(
 | `is_end` | `bool` | Whether this is an end stage |
 | `can_skip` | `bool` | Whether the user can skip |
 | `skip_default` | `dict[str, Any] \| None` | Values written into the collected data when skipped, as `{key: value}` |
-| `skip_default_mode` | `str \| None` | `"fill"` (write only where the key is absent) or `"overwrite"` (the default) |
+| `skip_default_mode` | `str \| None` | `"fill"` (write only where the key is unset — `null` counts as unset) or `"overwrite"` (the default) |
 | `suggestions` | `list[str] \| None` | Quick-reply suggestions |
 | `greeting_template` | `str \| None` | Opening line, rendered once when the stage first speaks and not repeated |
 | `response_template` | `str \| None` | Template-driven response (bypasses LLM), re-rendered every turn on a structured stage |

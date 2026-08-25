@@ -2505,7 +2505,9 @@ stages:
       - target: save
 ```
 
-#### Skip Defaults
+<a id="skip-defaults"></a>
+
+**Skip Defaults:**
 
 When users skip a stage, you can apply default values using `skip_default`:
 
@@ -2548,7 +2550,7 @@ This gives users three paths:
 decision, and it is per key. By default it may — `skip_default` overwrites,
 which is what it has always done, and a stage that relies on the clobber to
 leave a branch the user cannot otherwise escape depends on that. Set
-`skip_default_mode: fill` to write only where the key is absent:
+`skip_default_mode: fill` to write only where the key is unset:
 
 ```yaml
     can_skip: true
@@ -2556,6 +2558,11 @@ leave a branch the user cannot otherwise escape depends on that. Set
     skip_default:
       kb_enabled: false          # left alone if the user already set it
 ```
+
+"Unset" here is the same test the `has()` condition helper and schema
+`default` application use: a key is set when its value **is not `null`**. A key
+extraction left holding `null`, or that an earlier stage cleared, is one `fill`
+will write.
 
 One block can hold both, because a real stage needs both — an option the user
 configured must survive the skip that saves it, while a flag guarding an
@@ -2571,27 +2578,38 @@ by giving `value` alongside `mode`; a bare value keeps the block's:
 | | |
 |---|---|
 | `overwrite` | Write the default over whatever is there. **The default.** |
-| `fill` | Write the default only where the key is absent. |
+| `fill` | Write the default only where the key is unset (`null` counts as unset). |
 
-A mapping is read as `{value, mode}` only when it carries a `value` key **and
-names nothing besides `value` and `mode`**, so a nested default still means
-what it reads as — both `llm: {provider: anthropic}`, which names no `value`,
-and `field: {value: "", label: Email}`, which does but is plainly not an
-annotation. One collision is irreducible: a nested default whose only keys are
-`value` and optionally `mode` reads exactly like an annotation and is taken as
-one. Wrap it to say otherwise:
+A mapping is read as an annotation **only when it names exactly `value` and
+`mode`**, so a nested default still means what it reads as. Three shapes turn
+on that rule: `llm: {provider: anthropic}` names no `value`;
+`field: {value: "", label: Email}` names one but is plainly not an annotation,
+and reading it as one would drop `label`; and `threshold: {value: 3}` names
+nothing an annotation needs, since an entry declaring no mode takes the
+block's — which is what the bare value already does.
+
+One collision is irreducible: a nested default naming *exactly* `value` and
+`mode` reads like an annotation and is taken as one. Wrap it in a real
+annotation to say otherwise:
 
 ```yaml
     skip_default:
-      knob: {value: {value: 3, mode: "off"}}   # the mapping, whole
+      knob: {value: {value: 3, mode: "off"}, mode: overwrite}   # the mapping, whole
 ```
+
+A mapping that names one of these two modes without being an annotation is
+reported at `WARNING` and then written as the value it reads as — `{values:
+false, mode: fill}` is a typo, and storing that mapping where the author wrote
+`false` puts a *truthy* value on the key, so the branch the skip was meant to
+leave stays armed.
 
 **The skip marker lands before the defaults do**, and that ordering is a
 guarantee rather than an implementation detail: `_skipped_<stage>` is in
 `data` before any `skip_default` value is written, so a routing transform or
 condition running on the skip turn can still tell what the user chose from what
-the stage supplied. Every overwrite of a value that was already set is logged
-at `DEBUG`, naming the keys.
+the stage supplied. Every overwrite that *changes* a value the user had
+already set is logged at `DEBUG`, naming the keys; a default equal to what was
+already there has replaced nothing and is not reported.
 
 **Confirmation on New Data:**
 

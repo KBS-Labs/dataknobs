@@ -892,6 +892,13 @@ class TestStageFieldRegistrySync:
         exists precisely to pass through what the builder does not
         name, and what an author puts there is their own claim, not the
         builder's.
+
+        Only the *test* builder is checked, because it is the only one
+        that can drift here. The production builder's stage keywords
+        flow into the ``StageConfig`` dataclass, where an undeclared
+        one is a ``TypeError`` at construction -- and its parameters
+        are positional-or-keyword, so the filter below would find none
+        of them to check.
         """
         parameters = inspect.signature(WizardConfigBuilder.stage).parameters
         declared = {

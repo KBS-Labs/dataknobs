@@ -432,20 +432,25 @@ class WizardFSM:
         """
         stage_name = stage or self.current_stage
 
-        def _report(key: str, value: Any, expected: str) -> None:
+        def _report(key: str, value: Any, requirement: str, outcome: str) -> None:
             # "" is the block-level mode, which is a *sibling* field --
             # naming it "skip_default" would point the author at the
             # block they wrote correctly, and would share a warn-once
             # slot with the block's own type check.
             field = f"skip_default.{key}" if key else "skip_default_mode"
+            # The outcome is carried rather than assumed: a bad mode
+            # falls back to another mode, which the author needs named,
+            # while a mapping that only looks like an entry is still
+            # written as the value it reads as -- no default involved.
             self._report_once(
                 stage_name,
                 field,
-                "Stage '%s' declares %s as %r; %s is required, using the default",
+                "Stage '%s' declares %s as %r; %s. %s.",
                 stage_name,
                 field,
                 value,
-                expected,
+                requirement,
+                outcome,
             )
 
         return SkipDefaults.from_stage(

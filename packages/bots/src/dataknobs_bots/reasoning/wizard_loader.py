@@ -646,7 +646,15 @@ class WizardConfigLoader:
                 "suggestions": stage.get("suggestions", []),
                 "help_text": stage.get("help_text"),
                 "can_skip": stage.get("can_skip", False),
-                "skip_default": stage.get("skip_default"),
+                # skip_default is deliberately absent. This block is a
+                # hand-built subset carried on the FSM's own StateConfig;
+                # the metadata WizardFSM reads is the registry-driven one
+                # from _extract_metadata. A copy here answers "what does
+                # this stage write on skip?" without the sibling
+                # skip_default_mode that says which of those writes may
+                # land on a key the user set -- so it can only ever give
+                # the pre-mode answer. Read it through
+                # WizardFSM.get_skip_defaults(), which reads both.
                 "can_go_back": stage.get("can_go_back", True),
                 "tools": stage.get("tools", []),
                 "mode": stage.get("mode"),

@@ -96,6 +96,62 @@ def test_a_correctly_typed_value_is_returned_untouched(
     assert not caplog.records, f"a valid stage was warned about: {caplog.records}"
 
 
+def test_an_authored_null_reads_as_unset_rather_than_ill_typed(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """``can_skip:`` left empty is unset, and unset is not a type error.
+
+    ``_StageField.extract`` writes ``None`` for every field a stage did
+    not declare, so an unset field is *present* in the metadata holding
+    it. Reporting that as a wrong type accuses the author of writing
+    something they never wrote -- once per stage, in nearly every config
+    -- and a YAML ``null`` says the same thing a missing key does.
+
+    A guard rather than a reproduction: it holds today. It is here
+    because nothing else in this suite covers the ``None`` arm, so
+    removing it would leave every test green.
+    """
+    fsm = _fsm_with("can_skip", None)
+    try:
+        with caplog.at_level(logging.WARNING, logger="dataknobs_bots.reasoning.wizard_fsm"):
+            assert fsm.can_skip("only") is False
+    finally:
+        fsm.close()
+
+    assert not caplog.records, (
+        f"an unset field was reported as ill-typed: {[r.getMessage() for r in caplog.records]}"
+    )
+
+
+def test_a_field_the_registry_does_not_default_is_silent_when_absent(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The arm every ordinary config takes.
+
+    ``skip_default_mode`` has no registry default, so a stage that does
+    not mention it reaches ``_stage_field`` as ``None`` against a ``str``
+    default -- which is the first accessor able to reach the ``None`` arm
+    at all, and the reason it had to be taught the difference.
+    """
+    fsm = WizardConfigLoader().load_from_dict(
+        {
+            "name": "no-skip-fields",
+            "version": "1.0",
+            "stages": [{"name": "only", "is_start": True, "is_end": True, "prompt": "Hi."}],
+        }
+    )
+    try:
+        with caplog.at_level(logging.WARNING, logger="dataknobs_bots.reasoning.wizard_fsm"):
+            assert fsm.get_skip_defaults("only").entries == {}
+    finally:
+        fsm.close()
+
+    assert not caplog.records, (
+        f"a stage that mentions no skip fields was warned about: "
+        f"{[r.getMessage() for r in caplog.records]}"
+    )
+
+
 def test_a_transition_condition_that_is_not_a_string_is_not_reported_as_one() -> None:
     """``get_transition_condition`` feeds an observability record only.
 

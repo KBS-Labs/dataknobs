@@ -18,16 +18,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the user had chosen it.
 
   A stage now declares `skip_default_mode: fill` to write only where a key is
-  absent, and a key may state its own mode with `{value: ..., mode: fill}`
+  unset, and a key may state its own mode with `{value: ..., mode: fill}`
   where the block's is wrong for it alone. Both directions are needed in one
   block: an option the user configured must survive the skip that saves it,
   while a flag guarding an unconfigured branch must be cleared by that same
   skip or the user is pushed back into the branch they were leaving.
-  `overwrite` remains the default, so existing configs are unchanged; a
-  mapping is read as `{value, mode}` only when it carries a `value` key and
-  names nothing besides `value` and `mode`, so a nested default keeps meaning
-  what it reads as -- including one that has a `value` field of its own
-  alongside others. Keys whose value is actually replaced are logged at DEBUG.
+  `overwrite` remains the default, so a block that names no mode behaves
+  exactly as it did.
+
+  "Unset" is the reading the rest of the package already uses -- a key is set
+  when its value is not `None`, which is what `has()`, the confidence gate and
+  schema-default application all ask. A key extraction left holding `None` is
+  one `fill` writes.
+
+  A mapping is an annotation **only when it names exactly `value` and `mode`**,
+  so a nested default keeps meaning what it reads as: `{provider: "x"}` names
+  no `value`, `{value: "", label: "Email"}` names one but would lose `label`,
+  and `{value: 3}` names nothing an annotation needs, since an entry declaring
+  no mode takes the block's anyway. A mapping that names one of the two modes
+  without being an annotation is reported and then written as the value it
+  reads as, because `{values: false, mode: fill}` is a typo whose silent
+  reading puts a *truthy* mapping where the author wrote `false`. Keys whose
+  value is actually replaced are logged at DEBUG; a default equal to what was
+  already there has replaced nothing and is not reported. Values are copied on
+  the way in, so a transform editing a nested default cannot reach the loaded
+  config the next conversation starts from.
+
+  **One config shape changes meaning:** a `skip_default` key whose value is a
+  mapping naming *exactly* `value` and `mode` was a nested default and is now
+  read as an annotation. That collision is irreducible -- the two are the same
+  text -- so wrap it to say otherwise:
+  `knob: {value: {value: 3, mode: "off"}, mode: overwrite}`.
 
   Two things this makes explicit rather than incidental. The skip marker
   `_skipped_<stage>` is written **before** any default lands, and that
@@ -38,6 +59,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   was introduced, while the config builder declared the parameter `bool | None`
   and the package's own documentation showed a string -- so an author following
   either got a stage that quietly did nothing on skip.
+
+  `SkipDefaults`, `SkipDefaultEntry` and the mode constants are exported from
+  `dataknobs_bots.reasoning`, so a consumer can name what `get_skip_defaults()`
+  returns. `SkipDefaults.from_stage()` is the constructor for an authored
+  block; `from_dict()` takes the projected `{"entries": ...}` shape and now
+  rejects an authored one rather than yielding an empty block that applies
+  nothing.
 
 - **A stage field left unset is no longer reported as ill-typed.**
   `WizardFSM._stage_field` replaces a wrong-typed value with the field's

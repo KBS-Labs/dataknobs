@@ -12,13 +12,18 @@ stage belongs to :class:`~dataknobs_bots.reasoning.wizard_fsm.WizardFSM`,
 and applying it to a live state belongs to the navigator.  It is a leaf
 so that both of those and the config loader can share one reading of the
 grammar; what a field means must not depend on which of them read it.
+Being a leaf is also why the "is this key set?" test below is spelled
+out rather than imported from ``wizard_types``, where
+:func:`~dataknobs_bots.reasoning.wizard_types.field_is_present` defines
+it for the rest of the package.  The two are pinned together by test.
 """
 
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping, MutableMapping
+from copy import deepcopy
 from dataclasses import dataclass, field
-from typing import Any, Final
+from typing import Any, ClassVar, Final, Literal
 
 from dataknobs_common.structured_config import StructuredConfig
 
@@ -28,24 +33,31 @@ from dataknobs_common.structured_config import StructuredConfig
 #: be silently disarmed by any other choice.
 SKIP_DEFAULT_OVERWRITE: Final[str] = "overwrite"
 
-#: Write the default only where the key is absent.
+#: Write the default only where the key is unset.
 SKIP_DEFAULT_FILL: Final[str] = "fill"
 
 #: Every mode a stage may declare, in the order they are documented.
 SKIP_DEFAULT_MODES: Final[tuple[str, ...]] = (SKIP_DEFAULT_OVERWRITE, SKIP_DEFAULT_FILL)
 
-#: Every key an annotated entry may name.  A mapping naming anything
-#: else is a value in its own right, however much of this it also names.
+#: The keys an annotated entry names -- both of them, and nothing else.
+#: A mapping naming any other set is a value in its own right.
 _ANNOTATION_KEYS: Final[frozenset[str]] = frozenset({"value", "mode"})
 
-#: Called as ``(key, value, expected)`` when part of a block cannot be
-#: read.  ``key`` locates the offending field *within* the block --
-#: ``"kb_enabled.mode"`` for one key's own mode -- and is ``""`` for the
-#: block-level mode, which is authored beside the block rather than in
-#: it, so only the caller knows what that field is called.  The caller
-#: supplies the context and decides how loudly to say it -- the same
-#: contract ``NavigationCommandConfig.normalize_raw`` uses.
-OnInvalid = Callable[[str, Any, str], None]
+#: Called as ``(key, value, requirement, outcome)`` when part of a block
+#: cannot be read as written.  ``key`` locates the offending field
+#: *within* the block -- ``"kb_enabled.mode"`` for one key's own mode --
+#: and is ``""`` for the block-level mode, which is authored beside the
+#: block rather than in it, so only the caller knows what that field is
+#: called.  ``requirement`` says what would have been readable and
+#: ``outcome`` says what was done instead, because the two are not
+#: always the same answer: an unreadable mode falls back to another
+#: mode, while a mapping that merely *looks* like an annotation is still
+#: written as the value it reads as.  The caller supplies the context
+#: and decides how loudly to say it.
+OnInvalid = Callable[[str, Any, str, str], None]
+
+#: What :func:`SkipDefaults.from_stage` says a mode has to be.
+_MODE_REQUIRED: Final[str] = " or ".join(repr(mode) for mode in SKIP_DEFAULT_MODES) + " is required"
 
 
 @dataclass(frozen=True)
@@ -59,6 +71,10 @@ class SkipDefaultEntry(StructuredConfig):
             block-level one, so a consumer never has to look further up.
     """
 
+    #: A misspelled field here would read as "this entry writes None",
+    #: which is a value, so nothing downstream could notice.
+    _UNKNOWN_KEYS: ClassVar[Literal["ignore", "raise"]] = "raise"
+
     value: Any = None
     mode: str = SKIP_DEFAULT_OVERWRITE
 
@@ -67,11 +83,22 @@ class SkipDefaultEntry(StructuredConfig):
 class SkipDefaults(StructuredConfig):
     """A stage's ``skip_default`` block, resolved into per-key modes.
 
+    :meth:`from_stage` is the constructor for *authored* input -- a
+    block is ``{key: value}`` and this class is ``{"entries": {...}}``,
+    which are different shapes.  ``from_dict`` therefore takes only the
+    projected shape, and rejects the authored one rather than quietly
+    yielding an empty block that applies nothing.
+
     Attributes:
         entries: Key to the entry that writes it.  Empty when the stage
             declares no defaults, which is the common case and applies
             nothing.
     """
+
+    #: Every key of an authored block would be an unknown field here,
+    #: and ignoring them turns ``SkipDefaults.from_dict(block)`` into a
+    #: silent no-op -- see the class docstring.
+    _UNKNOWN_KEYS: ClassVar[Literal["ignore", "raise"]] = "raise"
 
     entries: dict[str, SkipDefaultEntry] = field(default_factory=dict)
 
@@ -92,26 +119,38 @@ class SkipDefaults(StructuredConfig):
               scenario_enabled: false                      # bare value
               kb_enabled: {value: false, mode: fill}       # annotated
 
-        A bare value takes *block_mode*.  A mapping is an annotated entry
-        **only when it carries a ``value`` key and names nothing besides
-        ``value`` and ``mode``**; any other mapping is itself the value,
-        which is what keeps a nested default meaning what it reads as --
-        both ``llm: {provider: "x"}``, which names no ``value`` at all,
-        and ``field: {value: "", label: "Email"}``, which does but is
-        plainly not an annotation.  Reading the second as an annotation
-        would drop ``label`` on the floor, which is the silent loss the
-        mode grammar exists to end.
+        A bare value takes *block_mode*.  A mapping is an annotated
+        entry **only when it names exactly ``value`` and ``mode``**; any
+        other mapping is itself the value, which is what keeps a nested
+        default meaning what it reads as.  Three shapes turn on that
+        rule: ``llm: {provider: "x"}`` names no ``value``;
+        ``field: {value: "", label: "Email"}`` names one but is plainly
+        not an annotation, and reading it as one would drop ``label`` on
+        the floor; and ``threshold: {value: 3}`` names nothing an
+        annotation needs, since an entry declaring no mode takes the
+        block's -- which is exactly what the bare value does.  Requiring
+        both keys therefore costs an author nothing and keeps a mapping
+        that has always been a value from becoming a number.
 
-        One collision is irreducible: a nested default whose *only* keys
-        are ``value`` and optionally ``mode`` is indistinguishable from
-        an annotation, and is read as one.  Wrap it to say otherwise::
+        One collision is irreducible: a nested default naming *exactly*
+        ``value`` and ``mode`` is indistinguishable from an annotation,
+        and is read as one.  Wrap it in a real annotation to say
+        otherwise::
 
-            field: {value: {value: 3, mode: "off"}}   # the value, whole
+            knob: {value: {value: 3, mode: "off"}, mode: overwrite}
 
-        An unreadable mode falls back to the documented default for that
-        key **alone**, so one typo does not discard the rest of the
-        block -- the same contract
-        :meth:`WizardFSM._stage_field` gives a wrong-typed stage field.
+        A mapping that names one of our modes without being an
+        annotation is reported and then written as the value it reads
+        as -- ``{values: false, mode: fill}`` is a typo, not a config,
+        and storing a truthy mapping where the author wrote ``false`` is
+        the silent loss this grammar exists to end.
+
+        An unreadable mode falls back to the mode in force for that key
+        **alone** -- the block's -- so one typo neither discards the
+        rest of the block nor overrides what the block asked for.  A
+        mode authored as an explicit ``null`` is unset rather than
+        unreadable, the same reading
+        :meth:`WizardFSM._stage_field` gives a stage field.
 
         Args:
             block: The authored ``skip_default`` mapping, or ``None``.
@@ -131,16 +170,28 @@ class SkipDefaults(StructuredConfig):
 
         entries: dict[str, SkipDefaultEntry] = {}
         for key, raw in block.items():
-            if isinstance(raw, Mapping) and "value" in raw and raw.keys() <= _ANNOTATION_KEYS:
-                mode = cls._mode(
-                    raw.get("mode", resolved_block_mode),
-                    resolved_block_mode,
-                    f"{key}.mode",
-                    on_invalid,
+            if isinstance(raw, Mapping) and raw.keys() == _ANNOTATION_KEYS:
+                declared = raw["mode"]
+                mode = (
+                    resolved_block_mode
+                    if declared is None
+                    else cls._mode(declared, resolved_block_mode, f"{key}.mode", on_invalid)
                 )
                 entries[key] = SkipDefaultEntry(value=raw["value"], mode=mode)
-            else:
-                entries[key] = SkipDefaultEntry(value=raw, mode=resolved_block_mode)
+                continue
+
+            if (
+                on_invalid is not None
+                and isinstance(raw, Mapping)
+                and raw.get("mode") in SKIP_DEFAULT_MODES
+            ):
+                on_invalid(
+                    key,
+                    raw,
+                    "an entry names exactly 'value' and 'mode'",
+                    "Writing the mapping as the value it reads as",
+                )
+            entries[key] = SkipDefaultEntry(value=raw, mode=resolved_block_mode)
 
         return cls(entries=entries)
 
@@ -155,30 +206,44 @@ class SkipDefaults(StructuredConfig):
         if raw in SKIP_DEFAULT_MODES:
             return str(raw)
         if on_invalid is not None:
-            on_invalid(key, raw, " or ".join(repr(mode) for mode in SKIP_DEFAULT_MODES))
+            on_invalid(key, raw, _MODE_REQUIRED, f"Using {default!r}")
         return default
 
     def apply(self, data: MutableMapping[str, Any]) -> list[str]:
         """Write the defaults into *data*.
 
+        ``fill`` writes where the key is **unset**, which this package
+        spells ``is None`` -- the reading
+        :func:`~dataknobs_bots.reasoning.wizard_types.field_is_present`
+        centralises for the ``has()`` condition helper, the confidence
+        gate and ``_apply_schema_defaults``.  A key left holding ``None``
+        by extraction or by an earlier stage is one every other reader
+        calls absent, so ``fill`` fills it.
+
+        Each value is copied on the way in.  A mutable default belongs to
+        the loaded config, and handing out the object itself lets one
+        conversation's transform edit what the next one starts from.
+
         Args:
             data: The wizard's collected data, mutated in place.
 
         Returns:
-            The keys whose existing value was **replaced by a different
-            one**, sorted.  A default equal to what was already there has
-            replaced nothing, and reporting it would train a reader to
-            ignore the case that matters.  ``fill`` never replaces, so it
-            never appears here.
+            The keys whose **set** value was replaced by a different
+            one, sorted.  A default equal to what was already there has
+            replaced nothing, and a key that was unset had nothing to
+            replace; reporting either would train a reader to ignore the
+            case that matters.  ``fill`` never replaces, so it never
+            appears here.
         """
         replaced = sorted(
             key
             for key, entry in self.entries.items()
-            if entry.mode == SKIP_DEFAULT_OVERWRITE and key in data and data[key] != entry.value
+            if entry.mode == SKIP_DEFAULT_OVERWRITE
+            and data.get(key) is not None
+            and data[key] != entry.value
         )
         for key, entry in self.entries.items():
-            if entry.mode == SKIP_DEFAULT_FILL:
-                data.setdefault(key, entry.value)
-            else:
-                data[key] = entry.value
+            if entry.mode == SKIP_DEFAULT_FILL and data.get(key) is not None:
+                continue
+            data[key] = deepcopy(entry.value)
         return replaced

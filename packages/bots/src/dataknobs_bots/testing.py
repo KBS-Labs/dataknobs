@@ -186,8 +186,9 @@ class WizardConfigBuilder:
                 the stage is skipped, as ``{key: value}``.  A key may
                 instead give ``{"value": ..., "mode": "fill"}`` to
                 override the block mode for itself alone.
-            skip_default_mode: ``"fill"`` (write only where the key is
-                absent) or ``"overwrite"`` (the default).
+            skip_default_mode: ``"fill"`` (write only where the key
+                is unset -- ``None`` counts as unset, matching
+                ``has()``) or ``"overwrite"`` (the default).
             can_go_back: Whether the user can navigate back from this
                 stage.
             reasoning: Reasoning strategy for this stage
