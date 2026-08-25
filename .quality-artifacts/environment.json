@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-08-25T14:25:29Z",
+  "timestamp": "2026-08-25T14:30:28Z",
   "python_version": "Python 3.12.12",
   "uv_version": "uv 0.12.5 (Homebrew 2026-08-14 aarch64-apple-darwin)",
   "os": "Darwin",
   "os_version": "24.6.0",
-  "git_branch": "sbk/wizard-fsm-stages-copy-contract",
-  "git_commit": "3f9dbc0bf219ce79dda10c978a13e5184fbb1a18",
+  "git_branch": "sbk/subflow-end-stage-render",
+  "git_commit": "5a967666cf1cccd97f35a6e92ae688718d22e929",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }
