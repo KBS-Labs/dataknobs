@@ -101,7 +101,7 @@ class TestWizardConfigBuilder:
                 mode="conversation",
                 extraction_scope="wizard_session",
                 auto_advance=False,
-                skip_extraction=True,
+                derivation_enabled=False,
             )
             .build()
         )
@@ -109,7 +109,47 @@ class TestWizardConfigBuilder:
         assert stage["mode"] == "conversation"
         assert stage["extraction_scope"] == "wizard_session"
         assert stage["auto_advance"] is False
-        assert stage["skip_extraction"] is True
+        assert stage["derivation_enabled"] is False
+
+    def test_skip_default_modes_reach_the_stage(self) -> None:
+        """The block and its mode are both builder keywords.
+
+        ``skip_default`` was declared ``bool | None`` while the runtime
+        has only ever honoured a mapping, so the builder could not
+        express the one shape that works.
+        """
+        config = (
+            WizardConfigBuilder("test")
+            .stage(
+                "s",
+                is_start=True,
+                is_end=True,
+                prompt="p",
+                can_skip=True,
+                skip_default={"kb_enabled": {"value": False, "mode": "fill"}},
+                skip_default_mode="overwrite",
+            )
+            .build()
+        )
+        stage = config["stages"][0]
+        assert stage["skip_default"] == {"kb_enabled": {"value": False, "mode": "fill"}}
+        assert stage["skip_default_mode"] == "overwrite"
+
+    def test_an_unnamed_field_still_passes_through(self) -> None:
+        """``**extra_fields`` carries what the signature does not name.
+
+        ``skip_extraction`` used to be an explicit keyword here even
+        though it is a per-turn state flag the loader has never read as
+        stage config. Dropping the keyword does not break a caller that
+        passes it -- it lands here instead, with the loader's
+        "unrecognized field" warning it always deserved.
+        """
+        config = (
+            WizardConfigBuilder("test")
+            .stage("s", is_start=True, is_end=True, prompt="p", llm_assist=True)
+            .build()
+        )
+        assert config["stages"][0]["llm_assist"] is True
 
     def test_transition_with_priority(self) -> None:
         """Transitions accept priority."""

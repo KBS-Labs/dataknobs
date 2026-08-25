@@ -194,7 +194,13 @@ class StageConfig(StructuredConfig):
     is_end: bool = False
     # Navigation
     can_skip: bool = False
-    skip_default: Any = None
+    # Values written into the collected data when the stage is skipped.
+    # A mapping, and only a mapping: the runtime has never honoured any
+    # other shape, so ``Any`` here invited a scalar the wizard discards.
+    skip_default: dict[str, Any] | None = None
+    # "fill" or "overwrite" (the default), applied to every key in
+    # skip_default that does not name its own mode.
+    skip_default_mode: str | None = None
     can_go_back: bool = True
     auto_advance: bool | None = None
     confirm_first_render: bool = True
@@ -547,7 +553,8 @@ class WizardConfigBuilder:
         is_start: bool = False,
         is_end: bool = False,
         can_skip: bool = False,
-        skip_default: Any = None,
+        skip_default: dict[str, Any] | None = None,
+        skip_default_mode: str | None = None,
         suggestions: list[str] | None = None,
         greeting_template: str | None = None,
         response_template: str | None = None,
@@ -568,7 +575,13 @@ class WizardConfigBuilder:
             is_start: Whether this is the start stage.
             is_end: Whether this is an end stage.
             can_skip: Whether the user can skip this stage.
-            skip_default: Default value if skipped.
+            skip_default: Values written into the collected data when
+                the stage is skipped, as ``{key: value}``.  A key may
+                instead give ``{"value": ..., "mode": "fill"}`` to
+                override the block mode for itself alone.
+            skip_default_mode: ``"fill"`` (write only where the key
+                is unset -- ``None`` counts as unset, matching
+                ``has()``) or ``"overwrite"`` (the default).
             suggestions: Quick-reply suggestions.
             greeting_template: Template rendered once, as this stage's
                 opening line, and not repeated afterwards.  Unlike
@@ -603,6 +616,7 @@ class WizardConfigBuilder:
             is_end=is_end,
             can_skip=can_skip,
             skip_default=skip_default,
+            skip_default_mode=skip_default_mode,
             suggestions=tuple(suggestions) if suggestions else (),
             greeting_template=greeting_template,
             response_template=response_template,

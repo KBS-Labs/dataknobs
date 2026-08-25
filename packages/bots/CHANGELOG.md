@@ -9,6 +9,76 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`skip_default` no longer has to overwrite a value the user set.** The
+  block was applied with a bare `dict.update`, which cannot be asked to do
+  anything else: a key the user set five turns ago was replaced exactly as
+  readily as one never touched, with no log line and nothing left to say the
+  value had ever been different. Every downstream reader -- conditions,
+  transforms, emission, templates -- then saw the stage's default as though
+  the user had chosen it.
+
+  A stage now declares `skip_default_mode: fill` to write only where a key is
+  unset, and a key may state its own mode with `{value: ..., mode: fill}`
+  where the block's is wrong for it alone. Both directions are needed in one
+  block: an option the user configured must survive the skip that saves it,
+  while a flag guarding an unconfigured branch must be cleared by that same
+  skip or the user is pushed back into the branch they were leaving.
+  `overwrite` remains the default, so a block that names no mode behaves
+  exactly as it did.
+
+  "Unset" is the reading the rest of the package already uses -- a key is set
+  when its value is not `None`, which is what `has()`, the confidence gate and
+  schema-default application all ask. A key extraction left holding `None` is
+  one `fill` writes.
+
+  A mapping is an annotation **only when it names exactly `value` and `mode`**,
+  so a nested default keeps meaning what it reads as: `{provider: "x"}` names
+  no `value`, `{value: "", label: "Email"}` names one but would lose `label`,
+  and `{value: 3}` names nothing an annotation needs, since an entry declaring
+  no mode takes the block's anyway. A mapping that names one of the two modes
+  without being an annotation is reported and then written as the value it
+  reads as, because `{values: false, mode: fill}` is a typo whose silent
+  reading puts a *truthy* mapping where the author wrote `false`. Keys whose
+  value is actually replaced are logged at DEBUG; a default equal to what was
+  already there has replaced nothing and is not reported. Values are copied on
+  the way in, so a transform editing a nested default cannot reach the loaded
+  config the next conversation starts from.
+
+  **One config shape changes meaning:** a `skip_default` key whose value is a
+  mapping naming *exactly* `value` and `mode` was a nested default and is now
+  read as an annotation. That collision is irreducible -- the two are the same
+  text -- so wrap it to say otherwise:
+  `knob: {value: {value: 3, mode: "off"}, mode: overwrite}`.
+
+  Two things this makes explicit rather than incidental. The skip marker
+  `_skipped_<stage>` is written **before** any default lands, and that
+  ordering is now a documented guarantee -- it is what lets anything running
+  on the skip turn tell the user's own value from the stage's. And a
+  `skip_default` of the wrong shape is reported instead of dropped: the
+  `isinstance(..., dict)` guard has silently discarded scalars since the field
+  was introduced, while the config builder declared the parameter `bool | None`
+  and the package's own documentation showed a string -- so an author following
+  either got a stage that quietly did nothing on skip.
+
+  `SkipDefaults`, `SkipDefaultEntry` and the mode constants are exported from
+  `dataknobs_bots.reasoning`, so a consumer can name what `get_skip_defaults()`
+  returns. `SkipDefaults.from_stage()` is the constructor for an authored
+  block; `from_dict()` takes the projected `{"entries": ...}` shape and now
+  rejects an authored one rather than yielding an empty block that applies
+  nothing.
+
+- **A stage field left unset is no longer reported as ill-typed.**
+  `WizardFSM._stage_field` replaces a wrong-typed value with the field's
+  documented default and warns; an *absent* field reaches it as `None`, which
+  is not a wrong type but the registry's own marker for "not declared". Any
+  accessor whose default is not `None` therefore accused every config leaving
+  the field out. No accessor could reach the *absent* case before -- every
+  shipped one asks for a field the registry already defaults -- so nothing
+  warned in practice, but it made `_stage_field` unusable for exactly the
+  fields most worth reading through it. A field authored as an explicit
+  `null` did reach it, and is now read as unset rather than reported as
+  ill-typed, which is what a YAML `null` says.
+
 - **Stage-dependent state resolves against the FSM that owns the stage.**
   `WizardNavigator` holds both the main FSM and the subflow manager, and each
   of its methods picked one by hand; five picked the main FSM, which inside a
@@ -251,6 +321,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   stream-abandon paths alike.
 
 ### Changed
+
+- **`WizardConfigBuilder.stage()` no longer declares a `skip_extraction`
+  keyword.** `skip_extraction` is a per-turn state flag set by auto-advance,
+  never a stage config field, so the loader discarded what the keyword wrote
+  and warned about an unrecognized field. Callers passing it are unaffected --
+  it lands in `**extra_fields` and behaves exactly as before. The typed
+  `skip_default` parameter changed from `bool | None` to
+  `dict[str, Any] | None`, which is the only shape the runtime has ever
+  honoured. A registry-sync test now asserts that every explicit `stage()`
+  keyword names a field the loader reads, so the class of drift this closes
+  cannot reopen silently.
 
 - **`WizardFSM` no longer reports a matched subflow transition as "none
   matched".** A subflow transition compiles to a self-loop arc, so a matched

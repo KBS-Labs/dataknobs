@@ -120,14 +120,14 @@ class WizardConfigBuilder:
         mode: str | None = None,
         extraction_scope: str | None = None,
         auto_advance: bool | None = None,
-        skip_extraction: bool | None = None,
         derivation_enabled: bool | None = None,
         recovery_enabled: bool | None = None,
         re_extract_on_entry: bool | str | None = None,
         confirm_first_render: bool | None = None,
         confirm_on_new_data: bool | None = None,
         can_skip: bool | None = None,
-        skip_default: bool | None = None,
+        skip_default: dict[str, Any] | None = None,
+        skip_default_mode: str | None = None,
         can_go_back: bool | None = None,
         reasoning: str | None = None,
         max_iterations: int | None = None,
@@ -163,7 +163,6 @@ class WizardConfigBuilder:
             mode: Stage mode (e.g. ``"conversation"``).
             extraction_scope: Per-stage extraction scope override.
             auto_advance: Per-stage auto-advance override.
-            skip_extraction: Whether to skip extraction on this stage.
             derivation_enabled: Per-stage field derivation override.
                 Set to ``False`` to suppress derivation on this stage.
             recovery_enabled: Per-stage recovery pipeline override.
@@ -183,7 +182,13 @@ class WizardConfigBuilder:
             confirm_on_new_data: Whether to re-confirm when schema
                 property values change on subsequent renders.
             can_skip: Whether the user can skip this stage.
-            skip_default: Default value to use when the stage is skipped.
+            skip_default: Values written into the collected data when
+                the stage is skipped, as ``{key: value}``.  A key may
+                instead give ``{"value": ..., "mode": "fill"}`` to
+                override the block mode for itself alone.
+            skip_default_mode: ``"fill"`` (write only where the key
+                is unset -- ``None`` counts as unset, matching
+                ``has()``) or ``"overwrite"`` (the default).
             can_go_back: Whether the user can navigate back from this
                 stage.
             reasoning: Reasoning strategy for this stage
@@ -228,8 +233,6 @@ class WizardConfigBuilder:
             stage["extraction_scope"] = extraction_scope
         if auto_advance is not None:
             stage["auto_advance"] = auto_advance
-        if skip_extraction is not None:
-            stage["skip_extraction"] = skip_extraction
         if derivation_enabled is not None:
             stage["derivation_enabled"] = derivation_enabled
         if recovery_enabled is not None:
@@ -244,6 +247,8 @@ class WizardConfigBuilder:
             stage["can_skip"] = can_skip
         if skip_default is not None:
             stage["skip_default"] = skip_default
+        if skip_default_mode is not None:
+            stage["skip_default_mode"] = skip_default_mode
         if can_go_back is not None:
             stage["can_go_back"] = can_go_back
         if reasoning is not None:

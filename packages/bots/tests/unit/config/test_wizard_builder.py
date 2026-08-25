@@ -60,7 +60,7 @@ class TestWizardConfigBuilder:
                 is_start=True,
                 is_end=True,
                 can_skip=True,
-                skip_default="Anonymous",
+                skip_default={"name": "Anonymous"},
                 suggestions=["Alice", "Bob"],
                 response_template="Hello {{name}}",
                 help_text="Type your name",
@@ -74,7 +74,7 @@ class TestWizardConfigBuilder:
         assert stage.schema is not None
         assert stage.tools == ("validator",)
         assert stage.can_skip is True
-        assert stage.skip_default == "Anonymous"
+        assert stage.skip_default == {"name": "Anonymous"}
         assert stage.suggestions == ("Alice", "Bob")
         assert stage.response_template == "Hello {{name}}"
         assert stage.help_text == "Type your name"
@@ -539,7 +539,7 @@ class TestWizardConfigSerialization:
                 "Enter data",
                 schema={"type": "object", "properties": {"x": {"type": "integer"}}},
                 can_skip=True,
-                skip_default=0,
+                skip_default={"x": 0},
             )
             .add_end_stage("done", "Goodbye")
             .add_transition("chat", "collect", condition="data.get('ready')")

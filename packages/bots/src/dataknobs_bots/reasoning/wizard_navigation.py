@@ -378,6 +378,27 @@ class WizardNavigator:
         Performs the skip operation (mark skipped, apply defaults, step
         FSM, run post-transition lifecycle) without generating a response.
 
+        **The skip marker is written before the defaults are applied, and
+        that ordering is part of the contract.** ``_skipped_<stage>``
+        going into ``state.data`` first is what lets anything downstream
+        tell "this value arrived with a skip" from "the user said this on
+        an ordinary turn" -- a routing transform reading a flag on the
+        skip turn sees the user's own value, not the stage's default.
+        Without the guarantee that distinction is unrecoverable, because
+        an overwritten value leaves nothing behind to say it was ever
+        different. The ordering predates ``skip_default`` (the marker was
+        written two weeks before the defaults were appended below it), so
+        it was never chosen; it is stated here because consumers depend
+        on it and a refactor would otherwise be free to reverse it.
+
+        Which defaults may land on a key that is already set is the
+        stage's decision, per key -- see
+        :meth:`WizardFSM.get_skip_defaults` and
+        :class:`~dataknobs_bots.reasoning.wizard_skip.SkipDefaults`. A
+        default that replaces a value the user set is logged at DEBUG,
+        naming the keys, because the alternative is a field changing with
+        nothing anywhere saying so.
+
         Hook coverage (when ``consistent_lifecycle=True``):
         - Full post-transition lifecycle: enter hook, auto-advance,
           subflow pop, complete hook — matching the forward path
@@ -400,10 +421,16 @@ class WizardNavigator:
         if not active_fsm.can_skip():
             return False, []
 
+        # The marker is written BEFORE the defaults land, and that
+        # ordering is a guarantee -- see this method's docstring.
         state.data[f"_skipped_{state.current_stage}"] = True
-        skip_default = active_fsm.current_metadata.get("skip_default")
-        if skip_default and isinstance(skip_default, dict):
-            state.data.update(skip_default)
+        replaced = active_fsm.get_skip_defaults().apply(state.data)
+        if replaced:
+            logger.debug(
+                "skip_default replaced user-set keys on '%s': %s",
+                state.current_stage,
+                replaced,
+            )
         state.clarification_attempts = 0
         # Clear skip_extraction — if the user skips a stage they were
         # auto-advanced to, the stale flag must not carry over to suppress

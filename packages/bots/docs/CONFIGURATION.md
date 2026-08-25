@@ -2068,7 +2068,8 @@ stages:
 | `suggestions` | list | Quick-reply buttons for users |
 | `help_text` | string | Additional help shown on request |
 | `can_skip` | bool | Allow users to skip this stage |
-| `skip_default` | object | Default values to apply when user skips this stage |
+| `skip_default` | object | Default values to apply when user skips this stage. See [Skip Defaults](#skip-defaults) |
+| `skip_default_mode` | string | `fill` or `overwrite` (default) — whether `skip_default` may replace values already set |
 | `can_go_back` | bool | Allow back navigation (default: true) |
 | `tools` | list | Tool names available in this stage (must be explicit; omitting means no tools) |
 | `reasoning` | string | Tool reasoning mode: "single" (default) or "react" for multi-tool loops |
@@ -2504,7 +2505,9 @@ stages:
       - target: save
 ```
 
-**Skipping with Defaults:**
+<a id="skip-defaults"></a>
+
+**Skip Defaults:**
 
 When users skip a stage, you can apply default values using `skip_default`:
 
@@ -2542,6 +2545,71 @@ This gives users three paths:
 > Use `skip_default` for stage-level defaults (applied when the user skips the entire stage).
 > Use schema `default` for property-level defaults (applied when the user doesn't mention a
 > specific field).
+
+**Whether a default may replace a value the user already set** is the stage's
+decision, and it is per key. By default it may — `skip_default` overwrites,
+which is what it has always done, and a stage that relies on the clobber to
+leave a branch the user cannot otherwise escape depends on that. Set
+`skip_default_mode: fill` to write only where the key is unset:
+
+```yaml
+    can_skip: true
+    skip_default_mode: fill
+    skip_default:
+      kb_enabled: false          # left alone if the user already set it
+```
+
+"Unset" here is the same test the `has()` condition helper and schema
+`default` application use: a key is set when its value **is not `null`**. A key
+extraction left holding `null`, or that an earlier stage cleared, is one `fill`
+will write.
+
+One block can hold both, because a real stage needs both — an option the user
+configured must survive the skip that saves it, while a flag guarding an
+unconfigured branch must be cleared by the same skip. A key states its own mode
+by giving `value` alongside `mode`; a bare value keeps the block's:
+
+```yaml
+    skip_default:
+      kb_enabled: {value: false, mode: fill}   # preserved if already set
+      scenario_enabled: false                  # cleared regardless
+```
+
+| | |
+|---|---|
+| `overwrite` | Write the default over whatever is there. **The default.** |
+| `fill` | Write the default only where the key is unset (`null` counts as unset). |
+
+A mapping is read as an annotation **only when it names exactly `value` and
+`mode`**, so a nested default still means what it reads as. Three shapes turn
+on that rule: `llm: {provider: anthropic}` names no `value`;
+`field: {value: "", label: Email}` names one but is plainly not an annotation,
+and reading it as one would drop `label`; and `threshold: {value: 3}` names
+nothing an annotation needs, since an entry declaring no mode takes the
+block's — which is what the bare value already does.
+
+One collision is irreducible: a nested default naming *exactly* `value` and
+`mode` reads like an annotation and is taken as one. Wrap it in a real
+annotation to say otherwise:
+
+```yaml
+    skip_default:
+      knob: {value: {value: 3, mode: "off"}, mode: overwrite}   # the mapping, whole
+```
+
+A mapping that names one of these two modes without being an annotation is
+reported at `WARNING` and then written as the value it reads as — `{values:
+false, mode: fill}` is a typo, and storing that mapping where the author wrote
+`false` puts a *truthy* value on the key, so the branch the skip was meant to
+leave stays armed.
+
+**The skip marker lands before the defaults do**, and that ordering is a
+guarantee rather than an implementation detail: `_skipped_<stage>` is in
+`data` before any `skip_default` value is written, so a routing transform or
+condition running on the skip turn can still tell what the user chose from what
+the stage supplied. Every overwrite that *changes* a value the user had
+already set is logged at `DEBUG`, naming the keys; a default equal to what was
+already there has replaced nothing and is not reported.
 
 **Confirmation on New Data:**
 

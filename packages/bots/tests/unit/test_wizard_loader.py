@@ -1,5 +1,6 @@
 """Tests for WizardConfigLoader."""
 
+import inspect
 import logging
 import tempfile
 from dataclasses import fields as dataclass_fields
@@ -9,6 +10,7 @@ import pytest
 import yaml
 
 from dataknobs_bots.config.wizard_builder import StageConfig
+from dataknobs_bots.testing import WizardConfigBuilder
 from dataknobs_bots.reasoning.wizard_loader import (
     KNOWN_STAGE_FIELDS,
     _STAGE_FIELDS,
@@ -839,14 +841,21 @@ class TestTransformContextFactory:
 
 
 class TestStageFieldRegistrySync:
-    """Verify that the stage field registry, KNOWN_STAGE_FIELDS, and
-    StageConfig stay in sync.
+    """Verify that the stage field registry, KNOWN_STAGE_FIELDS,
+    StageConfig and the test builder stay in sync.
 
     Adding a new stage field to the _STAGE_FIELDS registry should be
     the only change needed in wizard_loader.py.  StageConfig in
     wizard_builder.py must also declare the field so the typed
     builder API exposes it.  These tests catch drift between the
-    three representations.
+    four representations.
+
+    The builder assertion is the one that had been missing, and the
+    drift it now catches was real: ``WizardConfigBuilder.stage()``
+    offered a ``skip_extraction=`` keyword that wrote a key the loader
+    does not recognise, so a stage authored through the project's own
+    mandated test builder was silently discarded with a warning nobody
+    reads in a passing test.
     """
 
     def test_known_stage_fields_matches_registry(self) -> None:
@@ -869,6 +878,41 @@ class TestStageFieldRegistrySync:
             f"StageConfig is missing fields from _STAGE_FIELDS registry: "
             f"{sorted(missing)}. Add them to StageConfig in "
             f"wizard_builder.py so the typed builder API exposes them."
+        )
+
+    def test_builder_stage_keywords_are_known_to_the_loader(self) -> None:
+        """Every explicit ``stage()`` keyword must be a field the loader reads.
+
+        A keyword-only parameter on the test builder is a promise that
+        writing it does something.  The loader is the only thing that
+        can keep that promise, so a keyword naming a field outside
+        KNOWN_STAGE_FIELDS is a config surface that silently evaporates.
+
+        Only the *explicit* keywords are checked: ``**extra_fields``
+        exists precisely to pass through what the builder does not
+        name, and what an author puts there is their own claim, not the
+        builder's.
+
+        Only the *test* builder is checked, because it is the only one
+        that can drift here. The production builder's stage keywords
+        flow into the ``StageConfig`` dataclass, where an undeclared
+        one is a ``TypeError`` at construction -- and its parameters
+        are positional-or-keyword, so the filter below would find none
+        of them to check.
+        """
+        parameters = inspect.signature(WizardConfigBuilder.stage).parameters
+        declared = {
+            name
+            for name, parameter in parameters.items()
+            if parameter.kind is inspect.Parameter.KEYWORD_ONLY
+        }
+        unknown = declared - KNOWN_STAGE_FIELDS
+        assert not unknown, (
+            f"WizardConfigBuilder.stage() declares keywords the loader "
+            f"discards: {sorted(unknown)}. Either add a _StageField for "
+            f"each in wizard_loader.py, or drop the keyword -- writing one "
+            f"currently produces an 'unrecognized field' warning and no "
+            f"other effect."
         )
 
 
