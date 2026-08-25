@@ -429,8 +429,31 @@ class WizardStateSnapshot:
     Provides a complete picture of wizard state at a point in time,
     useful for debugging, audit trails, and driving UI components.
 
+    **Inside a pushed subflow this object mixes two frames of reference,
+    on purpose.** A subflow is not a step of the outer flow, so there is
+    no single stage list that both "which stage am I on" and "how far
+    through am I" can be answered from:
+
+    ================================  ==========================
+    Field                             Describes
+    ================================  ==========================
+    ``current_stage``                 the **subflow** stage
+    ``can_skip``                      the **subflow** stage
+    ``can_go_back``                   the **subflow** stage
+    ``suggestions``                   the **subflow** stage
+    ``stage_index``                   the **main** flow
+    ``total_stages``                  the **main** flow
+    ``stages``                        the **main** flow
+    ================================  ==========================
+
+    So progress reports the *parent* stage that pushed the subflow, and
+    stays put while the subflow runs -- which is what a progress bar
+    wants. Outside a subflow every field describes the same stage and the
+    distinction does not arise. A UI needing the subflow's own position
+    reads ``manager.metadata["wizard"]["subflow_stage"]``.
+
     Attributes:
-        current_stage: Current stage name
+        current_stage: Current stage name -- the subflow's, inside a push
         data: Collected wizard data
         history: List of visited stages
         transitions: List of all transitions
@@ -443,12 +466,16 @@ class WizardStateSnapshot:
         total_tasks: Total number of tasks
         available_task_ids: IDs of tasks ready to execute
         task_progress_percent: Progress based on tasks (if tasks defined)
-        stage_index: Index of current stage
-        total_stages: Total number of stages
-        can_skip: Whether current stage can be skipped
-        can_go_back: Whether back navigation is allowed
-        suggestions: Quick-reply suggestions for current stage
-        stages: Ordered list of stage dicts with name, label, and status
+        stage_index: Index in the **main** flow; inside a subflow, the
+            index of the parent stage that pushed it
+        total_stages: Number of stages in the **main** flow
+        can_skip: Whether ``current_stage`` can be skipped
+        can_go_back: Whether back navigation is allowed from
+            ``current_stage``
+        suggestions: Quick-reply suggestions for ``current_stage``,
+            rendered
+        stages: Ordered list of **main**-flow stage dicts with name,
+            label, and status
     """
 
     current_stage: str
@@ -709,7 +736,9 @@ class TransitionTracker:
 
         # Find most common trigger
         most_common_trigger = (
-            max(trigger_counts, key=trigger_counts.get) if trigger_counts else None
+            max(trigger_counts, key=lambda trigger: trigger_counts[trigger])
+            if trigger_counts
+            else None
         )
 
         return TransitionStats(

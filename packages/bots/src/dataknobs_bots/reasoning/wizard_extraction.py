@@ -44,6 +44,7 @@ from .wizard_types import (
     WizardState,
     _normalize_enum_value,
     field_is_present,
+    is_keyword_list,
 )
 from .wizard_utils import word_in_text
 
@@ -112,6 +113,10 @@ class WizardExtractor:
         self._focused_retry_enabled = focused_retry_enabled
         self._focused_retry_max_retries = focused_retry_max_retries
         self._field_derivations = field_derivations
+        #: Intent names already reported by :meth:`_intent_keywords`,
+        #: so an unusable override is named once rather than on every
+        #: classification of every turn.
+        self._reported_intent_keyword_types: set[str] = set()
 
     # -----------------------------------------------------------------
     # Public API — called from wizard.py orchestration
@@ -297,7 +302,7 @@ class WizardExtractor:
             IntentSpec(
                 name=i["id"],
                 target=i.get("target", ""),
-                keywords=(tuple(i["keywords"]) if i.get("keywords") else None),
+                keywords=self._intent_keywords(i),
                 extract=i.get("extract"),
             )
             for i in intent_config.get("intents", [])
@@ -311,6 +316,50 @@ class WizardExtractor:
             if result.intent.extract and result.extracted is not None:
                 state.data[result.intent.extract] = result.extracted
             logger.debug("Intent detected: %s", result.intent.name)
+
+    def _intent_keywords(self, intent: dict[str, Any]) -> tuple[str, ...] | None:
+        """The keyword overrides an intent declares, or ``None`` for none.
+
+        A hand-rolled ``intent_detection:`` block is authored config that
+        no synthesizer has validated by the time it reaches here, and
+        ``keywords`` is *iterated*: a bare string arms one keyword per
+        character, so a stage meaning ``done`` matched a user who typed
+        ``d`` -- and with ``per_intent_booleans`` that wrote the intent's
+        flag and fired its transition. Nothing raised and nothing was
+        logged.
+
+        The shape check is :func:`is_keyword_list`, shared with the
+        navigation commands and with the ``intent_confirm:`` synthesizer
+        so a keyword list means one thing everywhere. The *response*
+        differs by layer: the synthesizer raises, because nothing has
+        started yet and an author can still fix the file; here there is a
+        live conversation to keep serving, so the override is dropped --
+        the intent falls back to the classifier's own vocabulary, which
+        is what declaring no keywords already means -- and reported once.
+
+        Args:
+            intent: One entry of the block's ``intents`` list.
+
+        Returns:
+            The declared keywords as a tuple, or ``None`` when the intent
+            declares none or declares them unusably.
+        """
+        keywords = intent.get("keywords")
+        if not keywords:
+            return None
+        if is_keyword_list(keywords):
+            return tuple(keywords)
+
+        name = str(intent.get("id", "<unnamed>"))
+        if name not in self._reported_intent_keyword_types:
+            self._reported_intent_keyword_types.add(name)
+            logger.warning(
+                "Intent '%s' declares keywords as %s; a list of strings is "
+                "required, falling back to the classifier's own vocabulary",
+                name,
+                type(keywords).__name__,
+            )
+        return None
 
     def _build_intent_classifier(
         self,
@@ -895,7 +944,11 @@ class WizardExtractor:
                 if isinstance(content, list):
                     for part in content:
                         if isinstance(part, dict) and part.get("type") == "text":
-                            return part.get("text", "")
+                            text = part.get("text", "")
+                            # Guarded like the ``content`` branch above: a
+                            # message payload is untyped, and this method
+                            # is declared to return a ``str``.
+                            return text if isinstance(text, str) else ""
         return ""
 
     # -----------------------------------------------------------------

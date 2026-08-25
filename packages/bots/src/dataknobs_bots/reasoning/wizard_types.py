@@ -26,7 +26,7 @@ from __future__ import annotations
 
 import logging
 import time
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
@@ -171,6 +171,31 @@ _DEFAULT_NEGATIVE_PHRASES: tuple[str, ...] = (
 DEFAULT_BACK_KEYWORDS: tuple[str, ...] = ("back", "go back", "previous")
 DEFAULT_SKIP_KEYWORDS: tuple[str, ...] = ("skip", "skip this", "use default", "use defaults")
 DEFAULT_RESTART_KEYWORDS: tuple[str, ...] = ("restart", "start over")
+
+
+def is_keyword_list(value: Any) -> bool:
+    """Whether *value* is usable as a list of matchable keywords.
+
+    A ``str`` is rejected deliberately even though it is iterable: that
+    is the whole failure this guards, since iterating one yields a
+    keyword per character.
+
+    Four things in this package are authored as a keyword list and
+    *iterated* by their reader -- the three navigation commands, and the
+    ``keywords`` of an intent, whether written under ``intent_confirm:``
+    or in a hand-rolled ``intent_detection:`` block.  They share this
+    predicate so that what the field means cannot depend on which block
+    it was written in.  What they do about a bad value differs by layer
+    and should: a load-time validator raises, a runtime reader takes the
+    documented default and says so once.
+
+    Args:
+        value: The authored value.
+
+    Returns:
+        ``True`` when *value* is a list or tuple of strings.
+    """
+    return isinstance(value, (list, tuple)) and all(isinstance(item, str) for item in value)
 
 
 # =========================================================================
@@ -939,16 +964,122 @@ class NavigationCommandConfig(StructuredConfig):
     keywords: tuple[str, ...]
     enabled: bool = True
 
+    @classmethod
+    def normalize_raw(
+        cls,
+        raw: Any,
+        default_keywords: Sequence[str],
+        default_enabled: bool = True,
+        on_invalid: Callable[[str, Any, str], None] | None = None,
+    ) -> dict[str, Any]:
+        """Project one authored command block onto this config's fields.
+
+        A navigation command block is authored config and reaches its
+        readers uncoerced, so every level of it is checked here: the
+        block must be a mapping, ``keywords`` a list of strings and
+        ``enabled`` a bool. A field that fails falls back to the default
+        supplied for it **alone**, so one bad field does not discard the
+        others -- the same contract :meth:`WizardFSM._stage_field` gives
+        a wrong-typed stage field.
+
+        A bare ``keywords`` string is the case this exists for. It is
+        iterable, so consuming it without a check yields one keyword per
+        *character*: ``keywords: "done"`` armed ``d``, ``o``, ``n`` and
+        ``e``, which raises nothing and reads correctly in the config.
+
+        There are two readers -- wizard-level ``settings.navigation``
+        through :meth:`NavigationConfig._normalize_dict`, and a stage's
+        own block through ``WizardNavigator._resolve_navigation_config``
+        -- and they had a copy of this logic each. Both copies had the
+        same defect, which is the reason it lives here now: what a field
+        means must not depend on which of the two places it was written.
+
+        Args:
+            raw: The authored command block, or ``None`` if absent.
+            default_keywords: Keywords to use when none are readable.
+            default_enabled: ``enabled`` to use when it is not readable.
+            on_invalid: Called as ``(field, value, expected)`` for each
+                field that could not be read -- ``field`` is ``""`` for
+                the block itself. The caller supplies the context and
+                decides how loudly to say it.
+
+        Returns:
+            A dict with ``keywords`` and ``enabled``, ready to construct
+            this class or to be rebuilt by ``from_dict``'s recursion.
+        """
+
+        def _fallback() -> dict[str, Any]:
+            return {"keywords": list(default_keywords), "enabled": default_enabled}
+
+        if raw is None:
+            return _fallback()
+        if not isinstance(raw, dict):
+            if on_invalid is not None:
+                on_invalid("", raw, "a mapping")
+            return _fallback()
+
+        keywords_raw = raw.get("keywords")
+        if keywords_raw is None:
+            keywords = list(default_keywords)
+        elif is_keyword_list(keywords_raw):
+            keywords = [keyword.lower() for keyword in keywords_raw]
+        else:
+            if on_invalid is not None:
+                on_invalid("keywords", keywords_raw, "a list of strings")
+            keywords = list(default_keywords)
+
+        enabled = raw.get("enabled", default_enabled)
+        if not isinstance(enabled, bool):
+            # Declared ``bool``; an authored "false" is a truthy STRING,
+            # so a command the author turned off stayed on.
+            if on_invalid is not None:
+                on_invalid("enabled", enabled, "true or false")
+            enabled = default_enabled
+
+        return {"keywords": keywords, "enabled": enabled}
+
     def __post_init__(self) -> None:
-        """Coerce ``keywords`` to a tuple (raw config arrives as a list).
+        """Coerce ``keywords`` to a tuple, rejecting what must not be coerced.
 
         The ``from_dict`` path already coerces ``tuple[str, ...]`` fields via
         the base ``_coerce_field``; this covers the direct-construction path
-        (``NavigationCommandConfig(keywords=[...])``).  Coercing
-        unconditionally is a no-op on the dict path — ``tuple()`` of a tuple
-        is that same tuple — and matches how every sibling config in the
-        package normalises its sequence fields.
+        (``NavigationCommandConfig(keywords=[...])``).  Coercing a value that
+        is already a tuple is a no-op, and matches how every sibling config
+        in the package normalises its sequence fields.
+
+        The check is here because this is the **narrowest common path**:
+        every writer goes through it, including ``from_dict``, which the
+        base coercion passes a ``str`` through untouched (a string is not
+        one of the sequence types it recognises).  ``tuple("done")`` is
+        ``('d', 'o', 'n', 'e')`` -- four one-letter keywords that raise
+        nothing and read correctly in a config.
+
+        Authored config never reaches this with a bad value:
+        :meth:`normalize_raw` substitutes the command's documented
+        default first, because a YAML author cannot act on a traceback.
+        Reaching here with one therefore means a caller wrote it in code,
+        which is a bug and gets an exception.
+
+        Raises:
+            TypeError: If ``keywords`` is not a list or tuple of strings.
         """
+        if not is_keyword_list(self.keywords):
+            # Held as ``Any`` deliberately: the field is *declared*
+            # ``tuple[str, ...]``, so a type checker narrows it and calls
+            # the string branch unreachable -- which is true of every
+            # caller that honoured the declaration, and false of the one
+            # this exists to catch.
+            written: Any = self.keywords
+            hint = (
+                " A bare string is iterated one character at a time; write "
+                f"[{written!r}] to mean one keyword."
+                if isinstance(written, str)
+                else ""
+            )
+            raise TypeError(
+                f"{type(self).__name__}.keywords must be a list or tuple of "
+                f"strings, got {type(written).__name__} ({written!r}).{hint}"
+            )
         object.__setattr__(self, "keywords", tuple(self.keywords))
 
 
@@ -1002,22 +1133,29 @@ class NavigationConfig(StructuredConfig):
         """
 
         def _command(
-            raw_cmd: dict[str, Any] | None,
+            command: str,
+            raw_cmd: Any,
             default_keywords: tuple[str, ...],
         ) -> dict[str, Any]:
-            if raw_cmd is None:
-                return {"keywords": list(default_keywords)}
-            keywords = raw_cmd.get("keywords")
-            if keywords is not None:
-                keywords = [k.lower() for k in keywords]
-            else:
-                keywords = list(default_keywords)
-            return {"keywords": keywords, "enabled": raw_cmd.get("enabled", True)}
+            def _report(field: str, value: Any, expected: str) -> None:
+                logger.warning(
+                    "settings.navigation.%s declares %s as %s; %s is required, using the default",
+                    command,
+                    field or "the command",
+                    type(value).__name__,
+                    expected,
+                )
+
+            return NavigationCommandConfig.normalize_raw(
+                raw_cmd,
+                default_keywords,
+                on_invalid=_report,
+            )
 
         return {
-            "back": _command(raw.get("back"), DEFAULT_BACK_KEYWORDS),
-            "skip": _command(raw.get("skip"), DEFAULT_SKIP_KEYWORDS),
-            "restart": _command(raw.get("restart"), DEFAULT_RESTART_KEYWORDS),
+            "back": _command("back", raw.get("back"), DEFAULT_BACK_KEYWORDS),
+            "skip": _command("skip", raw.get("skip"), DEFAULT_SKIP_KEYWORDS),
+            "restart": _command("restart", raw.get("restart"), DEFAULT_RESTART_KEYWORDS),
         }
 
 

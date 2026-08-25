@@ -9,6 +9,164 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Stage-dependent state resolves against the FSM that owns the stage.**
+  `WizardNavigator` holds both the main FSM and the subflow manager, and each
+  of its methods picked one by hand; five picked the main FSM, which inside a
+  push does not have the current stage. Asking it returned an empty metadata
+  dict, indistinguishable from a stage that declared nothing -- so a subflow
+  stage declaring `can_skip: true` was told it was required, its own
+  `navigation.skip.keywords` were never found (the wizard-level defaults
+  applied instead), back landed on the right stage and then rendered one with
+  no prompt, schema or template, and an amendment jump to a subflow stage
+  found nothing. `WizardResponder` picked by hand too: a custom
+  `settings.context_template` rendering `can_skip` or `can_go_back` was handed
+  the main FSM's answer, so the system prompt told the model a skippable
+  subflow stage was required. The same stage config was correct standalone and
+  a dead end when pushed, with nothing in the config to say so.
+
+  Every site now asks `SubflowManager.fsm_for_state()`, which derives the
+  active FSM from the wizard state's subflow stack -- one rule, in the class
+  that owns the stack, correct both during a turn and outside one.
+  `WizardFSM` grew `stage_metadata_for()`, `has_stage()` and
+  `find_stage_owner()` so callers stop indexing another class's private
+  attribute. **Note for existing configs:** stage-level keywords replace the
+  wizard-level ones per command, as they always have outside a subflow, so a
+  subflow stage declaring `skip.keywords` now answers to those words and no
+  longer to the default `skip` -- keep `skip` in the list to have both.
+
+- **Amendments resolve a section against the whole flow, and unwind to reach
+  it.** The section-to-stage table confirms the wizard actually has the stage
+  it maps to, and asked that of one frame -- so the main flow never found a
+  stage living in a subflow, and once a subflow was pushed it stopped finding
+  main-flow stages, which is reachable because `complete_wizard` sets
+  completion with no subflow guard. Membership is now asked of the whole flow
+  tree (`WizardFSM.find_stage_owner`), because "is this a stage of this wizard"
+  is a property of the config and not of where the user stands. Acting on the
+  answer is separate and does read the stack: an amendment whose target lives
+  in the main flow while a subflow is open unwinds the subflow first, rather
+  than restoring the subflow's FSM to a stage it does not have; one naming a
+  stage inside some *other* subflow is declined and logged, since entering a
+  subflow needs a parent stage and a data mapping an amendment does not have.
+
+- **Restart inside a subflow leaves the subflow.** `restart_cleanup` reset the
+  main FSM and cleared data, history and banks, but left the subflow stack
+  loaded and the active subflow FSM set. The wizard then reported the main
+  flow's start stage while rendering the subflow stage's prompt, schema and
+  template -- and could not recover: `should_push` declines while already in a
+  subflow, and `should_pop` needs an end stage of the subflow, which the main
+  flow's start stage is not. Restart, the escape hatch of last resort, was
+  what wedged the wizard. It now unwinds the stack before restarting, through
+  `SubflowManager.unwind_all()` -- which also **records a `subflow_pop` for
+  each frame it tears down**, so the transition trail no longer holds a
+  `subflow_push` that nothing closes. A consumer pairing those records, or
+  reconstructing depth from them, was wrong in exactly the case this made
+  reachable.
+
+  Two further pieces of state survived the reset, because `replace_data({})`
+  empties `data` alone: **task completion** (`tasks` round-trips through
+  `fsm_state`, so a restarted wizard reported the previous run's completed
+  tasks -- a checklist that starts full on a flow the user just asked to start
+  over) and **`transient`** (merged into the metadata a UI reads). The task
+  *list* is rebuilt from the config rather than emptied: the wizard still has
+  the same tasks to do, none of them done.
+
+- **The read-only state snapshot describes the subflow stage it is standing
+  on.** `WizardReasoning.get_state_snapshot()` -- the documented way a UI reads
+  wizard state -- asked the **main** FSM for the current stage's metadata,
+  skippability and back-navigability, and inside a push the main FSM does not
+  have that stage. A skippable subflow stage therefore reported `can_skip:
+  False` and its `suggestions` came back empty, so a skip button disappeared
+  and quick replies vanished for as long as the subflow was open. `stage_index`
+  was wrong in its own way: the subflow's stage name is absent from the main
+  flow's stage list and was reported as index `0`, a progress bar that jumps
+  back to the start whenever a subflow opens -- while the same object's
+  `stages` roadmap correctly marked the *parent* stage as current, so the
+  snapshot contradicted itself. It now resolves through `_fsm_for_state()`,
+  the state-derived accessor the rest of the class already uses, and reports
+  main-flow progress against the parent stage that pushed the subflow.
+  `suggestions` now also goes through the reader the canonical metadata
+  writer uses, so a quick reply is Jinja-rendered (a UI was being handed the
+  raw `{{ ... }}` as a button label) and type-checked (a `suggestions:`
+  written as a bare string became one button per character).
+  `total_stages`, `data`, `history` and the task fields are unchanged.
+
+  **The mixed frame is documented on the type.** Inside a subflow the snapshot
+  answers `current_stage`, `can_skip`, `can_go_back` and `suggestions` for the
+  subflow stage, while `stage_index`, `total_stages` and `stages` stay on the
+  main flow and report the parent that pushed it. That table now lives on
+  `WizardStateSnapshot` itself as well as in the observability guide, so a
+  reader arriving through the API docs sees it.
+
+- **`snapshot_from_metadata()` reports the same state its instance-method
+  sibling does.** The static constructor -- the documented path for "you have
+  the conversation metadata but not the `WizardReasoning` instance" -- rebuilt
+  the stage-derived fields from `fsm_state` plus the caller's
+  `stage_definitions`, ignoring the values the wizard had already derived into
+  the same metadata dict one level up. Two consequences. `can_skip`,
+  `can_go_back` and `suggestions` were never passed to the constructor at all,
+  so they took the dataclass defaults (`False`, `True`, `[]`) in **every** flow
+  -- a UI on this path never showed a skip button and never showed a quick
+  reply, subflow or not. And inside a subflow the recomputation looked for the
+  subflow's stage name among the main flow's definitions, found nothing, and
+  reported `stage_index: 0` with no stage marked `"current"` in the roadmap.
+  All six fields now come from the metadata the wizard wrote.
+  **`stage_definitions` is unchanged for callers who need it:** it is the
+  fallback for metadata predating those fields or built by hand from
+  `fsm_state`, and is simply not consulted when the metadata is current.
+  `data` and `history` deliberately still come from `fsm_state`, so the two
+  constructors agree on those as well -- and are now **copied** out of it, as
+  the instance method already copied them. Returned by reference, a consumer
+  appending to `snapshot.history` on a type documented read-only silently
+  rewrote persisted wizard state.
+
+- **A `navigation:` block is type-checked before it is used, wherever it was
+  written.** The block is authored config and reached its readers uncoerced,
+  and every level of it was consumed without a check. `navigation: "yes"`
+  raised `AttributeError` on an ordinary turn (and, at wizard level, a
+  `ValueError` about *dictionary update sequences* out of `dataknobs-common`,
+  naming neither the wizard nor the field); a command declared as a scalar
+  raised one level down; `keywords: [1, 2]` raised out of `.lower()`; and
+  `enabled: "false"` is a **truthy string**, so a command the author turned off
+  stayed on while the field held a `str` on a dataclass declaring `bool`.
+  Quietest and worst: `keywords: "done"` was *iterated*, arming `d`, `o`, `n`
+  and `e` as four one-letter keywords, so a user answering `d` triggered a
+  command meant for `done` -- nothing raised, nothing was logged, and the
+  config read correctly.
+
+  A field that cannot be read now falls back to its documented default **alone**
+  -- a bad `skip` does not discard a good `back` -- and is reported at WARNING.
+  This is the contract `WizardFSM` gained for wrong-typed stage fields, applied
+  to the one config block that has two readers.
+
+  **Every reader now shares one implementation.** Wizard-level
+  `settings.navigation` and a stage's own `navigation:` block had a copy of the
+  merge logic each, and both copies had all four defects; they now call
+  `NavigationCommandConfig.normalize_raw()`, so what a field means cannot
+  depend on which of the two places it was written in. The stage-level report
+  is de-duplicated per stage and field, because that reader runs on every
+  navigation check of every turn.
+
+  The same is true of `keywords` wherever it appears. Four things in this
+  package are authored as a keyword list and then *iterated*, and they now
+  share one predicate (`is_keyword_list`) while responding at the layer each
+  belongs to:
+
+  - `NavigationCommandConfig.__post_init__` is the narrowest path every writer
+    goes through, including `from_dict` -- the base coercion passes a `str`
+    through untouched, so a string reached the constructor and became a tuple
+    of characters there. Constructing one with a non-list now raises
+    `TypeError`; authored config never reaches it, because `normalize_raw`
+    substitutes the documented default first.
+  - `intent_confirm:` **rejects** a wrong-typed `intents.<name>.keywords` at
+    load, beside the shape checks it already ran there -- nothing has started
+    yet and an author can still fix the file.
+  - A hand-rolled `intent_detection:` block, which no synthesizer validates,
+    **drops** an unusable override at classification time (falling back to the
+    classifier's own vocabulary, which is what declaring no keywords already
+    means) and reports it once per intent. With `per_intent_booleans`, a
+    one-character message had been matching an intent meant for a word,
+    writing its flag and firing its transition.
+
 - **A subflow guard now reads what its own stage prepared.** The condition on
   a `_subflow` transition was evaluated *before* the stage's pre-transition
   preparation ran, while every other transition condition is evaluated after

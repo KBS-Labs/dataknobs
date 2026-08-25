@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-08-24T23:39:41Z",
+  "timestamp": "2026-08-25T02:34:43Z",
   "python_version": "Python 3.12.12",
   "uv_version": "uv 0.12.5 (Homebrew 2026-08-14 aarch64-apple-darwin)",
   "os": "Darwin",
   "os_version": "24.6.0",
-  "git_branch": "sbk/subflow-guard-after-preparation",
-  "git_commit": "0efc1442419b9dd64a9a7a0ddedf535db82a5416",
+  "git_branch": "sbk/subflow-navigation-active-fsm",
+  "git_commit": "b9eb260007b413e49cedf3284d2b29dc7844bdae",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }

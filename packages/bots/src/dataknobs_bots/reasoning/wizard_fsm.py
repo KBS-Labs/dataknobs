@@ -144,6 +144,80 @@ class WizardFSM:
         """
         return self._stage_metadata.get(self.current_stage, {})
 
+    def stage_metadata_for(self, stage: str) -> dict[str, Any]:
+        """Get metadata for a named stage, or ``{}`` if this FSM has none.
+
+        The empty dict is the same answer :attr:`current_metadata` gives,
+        and it is deliberately not distinguished from a stage that
+        declared nothing -- callers reading one field with a default get
+        the documented default either way. A caller that needs to tell
+        "absent" from "empty" apart wants :meth:`has_stage`.
+
+        Args:
+            stage: Stage name.
+
+        Returns:
+            The stage's metadata dict, or ``{}``.
+        """
+        return self._stage_metadata.get(stage, {})
+
+    def has_stage(self, stage: str) -> bool:
+        """Whether this FSM defines *stage*.
+
+        Args:
+            stage: Stage name.
+
+        Returns:
+            ``True`` if the stage belongs to this FSM.
+        """
+        return stage in self._stage_metadata
+
+    def find_stage_owner(self, stage: str) -> "WizardFSM | None":
+        """The FSM in this tree that defines *stage*, searched depth-first.
+
+        Answers "does this wizard have such a stage at all", which is a
+        property of the configuration rather than of where the user
+        currently is.  :meth:`has_stage` answers it for one frame;
+        callers that must not depend on the frame -- the section-to-stage
+        table, which maps a name a user said onto a name the wizard uses
+        -- want this instead.
+
+        A caller that then has to *act* in the owning frame needs more
+        than this: two flows may legitimately name a stage the same, and
+        this reports the first one found (self, then subflows in
+        registration order).  Resolve the frame from the wizard state
+        there, and use this only to decide whether the name is a stage.
+
+        Args:
+            stage: Stage name.
+
+        Returns:
+            The FSM defining *stage*, or ``None`` if no flow in this tree
+            does.
+        """
+        return self._find_stage_owner(stage, set())
+
+    def _find_stage_owner(self, stage: str, seen: set[int]) -> "WizardFSM | None":
+        """Recursive half of :meth:`find_stage_owner`.
+
+        ``seen`` holds ``id()`` of the FSMs already visited: a registry
+        is built from config and nothing forbids a cycle, and a cycle
+        here would be an unbounded recursion rather than a wrong answer.
+        """
+        if id(self) in seen:
+            return None
+        seen.add(id(self))
+        if self.has_stage(stage):
+            return self
+        for name in self.subflow_names:
+            subflow = self.get_subflow(name)
+            if subflow is None:
+                continue
+            owner = subflow._find_stage_owner(stage, seen)
+            if owner is not None:
+                return owner
+        return None
+
     @property
     def stages(self) -> dict[str, dict[str, Any]]:
         """Get all stage metadata.

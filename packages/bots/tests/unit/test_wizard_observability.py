@@ -1551,8 +1551,9 @@ class TestSnapshotFromMetadata:
         assert [s["name"] for s in snapshot.stages] == ["welcome", "configure", "done"]
         assert [s["status"] for s in snapshot.stages] == ["completed", "current", "pending"]
         assert snapshot.stages[0]["label"] == "Welcome"
-        # The list is read twice — once for the roadmap above, once for the
-        # position below — so both branches are pinned.
+        # The roadmap above and the position here come off one unfolding of
+        # the list, so this pins that the names survive it as well as the
+        # labels do.
         assert (snapshot.stage_index, snapshot.total_stages) == (1, 3)
 
     def test_stage_definitions_as_a_dict(self) -> None:

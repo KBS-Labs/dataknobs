@@ -1,5 +1,5 @@
 {
-  "timestamp": "2026-08-24T23:39:41Z",
+  "timestamp": "2026-08-25T02:34:43Z",
   "overall_status": "PASS",
   "run_mode": "pr",
   "environment": "host",
@@ -9,7 +9,7 @@
   ],
   "coverage_percent": null,
   "package_hashes": {
-    "bots": "f15fb552c4c4c1b2158106d4d0fe53bacfe48e526b833ab5a4636728e7ec08a7",
+    "bots": "a52b6fd6e38fe81a4830d28e702d81eabf01cbfb082cc8e3212932d4d54e25a6",
     "common": "3cbc20435ffdc448ede2e93ee74c21de740730aab4b7e70ee50264838d0970b4",
     "config": "33fdf8a284304b52cfa3c91265fcaa8126741c7ee555dcba2b44fe3468e27bfd",
     "data": "d98e77f690b9e77711f63d9aae1384887beca4a55e49f36807234a8ec8be2e22",
@@ -23,8 +23,8 @@
   },
   "workspace_hashes": {
     "toolchain": "5f0fe9459553efff1fbb0ca11dc37a8b13e58e8d73c02abc90eb6663a15f9d25",
-    "workspace_tests": "3d476477585e71dc5bb8ff114df6c2df03065a89a2829f47fb65540cdac8e05e",
-    "docs": "628c9e15ecefe15fbd2713d487578840ff83ed7dd65cf91b390703a3ab51be20"
+    "workspace_tests": "fd28340cf9443318f8a8e229ae2c3e82c4914584aabdf69811e439880153e452",
+    "docs": "5be8797a02eda67d13cbcadbfd673aceaf4570f3168f8fbc4f7b5dbb34fb92ae"
   },
   "total_seconds": 150,
   "checks": {
@@ -85,7 +85,7 @@
       "status": "pass",
       "exit_code": 0,
       "skipped": false,
-      "duration_seconds": 9
+      "duration_seconds": 10
     }
   }
 }
