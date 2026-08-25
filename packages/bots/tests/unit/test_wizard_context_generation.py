@@ -746,11 +746,13 @@ class TestExtractionBotResponseContext:
         """Verbatim capture for trivial schemas must not bypass deictic resolution.
 
         Bug: When a stage schema is a single required string field with no
-        constraints, _needs_llm_extraction() returns False and _extract_data()
-        takes the verbatim capture fast path (returning the raw user message).
-        This early return happens BEFORE the bot-response prepending code at
-        wizard.py:3136, so deictic references like "the first one" are stored
-        literally instead of being resolved against the bot's prior response.
+        constraints, WizardExtractor.needs_llm_extraction() returns False
+        and WizardExtractor._extract_data() takes the verbatim capture fast
+        path (returning the raw user message). This early return happens
+        BEFORE the same method's bot-response prepending, which puts
+        _get_last_bot_response() in front of the user's message, so deictic
+        references like "the first one" are stored literally instead of
+        being resolved against the bot's prior response.
 
         This test uses a trivial schema (single required string field) with a
         deictic user message. The bot's prior response presents options. The
@@ -845,7 +847,7 @@ class TestCaptureModeStageField:
             },
         }
 
-        # _needs_llm_extraction should return True due to capture_mode
+        # needs_llm_extraction should return True due to capture_mode
         assert (
             wizard_reasoning._extraction.needs_llm_extraction(
                 stage["schema"],
@@ -872,7 +874,7 @@ class TestCaptureModeStageField:
             },
         }
 
-        # _needs_llm_extraction should return False due to capture_mode
+        # needs_llm_extraction should return False due to capture_mode
         assert (
             wizard_reasoning._extraction.needs_llm_extraction(
                 stage["schema"],
