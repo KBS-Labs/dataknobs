@@ -1,0 +1,521 @@
+"""What ``skip_default`` does to a value the user already set.
+
+``navigate_skip`` applied a stage's ``skip_default`` with a bare
+``state.data.update(...)``, and ``dict.update`` cannot be asked to do
+anything else: a key the user set five turns ago is replaced exactly as
+readily as one that was never touched. There was no mode flag, no
+per-key form, and no log line -- so a field the author of the config
+never meant to touch was silently rewritten, and every downstream reader
+(conditions, transforms, emission, templates) saw the default as though
+the user had chosen it.
+
+Both directions are legitimate and a real stage needs both **in one
+block**: an option the user configured must survive the skip that saves
+it, while a flag guarding an unconfigured branch must be clobbered by
+the skip or the user is pushed into the branch they were trying to
+leave. So the mode is per key, with a block-level default, and
+``overwrite`` stays the block-level default because making ``fill``
+the default would silently disarm every escape hatch that exists today.
+
+Two of the tests here are **guards rather than reproductions** and pass
+before the fix as well as after: the one pinning ``overwrite`` as the
+default, and the one pinning the fallback for a block with no modes in
+it. They are here because the failure they describe is a regression this
+change could plausibly introduce.
+"""
+
+from __future__ import annotations
+
+import logging
+from typing import Any
+
+import pytest
+
+from dataknobs_bots.reasoning.wizard import WizardReasoning
+from dataknobs_bots.reasoning.wizard_loader import WizardConfigLoader
+from dataknobs_bots.reasoning.wizard_skip import (
+    SKIP_DEFAULT_FILL,
+    SKIP_DEFAULT_OVERWRITE,
+    SkipDefaultEntry,
+    SkipDefaults,
+)
+from dataknobs_bots.reasoning.wizard_types import WizardState
+from dataknobs_bots.testing import BotTestHarness, WizardConfigBuilder
+
+# ---------------------------------------------------------------------------
+# Fixtures
+# ---------------------------------------------------------------------------
+
+#: The stage under test. Its transition fires on the skip marker alone,
+#: so setting a value does **not** move the wizard on -- which is the
+#: position the item is about: the user configures something, then says
+#: "done" to save, and the save is what destroys it.
+_CONFIGURE: dict[str, Any] = {
+    "name": "configure",
+    "is_start": True,
+    "prompt": "Configure the options.",
+    "response_template": "CONFIGURE",
+    "confirm_first_render": False,
+    "can_skip": True,
+    "schema": {
+        "type": "object",
+        "properties": {
+            "kb_enabled": {"type": "boolean"},
+            "scenario_enabled": {"type": "boolean"},
+        },
+    },
+    "transitions": [{"target": "review", "condition": "has('_skipped_configure')"}],
+}
+
+#: The skip lands here rather than on an end stage, so the turn does not
+#: also complete the flow and take the collected data out of view.
+_REVIEW: dict[str, Any] = {
+    "name": "review",
+    "prompt": "Anything else?",
+    "response_template": "REVIEW",
+    "confirm_first_render": False,
+    "schema": {"type": "object", "properties": {"extra": {"type": "string"}}},
+    "transitions": [{"target": "done", "condition": "has('extra')"}],
+}
+
+_DONE: dict[str, Any] = {
+    "name": "done",
+    "is_end": True,
+    "prompt": "Complete.",
+    "response_template": "DONE",
+}
+
+
+def _stage(**overrides: Any) -> dict[str, Any]:
+    """``_CONFIGURE`` with the skip fields under test written onto it."""
+    return {**_CONFIGURE, **overrides}
+
+
+def _wizard(stage: dict[str, Any]) -> dict[str, Any]:
+    """A two-stage wizard whose head is *stage*.
+
+    Built by hand rather than through the builder so the stage dict the
+    test authored is the one the loader sees, unmodified.
+    """
+    return {
+        "name": "skip-defaults",
+        "version": "1.0",
+        "stages": [stage, _REVIEW, _DONE],
+    }
+
+
+async def _set_then_skip(
+    config: dict[str, Any],
+    extracted: dict[str, Any],
+    *,
+    skip_word: str = "skip",
+) -> dict[str, Any]:
+    """Set *extracted* on the head stage, then skip it. Returns the data.
+
+    The two turns are the whole shape of the item: a value arrives from
+    the user, and the stage is then skipped without ever leaving it.
+    """
+    async with await BotTestHarness.create(
+        wizard_config=config,
+        main_responses=["r"] * 8,
+        extraction_results=[[extracted], [], []],
+    ) as harness:
+        await harness.greet()
+        await harness.chat("set the options")
+        for key, value in extracted.items():
+            assert harness.wizard_data.get(key) == value, (
+                f"setup: {key!r} was never set, so the test cannot say "
+                "anything about what the skip did to it"
+            )
+
+        await harness.chat(skip_word)
+        assert harness.wizard_data.get("_skipped_configure") is True, (
+            "setup: the stage was not skipped"
+        )
+        return dict(harness.wizard_data)
+
+
+# ---------------------------------------------------------------------------
+# 1-3. The modes, through a real turn
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_skip_default_fill_preserves_a_user_set_value() -> None:
+    """``fill`` writes only where the key is absent.
+
+    This is the arm that cost a consumer a working feature: a knowledge
+    base was configured, the user typed "done" to save, and the stage's
+    ``kb_enabled: false`` default replaced the flag the configuration had
+    just set -- so the artifact was emitted without the block the user
+    had spent the session building.
+    """
+    data = await _set_then_skip(
+        _wizard(
+            _stage(
+                skip_default={"kb_enabled": False},
+                skip_default_mode=SKIP_DEFAULT_FILL,
+            )
+        ),
+        {"kb_enabled": True},
+    )
+
+    assert data.get("kb_enabled") is True, (
+        "skip_default_mode: fill must leave a key the user set alone; "
+        "the stage's default replaced it"
+    )
+
+
+@pytest.mark.asyncio
+async def test_skip_default_overwrite_is_still_the_default() -> None:
+    """A block declaring no mode behaves exactly as it does today.
+
+    Not a reproduction -- this passes before the fix. It is here because
+    ``fill`` is the safer-*looking* default and making it the default
+    would disarm every stage that relies on the clobber to leave a branch
+    it cannot otherwise escape.
+    """
+    data = await _set_then_skip(
+        _wizard(_stage(skip_default={"scenario_enabled": False})),
+        {"scenario_enabled": True},
+    )
+
+    assert data.get("scenario_enabled") is False, (
+        "with no mode declared the default must still overwrite"
+    )
+
+
+@pytest.mark.asyncio
+async def test_per_key_modes_in_one_block() -> None:
+    """One key filled, one clobbered, in the same ``skip_default``.
+
+    The block-level flag alone is too coarse for the stage that motivated
+    this: its two arms need opposite things from the same skip. A bare
+    value keeps the block's mode, so only the key that differs has to say
+    so.
+    """
+    data = await _set_then_skip(
+        _wizard(
+            _stage(
+                skip_default={
+                    "kb_enabled": {"value": False, "mode": SKIP_DEFAULT_FILL},
+                    "scenario_enabled": False,
+                },
+            )
+        ),
+        {"kb_enabled": True, "scenario_enabled": True},
+    )
+
+    assert data.get("kb_enabled") is True, "the per-key 'fill' mode did not reach kb_enabled"
+    assert data.get("scenario_enabled") is False, (
+        "the bare value should keep the block mode, which is overwrite"
+    )
+
+
+# ---------------------------------------------------------------------------
+# 4. The ordering, as a guarantee rather than an accident
+# ---------------------------------------------------------------------------
+
+
+class _WriteOrder(dict):  # type: ignore[type-arg]
+    """A ``state.data`` that remembers the order keys were first written.
+
+    Planted directly rather than through the harness because a turn
+    rebuilds ``WizardState`` from serialized metadata -- ``data`` is a
+    fresh ``copy.deepcopy`` every turn, so a probe planted between two
+    turns would be discarded before the code under test ran.
+    """
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self.order: list[str] = []
+
+    def __setitem__(self, key: Any, value: Any) -> None:
+        if key not in self.order:
+            self.order.append(key)
+        super().__setitem__(key, value)
+
+    def setdefault(self, key: Any, default: Any = None) -> Any:
+        if key not in self:
+            self.order.append(key)
+        return super().setdefault(key, default)
+
+    def update(self, *args: Any, **kwargs: Any) -> None:
+        for key in dict(*args, **kwargs):
+            if key not in self.order:
+                self.order.append(key)
+        super().update(*args, **kwargs)
+
+
+def _navigator_for(config: dict[str, Any]) -> Any:
+    """The navigator of a strategy built over *config*.
+
+    Reaches past the harness deliberately: the two assertions below are
+    about the order of two statements inside one method, which no
+    sequence of turns can observe.
+    """
+    wizard_fsm = WizardConfigLoader().load_from_dict(config)
+    reasoning = WizardReasoning(wizard_fsm=wizard_fsm, strict_validation=False)
+    return reasoning._navigator
+
+
+@pytest.mark.asyncio
+async def test_the_skip_marker_is_observable_before_the_defaults_land() -> None:
+    """The skip marker is written first, and that is a contract.
+
+    A consumer cannot otherwise tell "this value arrived with a skip"
+    from "the user said this on an ordinary turn", so every workaround
+    for the gap this change closes rests on the marker being visible
+    before the defaults are. The ordering is older than ``skip_default``
+    -- the marker was written two weeks before the defaults were appended
+    below it -- which is exactly why it needs saying: nothing chose it.
+    """
+    navigator = _navigator_for(
+        _wizard(_stage(skip_default={"kb_enabled": False, "scenario_enabled": False}))
+    )
+    state = WizardState(current_stage="configure", data=_WriteOrder())
+
+    await navigator.navigate_skip(state)
+
+    order = state.data.order  # type: ignore[attr-defined]
+    assert "_skipped_configure" in order, "the skip marker was never written"
+    assert "kb_enabled" in order, "the defaults were never applied"
+    assert order.index("_skipped_configure") < order.index("kb_enabled"), (
+        f"the defaults landed before the skip marker: {order}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# 5. Saying so when a value is replaced
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_the_replaced_keys_are_logged(caplog: pytest.LogCaptureFixture) -> None:
+    """An overwrite of a user-set value is findable in the log.
+
+    The consumer who hit this found it by driving the flow and noticing
+    an emitted artifact was missing a block; nothing anywhere said a
+    value had been replaced.
+    """
+    config = _wizard(_stage(skip_default={"kb_enabled": False}))
+    navigator = _navigator_for(config)
+    state = WizardState(current_stage="configure", data={"kb_enabled": True})
+
+    with caplog.at_level(logging.DEBUG, logger="dataknobs_bots.reasoning.wizard_navigation"):
+        await navigator.navigate_skip(state)
+
+    messages = [record.getMessage() for record in caplog.records]
+    assert any("kb_enabled" in message and "configure" in message for message in messages), (
+        f"no log line named the replaced key: {messages}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_default_that_agrees_with_the_user_is_not_reported(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Only a key whose value actually changed counts as replaced.
+
+    A stage whose default happens to equal what the user chose has
+    replaced nothing, and reporting it would train a reader to ignore
+    the line that matters.
+    """
+    config = _wizard(_stage(skip_default={"kb_enabled": False}))
+    navigator = _navigator_for(config)
+    state = WizardState(current_stage="configure", data={"kb_enabled": False})
+
+    with caplog.at_level(logging.DEBUG, logger="dataknobs_bots.reasoning.wizard_navigation"):
+        await navigator.navigate_skip(state)
+
+    assert not any("replaced" in record.getMessage() for record in caplog.records), (
+        "a default equal to the user's own value was reported as a replacement"
+    )
+
+
+# ---------------------------------------------------------------------------
+# 6. A block of the wrong shape is reported, not discarded
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_a_scalar_skip_default_is_reported(caplog: pytest.LogCaptureFixture) -> None:
+    """``skip_default: "Anonymous"`` never worked, and never said so.
+
+    The ``isinstance(..., dict)`` guard has been on this line since the
+    field was introduced, so a scalar has always been dropped in silence
+    -- while the builder declared the parameter ``bool | None`` and the
+    package's own documentation showed a string. An author following
+    either got a stage that quietly did nothing on skip.
+    """
+    config = _wizard(_stage(skip_default="Anonymous"))
+    navigator = _navigator_for(config)
+    state = WizardState(current_stage="configure", data={})
+
+    with caplog.at_level(logging.WARNING):
+        await navigator.navigate_skip(state)
+
+    assert any(
+        "skip_default" in record.getMessage()
+        for record in caplog.records
+        if record.levelname == "WARNING"
+    ), (
+        f"a wrong-typed skip_default was discarded silently: {[r.getMessage() for r in caplog.records]}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_an_unknown_mode_is_reported_and_falls_back(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A misspelled mode takes the documented default and says so.
+
+    ``fil`` is not ``fill``, and silently treating it as one of the two
+    would give the author the opposite of what they asked for on the
+    key they cared enough about to annotate.
+    """
+    config = _wizard(
+        _stage(skip_default={"kb_enabled": {"value": False, "mode": "fil"}}),
+    )
+    navigator = _navigator_for(config)
+    state = WizardState(current_stage="configure", data={"kb_enabled": True})
+
+    with caplog.at_level(logging.WARNING):
+        await navigator.navigate_skip(state)
+
+    assert state.data["kb_enabled"] is False, (
+        "an unreadable mode must fall back to the documented default, overwrite"
+    )
+    assert any(
+        "mode" in record.getMessage() for record in caplog.records if record.levelname == "WARNING"
+    ), "the unreadable mode was accepted in silence"
+
+
+# ---------------------------------------------------------------------------
+# 7. Inside a subflow -- the joint case
+# ---------------------------------------------------------------------------
+
+
+def _subflow_wizard(stage: dict[str, Any]) -> dict[str, Any]:
+    """A parent whose ``gather`` stage pushes a subflow headed by *stage*."""
+    builder = WizardConfigBuilder("skip-defaults-in-a-subflow")
+    builder.stage(
+        "gather",
+        is_start=True,
+        prompt="Tell me your name.",
+        response_template="Noted.",
+        confirm_first_render=False,
+    )
+    builder.field("name", field_type="string", required=True)
+    builder.transition(
+        "wrap",
+        condition="has('name')",
+        subflow_network="detail",
+        return_stage="wrap",
+    )
+    builder.stage("wrap", is_end=True, prompt="All done.", response_template="WRAP")
+    builder.subflow("detail", {"name": "detail", "stages": [stage, _REVIEW, _DONE]})
+    return builder.build()
+
+
+@pytest.mark.asyncio
+async def test_skip_default_applies_inside_a_subflow() -> None:
+    """The same block, in a pushed subflow, means the same thing.
+
+    Until the navigator resolved a stage against the FSM that owns it,
+    this site was unreachable inside a push -- the outer skip gate asked
+    the main FSM, which does not have the stage, and refused before
+    ``skip_default`` was ever consulted. So the modes have to be shown
+    working here and not only at the top level.
+    """
+    stage = _stage(
+        skip_default={
+            "kb_enabled": {"value": False, "mode": SKIP_DEFAULT_FILL},
+            "scenario_enabled": False,
+        },
+    )
+    async with await BotTestHarness.create(
+        wizard_config=_subflow_wizard(stage),
+        main_responses=["r"] * 8,
+        extraction_results=[
+            [{"name": "Alice"}],
+            [{"kb_enabled": True, "scenario_enabled": True}],
+            [],
+        ],
+    ) as harness:
+        await harness.chat("my name is Alice")
+        assert harness.wizard_stage == "configure", "the subflow was not pushed"
+
+        await harness.chat("set the options")
+        assert harness.wizard_data.get("kb_enabled") is True, "setup: nothing was set"
+
+        await harness.chat("skip")
+
+        assert harness.wizard_data.get("_skipped_configure") is True
+        assert harness.wizard_data.get("kb_enabled") is True, (
+            "the per-key 'fill' mode did not survive the push"
+        )
+        assert harness.wizard_data.get("scenario_enabled") is False, (
+            "the block mode did not survive the push"
+        )
+
+
+# ---------------------------------------------------------------------------
+# 8. The grammar, without a turn
+# ---------------------------------------------------------------------------
+
+
+def test_a_bare_value_takes_the_block_mode() -> None:
+    """The scalar sugar: one mode for every key in the block."""
+    defaults = SkipDefaults.from_stage({"a": 1, "b": 2}, SKIP_DEFAULT_FILL)
+
+    assert defaults.entries == {
+        "a": SkipDefaultEntry(value=1, mode=SKIP_DEFAULT_FILL),
+        "b": SkipDefaultEntry(value=2, mode=SKIP_DEFAULT_FILL),
+    }
+
+
+def test_a_per_key_mode_overrides_the_block_mode() -> None:
+    """The per-key form is the one the motivating stage needs."""
+    defaults = SkipDefaults.from_stage(
+        {"a": {"value": 1, "mode": SKIP_DEFAULT_OVERWRITE}, "b": 2},
+        SKIP_DEFAULT_FILL,
+    )
+
+    assert defaults.entries["a"].mode == SKIP_DEFAULT_OVERWRITE
+    assert defaults.entries["b"].mode == SKIP_DEFAULT_FILL
+
+
+def test_a_mapping_without_a_value_key_is_the_value() -> None:
+    """A dict is only an entry when it says ``value``.
+
+    ``skip_default: {llm: {provider: "x"}}`` is a nested *value*, and the
+    existing suite has a case for it. Reading every mapping as an entry
+    would turn that config into a key with no value at all.
+    """
+    defaults = SkipDefaults.from_stage({"llm": {"provider": "x"}}, SKIP_DEFAULT_OVERWRITE)
+
+    assert defaults.entries["llm"].value == {"provider": "x"}
+
+
+def test_apply_reports_only_the_keys_whose_value_changed() -> None:
+    """``apply`` is the one place that decides what "replaced" means."""
+    defaults = SkipDefaults.from_stage(
+        {"changed": 2, "agreed": 1, "absent": 3},
+        SKIP_DEFAULT_OVERWRITE,
+    )
+    data: dict[str, Any] = {"changed": 1, "agreed": 1}
+
+    replaced = defaults.apply(data)
+
+    assert replaced == ["changed"]
+    assert data == {"changed": 2, "agreed": 1, "absent": 3}
+
+
+def test_apply_in_fill_mode_replaces_nothing() -> None:
+    """``fill`` cannot report a replacement, because it never makes one."""
+    defaults = SkipDefaults.from_stage({"a": 2}, SKIP_DEFAULT_FILL)
+    data: dict[str, Any] = {"a": 1}
+
+    assert defaults.apply(data) == []
+    assert data == {"a": 1}

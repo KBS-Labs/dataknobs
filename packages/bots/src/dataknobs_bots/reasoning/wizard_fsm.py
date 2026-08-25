@@ -13,6 +13,8 @@ from typing import Any, Callable, Self, TypeVar
 from dataknobs_fsm.api.advanced import AdvancedFSM, StepResult
 from dataknobs_fsm.execution.context import ExecutionContext
 
+from .wizard_skip import SKIP_DEFAULT_OVERWRITE, SkipDefaults
+
 logger = logging.getLogger(__name__)
 
 #: A stage field's declared type, taken from the default its accessor
@@ -287,17 +289,50 @@ class WizardFSM:
         if isinstance(value, type(default)):
             return value
 
-        if (stage_name, key) not in self._reported_stage_field_types:
-            self._reported_stage_field_types.add((stage_name, key))
-            logger.warning(
-                "Stage '%s' declares %s as %s; %s is required, using the default %r",
-                stage_name,
-                key,
-                type(value).__name__,
-                type(default).__name__,
-                default,
-            )
+        if value is None:
+            # Not a wrong-typed value: ``_StageField.extract`` writes
+            # ``None`` for every field the stage did not declare, so an
+            # unset field is *present* in the metadata holding it. Saying
+            # a stage "declares skip_default_mode as NoneType" would
+            # accuse the author of writing something they never wrote,
+            # once for every stage in every config that leaves the field
+            # out -- which is nearly all of them. An authored ``null``
+            # reaches here identically and means the same thing: unset.
+            return default
+
+        self._report_once(
+            stage_name,
+            key,
+            "Stage '%s' declares %s as %s; %s is required, using the default %r",
+            stage_name,
+            key,
+            type(value).__name__,
+            type(default).__name__,
+            default,
+        )
         return default
+
+    def _report_once(self, stage_name: str, key: str, message: str, *args: Any) -> None:
+        """Warn about *key* on *stage_name* the first time only.
+
+        A broken config is broken on every turn, so a per-turn warning
+        fills the log with one problem and buries the next one. Shared by
+        every reader of authored stage metadata rather than duplicated
+        per reader, so the "once" is once across all of them: a stage
+        whose ``skip_default`` is unreadable says so as many times as one
+        whose ``can_skip`` is, which is once.
+
+        Args:
+            stage_name: The stage the finding is about.
+            key: The metadata field, dotted for anything nested inside
+                one -- the pair with *stage_name* is what "once" counts.
+            message: Lazy-formatted log message.
+            *args: Its arguments.
+        """
+        if (stage_name, key) in self._reported_stage_field_types:
+            return
+        self._reported_stage_field_types.add((stage_name, key))
+        logger.warning(message, *args)
 
     def get_stage_prompt(self, stage: str | None = None) -> str:
         """Get prompt for a stage.
@@ -377,6 +412,47 @@ class WizardFSM:
             True if stage can be skipped
         """
         return self._stage_field(stage, "can_skip", False)
+
+    def get_skip_defaults(self, stage: str | None = None) -> SkipDefaults:
+        """The values a stage writes when it is skipped, with their modes.
+
+        Two authored fields make one answer -- ``skip_default`` holds the
+        values and ``skip_default_mode`` says what may be overwritten --
+        so they are read together here rather than separately by each
+        caller. Both go through :meth:`_stage_field`, which means a
+        ``skip_default`` written as a bare string (which this field has
+        never honoured, and which the builder's own signature invited)
+        is reported rather than dropped in silence.
+
+        Args:
+            stage: Stage name (defaults to current stage).
+
+        Returns:
+            The resolved block; empty when the stage declares none.
+        """
+        stage_name = stage or self.current_stage
+
+        def _report(key: str, value: Any, expected: str) -> None:
+            # "" is the block-level mode, which is a *sibling* field --
+            # naming it "skip_default" would point the author at the
+            # block they wrote correctly, and would share a warn-once
+            # slot with the block's own type check.
+            field = f"skip_default.{key}" if key else "skip_default_mode"
+            self._report_once(
+                stage_name,
+                field,
+                "Stage '%s' declares %s as %r; %s is required, using the default",
+                stage_name,
+                field,
+                value,
+                expected,
+            )
+
+        return SkipDefaults.from_stage(
+            self._stage_field(stage, "skip_default", {}),
+            self._stage_field(stage, "skip_default_mode", SKIP_DEFAULT_OVERWRITE),
+            on_invalid=_report,
+        )
 
     def can_go_back(self, stage: str | None = None) -> bool:
         """Check if back navigation is allowed.

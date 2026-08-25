@@ -9,6 +9,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`skip_default` no longer has to overwrite a value the user set.** The
+  block was applied with a bare `dict.update`, which cannot be asked to do
+  anything else: a key the user set five turns ago was replaced exactly as
+  readily as one never touched, with no log line and nothing left to say the
+  value had ever been different. Every downstream reader -- conditions,
+  transforms, emission, templates -- then saw the stage's default as though
+  the user had chosen it.
+
+  A stage now declares `skip_default_mode: fill` to write only where a key is
+  absent, and a key may state its own mode with `{value: ..., mode: fill}`
+  where the block's is wrong for it alone. Both directions are needed in one
+  block: an option the user configured must survive the skip that saves it,
+  while a flag guarding an unconfigured branch must be cleared by that same
+  skip or the user is pushed back into the branch they were leaving.
+  `overwrite` remains the default, so existing configs are unchanged; a
+  mapping is read as `{value, mode}` only when it carries a `value` key, so a
+  nested default keeps meaning what it reads as. Keys whose value is actually
+  replaced are logged at DEBUG.
+
+  Two things this makes explicit rather than incidental. The skip marker
+  `_skipped_<stage>` is written **before** any default lands, and that
+  ordering is now a documented guarantee -- it is what lets anything running
+  on the skip turn tell the user's own value from the stage's. And a
+  `skip_default` of the wrong shape is reported instead of dropped: the
+  `isinstance(..., dict)` guard has silently discarded scalars since the field
+  was introduced, while the config builder declared the parameter `bool | None`
+  and the package's own documentation showed a string -- so an author following
+  either got a stage that quietly did nothing on skip.
+
+- **A stage field left unset is no longer reported as ill-typed.**
+  `WizardFSM._stage_field` replaces a wrong-typed value with the field's
+  documented default and warns; an *absent* field reaches it as `None`, which
+  is not a wrong type but the registry's own marker for "not declared". Any
+  accessor whose default is not `None` therefore accused every config leaving
+  the field out. No shipped accessor could reach it before, so nothing warned
+  in practice -- but it made `_stage_field` unusable for exactly the fields
+  most worth reading through it.
+
 - **Stage-dependent state resolves against the FSM that owns the stage.**
   `WizardNavigator` holds both the main FSM and the subflow manager, and each
   of its methods picked one by hand; five picked the main FSM, which inside a
@@ -251,6 +289,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   stream-abandon paths alike.
 
 ### Changed
+
+- **`WizardConfigBuilder.stage()` no longer declares a `skip_extraction`
+  keyword.** `skip_extraction` is a per-turn state flag set by auto-advance,
+  never a stage config field, so the loader discarded what the keyword wrote
+  and warned about an unrecognized field. Callers passing it are unaffected --
+  it lands in `**extra_fields` and behaves exactly as before. The typed
+  `skip_default` parameter changed from `bool | None` to
+  `dict[str, Any] | None`, which is the only shape the runtime has ever
+  honoured. A registry-sync test now asserts that every explicit `stage()`
+  keyword names a field the loader reads, so the class of drift this closes
+  cannot reopen silently.
 
 - **`WizardFSM` no longer reports a matched subflow transition as "none
   matched".** A subflow transition compiles to a self-loop arc, so a matched

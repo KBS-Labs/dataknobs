@@ -146,6 +146,9 @@ _STAGE_FIELDS: tuple[_StageField, ...] = (
     # Navigation
     _StageField("can_skip", default=False),
     _StageField("skip_default"),
+    # Block-level mode for every key in skip_default that does not name
+    # its own; "overwrite" (today's behaviour) when absent.
+    _StageField("skip_default_mode"),
     _StageField("can_go_back", default=True),
     _StageField("auto_advance"),
     # Confirmation

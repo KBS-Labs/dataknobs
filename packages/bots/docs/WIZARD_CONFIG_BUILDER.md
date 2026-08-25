@@ -227,7 +227,7 @@ builder.add_structured_stage(
     schema={"type": "object", "properties": {"name": {"type": "string"}}},
     is_start=True,
     can_skip=True,
-    skip_default="Anonymous",
+    skip_default={"name": "Anonymous"},
     reasoning="react",
     max_iterations=5,
     response_template="Got it, {{ name }}!",
@@ -247,7 +247,8 @@ builder.add_structured_stage(
 | `is_start` | `bool` | Whether this is the start stage |
 | `is_end` | `bool` | Whether this is an end stage |
 | `can_skip` | `bool` | Whether the user can skip |
-| `skip_default` | `Any` | Default value when skipped |
+| `skip_default` | `dict[str, Any] \| None` | Values written into the collected data when skipped, as `{key: value}` |
+| `skip_default_mode` | `str \| None` | `"fill"` (write only where the key is absent) or `"overwrite"` (the default) |
 | `suggestions` | `list[str] \| None` | Quick-reply suggestions |
 | `greeting_template` | `str \| None` | Opening line, rendered once when the stage first speaks and not repeated |
 | `response_template` | `str \| None` | Template-driven response (bypasses LLM), re-rendered every turn on a structured stage |
@@ -490,7 +491,8 @@ All fields available on `StageConfig`:
 | `is_start` | `bool` | `False` | Whether this is the start stage |
 | `is_end` | `bool` | `False` | Whether this is an end stage |
 | `can_skip` | `bool` | `False` | Whether the user can skip this stage |
-| `skip_default` | `Any` | `None` | Default value if skipped |
+| `skip_default` | `dict[str, Any] \| None` | `None` | Values written into the collected data when the stage is skipped |
+| `skip_default_mode` | `str \| None` | `None` | Block-level mode for those values: `"fill"` or `"overwrite"` (the default). See [Skip Defaults](configuration.md#skip-defaults) |
 | `can_go_back` | `bool` | `True` | Whether the user can go back |
 | `auto_advance` | `bool \| None` | `None` | Auto-advance past this stage. `true` overrides global to enable, `false` overrides global to disable, absent/`None` defers to `auto_advance_filled_stages`. See [Message Stages](context-aware-wizards.md#message-stages) |
 | `confirm_first_render` | `bool` | `True` | Whether to pause for confirmation on first render. Set to `false` to skip and evaluate transitions immediately |
