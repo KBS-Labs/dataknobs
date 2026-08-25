@@ -2415,6 +2415,17 @@ The same rules apply wherever the block is written: `settings.navigation` and a
 stage's own `navigation:` are read through one implementation, so a field means
 the same thing in both.
 
+**`keywords` means the same thing everywhere it appears**, including under
+`intent_detection:` and `intent_confirm:` — it is always a list of strings, and
+a bare string is always iterated one character at a time. What happens to a bad
+value differs only by when it can be caught:
+
+| Where written | A wrong-typed `keywords` |
+|---|---|
+| `settings.navigation` / a stage's `navigation:` | falls back to the command's default keywords, reported at WARNING |
+| `intent_confirm:` | **rejected at load** with a `ConfigurationError` naming the stage and the intent |
+| a hand-rolled `intent_detection:` | the override is dropped — the intent falls back to the classifier's own vocabulary, as if it declared none — and reported once at WARNING |
+
 **Lifecycle Hooks:**
 ```yaml
 hooks:
@@ -3067,6 +3078,10 @@ transitions:
 |--------|-------------|-------------|
 | `keyword` | Fast substring matching against configured keywords. First match wins. No LLM call. | Simple triggers with known vocabulary |
 | `llm` | Lightweight LLM classification. Builds a prompt listing intents and asks the LLM to pick one. | Nuanced intent detection where keywords are insufficient |
+
+An intent's `keywords` must be a **list** of strings — `keywords: ["done"]`,
+never `keywords: done`. See **Navigation Commands** above for the full contract
+and what happens to a value that does not match.
 
 **Intent lifecycle:**
 - `_intent` is cleared at the start of each detection call

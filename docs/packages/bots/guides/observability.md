@@ -316,15 +316,33 @@ The subflow's own stages never appear in `stages`. A UI that needs to show
 where the user is *within* the subflow should read `subflow_stage` from the
 wizard metadata on the turn response.
 
+The same table is on `WizardStateSnapshot` itself, so it is visible to a reader
+who reaches the type through its API docs rather than through this guide.
+
 ```python
 snapshot = reasoning.get_state_snapshot(manager)
 
 # Progress: main-flow, steady across a subflow
-progress_bar.set_value(snapshot.stage_index / snapshot.total_stages)
+progress_bar.set_value(stage_fraction(snapshot))
 
 # Actions: the stage the user is on, subflow or not
 if snapshot.can_skip:
     show_skip_button()
+```
+
+Compute the fraction the way the wizard does, so a UI reading the snapshot and
+one reading `wizard.progress` from the turn metadata agree — the first stage is
+`0.0`, the last is `1.0`, and a one-stage flow does not divide by zero:
+
+```python
+def stage_fraction(snapshot: WizardStateSnapshot) -> float:
+    """The snapshot's position as a 0.0-1.0 fraction.
+
+    Mirrors ``stage_position``, which derives ``wizard.progress`` in the
+    turn metadata: the denominator is the distance to the *last* stage,
+    not the stage count.
+    """
+    return snapshot.stage_index / max(snapshot.total_stages - 1, 1)
 ```
 
 ### Using Snapshots for UI
@@ -335,8 +353,8 @@ Snapshots are designed for driving UI components:
 # In your web application
 snapshot = reasoning.get_state_snapshot(manager)
 
-# Display stage progress
-progress_bar.set_value(snapshot.stage_index / snapshot.total_stages)
+# Display stage progress (see stage_fraction above)
+progress_bar.set_value(stage_fraction(snapshot))
 stage_label.set_text(f"Stage {snapshot.stage_index + 1} of {snapshot.total_stages}")
 
 # Display task checklist

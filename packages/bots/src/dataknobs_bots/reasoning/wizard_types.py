@@ -173,12 +173,27 @@ DEFAULT_SKIP_KEYWORDS: tuple[str, ...] = ("skip", "skip this", "use default", "u
 DEFAULT_RESTART_KEYWORDS: tuple[str, ...] = ("restart", "start over")
 
 
-def _is_keyword_list(value: Any) -> bool:
-    """Whether *value* is usable as a list of navigation keywords.
+def is_keyword_list(value: Any) -> bool:
+    """Whether *value* is usable as a list of matchable keywords.
 
     A ``str`` is rejected deliberately even though it is iterable: that
     is the whole failure this guards, since iterating one yields a
     keyword per character.
+
+    Four things in this package are authored as a keyword list and
+    *iterated* by their reader -- the three navigation commands, and the
+    ``keywords`` of an intent, whether written under ``intent_confirm:``
+    or in a hand-rolled ``intent_detection:`` block.  They share this
+    predicate so that what the field means cannot depend on which block
+    it was written in.  What they do about a bad value differs by layer
+    and should: a load-time validator raises, a runtime reader takes the
+    documented default and says so once.
+
+    Args:
+        value: The authored value.
+
+    Returns:
+        ``True`` when *value* is a list or tuple of strings.
     """
     return isinstance(value, (list, tuple)) and all(isinstance(item, str) for item in value)
 
@@ -1006,7 +1021,7 @@ class NavigationCommandConfig(StructuredConfig):
         keywords_raw = raw.get("keywords")
         if keywords_raw is None:
             keywords = list(default_keywords)
-        elif _is_keyword_list(keywords_raw):
+        elif is_keyword_list(keywords_raw):
             keywords = [keyword.lower() for keyword in keywords_raw]
         else:
             if on_invalid is not None:
@@ -1024,15 +1039,47 @@ class NavigationCommandConfig(StructuredConfig):
         return {"keywords": keywords, "enabled": enabled}
 
     def __post_init__(self) -> None:
-        """Coerce ``keywords`` to a tuple (raw config arrives as a list).
+        """Coerce ``keywords`` to a tuple, rejecting what must not be coerced.
 
         The ``from_dict`` path already coerces ``tuple[str, ...]`` fields via
         the base ``_coerce_field``; this covers the direct-construction path
-        (``NavigationCommandConfig(keywords=[...])``).  Coercing
-        unconditionally is a no-op on the dict path — ``tuple()`` of a tuple
-        is that same tuple — and matches how every sibling config in the
-        package normalises its sequence fields.
+        (``NavigationCommandConfig(keywords=[...])``).  Coercing a value that
+        is already a tuple is a no-op, and matches how every sibling config
+        in the package normalises its sequence fields.
+
+        The check is here because this is the **narrowest common path**:
+        every writer goes through it, including ``from_dict``, which the
+        base coercion passes a ``str`` through untouched (a string is not
+        one of the sequence types it recognises).  ``tuple("done")`` is
+        ``('d', 'o', 'n', 'e')`` -- four one-letter keywords that raise
+        nothing and read correctly in a config.
+
+        Authored config never reaches this with a bad value:
+        :meth:`normalize_raw` substitutes the command's documented
+        default first, because a YAML author cannot act on a traceback.
+        Reaching here with one therefore means a caller wrote it in code,
+        which is a bug and gets an exception.
+
+        Raises:
+            TypeError: If ``keywords`` is not a list or tuple of strings.
         """
+        if not is_keyword_list(self.keywords):
+            # Held as ``Any`` deliberately: the field is *declared*
+            # ``tuple[str, ...]``, so a type checker narrows it and calls
+            # the string branch unreachable -- which is true of every
+            # caller that honoured the declaration, and false of the one
+            # this exists to catch.
+            written: Any = self.keywords
+            hint = (
+                " A bare string is iterated one character at a time; write "
+                f"[{written!r}] to mean one keyword."
+                if isinstance(written, str)
+                else ""
+            )
+            raise TypeError(
+                f"{type(self).__name__}.keywords must be a list or tuple of "
+                f"strings, got {type(written).__name__} ({written!r}).{hint}"
+            )
         object.__setattr__(self, "keywords", tuple(self.keywords))
 
 

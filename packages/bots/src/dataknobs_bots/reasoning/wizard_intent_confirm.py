@@ -26,6 +26,7 @@ from .stage_synthesizers import (
     register_stage_synthesizer,
     validate_no_conflicting_fields,
 )
+from .wizard_types import is_keyword_list
 
 logger = logging.getLogger(__name__)
 
@@ -75,6 +76,16 @@ class IntentConfirmSynthesizer:
                 raise ConfigurationError(
                     f"Stage '{stage_name}': intent_confirm.intents."
                     f"{name} is missing required 'target'.",
+                    context={"stage": stage_name, "intent": name},
+                )
+            keywords = intent.get("keywords")
+            if keywords is not None and not is_keyword_list(keywords):
+                raise ConfigurationError(
+                    f"Stage '{stage_name}': intent_confirm.intents."
+                    f"{name}.keywords must be a list of strings, got "
+                    f"{type(keywords).__name__} ({keywords!r}). A bare "
+                    f"string is iterated one character at a time, which "
+                    f"arms one keyword per letter.",
                     context={"stage": stage_name, "intent": name},
                 )
             if name in _RESERVED_INTENT_NAMES:

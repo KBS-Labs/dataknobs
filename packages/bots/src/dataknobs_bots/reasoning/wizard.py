@@ -3354,7 +3354,7 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
         # position where the builder reads the state, which is the pair that
         # drifted everywhere else it was written twice.
         metadata = self._build_wizard_metadata(state)
-        stage_meta = self._fsm_for_state(state).stages.get(state.current_stage, {})
+        stage_meta = self._fsm_for_state(state).stage_metadata_for(state.current_stage)
 
         advance_result = WizardAdvanceResult(
             state=state,
@@ -3774,6 +3774,11 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
         subflow push/pop both set it from ``subflow_stack``), so this agrees
         with it whenever the attribute is fresh and beats it when it is not.
 
+        The rule itself lives on :class:`SubflowManager`, which owns the
+        stack: this class and ``WizardNavigator`` both need it, and two
+        implementations of one rule is the shape that produced the defect
+        it exists to prevent.
+
         Args:
             state: Wizard state naming the subflow stack, if any.
 
@@ -3781,11 +3786,7 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
             The subflow's FSM when a subflow is on the stack and resolvable,
             otherwise the main FSM.
         """
-        if state.subflow_stack:
-            subflow = self._fsm.get_subflow(state.subflow_stack[-1].subflow_network)
-            if subflow is not None:
-                return subflow
-        return self._fsm
+        return self._subflows.fsm_for_state(state)
 
     def _build_wizard_metadata(self, state: WizardState) -> dict[str, Any]:
         """The canonical wizard metadata: a function of ``state`` and nothing else.
@@ -3837,7 +3838,7 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
         """
         active_fsm = self._fsm_for_state(state)
         stage = state.current_stage
-        stage_meta = active_fsm.stages.get(stage, {})
+        stage_meta = active_fsm.stage_metadata_for(stage)
 
         # Always report main-flow progress for the roadmap / breadcrumb.
         # During a subflow the "effective" main-flow stage is the parent
@@ -4807,7 +4808,7 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
         live position, so the delegate is correct outside a turn for the same
         reason :meth:`_build_wizard_metadata` is.
         """
-        stage_meta = self._fsm_for_state(state).stages.get(state.current_stage, {})
+        stage_meta = self._fsm_for_state(state).stage_metadata_for(state.current_stage)
         return self._response.render_suggestions(suggestions, state, stage_meta)
 
     def _build_default_context(
@@ -4950,7 +4951,19 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
             total_stages=position.total,
             can_skip=active_fsm.can_skip(stage_name),
             can_go_back=active_fsm.can_go_back(stage_name) and len(wizard_state.history) > 1,
-            suggestions=stage.get("suggestions", []),
+            # The same reader ``_build_wizard_metadata`` uses, and so the
+            # same reader the other constructor of this type reaches
+            # through the metadata.  Read straight off the stage dict,
+            # ``suggestions`` skipped both halves of it: the templates
+            # came back unrendered (a UI showed the user a raw Jinja
+            # expression as a button label) and a value of the wrong
+            # shape came back as itself, so a bare string became one
+            # quick reply per character.
+            suggestions=self._response.render_suggestions(
+                active_fsm.get_stage_suggestions(stage_name),
+                wizard_state,
+                stage,
+            ),
             stages=self._response.build_stages_roadmap(wizard_state),
         )
 
@@ -5028,8 +5041,13 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
         # carries transient keys as well; ``get_state_snapshot`` reports
         # the persistent set, and the two constructors of this type
         # agreeing is the whole point of the change.
-        data = fsm_state.get("data", {})
-        history = fsm_state.get("history", [])
+        # Copied, as the sibling constructor copies them.  These are the
+        # live objects inside ``manager.metadata``: handed out by
+        # reference, a consumer appending to ``snapshot.history`` --
+        # which the type documents as read-only -- rewrote persisted
+        # wizard state.
+        data = dict(fsm_state.get("data", {}))
+        history = list(fsm_state.get("history", []))
 
         if "stage_index" in wizard_meta:
             stage_index = normalized["stage_index"]

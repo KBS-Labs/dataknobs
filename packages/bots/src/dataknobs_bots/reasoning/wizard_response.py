@@ -1608,9 +1608,20 @@ class WizardResponder:
         if not template:
             return ""
 
+        # Ask the FSM that owns *this* stage, and name the stage rather
+        # than leaning on a live position.  ``self._fsm`` is the main
+        # FSM, and the no-argument form reads its current stage: inside a
+        # push that is a subflow stage the main FSM does not have, so
+        # both fields came back as the documented default.  A stage
+        # declaring ``can_skip: true`` rendered "required" into the
+        # system prompt on the same turn the wizard would have accepted
+        # the skip.  ``_build_wizard_metadata`` builds the identical
+        # two-key context this way.
+        stage_name = stage.get("name") or state.current_stage
+        active_fsm = self._subflows.fsm_for_state(state) if self._subflows else self._fsm
         extra_context = {
-            "can_skip": self._fsm.can_skip() if self._fsm else False,
-            "can_go_back": (self._fsm.can_go_back() if self._fsm else True)
+            "can_skip": active_fsm.can_skip(stage_name) if active_fsm else False,
+            "can_go_back": (active_fsm.can_go_back(stage_name) if active_fsm else True)
             and len(state.history) > 1,
         }
 

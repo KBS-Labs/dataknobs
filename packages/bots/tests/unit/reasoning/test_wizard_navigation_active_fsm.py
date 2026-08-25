@@ -27,11 +27,13 @@ never push through it.
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any
 
 import pytest
 
 from dataknobs_bots.reasoning.wizard import WizardReasoning
+from dataknobs_bots.reasoning.wizard_types import WizardState
 from dataknobs_bots.testing import BotTestHarness, WizardConfigBuilder
 
 # ---------------------------------------------------------------------------
@@ -152,6 +154,22 @@ def _strategy(harness: BotTestHarness) -> Any:
     return harness.bot.reasoning_strategy
 
 
+def _live_state(harness: BotTestHarness, stage: str | None = None) -> WizardState:
+    """The wizard state the last turn persisted, optionally repositioned.
+
+    Read back rather than constructed, because the subflow stack is the
+    thing under test: a hand-built stack would assert against the fixture
+    rather than against what a push actually leaves behind. ``stage``
+    moves the state within the frame it is already in, for the cases that
+    ask about a stage other than the current one.
+    """
+    manager = harness.bot.get_conversation_manager(harness.context.conversation_id)
+    state = _strategy(harness)._get_wizard_state(manager)
+    if stage is not None:
+        state.current_stage = stage
+    return state
+
+
 # ---------------------------------------------------------------------------
 # 1-3. Skip: cause B (the wrong FSM answers) and cause A (the wrong keywords)
 # ---------------------------------------------------------------------------
@@ -246,7 +264,9 @@ async def test_a_subflow_stages_keywords_replace_the_defaults_as_they_do_standal
         assert harness.wizard_stage == "sub_start", "the subflow was not pushed"
 
         keywords = (
-            _strategy(harness)._navigator._resolve_navigation_config("sub_start").skip.keywords
+            _strategy(harness)
+            ._navigator._resolve_navigation_config(_live_state(harness))
+            .skip.keywords
         )
 
         assert "done" in keywords, (
@@ -276,7 +296,7 @@ async def test_the_default_skip_keywords_still_apply_where_a_stage_declares_none
         await harness.chat("my name is Alice")
         strategy = _strategy(harness)
 
-        resolved = strategy._navigator._resolve_navigation_config("sub_done")
+        resolved = strategy._navigator._resolve_navigation_config(_live_state(harness, "sub_done"))
 
         assert "skip" in resolved.skip.keywords, (
             "a subflow stage declaring no navigation of its own lost the wizard-level defaults"
@@ -693,9 +713,10 @@ async def test_an_unreadable_navigation_block_is_reported_once_per_stage() -> No
         handler = _Collect()
         nav_logger = logging.getLogger("dataknobs_bots.reasoning.wizard_navigation")
         nav_logger.addHandler(handler)
+        state = _live_state(harness)
         try:
-            navigator._resolve_navigation_config("sub_start")
-            navigator._resolve_navigation_config("sub_start")
+            navigator._resolve_navigation_config(state)
+            navigator._resolve_navigation_config(state)
         finally:
             nav_logger.removeHandler(handler)
 
@@ -989,3 +1010,515 @@ def test_metadata_without_the_derived_fields_still_uses_stage_definitions() -> N
         "current",
         "pending",
     ]
+
+
+# ---------------------------------------------------------------------------
+# 17. The same defect one class over: the stage context template
+# ---------------------------------------------------------------------------
+#
+# ``WizardResponder._render_custom_context`` builds the ``can_skip`` /
+# ``can_go_back`` variables a ``settings.context_template`` renders, and it
+# asks ``self._fsm`` -- the **main** FSM -- with no stage, so the answer
+# comes from that FSM's live position. Inside a push the position is a
+# subflow stage the main FSM does not have, and ``_stage_field`` returns
+# the documented default.
+#
+# What makes this worth its own section rather than a footnote: fixing
+# ``_execute_skip`` without fixing this makes the two *disagree*. The
+# wizard now allows the skip while the system prompt it sent the model on
+# the same turn says the step is required. Before, both said required.
+#
+# ``_build_wizard_metadata`` is the site that already does this correctly
+# -- ``active_fsm.can_skip(stage)``, stage passed explicitly -- and it
+# renders ``stage_prompt`` with the very same two-key ``extra_context``.
+
+
+_CONTEXT_TEMPLATE = "SKIPPABLE={{ can_skip }}|STAGE={{ stage_name }}"
+
+
+def _context_template_config(*, can_skip: bool) -> dict[str, Any]:
+    """A parent pushing a subflow whose head stage has no template.
+
+    ``build_stage_context`` runs on the LLM response path only, so the
+    stage must not declare a ``response_template`` -- a template-mode
+    stage never reaches the model and there is no system prompt to
+    inspect.
+    """
+    stage: dict[str, Any] = {
+        "name": "sub_start",
+        "is_start": True,
+        "prompt": "Which detail?",
+        "confirm_first_render": False,
+        "schema": {"type": "object", "properties": {"detail": {"type": "string"}}},
+        "transitions": [{"target": "sub_done", "condition": "has('detail')"}],
+    }
+    if can_skip:
+        stage["can_skip"] = True
+    builder = _parent_pushing({"name": "detail", "stages": [stage, _SUB_DONE]})
+    builder.settings(context_template=_CONTEXT_TEMPLATE)
+    return builder.build()
+
+
+def _last_system_prompt(harness: BotTestHarness) -> str:
+    """The system prompt of the most recent model call.
+
+    ``ConversationManager.complete(system_prompt_override=...)`` puts it
+    in the first message, so this is what the model was actually told --
+    the observable the context template exists to produce.
+    """
+    call = harness.provider.get_last_call()
+    assert call is not None, "the wizard never called the model"
+    for message in call.get("messages", []):
+        if getattr(message, "role", None) == "system":
+            return str(getattr(message, "content", ""))
+    raise AssertionError("the model call carried no system message")
+
+
+def _rendered_can_skip(harness: BotTestHarness) -> str:
+    """The value the context template rendered for ``can_skip``.
+
+    Read back rather than string-matched: mixed-mode rendering pads a
+    substitution with spaces, and the subject here is the value, not the
+    whitespace around it.
+    """
+    prompt = _last_system_prompt(harness)
+    match = re.search(r"SKIPPABLE=\s*(\S+?)\s*\|", prompt)
+    assert match is not None, f"the context template did not render: {prompt!r}"
+    return match.group(1)
+
+
+@pytest.mark.asyncio
+async def test_the_context_template_sees_the_subflow_stages_can_skip() -> None:
+    """The custom context template rendered the main FSM's answer.
+
+    A stage declaring ``can_skip: true`` inside a push renders
+    ``can_skip`` as **False** into the system prompt, so an author whose
+    template says "this step is optional" tells the user the opposite --
+    on the same turn the wizard would in fact accept a skip.
+    """
+    async with await BotTestHarness.create(
+        wizard_config=_context_template_config(can_skip=True),
+        main_responses=["r"] * 8,
+        extraction_results=[[{"name": "Alice"}], []],
+    ) as harness:
+        await harness.chat("my name is Alice")
+        assert harness.wizard_stage == "sub_start", "the subflow was not pushed"
+
+        assert _rendered_can_skip(harness) == "True", (
+            "the stage declares can_skip: true, but the context template "
+            "was handed the main FSM's answer for a stage it does not have: "
+            f"{_last_system_prompt(harness)!r}"
+        )
+
+
+@pytest.mark.asyncio
+async def test_the_context_template_still_reports_an_unskippable_stage() -> None:
+    """Anti-overreach: resolving against the right FSM is not "always True".
+
+    The same subflow stage with no ``can_skip`` of its own must still
+    render False -- otherwise the fix has replaced one constant answer
+    with another.
+    """
+    async with await BotTestHarness.create(
+        wizard_config=_context_template_config(can_skip=False),
+        main_responses=["r"] * 8,
+        extraction_results=[[{"name": "Alice"}], []],
+    ) as harness:
+        await harness.chat("my name is Alice")
+        assert harness.wizard_stage == "sub_start", "the subflow was not pushed"
+
+        assert _rendered_can_skip(harness) == "False"
+
+
+# ---------------------------------------------------------------------------
+# 18. Amendments across a frame boundary
+# ---------------------------------------------------------------------------
+#
+# Widening ``map_section_to_stage``'s membership test to the active FSM
+# narrowed it at the same time: while a subflow is pushed, the active FSM
+# is the only one consulted, so a section naming a **main-flow** stage
+# stops resolving. That is reachable -- ``CompleteWizardTool`` sets
+# ``completed`` with no subflow guard, so a wizard can be completed
+# inside a push and the next turn routes to ``handle_amendment``.
+#
+# Both frames are legitimate targets, so the lookup asks both. Landing in
+# the other frame then has to unwind to it: restoring the *subflow's* FSM
+# to a main-flow stage is the original defect wearing a different hat.
+
+
+def _amendment_across_frames_config() -> dict[str, Any]:
+    """A main flow carrying a built-in section target, plus a subflow.
+
+    ``configure_llm`` is what the built-in table maps ``llm`` to, and it
+    lives in the **main** flow -- the frame a pushed subflow hides.
+    """
+    builder = WizardConfigBuilder("amendment-across-frames")
+    builder.stage(
+        "gather",
+        is_start=True,
+        prompt="Tell me your name.",
+        response_template="Noted.",
+        confirm_first_render=False,
+    )
+    builder.field("name", field_type="string", required=True)
+    builder.transition(
+        "configure_llm",
+        condition="has('name')",
+        subflow_network="detail",
+        return_stage="configure_llm",
+    )
+    builder.stage(
+        "configure_llm",
+        prompt="Which model?",
+        response_template="MODEL",
+        confirm_first_render=False,
+    )
+    builder.field("model", field_type="string", required=True)
+    builder.transition("wrap", condition="has('model')")
+    builder.stage("wrap", is_end=True, prompt="All done.", response_template="WRAP")
+    builder.subflow(
+        "detail",
+        {"name": "detail", "stages": [_SKIPPABLE_STAGE, _SUB_NEXT, _SUB_DONE]},
+    )
+    builder.settings(allow_post_completion_edits=True)
+    return builder.build()
+
+
+@pytest.mark.asyncio
+async def test_a_section_naming_a_main_flow_stage_survives_a_push() -> None:
+    """The other half of the membership widening.
+
+    ``llm`` maps to ``configure_llm``, which the main flow has and the
+    subflow does not. Asking only the active FSM answers ``None`` and the
+    amendment silently finds nothing -- the same silence the item fixed
+    in the opposite direction.
+    """
+    async with await BotTestHarness.create(
+        wizard_config=_amendment_across_frames_config(),
+        main_responses=["r"] * 8,
+        extraction_results=[[{"name": "Alice"}], []],
+    ) as harness:
+        await harness.chat("my name is Alice")
+        assert harness.wizard_stage == "sub_start", "the subflow was not pushed"
+
+        mapped = _strategy(harness)._map_section_to_stage("llm")
+
+        assert mapped == "configure_llm", (
+            "'llm' maps to a stage the main flow has; asking only the "
+            f"active subflow's FSM lost it: got {mapped!r}"
+        )
+
+
+@pytest.mark.asyncio
+async def test_an_amendment_to_a_main_flow_stage_leaves_the_subflow() -> None:
+    """Finding the stage is not enough -- the wizard has to get to it.
+
+    An amendment jump out of a subflow has to unwind the stack, for the
+    same reason restart does: leaving it loaded means the wizard reports
+    the main stage's name while the subflow's FSM answers for it, and it
+    can neither push again nor pop.
+
+    ``completed`` is set on the persisted state, which is exactly what
+    ``CompleteWizardTool`` does to reach this path from inside a push.
+    """
+    async with await BotTestHarness.create(
+        wizard_config=_amendment_across_frames_config(),
+        main_responses=["r"] * 10,
+        extraction_results=[
+            [{"name": "Alice"}],
+            [{"wants_edit": True, "target_section": "llm"}],
+        ],
+    ) as harness:
+        await harness.chat("my name is Alice")
+        assert harness.wizard_stage == "sub_start", "the subflow was not pushed"
+
+        manager = harness.bot.get_conversation_manager(harness.context.conversation_id)
+        manager.metadata["wizard"]["fsm_state"]["completed"] = True
+
+        await harness.chat("actually, change the llm")
+
+        assert harness.wizard_stage == "configure_llm", (
+            "the amendment named a main-flow stage and did not land on it "
+            f"(stage: {harness.wizard_stage!r})"
+        )
+        assert harness.last_response == "MODEL", (
+            "the wizard landed on 'configure_llm' but rendered someone "
+            f"else's stage: {harness.last_response!r}"
+        )
+        assert (harness.wizard_state or {}).get("subflow_depth") == 0, (
+            "the amendment left the main flow's stage current with the subflow stack still loaded"
+        )
+
+
+@pytest.mark.asyncio
+async def test_an_amendment_within_the_subflow_stays_in_the_subflow() -> None:
+    """Anti-overreach: consulting the main FSM must not preempt the active one.
+
+    A section whose target exists in **both** frames has to resolve to
+    the frame the user is standing in, and must not unwind on the way.
+    """
+    async with await BotTestHarness.create(
+        wizard_config=_amendment_across_frames_config(),
+        main_responses=["r"] * 8,
+        extraction_results=[[{"name": "Alice"}], []],
+    ) as harness:
+        await harness.chat("my name is Alice")
+        assert harness.wizard_stage == "sub_start", "the subflow was not pushed"
+
+        navigator = _strategy(harness)._navigator
+        navigator._section_to_stage_mapping = {"detail": "sub_next"}
+
+        assert _strategy(harness)._map_section_to_stage("detail") == "sub_next"
+
+
+# ---------------------------------------------------------------------------
+# 19. What a restart leaves behind
+# ---------------------------------------------------------------------------
+#
+# ``restart_cleanup`` resets the stage, the data, the history, the
+# completion flag, the clarification counter, the extraction flag, the
+# banks, the artifact and (since this item) the subflow stack. Two pieces
+# of wizard state are not in that list, and one of them is persisted.
+#
+# The audit trail is the second half: unwinding the stack in silence
+# leaves a ``subflow_push`` record with no matching ``subflow_pop``, so a
+# consumer pairing them -- or reconstructing depth from the trail --
+# is wrong in exactly the case this item made reachable.
+
+
+def _tasked_config() -> dict[str, Any]:
+    """A wizard whose first stage carries a task completed by extraction."""
+    builder = WizardConfigBuilder("restart-and-tasks")
+    builder.stage(
+        "gather",
+        is_start=True,
+        prompt="Tell me your name.",
+        response_template="Noted.",
+        confirm_first_render=False,
+        tasks=[
+            {
+                "id": "collect_name",
+                "description": "Collect the name",
+                "completed_by": "field_extraction",
+                "field_name": "name",
+            }
+        ],
+    )
+    builder.field("name", field_type="string", required=True)
+    builder.transition("wrap", condition="has('name')")
+    builder.stage("wrap", is_end=True, prompt="All done.", response_template="WRAP")
+    return builder.build()
+
+
+@pytest.mark.asyncio
+async def test_restart_clears_task_completion() -> None:
+    """Tasks are persisted, restored, and survived the reset.
+
+    ``state.tasks`` round-trips through ``fsm_state``, so a restarted
+    wizard reported the *previous* run's completed tasks -- a progress
+    indicator that starts full on a flow the user just asked to start
+    over.
+    """
+    async with await BotTestHarness.create(
+        wizard_config=_tasked_config(),
+        main_responses=["r"] * 8,
+        extraction_results=[[{"name": "Alice"}], []],
+    ) as harness:
+        await harness.chat("my name is Alice")
+        manager = harness.bot.get_conversation_manager(harness.context.conversation_id)
+        assert _strategy(harness).get_state_snapshot(manager).completed_tasks == 1, (
+            "the task did not complete, so the restart has nothing to reset"
+        )
+
+        await harness.chat("start over")
+
+        snapshot = _strategy(harness).get_state_snapshot(manager)
+        assert snapshot.completed_tasks == 0, (
+            "the wizard restarted with the previous run's tasks still "
+            f"marked complete ({snapshot.completed_tasks} of {snapshot.total_tasks})"
+        )
+        assert snapshot.total_tasks == 1, "the task list itself must survive the restart"
+
+
+@pytest.mark.asyncio
+async def test_restart_clears_transient_data() -> None:
+    """``transient`` is wizard state and the reset skipped it.
+
+    Driven through the non-conversational API because that is the path
+    where a caller owns the state object across calls -- a transform
+    writing an ephemeral key leaves it there, and the restart that is
+    supposed to give a clean slate hands it back.
+    """
+    async with await BotTestHarness.create(
+        wizard_config=_tasked_config(),
+        main_responses=["r"] * 4,
+        extraction_results=[[{"name": "Alice"}]],
+    ) as harness:
+        state = WizardState(current_stage="gather", data={"name": "Alice"})
+        state.transient["scratch"] = "from the previous run"
+
+        await _strategy(harness).advance(
+            user_input={},
+            state=state,
+            navigation="restart",
+        )
+
+        assert state.transient == {}, (
+            "the restart cleared data and left transient standing, so the "
+            f"first stage of the new run still sees {state.transient!r}"
+        )
+
+
+@pytest.mark.asyncio
+async def test_restart_inside_a_subflow_records_the_pop() -> None:
+    """The unwind has to appear in the audit trail, like every other one.
+
+    ``handle_pop`` records ``subflow_pop``; the restart unwind did not,
+    so the trail held a push for ``detail`` that nothing ever closed.
+    """
+    async with await BotTestHarness.create(
+        wizard_config=_restartable_config(),
+        main_responses=["r"] * 8,
+        extraction_results=[[{"name": "Alice"}], []],
+    ) as harness:
+        await harness.chat("my name is Alice")
+        assert harness.wizard_stage == "sub_a", "the subflow was not pushed"
+
+        await harness.chat("start over")
+
+        transitions = _wizard_metadata(harness)["wizard"]["fsm_state"]["transitions"]
+        pushed = [t["subflow_push"] for t in transitions if t.get("subflow_push")]
+        popped = [t["subflow_pop"] for t in transitions if t.get("subflow_pop")]
+
+        assert pushed == ["detail"], "expected exactly one push to have been recorded"
+        assert popped == ["detail"], (
+            "the restart unwound the subflow without recording the pop, so "
+            f"the trail holds a push nothing closes: pops={popped!r}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# 20. The last field the two snapshot constructors disagreed about
+# ---------------------------------------------------------------------------
+#
+# ``snapshot_from_metadata`` was moved onto ``normalize_wizard_state``,
+# which reads what ``_build_wizard_metadata`` derived -- and that writer
+# passes ``suggestions`` through ``get_stage_suggestions`` (type-checked)
+# and ``render_suggestions`` (Jinja). ``get_state_snapshot`` still read
+# ``stage.get("suggestions", [])`` off the raw metadata, so the same
+# stage yielded a rendered list from one constructor and an unrendered
+# one from the other -- and a wrong-typed value straight through.
+#
+# The fixtures in section 12-16 could not see this: their suggestions are
+# literals, where rendered and raw coincide. That is the same hazard the
+# item guards against for ``stage_index`` by putting the pushing stage at
+# index 1, applied to the other field.
+
+
+def _templated_suggestions_config(suggestions: Any) -> dict[str, Any]:
+    """A two-stage flow whose second stage declares *suggestions*."""
+    builder = WizardConfigBuilder("suggestions-render")
+    builder.stage(
+        "intro",
+        is_start=True,
+        prompt="Say hello.",
+        response_template="INTRO",
+        confirm_first_render=False,
+    )
+    builder.field("greeting", field_type="string", required=True)
+    builder.transition("gather", condition="has('greeting')")
+    builder.stage(
+        "gather",
+        prompt="Tell me your name.",
+        response_template="Noted.",
+        confirm_first_render=False,
+        suggestions=suggestions,
+    )
+    builder.field("name", field_type="string", required=True)
+    builder.transition("wrap", condition="has('name')")
+    builder.stage("wrap", is_end=True, prompt="All done.", response_template="WRAP")
+    return builder.build()
+
+
+@pytest.mark.asyncio
+async def test_both_snapshots_render_the_stages_suggestions() -> None:
+    """One constructor rendered the quick replies and the other did not.
+
+    A UI reading ``get_state_snapshot`` showed the user a raw Jinja
+    expression as a button label, while the same stage read through
+    ``snapshot_from_metadata`` showed the rendered text.
+    """
+    async with await BotTestHarness.create(
+        wizard_config=_templated_suggestions_config(["Use {{ greeting }}", "Something else"]),
+        main_responses=["r"] * 8,
+        extraction_results=[[{"greeting": "hi"}], []],
+    ) as harness:
+        await harness.chat("hi")
+        assert harness.wizard_stage == "gather", "expected the second stage"
+
+        manager = harness.bot.get_conversation_manager(harness.context.conversation_id)
+        live = _strategy(harness).get_state_snapshot(manager)
+        static = WizardReasoning.snapshot_from_metadata(_wizard_metadata(harness))
+
+        assert static is not None
+        assert static.suggestions == ["Use hi", "Something else"]
+        assert live.suggestions == static.suggestions, (
+            "the two constructors of one type disagree about the stage's "
+            f"quick replies: {live.suggestions!r} vs {static.suggestions!r}"
+        )
+
+
+@pytest.mark.asyncio
+async def test_a_wrong_typed_suggestions_field_does_not_reach_a_snapshot() -> None:
+    """``suggestions`` is declared ``list[str]`` and was handed through raw.
+
+    A bare string is iterable, so a UI building one button per item
+    rendered one button per *character*. ``get_stage_suggestions`` already
+    applies the documented default; the snapshot bypassed it.
+    """
+    async with await BotTestHarness.create(
+        wizard_config=_templated_suggestions_config("Use the default"),
+        main_responses=["r"] * 8,
+        extraction_results=[[{"greeting": "hi"}], []],
+    ) as harness:
+        await harness.chat("hi")
+        assert harness.wizard_stage == "gather", "expected the second stage"
+
+        manager = harness.bot.get_conversation_manager(harness.context.conversation_id)
+        live = _strategy(harness).get_state_snapshot(manager)
+
+        assert live.suggestions == [], (
+            "a string where a list of strings belongs must fall back to the "
+            f"documented default, not be handed to the caller: {live.suggestions!r}"
+        )
+
+
+@pytest.mark.asyncio
+async def test_the_static_snapshot_does_not_alias_the_state_it_read() -> None:
+    """The snapshot is documented read-only and handed out live objects.
+
+    ``get_state_snapshot`` copies ``data`` and ``history``; this
+    constructor returned the very dict and list inside
+    ``manager.metadata``, so a consumer appending to ``snapshot.history``
+    silently rewrote persisted wizard state.
+    """
+    async with await BotTestHarness.create(
+        wizard_config=_templated_suggestions_config(["Alice", "Bob"]),
+        main_responses=["r"] * 8,
+        extraction_results=[[{"greeting": "hi"}], []],
+    ) as harness:
+        await harness.chat("hi")
+        manager = harness.bot.get_conversation_manager(harness.context.conversation_id)
+
+        snapshot = WizardReasoning.snapshot_from_metadata(manager.metadata)
+        assert snapshot is not None
+        snapshot.history.append("tampered")
+        snapshot.data["injected"] = True
+
+        persisted = manager.metadata["wizard"]["fsm_state"]
+        assert "tampered" not in persisted["history"], (
+            "appending to the snapshot's history rewrote the persisted state"
+        )
+        assert "injected" not in persisted["data"], (
+            "writing to the snapshot's data rewrote the persisted state"
+        )

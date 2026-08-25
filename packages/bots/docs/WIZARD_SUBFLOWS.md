@@ -188,10 +188,28 @@ against:
   `skip` in the list if you want both.
 - **Restart leaves the subflow.** `restart` / `start over` returns the
   user to the **main** flow's start stage and unwinds the subflow stack
-  with it; it is not a way to restart the subflow in place.
+  with it; it is not a way to restart the subflow in place. The unwind is
+  recorded — one `subflow_pop` transition per frame torn down — so the
+  audit trail pairs with the `subflow_push` that opened it. Restart also
+  clears task completion, so a restarted wizard starts its checklist
+  empty.
 
-Amendment jumps (`allow_amendments`) resolve the same way, so a section
-name may target a stage that lives in the active subflow.
+#### Amendment jumps across a frame boundary
+
+Amendment jumps (`allow_post_completion_edits`) resolve a section name
+against the **whole** flow — the main stages and every subflow's — so a
+section may name a stage in either frame. Two consequences worth knowing:
+
+- A jump whose target is in the main flow while a subflow is open
+  **unwinds the subflow first**, exactly as restart does. There is no
+  way to be on a main-flow stage with a subflow still loaded.
+- A jump naming a stage inside some *other*, inactive subflow is
+  **declined** and logged. Entering a subflow needs a parent stage to
+  return to and a data mapping to apply, and an amendment supplies
+  neither; the wizard stays where it is.
+
+A custom `section_to_stage_mapping` is returned before this check, as it
+always has been — naming a stage explicitly is taken at face value.
 
 A subflow stage's `navigation:` block is read through the same
 implementation as the wizard-level one, and its fields are type-checked

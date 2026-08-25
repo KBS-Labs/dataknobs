@@ -710,3 +710,51 @@ class TestNavigationConfigWrongTypes:
         )
 
         assert reasoning._navigation_config.skip.keywords == DEFAULT_SKIP_KEYWORDS
+
+
+# ===================================================================
+# TestNavigationCommandDirectConstruction
+# ===================================================================
+
+
+class TestNavigationCommandDirectConstruction:
+    """The third writer of ``keywords``, which the ``from_dict`` guard misses.
+
+    ``normalize_raw`` is a classmethod a caller has to remember;
+    ``__post_init__`` is the path *every* writer goes through, and it
+    coerced unconditionally -- ``tuple("done")`` is ``('d','o','n','e')``,
+    which is the same four one-letter keywords the authored-config guard
+    exists to prevent, reached by constructing the object directly.
+
+    Putting the check on the narrowest common path also simplifies what
+    ``normalize_raw`` owes: it supplies the *fallback value*, and the
+    shape check belongs where the field is set.
+    """
+
+    def test_a_keywords_string_is_not_split_on_construction(self) -> None:
+        """``NavigationCommandConfig(keywords="done")`` armed four letters.
+
+        Authored config gets a fallback because a YAML author cannot act
+        on a traceback; code gets an exception, because a caller passing
+        a string where the field is declared ``tuple[str, ...]`` has a
+        bug and every authored path is normalised before it reaches here.
+        """
+        with pytest.raises(TypeError, match="keywords"):
+            NavigationCommandConfig(keywords="done")  # type: ignore[arg-type]
+
+    def test_from_dict_is_guarded_by_the_same_check(self) -> None:
+        """``_coerce_field`` passes a ``str`` through untouched.
+
+        A string is not one of the sequence types the base coercion
+        recognises, so ``NavigationCommandConfig.from_dict`` reached
+        ``__post_init__`` with it -- the one place that can still tell a
+        string from the tuple of characters it becomes.
+        """
+        with pytest.raises(TypeError, match="keywords"):
+            NavigationCommandConfig.from_dict({"keywords": "done"})
+
+    def test_a_valid_keyword_list_is_still_coerced_to_a_tuple(self) -> None:
+        """Anti-overreach: the coercion this guards must still happen."""
+        command = NavigationCommandConfig(keywords=["done", "finished"])
+
+        assert command.keywords == ("done", "finished")
