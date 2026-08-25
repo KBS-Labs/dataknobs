@@ -20,6 +20,23 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+#: Renders the template a stage shows as the turn leaves it, or ``None``
+#: when it has nothing left to say.  Satisfied by
+#: :meth:`~dataknobs_bots.reasoning.wizard_response.WizardResponder.render_departing_stage`,
+#: which the auto-advance loop already uses for the stages it steps past.
+RenderDepartingStage = Callable[[dict[str, Any], WizardState], "str | None"]
+
+
+def _renders_nothing(_stage: dict[str, Any], _state: WizardState) -> str | None:
+    """The renderer a manager has before one is injected.
+
+    A manager built without a responder has nothing to render *with*, so
+    silence is the honest answer rather than a swallowed one.  The single
+    production constructor injects the real renderer one line after it
+    injects the condition evaluator.
+    """
+    return None
+
 
 class SubflowManager:
     """Manages the subflow stack and active FSM switching.
@@ -41,7 +58,20 @@ class SubflowManager:
     ) -> None:
         self._fsm = fsm
         self._evaluate_condition = evaluate_condition
+        self._render_departing_stage: RenderDepartingStage = _renders_nothing
         self._active_subflow_fsm: WizardFSM | None = None
+
+    def set_render_departing_stage(self, render: RenderDepartingStage) -> None:
+        """Supply the renderer :meth:`pop_if_ended` gives the end stage.
+
+        Injected rather than passed per call for the same reason
+        :meth:`set_evaluate_condition` is: this class is constructed
+        before :class:`WizardResponder`, which owns the renderer.  Passing
+        it per call would also let the two pop sites drift apart on which
+        renderer they use, which is the divergence :meth:`pop_if_ended`
+        exists to remove.
+        """
+        self._render_departing_stage = render
 
     def set_evaluate_condition(
         self,
@@ -418,6 +448,53 @@ class SubflowManager:
 
         active_fsm = self.get_active_fsm()
         return active_fsm.is_end_stage(wizard_state.current_stage)
+
+    def pop_if_ended(self, wizard_state: WizardState) -> str | None:
+        """Pop a finished subflow, returning what its end stage had to say.
+
+        An ``is_end`` subflow stage is entered and left inside one turn --
+        :meth:`should_pop` asks only for a non-empty stack and an end
+        stage -- so this is the only moment it can speak.  Its template
+        used to render nowhere, and a subflow whose failing exit exists to
+        say *nothing was saved, and here is why* said it on the one stage
+        that was never on screen.
+
+        **The order is the whole point.** :meth:`handle_pop` swaps the
+        active FSM and replaces ``wizard_state.data`` with the parent's,
+        so a render placed after it names the parent's stage and
+        interpolates the parent's data.  Rendering first is what makes the
+        message the subflow's own.
+
+        This exists as one method rather than two lines at each call site
+        because there are two pop sites -- the post-transition sequence
+        and the auto-advance loop -- and a stage left by either must say
+        the same thing.  Clearing ``completed`` belongs here for the same
+        reason: the subflow ended, the wizard did not, and both sites were
+        already spelling that out identically.
+
+        Args:
+            wizard_state: Current wizard state, mutated in place when a
+                pop happens.
+
+        Returns:
+            The end stage's rendered template, or ``None`` when no pop
+            happened *or* the stage had no template to offer.  Callers
+            collect the message and re-read the active FSM; none of them
+            needs to tell those two cases apart.
+        """
+        if not self.should_pop(wizard_state):
+            return None
+
+        # Asked of the state's stage, because that is the stage
+        # ``should_pop`` just approved -- ``current_metadata`` would ask
+        # the FSM's, and the two need not agree outside a turn.
+        departing = self.get_active_fsm().stage_metadata_for(wizard_state.current_stage)
+        message = self._render_departing_stage(departing, wizard_state)
+        # ``handle_pop``'s bool is unread on purpose: its only ``False`` is
+        # an empty stack, which ``should_pop`` has already ruled out.
+        self.handle_pop(wizard_state)
+        wizard_state.completed = False
+        return message
 
 
 # ---------------------------------------------------------------------------

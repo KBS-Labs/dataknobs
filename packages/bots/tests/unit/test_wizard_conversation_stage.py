@@ -280,7 +280,7 @@ class TestConversationMode:
 
 
 class TestIntentDetection:
-    """Tests for _detect_intent method."""
+    """Tests for detect_intent method."""
 
     @pytest.fixture
     def reasoning(

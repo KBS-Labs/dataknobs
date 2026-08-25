@@ -5,6 +5,8 @@ Reusable, nestable wizard flows that can be invoked from within a parent wizard.
 ## Table of Contents
 
 - [Overview](#overview)
+  - [First-Render Confirmation in Subflow Stages](#first-render-confirmation-in-subflow-stages)
+  - [What the End Stage Says](#what-the-end-stage-says)
 - [Configuration](#configuration)
   - [Transition Syntax](#transition-syntax)
   - [Subflow Block Fields](#subflow-block-fields)
@@ -79,6 +81,29 @@ stages:
 ```
 
 Alternatively, omit the `response_template` entirely (let the LLM generate the response instead).
+
+### What the End Stage Says
+
+A subflow's `is_end` stage is entered and left inside a single turn: reaching it satisfies `SubflowManager.should_pop()`, so the pop runs in the same step that landed there and the parent resumes at its `return_stage`. The end stage still gets to speak. Its `response_template` renders **before** the pop -- against the subflow's own data, under the subflow's own stage name -- and the message is prepended to the turn ahead of whatever the parent's return stage renders.
+
+```yaml
+# In a subflow definition
+  - name: saved
+    is_end: true
+    response_template: "Indexed {{ document_count }} documents."
+
+  - name: nothing_saved
+    is_end: true
+    response_template: "Nothing was saved: {{ source }} could not be read."
+```
+
+A user completing that subflow sees the end stage's line, then the parent's. This is what makes a subflow's *failing* exit usable: a branch whose only job is to explain that nothing was built has nowhere else to say it.
+
+Three consequences follow from the stage being left as soon as it is reached:
+
+- The template renders against the subflow's data, which the pop then replaces with the parent's. A value that exists only inside the subflow -- `document_count` above -- is interpolated correctly here and is gone by the time the parent renders. Fields the parent needs must still travel through [`result_mapping`](#result_mapping-child-to-parent).
+- **`prompt` is not one of the templates the pop can render.** The departing stage offers `greeting_template`, `response_template`, or `clarification_template` and nothing else, so an end stage carrying only a `prompt` is still silent. (`prompt` *is* rendered elsewhere -- into the turn's `stage_prompt` metadata -- and is handed to the model verbatim as the stage's goal. It is simply not a candidate here.) A completion message goes in `response_template`.
+- `auto_advance: true` on an end stage does nothing. The auto-advance loop excludes end stages by design; a flow that has ended has nothing to advance to. Set the template, not the flag.
 
 ## Configuration
 
@@ -347,7 +372,7 @@ stages:
             collected_url: kb_url
 
   - name: review
-    prompt: "Great, your KB is at {{ data.kb_url }}. Ready to continue?"
+    prompt: "Great, your KB is at {{ kb_url }}. Ready to continue?"
     transitions:
       - target: complete
         condition: "data.get('confirmed')"
@@ -375,7 +400,7 @@ subflows:
 
       - name: confirm_url
         is_end: true
-        prompt: "Got it: {{ data.collected_url }}"
+        prompt: "Got it: {{ collected_url }}"
 ```
 
 Inline definitions are loaded by `_load_single_subflow()` when it finds the subflow name as a key in `wizard_config["subflows"]`.
@@ -452,7 +477,7 @@ stages:
         condition: "data.get('collected_url')"
 
   - name: validate_url
-    prompt: "Checking access to {{ data.collected_url }}..."
+    prompt: "Checking access to {{ collected_url }}..."
     tools:
       - url_validator
     transitions:
@@ -583,12 +608,12 @@ stages:
   - name: complete
     is_end: true
     prompt: >
-      Your {{ data.bot_type }} bot is ready!
-      {% if data.knowledge_base_url %}
-      Knowledge base: {{ data.knowledge_base_url }}
-      ({{ data.kb_doc_count }} documents indexed)
+      Your {{ bot_type }} bot is ready!
+      {% if knowledge_base_url %}
+      Knowledge base: {{ knowledge_base_url }}
+      ({{ kb_doc_count }} documents indexed)
       {% endif %}
-      Tone: {{ data.tone }}
+      Tone: {{ tone }}
 ```
 
 ### Subflow (`subflows/kb_acquisition.yaml`)
@@ -611,7 +636,7 @@ stages:
         condition: "data.get('kb_url')"
 
   - name: ingest
-    prompt: "Indexing {{ data.kb_url }}... This may take a moment."
+    prompt: "Indexing {{ kb_url }}... This may take a moment."
     tools:
       - kb_indexer
     schema:
@@ -626,7 +651,7 @@ stages:
 
   - name: done
     is_end: true
-    prompt: "Indexed {{ data.document_count }} documents from {{ data.kb_url }}."
+    response_template: "Indexed {{ document_count }} documents from {{ kb_url }}."
 ```
 
 ### Conversation Flow
@@ -640,8 +665,9 @@ stages:
 3. `data_mapping` copies `bot_type` as `source_type` into the subflow's initial data.
 4. Subflow runs through `ask_source` -> `ingest` -> `done`.
 5. At `done` (end stage), `SubflowManager.should_pop()` returns `True`.
-6. `SubflowManager.handle_pop()` restores parent data and applies `result_mapping`:
+6. `done`'s `response_template` renders first, while the subflow's data is still in place, so `document_count` and `kb_url` interpolate. The message is prepended to the turn.
+7. `SubflowManager.handle_pop()` restores parent data and applies `result_mapping`:
    - Parent data `{"bot_type": "qa"}` is restored.
    - Subflow's `kb_url` is mapped to `knowledge_base_url`.
    - Subflow's `document_count` is mapped to `kb_doc_count`.
-7. Parent wizard resumes at `configure_personality` with the enriched data.
+8. Parent wizard resumes at `configure_personality` with the enriched data, rendering its own template after the subflow's.

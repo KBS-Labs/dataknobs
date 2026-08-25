@@ -1,7 +1,7 @@
 """Tests for schema default stripping and application.
 
 Tests for _strip_schema_defaults (removing defaults before extraction) and
-_apply_schema_defaults (applying defaults to wizard state after extraction).
+apply_schema_defaults (applying defaults to wizard state after extraction).
 """
 
 from typing import Any
@@ -385,7 +385,7 @@ class TestSchemaDefaultsIntegration:
 
 
 class TestApplySchemaDefaults:
-    """Tests for _apply_schema_defaults method."""
+    """Tests for apply_schema_defaults method."""
 
     def test_applies_missing_defaults(self, wizard_reasoning: WizardReasoning) -> None:
         """Defaults are applied for properties not in wizard data."""

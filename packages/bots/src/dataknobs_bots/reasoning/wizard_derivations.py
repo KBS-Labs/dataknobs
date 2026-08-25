@@ -366,7 +366,7 @@ def _length(
 ) -> int | Any:
     """Length of string/list/dict; ``_SKIP`` if not measurable."""
     try:
-        return len(value)  # type: ignore[arg-type]
+        return len(value)
     except TypeError:
         return _SKIP
 
@@ -710,7 +710,7 @@ def apply_field_derivations(
 
         # Check guard condition.
         # target_missing uses is_present() semantics (consistent with
-        # the confidence gate's _field_is_present): a key present with
+        # the confidence gate's field_is_present): a key present with
         # value None is treated as absent and will be re-derived.
         # This differs from _apply_transition_derivations which uses
         # ``key in state.data`` — a stricter key-presence check.

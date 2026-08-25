@@ -551,9 +551,11 @@ class WizardAdvanceResult:
         completed: Whether the wizard has reached its end state.
         transitioned: Whether a stage transition occurred.
         from_stage: Stage before the advance (None if no transition).
-        auto_advance_messages: Rendered template strings from stages
-            auto-advanced through during post-transition lifecycle.
-            Empty when no auto-advance occurred.
+        auto_advance_messages: Rendered template strings collected from
+            the stages this turn left -- those auto-advanced through,
+            and a subflow's ``is_end`` stage on the turn it is popped.
+            A pop can contribute the only entry, so this is not empty
+            merely because no auto-advance occurred.
         metadata: Full wizard metadata dict for UI rendering.
         extraction: Extraction result when ``advance()`` ran with raw
             text input.  ``None`` when ``user_input`` was a dict.
@@ -660,8 +662,9 @@ class FinalizePreambleResult:
             (only set when ``subflow_pushed`` is True).
         from_stage: Stage name before FSM transition.
         new_stage: Stage metadata after FSM transition + post-lifecycle.
-        auto_advance_messages: Rendered messages from auto-advanced
-            intermediate stages.
+        auto_advance_messages: Rendered messages from the stages the
+            turn left -- auto-advanced intermediate stages, and a
+            popped subflow's ``is_end`` stage.
         completed_before: Whether the wizard was completed before this
             turn's response generation.
     """

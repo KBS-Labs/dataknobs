@@ -1,8 +1,8 @@
 """Tests for intent classification and verbatim capture in wizard collection mode.
 
 Covers:
-- _needs_llm_extraction: schema-based auto-detection and capture_mode config
-- _classify_collection_intent: rule-based help detection
+- needs_llm_extraction: schema-based auto-detection and capture_mode config
+- classify_collection_intent: rule-based help detection
 - Verbatim capture path in _extract_data: single string field → no LLM call
 """
 
@@ -52,12 +52,12 @@ def _make_wizard(
 
 
 # =====================================================================
-# _needs_llm_extraction tests
+# needs_llm_extraction tests
 # =====================================================================
 
 
 class TestNeedsLlmExtraction:
-    """Tests for _needs_llm_extraction auto-detection and config override."""
+    """Tests for needs_llm_extraction auto-detection and config override."""
 
     def test_single_string_field_auto_detect(self) -> None:
         """Single required string field → verbatim (no LLM)."""
@@ -214,12 +214,12 @@ class TestNeedsLlmExtraction:
 
 
 # =====================================================================
-# _classify_collection_intent tests
+# classify_collection_intent tests
 # =====================================================================
 
 
 class TestClassifyCollectionIntent:
-    """Tests for _classify_collection_intent rule-based classification."""
+    """Tests for classify_collection_intent rule-based classification."""
 
     def test_data_input_default(self) -> None:
         """Regular data input returns 'data_input'."""

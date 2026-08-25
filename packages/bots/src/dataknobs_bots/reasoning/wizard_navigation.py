@@ -414,8 +414,9 @@ class WizardNavigator:
         Returns:
             Tuple of (success, auto_advance_messages).  ``success`` is
             False when the stage cannot be skipped; ``auto_advance_messages``
-            contains rendered templates from any stages auto-advanced
-            through during the post-transition lifecycle.
+            contains rendered templates from the stages the lifecycle
+            left -- those auto-advanced through, and a popped subflow's
+            ``is_end`` stage.
         """
         active_fsm = self._fsm_for(state)
         if not active_fsm.can_skip():

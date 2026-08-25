@@ -571,7 +571,7 @@ def test_fill_writes_exactly_where_the_package_says_a_field_is_absent(
     This package already has one answer and states it in one place:
     :func:`field_is_present` -- "a field has been provided if its value
     is not None" -- which is what the ``has()`` condition helper, the
-    confidence gate and ``_apply_schema_defaults`` all use.
+    confidence gate and ``WizardExtractor.apply_schema_defaults`` all use.
     ``wizard_derivations`` even carries a note naming the fork, because
     ``_apply_transition_derivations`` picked the stricter key-presence
     reading and the two have had to be told apart ever since.
