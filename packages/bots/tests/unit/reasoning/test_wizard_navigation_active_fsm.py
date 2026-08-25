@@ -657,8 +657,7 @@ async def test_a_keywords_string_is_not_one_keyword_per_character() -> None:
         await harness.chat("skip")
 
         assert harness.wizard_stage != "sub_start", (
-            "the keywords are unreadable, so the wizard-level 'skip' should "
-            "have reached the stage"
+            "the keywords are unreadable, so the wizard-level 'skip' should have reached the stage"
         )
 
 
@@ -700,7 +699,144 @@ async def test_an_unreadable_navigation_block_is_reported_once_per_stage() -> No
             nav_logger.removeHandler(handler)
 
         reported = [message for message in records if "navigation" in message]
-        assert len(reported) == 1, (
-            f"expected one report per stage and field, got {reported}"
-        )
+        assert len(reported) == 1, f"expected one report per stage and field, got {reported}"
         assert "sub_start" in reported[0]
+
+
+# ---------------------------------------------------------------------------
+# 12-13. The same defect one class up: the read-only state snapshot
+# ---------------------------------------------------------------------------
+#
+# ``WizardNavigator`` was six sites picking an FSM by hand. It is not the
+# only class that picks: ``WizardReasoning.get_state_snapshot`` asks
+# ``self._fsm`` for the current stage's metadata, its skippability and
+# its position, and inside a push the main FSM does not have that stage.
+# The snapshot is the documented way a UI reads wizard state -- the
+# observability guide drives a progress bar and a skip button straight
+# off these fields -- so the failure is a wrong progress bar and a
+# missing skip button, not an exception anyone would notice in a log.
+#
+# The canonical resolver for this class already exists and is used by
+# ``_build_wizard_metadata``: ``_fsm_for_state(state)``, which reads the
+# subflow stack off the *state* rather than off a per-turn attribute, and
+# so is also correct outside a turn -- which is exactly what a snapshot
+# is.
+
+
+def _snapshot_config() -> dict[str, Any]:
+    """A parent whose **second** stage pushes the subflow.
+
+    The pushing stage's index is the whole point. A subflow stage's name
+    is absent from the main flow's ``stage_names``, and ``stage_position``
+    reports index ``0`` for a name it cannot find -- so with the pushing
+    stage at index 0 the wrong answer and the right one coincide and the
+    assertion proves nothing. Here the parent stage is index 1.
+    """
+    builder = WizardConfigBuilder("snapshot-in-a-subflow")
+    builder.stage(
+        "intro",
+        is_start=True,
+        prompt="Say hello.",
+        response_template="INTRO",
+        confirm_first_render=False,
+    )
+    builder.field("greeting", field_type="string", required=True)
+    builder.transition("gather", condition="has('greeting')")
+    builder.stage(
+        "gather",
+        prompt="Tell me your name.",
+        response_template="Noted.",
+        confirm_first_render=False,
+    )
+    builder.field("name", field_type="string", required=True)
+    builder.transition(
+        "wrap",
+        condition="has('name')",
+        subflow_network="detail",
+        return_stage="wrap",
+    )
+    builder.stage("wrap", is_end=True, prompt="All done.", response_template="WRAP")
+    builder.subflow(
+        "detail",
+        {
+            "name": "detail",
+            "stages": [
+                {**_SKIPPABLE_STAGE, "suggestions": ["Colour", "Size"]},
+                _SUB_NEXT,
+                _SUB_DONE,
+            ],
+        },
+    )
+    return builder.build()
+
+
+def _snapshot_inside_the_subflow(harness: BotTestHarness) -> Any:
+    """Drive the wizard into the subflow and take a snapshot there."""
+    manager = harness.bot.get_conversation_manager(harness.context.conversation_id)
+    return _strategy(harness).get_state_snapshot(manager)
+
+
+@pytest.mark.asyncio
+async def test_the_snapshot_describes_the_subflow_stage_it_is_standing_on() -> None:
+    """The stage-derived fields came from an FSM without the stage.
+
+    ``can_skip`` and ``suggestions`` are read off the stage's metadata,
+    which the main FSM answers as ``{}`` inside a push -- so a skippable
+    stage reports as required and its quick replies vanish. Both are
+    documented UI inputs: the observability guide shows a skip button
+    gated on ``can_skip`` and quick-reply buttons built from
+    ``suggestions``.
+    """
+    async with await BotTestHarness.create(
+        wizard_config=_snapshot_config(),
+        main_responses=["r"] * 10,
+        extraction_results=[[{"greeting": "hi"}], [{"name": "Alice"}], [], []],
+    ) as harness:
+        await harness.chat("hi")
+        await harness.chat("my name is Alice")
+        assert harness.wizard_stage == "sub_start", "the subflow was not pushed"
+
+        snapshot = _snapshot_inside_the_subflow(harness)
+
+        assert snapshot.current_stage == "sub_start"
+        assert snapshot.can_skip is True, (
+            "the stage declares can_skip: true; the snapshot asked an FSM "
+            "that does not have the stage and got the default False"
+        )
+        assert snapshot.suggestions == ["Colour", "Size"], (
+            "the stage's quick replies were read from the wrong FSM"
+        )
+
+
+@pytest.mark.asyncio
+async def test_the_snapshot_reports_main_flow_progress_while_inside_a_subflow() -> None:
+    """Progress stays main-flow, and it has to be asked for correctly.
+
+    ``stage_index`` is deliberately a *main-flow* number -- a subflow is
+    not a step of the outer flow, and ``_build_wizard_metadata`` reports
+    the parent stage that pushed it. The snapshot passed the subflow's
+    stage name to the main flow's ``stage_names`` instead, which
+    ``stage_position`` cannot find and reports as index ``0``: a progress
+    bar that jumps back to the start whenever a subflow opens.
+
+    So resolving the FSM is not sufficient here. Asking the *subflow's*
+    stage_names would be a second wrong answer -- right stage, wrong
+    flow. The parent stage is the answer, and this pins it.
+    """
+    async with await BotTestHarness.create(
+        wizard_config=_snapshot_config(),
+        main_responses=["r"] * 10,
+        extraction_results=[[{"greeting": "hi"}], [{"name": "Alice"}], [], []],
+    ) as harness:
+        await harness.chat("hi")
+        await harness.chat("my name is Alice")
+        assert harness.wizard_stage == "sub_start", "the subflow was not pushed"
+
+        snapshot = _snapshot_inside_the_subflow(harness)
+
+        assert snapshot.stage_index == 1, (
+            "'gather' is the main-flow stage that pushed this subflow and it "
+            "is index 1; index 0 is stage_position failing to find the "
+            "subflow's stage name among the main flow's"
+        )
+        assert snapshot.total_stages == 3

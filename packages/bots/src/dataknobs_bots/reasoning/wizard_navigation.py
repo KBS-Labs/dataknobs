@@ -125,13 +125,20 @@ class WizardNavigator:
 
         This class holds a reference to the **main** FSM and to the
         subflow manager, and every method that resolves a stage has to
-        pick one.  Picked by hand six times, six were wrong: inside a
+        pick one.  Picked by hand nine times, six were wrong: inside a
         push the stage belongs to the subflow's FSM, and asking the main
         FSM about a stage it does not have returns ``{}`` -- which
         ``.get(key, default)`` then reports as a stage that deliberately
         declared nothing.  ``can_skip`` reads ``False``, stage-level
         navigation keywords read as absent, and ``current_metadata``
         reads as a stage with no name, prompt, schema or template.
+
+        The other three were right, and they are routed through here too.
+        Two spellings of one question is how the next one goes wrong: a
+        reader who finds both has to work out whether the difference is
+        deliberate, and the answer that produced this defect was that it
+        never was.  ``self._subflows.get_active_fsm()`` therefore appears
+        exactly once in this class, below.
 
         There is no site in this class where the main FSM is the right
         answer *while a subflow is active*.  The one that looks like an
@@ -144,8 +151,8 @@ class WizardNavigator:
         later would not have to remember to change the call.
 
         Deliberately trivial today.  It exists so the choice has one name
-        and one docstring instead of six independent judgements, which is
-        what produced six wrong ones.
+        and one docstring instead of nine independent judgements, which
+        is what produced six wrong ones.
 
         Returns:
             The active subflow's FSM, or the main FSM outside a push.
@@ -232,7 +239,7 @@ class WizardNavigator:
             state.history.append(target_stage)
 
         # Restore FSM to target stage
-        active_fsm = self._subflows.get_active_fsm()
+        active_fsm = self._fsm_for()
         active_fsm.restore(
             {
                 "current_stage": target_stage,
@@ -297,7 +304,7 @@ class WizardNavigator:
         Returns:
             True if navigation succeeded, False if at beginning.
         """
-        active_fsm = self._subflows.get_active_fsm()
+        active_fsm = self._fsm_for()
         if not active_fsm.can_go_back() or len(state.history) <= 1:
             return False
 
@@ -354,7 +361,7 @@ class WizardNavigator:
             contains rendered templates from any stages auto-advanced
             through during the post-transition lifecycle.
         """
-        active_fsm = self._subflows.get_active_fsm()
+        active_fsm = self._fsm_for()
         if not active_fsm.can_skip():
             return False, []
 
@@ -670,7 +677,7 @@ class WizardNavigator:
             user_message=message,
         )
 
-        stage = self._subflows.get_active_fsm().current_metadata
+        stage = self._fsm_for().current_metadata
         response = await self._generate_stage_response(manager, llm, stage, state, None)
         if auto_advance_messages:
             self._prepend_messages_to_response(response, auto_advance_messages)

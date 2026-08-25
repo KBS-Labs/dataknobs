@@ -1092,8 +1092,7 @@ class NavigationConfig(StructuredConfig):
         ) -> dict[str, Any]:
             def _report(field: str, value: Any, expected: str) -> None:
                 logger.warning(
-                    "settings.navigation.%s declares %s as %s; %s is "
-                    "required, using the default",
+                    "settings.navigation.%s declares %s as %s; %s is required, using the default",
                     command,
                     field or "the command",
                     type(value).__name__,

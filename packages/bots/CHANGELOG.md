@@ -36,6 +36,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   flow's start stage is not. Restart, the escape hatch of last resort, was
   what wedged the wizard. It now unwinds the stack before restarting.
 
+- **The read-only state snapshot describes the subflow stage it is standing
+  on.** `WizardReasoning.get_state_snapshot()` -- the documented way a UI reads
+  wizard state -- asked the **main** FSM for the current stage's metadata,
+  skippability and back-navigability, and inside a push the main FSM does not
+  have that stage. A skippable subflow stage therefore reported `can_skip:
+  False` and its `suggestions` came back empty, so a skip button disappeared
+  and quick replies vanished for as long as the subflow was open. `stage_index`
+  was wrong in its own way: the subflow's stage name is absent from the main
+  flow's stage list and was reported as index `0`, a progress bar that jumps
+  back to the start whenever a subflow opens -- while the same object's
+  `stages` roadmap correctly marked the *parent* stage as current, so the
+  snapshot contradicted itself. It now resolves through `_fsm_for_state()`,
+  the state-derived accessor the rest of the class already uses, and reports
+  main-flow progress against the parent stage that pushed the subflow.
+  `total_stages`, `data`, `history` and the task fields are unchanged.
+
 - **A `navigation:` block is type-checked before it is used, wherever it was
   written.** The block is authored config and reached its readers uncoerced,
   and every level of it was consumed without a check. `navigation: "yes"`

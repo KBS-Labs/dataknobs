@@ -4885,6 +4885,13 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
         Useful for UI components that need to display current state, progress,
         and available actions.
 
+        Inside a pushed subflow the result mixes two frames of reference on
+        purpose.  The stage-derived fields -- ``current_stage``, ``can_skip``,
+        ``can_go_back``, ``suggestions`` -- describe the **subflow** stage the
+        user is looking at.  Progress does not: a subflow is not a step of the
+        outer flow, so ``stage_index``, ``total_stages`` and ``stages`` stay on
+        the main flow and report the parent stage that pushed the subflow.
+
         Args:
             manager: ConversationManager instance
 
@@ -4892,16 +4899,39 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
             WizardStateSnapshot with complete state information
         """
         wizard_state = self._get_wizard_state(manager)
-        stage = self._fsm.current_metadata
+        stage_name = wizard_state.current_stage
 
-        position = stage_position(self._fsm.stage_names, wizard_state.current_stage)
+        # Which FSM answers: the one that owns the stage.  Inside a push
+        # the stage belongs to the subflow's FSM, and asking the main FSM
+        # about a stage it does not have returns ``{}`` -- surfaced here
+        # as a stage that cannot be skipped and offers no quick replies,
+        # which is what a UI would then render.  ``_fsm_for_state`` reads
+        # the stack off the *state* rather than off the per-turn
+        # attribute, which is what a snapshot needs: it is taken outside
+        # a turn by definition.
+        active_fsm = self._fsm_for_state(wizard_state)
+        stage = active_fsm.stage_metadata_for(stage_name)
+
+        # Progress stays main-flow.  A subflow is not a step of the outer
+        # flow, so the stage to locate is the parent that pushed it --
+        # the substitution ``_build_wizard_metadata`` and
+        # ``build_stages_roadmap`` both make.  Without it this object
+        # contradicted its own ``stages`` field, which already marks the
+        # parent "current" while ``stage_index`` reported 0: a progress
+        # bar that jumps back to the start whenever a subflow opens.
+        effective_main_stage = (
+            wizard_state.subflow_stack[-1].parent_stage
+            if wizard_state.subflow_stack
+            else stage_name
+        )
+        position = stage_position(self._fsm.stage_names, effective_main_stage)
 
         # Get task info
         task_list = wizard_state.tasks
         available_tasks = task_list.get_available_tasks()
 
         return WizardStateSnapshot(
-            current_stage=wizard_state.current_stage,
+            current_stage=stage_name,
             data=dict(wizard_state.data),
             history=list(wizard_state.history),
             transitions=list(wizard_state.transitions),
@@ -4917,9 +4947,9 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
             task_progress_percent=task_list.calculate_progress(),
             # Stage info
             stage_index=position.index,
-            total_stages=self._fsm.stage_count,
-            can_skip=self._fsm.can_skip(),
-            can_go_back=self._fsm.can_go_back() and len(wizard_state.history) > 1,
+            total_stages=position.total,
+            can_skip=active_fsm.can_skip(stage_name),
+            can_go_back=active_fsm.can_go_back(stage_name) and len(wizard_state.history) > 1,
             suggestions=stage.get("suggestions", []),
             stages=self._response.build_stages_roadmap(wizard_state),
         )

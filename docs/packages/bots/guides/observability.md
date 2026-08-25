@@ -293,6 +293,40 @@ data = snapshot.to_dict()
 restored = WizardStateSnapshot.from_dict(data)
 ```
 
+### Snapshots Inside a Subflow
+
+A snapshot taken while the wizard is inside a pushed subflow mixes two frames
+of reference deliberately, and a UI that renders it should know which is which:
+
+| Field | Frame | Value inside a subflow |
+|---|---|---|
+| `current_stage` | subflow | The subflow's stage name |
+| `can_skip`, `can_go_back`, `suggestions` | subflow | Read from the subflow stage's own config |
+| `stage_index`, `total_stages`, `stages` | **main flow** | The parent stage that pushed the subflow is the current one |
+
+The split is intentional. The stage-derived fields describe the stage the user
+is actually looking at, so a skip button and quick replies come from the
+subflow stage. Progress does not: a subflow is not a step of the outer flow, so
+`stage_index` stays on the main flow and reports the parent stage that pushed
+it — which keeps a progress bar steady while a subflow opens and closes, and
+keeps `stage_index` consistent with the `stages` roadmap, where the parent is
+likewise marked `"current"`.
+
+The subflow's own stages never appear in `stages`. A UI that needs to show
+where the user is *within* the subflow should read `subflow_stage` from the
+wizard metadata on the turn response.
+
+```python
+snapshot = reasoning.get_state_snapshot(manager)
+
+# Progress: main-flow, steady across a subflow
+progress_bar.set_value(snapshot.stage_index / snapshot.total_stages)
+
+# Actions: the stage the user is on, subflow or not
+if snapshot.can_skip:
+    show_skip_button()
+```
+
 ### Using Snapshots for UI
 
 Snapshots are designed for driving UI components:
