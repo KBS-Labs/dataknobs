@@ -141,6 +141,9 @@ class WizardFSM:
     def current_metadata(self) -> dict[str, Any]:
         """Get metadata for current stage.
 
+        The stage dict is the live one, not a copy -- see :attr:`stages`
+        for the boundary these readers share.
+
         Returns:
             Dict containing current stage's metadata
         """
@@ -154,6 +157,9 @@ class WizardFSM:
         declared nothing -- callers reading one field with a default get
         the documented default either way. A caller that needs to tell
         "absent" from "empty" apart wants :meth:`has_stage`.
+
+        The stage dict is the live one, not a copy -- see :attr:`stages`
+        for the boundary these readers share.
 
         Args:
             stage: Stage name.
@@ -231,10 +237,10 @@ class WizardFSM:
         caller that intends to edit a stage it read here must copy that
         stage itself.
 
-        A deep copy is deliberately not taken. The three callers in this
-        package only iterate, one of them on a per-turn path, and
-        deepcopy measures ~2500x the shallow copy for a guarantee none of
-        them asks for.
+        A deep copy is deliberately not taken. The four call sites in
+        this package only iterate -- one of them, the stages roadmap, on
+        every turn -- and deepcopy measures ~2500x the shallow copy for a
+        guarantee none of them asks for.
 
         Returns:
             Dict mapping stage name to stage configuration dict.
