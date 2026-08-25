@@ -4964,10 +4964,17 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
         This static method is useful when you have access to conversation
         metadata but not the WizardReasoning instance itself.
 
+        The stage-derived fields -- position, roadmap, and the actions the
+        stage allows -- are read from what the wizard already derived into
+        the metadata, which is subflow-aware.  ``stage_definitions`` is the
+        fallback for metadata written before those fields existed, or built
+        by hand from ``fsm_state`` alone.
+
         Args:
             metadata: Conversation manager metadata dict
-            stage_definitions: Optional stage definitions for index
-                calculation.  Either the wizard config's ``stages`` list
+            stage_definitions: Stage definitions used to derive the
+                position and roadmap **when the metadata does not already
+                carry them**.  Either the wizard config's ``stages`` list
                 (as the example below passes) or a name-keyed dict.
 
         Returns:
@@ -4999,46 +5006,79 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
         task_list = WizardTaskList.from_dict(tasks_data) if tasks_data else WizardTaskList()
         available_tasks = task_list.get_available_tasks()
 
-        # Calculate stage index if definitions provided
-        current_stage = fsm_state.get("current_stage", "unknown")
-        stage_names: list[str] = []
-        if stage_definitions:
-            if isinstance(stage_definitions, dict):
-                stage_names = list(stage_definitions.keys())
-            elif isinstance(stage_definitions, list):
-                stage_names = [s.get("name", "") for s in stage_definitions]
-        position = stage_position(stage_names, current_stage)
+        # Everything the stage decides was already derived by
+        # ``_build_wizard_metadata`` and stored beside ``fsm_state`` --
+        # subflow and all -- and ``normalize_wizard_state`` is the reader
+        # for it.  Recomputing it here from the *main* flow's definitions
+        # is how a subflow stage came back as index 0 with nothing marked
+        # current, and ``can_skip``, ``can_go_back`` and ``suggestions``
+        # were not recomputed at all: they were never passed to the
+        # constructor, so they took the dataclass defaults in every flow.
+        #
+        # Imported inside the method for the reason the
+        # ``PROVIDER_ROLE_EXTRACTION`` imports above are: reasoning sits
+        # below the bot layer and must not import it at module scope.
+        from dataknobs_bots.bot.base import normalize_wizard_state
 
-        # Build stages roadmap from definitions if available
-        stages: list[dict[str, str]] = []
-        if stage_definitions:
-            history_set = set(fsm_state.get("history", []))
+        normalized = normalize_wizard_state(wizard_meta)
+        current_stage = normalized["current_stage"] or "unknown"
+
+        # ``data`` and ``history`` deliberately stay on ``fsm_state``.
+        # The normalized ``data`` prefers ``wizard_meta["data"]``, which
+        # carries transient keys as well; ``get_state_snapshot`` reports
+        # the persistent set, and the two constructors of this type
+        # agreeing is the whole point of the change.
+        data = fsm_state.get("data", {})
+        history = fsm_state.get("history", [])
+
+        if "stage_index" in wizard_meta:
+            stage_index = normalized["stage_index"]
+            total_stages = normalized["total_stages"]
+            stages = list(normalized["stages"])
+        else:
+            # Metadata predating the derived fields, or hand-built from
+            # ``fsm_state``: the caller's definitions are all there is.
+            # Both shapes are unfolded once, into (name, label) pairs, and
+            # the position and the roadmap are read off the same list --
+            # the dict/list branch used to be written twice, once for
+            # each, which is two chances to disagree about what a
+            # definition is called.
+            pairs: list[tuple[str, str]] = []
             if isinstance(stage_definitions, dict):
-                for name, meta in stage_definitions.items():
-                    label = meta.get("label", name) if isinstance(meta, dict) else name
-                    if name == current_stage:
-                        status = "current"
-                    elif name in history_set:
-                        status = "completed"
-                    else:
-                        status = "pending"
-                    stages.append({"name": name, "label": label, "status": status})
+                pairs = [
+                    (name, meta.get("label", name) if isinstance(meta, dict) else name)
+                    for name, meta in stage_definitions.items()
+                ]
             elif isinstance(stage_definitions, list):
-                for s in stage_definitions:
-                    name = s.get("name", "")
-                    label = s.get("label", name)
-                    if name == current_stage:
-                        status = "current"
-                    elif name in history_set:
-                        status = "completed"
-                    else:
-                        status = "pending"
-                    stages.append({"name": name, "label": label, "status": status})
+                pairs = [
+                    (s.get("name", ""), s.get("label", s.get("name", "")))
+                    for s in stage_definitions
+                ]
+
+            position = stage_position([name for name, _ in pairs], current_stage)
+            stage_index = position.index
+            total_stages = position.total
+
+            history_set = set(history)
+            stages = [
+                {
+                    "name": name,
+                    "label": label,
+                    "status": (
+                        "current"
+                        if name == current_stage
+                        else "completed"
+                        if name in history_set
+                        else "pending"
+                    ),
+                }
+                for name, label in pairs
+            ]
 
         return WizardStateSnapshot(
             current_stage=current_stage,
-            data=fsm_state.get("data", {}),
-            history=fsm_state.get("history", []),
+            data=data,
+            history=history,
             transitions=transitions,
             completed=fsm_state.get("completed", False),
             snapshot_timestamp=time.time(),
@@ -5049,7 +5089,10 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
             total_tasks=len(task_list),
             available_task_ids=[t.id for t in available_tasks],
             task_progress_percent=task_list.calculate_progress(),
-            stage_index=position.index,
-            total_stages=position.total,
+            stage_index=stage_index,
+            total_stages=total_stages,
+            can_skip=normalized["can_skip"],
+            can_go_back=normalized["can_go_back"],
+            suggestions=normalized["suggestions"],
             stages=stages,
         )

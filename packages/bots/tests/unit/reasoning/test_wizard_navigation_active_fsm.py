@@ -31,6 +31,7 @@ from typing import Any
 
 import pytest
 
+from dataknobs_bots.reasoning.wizard import WizardReasoning
 from dataknobs_bots.testing import BotTestHarness, WizardConfigBuilder
 
 # ---------------------------------------------------------------------------
@@ -731,6 +732,10 @@ def _snapshot_config() -> dict[str, Any]:
     reports index ``0`` for a name it cannot find -- so with the pushing
     stage at index 0 the wrong answer and the right one coincide and the
     assertion proves nothing. Here the parent stage is index 1.
+
+    ``gather`` carries ``can_skip`` and ``suggestions`` of its own so the
+    same config can also be observed from *outside* a subflow, which is
+    where ``snapshot_from_metadata`` turns out to be wrong as well.
     """
     builder = WizardConfigBuilder("snapshot-in-a-subflow")
     builder.stage(
@@ -744,6 +749,8 @@ def _snapshot_config() -> dict[str, Any]:
     builder.transition("gather", condition="has('greeting')")
     builder.stage(
         "gather",
+        can_skip=True,
+        suggestions=["Alice", "Bob"],
         prompt="Tell me your name.",
         response_template="Noted.",
         confirm_first_render=False,
@@ -840,3 +847,145 @@ async def test_the_snapshot_reports_main_flow_progress_while_inside_a_subflow() 
             "subflow's stage name among the main flow's"
         )
         assert snapshot.total_stages == 3
+
+
+# ---------------------------------------------------------------------------
+# 14-16. The static sibling: snapshot_from_metadata
+# ---------------------------------------------------------------------------
+#
+# ``WizardStateSnapshot`` has two constructors. ``get_state_snapshot()``
+# asks an FSM; ``snapshot_from_metadata()`` is the documented path for
+# "you have the conversation metadata but not the instance", and it
+# recomputes the stage-derived fields from ``fsm_state`` plus a caller-
+# supplied ``stage_definitions``.
+#
+# It recomputes them worse, and the right answers are one level up in the
+# very dict it is handed: ``manager.metadata["wizard"]`` is
+# ``_build_wizard_metadata(state)`` output with ``fsm_state`` nested
+# inside it, so ``stage_index``, ``total_stages``, ``stages``,
+# ``can_skip``, ``can_go_back`` and ``suggestions`` are all sitting there
+# already, derived by the canonical writer and subflow-aware.
+#
+# Two distinct failures, and only the second is about subflows:
+#
+# * ``can_skip``, ``can_go_back`` and ``suggestions`` were never passed to
+#   the constructor **at all**, so they took the dataclass defaults
+#   (False / True / []) in every flow, subflow or not.  A UI built on this
+#   path never showed a skip button and never showed a quick reply.
+# * inside a push, the recomputation locates a subflow stage name among
+#   the main flow's definitions, finds nothing, and reports index 0 with
+#   no stage marked "current" in the roadmap.
+#
+# ``stage_definitions`` stays as the fallback, for metadata written before
+# the canonical fields existed or hand-built by a caller.
+
+
+def _wizard_metadata(harness: BotTestHarness) -> dict[str, Any]:
+    """The conversation metadata a consumer would hold."""
+    manager = harness.bot.get_conversation_manager(harness.context.conversation_id)
+    return dict(manager.metadata)
+
+
+def _main_stage_definitions() -> list[dict[str, Any]]:
+    """The main flow's stage list, as the documented example passes it."""
+    return _snapshot_config()["stages"]
+
+
+@pytest.mark.asyncio
+async def test_the_static_snapshot_reports_the_actions_the_stage_allows() -> None:
+    """Not a subflow bug: these three were never populated in any flow.
+
+    ``snapshot_from_metadata`` omitted ``can_skip``, ``can_go_back`` and
+    ``suggestions`` from the constructor call entirely, so they fell to
+    the dataclass defaults. The two constructors of one type therefore
+    disagreed about three fields everywhere, not merely inside a push --
+    and the correct values were already in the metadata being read.
+
+    Observed in the **main** flow, before any subflow is pushed, so
+    nothing here depends on the subflow machinery.
+    """
+    async with await BotTestHarness.create(
+        wizard_config=_snapshot_config(),
+        main_responses=["r"] * 10,
+        extraction_results=[[{"greeting": "hi"}], [], []],
+    ) as harness:
+        await harness.chat("hi")
+        assert harness.wizard_stage == "gather", "expected the main flow's second stage"
+
+        snapshot = WizardReasoning.snapshot_from_metadata(
+            _wizard_metadata(harness),
+            stage_definitions=_main_stage_definitions(),
+        )
+
+        assert snapshot is not None
+        assert snapshot.can_skip is True, (
+            "'gather' declares can_skip: true and the metadata says so; the "
+            "snapshot never read the field and took the dataclass default"
+        )
+        assert snapshot.suggestions == ["Alice", "Bob"], (
+            "the stage's quick replies are in the metadata and were not read"
+        )
+
+
+@pytest.mark.asyncio
+async def test_the_static_snapshot_locates_a_subflow_stage_in_the_main_flow() -> None:
+    """Inside a push, the recomputation has nothing to match against.
+
+    ``stage_definitions`` is the **main** flow's stage list, and the
+    current stage is the subflow's. So ``stage_position`` reported index
+    0 and the roadmap loop marked nothing ``"current"`` -- both fixed by
+    reading what the canonical writer already derived, which reports the
+    parent stage that pushed the subflow.
+    """
+    async with await BotTestHarness.create(
+        wizard_config=_snapshot_config(),
+        main_responses=["r"] * 10,
+        extraction_results=[[{"greeting": "hi"}], [{"name": "Alice"}], [], []],
+    ) as harness:
+        await harness.chat("hi")
+        await harness.chat("my name is Alice")
+        assert harness.wizard_stage == "sub_start", "the subflow was not pushed"
+
+        snapshot = WizardReasoning.snapshot_from_metadata(
+            _wizard_metadata(harness),
+            stage_definitions=_main_stage_definitions(),
+        )
+
+        assert snapshot is not None
+        assert snapshot.stage_index == 1, (
+            "'gather' pushed this subflow and is index 1; index 0 is the "
+            "recomputation failing to find the subflow's stage name among "
+            "the main flow's definitions"
+        )
+        current = [entry for entry in snapshot.stages if entry["status"] == "current"]
+        assert [entry["name"] for entry in current] == ["gather"], (
+            "the roadmap marked no main-flow stage current because the name "
+            "it compared against belongs to the subflow"
+        )
+        assert snapshot.can_skip is True, "the subflow stage declares can_skip: true"
+
+
+def test_metadata_without_the_derived_fields_still_uses_stage_definitions() -> None:
+    """The fallback is kept, and this is what keeps it honest.
+
+    Metadata written before the canonical fields existed -- or built by
+    hand, as a caller with only ``fsm_state`` would -- has no
+    ``stage_index`` to prefer. ``stage_definitions`` still drives the
+    position and the roadmap there, which is the behaviour every existing
+    caller has.
+
+    A pure unit: no bot, no FSM, just the two shapes of input.
+    """
+    snapshot = WizardReasoning.snapshot_from_metadata(
+        {"wizard": {"fsm_state": {"current_stage": "gather", "history": ["intro"]}}},
+        stage_definitions=[{"name": "intro"}, {"name": "gather"}, {"name": "wrap"}],
+    )
+
+    assert snapshot is not None
+    assert snapshot.stage_index == 1
+    assert snapshot.total_stages == 3
+    assert [entry["status"] for entry in snapshot.stages] == [
+        "completed",
+        "current",
+        "pending",
+    ]

@@ -382,6 +382,17 @@ snapshot = WizardReasoning.snapshot_from_metadata(
 # - Stages are exited (completed_by: stage_exit)
 ```
 
+Both constructors report the same thing. `snapshot_from_metadata` reads the
+stage-derived fields — position, roadmap, `can_skip`, `can_go_back`,
+`suggestions` — from what the wizard already derived into the metadata, so it
+is subflow-aware in the same way `get_state_snapshot` is and follows the frame
+split described above.
+
+`stage_definitions` is the fallback for metadata that predates those fields, or
+that a caller built by hand from `fsm_state` alone. Passing it is harmless when
+the metadata is current; it is simply not consulted.
+
+
 ## Conversion Utilities
 
 Convert between wizard and FSM observability types:

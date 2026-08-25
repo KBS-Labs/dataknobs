@@ -52,6 +52,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   main-flow progress against the parent stage that pushed the subflow.
   `total_stages`, `data`, `history` and the task fields are unchanged.
 
+- **`snapshot_from_metadata()` reports the same state its instance-method
+  sibling does.** The static constructor -- the documented path for "you have
+  the conversation metadata but not the `WizardReasoning` instance" -- rebuilt
+  the stage-derived fields from `fsm_state` plus the caller's
+  `stage_definitions`, ignoring the values the wizard had already derived into
+  the same metadata dict one level up. Two consequences. `can_skip`,
+  `can_go_back` and `suggestions` were never passed to the constructor at all,
+  so they took the dataclass defaults (`False`, `True`, `[]`) in **every** flow
+  -- a UI on this path never showed a skip button and never showed a quick
+  reply, subflow or not. And inside a subflow the recomputation looked for the
+  subflow's stage name among the main flow's definitions, found nothing, and
+  reported `stage_index: 0` with no stage marked `"current"` in the roadmap.
+  All six fields now come from the metadata the wizard wrote.
+  **`stage_definitions` is unchanged for callers who need it:** it is the
+  fallback for metadata predating those fields or built by hand from
+  `fsm_state`, and is simply not consulted when the metadata is current.
+  `data` and `history` deliberately still come from `fsm_state`, so the two
+  constructors agree on those as well.
+
 - **A `navigation:` block is type-checked before it is used, wherever it was
   written.** The block is authored config and reached its readers uncoerced,
   and every level of it was consumed without a check. `navigation: "yes"`
