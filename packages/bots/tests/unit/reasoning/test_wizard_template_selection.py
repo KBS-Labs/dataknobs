@@ -222,11 +222,11 @@ def test_auto_advance_collects_the_template_the_turn_would_have_rendered() -> No
     )
 
     fresh = WizardState(current_stage="opening", data={})
-    assert responder._render_auto_advance_template(stage, fresh) == GREETING
+    assert responder.render_departing_stage(stage, fresh) == GREETING
 
     spoken = WizardState(current_stage="opening", data={})
     spoken.increment_render_count("opening")
-    assert responder._render_auto_advance_template(stage, spoken) == CLARIFY
+    assert responder.render_departing_stage(stage, spoken) == CLARIFY
 
 
 def test_auto_advance_drops_a_spoken_stage_rather_than_repeating_it() -> None:
@@ -245,12 +245,12 @@ def test_auto_advance_drops_a_spoken_stage_rather_than_repeating_it() -> None:
     responder, stage = _responder_for(response_template=GREETING)
 
     fresh = WizardState(current_stage="opening", data={})
-    assert responder._render_auto_advance_template(stage, fresh) == GREETING
+    assert responder.render_departing_stage(stage, fresh) == GREETING
     assert fresh.get_render_count("opening") == 1
 
     spoken = WizardState(current_stage="opening", data={})
     spoken.increment_render_count("opening")
-    assert responder._render_auto_advance_template(stage, spoken) is None
+    assert responder.render_departing_stage(stage, spoken) is None
     # Nothing rendered, so nothing counted.
     assert spoken.get_render_count("opening") == 1
 
@@ -567,11 +567,9 @@ def test_auto_advance_collects_a_greeting_from_a_message_stage() -> None:
     stage = fsm.current_metadata
 
     state = WizardState(current_stage="notice", data={})
-    assert responder._render_auto_advance_template(stage, state) == (
-        "One moment while I look that up."
-    )
+    assert responder.render_departing_stage(stage, state) == ("One moment while I look that up.")
     assert state.get_greeting_count("notice") == 1
     assert state.get_render_count("notice") == 0
 
     # Advanced past a second time, it has nothing left to add.
-    assert responder._render_auto_advance_template(stage, state) is None
+    assert responder.render_departing_stage(stage, state) is None

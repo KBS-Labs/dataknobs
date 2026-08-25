@@ -800,6 +800,10 @@ class WizardResponder:
         :meth:`can_auto_advance`, rendering each stage's
         ``response_template`` before moving past it.
 
+        A step that lands on a subflow's ``is_end`` stage pops it, and
+        that stage renders too -- it is left by the same iteration, so
+        this loop is one of its only two chances to speak.
+
         A per-call closure is installed as the ``transform_context_factory``
         before each ``step_async`` call, mirroring the pattern in
         ``_execute_fsm_step``, so that auto-advance transforms have
@@ -820,7 +824,9 @@ class WizardResponder:
                 ``auto_advance`` setting.
 
         Returns:
-            List of rendered template strings from auto-advanced stages
+            Rendered template strings from the stages this loop left, in
+            the order it left them -- each stage stepped past, and a
+            subflow end stage popped on the way
         """
         from ..artifacts.transforms import TransformContext
 
@@ -840,7 +846,7 @@ class WizardResponder:
         ):
             # Render template of the stage being advanced past
             if not (skip_first_render and count == 0):
-                rendered = self._render_auto_advance_template(stage, wizard_state)
+                rendered = self.render_departing_stage(stage, wizard_state)
                 if rendered:
                     messages.append(rendered)
 
@@ -910,12 +916,19 @@ class WizardResponder:
                 new_stage_name,
             )
 
-            # Handle subflow pop if needed (no-op when no subflow is active)
-            if self._subflows.should_pop(wizard_state):
-                self._subflows.handle_pop(wizard_state)
-                active_fsm = self._subflows.get_active_fsm()
-                wizard_state.completed = False
+            # Handle subflow pop if needed (no-op when no subflow is
+            # active).  The step above may have landed on a subflow's end
+            # stage, which this loop would otherwise leave without ever
+            # rendering -- so its message joins the ones collected from
+            # the stages stepped past, in the order they were left.
+            ended_message = self._subflows.pop_if_ended(wizard_state)
+            if ended_message:
+                messages.append(ended_message)
 
+            # Unconditional because a pop changes the answer and every
+            # caller passes ``get_active_fsm()`` in to begin with, so this
+            # is the same object whenever no pop happened.
+            active_fsm = self._subflows.get_active_fsm()
             stage = active_fsm.current_metadata
 
         # If we advanced through any stages, mark the landing stage so the
@@ -2196,16 +2209,21 @@ class WizardResponder:
             stream_ctx.tool_restart_requested,
         ) = self._read_lifecycle_signals(completion_signal, restart_signal)
 
-    def _render_auto_advance_template(
-        self, stage: dict[str, Any], state: WizardState
-    ) -> str | None:
-        """Render a stage's active template for auto-advance collection.
+    def render_departing_stage(self, stage: dict[str, Any], state: WizardState) -> str | None:
+        """Render the template a stage shows as the turn leaves it.
 
-        Used during auto-advance to capture message stage content before
-        the stage is advanced past.  Selection goes through
+        Two paths leave a stage without giving it a turn of its own, and
+        both collect what it would have said: the auto-advance loop, which
+        steps past it, and a subflow pop, which leaves an ``is_end`` stage
+        on the same turn it was entered.  Selection goes through
         :meth:`_select_active_template`, so a stage contributes the
         template the turn would have rendered rather than whichever one it
         rendered first.
+
+        Public because the second caller reaches it through
+        :class:`~dataknobs_bots.reasoning.wizard_subflows.SubflowManager`,
+        which owns the pop and is injected with this method the way it is
+        injected with :meth:`evaluate_condition`.
 
         A stage that has no template left to offer contributes nothing.
         That is not the same as what the turn would have said — the turn

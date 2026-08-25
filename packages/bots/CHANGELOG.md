@@ -9,6 +9,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A subflow's `is_end` stage now renders its `response_template`.** The
+  stage was entered and left inside one turn -- reaching it is what makes the
+  subflow poppable -- so the pop ran in the same step and the parent's return
+  stage rendered instead. The end stage's template was parsed, validated, and
+  on screen nowhere.
+
+  The cost is not the usual missing line. A subflow that can fail ends on a
+  stage whose whole job is to say *nothing was saved, and here is why*, and
+  that refusal was the one message that never appeared: the flow discarded
+  the work and reported success. A completion message is the natural thing to
+  put on an end stage, and it silently was not one.
+
+  The template renders **before** the pop, against the subflow's own data and
+  under its own stage name, and is prepended to the turn ahead of whatever the
+  parent's return stage renders. A value that exists only inside the subflow
+  interpolates correctly; the pop then replaces the data with the parent's, so
+  fields the parent needs still travel through `result_mapping` as before.
+
+  Both pop paths render, not just one -- the post-transition step and the
+  auto-advance loop pop through the same method now, so an end stage reached
+  by `auto_advance` says the same thing as one reached by an ordinary
+  transition. Unchanged: `auto_advance: true` on an end stage still does
+  nothing, the auto-advance loop excluding end stages by design; and `prompt`
+  is still an instruction to the model rather than a template, so an end stage
+  carrying only a `prompt` is still silent.
+
 - **`skip_default` no longer has to overwrite a value the user set.** The
   block was applied with a bare `dict.update`, which cannot be asked to do
   anything else: a key the user set five turns ago was replaced exactly as

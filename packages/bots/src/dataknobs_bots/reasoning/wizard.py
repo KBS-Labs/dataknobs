@@ -723,6 +723,11 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
         # is constructed (resolves the circular dependency).
         self._subflows.set_evaluate_condition(self._response.evaluate_condition)
 
+        # Same dependency, same resolution: the pop is the only moment an
+        # is_end subflow stage can render, and the renderer lives on the
+        # responder.
+        self._subflows.set_render_departing_stage(self._response.render_departing_stage)
+
         # Build navigation keyword config from wizard-level settings.
         # Guarded here rather than inside NavigationConfig because
         # StructuredConfig.from_dict calls dict(config) before any of that
@@ -4226,26 +4231,29 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
                 condition) is always enforced.
 
         Returns:
-            List of rendered template strings from auto-advanced stages.
+            The turn's collected template strings: a finished subflow's
+            end stage first, then every stage auto-advance stepped past.
         """
-        # Subflow pop check
-        if self._subflows.should_pop(state):
-            self._subflows.handle_pop(state)
-            state.completed = False
+        # Subflow pop check.  The end stage is left in this step, so its
+        # template renders here or nowhere -- and ahead of the parent's
+        # return render, which is what the turn goes on to produce.
+        messages: list[str] = []
+        ended_message = self._subflows.pop_if_ended(state)
+        if ended_message:
+            messages.append(ended_message)
 
         # Auto-advance through stages with all required fields filled
         active_fsm = self._subflows.get_active_fsm()
         stage = active_fsm.current_metadata
-        auto_advance_messages = await self._response.run_auto_advance_loop(
-            state,
-            active_fsm,
-            stage,
-            llm=llm,
-            after_re_extraction=after_re_extraction,
+        messages.extend(
+            await self._response.run_auto_advance_loop(
+                state,
+                active_fsm,
+                stage,
+                llm=llm,
+                after_re_extraction=after_re_extraction,
+            )
         )
-
-        # Re-fetch in case subflow pop occurred during auto-advance
-        active_fsm = self._subflows.get_active_fsm()
 
         # Stage entry hook
         if self._hooks:
@@ -4255,7 +4263,7 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
         if state.completed and self._hooks:
             await self._hooks.trigger_complete(state.data)
 
-        return auto_advance_messages
+        return messages
 
     async def _run_post_transition_re_extraction(
         self,
