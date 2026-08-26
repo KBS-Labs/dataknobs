@@ -50,7 +50,7 @@ class TestArtifact:
     def test_with_content(self) -> None:
         content = {"questions": [{"id": "q1", "text": "What is 2+2?"}]}
         provenance = create_provenance(
-            created_by="bot:edubot",
+            created_by="bot:acme",
             creation_method="generator",
         )
         artifact = Artifact(
@@ -62,7 +62,7 @@ class TestArtifact:
         )
         assert artifact.name == "Math Questions"
         assert artifact.content == content
-        assert artifact.provenance.created_by == "bot:edubot"
+        assert artifact.provenance.created_by == "bot:acme"
         assert artifact.tags == ["math", "assessment"]
 
     def test_is_approved(self) -> None:

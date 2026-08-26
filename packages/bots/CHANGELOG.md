@@ -9,6 +9,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`preview_config` now reports whether the config it renders is valid.** The
+  preview returns `valid`, `errors` and `warnings` beside whatever it rendered —
+  in all three formats — using the same keys `validate_config` returns, so the
+  two are comparable directly. Wired to the same `builder_factory`, the two
+  tools now cannot disagree: the verdict comes from `builder.validate()`, the
+  same validator `build()` and `build_portable()` run.
+
+  Before this, `preview_config` rendered a config and said nothing about it,
+  while `validate_config` refused the same wizard data in the same turn and
+  `build()` raised — so there was no final config, and the tool's own
+  description promised the model *"what the final config will look like."* That
+  sentence is now *"Reports whether it is valid, and shows it either way"*; the
+  catalog entry, which never made the promise, is unchanged.
+
+  It reports **and** renders. A config with errors is still the thing being
+  built, and seeing it is how an author works out what the errors are about — so
+  the verdict is carried alongside the render, never in place of it. A validator
+  that raises is reported as the verdict rather than costing the render.
+
+  **Consumers reading the preview's output should expect the three new keys.**
+  A caller that treated the result as exactly its rendered keys will see
+  `valid`, `errors` and `warnings` arrive alongside them. The keys accompany a
+  render, so the two paths with no config to render — no wizard data, and a
+  `builder_factory` that raises — are unchanged: they still return `{"error":
+  ...}` and carry no verdict, because on those nothing was validated.
+  `validate_config` reports its own failures as `valid: False`, so the two
+  tools' *failure* shapes still differ even though their verdicts no longer can.
+
 - **Config validation now enforces the `$resource` marker rule at every depth,
   so more configs are reported invalid than before.** This is stricter, not a
   narrowing: a config that validated yesterday and carries a marker typo below

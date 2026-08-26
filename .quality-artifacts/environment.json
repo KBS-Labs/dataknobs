@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-08-26T18:44:16Z",
+  "timestamp": "2026-08-26T19:40:08Z",
   "python_version": "Python 3.12.12",
   "uv_version": "uv 0.12.5 (Homebrew 2026-08-14 aarch64-apple-darwin)",
   "os": "Darwin",
   "os_version": "24.6.0",
-  "git_branch": "sbk/marker-rule-callable-at-every-depth",
-  "git_commit": "754984d4453c9577c5ce0eff7c79d2f1dda740a2",
+  "git_branch": "sbk/preview-carries-the-verdict",
+  "git_commit": "8cf682d9434d398df15b47c8aa620ecc04578ad1",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }

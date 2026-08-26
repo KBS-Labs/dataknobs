@@ -22,7 +22,7 @@ Example:
     ...     artifact_type="content",
     ...     name="Questions",
     ...     content={"questions": [...]},
-    ...     provenance=create_provenance("bot:edubot", "generator"),
+    ...     provenance=create_provenance("bot:acme", "generator"),
     ...     metadata={"tenant_id": "acme"},
     ... )
 """

@@ -13,6 +13,7 @@ from dataknobs_llm.tools.context import ToolExecutionContext, ToolWizardState
 
 from dataknobs_bots.config.builder import DynaBotConfigBuilder
 from dataknobs_bots.config.drafts import ConfigDraftManager
+from dataknobs_bots.config.schema import DynaBotConfigSchema
 from dataknobs_bots.config.templates import (
     ConfigTemplate,
     ConfigTemplateRegistry,
@@ -273,6 +274,118 @@ class TestPreviewConfigTool:
         context = _make_context({"some": "data"})
         result = await tool.execute_with_context(context)
         assert "error" in result
+
+    @pytest.mark.asyncio
+    async def test_preview_reports_invalid_config(self) -> None:
+        """The preview must carry the verdict validate_config reaches.
+
+        One builder factory, one process, one marker typo: the preview
+        rendered the config with no verdict of any kind while
+        ``validate_config`` returned ``valid=False`` on the same wizard
+        data in the same turn -- and ``build()`` raised, so there was no
+        final config for the preview to be showing. The two tools are
+        wired to the same factory; they must not answer differently.
+        """
+        wizard_data = {"llm_resource": "default", "storage_backend": "memory"}
+        context = _make_context(wizard_data)
+        preview_tool = PreviewConfigTool(builder_factory=_typo_builder_factory)
+        validate_tool = ValidateConfigTool(builder_factory=_typo_builder_factory)
+
+        preview = await preview_tool.execute_with_context(context, format="summary")
+        verdict = await validate_tool.execute_with_context(context)
+
+        assert verdict["valid"] is False, "the fixture must be an invalid config"
+        assert preview["valid"] is False
+        assert preview["errors"] == verdict["errors"]
+
+    @pytest.mark.asyncio
+    async def test_preview_reports_valid_config(self) -> None:
+        """The anti-vacuity half: a clean config is reported clean.
+
+        Without this, a preview that hard-coded ``valid=False`` would
+        pass the test above.
+        """
+        context = _make_context({"llm_provider": "ollama", "storage_backend": "memory"})
+        tool = PreviewConfigTool(builder_factory=_basic_builder_factory)
+
+        preview = await tool.execute_with_context(context, format="summary")
+
+        assert preview["valid"] is True
+        assert preview["errors"] == []
+
+    @pytest.mark.asyncio
+    async def test_preview_verdict_in_every_format(self) -> None:
+        """All three formats carry it -- a per-branch omission is the half-fix.
+
+        ``summary``, ``full`` and ``yaml`` are three separate returns, so
+        carrying the verdict in one is the obvious way to leave the other
+        two lying.
+        """
+        wizard_data = {"llm_resource": "default", "storage_backend": "memory"}
+        context = _make_context(wizard_data)
+        tool = PreviewConfigTool(builder_factory=_typo_builder_factory)
+
+        for fmt, rendered_key in (
+            ("summary", "sections"),
+            ("full", "config"),
+            ("yaml", "yaml"),
+        ):
+            preview = await tool.execute_with_context(context, format=fmt)
+            assert preview["valid"] is False, f"format={fmt} carries no verdict"
+            assert preview["errors"], f"format={fmt} carries no errors"
+            assert rendered_key in preview, f"format={fmt} stopped rendering"
+
+    @pytest.mark.asyncio
+    async def test_preview_still_renders_when_invalid(self) -> None:
+        """Report *and* render -- not a second validate tool.
+
+        The ruling is that the preview carries the verdict and still shows
+        the config. A fix that returned only the verdict would satisfy the
+        three tests above and destroy the tool.
+        """
+        wizard_data = {"llm_resource": "default", "storage_backend": "memory"}
+        context = _make_context(wizard_data)
+        tool = PreviewConfigTool(builder_factory=_typo_builder_factory)
+
+        preview = await tool.execute_with_context(context, format="full")
+
+        assert preview["valid"] is False
+        assert preview["config"]["llm"]["$resource"] == "default"
+        parsed = yaml.safe_load((await tool.execute_with_context(context, format="yaml"))["yaml"])
+        assert parsed["llm"]["$resource"] == "default"
+
+    @pytest.mark.asyncio
+    async def test_preview_renders_when_the_validator_itself_raises(self) -> None:
+        """A validator that raises must not cost the render.
+
+        ``ConfigValidator.validate`` guards its registered validators but
+        calls ``self._schema.validate(config)`` unguarded, so a schema a
+        consumer supplies is a reachable raise path -- and subclassing
+        that schema is exactly what a consumer does. ``build_unvalidated``
+        has already succeeded by then, so there is a config to show;
+        reporting the failure as the verdict keeps the preview honest
+        without turning a schema bug into a dead tool.
+        """
+
+        class _RaisingSchema(DynaBotConfigSchema):
+            def validate(self, config: dict[str, Any]) -> ValidationResult:
+                raise RuntimeError("schema exploded")
+
+        def raising_schema_factory(data: dict[str, Any]) -> DynaBotConfigBuilder:
+            return (
+                DynaBotConfigBuilder(schema=_RaisingSchema())
+                .set_llm("ollama", model="llama3.2")
+                .set_conversation_storage("memory")
+            )
+
+        context = _make_context({"llm_provider": "ollama", "storage_backend": "memory"})
+        tool = PreviewConfigTool(builder_factory=raising_schema_factory)
+
+        preview = await tool.execute_with_context(context, format="full")
+
+        assert preview["valid"] is False
+        assert any("schema exploded" in e for e in preview["errors"])
+        assert preview["config"]["llm"]["provider"] == "ollama"
 
 
 class TestValidateConfigTool:

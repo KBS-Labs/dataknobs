@@ -47,7 +47,7 @@ from dataknobs_bots.config.builder import DynaBotConfigBuilder
 from dataknobs_bots.config.drafts import ConfigDraftManager
 from dataknobs_bots.config.templates import ConfigTemplateRegistry
 from dataknobs_bots.config.tool_catalog import InjectedCallable, injected_dependency
-from dataknobs_bots.config.validation import ConfigValidator
+from dataknobs_bots.config.validation import ConfigValidator, ValidationResult
 
 logger = logging.getLogger(__name__)
 
@@ -433,8 +433,8 @@ class PreviewConfigTool(ContextAwareTool):
             name="preview_config",
             description=(
                 "Preview the bot configuration being built from the "
-                "current wizard data. Shows what the final config will "
-                "look like."
+                "current wizard data. Reports whether it is valid, and "
+                "shows it either way."
             ),
         )
         self._builder_factory = builder_factory
@@ -484,14 +484,22 @@ class PreviewConfigTool(ContextAwareTool):
         format: str = "summary",
         **kwargs: Any,
     ) -> dict[str, Any]:
-        """Preview the current configuration.
+        """Preview the current configuration, and say whether it is valid.
+
+        The preview renders either way. A config with errors is still the
+        thing being built, and showing it is how an author sees what the
+        errors are about -- so the verdict is carried alongside the render
+        rather than in place of it.
 
         Args:
             context: Execution context with wizard state.
             format: Output format ('summary', 'full', or 'yaml').
 
         Returns:
-            Dict with the configuration preview.
+            Dict with the configuration preview, plus the builder's
+            ``ValidationResult`` keys -- ``valid``, ``errors`` and
+            ``warnings`` -- so the answer is in the same vocabulary
+            ``validate_config`` returns it in.
         """
         wizard_data = _get_wizard_data(context)
         if not wizard_data:
@@ -504,18 +512,41 @@ class PreviewConfigTool(ContextAwareTool):
             logger.exception("Failed to build config for preview")
             return {"error": f"Failed to build configuration: {e}"}
 
+        try:
+            # The builder's own validator -- the one `build()` runs and the one
+            # `validate_config` reports. Pairing `build_unvalidated` with
+            # `validate` is what that method's docstring asks of a caller that
+            # wants a verdict, and this was the caller still ignoring it.
+            result = builder.validate()
+        except Exception as e:
+            # `build_unvalidated` already succeeded, so there is a config to
+            # show. `ConfigValidator.validate` guards its registered validators
+            # but calls the schema unguarded, and the schema is a consumer's to
+            # subclass -- report the failure as the verdict rather than spend
+            # the render on it.
+            logger.exception("Failed to validate config for preview")
+            result = ValidationResult.error(f"Failed to validate configuration: {e}")
+
         logger.debug(
-            "Generated config preview (format=%s)",
+            "Generated config preview (format=%s, valid=%s)",
             format,
+            result.valid,
             extra={"conversation_id": context.conversation_id},
         )
 
+        rendered: dict[str, Any]
         if format == "yaml":
-            return {"yaml": yaml.dump(config, default_flow_style=False, sort_keys=False)}
+            rendered = {"yaml": yaml.dump(config, default_flow_style=False, sort_keys=False)}
         elif format == "full":
-            return {"config": config}
+            rendered = {"config": config}
         else:
-            return _build_summary(config)
+            rendered = _build_summary(config)
+
+        # One merge covers all three formats, so a branch cannot come to render
+        # without the verdict -- which is the shape a half-fix would take. The
+        # verdict's keys go last on purpose: a rendered section that ever grew a
+        # `valid` key of its own would be shadowing the answer, not adding one.
+        return {**rendered, **result.to_dict()}
 
 
 class ValidateConfigTool(ContextAwareTool):

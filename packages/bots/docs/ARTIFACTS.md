@@ -28,7 +28,7 @@ artifact = Artifact(
     name="Assessment Questions",
     content={"questions": ["What is photosynthesis?", "Explain mitosis."]},
     provenance=create_provenance(
-        created_by="bot:edubot",
+        created_by="bot:acme",
         creation_method="generator",
     ),
 )
@@ -210,7 +210,7 @@ Convenience factory:
 
 ```python
 provenance = create_provenance(
-    created_by="bot:edubot",
+    created_by="bot:acme",
     creation_method="generator",
     # Additional ProvenanceRecord fields via **kwargs
     creation_context={"topic": "biology"},
@@ -368,7 +368,7 @@ artifact = await registry.create(
     artifact_type="content",
     name="Unit 1 Questions",
     content={"questions": ["What is 2+2?", "Explain gravity."]},
-    provenance=create_provenance("bot:edubot", "generator"),
+    provenance=create_provenance("bot:acme", "generator"),
     tags=["math", "science"],
 )
 

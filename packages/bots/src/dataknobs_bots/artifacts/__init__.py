@@ -20,7 +20,7 @@ Example:
     ...     name="Assessment Questions",
     ...     content={"questions": [...]},
     ...     provenance=create_provenance(
-    ...         created_by="bot:edubot",
+    ...         created_by="bot:acme",
     ...         creation_method="generator",
     ...     ),
     ... )
