@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-08-26T02:56:53Z",
+  "timestamp": "2026-08-26T03:04:41Z",
   "python_version": "Python 3.12.12",
   "uv_version": "uv 0.12.5 (Homebrew 2026-08-14 aarch64-apple-darwin)",
   "os": "Darwin",
   "os_version": "24.6.0",
   "git_branch": "sbk/subflow-field-survival-table",
-  "git_commit": "bba4c1cf9bb73b9354e79c86d841bdf4079d6952",
+  "git_commit": "342b1fddbc6b3600a92fb967a6ea2266b676c6b2",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }
