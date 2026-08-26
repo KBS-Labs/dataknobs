@@ -66,6 +66,7 @@ from dataknobs_common.config_loading import (
     find_config_file,
     load_yaml_or_json,
 )
+from dataknobs_common.copying import copy_structure
 
 from .exceptions import ConfigError
 
@@ -132,52 +133,6 @@ def _is_unexpanded_template(value: Any) -> bool:
     as a variable, which is a supported thing to do.
     """
     return isinstance(value, str) and "${" in value
-
-
-def _copy_structure(value: Any, _seen: dict[int, Any] | None = None) -> Any:
-    """Copy nested containers; pass every other value through by identity.
-
-    What every hand-out from this class needs, and the exact bound the
-    substitution pass set while it was incidentally providing this isolation:
-    it rebuilds dicts and lists and returns everything else unchanged.
-
-    ``copy.deepcopy`` would overshoot. A resource assembled in Python may hold
-    a live object — a connection pool, a prebuilt provider, a lock — and
-    duplicating one silently gives the factory a second pool, while a value
-    that cannot be pickled raises out of what is meant to be a dict read.
-    Neither is a risk the aliasing this copy prevents justifies taking.
-
-    The one thing kept from ``deepcopy`` is its memo. A container reached
-    twice is copied once and the same copy used both times, so a structure
-    that refers back to itself terminates instead of recursing to a
-    ``RecursionError`` -- and one that merely shares a subtree between two
-    keys keeps sharing it. A config read is the wrong place to discover
-    either.
-
-    ``_seen`` is internal. A caller assembling one hand-out from several
-    values passes the same memo to each, so the result's sharing reflects the
-    source's; a caller copying one value omits it.
-    """
-    if _seen is None:
-        _seen = {}
-    marker = id(value)
-    if marker in _seen:
-        return _seen[marker]
-
-    if isinstance(value, dict):
-        copied_dict: dict[Any, Any] = {}
-        # Registered before recursing, so a self-reference finds it.
-        _seen[marker] = copied_dict
-        for key, item in value.items():
-            copied_dict[key] = _copy_structure(item, _seen)
-        return copied_dict
-    if isinstance(value, list):
-        copied_list: list[Any] = []
-        _seen[marker] = copied_list
-        for item in value:
-            copied_list.append(_copy_structure(item, _seen))
-        return copied_list
-    return value
 
 
 class EnvironmentConfigError(Exception):
@@ -569,10 +524,10 @@ class EnvironmentConfig:
             # each default under its own memo would make that property depend
             # on which of the two paths below the caller took.
             seen: dict[int, Any] = {}
-            # Annotated because ``_copy_structure`` returns whatever it was
+            # Annotated because ``copy_structure`` returns whatever it was
             # handed, so its declared type is ``Any``; the caller is what knows
             # a resource entry is a mapping.
-            config: dict[str, Any] = _copy_structure(type_resources[logical_name], seen)
+            config: dict[str, Any] = copy_structure(type_resources[logical_name], seen)
 
             # Apply defaults for missing keys. Copied like everything else
             # handed out of here: the object aliased is the caller's own
@@ -582,7 +537,7 @@ class EnvironmentConfig:
             if defaults:
                 for key, value in defaults.items():
                     if key not in config:
-                        config[key] = _copy_structure(value, seen)
+                        config[key] = copy_structure(value, seen)
 
             return config
 
@@ -591,7 +546,7 @@ class EnvironmentConfig:
         # raise.
         lenient = not required if required is not None else defaults is not None
         if lenient:
-            copied_defaults: dict[str, Any] = _copy_structure(defaults or {})
+            copied_defaults: dict[str, Any] = copy_structure(defaults or {})
             return copied_defaults
 
         raise ResourceNotFoundError(
@@ -700,10 +655,10 @@ class EnvironmentConfig:
             result["description"] = self.description
 
         if self.settings:
-            result["settings"] = _copy_structure(self.settings)
+            result["settings"] = copy_structure(self.settings)
 
         if self.resources:
-            result["resources"] = _copy_structure(self.resources)
+            result["resources"] = copy_structure(self.resources)
 
         return result
 
@@ -747,7 +702,7 @@ class EnvironmentConfig:
         # Deep merge resources. Copied structurally, like every other hand-out
         # from this class: a one-level copy would leave each nested section of
         # the result aliasing one of the two inputs, both of which outlive it.
-        merged_resources: dict[str, dict[str, dict[str, Any]]] = _copy_structure(self.resources)
+        merged_resources: dict[str, dict[str, dict[str, Any]]] = copy_structure(self.resources)
 
         # Merge in other's resources
         for rtype, resources in other.resources.items():
@@ -756,13 +711,13 @@ class EnvironmentConfig:
             for name, config in resources.items():
                 if name in merged_resources[rtype]:
                     # Merge configs
-                    merged_resources[rtype][name].update(_copy_structure(config))
+                    merged_resources[rtype][name].update(copy_structure(config))
                 else:
-                    merged_resources[rtype][name] = _copy_structure(config)
+                    merged_resources[rtype][name] = copy_structure(config)
 
         # Merge settings
-        merged_settings: dict[str, Any] = _copy_structure(self.settings)
-        merged_settings.update(_copy_structure(other.settings))
+        merged_settings: dict[str, Any] = copy_structure(self.settings)
+        merged_settings.update(copy_structure(other.settings))
 
         return EnvironmentConfig(
             name=other.name,

@@ -23,6 +23,10 @@
           "site": "testing.md"
         },
         {
+          "package": "guides/copying.md",
+          "site": "copying.md"
+        },
+        {
           "package": "guides/dotted-paths.md",
           "site": "dotted-paths.md"
         },

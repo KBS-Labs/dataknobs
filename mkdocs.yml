@@ -76,6 +76,7 @@ nav:
       - packages/common/sync-bridge.md
       - packages/common/structured-config.md
       - packages/common/serialization.md
+      - packages/common/copying.md
       - packages/common/plugin-registry.md
       - packages/common/packs.md
       - packages/common/testing.md
