@@ -7,6 +7,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Added
+
+- **`WizardStateSnapshot` carries the current stage's configuration, and
+  converts to the state a tool is handed.** The snapshot gains
+  `stage_metadata` — the declared config of `current_stage`: prompt, schema,
+  `can_skip`, and whatever else the stage declares — and a
+  `to_tool_view()` method returning the `ToolWizardState` a
+  `ContextAwareTool` receives.
+
+  The two go together. `ToolWizardState` has five fields and `stage_metadata`
+  was the only one with no snapshot counterpart, so a conversion written
+  before this could not have populated it: every tool handed a converted
+  snapshot would have seen an empty dict, with nothing to say the value had
+  been dropped rather than genuinely absent.
+
+  **Only the live constructor supplies the new field.** Stage metadata is not
+  written into the persisted `fsm_state`, so `get_state_snapshot()` reads it
+  from the FSM that owns the stage — the subflow's, inside a push — while
+  `snapshot_from_metadata()` has nothing to read and reports `{}`. That is the
+  same answer, for the same reason, that
+  `ToolWizardState.from_manager_metadata()` already gives. `stage_definitions`
+  is not a substitute: it is the *main* flow's declarations, so inside a push
+  it describes a different stage than `current_stage` does, and it is optional
+  besides.
+
+  The conversion **copies** its payloads. A *published* `ToolWizardState`
+  holds `collected_data` by reference on purpose — that is the live channel,
+  and a tool's writes are meant to land in wizard state. A snapshot is not
+  that channel, so writes to a converted view go nowhere and the copy makes
+  that structural rather than a matter of documentation.
+
+  **`to_dict()` gains a key.** The change is otherwise additive — the field is
+  defaulted and appended, and `from_dict()` tolerates its absence, so
+  snapshots serialised by an earlier version still load — but a consumer
+  asserting an exact key set on a serialised snapshot will see one more.
+
 ## v0.12.0 - 2026-08-26
 
 ### Changed

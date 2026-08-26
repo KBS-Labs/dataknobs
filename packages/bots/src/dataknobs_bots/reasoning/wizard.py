@@ -4900,10 +4900,11 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
 
         Inside a pushed subflow the result mixes two frames of reference on
         purpose.  The stage-derived fields -- ``current_stage``, ``can_skip``,
-        ``can_go_back``, ``suggestions`` -- describe the **subflow** stage the
-        user is looking at.  Progress does not: a subflow is not a step of the
-        outer flow, so ``stage_index``, ``total_stages`` and ``stages`` stay on
-        the main flow and report the parent stage that pushed the subflow.
+        ``can_go_back``, ``suggestions``, ``stage_metadata`` -- describe the
+        **subflow** stage the user is looking at.  Progress does not: a subflow
+        is not a step of the outer flow, so ``stage_index``, ``total_stages``
+        and ``stages`` stay on the main flow and report the parent stage that
+        pushed the subflow.
 
         Args:
             manager: ConversationManager instance
@@ -4977,6 +4978,19 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
                 stage,
             ),
             stages=self._response.build_stages_roadmap(wizard_state),
+            # ``stage``, resolved above from the stage name the *state*
+            # reports -- the same dict ``suggestions`` is rendered
+            # against, and the subflow's inside a push.
+            # ``active_fsm.current_metadata`` answers the same today, but
+            # only because it reads the FSM's *per-turn* ``current_stage``
+            # and ``_fsm_for_state`` has already synced it: asked of an
+            # instance that has not run a turn it reports the **start**
+            # stage instead.  Sourcing a snapshot from a per-turn
+            # attribute is the coupling this method avoids everywhere
+            # else, so it is avoided here too.
+            # Copied: ``stage_metadata_for`` documents that it hands back
+            # the FSM's live stage dict, and this object is read-only.
+            stage_metadata=dict(stage),
         )
 
     @staticmethod
@@ -4994,6 +5008,11 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
         the metadata, which is subflow-aware.  ``stage_definitions`` is the
         fallback for metadata written before those fields existed, or built
         by hand from ``fsm_state`` alone.
+
+        ``stage_metadata`` is the one field this route cannot supply: the
+        stage's declared configuration is not persisted into ``fsm_state``,
+        so the result always carries ``{}`` there.  ``get_state_snapshot``
+        is the constructor that has it.
 
         Args:
             metadata: Conversation manager metadata dict
@@ -5125,4 +5144,14 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
             can_go_back=normalized["can_go_back"],
             suggestions=normalized["suggestions"],
             stages=stages,
+            # ``stage_metadata`` is deliberately not passed, and this is
+            # the one field where the two constructors of this type do
+            # not agree.  It is not written into ``fsm_state``, so there
+            # is nothing here to read -- the live publisher is its only
+            # holder.  ``stage_definitions`` is not a substitute: it is
+            # the *main* flow's declarations, so inside a push it
+            # describes a different stage than ``current_stage``, and it
+            # is optional besides.  Empty is the honest answer, and the
+            # same one ``ToolWizardState.from_manager_metadata`` gives
+            # for the same reason.
         )

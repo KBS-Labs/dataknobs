@@ -25,6 +25,7 @@ from dataknobs_fsm.observability import (
     ExecutionStats,
     ExecutionTracker,
 )
+from dataknobs_llm.tools.context import ToolWizardState
 
 
 @dataclass
@@ -476,6 +477,17 @@ class WizardStateSnapshot:
             rendered
         stages: Ordered list of **main**-flow stage dicts with name,
             label, and status
+        stage_metadata: The declared configuration of ``current_stage`` --
+            prompt, schema, ``can_skip``, and whatever else the stage
+            declares. **Only the live constructor can supply it.** Stage
+            metadata is not written into the persisted ``fsm_state``, so
+            ``WizardReasoning.snapshot_from_metadata`` has nothing to read
+            and leaves this empty; ``get_state_snapshot`` reads it from
+            the FSM that owns the stage. An empty dict therefore means
+            either "this came off the metadata route" or "the stage
+            declares nothing", and the two are deliberately not
+            distinguished -- the same boundary
+            ``WizardFSM.stage_metadata_for`` documents.
     """
 
     current_stage: str
@@ -499,6 +511,7 @@ class WizardStateSnapshot:
     can_go_back: bool = True
     suggestions: list[str] = field(default_factory=list)
     stages: list[dict[str, str]] = field(default_factory=list)
+    stage_metadata: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         """Convert snapshot to dictionary.
@@ -526,6 +539,7 @@ class WizardStateSnapshot:
             "can_go_back": self.can_go_back,
             "suggestions": self.suggestions,
             "stages": self.stages,
+            "stage_metadata": self.stage_metadata,
         }
 
     @classmethod
@@ -559,6 +573,39 @@ class WizardStateSnapshot:
             can_go_back=data.get("can_go_back", True),
             suggestions=data.get("suggestions", []),
             stages=data.get("stages", []),
+            stage_metadata=data.get("stage_metadata", {}),
+        )
+
+    def to_tool_view(self) -> ToolWizardState:
+        """Convert to the wizard state a ``ContextAwareTool`` is handed.
+
+        ``ToolWizardState`` is the tool-facing projection of wizard
+        state: five fields, every one of which has a counterpart here.
+        The conversion runs in this direction only -- a snapshot carries
+        transitions, task tracking and main-flow progress that the tool
+        view has no room for, so the inverse would have to invent them.
+        A tool that needs those reads the snapshot.
+
+        **The payloads are copies.** A *published* ``ToolWizardState``
+        holds ``collected_data`` by reference on purpose: that is the
+        live channel, and a tool's writes are meant to land in wizard
+        state for the rest of the turn. A snapshot is not that channel --
+        it is already a copy taken at a point in time -- so handing a
+        tool a writable reference into one would promise a write-back
+        that cannot happen. Writes to the returned object go nowhere.
+
+        ``stage_metadata`` is empty when this snapshot came off
+        ``WizardReasoning.snapshot_from_metadata``; see the attribute.
+
+        Returns:
+            ToolWizardState with copied payloads
+        """
+        return ToolWizardState(
+            current_stage=self.current_stage,
+            collected_data=dict(self.data),
+            history=list(self.history),
+            completed=self.completed,
+            stage_metadata=dict(self.stage_metadata),
         )
 
     def get_task(self, task_id: str) -> dict[str, Any] | None:

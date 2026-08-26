@@ -1361,6 +1361,103 @@ class TestWizardStateSnapshot:
         snapshot = WizardStateSnapshot(current_stage="welcome")
         assert snapshot.stages == []
 
+    def test_snapshot_round_trips_stage_metadata(self) -> None:
+        """``to_dict()``/``from_dict()`` preserve the stage metadata.
+
+        Both serialisers enumerate every field by hand, so a field added
+        to the dataclass reaches neither of them for free. Omitting the
+        ``to_dict()`` key drops the metadata; omitting the ``from_dict()``
+        read resets it to ``{}``. Neither raises anywhere -- a consumer
+        persisting a snapshot and reloading it just finds the stage
+        metadata gone. This is the assertion that catches either half.
+        """
+        stage_metadata = {"prompt": "Tell me your name.", "can_skip": True}
+        snapshot = WizardStateSnapshot(
+            current_stage="gather",
+            stage_metadata=stage_metadata,
+        )
+
+        data = snapshot.to_dict()
+        assert data["stage_metadata"] == stage_metadata
+
+        restored = WizardStateSnapshot.from_dict(data)
+        assert restored.stage_metadata == stage_metadata
+
+    def test_snapshot_from_dict_tolerates_absent_stage_metadata(self) -> None:
+        """A dict serialised before the field existed still loads.
+
+        ``from_dict()`` is the reader for persisted snapshots, and
+        snapshots persisted by an earlier version have no
+        ``stage_metadata`` key at all.
+        """
+        restored = WizardStateSnapshot.from_dict({"current_stage": "gather"})
+        assert restored.stage_metadata == {}
+
+
+class TestSnapshotToToolView:
+    """``WizardStateSnapshot.to_tool_view()`` -- the one-way conversion.
+
+    ``ToolWizardState`` is what a ``ContextAwareTool`` is handed;
+    ``WizardStateSnapshot`` is what observability holds. Every field of
+    the former has a counterpart on the latter, so the conversion exists
+    in this direction and not the reverse: a snapshot carries nineteen
+    fields a tool view has no room for.
+    """
+
+    def test_to_tool_view_is_complete(self) -> None:
+        """Every ``ToolWizardState`` field is populated from the snapshot.
+
+        ``stage_metadata`` is the one that makes this worth asserting: it
+        is the sole tool-view field with no snapshot counterpart before
+        this change, so a conversion written against the old dataclass
+        could only have left it ``{}`` -- silently handing every tool an
+        empty dict where the publisher's route supplies a real one.
+        """
+        snapshot = WizardStateSnapshot(
+            current_stage="gather",
+            data={"name": "Alice"},
+            history=["intro", "gather"],
+            completed=False,
+            stage_metadata={"prompt": "Tell me your name."},
+        )
+
+        view = snapshot.to_tool_view()
+
+        assert view.current_stage == "gather"
+        assert view.collected_data == {"name": "Alice"}
+        assert view.history == ["intro", "gather"]
+        assert view.completed is False
+        assert view.stage_metadata == {"prompt": "Tell me your name."}, (
+            "the field the tool view has and the snapshot did not; a "
+            "conversion that predates it can only report {}"
+        )
+
+    def test_to_tool_view_copies_payloads(self) -> None:
+        """The view's mutable payloads are copies, not aliases.
+
+        A *published* ``ToolWizardState`` holds ``collected_data`` by
+        reference on purpose -- that is the live channel, and a tool's
+        writes are meant to land in wizard state. A snapshot is not that
+        channel: it is already a copy taken at a point in time, so
+        handing a tool a writable reference into it would promise a
+        write-back that cannot happen.
+        """
+        snapshot = WizardStateSnapshot(
+            current_stage="gather",
+            data={"name": "Alice"},
+            history=["intro", "gather"],
+            stage_metadata={"prompt": "Tell me your name."},
+        )
+
+        view = snapshot.to_tool_view()
+        view.collected_data["name"] = "Bob"
+        view.history.append("wrap")
+        view.stage_metadata["prompt"] = "changed"
+
+        assert snapshot.data == {"name": "Alice"}
+        assert snapshot.history == ["intro", "gather"]
+        assert snapshot.stage_metadata == {"prompt": "Tell me your name."}
+
 
 class TestConversionUtilities:
     """Tests for conversion utilities between wizard and FSM types."""
