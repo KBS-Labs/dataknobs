@@ -158,7 +158,7 @@ active, so a subflow declaring `extraction_scope: current_message` runs under
 whatever the parent declared, *including while its own stage is current*. The
 block is parsed and stored on the subflow's FSM; it is simply never consulted.
 
-| Level | Live inside a push? | |
+| Level | Live inside a push? | Why |
 |---|---|---|
 | **Stage** — `prompt`, `schema`, `response_template`, `collection_mode`, `extraction_scope`, `auto_advance`, `can_skip`, `skip_default`, `navigation`, and the rest | ✅ | read from the FSM that owns the stage |
 | **Transition** — a subflow guard's `condition` | ✅ | see [When the Guard Is Evaluated](#when-the-guard-is-evaluated-and-what-it-can-see) |
