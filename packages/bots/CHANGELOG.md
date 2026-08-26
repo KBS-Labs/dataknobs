@@ -30,7 +30,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   **Consumers reading the preview's output should expect the three new keys.**
   A caller that treated the result as exactly its rendered keys will see
-  `valid`, `errors` and `warnings` arrive alongside them.
+  `valid`, `errors` and `warnings` arrive alongside them. The keys accompany a
+  render, so the two paths with no config to render — no wizard data, and a
+  `builder_factory` that raises — are unchanged: they still return `{"error":
+  ...}` and carry no verdict, because on those nothing was validated.
+  `validate_config` reports its own failures as `valid: False`, so the two
+  tools' *failure* shapes still differ even though their verdicts no longer can.
 
 - **Config validation now enforces the `$resource` marker rule at every depth,
   so more configs are reported invalid than before.** This is stricter, not a
