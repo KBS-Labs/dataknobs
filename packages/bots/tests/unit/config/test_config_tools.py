@@ -351,9 +351,7 @@ class TestPreviewConfigTool:
 
         assert preview["valid"] is False
         assert preview["config"]["llm"]["$resource"] == "default"
-        parsed = yaml.safe_load(
-            (await tool.execute_with_context(context, format="yaml"))["yaml"]
-        )
+        parsed = yaml.safe_load((await tool.execute_with_context(context, format="yaml"))["yaml"])
         assert parsed["llm"]["$resource"] == "default"
 
     @pytest.mark.asyncio
