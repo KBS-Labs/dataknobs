@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Fixed
+
+- **A config that contains itself is now reported rather than followed round.**
+  YAML anchors build one directly — `a: &x` with `b: *x` under it is a dict
+  that contains itself, and `yaml.safe_load` accepts it without complaint. Both
+  readers of the `$resource` format descended such a tree until the stack ran
+  out. Either now raises `ConfigError` naming where the cycle closed and where
+  that block was entered.
+
+  The cycle guard that already existed did not reach this. It tracks resource
+  *identities*, so it catches a resource whose config references it again —
+  invisible in the authored tree, since those are two different objects naming
+  one resource. A block reaching itself is a cycle in *object* identity with no
+  `$resource` key involved anywhere. Neither detects the other, and a config
+  can carry either.
+
+  Both guards now live on one object that the walk threads through its
+  recursion, rather than as two things to forward independently — a missed
+  forward being silent is the hazard that shape exists to remove. It is a stack
+  and not a visited set: an anchor reused for its ordinary purpose puts one
+  object at two paths without either containing the other, which is legitimate,
+  common, and still resolves. Only what a descent is currently inside can close
+  a cycle.
+
 ### Added
 
 - **`collect_marker_violations()` reports `$resource` marker breaches without

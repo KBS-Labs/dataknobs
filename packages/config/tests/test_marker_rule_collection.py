@@ -13,6 +13,7 @@ pin that the two raising wrappers still raise exactly what they raised.
 from __future__ import annotations
 
 import pytest
+import yaml
 
 from dataknobs_config import MarkerViolation, collect_marker_violations
 from dataknobs_config.environment_aware import (
@@ -192,3 +193,135 @@ class TestTheRaisingWrappersAreUnchanged:
             _validate_orphaned_markers({"$required": True}, path="")
 
         assert "<root>" in str(excinfo.value)
+
+
+class TestAConfigThatContainsItself:
+    """A structural cycle is reported, not followed round.
+
+    YAML anchors build one: ``a: &x`` with ``b: *x`` under it produces a dict
+    that contains itself, and ``yaml.safe_load`` does it without complaint.
+    Both readers of the format descended it until the stack ran out.
+
+    `c7b6a24e` settled the policy for the other cycle a config can carry -- a
+    resource that reaches itself -- and settled it for every entry point at
+    once, because guarding one walk *"left the build to exhaust the stack on
+    the same input, and left the survey certifying that input as sound."*
+    That is this cycle exactly, in the dimension that commit did not cover.
+    """
+
+    @pytest.fixture
+    def env(self) -> EnvironmentConfig:
+        return EnvironmentConfig.from_dict({"name": "test", "resources": {}})
+
+    @pytest.fixture
+    def cyclic_dict(self) -> dict:
+        return yaml.safe_load("bot:\n  llm: &x\n    nested: *x\n")
+
+    @pytest.fixture
+    def cyclic_list(self) -> dict:
+        return yaml.safe_load("tools: &t\n  - *t\n")
+
+    def test_the_collector_reports_a_cyclic_dict(self, cyclic_dict) -> None:
+        with pytest.raises(ConfigError) as excinfo:
+            collect_marker_violations(cyclic_dict)
+
+        message = str(excinfo.value)
+        assert "cycle" in message
+        assert "bot.llm" in message
+
+    def test_the_resolver_reports_a_cyclic_dict(self, cyclic_dict, env) -> None:
+        with pytest.raises(ConfigError) as excinfo:
+            resolve_resource_references(cyclic_dict, env)
+
+        assert "cycle" in str(excinfo.value)
+
+    def test_the_collector_reports_a_cyclic_list(self, cyclic_list) -> None:
+        with pytest.raises(ConfigError) as excinfo:
+            collect_marker_violations(cyclic_list)
+
+        assert "cycle" in str(excinfo.value)
+
+    def test_the_resolver_reports_a_cyclic_list(self, cyclic_list, env) -> None:
+        with pytest.raises(ConfigError) as excinfo:
+            resolve_resource_references(cyclic_list, env)
+
+        assert "cycle" in str(excinfo.value)
+
+    def test_the_message_names_both_ends_of_the_cycle(self, cyclic_dict) -> None:
+        """Where it closed and where that block was entered.
+
+        One path alone locates half of a cycle, and the half it locates is
+        the one the reader can already see.
+        """
+        with pytest.raises(ConfigError) as excinfo:
+            collect_marker_violations(cyclic_dict)
+
+        message = str(excinfo.value)
+        # Quoted, so the entered path is not merely a prefix of the closing one.
+        assert "'bot.llm.nested'" in message
+        assert "'bot.llm'" in message
+
+    def test_a_shared_anchor_that_is_not_a_cycle_still_resolves(self, env) -> None:
+        """The anti-vacuity half, and the one a visited-set would break.
+
+        An anchor reused for its ordinary purpose -- not repeating a block --
+        puts the *same object* at two paths without either containing the
+        other. A guard that refused to re-enter any object it had seen would
+        reject this, so the guard tracks what the descent is currently inside
+        rather than everything it has ever been.
+        """
+        shared = yaml.safe_load("defaults: &d\n  timeout: 5\na: *d\nb: *d\n")
+        assert shared["a"] is shared["b"]
+
+        assert collect_marker_violations(shared) == []
+        assert resolve_resource_references(shared, env) == {
+            "defaults": {"timeout": 5},
+            "a": {"timeout": 5},
+            "b": {"timeout": 5},
+        }
+
+    def test_a_sibling_repeated_at_one_level_is_not_a_cycle(self, env) -> None:
+        """The pop must happen, or the second sibling reads as a repeat."""
+        block = {"timeout": 5}
+        assert collect_marker_violations({"a": block, "b": block}) == []
+
+
+class TestTheResourceCycleStillReportsItself:
+    """The other cycle a config can carry, unchanged.
+
+    Two different things reach themselves in a config tree and they are
+    detected differently: a resource by its identity, a block by object
+    identity. Sharing the descent's bookkeeping must not merge the verdicts.
+    """
+
+    def test_a_resource_that_reaches_itself_names_the_chain(self) -> None:
+        env = EnvironmentConfig.from_dict(
+            {
+                "name": "test",
+                "resources": {"databases": {"a": {"$resource": "a", "type": "databases"}}},
+            }
+        )
+
+        with pytest.raises(ConfigError) as excinfo:
+            resolve_resource_references({"db": {"$resource": "a", "type": "databases"}}, env)
+
+        message = str(excinfo.value)
+        assert "Resource reference cycle" in message
+        assert "databases/a" in message
+
+    def test_a_second_reference_to_one_resource_is_not_a_cycle(self) -> None:
+        """The guard is popped at the splice, so two references are two."""
+        env = EnvironmentConfig.from_dict(
+            {"name": "test", "resources": {"databases": {"main": {"backend": "postgres"}}}}
+        )
+
+        resolved = resolve_resource_references(
+            {
+                "primary": {"$resource": "main", "type": "databases"},
+                "replica": {"$resource": "main", "type": "databases"},
+            },
+            env,
+        )
+
+        assert resolved["primary"] == {"backend": "postgres"}
+        assert resolved["replica"] == {"backend": "postgres"}

@@ -233,6 +233,16 @@ something the reader can find in the file they have open. `message` is the same
 sentence resolution raises, deliberately: one defect described one way, whether
 it surfaces as a lint or as a failed build.
 
+One finding it raises rather than collects: a **structural cycle**. YAML
+anchors build one directly — `a: &x` with `b: *x` under it is a dict that
+contains itself — and both readers of the format used to descend it until the
+stack ran out. Either now raises `ConfigError` naming where the cycle closed
+and where that block was entered. A cycle raises even in a collecting walk for
+the reason a survey raises on one: returning findings for a tree you could not
+finish reading certifies the rest of it as sound. An anchor reused for its
+ordinary purpose — not repeating a block — is not a cycle and still resolves;
+only what a descent is *currently* inside can close one.
+
 !!! note "It is stricter than resolution in exactly one case"
 
     A reference's inline defaults are expanded only once they are known to
@@ -253,7 +263,8 @@ three references to `default` stay distinguishable in a log.
 | Resource missing, policy strict | `ResourceNotFoundError` |
 | Reference malformed — unknown `$` marker, unparseable `$required`, `$requires` that is not a list of names, or a policy marker with no `$resource` | `ConfigError` |
 | Resource found but under-capable for `$requires` | `ConfigError` |
-| A resource reaches itself (`a` → `b` → `a`) | `ConfigError` naming the cycle |
+| A resource reaches itself (`a` → `b` → `a`) | `ConfigError` naming the chain |
+| A block contains itself — a YAML anchor aliased inside its own value | `ConfigError` naming both ends |
 
 `ConfigBindingResolver.resolve()` raises `ResourceNotFoundError` for a
 missing resource too. That API takes a `(type, name)` pair with no reference
