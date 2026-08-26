@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+## v3.1.0 - 2026-08-26
+
 ### Added
 
 - **An unknown-key policy on `StructuredConfig`.** `from_dict` projects a

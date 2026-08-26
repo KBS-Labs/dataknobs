@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+## v0.12.0 - 2026-08-26
+
 ### Changed
 
 - **`preview_config` now reports whether the config it renders is valid.** The

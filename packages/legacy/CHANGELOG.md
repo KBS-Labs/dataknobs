@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+## v0.2.1 - 2026-08-26
+
 ### Fixed
 
 - **`from dataknobs.<pkg>.<module> import Name` now resolves — the import form

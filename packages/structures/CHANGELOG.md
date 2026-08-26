@@ -11,12 +11,14 @@ package, which for most of them was nothing but the version number.
 
 ## Unreleased
 
+## v1.0.17 - 2026-08-26
+
 ### Changed
 
 - This package's tests joined the linted set at a ceiling of zero, alongside
   the sources that graduated in v1.0.16. No source change and no
-  consumer-visible change, so this rides along with the next release that has
-  one.
+  consumer-visible change: this is a maintenance release, cut so the workspace
+  carries one version set rather than because anything here changed.
 
 ## v1.0.16 - 2026-08-11
 

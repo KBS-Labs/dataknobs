@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+## v2.2.0 - 2026-08-26
+
 ### Changed
 
 - **`format_heading_for_display` now raises `ValueError` when `headings` and

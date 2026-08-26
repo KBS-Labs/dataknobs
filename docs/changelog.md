@@ -5,6 +5,206 @@ All notable changes to Dataknobs packages will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Release - 2026-08-26
+
+Three changes run across the workspace in this release.
+
+**A config key nothing recognises is an error rather than a silent default.**
+`dataknobs-common` gives `StructuredConfig` an unknown-key policy —
+`_UNKNOWN_KEYS`, `_INPUT_KEYS` and `accepts()` — defaulting to the lenient
+reading so no existing config class changes, and `dataknobs-data` opts in once
+on `DatabaseConfig`, so all fourteen of its backends — seven sync, seven async
+— inherit it. The default was wrong specifically for that family: every
+connection field has a working default, so a config built from misspelled keys
+did not fail, it succeeded against the wrong store —
+`create(backend="postgres", hosst="db.internal")` connected to `localhost` and
+logged nothing. Turning the key into an error is what made the documentation
+readable as code, and it turned out to be wrong in sixteen places: pool sizes
+under SQLAlchemy's spelling, `hosts` passed to the sync Elasticsearch backend,
+`username`/`password` where the field is `basic_auth`, `connection` for
+`connection_string`, and two file-backend options that have never existed. The
+same sweep reached `dataknobs-llm`'s conversation-storage examples, a memory
+bank in `dataknobs-bots` sending a table name to backends that have no table,
+and `dataknobs-fsm`'s `InMemoryStorage`, which set two connection parameters
+the memory backend has no fields for and documented itself as applying them.
+Errors name the offending key, suggest the nearest accepted spelling, and list
+the accepted set; routing keys (`backend`, `factory`, `name`, `type`) still
+pass through.
+
+**A component that cannot do its job no longer reports success.** The shape
+recurs in every package and is the same each time: a failure absorbed one frame
+below the guard that would have reported it, arriving at the caller as an
+ordinary empty answer. A `DatabaseSource` whose database was misconfigured
+returned "no matching records" on every call, indefinitely, while reading as
+healthy; a `ClusterTopicIndex` that could not embed returned an empty topic
+list, which grounded retrieval reads as a vocabulary gap, so a broken embedder
+silently rerouted the turn to a different strategy and named the wrong cause.
+Both now raise, and the retrieval loop's existing per-source guard — which had
+no test and was unreachable through either — drops the source and logs what
+actually happened. In `dataknobs-bots` a wizard tool wrote into a throwaway
+dict and reported success, a subflow that failed discarded the work and
+reported success, `preview_config` rendered a config `build()` would refuse and
+said nothing about it, and `skip_default` replaced a value the user had set
+five turns ago with no log line. In `dataknobs-common`, `safe_eval` decided
+whether to prepend `return` with a substring test, so `return_code == 0`
+evaluated `False` forever with `success=True` and `error=None` — a wizard
+transition guarded by one never fired, and nothing logged anything.
+
+**The `$resource` marker rule is a callable, applied at every depth.**
+`dataknobs-config` exports `collect_marker_violations()`, which walks any
+config tree and reports each breach without needing an environment and without
+raising — the rule, where only `RESOURCE_MARKER_KEYS`, the vocabulary, had been
+exported before. Offering the set alone is what left every caller to write its
+own rule around it, and `dataknobs-bots` had done exactly that: a transcription
+of one clause, applied to one mapping, which agreed with the resolver about a
+reference handed to it directly and disagreed about everything else — a nested
+reference, a misspelled `$resource` selector, and any section no schema is
+registered for. The transcription is gone and both packages now share one
+definition, so a marker defect is described one way whether it surfaces as a
+lint or as a failed build. More configs are reported invalid than before;
+everything newly reported already failed at resolution, in whichever deployment
+lacked the resource, instead of at config-lint time. `dataknobs-config` also
+now reports a config that contains itself — a YAML anchor builds one directly,
+and both readers of the format descended it until the stack ran out.
+
+### dataknobs-common [3.1.0]
+
+#### Added
+- an unknown-key policy on `StructuredConfig`: `_UNKNOWN_KEYS` (`"ignore"` by default, so no existing class changes), `_INPUT_KEYS` for input spellings `_normalize_dict` consumes that are not themselves fields, and `accepts(key)` — the question a caller composing a config for a statically-unknown target has to be able to ask. Under `"raise"` an unrecognised key names itself, offers the nearest accepted spelling, and lists the accepted set
+- `safe_eval_validate(expression, *, restrict_builtins=True)` — the static pass `safe_eval` runs before evaluating anything, as a callable. `safe_eval` now calls it, so there is one implementation and the two answers cannot drift. A refusal and a runtime failure both arrive as `success=False` with an unstructured `error`, so a caller holding only an `ExpressionResult` cannot tell "this will never run" from "not satisfied yet" — which for a config-authored wizard condition means the stage never fires and nothing reports why. It never raises, and `None` is not a safety review
+- class-definition validation for the class-level policy attributes. `_UNKNOWN_KEYS = "Raise"` compared unequal to `"raise"` and selected the lenient policy in a class that read as opted in to the strict one; `str` is iterable, so `_INPUT_KEYS = "connection_string"` unioned in ten single characters and still rejected the alias it was written to declare, and `_SENSITIVE_FIELDS` failed the same way while turning a field-name test into a substring match; omitting `ClassVar` makes the dataclass decorator treat any of them as a field. Checked at runtime rather than left to the type checker, because the subclasses that matter are consumers' and a library cannot assume its consumers run mypy
+
+#### Fixed
+- `safe_eval`'s `return` prefix is a token test rather than `startswith("return")`, so `returned_value > 1` and `return_code == 0` are evaluated as expressions instead of being left unwrapped, returning `None`, and coercing to `False` with `success=True` and `error=None`
+
+#### Changed
+- `safe_eval` and `safe_eval_value` accept any `Mapping` as `scope`, so a caller holding a read-only mapping no longer has to copy it to satisfy the annotation
+
+### dataknobs-config [0.7.0]
+
+#### Added
+- `collect_marker_violations()` and `MarkerViolation` — the `$resource` marker rule as a callable, returning a dotted path and the resolver's own sentence per breach, for a validator or config-authoring tool that has no environment and no permission to raise. It descends into a reference's inline defaults unconditionally where resolution walks only those an environment does not override, deliberately: a malformed reference inside an overridden default goes live the day that override is removed, and a validator's subject is the authored config rather than one deployment of it
+
+#### Fixed
+- a config that contains itself is reported rather than followed round. Both readers of the `$resource` format descended a self-containing tree — which `yaml.safe_load` accepts without complaint — until the stack ran out. The existing cycle guard could not reach it: it tracks resource *identities*, and a block reaching itself is a cycle in object identity with no `$resource` key involved. Both guards now live on one object threaded through the recursion, and it is a stack rather than a visited set, so an anchor reused for its ordinary purpose still resolves
+
+#### Documented
+- the configuration guides teach `StructuredConfigConsumer` rather than `ConfigurableBase`. The deprecated base is soft-deprecated by design and raises no runtime warning, so documentation was the only channel through which a new adopter could learn it is going away — and the guides were the channel recommending it
+
+### dataknobs-structures [1.0.17]
+
+#### Changed
+- this package's tests joined the linted set at a ceiling of zero, alongside the sources that graduated in v1.0.16. No source change and no consumer-visible change; released here so the workspace carries one version set
+
+### dataknobs-utils [2.0.2]
+
+#### Fixed
+- an emoji immediately after the Status Counts block was dropped from the loaded data. `EmojiData._load_emoji_test` verified the file's status tallies with a nested `for line in f` over the *same* handle as the outer loop, so the line that terminated the inner loop had already been consumed when the outer loop resumed and was never classified. In the shipped Unicode 15.0 data that line is blank and nothing was lost, which is what made it worth fixing rather than leaving: whether an emoji went missing depended on a property of the input file that nothing stated and nothing checked
+
+### dataknobs-xization [2.2.0]
+
+#### Changed
+- `format_heading_for_display` raises `ValueError` when `headings` and `heading_levels` differ in length instead of silently dropping the excess. The function is public and both lists come from the caller, so a mismatch was a caller error that produced quietly truncated output. Callers passing equal-length lists — every caller inside this package — are unaffected. The same tightening covers the two internal heading walks, where the two lists are built together and a mismatch would mean a construction bug rather than bad input
+
+### dataknobs-data [0.10.0]
+
+#### Changed
+- **Breaking:** every database backend config rejects a key it does not accept, rather than discarding it. Set once on `DatabaseConfig`, so all fourteen backends inherit it and so does a backend added later. The "synthesized default values" warning could not cover this — it fires when *recognized* explicit keys mix with defaults, and an unrecognized key enters neither bucket, so the config read as "nothing was configured" and the case most in need of the warning was the one it structurally could not see. A call that now raises was already not doing what it read as doing; ask `CONFIG_CLS.accepts(key)` to supply a key only some backends have
+- the backend registry's `config_options` metadata named keys the config classes reject. It is the programmatic equivalent of a documented sample — read by a consumer building a config form — and carried all three defects found in the markdown: a field belonging to the sibling backend, another library's vocabulary, and a field that never existed
+
+#### Fixed
+- **Breaking:** a `DatabaseSource` raises rather than reporting a store it cannot reach as a store with nothing in it. Both of its searches were wrapped and logged, so a misconfigured database answered "no matching records" on every call while reading as healthy. The wrapping added no resilience the caller did not already have — the grounded retrieval loop guards each source, logs one that raises, and drops it for that turn — and absorbing the failure one frame below meant that guard never fired. A partly-failed search now raises rather than returning the part that worked
+- **Breaking:** a `ClusterTopicIndex` raises rather than reporting an index it cannot run as one that found no topics. It landed harder than its sibling because an empty topic index is read as a vocabulary gap, so the turn fell back to plain text retrieval and named the wrong cause. Embedding seed chunks keeps its per-chunk tolerance, now reported at WARNING rather than DEBUG, but a pool where every chunk failed raises
+- `SensorDataGenerator` draws from its own stream, so a seed means what it says. It seeded the module global and then drew from it across every later call, making its output a property of the whole process: anything else drawing in between shifted the sequence, and constructing one silently reseeded every other consumer. Measured across 3,000 constructions with an unrelated draw interleaved, six distinct outcomes before and one after. `seed=0` also now seeds — the guard was `if seed:`, which read zero as "no seed given"
+- sixteen documented factory calls named a field no backend has, invisible while unknown keys were dropped: the sample ran, and what it configured was the default. The two forms most consumers copy broke rather than merely misconfigured — a bot's `conversation_storage:` block reaches the factory with every key it carries, so the documented production Postgres sample raised at startup for anyone who copied it. A new test checks every documented factory call, backend constructor and YAML block against the real config class via `accepts()`
+- `Not` is exported from `dataknobs_data.validation`. Of the three logical combinators the only one that negates was the only one unreachable by the path the other two use; a test now derives the expected export set from the constraints module
+
+### dataknobs-llm [0.8.0]
+
+#### Added
+- `ToolExecutionContext.wizard_data()` — a supported way for a tool to reach wizard data. The only route before was guarded by a check the accessors around it consistently collapsed into an empty dict, so a tool run outside a wizard appended to a fresh throwaway, saw its own write, and reported success. The new accessor returns `None` there, deliberately, so the condition is one a tool can detect and report
+- `ConversationState.live_wizard_state` — a per-turn channel a reasoning strategy publishes live wizard state on, preferred by `ToolExecutionContext.from_manager` over rebuilding from persisted metadata. It sits on `ConversationState` rather than inside `metadata` because wizard data is deep-copied on restore precisely so live state and persisted metadata cannot share a reference
+
+#### Deprecated
+- `WizardStateSnapshot` is now `ToolWizardState`; `dataknobs_bots` exports an unrelated and much larger dataclass under the same name. The old name remains an alias in `dataknobs_llm.tools` and `dataknobs_llm.tools.context` for one minor version and warns when read from either, while type checkers still resolve it to the class
+
+#### Fixed
+- extra arguments to `LLMProviderFactory.create()` reach the provider. The signature has taken `**kwargs` and the docstring has described them as passed to the constructor since before the provider registry existed, and neither branch ever passed them on
+- `create_llm_provider()` returns the one provider the call can produce, being overloaded on `is_async`; `LLMProviderFactory.create()` keeps returning the union, because `is_async` is a constructor flag there and the method must stay callable through the `Config` factory protocol
+- the factory's sync arm names the class it actually returns. It declared `AsyncLLMProvider | SyncLLMProvider`, but `SyncProviderAdapter` wraps an async provider rather than subclassing `LLMProvider` and no `SyncLLMProvider` subclass exists in tree, so that arm was uninhabited and held down by a `# type: ignore`
+- the provider registry produces providers, not provider classes. `PluginRegistry[T]`'s parameter is what a registration *produces*, and the union this leaked had made `provider.complete(...)` statically ambiguous between a coroutine and an `LLMResponse` wherever a sync provider was requested
+- seven documented conversation-storage examples named database config keys the backends do not have; the field is `path` in every case. Each built a database at the config default rather than where it named — the SQLite ones at `:memory:`, so an example about persisting conversations to a file persisted nothing
+
+### dataknobs-bots [0.12.0]
+
+#### Changed
+- **Breaking:** the five reasoning-strategy configs are keyword-only. Inheriting `greeting_template` from the new `ReasoningConfig` base forces it: a base field is declared ahead of every subclass field, so a defaulted one would sit in front of the wizard's required `wizard_config`. Four of the five would have raised on a call written against the old order; the wizard would not, because its second positional was `greeting_template` and became `config_base_path`, both `str | None` — so `WizardReasoningConfig(cfg, "Hello!")` would have constructed, with no greeting and a nonsense base path. Migration is mechanical: name every argument
+- `greeting_template` is declared once for the reasoning-strategy family and read from one place. `ReasoningStrategy` has always documented it as universal, but each of the five configs declared it and each of the five strategies copied it onto itself, and a strategy that skipped either half was not reported — a config class that omits a key drops it rather than rejecting it. `ReasoningConfig` is exported for a consumer's own strategy config
+- wizard bots honour the strategy-level `greeting_template` instead of discarding it. A documented limitation lifted rather than a bug fixed: the old behaviour was stated in the configuration guide, and nothing can have depended on it, but a bot that sets the field today will start greeting with it
+- `preview_config` reports whether the config it renders is valid, returning `valid`, `errors` and `warnings` beside the render in all three formats and using the same keys `validate_config` returns. It reports **and** renders — a config with errors is still the thing being built. Consumers reading the output should expect the three new keys; the two paths with no config to render still return `{"error": ...}` and carry no verdict
+- config validation enforces the `$resource` marker rule at every depth, so more configs are reported invalid than before. `marker_violations_result()` is exported for a consumer composing a validator pipeline of its own
+- a `ConfigValidator` passed to `ValidateConfigTool` is additional rather than a replacement, so a consumer supplying both gets strictly more errors and never fewer. The failure directions are not symmetric: an extra error stops an author, a missing one misleads them. `ValidationResult.merge_unique` is added for composing validators that cover overlapping ground; `merge` still concatenates
+- a `WizardFSM` stage accessor returns the type it declares. Stage metadata is authored config carried through uncoerced, so `can_skip: "no"` gave a truthy string from a method declared `-> bool` and `tools:` written as a bare string iterated character by character. The seven typed accessors share one read that substitutes the documented default and warns once per stage and field
+- `WizardFSM` no longer reports a matched subflow transition as "none matched" — such a transition compiles to a self-loop arc, so a match leaves the FSM where it started and was indistinguishable in the log from a failed condition. A declined subflow push now logs the guard's decision on both branches, naming the conditions asked; a decline previously left no trace at all
+- a condition that fails on a turn's data is logged at DEBUG rather than WARNING. `data['name']` before `name` has been captured is the ordinary state of a guard whose input has not arrived, and warning on it every turn for a correct config is how a log teaches its reader to skip it. WARNING is reserved for a condition the engine refuses
+- loading a config with an ill-typed text field no longer raises: two of the loader's warning heuristics searched an authored value with a regex directly, so a non-string prompt or condition took the whole load down from inside a check that exists only to advise
+- `WizardConfigBuilder.stage()` no longer declares a `skip_extraction` keyword, which is a per-turn state flag rather than a stage field; a registry-sync test now asserts every explicit `stage()` keyword names a field the loader reads
+- the three places a bot builds an LLM provider from config call `create_llm_provider()` rather than the factory constructor, so the site can say which provider comes back
+
+#### Added
+- `greeting_template`, a wizard stage field for an opening line the stage says once — on the turn the stage first speaks, then stepped over, whatever the stage's mode. A structured stage had no way to open with fixed text: its `response_template` is deliberately re-rendered every turn, and the only escape was `mode: conversation`, which turns extraction off. Greeting a stage does not consume the render its `confirm_first_render` is waiting for
+- the loader reports two config surfaces that parse, validate and read as correct while doing nothing: a `response_template` a `greeting_template` has made unreachable, a pushed subflow's `settings:` block, and `auto_advance: true` on an end stage. Warnings rather than refusals, which is this validator's contract for all eight of its checks — a subflow's `settings:` is not wrong, it is unread
+- wizard transition conditions are checked when the wizard is loaded, so a condition the expression engine will refuse is named once with its stage and target. Nothing said so before evaluation, and by then a refusal is indistinguishable from a condition merely unsatisfied, because every wizard condition site passes `default=False` — load time is the last moment the report reaches the author
+- `DynaBotConfigBuilder.build_unvalidated()` — the public name for building without validating, for callers that report a `ValidationResult` rather than raise on one; the config-toolkit tools had all been reaching through a private method from outside the class. Pair it with `validate()`
+- `dataknobs_bots.config.injected_dependency()` and `InjectedCallable` — the one line a `from_config` needs to tell a live dependency from config data. Public because a consumer writing a tool with a `requires` entry has the same problem and no way to discover the answer otherwise
+- `ContextAwareTool.missing_arguments()` and `missing_arguments_result()`, both overridable; `WizardState.replace_data()`; and `BotTestHarness.create(custom_functions=...)` with `WizardConfigBuilder.transition(derive=...)`
+
+#### Fixed
+- a subflow's `is_end` stage renders its `response_template`. The stage was entered and left inside one turn, so the pop ran in the same step and the parent's return stage rendered instead. The cost is not the usual missing line: a subflow that can fail ends on a stage whose whole job is to say *nothing was saved, and here is why*, and that refusal was the one message that never appeared — the flow discarded the work and reported success. The template renders before the pop, against the subflow's own data, and a failed render no longer takes the departure with it
+- stage-dependent state resolves against the FSM that owns the stage. `WizardNavigator` holds both the main FSM and the subflow manager and each of its methods picked one by hand; five picked the main FSM, which inside a push does not have the current stage — so a subflow stage declaring `can_skip: true` was told it was required, its own navigation keywords were never found, back landed on the right stage and rendered one with no prompt, and a custom context template told the model a skippable stage was required. Every site now asks `SubflowManager.fsm_for_state()`. **Note:** stage-level keywords replace wizard-level ones per command, as they always have outside a subflow
+- the read-only state snapshot describes the subflow stage it is standing on. A skippable subflow stage reported `can_skip: False` and empty `suggestions`, so a skip button disappeared and quick replies vanished for as long as the subflow was open, while `stage_index` reported `0` — a progress bar that jumps to the start whenever a subflow opens, contradicting the same object's `stages` roadmap. The mixed frame is now documented on the type
+- `snapshot_from_metadata()` reports the same state its instance-method sibling does. `can_skip`, `can_go_back` and `suggestions` were never passed to the constructor at all, so they took the dataclass defaults in every flow — a UI on this path never showed a skip button and never showed a quick reply, subflow or not. `data` and `history` are now copied out of `fsm_state`, as the instance method already copied them; returned by reference, a consumer appending to `snapshot.history` on a type documented read-only silently rewrote persisted state
+- restart inside a subflow leaves the subflow. `restart_cleanup` left the stack loaded, so the wizard reported the main flow's start stage while rendering the subflow stage's prompt and could not recover — restart, the escape hatch of last resort, was what wedged the wizard. It now unwinds through `SubflowManager.unwind_all()`, recording a `subflow_pop` per frame so the transition trail no longer holds a push nothing closes. Task completion and `transient` also survived the reset and no longer do
+- amendments resolve a section against the whole flow and unwind to reach it. Membership is a property of the config rather than of where the user stands; acting on the answer does read the stack, so an amendment whose target is in the main flow while a subflow is open unwinds first, and one naming a stage in some other subflow is declined and logged
+- a subflow guard reads what its own stage prepared. The condition on a `_subflow` transition was evaluated before the stage's pre-transition preparation ran, so a guard reading a key written by `routing_transforms:` or `derive:` fired a turn late, against a message the user wrote in answer to a prompt they never saw
+- `advance()` can push a subflow. The non-conversational API never asked whether one should be pushed while still reaching `should_pop`, so it could be carried out of a subflow it had no way to enter
+- a wizard tool's writes to collected data are no longer discarded, its reads are no longer a turn behind, and a tool on the first turn of a wizard that does not greet gets real state. `ToolExecutionContext` rebuilt wizard state from persisted metadata, which the wizard rewrites when the turn is saved — so a tool wrote where nothing would read it again and reported success, and where a stage declared `tool_result_mapping` the tool was *called* with this turn's values and *read* the previous turn's. `WizardReasoning` now publishes live state for the duration of the turn
+- a flow change mid-turn no longer strands a tool on abandoned data: `WizardState.data` was rebound on a subflow push, pop and restart, and the three sites now refill the dict in place
+- the KB tools report missing wizard state instead of writing into nothing, reaching wizard data through the public accessor
+- `skip_default` no longer has to overwrite a value the user set. It was applied with a bare `dict.update`, so a key the user set five turns ago was replaced as readily as one never touched, with nothing left to say the value had ever been different. A stage declares `skip_default_mode: fill`, or a key states its own mode; `overwrite` remains the default. **One config shape changes meaning:** a key whose value names exactly `value` and `mode` is now read as an annotation
+- a `navigation:` block is type-checked before use, wherever it was written. `enabled: "false"` is a truthy string, so a command the author turned off stayed on; quietest and worst, `keywords: "done"` was iterated into four one-letter keywords, so a user answering `d` triggered a command meant for `done` — nothing raised, nothing logged, and the config read correctly. Both readers now share one implementation, and four things authored as a keyword list share one predicate
+- a stage field left unset is no longer reported as ill-typed; an absent field reaches the shared read as `None`, which is the registry's marker for "not declared" rather than a wrong type
+- `validate_config` and `save_config` reach one verdict. The disagreement was symmetrical and only half of it was the tool's: `SaveConfigTool(portable=False)` — the constructor and `from_config` default — built through the unvalidated path and wrote to disk exactly the config `validate_config` had just refused. Both settings of the flag now validate; `portable` selects the output shape, not whether the config is checked
+- every `ContextAwareTool` answers an omitted required argument rather than raising `TypeError` from the call itself. Nine tools carried that shape, which was also the `[override]` incompatibility the type checker reported at all nine sites
+- a tool handed the dependency it declares now uses it. Five of the six built-in tools with a `requires` entry read only the YAML spelling of the key, so three discarded the live object and rebuilt their own while two put an already-resolved callable through `resolve_callable` and raised. Only `KnowledgeSearchTool` worked, and only because it defines no `from_config`
+- a `database` grounded source works against a real store. It forwarded a `connection` string no backend accepts under any spelling, dropping every key that names a store, then never connected what it built — and a backend that needs connecting raises on every query, which `DatabaseSource` reported as an empty result set. **Breaking** for a config carrying an option no backend accepts and that was previously discarded
+- the successors named by a deprecation are importable from the same place as what they replace: `dataknobs_bots.api` exported four deprecated names and none of the four registry names defined in the same module, so a consumer who read the warning and changed the name got an `ImportError` — the only working code was the deprecated code
+- a `clarification_template` set without a `response_template` renders, and a conversation-mode stage renders it when the turn is streamed rather than only when buffered; the template-selection rule existed in three copies and now exists once. A stage the wizard auto-advances past no longer repeats an opening line it has already delivered
+- a `storage_class` with no `create` names itself, raising `ConfigurationError` carrying the config key and the dotted path instead of a bare `AttributeError`
+- the wizard loader no longer prepends `return` to a condition before handing it to the expression engine, which has done this itself since it was introduced; the loader's copy predated it and carried the same substring-test defect. The expression logged alongside a failed condition is now the one the author wrote
+- an abandoned stream no longer leaks a turn's `turn_data` into the next one — the cleanup ran in turn finalization, which `stream_chat()` deliberately skips when the stream was not fully consumed, and now runs in the `finally` every turn driver executes
+- `ErrorRaisingStrategy` accepts `greeting_template`, so building it from config no longer raises; a registry-driven test now holds every registered strategy to the universal contract, including one a consumer registers
+- `WizardConfigBuilder.add_subflow_network()` produces a subflow the loader can read. Neither direction worked: `to_dict()` emitted a shape `load_from_dict` refuses, and `from_dict()` iterated a documented `subflows:` section as though it were a list. The method had no caller and no test anywhere in the tree
+- a repeated wizard-validation message is emitted once, per duplicated name and per `(stage, target)` pair; both tool-loop deliveries answer "what is pending" the same way; a memory bank no longer sends a table name to a backend that has no table; and `AddBankRecordTool`'s documented constructor arguments are the real ones
+
+#### Documented
+- the subflow guide says which of a subflow's own config is live inside a push — the rule is by level rather than by field, with wizard-level `settings:` the exception, and `navigation` called out because it is the one word appearing at both levels while the levels disagree. The push/pop lifecycle table now names the end stage's render and its order
+- `WizardFSM.stages` documented a stronger guarantee than it delivers: the copy is shallow, so the natural `for name, meta in fsm.stages.items(): meta[...] = ...` edits the running wizard's configuration for the life of the process. Behaviour is unchanged deliberately — a deep copy measures roughly 2500x the shallow one for a guarantee no caller in this package asks for — and two tests pin the boundary
+- the multi-tenancy guides say that the API they document is deprecated. `BotManager` and the `dataknobs_bots.api` singleton helpers warn at runtime, so a sample pasted from either guide raised a `DeprecationWarning` on its first call and neither page mentioned it
+- the built-in tool table is the catalog again. It stopped at twelve rows while the catalog held twenty-one, and the prose above it stated twelve as well, so the nine wizard tools were named in neither document. A subset is the worst shape this error can take: an obviously partial list invites the reader to go and look, while a stated count reads as a closed set and the reader concludes the rest do not exist. A workspace guard now compares the table and every documented count against the registry in both directions, so the next tool registered cannot land unlisted
+- what a custom `storage_class` actually has to provide — three pages listed implementing `ConversationStorage` and supplying `create(config)` as equal requirements when only the second is checked
+- grounded retrieval isolates sources from one another, a guard that was already there, had no test, and was unreachable through the two `dataknobs-data` sources that absorbed their own failures
+
+### dataknobs-fsm [0.4.2]
+
+#### Fixed
+- `InMemoryStorage` no longer injects connection parameters the memory backend has no fields for. It set `max_size=1000` and `enable_indexing=True` on every in-memory history store; `AsyncMemoryDatabase` accepts neither, so both were discarded by the config projection and the store was never bounded or indexed by them — while the class documented itself as applying those defaults, which is what made the gap invisible
+
+### dataknobs-legacy [0.2.1]
+
+#### Fixed
+- `from dataknobs.<pkg>.<module> import Name` resolves — the import form pre-split code actually contains. Each shim re-exported a modular package's submodules by importing them, which binds them as attributes and is enough for `from dataknobs.structures import tree` but not for the dotted form, because Python resolves a dotted module path through `sys.modules` rather than through the parent's attributes
+
 ## Release - 2026-08-19
 
 Three changes run across the workspace in this release.

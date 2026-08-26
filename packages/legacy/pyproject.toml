@@ -1,6 +1,6 @@
 [project]
 name = "dataknobs"
-version = "0.2.0"
+version = "0.2.1"
 description = "Useful implementations of data structures and design patterns for AI knowledge bases. (Legacy package - please use modular packages instead)"
 readme = "README.md"
 authors = [
@@ -8,10 +8,10 @@ authors = [
 ]
 requires-python = ">=3.12"
 dependencies = [
-    "dataknobs-common==3.0.0",
-    "dataknobs-structures==1.0.16",
-    "dataknobs-utils==2.0.1",
-    "dataknobs-xization==2.1.0",
+    "dataknobs-common==3.1.0",
+    "dataknobs-structures==1.0.17",
+    "dataknobs-utils==2.0.2",
+    "dataknobs-xization==2.2.0",
 ]
 
 [tool.uv.sources]
