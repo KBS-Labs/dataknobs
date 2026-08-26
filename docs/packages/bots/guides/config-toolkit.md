@@ -253,7 +253,7 @@ The toolkit uses composition, not subclassing. Consumers provide:
 8. **`set_custom_section()`** — adds domain-specific config sections
 
 ```python
-# Example: EduBot setup
+# Example: a tutoring bot's setup
 from pathlib import Path
 from dataknobs_bots.tools import (
     PreviewConfigTool, SaveConfigTool, ListAvailableToolsTool,
@@ -261,9 +261,9 @@ from dataknobs_bots.tools import (
 )
 
 schema = DynaBotConfigSchema()
-schema.register_extension("educational", edu_schema)
+schema.register_extension("educational", educational_schema)
 
-def edu_builder_factory(wizard_data):
+def tutoring_builder_factory(wizard_data):
     builder = DynaBotConfigBuilder(schema=schema)
     # ... build generic sections ...
     builder.set_custom_section("educational", {
@@ -272,7 +272,7 @@ def edu_builder_factory(wizard_data):
     })
     return builder
 
-preview_tool = PreviewConfigTool(builder_factory=edu_builder_factory)
+preview_tool = PreviewConfigTool(builder_factory=tutoring_builder_factory)
 save_tool = SaveConfigTool(
     draft_manager=manager,
     on_save=register_with_bot_manager,
