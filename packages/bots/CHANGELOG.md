@@ -9,6 +9,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`WizardConfigBuilder.add_subflow_network()` now produces a subflow the
+  loader can read.** Each value under `subflows:` is a whole wizard config --
+  `{name: ..., stages: [...]}` -- which is what `WizardConfigLoader` hands to
+  `load_from_dict` and what the subflow guide documents. The builder collected
+  a bare list of stages, so neither direction worked: `to_dict()`, whose
+  docstring promises loader compatibility, emitted a shape `load_from_dict`
+  refuses with `Wizard config must have 'stages' field`, and `from_dict()`
+  iterated a documented `subflows:` section as though it were a list and got
+  its keys, raising `dictionary update sequence element #0 has length 1`. So a
+  wizard built with the builder could not declare a subflow, and a wizard YAML
+  that declared one could not be read back into the builder -- which
+  `from_file()` is the documented way to do.
+
+  Callers still pass stages alone; the wrapping happens once, on the way in.
+  The `WizardConfig.subflows` field is now typed as the configs it holds. The
+  method had no caller and no test anywhere in the tree, which is the whole
+  explanation for how a public method that round-trips through neither
+  direction survived; the round trip is now pinned in both.
+
 - **A subflow's `is_end` stage now renders its `response_template`.** The
   stage was entered and left inside one turn -- reaching it is what makes the
   subflow poppable -- so the pop ran in the same step and the parent's return
@@ -409,6 +428,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   to advise about a config now skips what it cannot read.
 
 ### Added
+
+- **The loader now says which of a subflow's config is inert.** Two config
+  surfaces parsed, validated and read as correct while doing nothing, with no
+  report at load, at runtime or in a log. Both are now warnings from
+  `WizardConfigLoader`, which loads every subflow through the same entry point
+  the top-level wizard uses.
+
+  **A pushed subflow's `settings:` block is never read.** A wizard's settings
+  are hoisted once, off the top-level flow, into the collaborators built from
+  them -- the extractor holds `extraction_scope`, the navigator the merged
+  navigation config -- and those outlive any push. So a subflow declaring
+  `extraction_scope: current_message` runs under whatever the parent declared,
+  including while its own stage is current. Honouring the block would mean
+  rebuilding that collaborator graph on every push and pop, so the config is
+  answered where it is authored instead: the warning names the keys it found
+  and points at `extraction_scope` and `auto_advance`, which are stage fields
+  and *are* read from the flow a push made active. The same file loaded on its
+  own is a wizard and honours every key, so the warning is about how the config
+  is being used, not about the config -- and a top-level wizard is not warned.
+
+  **`auto_advance: true` on an end stage is never acted on**, in a subflow or
+  out of one. `can_auto_advance` returns `False` for any stage carrying
+  `is_end` before it reaches the schema or the transition conditions; the
+  exclusion is deliberate, since advancing out of a flow that has ended has
+  nowhere to go. `auto_advance: false` on an end stage is not reported: it asks
+  for what already happens.
+
+  Both are warnings and neither refuses the config, which is this validator's
+  contract for all eight of its checks. A subflow's `settings:` is not *wrong*,
+  it is *unread*.
 
 - **`BotTestHarness.create(custom_functions=...)`** threads transition
   functions -- routing transforms, transforms, validators -- into the wizard

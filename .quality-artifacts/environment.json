@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-08-25T17:32:31Z",
+  "timestamp": "2026-08-26T02:28:28Z",
   "python_version": "Python 3.12.12",
   "uv_version": "uv 0.12.5 (Homebrew 2026-08-14 aarch64-apple-darwin)",
   "os": "Darwin",
   "os_version": "24.6.0",
-  "git_branch": "sbk/subflow-end-stage-render",
-  "git_commit": "53fcdd60f913f3a41c1e2f2ed77a80c2ce67a731",
+  "git_branch": "sbk/subflow-inert-fields-warned-at-load",
+  "git_commit": "c04f8ffe025c8f96b9f075d481763315ca755669",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }
