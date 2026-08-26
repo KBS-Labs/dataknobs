@@ -700,6 +700,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Documented
 
+- **The subflow push/pop lifecycle table said nothing about the end stage's
+  render.** Its `Pop` row went straight from "subflow reaches an `is_end` stage"
+  to `result_mapping`, so a reader following the table still had the belief that
+  an end stage is silent -- the one the pre-pop render exists to falsify, and
+  which the subflow guide contradicts at length. The row now names the render
+  and its order.
+
 - **The subflow guide now says which of a subflow's own config is live inside
   a push.** The rule is by level rather than by field: everything a subflow
   declares on a *stage* means the same thing inside a push as it does when the

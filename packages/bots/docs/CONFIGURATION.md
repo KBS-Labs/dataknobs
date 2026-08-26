@@ -2265,7 +2265,7 @@ transitions:
 |------|-------------|
 | **Push** | Parent state saved. `data_mapping` copies fields to subflow. Subflow starts at its `is_start` stage. |
 | **In subflow** | Normal wizard processing (extraction, transitions, response templates). Parent state is frozen. |
-| **Pop** | Subflow reaches an `is_end` stage. `result_mapping` copies fields back to parent. Parent resumes at `return_stage`. |
+| **Pop** | Subflow reaches an `is_end` stage. **Its `response_template` renders first**, against the subflow's own data and before the pop. `result_mapping` then copies fields back to parent. Parent resumes at `return_stage`. |
 | **After pop** | Return stage renders its response. **Waits for user input** before evaluating transitions. |
 
 > **Critical:** After a subflow pops, the return stage does NOT automatically evaluate
