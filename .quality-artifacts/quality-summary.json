@@ -1,5 +1,5 @@
 {
-  "timestamp": "2026-08-26T02:28:28Z",
+  "timestamp": "2026-08-26T02:56:53Z",
   "overall_status": "PASS",
   "run_mode": "pr",
   "environment": "host",
@@ -24,7 +24,7 @@
   "workspace_hashes": {
     "toolchain": "5f0fe9459553efff1fbb0ca11dc37a8b13e58e8d73c02abc90eb6663a15f9d25",
     "workspace_tests": "9128a2d959b19de24296bfdd094348acc54f701212f90ad81ef8d9a534a1e840",
-    "docs": "9507a84416ee12fadce75351429d6187bb2c809aee50a59f6e31a3a3bf3418ae"
+    "docs": "ccda95773530d5bc43f7e62bf9f5061038487978e16c3bbfb07c342d954c6de4"
   },
   "total_seconds": 152,
   "checks": {
@@ -51,14 +51,14 @@
       "exit_code": 0,
       "skipped": false,
       "tool": "validate.sh",
-      "duration_seconds": 28
+      "duration_seconds": 29
     },
     "documentation": {
       "status": "pass",
       "exit_code": 0,
       "skipped": false,
       "tool": "mkdocs",
-      "duration_seconds": 25
+      "duration_seconds": 24
     },
     "documentation_versions": {
       "status": "pass",
@@ -72,7 +72,7 @@
       "exit_code": 0,
       "skipped": false,
       "tool": "docs-mirror-check.py",
-      "duration_seconds": 0
+      "duration_seconds": 1
     },
     "unit_tests": {
       "status": "pass",
