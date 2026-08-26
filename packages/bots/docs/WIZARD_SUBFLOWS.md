@@ -10,6 +10,7 @@ Reusable, nestable wizard flows that can be invoked from within a parent wizard.
 - [Configuration](#configuration)
   - [Transition Syntax](#transition-syntax)
   - [Subflow Block Fields](#subflow-block-fields)
+  - [Which Subflow Config Is Live Inside a Push](#which-subflow-config-is-live-inside-a-push)
   - [When the Guard Is Evaluated, and What It Can See](#when-the-guard-is-evaluated-and-what-it-can-see)
   - [Navigation Inside a Pushed Subflow](#navigation-inside-a-pushed-subflow)
 - [Data Flow](#data-flow)
@@ -139,6 +140,57 @@ When the condition evaluates to true, the wizard pushes the `kb_acquisition` sub
 | `return_stage` | `str` | No | Stage to transition to when the subflow completes. Defaults to the stage that pushed the subflow. |
 | `data_mapping` | `dict[str, str]` | No | Maps parent field names to subflow field names (parent -> child). |
 | `result_mapping` | `dict[str, str]` | No | Maps subflow field names back to parent field names (child -> parent). |
+
+### Which Subflow Config Is Live Inside a Push
+
+A pushed subflow keeps its own FSM, and every read of the stage in play goes
+to whichever FSM owns that stage. So **everything a subflow declares at the
+stage level means the same thing inside a push as it does when the same file
+is loaded as a wizard of its own.** The fields travel with the stage; there is
+no separate subflow-flavoured path reading them.
+
+**A subflow's wizard-level `settings:` block is the exception, and it is
+inert.** Settings are read once, off the top-level flow, when the strategy is
+built — the extractor is constructed with that flow's `extraction_scope`, the
+navigator with that flow's `navigation` block — and those collaborators outlive
+every push and pop. Nothing re-reads `settings` from the flow a push made
+active, so a subflow declaring `extraction_scope: current_message` runs under
+whatever the parent declared, *including while its own stage is current*. The
+block is parsed and stored on the subflow's FSM; it is simply never consulted.
+
+| Level | Live inside a push? | |
+|---|---|---|
+| **Stage** — `prompt`, `schema`, `response_template`, `collection_mode`, `extraction_scope`, `auto_advance`, `can_skip`, `skip_default`, `navigation`, and the rest | ✅ | read from the FSM that owns the stage |
+| **Transition** — a subflow guard's `condition` | ✅ | see [When the Guard Is Evaluated](#when-the-guard-is-evaluated-and-what-it-can-see) |
+| **Wizard** — every key of `settings:` | ❌ | hoisted once off the top-level flow; **reported at load** |
+
+`navigation` is the one word that appears at both levels, and the levels
+disagree. A subflow **stage** carrying its own `navigation:` block is live, as
+[Navigation Inside a Pushed Subflow](#navigation-inside-a-pushed-subflow)
+describes. The same block written under a subflow's `settings:` is not.
+
+**Say it per stage instead.** Two of the settings have stage-level
+counterparts that *are* read from the active flow — `extraction_scope` and
+`auto_advance` — and a stage's own `extraction_scope` is preferred over the
+hoisted wizard-level one:
+
+```yaml
+# In a subflow definition. Live, because it is on the stage.
+stages:
+  - name: gather
+    extraction_scope: current_message
+```
+
+The loader does not leave this to be discovered at runtime: loading a subflow
+that declares `settings:` logs a warning naming the keys it found. It is a
+warning and not a refusal, because the block is not *wrong* — the same file
+loaded directly as a wizard honours every key of it. It is unread only here.
+
+One nearby field is inert for a reason that has nothing to do with subflows.
+`auto_advance: true` on an `is_end` stage does nothing whether the stage is in
+a subflow or not, because end stages are excluded from the auto-advance loop;
+see [What the End Stage Says](#what-the-end-stage-says). It is reported at load
+too, and for that reason the report is not limited to subflows.
 
 ### When the Guard Is Evaluated, and What It Can See
 

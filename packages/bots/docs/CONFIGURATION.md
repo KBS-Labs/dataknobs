@@ -2273,6 +2273,14 @@ transitions:
 > This means every subflow pop requires at least one user turn before the parent stage can
 > advance — including triggering a second subflow.
 
+**"Normal wizard processing" is per stage, not per wizard.** Everything a
+subflow declares on a *stage* — schema, templates, `can_skip`, `navigation`,
+`extraction_scope` — is live inside the push. A subflow's own wizard-level
+`settings:` block is not: settings are read once off the top-level flow when
+the strategy is built, so a subflow's copy is never consulted and the loader
+warns when it finds one. See
+[Which Subflow Config Is Live Inside a Push](wizard-subflows.md#which-subflow-config-is-live-inside-a-push).
+
 **Sequential subflows** — when multiple subflows can fire from the same stage (e.g., quiz
 config and KB setup both triggered from `configure_options`), they execute one at a time:
 
