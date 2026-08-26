@@ -9,10 +9,10 @@ resolution-markers = [
     "python_full_version == '3.14.*' and sys_platform == 'emscripten'",
     "python_full_version == '3.14.*' and sys_platform != 'emscripten' and sys_platform != 'win32'",
     "python_full_version == '3.13.*' and sys_platform == 'win32'",
-    "python_full_version < '3.13' and sys_platform == 'win32'",
     "python_full_version == '3.13.*' and sys_platform == 'emscripten'",
-    "python_full_version < '3.13' and sys_platform == 'emscripten'",
     "python_full_version == '3.13.*' and sys_platform != 'emscripten' and sys_platform != 'win32'",
+    "python_full_version < '3.13' and sys_platform == 'win32'",
+    "python_full_version < '3.13' and sys_platform == 'emscripten'",
     "python_full_version < '3.13' and sys_platform != 'emscripten' and sys_platform != 'win32'",
 ]
 
@@ -1302,7 +1302,7 @@ wheels = [
 
 [[package]]
 name = "dataknobs"
-version = "0.2.0"
+version = "0.2.1"
 source = { editable = "packages/legacy" }
 dependencies = [
     { name = "dataknobs-common" },
@@ -1321,7 +1321,7 @@ requires-dist = [
 
 [[package]]
 name = "dataknobs-bots"
-version = "0.11.0"
+version = "0.12.0"
 source = { editable = "packages/bots" }
 dependencies = [
     { name = "dataknobs-common" },
@@ -1425,7 +1425,7 @@ dev = [
 
 [[package]]
 name = "dataknobs-common"
-version = "3.0.0"
+version = "3.1.0"
 source = { editable = "packages/common" }
 
 [package.optional-dependencies]
@@ -1487,7 +1487,7 @@ dev = [
 
 [[package]]
 name = "dataknobs-config"
-version = "0.6.0"
+version = "0.7.0"
 source = { editable = "packages/config" }
 dependencies = [
     { name = "dataknobs-common" },
@@ -1519,7 +1519,7 @@ provides-extras = ["dev"]
 
 [[package]]
 name = "dataknobs-data"
-version = "0.9.0"
+version = "0.10.0"
 source = { editable = "packages/data" }
 dependencies = [
     { name = "aiofiles" },
@@ -1663,7 +1663,7 @@ dev = [
 
 [[package]]
 name = "dataknobs-fsm"
-version = "0.4.1"
+version = "0.4.2"
 source = { editable = "packages/fsm" }
 dependencies = [
     { name = "aiofiles" },
@@ -1786,7 +1786,7 @@ dev = [
 
 [[package]]
 name = "dataknobs-llm"
-version = "0.7.1"
+version = "0.8.0"
 source = { editable = "packages/llm" }
 dependencies = [
     { name = "dataknobs-common" },
@@ -1876,7 +1876,7 @@ dev = [
 
 [[package]]
 name = "dataknobs-structures"
-version = "1.0.16"
+version = "1.0.17"
 source = { editable = "packages/structures" }
 dependencies = [
     { name = "dataknobs-common" },
@@ -1895,7 +1895,7 @@ requires-dist = [
 
 [[package]]
 name = "dataknobs-utils"
-version = "2.0.1"
+version = "2.0.2"
 source = { editable = "packages/utils" }
 dependencies = [
     { name = "beautifulsoup4" },
@@ -2029,7 +2029,7 @@ dev = [
 
 [[package]]
 name = "dataknobs-xization"
-version = "2.1.0"
+version = "2.2.0"
 source = { editable = "packages/xization" }
 dependencies = [
     { name = "beautifulsoup4" },

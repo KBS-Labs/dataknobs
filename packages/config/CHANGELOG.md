@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+## v0.7.0 - 2026-08-26
+
 ### Fixed
 
 - **A config that contains itself is now reported rather than followed round.**

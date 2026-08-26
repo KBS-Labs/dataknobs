@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+## v2.2.0 - 2026-08-26
+
+### Changed
+
+- **`format_heading_for_display` now raises `ValueError` when `headings` and
+  `heading_levels` differ in length, instead of silently dropping the excess.**
+  The function is public (`dataknobs_xization.markdown`) and both lists come
+  from the caller, so a mismatch was a caller error that produced quietly
+  truncated output rather than a complaint. Callers passing equal-length lists —
+  every caller inside this package — are unaffected. The same tightening was
+  applied to the two internal heading walks in `Chunk.to_text` and
+  `MarkdownChunker`, where `ChunkMetadata.headings` and
+  `ChunkMetadata.heading_levels` are built together and a mismatch would mean a
+  construction bug rather than bad input.
+
+  Behaviour is otherwise unchanged: the rewrites in `RegexAuthority` (an
+  `enumerate(..., start=1)` replacing a manual increment) and `JSONChunker`
+  (decoding into a separate name rather than rebinding the loop variable)
+  produce identical results.
+
 ## v2.1.0 - 2026-08-19
 
 ### Security

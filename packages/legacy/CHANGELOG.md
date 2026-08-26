@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+## v0.2.1 - 2026-08-26
+
+### Fixed
+
+- **`from dataknobs.<pkg>.<module> import Name` now resolves — the import form
+  pre-split code actually contains.** Each shim re-exported a modular package's
+  submodules by importing them, which binds them as attributes and is enough for
+  `from dataknobs.structures import tree`, but not for the dotted form: Python
+  resolves a dotted module path through `sys.modules`, not through the parent's
+  attributes. The submodules are now registered under the legacy namespace, so
+  both spellings work. For a package that exists only to provide backward
+  compatibility, the dotted form was the one that mattered most. The shared
+  helper lives in `dataknobs._aliasing` because all three shims had the same
+  shape and therefore the same gap.
+
 ## v0.2.0 - 2026-08-11
 
 ### Removed
