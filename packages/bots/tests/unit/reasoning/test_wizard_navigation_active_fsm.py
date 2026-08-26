@@ -1733,3 +1733,161 @@ async def test_a_second_instance_snapshots_the_stage_the_state_reports() -> None
                 "its own current_stage names"
             )
             assert snapshot.stage_metadata.get("can_skip") is True
+
+
+# ---------------------------------------------------------------------------
+# 21-24. What the snapshot's copies actually isolate
+# ---------------------------------------------------------------------------
+#
+# The snapshot is documented read-only, and its payloads were copied one
+# level deep. ``dict(stage)`` gives the caller its own top-level mapping
+# and leaves every nested container inside it pointing at the FSM's live
+# stage config -- so writing through ``snapshot.stage_metadata["schema"]``
+# reconfigured the running wizard for every later turn, silently.
+#
+# ``WizardFSM.stages`` documents exactly this boundary and tells a caller
+# who intends to edit a stage it read to copy that stage itself. The
+# snapshot is such a caller. The FSM's own accessors are unchanged: they
+# still hand out the live dict, deliberately and on the per-turn path.
+#
+# ``data`` has the same exposure against wizard state rather than against
+# stage config, and reaches a tool through ``to_tool_view()``.
+#
+# ``history`` is a list of strings, where a shallow copy is already a
+# full one, and ``stages`` and ``tasks`` are built fresh by their
+# producers -- so those three are left as they are.
+
+
+def _nested_schema_config() -> dict[str, Any]:
+    """The snapshot fixture, whose subflow stage declares a nested schema."""
+    return _snapshot_config()
+
+
+def _nested_data_config() -> dict[str, Any]:
+    """A flow collecting an **object**-typed field.
+
+    ``data`` only nests when a stage declares a field that nests, so the
+    aliasing this fixture exists to observe is unreachable from the
+    string-typed fixtures the rest of the file uses.
+    """
+    builder = WizardConfigBuilder("nested-collected-data")
+    builder.stage(
+        "intro",
+        is_start=True,
+        prompt="Describe yourself.",
+        response_template="INTRO",
+        confirm_first_render=False,
+    )
+    builder.field("profile", field_type="object", required=True)
+    builder.transition("wrap", condition="has('profile')")
+    builder.stage("wrap", is_end=True, prompt="All done.", response_template="WRAP")
+    return builder.build()
+
+
+@pytest.mark.asyncio
+async def test_the_live_snapshot_does_not_alias_nested_stage_config() -> None:
+    """A write through the snapshot must not reconfigure the wizard."""
+    async with await BotTestHarness.create(
+        wizard_config=_nested_schema_config(),
+        main_responses=["r"] * 10,
+        extraction_results=[[{"greeting": "hi"}], [{"name": "Alice"}], [], []],
+    ) as harness:
+        await harness.chat("hi")
+        await harness.chat("my name is Alice")
+        assert harness.wizard_stage == "sub_start", "the subflow was not pushed"
+
+        snapshot = _snapshot_inside_the_subflow(harness)
+        assert "properties" in snapshot.stage_metadata["schema"], (
+            "precondition: this stage's config nests"
+        )
+        snapshot.stage_metadata["schema"]["properties"]["injected"] = {"type": "string"}
+
+        again = _snapshot_inside_the_subflow(harness)
+        assert "injected" not in again.stage_metadata["schema"]["properties"], (
+            "writing through the snapshot's stage metadata reached the FSM's "
+            "live stage config and changed the schema for every later turn"
+        )
+
+
+@pytest.mark.asyncio
+async def test_the_live_snapshot_does_not_alias_nested_collected_data() -> None:
+    """Green before the change, and worth pinning for the reason it is.
+
+    This route was never exposed: ``_get_wizard_state`` already
+    ``copy.deepcopy``s ``data`` on the way out of the metadata, so the
+    dict this constructor shallow-copies is a per-call transient rather
+    than persisted state. The sibling constructor reads ``fsm_state``
+    directly and had no such upstream copy, which is why only one of the
+    two needed changing.
+
+    Pinned so that weakening the upstream copy is caught here rather
+    than by a consumer.
+    """
+    async with await BotTestHarness.create(
+        wizard_config=_nested_data_config(),
+        main_responses=["r"] * 8,
+        extraction_results=[[{"profile": {"city": "Boston"}}], []],
+    ) as harness:
+        await harness.chat("hi")
+        manager = harness.bot.get_conversation_manager(harness.context.conversation_id)
+        strategy = _strategy(harness)
+
+        snapshot = strategy.get_state_snapshot(manager)
+        assert isinstance(snapshot.data.get("profile"), dict), (
+            "precondition: a collected value nests"
+        )
+        snapshot.data["profile"]["injected"] = True
+
+        again = strategy.get_state_snapshot(manager)
+        assert "injected" not in again.data["profile"], (
+            "writing through the snapshot's data reached persisted wizard state"
+        )
+
+
+@pytest.mark.asyncio
+async def test_the_static_snapshot_does_not_alias_nested_collected_data() -> None:
+    """The sibling constructor, which copied ``data`` one level deep too.
+
+    An existing test covers the top level -- appending to ``history`` and
+    adding a key to ``data``. Neither reaches a nested value.
+    """
+    async with await BotTestHarness.create(
+        wizard_config=_nested_data_config(),
+        main_responses=["r"] * 8,
+        extraction_results=[[{"profile": {"city": "Boston"}}], []],
+    ) as harness:
+        await harness.chat("hi")
+        manager = harness.bot.get_conversation_manager(harness.context.conversation_id)
+
+        snapshot = WizardReasoning.snapshot_from_metadata(manager.metadata)
+        assert snapshot is not None
+        assert isinstance(snapshot.data.get("profile"), dict), "precondition"
+        snapshot.data["profile"]["injected"] = True
+
+        persisted = manager.metadata["wizard"]["fsm_state"]
+        assert "injected" not in persisted["data"]["profile"], (
+            "writing into a nested collected value rewrote persisted state"
+        )
+
+
+def test_the_tool_view_does_not_alias_nested_payloads() -> None:
+    """The conversion hands a tool payloads it can write to freely.
+
+    A pure unit: the conversion is a method on the dataclass, and the
+    hazard is a property of the copy rather than of how the snapshot was
+    built.
+    """
+    from dataknobs_bots.reasoning.observability import WizardStateSnapshot
+
+    snapshot = WizardStateSnapshot(
+        current_stage="gather",
+        data={"profile": {"city": "Boston"}},
+        stage_metadata={"schema": {"properties": {"name": {"type": "string"}}}},
+    )
+
+    view = snapshot.to_tool_view()
+    view.collected_data["profile"]["city"] = "tampered"
+    view.stage_metadata["schema"]["properties"]["injected"] = {}
+
+    assert snapshot.data["profile"]["city"] == "Boston"
+    assert "injected" not in snapshot.stage_metadata["schema"]["properties"]

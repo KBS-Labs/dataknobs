@@ -24,6 +24,7 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, ClassVar
 
+from dataknobs_common.copying import copy_structure
 from dataknobs_common.lifecycle import aclose_if_owned
 from dataknobs_common.paths import safe_join_or_raise
 from dataknobs_common.serialization import sanitize_for_json
@@ -4990,7 +4991,16 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
             # else, so it is avoided here too.
             # Copied: ``stage_metadata_for`` documents that it hands back
             # the FSM's live stage dict, and this object is read-only.
-            stage_metadata=dict(stage),
+            # ``copy_structure`` rather than ``dict``: a shallow copy
+            # leaves the stage's nested ``schema``/``navigation`` dicts
+            # pointing at the FSM's live config, so a write through this
+            # read-only object reconfigured the running wizard for every
+            # later turn.  ``WizardFSM.stages`` documents that boundary
+            # and tells a caller intending to edit a stage it read to
+            # copy it -- this is that caller doing so.  The FSM's own
+            # accessors are unchanged: they hand out the live dict, on
+            # the per-turn path, deliberately.
+            stage_metadata=copy_structure(stage),
         )
 
     @staticmethod
@@ -5077,7 +5087,14 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
         # reference, a consumer appending to ``snapshot.history`` --
         # which the type documents as read-only -- rewrote persisted
         # wizard state.
-        data = dict(fsm_state.get("data", {}))
+        # Structural, not shallow.  ``dict()`` isolates only the top
+        # level, so a nested collected value stayed the object inside
+        # ``manager.metadata`` and a consumer writing into it rewrote
+        # persisted wizard state.  ``_get_wizard_state`` already copies
+        # this dict in depth on the way out of metadata; this is the
+        # same rule on the other route out.  ``history`` is a list of
+        # strings, where a shallow copy is already a full one.
+        data = copy_structure(fsm_state.get("data", {}))
         history = list(fsm_state.get("history", []))
 
         if "stage_index" in wizard_meta:

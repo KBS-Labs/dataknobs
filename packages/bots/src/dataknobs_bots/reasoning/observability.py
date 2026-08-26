@@ -19,6 +19,7 @@ import time
 from dataclasses import asdict, dataclass, field
 from typing import Any, Literal
 
+from dataknobs_common.copying import copy_structure
 from dataknobs_fsm.observability import (
     ExecutionHistoryQuery,
     ExecutionRecord,
@@ -587,13 +588,16 @@ class WizardStateSnapshot:
         view has no room for, so the inverse would have to invent them.
         A tool that needs those reads the snapshot.
 
-        **The payloads are copies.** A *published* ``ToolWizardState``
-        holds ``collected_data`` by reference on purpose: that is the
-        live channel, and a tool's writes are meant to land in wizard
-        state for the rest of the turn. A snapshot is not that channel --
-        it is already a copy taken at a point in time -- so handing a
-        tool a writable reference into one would promise a write-back
-        that cannot happen. Writes to the returned object go nowhere.
+        **The payloads are copies, in depth.** A *published*
+        ``ToolWizardState`` holds ``collected_data`` by reference on
+        purpose: that is the live channel, and a tool's writes are meant
+        to land in wizard state for the rest of the turn. A snapshot is
+        not that channel -- it is already a copy taken at a point in time
+        -- so handing a tool a writable reference into one would promise
+        a write-back that cannot happen. Writes to the returned object go
+        nowhere, and ``copy_structure`` is what makes that true of a
+        *nested* write as well: a shallow copy would leave a tool one
+        level away from the objects the snapshot was taken from.
 
         ``stage_metadata`` is empty when this snapshot came off
         ``WizardReasoning.snapshot_from_metadata``; see the attribute.
@@ -603,10 +607,10 @@ class WizardStateSnapshot:
         """
         return ToolWizardState(
             current_stage=self.current_stage,
-            collected_data=dict(self.data),
+            collected_data=copy_structure(self.data),
             history=list(self.history),
             completed=self.completed,
-            stage_metadata=dict(self.stage_metadata),
+            stage_metadata=copy_structure(self.stage_metadata),
         )
 
     def get_task(self, task_id: str) -> dict[str, Any] | None:

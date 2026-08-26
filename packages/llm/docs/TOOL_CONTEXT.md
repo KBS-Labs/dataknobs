@@ -140,11 +140,13 @@ The conversion runs in this direction only. A snapshot carries fields the tool
 view has no room for, so the inverse would have to invent them; a tool that
 needs progress or transitions reads the snapshot.
 
-**The converted view's payloads are copies.** A *published* `ToolWizardState`
-holds `collected_data` by reference on purpose — that is the live channel. A
-snapshot is not that channel: it is already a copy taken at a point in time, so
-writes to a converted view go nowhere, and copying makes that structural rather
-than a matter of documentation.
+**The converted view's payloads are copies, in depth.** A *published*
+`ToolWizardState` holds `collected_data` by reference on purpose — that is the
+live channel. A snapshot is not that channel: it is already a copy taken at a
+point in time, so writes to a converted view go nowhere. The copy is
+structural rather than shallow, so that holds for a nested write too — a tool
+adjusting `view.stage_metadata["schema"]["properties"]` is not one level away
+from the wizard's own configuration.
 
 `stage_metadata` on a converted view is populated when the snapshot came from
 `get_state_snapshot()` and empty when it came from

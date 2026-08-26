@@ -43,6 +43,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   snapshots serialised by an earlier version still load — but a consumer
   asserting an exact key set on a serialised snapshot will see one more.
 
+### Fixed
+
+- **A snapshot's payloads are copied in depth, so writing through one cannot
+  reach what it was taken from.** `WizardStateSnapshot` is documented
+  read-only and its payloads were copied one level. A shallow copy isolates
+  only the top, so writing through `snapshot.stage_metadata["schema"]` reached
+  the FSM's live stage configuration and reconfigured the running wizard for
+  every later turn — silently, and for the life of the process.
+
+  Three sites now copy through `dataknobs_common.copy_structure`:
+  `get_state_snapshot`'s `stage_metadata`, `snapshot_from_metadata`'s `data`
+  (which read the persisted dict directly, so a nested collected value aliased
+  conversation metadata), and `to_tool_view()`, which hands both to a tool.
+
+  `WizardFSM.stages`, `current_metadata` and `stage_metadata_for` are
+  **unchanged**: they still return the live stage dict, deliberately and on
+  the per-turn path, where a deep copy would charge every turn for a guarantee
+  no caller there asks for. `stages` already documented that a caller
+  intending to edit a stage it read must copy it; the snapshot is that caller,
+  and now does.
+
+  `history`, `stages` and `tasks` are left as they were — the first is a list
+  of strings, where a shallow copy is already a full one, and the other two
+  are built fresh by their producers. `get_state_snapshot`'s `data` needed no
+  change either: `_get_wizard_state` already deep-copies it out of the
+  metadata, so what the snapshot copies is a per-call transient.
+
 ## v0.12.0 - 2026-08-26
 
 ### Changed

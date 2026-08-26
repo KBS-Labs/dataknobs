@@ -360,6 +360,13 @@ An empty dict therefore means either "this snapshot came off the metadata
 route" or "the stage declares nothing", and the two are deliberately not
 distinguished.
 
+The snapshot's copy of it is structural, not shallow, so adjusting a nested
+section of the stage config you read here does not reconfigure the running
+wizard. Reading the same stage through `WizardFSM.stages`,
+`current_metadata` or `stage_metadata_for()` does hand you the live dict —
+those are on the per-turn path and unchanged. Copy a stage you intend to
+edit, as `stages` documents.
+
 ### Handing a Snapshot to a Tool
 
 `to_tool_view()` converts a snapshot into the `ToolWizardState` a
@@ -374,7 +381,8 @@ context = ToolExecutionContext(wizard_state=snapshot.to_tool_view())
 
 The conversion runs in this direction only — a snapshot carries transitions,
 task tracking and progress that the tool view has no room for — and its
-payloads are **copies**, so writes to the view do not reach the snapshot. See
+payloads are **copied in depth**, so neither a write to the view nor a write
+into something nested inside it reaches the snapshot or the wizard. See
 [Tool Execution Context](../../llm/guides/tool-context.md) for what a tool may
 and may not do with the result.
 
