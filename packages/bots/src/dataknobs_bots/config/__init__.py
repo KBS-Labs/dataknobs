@@ -57,7 +57,7 @@ from .resolution import (
 )
 from .schema import DynaBotConfigSchema
 from .templates import ConfigTemplate, ConfigTemplateRegistry, TemplateVariable
-from .validation import ConfigValidator, ValidationResult
+from .validation import ConfigValidator, ValidationResult, marker_violations_result
 from .versioning import (
     ConfigVersion,
     ConfigVersionManager,
@@ -80,6 +80,10 @@ __all__ = [
     "DynaBotConfigSchema",
     "ConfigValidator",
     "ValidationResult",
+    # The `$resource` marker rule in `ValidationResult` form, for a consumer
+    # composing its own validator pipeline. `ConfigValidator` already runs it;
+    # this is for a pipeline that is not one.
+    "marker_violations_result",
     "DynaBotConfigBuilder",
     "ConfigTemplate",
     "TemplateVariable",

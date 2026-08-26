@@ -110,6 +110,8 @@ result = validator.validate(config)
 validator.register_validator("my_check", my_validator_fn)
 ```
 
+--8<-- "packages/bots/docs/CONFIG_TOOLKIT.md:marker-rule"
+
 --8<-- "packages/bots/docs/CONFIG_TOOLKIT.md:combining-results"
 
 ### Templates

@@ -74,7 +74,8 @@ from __future__ import annotations
 
 import copy
 import logging
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -127,6 +128,111 @@ def _render_path(path: str) -> str:
     return path or "<root>"
 
 
+def _child_path(path: str, key: Any) -> str:
+    """Extend a dotted config path by one mapping key."""
+    return f"{path}.{key}" if path else str(key)
+
+
+#: The half of a cycle message that is a policy rather than a description.
+#: Two unrelated things can reach themselves in a config tree, but what is done
+#: about either is one decision, so the sentence stating it is one string.
+_CYCLE_POLICY = (
+    "so this is reported rather than followed round -- unresolved, it exhausts the stack instead."
+)
+
+
+class _Descent:
+    """What one walk is currently inside, for both cycles a config can carry.
+
+    A config tree reaches itself in two unrelated ways. A **resource** reaches
+    itself when a reference resolves to a config that references it again --
+    an identity cycle, invisible in the authored tree, since the two blocks are
+    different objects naming one resource. A **block** reaches itself when the
+    same object appears inside its own descent, which YAML anchors produce
+    directly: ``a: &x`` with ``b: *x`` under it is a dict that contains itself,
+    and ``yaml.safe_load`` builds it without complaint.
+
+    Neither detects the other, and both are guarded the same way and for the
+    same reason, which is why they are one object rather than two parameters.
+    :func:`_walk` forwards its bookkeeping through every recursion and a missed
+    forward is silent, so a second thing to forward is a second thing to
+    forget; there is one, and it carries both.
+
+    **A stack, not a visited set.** An anchor reused for its ordinary purpose --
+    not repeating a block -- puts one object at two paths without either
+    containing the other, which is legitimate and common. Only what the descent
+    is *currently* inside can close a cycle, so entries are popped on the way
+    back up. Object identities are safe as keys for exactly the same reason:
+    nothing is tracked that the walk is not holding.
+    """
+
+    def __init__(self) -> None:
+        self._resources: list[tuple[str, str]] = []
+        self._blocks: dict[int, str] = {}
+
+    @contextmanager
+    def resource(self, resource_type: str, name: str, *, path: str) -> Iterator[None]:
+        """Expand one resource, refusing to expand it inside itself."""
+        marker = (resource_type, name)
+        if marker in self._resources:
+            chain = " -> ".join(f"{kind}/{name}" for kind, name in [*self._resources, marker])
+            raise ConfigError(
+                f"Resource reference cycle at config path '{_render_path(path)}': "
+                f"{chain}. A resource that reaches itself has no resolved form, "
+                f"{_CYCLE_POLICY}"
+            )
+        self._resources.append(marker)
+        try:
+            yield
+        finally:
+            self._resources.pop()
+
+    @contextmanager
+    def block(self, node: Any, *, path: str) -> Iterator[None]:
+        """Descend into one container, refusing to descend into it twice."""
+        key = id(node)
+        entered_at = self._blocks.get(key)
+        if entered_at is not None:
+            raise ConfigError(
+                f"Config cycle at config path '{_render_path(path)}': this is the "
+                f"block at '{_render_path(entered_at)}', reached from inside "
+                f"itself. A block that contains itself has no finite form, "
+                f"{_CYCLE_POLICY}"
+            )
+        self._blocks[key] = path
+        try:
+            yield
+        finally:
+            del self._blocks[key]
+
+
+def _reference_marker_messages(reference: Mapping[str, Any], *, path: str) -> list[str]:
+    """The reference half of the marker rule, stated once.
+
+    Two callers need this answer and need it reported differently: a resolver
+    raises on the first offender because it cannot build past one, and a
+    validator collects every offender because a reader fixing a config wants
+    the list. Both disciplines are legitimate and neither belongs inside the
+    rule, so the rule returns messages and the caller decides.
+    """
+    unknown = sorted(
+        key
+        for key in reference
+        if isinstance(key, str) and key.startswith("$") and key not in RESOURCE_MARKER_KEYS
+    )
+    if not unknown:
+        return []
+
+    markers = ", ".join(sorted(key for key in RESOURCE_MARKER_KEYS if key.startswith("$")))
+    return [
+        f"Unknown marker key(s) {unknown} in the $resource reference for "
+        f"'{reference.get('$resource')}' at config path '{_render_path(path)}'. "
+        f"A $-prefixed key must be one of: {markers}. Everything else in the "
+        f"block is an inline default, so an unrecognised marker would otherwise "
+        f"be passed to a factory as a keyword argument rather than rejected."
+    ]
+
+
 def _validate_reference_markers(reference: Mapping[str, Any], *, path: str) -> None:
     """Reject a ``$``-prefixed key in a reference block that is not a marker.
 
@@ -135,22 +241,31 @@ def _validate_reference_markers(reference: Mapping[str, Any], *, path: str) -> N
     happens to be absent would surface it first in whichever deployment is
     least equipped to read the message.
     """
-    unknown = sorted(
-        key
-        for key in reference
-        if isinstance(key, str) and key.startswith("$") and key not in RESOURCE_MARKER_KEYS
-    )
-    if not unknown:
-        return
+    messages = _reference_marker_messages(reference, path=path)
+    if messages:
+        # The first, not all of them: a resolver cannot build past one
+        # breach, so reporting the rest would be reporting about a tree
+        # it has already stopped reading.
+        raise ConfigError(messages[0])
 
-    markers = ", ".join(sorted(key for key in RESOURCE_MARKER_KEYS if key.startswith("$")))
-    raise ConfigError(
-        f"Unknown marker key(s) {unknown} in the $resource reference for "
-        f"'{reference.get('$resource')}' at config path '{_render_path(path)}'. "
-        f"A $-prefixed key must be one of: {markers}. Everything else in the "
-        f"block is an inline default, so an unrecognised marker would otherwise "
-        f"be passed to a factory as a keyword argument rather than rejected."
-    )
+
+def _orphaned_marker_messages(block: Mapping[str, Any], *, path: str) -> list[str]:
+    """The orphan half of the marker rule, stated once.
+
+    Its sibling :func:`_reference_marker_messages` covers the block that *is*
+    a reference; this covers the block that was meant to be one.
+    """
+    orphaned = sorted(key for key in block if key in _POLICY_MARKER_KEYS)
+    if not orphaned:
+        return []
+
+    return [
+        f"Marker key(s) {orphaned} at config path '{_render_path(path)}' on a "
+        f"block with no `$resource` key. They qualify a resource reference and "
+        f"mean nothing without one, so this is a misspelled `$resource` -- the "
+        f"block resolves to itself and reaches a factory with its markers "
+        f"attached. Keys present: {sorted(str(key) for key in block)}."
+    ]
 
 
 def _validate_orphaned_markers(block: Mapping[str, Any], *, path: str) -> None:
@@ -166,17 +281,119 @@ def _validate_orphaned_markers(block: Mapping[str, Any], *, path: str) -> None:
     A leftover policy marker is what gives it away, and it is specific enough
     to act on: neither means anything except on a reference.
     """
-    orphaned = sorted(key for key in block if key in _POLICY_MARKER_KEYS)
-    if not orphaned:
-        return
+    messages = _orphaned_marker_messages(block, path=path)
+    if messages:
+        # The first, not all of them: a resolver cannot build past one
+        # breach, so reporting the rest would be reporting about a tree
+        # it has already stopped reading.
+        raise ConfigError(messages[0])
 
-    raise ConfigError(
-        f"Marker key(s) {orphaned} at config path '{_render_path(path)}' on a "
-        f"block with no `$resource` key. They qualify a resource reference and "
-        f"mean nothing without one, so this is a misspelled `$resource` -- the "
-        f"block resolves to itself and reaches a factory with its markers "
-        f"attached. Keys present: {sorted(str(key) for key in block)}."
-    )
+
+def _marker_violations(block: Mapping[str, Any], *, path: str) -> list[str]:
+    """Apply whichever half of the marker rule this block is subject to.
+
+    What makes a block a reference is the ``$resource`` key, so the two halves
+    are exhaustive and mutually exclusive by construction: a block that has it
+    has a closed vocabulary, and a block that does not can still be a
+    misspelling of one.
+    """
+    if "$resource" in block:
+        return _reference_marker_messages(block, path=path)
+    return _orphaned_marker_messages(block, path=path)
+
+
+@dataclass(frozen=True)
+class MarkerViolation:
+    """One breach of the ``$resource`` marker rule, located.
+
+    Attributes:
+        path: Dotted path to the offending block, list items spelled ``[0]``
+            -- e.g. ``bot.knowledge_base.vector_store``. Empty at the root of
+            whatever tree the caller passed.
+        message: The same sentence the resolver raises for this breach. It is
+            the same string deliberately: a config lint and a failed build
+            describing one defect differently is two defects to the reader.
+    """
+
+    path: str
+    message: str
+
+
+def collect_marker_violations(config: Any, *, path: str = "") -> list[MarkerViolation]:
+    """Report every ``$resource`` marker breach in *config*, without resolving.
+
+    For a caller that holds a config tree and reports a verdict on it -- a
+    validator, an editor, a config-authoring tool -- rather than building from
+    it. :func:`resolve_resource_references` enforces the same rule, but needs
+    an :class:`EnvironmentConfig` and raises on the first breach; a caller with
+    neither an environment nor permission to raise had only the marker set to
+    work from, and the one that tried transcribed a clause of the rule.
+
+    **The traversal:** at every mapping, the reference rule if ``$resource`` is
+    present and the orphan rule if it is not, then descend into every value; at
+    every list, descend into every item. Nothing is skipped and nothing is
+    rewritten.
+
+    **One documented divergence from the resolver, in the strict direction.**
+    This descends into a reference's inline defaults unconditionally, where
+    :func:`resolve_resource_references` walks only those an environment does
+    not override -- a default the environment supplies is discarded, so
+    expanding it would be work for nothing. The consequence is that a
+    malformed reference inside an overridden default is invisible to a build,
+    and becomes live the day an environment stops overriding that key. A
+    validator's subject is the authored config, not one deployment of it, so
+    this reports it.
+
+    **A tree that contains itself raises** :class:`ConfigError` **naming both
+    ends of the cycle**, rather than descending until the stack runs out. YAML
+    anchors produce one directly -- ``a: &x`` with ``b: *x`` under it is a dict
+    that contains itself, and ``yaml.safe_load`` builds it without complaint.
+    An anchor reused for its ordinary purpose is not a cycle and still
+    resolves: only what the descent is *currently* inside can close one.
+
+    Args:
+        config: Any config tree -- a whole config, or one section of one
+        path: Dotted path *config* sits at, for messages. Pass the section's
+            name when validating a subtree, or a finding will name a path that
+            locates nothing in the file the reader has open.
+
+    Returns:
+        Every violation found, in traversal order. Empty when there are none.
+
+    Raises:
+        ConfigError: If *config* contains a structural cycle, per above. A
+            cycle raises even here, where every other finding is collected,
+            for the reason a survey raises on one: a walk that returned
+            findings for a tree it could not finish reading would be
+            certifying the rest of that tree as sound.
+    """
+    return _collect_marker_violations(config, path=path, descent=_Descent())
+
+
+def _collect_marker_violations(
+    config: Any, *, path: str, descent: _Descent
+) -> list[MarkerViolation]:
+    """The recursive half, carrying the cycle guard the public entry creates."""
+    violations: list[MarkerViolation] = []
+
+    if isinstance(config, Mapping):
+        with descent.block(config, path=path):
+            violations.extend(
+                MarkerViolation(path=path, message=message)
+                for message in _marker_violations(config, path=path)
+            )
+            for key, value in config.items():
+                violations.extend(
+                    _collect_marker_violations(value, path=_child_path(path, key), descent=descent)
+                )
+    elif isinstance(config, list):
+        with descent.block(config, path=path):
+            for index, item in enumerate(config):
+                violations.extend(
+                    _collect_marker_violations(item, path=f"{path}[{index}]", descent=descent)
+                )
+
+    return violations
 
 
 def _parse_requires(value: Any, *, where: str) -> list[str]:
@@ -414,11 +631,6 @@ def _substitute_deferring_defaults(config: Any, *, defer_defaults: bool = True) 
     return substitute_env_vars(config)
 
 
-def _child_path(path: str, key: Any) -> str:
-    """Extend a dotted config path by one mapping key."""
-    return f"{path}.{key}" if path else str(key)
-
-
 def _walk(
     config: Any,
     environment: EnvironmentConfig,
@@ -426,7 +638,7 @@ def _walk(
     substitute: bool,
     strict_resources: bool | None,
     path: str,
-    active: list[tuple[str, str]],
+    descent: _Descent,
     survey: list[UnresolvedResourceRef] | None,
 ) -> Any:
     """Resolve every ``$resource`` reference in ``config``, recursively.
@@ -457,50 +669,56 @@ def _walk(
             every recursion: a missed forward is silent, reverting a nested
             reference to leniency inside an otherwise strict resolution
         path: Dotted config path of ``config``, for messages and findings
-        active: Resource identities currently being expanded, innermost last.
-            The cycle guard; see :func:`_splice_reference`.
+        descent: What this walk is currently inside -- resources being
+            expanded and blocks being descended. The cycle guards, both of
+            them; see :class:`_Descent`.
         survey: Collector for unresolvable references, or ``None`` to build
 
     Returns:
         The tree with every reference replaced by its resolved config
     """
     if isinstance(config, dict):
-        if "$resource" in config:
-            return _splice_reference(
-                config,
-                environment,
-                substitute=substitute,
-                strict_resources=strict_resources,
-                path=path,
-                active=active,
-                survey=survey,
-            )
-        _validate_orphaned_markers(config, path=path)
-        return {
-            key: _walk(
-                value,
-                environment,
-                substitute=substitute,
-                strict_resources=strict_resources,
-                path=_child_path(path, key),
-                active=active,
-                survey=survey,
-            )
-            for key, value in config.items()
-        }
+        # Guarded across both branches, not just the descending one: a
+        # reference's inline defaults can hold the reference block itself, and
+        # those are walked too.
+        with descent.block(config, path=path):
+            if "$resource" in config:
+                return _splice_reference(
+                    config,
+                    environment,
+                    substitute=substitute,
+                    strict_resources=strict_resources,
+                    path=path,
+                    descent=descent,
+                    survey=survey,
+                )
+            _validate_orphaned_markers(config, path=path)
+            return {
+                key: _walk(
+                    value,
+                    environment,
+                    substitute=substitute,
+                    strict_resources=strict_resources,
+                    path=_child_path(path, key),
+                    descent=descent,
+                    survey=survey,
+                )
+                for key, value in config.items()
+            }
     if isinstance(config, list):
-        return [
-            _walk(
-                item,
-                environment,
-                substitute=substitute,
-                strict_resources=strict_resources,
-                path=f"{path}[{index}]",
-                active=active,
-                survey=survey,
-            )
-            for index, item in enumerate(config)
-        ]
+        with descent.block(config, path=path):
+            return [
+                _walk(
+                    item,
+                    environment,
+                    substitute=substitute,
+                    strict_resources=strict_resources,
+                    path=f"{path}[{index}]",
+                    descent=descent,
+                    survey=survey,
+                )
+                for index, item in enumerate(config)
+            ]
     return config
 
 
@@ -511,7 +729,7 @@ def _splice_reference(
     substitute: bool,
     strict_resources: bool | None,
     path: str,
-    active: list[tuple[str, str]],
+    descent: _Descent,
     survey: list[UnresolvedResourceRef] | None,
 ) -> Any:
     """Replace one reference block with the config it resolves to."""
@@ -524,7 +742,7 @@ def _splice_reference(
             substitute=substitute,
             strict_resources=strict_resources,
             path=path,
-            active=active,
+            descent=descent,
             survey=survey,
         )
     else:
@@ -534,7 +752,7 @@ def _splice_reference(
             substitute=substitute,
             strict_resources=strict_resources,
             path=path,
-            active=active,
+            descent=descent,
             survey=survey,
         )
 
@@ -565,7 +783,7 @@ def _degrade_to_defaults(
     substitute: bool,
     strict_resources: bool | None,
     path: str,
-    active: list[tuple[str, str]],
+    descent: _Descent,
     survey: list[UnresolvedResourceRef] | None,
 ) -> Any:
     """Handle a reference whose resource this environment does not define.
@@ -623,7 +841,7 @@ def _degrade_to_defaults(
         substitute=substitute,
         strict_resources=strict_resources,
         path=path,
-        active=active,
+        descent=descent,
         survey=survey,
     )
 
@@ -635,7 +853,7 @@ def _splice_found_resource(
     substitute: bool,
     strict_resources: bool | None,
     path: str,
-    active: list[tuple[str, str]],
+    descent: _Descent,
     survey: list[UnresolvedResourceRef] | None,
 ) -> Any:
     """Merge the environment's resource with the defaults that survive it.
@@ -646,23 +864,12 @@ def _splice_found_resource(
     under one flag would either re-expand the environment's values or leave
     the defaults' nested refs raw.
     """
-    marker = (reference.resource_type, reference.name)
-    if marker in active:
-        chain = " -> ".join(f"{kind}/{name}" for kind, name in [*active, marker])
-        raise ConfigError(
-            f"Resource reference cycle at config path '{_render_path(path)}': "
-            f"{chain}. A resource that reaches itself has no resolved form, so "
-            f"this is reported rather than followed round -- unresolved, it "
-            f"exhausts the stack instead."
-        )
-
     # Held only for the resource's own expansion. A reference's inline
-    # defaults are spliced after this is popped because they belong to the
+    # defaults are spliced after this is released because they belong to the
     # call site, not to the resource: a default naming the same resource is an
     # ordinary second reference to it, and reporting that as a cycle would
     # reject a config that resolves perfectly well.
-    active.append(marker)
-    try:
+    with descent.resource(reference.resource_type, reference.name, path=path):
         env_needs_pass = substitute and not environment.substituted
         resolved = _resolve_source(
             environment.get_resource(reference.resource_type, reference.name),
@@ -670,11 +877,9 @@ def _splice_found_resource(
             substitute=env_needs_pass,
             strict_resources=strict_resources,
             path=path,
-            active=active,
+            descent=descent,
             survey=survey,
         )
-    finally:
-        active.pop()
 
     # Inline defaults fill gaps *after* the source above, and each is expanded
     # only once it is known to survive -- so no value is handed to a second
@@ -690,7 +895,7 @@ def _splice_found_resource(
                     substitute=substitute,
                     strict_resources=strict_resources,
                     path=_child_path(path, key),
-                    active=active,
+                    descent=descent,
                     survey=survey,
                 )
 
@@ -704,7 +909,7 @@ def _resolve_source(
     substitute: bool,
     strict_resources: bool | None,
     path: str,
-    active: list[tuple[str, str]],
+    descent: _Descent,
     survey: list[UnresolvedResourceRef] | None,
 ) -> Any:
     """Expand one source's ``${VAR}`` refs, then resolve its references.
@@ -727,7 +932,7 @@ def _resolve_source(
         substitute=substitute,
         strict_resources=strict_resources,
         path=path,
-        active=active,
+        descent=descent,
         survey=survey,
     )
 
@@ -780,7 +985,7 @@ def resolve_resource_references(
         substitute=substitute,
         strict_resources=strict_resources,
         path="",
-        active=[],
+        descent=_Descent(),
         survey=None,
     )
 
@@ -1257,7 +1462,7 @@ class EnvironmentAwareConfig:
             substitute=True,
             strict_resources=self._effective_strict(strict_resources),
             path="",
-            active=[],
+            descent=_Descent(),
             survey=found,
         )
         return found

@@ -7,6 +7,57 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Fixed
+
+- **A config that contains itself is now reported rather than followed round.**
+  YAML anchors build one directly — `a: &x` with `b: *x` under it is a dict
+  that contains itself, and `yaml.safe_load` accepts it without complaint. Both
+  readers of the `$resource` format descended such a tree until the stack ran
+  out. Either now raises `ConfigError` naming where the cycle closed and where
+  that block was entered.
+
+  The cycle guard that already existed did not reach this. It tracks resource
+  *identities*, so it catches a resource whose config references it again —
+  invisible in the authored tree, since those are two different objects naming
+  one resource. A block reaching itself is a cycle in *object* identity with no
+  `$resource` key involved anywhere. Neither detects the other, and a config
+  can carry either.
+
+  Both guards now live on one object that the walk threads through its
+  recursion, rather than as two things to forward independently — a missed
+  forward being silent is the hazard that shape exists to remove. It is a stack
+  and not a visited set: an anchor reused for its ordinary purpose puts one
+  object at two paths without either containing the other, which is legitimate,
+  common, and still resolves. Only what a descent is currently inside can close
+  a cycle.
+
+### Added
+
+- **`collect_marker_violations()` reports `$resource` marker breaches without
+  resolving.** The rule that decides which `$`-prefixed keys a config may carry
+  was reachable only through resolution, which needs an `EnvironmentConfig` and
+  raises on the first breach. A caller that holds a config tree and reports a
+  verdict on it — a validator, an editor, a config-authoring tool — has neither
+  an environment nor permission to raise, and the only thing exported for it was
+  `RESOURCE_MARKER_KEYS`: the vocabulary, not the rule. Offering the set alone
+  is what left the caller that asked to write its own rule around it, and a
+  transcribed rule drifts even where the set it consults cannot.
+
+  The new function walks any config tree and returns a `MarkerViolation` per
+  breach — dotted path, and the same sentence the resolver raises — applying
+  both halves of the rule at every depth: the closed vocabulary of a block that
+  *is* a reference, and the stranded `$required` / `$requires` that says a block
+  was meant to be one. Resolution is unchanged: the two internal guards still
+  raise on the first offender, with the same exception type and message, and now
+  share their definition with the collector rather than restating it.
+
+  One divergence is deliberate and documented on the function. It descends into
+  a reference's inline defaults unconditionally, where resolution walks only
+  those an environment does not override — so a malformed reference inside an
+  overridden default, which no build ever reaches and which goes live the day
+  that override is removed, is reported here. A validator's subject is the
+  authored config, not one deployment of it.
+
 ### Documented
 
 - **The configuration guides teach `StructuredConfigConsumer` rather than

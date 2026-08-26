@@ -24,7 +24,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Protocol
 
 from dataknobs_bots.registry.portability import PortabilityError, validate_portability
-from dataknobs_config import RESOURCE_MARKER_KEYS
+from dataknobs_config import collect_marker_violations
 
 if TYPE_CHECKING:
     from .schema import DynaBotConfigSchema
@@ -283,11 +283,18 @@ class ConfigValidator:
         if self._schema is None:
             return ValidationResult.ok()
 
+        # Rooted at the component name, so a finding reads
+        # `knowledge_base.vector_store` rather than `vector_store` -- which
+        # would name a key the caller cannot find, since it passed the subtree.
+        result = marker_violations_result(config, path=component)
+
         schema = self._schema.get_component_schema(component)
         if schema is None:
-            return ValidationResult.warning(f"No schema registered for component '{component}'")
+            return result.merge(
+                ValidationResult.warning(f"No schema registered for component '{component}'")
+            )
 
-        return _validate_against_schema(component, config, schema)
+        return result.merge(_validate_against_schema(component, config, schema))
 
 
 #: Schema fields whose valid values come from a live registry rather than a
@@ -371,15 +378,44 @@ def _matches_option(value: Any, options: list[str]) -> bool:
     return value in options
 
 
+def marker_violations_result(config: Any, *, path: str = "") -> ValidationResult:
+    """Report the ``$resource`` marker rule over *config* as a result.
+
+    The rule itself lives in ``dataknobs-config``, which owns the marker
+    vocabulary and enforces it at resolution. This is the reporting half: the
+    resolver raises on the first breach because it cannot build past one, and a
+    validator collects every breach because a reader fixing a config wants the
+    list.
+
+    Args:
+        config: A config tree -- a whole config, or one section of one.
+        path: Dotted path *config* sits at, so a finding names a path that
+            locates something in the file the reader has open.
+
+    Returns:
+        A failed result carrying one error per violation, or ``ok()``.
+    """
+    violations = collect_marker_violations(config, path=path)
+    if not violations:
+        return ValidationResult.ok()
+    # The violation's own sentence, unaltered and already carrying its path: a
+    # config lint and a failed build describing one defect in two different
+    # wordings is two defects to the reader.
+    return ValidationResult(valid=False, errors=[v.message for v in violations])
+
+
 def _validate_against_schema(
     component: str,
     config: dict[str, Any],
     schema: dict[str, Any],
 ) -> ValidationResult:
-    """Validate a config dict against a JSON Schema-like definition.
+    """Validate one config dict against a JSON Schema-like definition.
 
-    Performs basic structural validation: required fields, type checking
-    for enum fields, and nested property validation.
+    Structural validation of *this* mapping and no deeper: required fields,
+    and enum checking for the fields the schema declares. It descends into
+    nothing -- it advertised "nested property validation" for as long as it
+    has existed and has never performed any, which is how a marker rule
+    applied here came to be a rule applied at depth 1 of a tree.
 
     Args:
         component: Component name for error messages.
@@ -402,28 +438,13 @@ def _validate_against_schema(
             )
 
     # A section may be a `$resource` reference rather than a literal config,
-    # whose keys are markers and not schema fields. The skip is for those --
-    # but a reference's marker vocabulary is closed, so skipping every
-    # `$`-prefixed key let a misspelling through the one check that runs
-    # before resolution. `$requred: true` reads as *not required*, and
-    # deferring it means it first appears in whichever deployment lacks the
-    # resource. The set is imported rather than transcribed so this cannot
-    # drift from the resolver that enforces it.
-    is_reference = "$resource" in config
+    # whose keys are markers and not schema fields -- so a `$`-prefixed key is
+    # not one of the properties below and there is nothing here to check it
+    # against. The marker vocabulary is a rule of its own, enforced over the
+    # whole tree by `collect_marker_violations`, which this function's callers
+    # invoke separately.
     for key, value in config.items():
         if key.startswith("$"):
-            if is_reference and key not in RESOURCE_MARKER_KEYS:
-                markers = ", ".join(
-                    sorted(marker for marker in RESOURCE_MARKER_KEYS if marker.startswith("$"))
-                )
-                result = result.merge(
-                    ValidationResult.error(
-                        f"Component '{component}': unknown marker key '{key}' in a "
-                        f"$resource reference. A $-prefixed key must be one of: "
-                        f"{markers}. Anything else is treated as an inline default "
-                        f"and passed to a factory as a keyword argument."
-                    )
-                )
             continue
         if key in properties:
             prop_schema = properties[key]
