@@ -171,3 +171,37 @@ def test_a_subflow_without_settings_does_not_warn(
         loader.load_from_dict(_host({"helper": without}))
 
     assert not any(_INERT in r.message for r in caplog.records)
+
+
+def test_a_settings_block_with_non_string_keys_still_only_warns(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The keys are authored, so their types are not ours to assume.
+
+    A ``settings:`` block whose key is written ``1:`` is ordinary YAML --
+    an unquoted numeric key is an ``int``, not a string -- and naming the
+    keys in the warning
+    sorted and joined them. Both steps refuse a non-string key, and the
+    exception does not stop at this check: ``_load_subflow_networks``
+    catches it and re-raises, so the whole wizard fails to load. A check
+    that exists to advise about a config must not be the thing that
+    refuses it.
+    """
+    loader = WizardConfigLoader()
+
+    with caplog.at_level(logging.WARNING):
+        loader.load_from_dict(_host({"helper": _subflow(settings={1: "foo", "b": 2})}))
+
+    assert any(_INERT in r.message for r in caplog.records)
+
+
+def test_a_wrong_typed_settings_block_still_only_warns(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A ``settings:`` that is not a mapping at all is shown, not iterated."""
+    loader = WizardConfigLoader()
+
+    with caplog.at_level(logging.WARNING):
+        loader.load_from_dict(_host({"helper": _subflow(settings="extraction_scope")}))
+
+    assert any(_INERT in r.message for r in caplog.records)

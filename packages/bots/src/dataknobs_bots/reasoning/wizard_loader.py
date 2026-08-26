@@ -624,12 +624,17 @@ class WizardConfigLoader:
         #    own stage is current.
         subflow_settings = wizard_config.get("settings")
         if is_subflow and subflow_settings:
+            # A check whose purpose is to advise about a config must not
+            # be the thing that refuses it -- and the keys are authored
+            # too, not just the block. An unquoted YAML numeric key is an
+            # `int`, which neither sorts against a string nor joins, and
+            # the exception would not stop here: `_load_subflow_networks`
+            # catches it and re-raises, so naming the keys would take the
+            # whole wizard down. Naming them is worth a `str()`; a block
+            # that is not a mapping at all is shown rather than iterated.
             declared = (
-                ", ".join(sorted(subflow_settings))
+                ", ".join(sorted(str(key) for key in subflow_settings))
                 if isinstance(subflow_settings, dict)
-                # A check whose purpose is to advise about a config must
-                # not be the thing that refuses it, so a wrong-typed
-                # block is shown rather than iterated.
                 else repr(subflow_settings)
             )
             logger.warning(
