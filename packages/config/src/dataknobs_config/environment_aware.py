@@ -127,6 +127,38 @@ def _render_path(path: str) -> str:
     return path or "<root>"
 
 
+def _child_path(path: str, key: Any) -> str:
+    """Extend a dotted config path by one mapping key."""
+    return f"{path}.{key}" if path else str(key)
+
+
+def _reference_marker_messages(reference: Mapping[str, Any], *, path: str) -> list[str]:
+    """The reference half of the marker rule, stated once.
+
+    Two callers need this answer and need it reported differently: a resolver
+    raises on the first offender because it cannot build past one, and a
+    validator collects every offender because a reader fixing a config wants
+    the list. Both disciplines are legitimate and neither belongs inside the
+    rule, so the rule returns messages and the caller decides.
+    """
+    unknown = sorted(
+        key
+        for key in reference
+        if isinstance(key, str) and key.startswith("$") and key not in RESOURCE_MARKER_KEYS
+    )
+    if not unknown:
+        return []
+
+    markers = ", ".join(sorted(key for key in RESOURCE_MARKER_KEYS if key.startswith("$")))
+    return [
+        f"Unknown marker key(s) {unknown} in the $resource reference for "
+        f"'{reference.get('$resource')}' at config path '{_render_path(path)}'. "
+        f"A $-prefixed key must be one of: {markers}. Everything else in the "
+        f"block is an inline default, so an unrecognised marker would otherwise "
+        f"be passed to a factory as a keyword argument rather than rejected."
+    ]
+
+
 def _validate_reference_markers(reference: Mapping[str, Any], *, path: str) -> None:
     """Reject a ``$``-prefixed key in a reference block that is not a marker.
 
@@ -135,22 +167,31 @@ def _validate_reference_markers(reference: Mapping[str, Any], *, path: str) -> N
     happens to be absent would surface it first in whichever deployment is
     least equipped to read the message.
     """
-    unknown = sorted(
-        key
-        for key in reference
-        if isinstance(key, str) and key.startswith("$") and key not in RESOURCE_MARKER_KEYS
-    )
-    if not unknown:
-        return
+    messages = _reference_marker_messages(reference, path=path)
+    if messages:
+        # The first, not all of them: a resolver cannot build past one
+        # breach, so reporting the rest would be reporting about a tree
+        # it has already stopped reading.
+        raise ConfigError(messages[0])
 
-    markers = ", ".join(sorted(key for key in RESOURCE_MARKER_KEYS if key.startswith("$")))
-    raise ConfigError(
-        f"Unknown marker key(s) {unknown} in the $resource reference for "
-        f"'{reference.get('$resource')}' at config path '{_render_path(path)}'. "
-        f"A $-prefixed key must be one of: {markers}. Everything else in the "
-        f"block is an inline default, so an unrecognised marker would otherwise "
-        f"be passed to a factory as a keyword argument rather than rejected."
-    )
+
+def _orphaned_marker_messages(block: Mapping[str, Any], *, path: str) -> list[str]:
+    """The orphan half of the marker rule, stated once.
+
+    Its sibling :func:`_reference_marker_messages` covers the block that *is*
+    a reference; this covers the block that was meant to be one.
+    """
+    orphaned = sorted(key for key in block if key in _POLICY_MARKER_KEYS)
+    if not orphaned:
+        return []
+
+    return [
+        f"Marker key(s) {orphaned} at config path '{_render_path(path)}' on a "
+        f"block with no `$resource` key. They qualify a resource reference and "
+        f"mean nothing without one, so this is a misspelled `$resource` -- the "
+        f"block resolves to itself and reaches a factory with its markers "
+        f"attached. Keys present: {sorted(str(key) for key in block)}."
+    ]
 
 
 def _validate_orphaned_markers(block: Mapping[str, Any], *, path: str) -> None:
@@ -166,17 +207,92 @@ def _validate_orphaned_markers(block: Mapping[str, Any], *, path: str) -> None:
     A leftover policy marker is what gives it away, and it is specific enough
     to act on: neither means anything except on a reference.
     """
-    orphaned = sorted(key for key in block if key in _POLICY_MARKER_KEYS)
-    if not orphaned:
-        return
+    messages = _orphaned_marker_messages(block, path=path)
+    if messages:
+        # The first, not all of them: a resolver cannot build past one
+        # breach, so reporting the rest would be reporting about a tree
+        # it has already stopped reading.
+        raise ConfigError(messages[0])
 
-    raise ConfigError(
-        f"Marker key(s) {orphaned} at config path '{_render_path(path)}' on a "
-        f"block with no `$resource` key. They qualify a resource reference and "
-        f"mean nothing without one, so this is a misspelled `$resource` -- the "
-        f"block resolves to itself and reaches a factory with its markers "
-        f"attached. Keys present: {sorted(str(key) for key in block)}."
-    )
+
+def _marker_violations(block: Mapping[str, Any], *, path: str) -> list[str]:
+    """Apply whichever half of the marker rule this block is subject to.
+
+    What makes a block a reference is the ``$resource`` key, so the two halves
+    are exhaustive and mutually exclusive by construction: a block that has it
+    has a closed vocabulary, and a block that does not can still be a
+    misspelling of one.
+    """
+    if "$resource" in block:
+        return _reference_marker_messages(block, path=path)
+    return _orphaned_marker_messages(block, path=path)
+
+
+@dataclass(frozen=True)
+class MarkerViolation:
+    """One breach of the ``$resource`` marker rule, located.
+
+    Attributes:
+        path: Dotted path to the offending block, list items spelled ``[0]``
+            -- e.g. ``bot.knowledge_base.vector_store``. Empty at the root of
+            whatever tree the caller passed.
+        message: The same sentence the resolver raises for this breach. It is
+            the same string deliberately: a config lint and a failed build
+            describing one defect differently is two defects to the reader.
+    """
+
+    path: str
+    message: str
+
+
+def collect_marker_violations(config: Any, *, path: str = "") -> list[MarkerViolation]:
+    """Report every ``$resource`` marker breach in *config*, without resolving.
+
+    For a caller that holds a config tree and reports a verdict on it -- a
+    validator, an editor, a config-authoring tool -- rather than building from
+    it. :func:`resolve_resource_references` enforces the same rule, but needs
+    an :class:`EnvironmentConfig` and raises on the first breach; a caller with
+    neither an environment nor permission to raise had only the marker set to
+    work from, and the one that tried transcribed a clause of the rule.
+
+    **The traversal:** at every mapping, the reference rule if ``$resource`` is
+    present and the orphan rule if it is not, then descend into every value; at
+    every list, descend into every item. Nothing is skipped and nothing is
+    rewritten.
+
+    **One documented divergence from the resolver, in the strict direction.**
+    This descends into a reference's inline defaults unconditionally, where
+    :func:`resolve_resource_references` walks only those an environment does
+    not override -- a default the environment supplies is discarded, so
+    expanding it would be work for nothing. The consequence is that a
+    malformed reference inside an overridden default is invisible to a build,
+    and becomes live the day an environment stops overriding that key. A
+    validator's subject is the authored config, not one deployment of it, so
+    this reports it.
+
+    Args:
+        config: Any config tree -- a whole config, or one section of one
+        path: Dotted path *config* sits at, for messages. Pass the section's
+            name when validating a subtree, or a finding will name a path that
+            locates nothing in the file the reader has open.
+
+    Returns:
+        Every violation found, in traversal order. Empty when there are none.
+    """
+    violations: list[MarkerViolation] = []
+
+    if isinstance(config, Mapping):
+        violations.extend(
+            MarkerViolation(path=path, message=message)
+            for message in _marker_violations(config, path=path)
+        )
+        for key, value in config.items():
+            violations.extend(collect_marker_violations(value, path=_child_path(path, key)))
+    elif isinstance(config, list):
+        for index, item in enumerate(config):
+            violations.extend(collect_marker_violations(item, path=f"{path}[{index}]"))
+
+    return violations
 
 
 def _parse_requires(value: Any, *, where: str) -> list[str]:
@@ -412,11 +528,6 @@ def _substitute_deferring_defaults(config: Any, *, defer_defaults: bool = True) 
             _substitute_deferring_defaults(item, defer_defaults=defer_defaults) for item in config
         ]
     return substitute_env_vars(config)
-
-
-def _child_path(path: str, key: Any) -> str:
-    """Extend a dotted config path by one mapping key."""
-    return f"{path}.{key}" if path else str(key)
 
 
 def _walk(

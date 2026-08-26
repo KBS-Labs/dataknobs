@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Changed
+
+- **Config validation now enforces the `$resource` marker rule at every depth,
+  so more configs are reported invalid than before.** This is stricter, not a
+  narrowing: a config that validated yesterday and carries a marker typo below
+  the top level of a component is now reported invalid, which is the only way a
+  consumer notices the gap is closed. Everything newly reported already failed
+  at resolution — it simply failed later, in whichever deployment lacked the
+  resource, instead of at config-lint time.
+
+  `ConfigValidator` carried its own transcription of one clause of the rule,
+  applied to one mapping. It agreed with the resolver about a reference section
+  handed to it directly and disagreed about everything else: a reference nested
+  inside one (`knowledge_base.vector_store` and every sibling), a misspelled
+  `$resource` selector, which leaves `$required` stranded on an ordinary dict
+  that then reaches a factory with its markers attached, and any section no
+  schema is registered for — the component loop visits registered names only,
+  so a `$resource` block under any other key was read by nothing at all.
+
+  The transcription is gone. `DynaBotConfigSchema.validate()` calls
+  `dataknobs-config`'s `collect_marker_violations()` once over the whole `bot`
+  block, and `validate_component()` calls it on the subtree, rooted at the
+  component name so a finding names a path the reader can find. Messages are the
+  resolver's own sentences: one defect described one way, whether it surfaces as
+  a lint or as a failed build. `marker_violations_result()` is exported for a
+  consumer composing a validator pipeline of its own.
+
+  `_validate_against_schema`'s docstring claimed "nested property validation"
+  it has never performed, which is the whole explanation for how a rule applied
+  there came to be a rule applied at depth 1 of a tree; it now says what it does.
+
 ### Fixed
 
 - **`WizardConfigBuilder.add_subflow_network()` now produces a subflow the

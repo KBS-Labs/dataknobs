@@ -39,6 +39,7 @@ from dataknobs_common.structured_config import StructuredConfig
 from .validation import (
     ValidationResult,
     _validate_against_schema,
+    marker_violations_result,
     resolve_enum_options,
 )
 
@@ -185,8 +186,15 @@ class DynaBotConfigSchema:
         Returns:
             ValidationResult with all schema violations.
         """
-        result = ValidationResult.ok()
         bot = config.get("bot", config)
+
+        # Once, over the whole tree, before the per-component loop -- because
+        # the marker rule is a property of the config format rather than of any
+        # schema, and the loop below reaches neither the depth it applies at nor
+        # the sections it applies to. The loop visits registered components
+        # only, so a `$resource` block under any other key is a block nothing
+        # would otherwise look at.
+        result = marker_violations_result(bot)
 
         for name, comp in self._components.items():
             if comp.required and name not in bot:

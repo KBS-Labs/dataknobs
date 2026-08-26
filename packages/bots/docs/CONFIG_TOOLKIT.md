@@ -147,6 +147,39 @@ def check_domain_id(config):
 validator.register_validator("domain_id", check_domain_id)
 ```
 
+<!-- --8<-- [start:marker-rule] -->
+### The `$resource` marker rule
+
+A config section may be a `$resource` reference rather than a literal config.
+Its marker vocabulary is closed — `$resource`, `type`, `$requires`, `$required`
+— and anything else `$`-prefixed inside a reference is a malformed reference,
+not an inline default. A stranded `$required` or `$requires` on a block with no
+`$resource` is the same defect from the other side: it says the selector key
+itself is the misspelled one.
+
+Validation enforces that rule **at every depth**, on every section, whether or
+not a schema is registered for it — `$requred: true` reads as *not required*,
+and catching it at config-lint time is the difference between one confusing
+message and a factory called with a keyword argument it did not expect.
+
+```python
+result = validator.validate(config)
+# -> valid=False, errors=[
+#      "Unknown marker key(s) ['$requred'] in the $resource reference for
+#       'vectors' at config path 'knowledge_base.vector_store'. ..."
+#    ]
+
+# Or on one section, rooted so the path locates something:
+result = validator.validate_component("knowledge_base", section)
+```
+
+The messages are `dataknobs-config`'s own — the same sentences resolution
+raises — because one defect described two ways is two defects to the reader.
+The rule itself is `collect_marker_violations()`, exported from
+`dataknobs_config`; `marker_violations_result()` wraps it in a
+`ValidationResult` for a pipeline composing its own validators.
+<!-- --8<-- [end:marker-rule] -->
+
 <!-- --8<-- [start:combining-results] -->
 ### Combining results
 

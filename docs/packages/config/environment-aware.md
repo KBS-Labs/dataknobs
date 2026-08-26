@@ -204,11 +204,44 @@ Two corollaries, because a closed set is only as good as where it is checked:
   produced an ordinary dict that resolved to itself and reached the factory
   with its markers attached. A leftover policy marker is what gives it away.
 
-`RESOURCE_MARKER_KEYS` is exported from `dataknobs_config` so a second reader
-of this format has the vocabulary without copying the literal — and
 `resolve_resource_references(config, environment, ...)` is exported so that a
 consumer with a config tree and an environment does not have to *be* a second
-reader in the first place.
+reader of this format in the first place.
+
+#### Checking the rule without resolving it
+
+Resolution needs an environment and raises on the first breach. A caller that
+holds a config tree and reports a *verdict* on it — a validator, an editor, a
+config-authoring tool — has neither, and offering it only `RESOURCE_MARKER_KEYS`
+gives it the vocabulary while leaving it to write the rule. A rule written twice
+drifts even where the set it consults cannot.
+
+`collect_marker_violations(config, *, path="")` is that rule, callable:
+
+```python
+from dataknobs_config import collect_marker_violations
+
+for violation in collect_marker_violations(config):
+    print(f"{violation.path}: {violation.message}")
+```
+
+It walks any tree — a whole config, or one section of one — applies both
+corollaries above at every depth, and returns a `MarkerViolation(path, message)`
+per breach rather than raising on the first. `path` is dotted, list items
+spelled `[0]`; pass `path=` when validating a subtree so a finding names
+something the reader can find in the file they have open. `message` is the same
+sentence resolution raises, deliberately: one defect described one way, whether
+it surfaces as a lint or as a failed build.
+
+!!! note "It is stricter than resolution in exactly one case"
+
+    A reference's inline defaults are expanded only once they are known to
+    survive, so a default the environment overrides is never walked and a
+    malformed reference *inside* it is never checked. That is right for a build
+    — expanding a value nothing will read is work for nothing — and wrong for a
+    validator, because that reference goes live the day the override is removed.
+    `collect_marker_violations` descends into it. A validator's subject is the
+    authored config, not one deployment of it.
 
 #### Which exception
 
@@ -815,7 +848,9 @@ llm_providers:
 | Function | Description |
 |----------|-------------|
 | `resolve_resource_references(config, environment, *, substitute=False, strict_resources=None)` | Resolve every `$resource` reference in a config tree |
-| `RESOURCE_MARKER_KEYS` | The closed marker set — `$resource`, `type`, `$requires`, `$required` |
+| `collect_marker_violations(config, *, path="")` | Report every marker-rule breach in a tree, without resolving |
+| `MarkerViolation` | One breach: `path`, `message` |
+| `RESOURCE_MARKER_KEYS` | The closed marker set — `$resource`, `type`, `$requires`, `$required`. The last resort, for a reader that needs the literals rather than the rule |
 | `STRICT_RESOURCES_SETTING` | The environment settings key holding the policy |
 | `UnresolvedResourceRef` | A survey finding: `path`, `resource_type`, `resource_name`, `required`, `has_inline_defaults` |
 

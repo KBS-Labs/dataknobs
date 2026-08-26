@@ -34,7 +34,9 @@ from .environment_aware import (
     RESOURCE_MARKER_KEYS,
     EnvironmentAwareConfig,
     EnvironmentAwareConfigError,
+    MarkerViolation,
     UnresolvedResourceRef,
+    collect_marker_violations,
     resolve_resource_references,
 )
 from .environment_config import (
@@ -92,9 +94,17 @@ __all__ = [
     # environment should resolve with it rather than write a third reader of
     # the format, which is how one arrived with its markers unvalidated, its
     # inline defaults dropped and a fallback branch that could not be reached.
-    # The marker set and the settings key are for the reader that genuinely
-    # cannot -- a validator, an editor -- so neither copies the literals.
+    #
+    # A reader that genuinely cannot resolve -- a validator, an editor, a
+    # config-authoring tool with no environment in hand -- reaches for
+    # `collect_marker_violations`, which applies the same marker rule to an
+    # authored tree and reports rather than raises. The marker set itself is
+    # the last resort, for a reader that needs the literals: offering only the
+    # set is what left the one validator that asked to transcribe the rule
+    # around it, and a transcription of a rule drifts even when the set cannot.
     "resolve_resource_references",
+    "collect_marker_violations",
+    "MarkerViolation",
     "RESOURCE_MARKER_KEYS",
     "STRICT_RESOURCES_SETTING",
     "UnresolvedResourceRef",

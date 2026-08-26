@@ -292,3 +292,174 @@ class TestResourceReferenceMarkers:
             "llm", {"provider": "ollama", "$custom": "passed through"}
         )
         assert result.valid is True
+
+
+class TestMarkerRuleDepth:
+    """The marker rule applies at every depth of a config, and to both halves.
+
+    The validator used to carry a transcription of one clause of that rule,
+    applied to a component's own top level. It agreed with the resolver about a
+    reference section handed to it directly and disagreed about everything
+    else: a reference nested inside one, a misspelled ``$resource`` selector,
+    and a section no schema is registered for. A config the validator called
+    valid then raised at resolution.
+    """
+
+    def test_a_nested_reference_marker_is_caught(self) -> None:
+        """The gap the transcription had: it looked one level down, once."""
+        schema = DynaBotConfigSchema()
+        validator = ConfigValidator(schema=schema)
+        config: dict[str, Any] = {
+            "bot": {
+                "llm": {"provider": "ollama"},
+                "conversation_storage": {"backend": "memory"},
+                "knowledge_base": {
+                    "vector_store": {
+                        "$resource": "vectors",
+                        "type": "vector_stores",
+                        "$requred": True,
+                    }
+                },
+            }
+        }
+
+        result = validator.validate(config)
+
+        assert result.valid is False
+        assert any("$requred" in e for e in result.errors)
+
+    def test_a_misspelled_selector_is_caught(self) -> None:
+        """``$resorce`` produces an ordinary dict that reaches a factory."""
+        schema = DynaBotConfigSchema()
+        validator = ConfigValidator(schema=schema)
+        config: dict[str, Any] = {
+            "bot": {
+                "llm": {"$resorce": "default", "type": "llm_providers", "$required": True},
+                "conversation_storage": {"backend": "memory"},
+            }
+        }
+
+        result = validator.validate(config)
+
+        assert result.valid is False
+        assert any("$required" in e for e in result.errors)
+
+    def test_an_orphaned_policy_marker_is_caught(self) -> None:
+        schema = DynaBotConfigSchema()
+        validator = ConfigValidator(schema=schema)
+        config: dict[str, Any] = {
+            "bot": {
+                "llm": {"provider": "ollama"},
+                "conversation_storage": {"backend": "memory", "$requires": ["persistence"]},
+            }
+        }
+
+        result = validator.validate(config)
+
+        assert result.valid is False
+        assert any("$requires" in e for e in result.errors)
+
+    def test_an_unregistered_section_is_checked(self) -> None:
+        """Nothing looked at a section no schema is registered for."""
+        schema = DynaBotConfigSchema()
+        validator = ConfigValidator(schema=schema)
+        config: dict[str, Any] = {
+            "bot": {
+                "llm": {"provider": "ollama"},
+                "conversation_storage": {"backend": "memory"},
+                "custom_thing": {"$resource": "whatever", "$requred": True},
+            }
+        }
+
+        result = validator.validate(config)
+
+        assert result.valid is False
+        assert any("$requred" in e for e in result.errors)
+
+    def test_a_clean_config_is_still_valid(self) -> None:
+        """The anti-vacuity half: a check that always fires checks nothing."""
+        schema = DynaBotConfigSchema()
+        validator = ConfigValidator(schema=schema)
+        config: dict[str, Any] = {
+            "bot": {
+                "llm": {"$resource": "default", "type": "llm_providers", "$required": True},
+                "conversation_storage": {"backend": "memory"},
+                "knowledge_base": {
+                    "vector_store": {"$resource": "vectors", "type": "vector_stores"}
+                },
+            }
+        }
+
+        result = validator.validate(config)
+
+        assert result.valid is True
+
+    def test_a_violation_is_reported_once(self) -> None:
+        """Two entry points cover this ground; only one may report it."""
+        schema = DynaBotConfigSchema()
+        validator = ConfigValidator(schema=schema)
+        config: dict[str, Any] = {
+            "bot": {
+                "llm": {"$resource": "default", "type": "llm_providers", "$requred": True},
+                "conversation_storage": {"backend": "memory"},
+            }
+        }
+
+        result = validator.validate(config)
+
+        assert result.valid is False
+        assert len([e for e in result.errors if "$requred" in e]) == 1
+
+
+class TestMarkerRuleOnASubtree:
+    """``validate_component`` reports the same rule, rooted at the component.
+
+    Deleting the transcription and routing the check only through the
+    whole-config entry point would leave a consumer validating one component at
+    a time with less than it had: the transcribed branch really did catch a
+    misspelled marker on a component's own top level.
+    """
+
+    def test_validate_component_still_catches_a_top_level_marker(self) -> None:
+        """Green before this change -- it is the guard on the deletion."""
+        schema = DynaBotConfigSchema()
+        validator = ConfigValidator(schema=schema)
+
+        result = validator.validate_component(
+            "llm", {"$resource": "default", "type": "llm_providers", "$requred": True}
+        )
+
+        assert result.valid is False
+        assert any("$requred" in e for e in result.errors)
+
+    def test_validate_component_catches_a_nested_marker(self) -> None:
+        schema = DynaBotConfigSchema()
+        validator = ConfigValidator(schema=schema)
+
+        result = validator.validate_component(
+            "knowledge_base",
+            {"vector_store": {"$resource": "vectors", "type": "vector_stores", "$requred": True}},
+        )
+
+        assert result.valid is False
+        assert any("$requred" in e for e in result.errors)
+
+    def test_validate_component_names_the_component_in_the_path(self) -> None:
+        """A message about ``vector_store`` alone would not locate anything."""
+        schema = DynaBotConfigSchema()
+        validator = ConfigValidator(schema=schema)
+
+        result = validator.validate_component(
+            "knowledge_base",
+            {"vector_store": {"$resource": "vectors", "type": "vector_stores", "$requred": True}},
+        )
+
+        assert any("knowledge_base.vector_store" in e for e in result.errors)
+
+    def test_validate_component_catches_an_orphaned_marker(self) -> None:
+        schema = DynaBotConfigSchema()
+        validator = ConfigValidator(schema=schema)
+
+        result = validator.validate_component("llm", {"$resorce": "default", "$required": True})
+
+        assert result.valid is False
