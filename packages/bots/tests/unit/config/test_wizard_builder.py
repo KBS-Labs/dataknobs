@@ -669,3 +669,87 @@ class TestDynaBotConfigBuilderIntegration:
         builder = DynaBotConfigBuilder()
         result = builder.set_reasoning_wizard("path.yaml")
         assert result is builder
+
+
+class TestSubflowNetworkShape:
+    """``subflows:`` means the same thing to the builder and the loader.
+
+    ``WIZARD_SUBFLOWS.md`` documents each value under ``subflows:`` as a
+    whole wizard config -- ``{name: ..., stages: [...]}`` -- and
+    ``WizardConfigLoader._load_single_subflow`` reads it that way, handing
+    it straight to ``load_from_dict``. The builder collected a bare list
+    of stages instead, so neither direction worked: ``to_dict()`` emitted
+    a shape the loader refuses, and ``from_dict()`` iterated a documented
+    config as though it were a list and got its keys.
+
+    Neither had a caller. ``add_subflow_network`` is referenced nowhere in
+    the repository outside its own definition, which is the whole
+    explanation for how a public method that cannot round-trip survived.
+    """
+
+    @staticmethod
+    def _stages() -> list[dict[str, object]]:
+        return [
+            {
+                "name": "only",
+                "is_start": True,
+                "is_end": True,
+                "prompt": "hi",
+                "response_template": "hi",
+            }
+        ]
+
+    def _host(self) -> WizardConfigBuilder:
+        return (
+            WizardConfigBuilder("host")
+            .add_structured_stage("start", "go", is_start=True, response_template="go")
+            .add_end_stage("done", "done")
+            .add_subflow_network("helper", self._stages())
+            .add_transition(
+                "start",
+                "_subflow",
+                subflow={"network": "helper", "return_stage": "done"},
+            )
+        )
+
+    def test_a_built_subflow_network_loads(self) -> None:
+        """``to_dict`` is documented as loader-compatible; it has to be."""
+        from dataknobs_bots.reasoning.wizard_loader import WizardConfigLoader
+
+        fsm = WizardConfigLoader().load_from_dict(self._host().build().to_dict())
+
+        assert fsm.get_subflow("helper") is not None
+
+    def test_a_built_subflow_network_is_a_wizard_config(self) -> None:
+        """Not a bare list -- the shape the docs show and the loader reads."""
+        emitted = self._host().build().to_dict()["subflows"]["helper"]
+
+        assert emitted["stages"] == self._stages()
+        assert emitted["name"] == "helper"
+
+    def test_from_dict_reads_the_documented_shape(self) -> None:
+        """A real wizard YAML is the input this constructor exists for."""
+        authored = {
+            "name": "host",
+            "stages": [
+                {
+                    "name": "start",
+                    "is_start": True,
+                    "prompt": "go",
+                    "response_template": "go",
+                }
+            ],
+            "subflows": {"helper": {"name": "helper", "stages": self._stages()}},
+        }
+
+        rebuilt = WizardConfigBuilder.from_dict(authored).build().to_dict()
+
+        assert rebuilt["subflows"] == authored["subflows"]
+
+    def test_the_round_trip_is_stable(self) -> None:
+        """Twice through says the same thing as once, or one side is lying."""
+        once = self._host().build().to_dict()
+
+        twice = WizardConfigBuilder.from_dict(once).build().to_dict()
+
+        assert twice["subflows"] == once["subflows"]

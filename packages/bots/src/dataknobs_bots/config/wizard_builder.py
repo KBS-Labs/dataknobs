@@ -333,7 +333,13 @@ class WizardConfig(StructuredConfig):
     settings: dict[str, Any] = dataclasses.field(default_factory=dict)
     stages: tuple[StageConfig, ...] = ()
     global_tasks: tuple[dict[str, Any], ...] = ()
-    subflows: dict[str, list[dict[str, Any]]] | None = None
+    #: Each value is a whole wizard config, which is what
+    #: ``WizardConfigLoader._load_single_subflow`` hands to
+    #: ``load_from_dict`` and what ``WIZARD_SUBFLOWS.md`` documents. A bare
+    #: list of stages is what a caller supplies; the wrapping happens in
+    #: :meth:`WizardConfigBuilder.add_subflow_network`, once, rather than
+    #: at every surface that has to agree with the loader.
+    subflows: dict[str, dict[str, Any]] | None = None
 
     def __post_init__(self) -> None:
         """Coerce ``stages``/``global_tasks`` to tuples (lists when loaded).
@@ -360,9 +366,7 @@ class WizardConfig(StructuredConfig):
         if self.global_tasks:
             d["global_tasks"] = [dict(t) for t in self.global_tasks]
         if self.subflows:
-            d["subflows"] = {
-                name: [dict(s) for s in stages] for name, stages in self.subflows.items()
-            }
+            d["subflows"] = {name: dict(config) for name, config in self.subflows.items()}
         return d
 
     def to_yaml(self) -> str:
@@ -414,7 +418,7 @@ class WizardConfigBuilder:
         self._pending_transitions: list[tuple[str, TransitionConfig]] = []
         self._pending_intents: list[tuple[str, IntentDetectionConfig]] = []
         self._global_tasks: list[dict[str, Any]] = []
-        self._subflows: dict[str, list[dict[str, Any]]] = {}
+        self._subflows: dict[str, dict[str, Any]] = {}
         self._tool_catalog: ToolCatalog | None = None
 
     # -- Metadata --
@@ -735,6 +739,12 @@ class WizardConfigBuilder:
         Each network must have its own ``is_start`` and ``is_end``
         stages.
 
+        The network is stored as a wizard config of its own --
+        ``{"name": name, "stages": [...]}`` -- because that is what the
+        loader reads each ``subflows:`` value as, and what
+        ``WIZARD_SUBFLOWS.md`` shows. Callers still supply stages alone,
+        since a subflow's own ``settings:`` is not read when it is pushed.
+
         Args:
             name: Network identifier referenced by
                 ``transition(subflow={"network": name, ...})``.
@@ -744,7 +754,7 @@ class WizardConfigBuilder:
         Returns:
             self for method chaining.
         """
-        self._subflows[name] = [dict(s) for s in stages]
+        self._subflows[name] = {"name": name, "stages": [dict(s) for s in stages]}
         return self
 
     # -- Intent detection --
@@ -882,8 +892,8 @@ class WizardConfigBuilder:
             stage = _stage_from_dict(stage_dict)
             builder._stages.append(stage)
 
-        for name, stages in config.get("subflows", {}).items():
-            builder._subflows[name] = [dict(s) for s in stages]
+        for name, subflow_config in config.get("subflows", {}).items():
+            builder._subflows[name] = dict(subflow_config)
 
         return builder
 

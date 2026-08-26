@@ -9,6 +9,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`WizardConfigBuilder.add_subflow_network()` now produces a subflow the
+  loader can read.** Each value under `subflows:` is a whole wizard config --
+  `{name: ..., stages: [...]}` -- which is what `WizardConfigLoader` hands to
+  `load_from_dict` and what the subflow guide documents. The builder collected
+  a bare list of stages, so neither direction worked: `to_dict()`, whose
+  docstring promises loader compatibility, emitted a shape `load_from_dict`
+  refuses with `Wizard config must have 'stages' field`, and `from_dict()`
+  iterated a documented `subflows:` section as though it were a list and got
+  its keys, raising `dictionary update sequence element #0 has length 1`. So a
+  wizard built with the builder could not declare a subflow, and a wizard YAML
+  that declared one could not be read back into the builder -- which
+  `from_file()` is the documented way to do.
+
+  Callers still pass stages alone; the wrapping happens once, on the way in.
+  The `WizardConfig.subflows` field is now typed as the configs it holds. The
+  method had no caller and no test anywhere in the tree, which is the whole
+  explanation for how a public method that round-trips through neither
+  direction survived; the round trip is now pinned in both.
+
 - **A subflow's `is_end` stage now renders its `response_template`.** The
   stage was entered and left inside one turn -- reaching it is what makes the
   subflow poppable -- so the pop ran in the same step and the parent's return
