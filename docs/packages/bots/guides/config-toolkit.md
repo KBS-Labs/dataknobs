@@ -209,16 +209,19 @@ Six `ContextAwareTool` implementations for wizard-driven config flows:
 |------|---------|---------------|
 | `ListTemplatesTool` | List available templates | `ConfigTemplateRegistry` |
 | `GetTemplateDetailsTool` | Get template details | `ConfigTemplateRegistry` |
-| `PreviewConfigTool` | Preview config being built | `builder_factory` callback |
+| `PreviewConfigTool` | Preview config being built, and report whether it is valid | `builder_factory` callback |
 | `ValidateConfigTool` | Validate current config | `builder_factory` — the builder's validator decides |
 | `SaveConfigTool` | Save/finalize config | `ConfigDraftManager` + `on_save` + `portable` |
 | `ListAvailableToolsTool` | List tools for bot config | `available_tools` catalog |
 
 Consumer extension via `builder_factory`, `on_save`, `portable`, and `available_tools`.
 
-`ValidateConfigTool` and `SaveConfigTool` wired to the **same** `builder_factory`
-reach one verdict: the builder's own validator decides both, at either setting of
-`portable`. Two caveats, both by construction — each tool resolves its own factory
+`PreviewConfigTool`, `ValidateConfigTool` and `SaveConfigTool` wired to the
+**same** `builder_factory` reach one verdict: the builder's own validator decides
+all three, at either setting of `portable`. The preview carries it as `valid`,
+`errors` and `warnings` beside whatever it rendered, in every format — and it
+still renders, because a config with errors is what the author is working on.
+Two caveats, both by construction — each tool resolves its own factory
 from its own config block, so nothing checks that the two name the same callable;
 and a `ConfigValidator` passed to `ValidateConfigTool` is optional and runs *in
 addition*, so it can refuse what save accepts. That asymmetry is deliberate: an

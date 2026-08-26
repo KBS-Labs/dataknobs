@@ -585,7 +585,7 @@ Six ContextAwareTool implementations for wizard-driven config flows:
 |------|---------|---------------|
 | `ListTemplatesTool` | List available templates | `ConfigTemplateRegistry` |
 | `GetTemplateDetailsTool` | Get template details | `ConfigTemplateRegistry` |
-| `PreviewConfigTool` | Preview config being built | `builder_factory` callback |
+| `PreviewConfigTool` | Preview config being built, and report whether it is valid | `builder_factory` callback |
 | `ValidateConfigTool` | Validate current config | the `builder_factory`'s builder — its validator decides |
 | `SaveConfigTool` | Save/finalize config | `ConfigDraftManager` + `on_save` + `portable` |
 | `ListAvailableToolsTool` | List tools for bot config | `available_tools` catalog |
@@ -593,11 +593,16 @@ Six ContextAwareTool implementations for wizard-driven config flows:
 ### Consumer Extension Points
 
 - **`builder_factory`**: `PreviewConfigTool` and `ValidateConfigTool` accept a `builder_factory: Callable[[dict], DynaBotConfigBuilder]` that encapsulates domain-specific config building logic.
-  When `ValidateConfigTool` has one, the builder's own validator decides the
-  verdict — the same validator `build()` and `build_portable()` run — so wiring
-  `ValidateConfigTool` and `SaveConfigTool` to the **same** factory makes the
-  save outcome predictable from the validate outcome, at either setting of
-  `portable`.
+  The builder's own validator decides the verdict — the same validator `build()`
+  and `build_portable()` run — so wiring `PreviewConfigTool`,
+  `ValidateConfigTool` and `SaveConfigTool` to the **same** factory makes all
+  three agree, at either setting of `portable`.
+
+  `preview_config` carries that verdict as `valid`, `errors` and `warnings`
+  alongside whatever it rendered, in every format — the same keys
+  `validate_config` returns, so the two are comparable at a glance. It reports
+  **and** renders: a config with errors is still the thing being built, and
+  seeing it is how an author works out what the errors are about.
 
   Two things fall outside that, both by construction. Each tool resolves its own
   `builder_factory` from its own config block, and nothing checks that the two
