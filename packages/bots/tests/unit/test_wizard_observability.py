@@ -1400,8 +1400,8 @@ class TestSnapshotToToolView:
     ``ToolWizardState`` is what a ``ContextAwareTool`` is handed;
     ``WizardStateSnapshot`` is what observability holds. Every field of
     the former has a counterpart on the latter, so the conversion exists
-    in this direction and not the reverse: a snapshot carries nineteen
-    fields a tool view has no room for.
+    in this direction and not the reverse: a snapshot carries fifteen
+    further fields a tool view has no room for.
     """
 
     def test_to_tool_view_is_complete(self) -> None:

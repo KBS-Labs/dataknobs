@@ -442,6 +442,7 @@ class WizardStateSnapshot:
     ``can_skip``                      the **subflow** stage
     ``can_go_back``                   the **subflow** stage
     ``suggestions``                   the **subflow** stage
+    ``stage_metadata``                the **subflow** stage
     ``stage_index``                   the **main** flow
     ``total_stages``                  the **main** flow
     ``stages``                        the **main** flow
