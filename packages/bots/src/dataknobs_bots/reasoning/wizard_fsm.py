@@ -8,12 +8,18 @@ helpers, and serialization for persistence.
 import copy
 import logging
 from types import TracebackType
-from typing import Any, Callable, Self
+from typing import Any, Callable, Self, TypeVar
 
 from dataknobs_fsm.api.advanced import AdvancedFSM, StepResult
 from dataknobs_fsm.execution.context import ExecutionContext
 
+from .wizard_skip import SKIP_DEFAULT_OVERWRITE, SkipDefaults
+
 logger = logging.getLogger(__name__)
+
+#: A stage field's declared type, taken from the default its accessor
+#: passes to :meth:`WizardFSM._stage_field`.
+_T = TypeVar("_T")
 
 
 class WizardFSM:
@@ -73,6 +79,9 @@ class WizardFSM:
         """
         self._fsm = fsm
         self._stage_metadata = stage_metadata
+        # (stage, field) pairs already reported by _stage_field, so an
+        # ill-typed config is named once rather than once per turn.
+        self._reported_stage_field_types: set[tuple[str, str]] = set()
         self._settings = settings or {}
         self._context: ExecutionContext | None = None
         self._subflow_registry: dict[str, WizardFSM] = dict(subflow_registry or {})
@@ -132,16 +141,106 @@ class WizardFSM:
     def current_metadata(self) -> dict[str, Any]:
         """Get metadata for current stage.
 
+        The stage dict is the live one, not a copy -- see :attr:`stages`
+        for the boundary these readers share.
+
         Returns:
             Dict containing current stage's metadata
         """
         return self._stage_metadata.get(self.current_stage, {})
 
+    def stage_metadata_for(self, stage: str) -> dict[str, Any]:
+        """Get metadata for a named stage, or ``{}`` if this FSM has none.
+
+        The empty dict is the same answer :attr:`current_metadata` gives,
+        and it is deliberately not distinguished from a stage that
+        declared nothing -- callers reading one field with a default get
+        the documented default either way. A caller that needs to tell
+        "absent" from "empty" apart wants :meth:`has_stage`.
+
+        The stage dict is the live one, not a copy -- see :attr:`stages`
+        for the boundary these readers share.
+
+        Args:
+            stage: Stage name.
+
+        Returns:
+            The stage's metadata dict, or ``{}``.
+        """
+        return self._stage_metadata.get(stage, {})
+
+    def has_stage(self, stage: str) -> bool:
+        """Whether this FSM defines *stage*.
+
+        Args:
+            stage: Stage name.
+
+        Returns:
+            ``True`` if the stage belongs to this FSM.
+        """
+        return stage in self._stage_metadata
+
+    def find_stage_owner(self, stage: str) -> "WizardFSM | None":
+        """The FSM in this tree that defines *stage*, searched depth-first.
+
+        Answers "does this wizard have such a stage at all", which is a
+        property of the configuration rather than of where the user
+        currently is.  :meth:`has_stage` answers it for one frame;
+        callers that must not depend on the frame -- the section-to-stage
+        table, which maps a name a user said onto a name the wizard uses
+        -- want this instead.
+
+        A caller that then has to *act* in the owning frame needs more
+        than this: two flows may legitimately name a stage the same, and
+        this reports the first one found (self, then subflows in
+        registration order).  Resolve the frame from the wizard state
+        there, and use this only to decide whether the name is a stage.
+
+        Args:
+            stage: Stage name.
+
+        Returns:
+            The FSM defining *stage*, or ``None`` if no flow in this tree
+            does.
+        """
+        return self._find_stage_owner(stage, set())
+
+    def _find_stage_owner(self, stage: str, seen: set[int]) -> "WizardFSM | None":
+        """Recursive half of :meth:`find_stage_owner`.
+
+        ``seen`` holds ``id()`` of the FSMs already visited: a registry
+        is built from config and nothing forbids a cycle, and a cycle
+        here would be an unbounded recursion rather than a wrong answer.
+        """
+        if id(self) in seen:
+            return None
+        seen.add(id(self))
+        if self.has_stage(stage):
+            return self
+        for name in self.subflow_names:
+            subflow = self.get_subflow(name)
+            if subflow is None:
+                continue
+            owner = subflow._find_stage_owner(stage, seen)
+            if owner is not None:
+                return owner
+        return None
+
     @property
     def stages(self) -> dict[str, dict[str, Any]]:
         """Get all stage metadata.
 
-        Returns a copy to prevent external modification.
+        The returned mapping is a **shallow** copy: adding or removing a
+        key does not change which stages this FSM has, but the stage
+        dicts inside it are the live ones, so writing through them does.
+        The guarantee is over the table's shape, not its contents -- a
+        caller that intends to edit a stage it read here must copy that
+        stage itself.
+
+        A deep copy is deliberately not taken. The four call sites in
+        this package only iterate -- one of them, the stages roadmap, on
+        every turn -- and deepcopy measures ~2500x the shallow copy for a
+        guarantee none of them asks for.
 
         Returns:
             Dict mapping stage name to stage configuration dict.
@@ -166,6 +265,91 @@ class WizardFSM:
         """
         return len(self._stage_metadata)
 
+    def _stage_field(self, stage: str | None, key: str, default: _T) -> _T:
+        """Read one field of a stage's metadata as the type it is declared.
+
+        Stage metadata is authored config carried through untouched:
+        ``_StageField.extract`` copies the value out of the YAML without
+        coercing it, and nothing between the file and here checks it. The
+        accessors below nonetheless declare concrete return types, and
+        every caller relies on them -- a stage written ``can_skip: "no"``
+        yields a *truthy string* from a method declared ``-> bool``, so the
+        stage the author marked unskippable becomes skippable.
+
+        A value of the wrong type is therefore replaced by the field's
+        documented default and reported once, rather than handed to a
+        caller that will fail somewhere the config is no longer in view.
+        Warning once per stage and field keeps a broken config from
+        filling the log a turn at a time.
+
+        The check is on the container, not its contents: ``tools: [1, 2]``
+        is a list and passes. What it is written to catch is a value of
+        the wrong *shape* -- a string where a list belongs, iterated one
+        character at a time -- which is the failure a YAML author actually
+        produces. An element check would need each accessor to declare its
+        element type, which is a different contract from the one the
+        ``default`` argument carries here.
+
+        Args:
+            stage: Stage name, or ``None`` for the current stage.
+            key: Metadata field to read.
+            default: The field's documented default; its type is the
+                contract the returned value is held to.
+
+        Returns:
+            The authored value when it matches ``default``'s type,
+            otherwise ``default``.
+        """
+        stage_name = stage or self.current_stage
+        value = self._stage_metadata.get(stage_name, {}).get(key, default)
+        if isinstance(value, type(default)):
+            return value
+
+        if value is None:
+            # Not a wrong-typed value: ``_StageField.extract`` writes
+            # ``None`` for every field the stage did not declare, so an
+            # unset field is *present* in the metadata holding it. Saying
+            # a stage "declares skip_default_mode as NoneType" would
+            # accuse the author of writing something they never wrote,
+            # once for every stage in every config that leaves the field
+            # out -- which is nearly all of them. An authored ``null``
+            # reaches here identically and means the same thing: unset.
+            return default
+
+        self._report_once(
+            stage_name,
+            key,
+            "Stage '%s' declares %s as %s; %s is required, using the default %r",
+            stage_name,
+            key,
+            type(value).__name__,
+            type(default).__name__,
+            default,
+        )
+        return default
+
+    def _report_once(self, stage_name: str, key: str, message: str, *args: Any) -> None:
+        """Warn about *key* on *stage_name* the first time only.
+
+        A broken config is broken on every turn, so a per-turn warning
+        fills the log with one problem and buries the next one. Shared by
+        every reader of authored stage metadata rather than duplicated
+        per reader, so the "once" is once across all of them: a stage
+        whose ``skip_default`` is unreadable says so as many times as one
+        whose ``can_skip`` is, which is once.
+
+        Args:
+            stage_name: The stage the finding is about.
+            key: The metadata field, dotted for anything nested inside
+                one -- the pair with *stage_name* is what "once" counts.
+            message: Lazy-formatted log message.
+            *args: Its arguments.
+        """
+        if (stage_name, key) in self._reported_stage_field_types:
+            return
+        self._reported_stage_field_types.add((stage_name, key))
+        logger.warning(message, *args)
+
     def get_stage_prompt(self, stage: str | None = None) -> str:
         """Get prompt for a stage.
 
@@ -175,8 +359,7 @@ class WizardFSM:
         Returns:
             Stage prompt string
         """
-        stage = stage or self.current_stage
-        return self._stage_metadata.get(stage, {}).get("prompt", "")
+        return self._stage_field(stage, "prompt", "")
 
     def get_stage_schema(self, stage: str | None = None) -> dict[str, Any] | None:
         """Get validation schema for a stage.
@@ -199,8 +382,7 @@ class WizardFSM:
         Returns:
             List of tool names available in the stage
         """
-        stage = stage or self.current_stage
-        return self._stage_metadata.get(stage, {}).get("tools", [])
+        return self._stage_field(stage, "tools", [])
 
     def get_stage_suggestions(self, stage: str | None = None) -> list[str]:
         """Get quick-reply suggestions for a stage.
@@ -211,8 +393,7 @@ class WizardFSM:
         Returns:
             List of suggestion strings
         """
-        stage = stage or self.current_stage
-        return self._stage_metadata.get(stage, {}).get("suggestions", [])
+        return self._stage_field(stage, "suggestions", [])
 
     def get_transition_condition(self, from_stage: str, to_stage: str) -> str | None:
         """Get the condition expression for a transition.
@@ -229,7 +410,11 @@ class WizardFSM:
 
         for transition in transitions:
             if transition.get("target") == to_stage:
-                return transition.get("condition")
+                condition = transition.get("condition")
+                # Feeds a transition record's ``condition_evaluated`` and
+                # nothing else. A non-string would be read back as the
+                # expression that fired; "nothing recorded" is honest.
+                return condition if isinstance(condition, str) else None
 
         return None
 
@@ -242,8 +427,53 @@ class WizardFSM:
         Returns:
             True if stage can be skipped
         """
-        stage = stage or self.current_stage
-        return self._stage_metadata.get(stage, {}).get("can_skip", False)
+        return self._stage_field(stage, "can_skip", False)
+
+    def get_skip_defaults(self, stage: str | None = None) -> SkipDefaults:
+        """The values a stage writes when it is skipped, with their modes.
+
+        Two authored fields make one answer -- ``skip_default`` holds the
+        values and ``skip_default_mode`` says what may be overwritten --
+        so they are read together here rather than separately by each
+        caller. Both go through :meth:`_stage_field`, which means a
+        ``skip_default`` written as a bare string (which this field has
+        never honoured, and which the builder's own signature invited)
+        is reported rather than dropped in silence.
+
+        Args:
+            stage: Stage name (defaults to current stage).
+
+        Returns:
+            The resolved block; empty when the stage declares none.
+        """
+        stage_name = stage or self.current_stage
+
+        def _report(key: str, value: Any, requirement: str, outcome: str) -> None:
+            # "" is the block-level mode, which is a *sibling* field --
+            # naming it "skip_default" would point the author at the
+            # block they wrote correctly, and would share a warn-once
+            # slot with the block's own type check.
+            field = f"skip_default.{key}" if key else "skip_default_mode"
+            # The outcome is carried rather than assumed: a bad mode
+            # falls back to another mode, which the author needs named,
+            # while a mapping that only looks like an entry is still
+            # written as the value it reads as -- no default involved.
+            self._report_once(
+                stage_name,
+                field,
+                "Stage '%s' declares %s as %r; %s. %s.",
+                stage_name,
+                field,
+                value,
+                requirement,
+                outcome,
+            )
+
+        return SkipDefaults.from_stage(
+            self._stage_field(stage, "skip_default", {}),
+            self._stage_field(stage, "skip_default_mode", SKIP_DEFAULT_OVERWRITE),
+            on_invalid=_report,
+        )
 
     def can_go_back(self, stage: str | None = None) -> bool:
         """Check if back navigation is allowed.
@@ -254,8 +484,7 @@ class WizardFSM:
         Returns:
             True if back navigation is allowed
         """
-        stage = stage or self.current_stage
-        return self._stage_metadata.get(stage, {}).get("can_go_back", True)
+        return self._stage_field(stage, "can_go_back", True)
 
     def is_start_stage(self, stage: str | None = None) -> bool:
         """Check if stage is a start stage.
@@ -266,8 +495,7 @@ class WizardFSM:
         Returns:
             True if stage is marked as start
         """
-        stage = stage or self.current_stage
-        return self._stage_metadata.get(stage, {}).get("is_start", False)
+        return self._stage_field(stage, "is_start", False)
 
     def is_end_stage(self, stage: str | None = None) -> bool:
         """Check if stage is an end stage.
@@ -278,8 +506,7 @@ class WizardFSM:
         Returns:
             True if stage is marked as end
         """
-        stage = stage or self.current_stage
-        return self._stage_metadata.get(stage, {}).get("is_end", False)
+        return self._stage_field(stage, "is_end", False)
 
     # =========================================================================
     # Subflow Registry Methods
@@ -372,9 +599,100 @@ class WizardFSM:
             The callable, or ``None`` if not found.
         """
         registry = getattr(self._fsm.fsm, "function_registry", None)
-        if registry is not None and hasattr(registry, "get_function"):
-            return registry.get_function(name)
+        if registry is None or not hasattr(registry, "get_function"):
+            return None
+        func = registry.get_function(name)
+        # The registry is typed Any at its source and holds whatever was
+        # registered.  The caller calls what comes back, so a non-callable
+        # would fail there, one frame away from the name that produced it.
+        if callable(func):
+            # mypy does not narrow Any through callable(); the annotation
+            # states what the check above established at runtime.
+            resolved: Callable[..., Any] = func
+            return resolved
+        if func is not None:
+            logger.warning(
+                "Function registry entry '%s' is not callable (%s); treating it as absent",
+                name,
+                type(func).__name__,
+            )
         return None
+
+    def _log_step_outcome(self, before_stage: str, after_stage: str, transition: str) -> None:
+        """Say what the step did, at DEBUG, for both ``step`` variants.
+
+        Standing still is not the same as matching nothing, and the case
+        where they differ is the one worth naming: a **subflow**
+        transition compiles to a self-loop arc carrying its condition
+        (``WizardConfigLoader._translate_transition``), so a matched
+        subflow transition leaves the FSM exactly where it started.
+        Reporting that as "none matched" sends a reader looking for a
+        broken condition when the condition was satisfied and the push is
+        somebody else's job --
+        ``SubflowManager.should_push``, which runs before this step.
+
+        The two are told apart by *what the step reports*, not by what the
+        stage declares. A stage holding a subflow transition whose guard
+        **declined** matched nothing, and is the ordinary case rather than
+        the exotic one: a guard that carries pushes the subflow, and a push
+        skips this step entirely, so a step that runs at all is one where
+        no push was performed. Reading the declaration instead would
+        describe every declined turn as a self-loop.
+        ``StepResult.transition`` is ``"none"`` exactly when the engine
+        found no arc whose condition passed (``api/advanced.py``), which
+        also keeps a regular arc back to its own stage off the
+        "none matched" line.
+
+        Args:
+            before_stage: Stage the step started from.
+            after_stage: Stage the step ended on.
+            transition: ``StepResult.transition`` from the step just taken.
+        """
+        stage_meta = self._stage_metadata.get(before_stage, {})
+        transitions = stage_meta.get("transitions", [])
+
+        if before_stage != after_stage:
+            for trans in transitions:
+                if trans.get("target") == after_stage:
+                    condition = trans.get("condition", "unconditional")
+                    logger.debug(
+                        "WizardFSM transition: '%s' -> '%s' via condition: %s",
+                        before_stage,
+                        after_stage,
+                        condition,
+                    )
+                    break
+            return
+
+        if not transitions:
+            return
+
+        if transition == "none":
+            logger.debug(
+                "WizardFSM no transition from '%s': %d transitions defined, none matched",
+                before_stage,
+                len(transitions),
+            )
+        else:
+            subflow_transitions = [t for t in transitions if t.get("is_subflow_transition")]
+            logger.debug(
+                "WizardFSM stayed at '%s': step reports transition '%s'; %d "
+                "transitions defined, %d of them subflow transitions, whose "
+                "arc is a self-loop and whose push is decided before this step",
+                before_stage,
+                transition,
+                len(transitions),
+                len(subflow_transitions),
+            )
+
+        for trans in transitions:
+            target = trans.get("target", "?")
+            condition = trans.get("condition", "unconditional")
+            logger.debug(
+                "  - target='%s', condition='%s'",
+                target,
+                condition,
+            )
 
     def step(self, data: dict[str, Any]) -> StepResult:
         """Execute one FSM step with given data.
@@ -411,39 +729,7 @@ class WizardFSM:
 
         after_stage = self.current_stage
 
-        # Log transition evaluation details
-        if before_stage != after_stage:
-            # Log the condition that was evaluated
-            stage_meta = self._stage_metadata.get(before_stage, {})
-            transitions = stage_meta.get("transitions", [])
-            for trans in transitions:
-                if trans.get("target") == after_stage:
-                    condition = trans.get("condition", "unconditional")
-                    logger.debug(
-                        "WizardFSM transition: '%s' -> '%s' via condition: %s",
-                        before_stage,
-                        after_stage,
-                        condition,
-                    )
-                    break
-        else:
-            # Log why no transition occurred
-            stage_meta = self._stage_metadata.get(before_stage, {})
-            transitions = stage_meta.get("transitions", [])
-            if transitions:
-                logger.debug(
-                    "WizardFSM no transition from '%s': %d transitions defined, none matched",
-                    before_stage,
-                    len(transitions),
-                )
-                for trans in transitions:
-                    target = trans.get("target", "?")
-                    condition = trans.get("condition", "unconditional")
-                    logger.debug(
-                        "  - target='%s', condition='%s'",
-                        target,
-                        condition,
-                    )
+        self._log_step_outcome(before_stage, after_stage, result.transition)
 
         return result
 
@@ -482,37 +768,7 @@ class WizardFSM:
 
         after_stage = self.current_stage
 
-        # Log transition evaluation details
-        if before_stage != after_stage:
-            stage_meta = self._stage_metadata.get(before_stage, {})
-            transitions = stage_meta.get("transitions", [])
-            for trans in transitions:
-                if trans.get("target") == after_stage:
-                    condition = trans.get("condition", "unconditional")
-                    logger.debug(
-                        "WizardFSM transition: '%s' -> '%s' via condition: %s",
-                        before_stage,
-                        after_stage,
-                        condition,
-                    )
-                    break
-        else:
-            stage_meta = self._stage_metadata.get(before_stage, {})
-            transitions = stage_meta.get("transitions", [])
-            if transitions:
-                logger.debug(
-                    "WizardFSM no transition from '%s': %d transitions defined, none matched",
-                    before_stage,
-                    len(transitions),
-                )
-                for trans in transitions:
-                    target = trans.get("target", "?")
-                    condition = trans.get("condition", "unconditional")
-                    logger.debug(
-                        "  - target='%s', condition='%s'",
-                        target,
-                        condition,
-                    )
+        self._log_step_outcome(before_stage, after_stage, result.transition)
 
         return result
 

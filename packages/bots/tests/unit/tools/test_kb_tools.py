@@ -8,7 +8,7 @@ from typing import Any
 
 import pytest
 from dataknobs_common.testing import assert_no_blocking, requires_blockbuster
-from dataknobs_llm.tools.context import ToolExecutionContext, WizardStateSnapshot
+from dataknobs_llm.tools.context import ToolExecutionContext, ToolWizardState
 
 from dataknobs_bots.tools.kb_tools import (
     AddKBResourceTool,
@@ -24,7 +24,7 @@ def _make_context(
 ) -> ToolExecutionContext:
     """Create a ToolExecutionContext with wizard state."""
     if wizard_data is not None:
-        wizard_state = WizardStateSnapshot(
+        wizard_state = ToolWizardState(
             current_stage="test",
             collected_data=wizard_data,
             history=["test"],

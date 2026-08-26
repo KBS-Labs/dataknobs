@@ -194,7 +194,13 @@ class StageConfig(StructuredConfig):
     is_end: bool = False
     # Navigation
     can_skip: bool = False
-    skip_default: Any = None
+    # Values written into the collected data when the stage is skipped.
+    # A mapping, and only a mapping: the runtime has never honoured any
+    # other shape, so ``Any`` here invited a scalar the wizard discards.
+    skip_default: dict[str, Any] | None = None
+    # "fill" or "overwrite" (the default), applied to every key in
+    # skip_default that does not name its own mode.
+    skip_default_mode: str | None = None
     can_go_back: bool = True
     auto_advance: bool | None = None
     confirm_first_render: bool = True
@@ -218,6 +224,7 @@ class StageConfig(StructuredConfig):
     # scope at render time.
     inputs: dict[str, str] | None = None
     # Response generation
+    greeting_template: str | None = None
     response_template: str | None = None
     clarification_template: str | None = None
     confirmation_template: str | None = None
@@ -326,7 +333,13 @@ class WizardConfig(StructuredConfig):
     settings: dict[str, Any] = dataclasses.field(default_factory=dict)
     stages: tuple[StageConfig, ...] = ()
     global_tasks: tuple[dict[str, Any], ...] = ()
-    subflows: dict[str, list[dict[str, Any]]] | None = None
+    #: Each value is a whole wizard config, which is what
+    #: ``WizardConfigLoader._load_single_subflow`` hands to
+    #: ``load_from_dict`` and what ``WIZARD_SUBFLOWS.md`` documents. A bare
+    #: list of stages is what a caller supplies; the wrapping happens in
+    #: :meth:`WizardConfigBuilder.add_subflow_network`, once, rather than
+    #: at every surface that has to agree with the loader.
+    subflows: dict[str, dict[str, Any]] | None = None
 
     def __post_init__(self) -> None:
         """Coerce ``stages``/``global_tasks`` to tuples (lists when loaded).
@@ -353,9 +366,7 @@ class WizardConfig(StructuredConfig):
         if self.global_tasks:
             d["global_tasks"] = [dict(t) for t in self.global_tasks]
         if self.subflows:
-            d["subflows"] = {
-                name: [dict(s) for s in stages] for name, stages in self.subflows.items()
-            }
+            d["subflows"] = {name: dict(config) for name, config in self.subflows.items()}
         return d
 
     def to_yaml(self) -> str:
@@ -407,7 +418,7 @@ class WizardConfigBuilder:
         self._pending_transitions: list[tuple[str, TransitionConfig]] = []
         self._pending_intents: list[tuple[str, IntentDetectionConfig]] = []
         self._global_tasks: list[dict[str, Any]] = []
-        self._subflows: dict[str, list[dict[str, Any]]] = {}
+        self._subflows: dict[str, dict[str, Any]] = {}
         self._tool_catalog: ToolCatalog | None = None
 
     # -- Metadata --
@@ -491,6 +502,7 @@ class WizardConfigBuilder:
         is_start: bool = False,
         suggestions: list[str] | None = None,
         intent_detection: dict[str, Any] | None = None,
+        greeting_template: str | None = None,
         **kwargs: Any,
     ) -> Self:
         """Add a conversation-mode stage.
@@ -506,6 +518,11 @@ class WizardConfigBuilder:
             suggestions: Quick-reply suggestions.
             intent_detection: Intent detection config dict with
                 ``method`` and ``intents`` keys.
+            greeting_template: Template rendered once, as this stage's
+                opening line, before the stage starts conversing.  Takes
+                precedence over ``response_template``, which is therefore
+                unreachable on a conversation stage that sets both — use
+                ``clarification_template`` for the later turns.
             **kwargs: Additional StageConfig fields.
 
         Returns:
@@ -525,6 +542,7 @@ class WizardConfigBuilder:
             is_start=is_start,
             suggestions=tuple(suggestions) if suggestions else (),
             intent_detection=intent_cfg,
+            greeting_template=greeting_template,
             **kwargs,
         )
         self._stages.append(stage)
@@ -539,8 +557,10 @@ class WizardConfigBuilder:
         is_start: bool = False,
         is_end: bool = False,
         can_skip: bool = False,
-        skip_default: Any = None,
+        skip_default: dict[str, Any] | None = None,
+        skip_default_mode: str | None = None,
         suggestions: list[str] | None = None,
+        greeting_template: str | None = None,
         response_template: str | None = None,
         help_text: str | None = None,
         reasoning: str | None = None,
@@ -559,8 +579,19 @@ class WizardConfigBuilder:
             is_start: Whether this is the start stage.
             is_end: Whether this is an end stage.
             can_skip: Whether the user can skip this stage.
-            skip_default: Default value if skipped.
+            skip_default: Values written into the collected data when
+                the stage is skipped, as ``{key: value}``.  A key may
+                instead give ``{"value": ..., "mode": "fill"}`` to
+                override the block mode for itself alone.
+            skip_default_mode: ``"fill"`` (write only where the key
+                is unset -- ``None`` counts as unset, matching
+                ``has()``) or ``"overwrite"`` (the default).
             suggestions: Quick-reply suggestions.
+            greeting_template: Template rendered once, as this stage's
+                opening line, and not repeated afterwards.  Unlike
+                ``response_template`` it does not stand in for the
+                stage's response, so the stage still extracts and still
+                confirms on the user's first turn.
             response_template: Template-driven response (bypasses LLM).
             help_text: Help message for the user.
             reasoning: Registered strategy name (e.g. ``"react"``,
@@ -589,7 +620,9 @@ class WizardConfigBuilder:
             is_end=is_end,
             can_skip=can_skip,
             skip_default=skip_default,
+            skip_default_mode=skip_default_mode,
             suggestions=tuple(suggestions) if suggestions else (),
+            greeting_template=greeting_template,
             response_template=response_template,
             help_text=help_text,
             reasoning=reasoning,
@@ -706,6 +739,12 @@ class WizardConfigBuilder:
         Each network must have its own ``is_start`` and ``is_end``
         stages.
 
+        The network is stored as a wizard config of its own --
+        ``{"name": name, "stages": [...]}`` -- because that is what the
+        loader reads each ``subflows:`` value as, and what
+        ``WIZARD_SUBFLOWS.md`` shows. Callers still supply stages alone,
+        since a subflow's own ``settings:`` is not read when it is pushed.
+
         Args:
             name: Network identifier referenced by
                 ``transition(subflow={"network": name, ...})``.
@@ -715,7 +754,7 @@ class WizardConfigBuilder:
         Returns:
             self for method chaining.
         """
-        self._subflows[name] = [dict(s) for s in stages]
+        self._subflows[name] = {"name": name, "stages": [dict(s) for s in stages]}
         return self
 
     # -- Intent detection --
@@ -853,8 +892,8 @@ class WizardConfigBuilder:
             stage = _stage_from_dict(stage_dict)
             builder._stages.append(stage)
 
-        for name, stages in config.get("subflows", {}).items():
-            builder._subflows[name] = [dict(s) for s in stages]
+        for name, subflow_config in config.get("subflows", {}).items():
+            builder._subflows[name] = dict(subflow_config)
 
         return builder
 
@@ -1101,15 +1140,37 @@ class WizardConfigBuilder:
                     )
                 )
 
+        # Warnings: a greeting leaves a conversation stage's
+        # response_template unreachable (mirrors the loader's check, so a
+        # config built here is told before it is ever loaded)
+        for stage in stages:
+            if stage.mode == "conversation" and stage.greeting_template and stage.response_template:
+                result = result.merge(
+                    ValidationResult.warning(
+                        f"Stage '{stage.name}' sets both greeting_template "
+                        f"and response_template on a conversation-mode "
+                        f"stage — response_template is unreachable; use "
+                        f"clarification_template for later turns"
+                    )
+                )
+
         # Warnings: Python str.format() in templates (should be Jinja2)
         _fmt_re = re.compile(r"(?<!\{)\{(\w+)\}(?!\})")
         for stage in stages:
-            if stage.response_template:
-                match = _fmt_re.search(stage.response_template)
+            for field_name in (
+                "greeting_template",
+                "response_template",
+                "clarification_template",
+                "confirmation_template",
+            ):
+                text = getattr(stage, field_name)
+                if not text:
+                    continue
+                match = _fmt_re.search(text)
                 if match:
                     result = result.merge(
                         ValidationResult.warning(
-                            f"Stage '{stage.name}' response_template uses "
+                            f"Stage '{stage.name}' {field_name} uses "
                             f"Python format syntax {{{match.group(1)}}} — "
                             f"did you mean Jinja2 {{{{ {match.group(1)} }}}}?"
                         )

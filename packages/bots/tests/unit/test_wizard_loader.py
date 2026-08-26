@@ -1,5 +1,7 @@
 """Tests for WizardConfigLoader."""
 
+import inspect
+import logging
 import tempfile
 from dataclasses import fields as dataclass_fields
 from pathlib import Path
@@ -8,6 +10,7 @@ import pytest
 import yaml
 
 from dataknobs_bots.config.wizard_builder import StageConfig
+from dataknobs_bots.testing import WizardConfigBuilder
 from dataknobs_bots.reasoning.wizard_loader import (
     KNOWN_STAGE_FIELDS,
     _STAGE_FIELDS,
@@ -838,14 +841,21 @@ class TestTransformContextFactory:
 
 
 class TestStageFieldRegistrySync:
-    """Verify that the stage field registry, KNOWN_STAGE_FIELDS, and
-    StageConfig stay in sync.
+    """Verify that the stage field registry, KNOWN_STAGE_FIELDS,
+    StageConfig and the test builder stay in sync.
 
     Adding a new stage field to the _STAGE_FIELDS registry should be
     the only change needed in wizard_loader.py.  StageConfig in
     wizard_builder.py must also declare the field so the typed
     builder API exposes it.  These tests catch drift between the
-    three representations.
+    four representations.
+
+    The builder assertion is the one that had been missing, and the
+    drift it now catches was real: ``WizardConfigBuilder.stage()``
+    offered a ``skip_extraction=`` keyword that wrote a key the loader
+    does not recognise, so a stage authored through the project's own
+    mandated test builder was silently discarded with a warning nobody
+    reads in a passing test.
     """
 
     def test_known_stage_fields_matches_registry(self) -> None:
@@ -869,3 +879,140 @@ class TestStageFieldRegistrySync:
             f"{sorted(missing)}. Add them to StageConfig in "
             f"wizard_builder.py so the typed builder API exposes them."
         )
+
+    def test_builder_stage_keywords_are_known_to_the_loader(self) -> None:
+        """Every explicit ``stage()`` keyword must be a field the loader reads.
+
+        A keyword-only parameter on the test builder is a promise that
+        writing it does something.  The loader is the only thing that
+        can keep that promise, so a keyword naming a field outside
+        KNOWN_STAGE_FIELDS is a config surface that silently evaporates.
+
+        Only the *explicit* keywords are checked: ``**extra_fields``
+        exists precisely to pass through what the builder does not
+        name, and what an author puts there is their own claim, not the
+        builder's.
+
+        Only the *test* builder is checked, because it is the only one
+        that can drift here. The production builder's stage keywords
+        flow into the ``StageConfig`` dataclass, where an undeclared
+        one is a ``TypeError`` at construction -- and its parameters
+        are positional-or-keyword, so the filter below would find none
+        of them to check.
+        """
+        parameters = inspect.signature(WizardConfigBuilder.stage).parameters
+        declared = {
+            name
+            for name, parameter in parameters.items()
+            if parameter.kind is inspect.Parameter.KEYWORD_ONLY
+        }
+        unknown = declared - KNOWN_STAGE_FIELDS
+        assert not unknown, (
+            f"WizardConfigBuilder.stage() declares keywords the loader "
+            f"discards: {sorted(unknown)}. Either add a _StageField for "
+            f"each in wizard_loader.py, or drop the keyword -- writing one "
+            f"currently produces an 'unrecognized field' warning and no "
+            f"other effect."
+        )
+
+
+class TestGreetingTemplateValidation:
+    """The one collision ``greeting_template`` creates, reported at load.
+
+    On a conversation-mode stage both fields mean "first render", and
+    precedence gives the greeting — so the ``response_template`` beside
+    it never renders.  That is the same silent inertness the field was
+    added to remove, so the loader says so rather than leaving the
+    author to discover it in a transcript.
+    """
+
+    def test_greeting_and_response_on_a_conversation_stage_warns(
+        self, wizard_loader: WizardConfigLoader, caplog
+    ) -> None:
+        config: dict = {
+            "name": "test-wizard",
+            "stages": [
+                {
+                    "name": "chat",
+                    "is_start": True,
+                    "is_end": True,
+                    "mode": "conversation",
+                    "prompt": "Converse.",
+                    "greeting_template": "Hello!",
+                    "response_template": "Never rendered.",
+                }
+            ],
+        }
+        with caplog.at_level(logging.WARNING):
+            wizard_loader.load_from_dict(config)
+
+        assert any(
+            "'response_template' is unreachable" in r.getMessage()
+            for r in caplog.records
+            if r.levelname == "WARNING"
+        ), f"no unreachable-template warning in {[r.getMessage() for r in caplog.records]}"
+
+    def test_greeting_and_response_on_a_structured_stage_is_silent(
+        self, wizard_loader: WizardConfigLoader, caplog
+    ) -> None:
+        """Both fields on a structured stage is the supported shape.
+
+        The greeting opens; the ``response_template`` renders from the
+        first user turn onward.  Neither is unreachable, so nothing is
+        reported.
+        """
+        config: dict = {
+            "name": "test-wizard",
+            "stages": [
+                {
+                    "name": "collect",
+                    "is_start": True,
+                    "is_end": True,
+                    "prompt": "Collect.",
+                    "greeting_template": "Hello!",
+                    "response_template": "Recorded: {{ topic }}",
+                    "schema": {"type": "object", "properties": {"topic": {"type": "string"}}},
+                }
+            ],
+        }
+        with caplog.at_level(logging.WARNING):
+            wizard_loader.load_from_dict(config)
+
+        assert not [r.getMessage() for r in caplog.records if "unreachable" in r.getMessage()]
+
+    @pytest.mark.parametrize(
+        "field_name",
+        [
+            "greeting_template",
+            "response_template",
+            "clarification_template",
+            "confirmation_template",
+        ],
+    )
+    def test_python_format_syntax_warns_on_every_template_field(
+        self, wizard_loader: WizardConfigLoader, caplog, field_name: str
+    ) -> None:
+        """The str.format()-vs-Jinja2 check enumerates fields by name.
+
+        It had listed only ``response_template`` and ``prompt``, so a
+        ``{name}`` in any of the other template fields went unreported.
+        """
+        config: dict = {
+            "name": "test-wizard",
+            "stages": [
+                {
+                    "name": "start",
+                    "is_start": True,
+                    "is_end": True,
+                    "prompt": "Go",
+                    field_name: "Hello {name}",
+                }
+            ],
+        }
+        with caplog.at_level(logging.WARNING):
+            wizard_loader.load_from_dict(config)
+
+        assert any(
+            field_name in r.getMessage() and "Python format syntax" in r.getMessage()
+            for r in caplog.records
+        ), [r.getMessage() for r in caplog.records]

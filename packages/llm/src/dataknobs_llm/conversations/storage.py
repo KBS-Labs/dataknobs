@@ -130,11 +130,15 @@ import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Dict, List
+from typing import TYPE_CHECKING, Any, Dict, List
 
 from dataknobs_structures.tree import Tree
 from dataknobs_llm.llm.base import LLMMessage
 from dataknobs_llm.exceptions import StorageError, SchemaVersionError
+
+if TYPE_CHECKING:  # pragma: no cover - annotation-only, no runtime import
+    from dataknobs_data import AsyncDatabase
+    from dataknobs_llm.tools.context import ToolWizardState
 
 # Current schema version - increment when making schema changes
 SCHEMA_VERSION = "1.1.0"
@@ -392,15 +396,42 @@ class ConversationState:
     def __post_init__(self) -> None:
         """Initialize transient runtime state.
 
-        ``turn_data`` is per-turn cross-middleware communication state.
-        Populated by the bot layer before each LLM call and cleared
-        after the turn completes.  Stored as a plain attribute (not a
-        dataclass field) so it is invisible to ``dataclasses.asdict()``
-        and ``dataclasses.fields()`` — only the custom ``to_dict()``
-        and ``from_dict()`` matter for serialization, and they
-        deliberately exclude it.
+        Both attributes below are per-turn channels, populated by the
+        layers above and cleared when the turn completes.  Both are plain
+        attributes rather than dataclass fields, so they are invisible to
+        ``dataclasses.asdict()`` and ``dataclasses.fields()`` — only the
+        custom ``to_dict()`` and ``from_dict()`` matter for
+        serialization, and they deliberately exclude both.  Nothing here
+        is persisted, and nothing here may be relied on outside the turn
+        that set it.
+
+        Both assume the same single-turn-at-a-time contract the rest of
+        this object does (see ``ConversationManager.scoped_middleware``):
+        one turn writes a channel, that turn's readers read it, and the
+        turn's teardown clears it.  Two turns running concurrently
+        against the same cached manager would share both channels, and
+        for ``live_wizard_state`` that means sharing wizard data that one
+        of them is going to persist.
+
+        ``turn_data`` is cross-middleware communication state, populated
+        by the bot layer before each LLM call.
+
+        ``live_wizard_state`` is the live view of wizard state a
+        reasoning strategy publishes for the duration of a turn, held by
+        reference so that a tool reading it sees this turn's values and a
+        tool writing to it writes to the wizard's own data.
+        :meth:`dataknobs_llm.tools.context.ToolExecutionContext.from_manager`
+        prefers it over rebuilding the state from persisted metadata, and
+        a strategy that publishes nothing leaves it ``None`` — which is
+        the pre-existing behaviour, not a degraded one.
+
+        Keeping it *out* of ``metadata`` is deliberate and load-bearing:
+        wizard data is deep-copied on restore precisely so that live
+        state and persisted metadata cannot share a reference, and this
+        channel must not reintroduce that sharing from the other side.
         """
         self.turn_data: Dict[str, Any] = {}
+        self.live_wizard_state: ToolWizardState | None = None
 
     def get_current_node(self) -> Tree | None:
         """Get the current tree node."""
@@ -933,7 +964,7 @@ class DataknobsConversationStorage(ConversationStorage):
         dataknobs_data.database_factory: Backend creation utilities
     """
 
-    def __init__(self, backend: Any):
+    def __init__(self, backend: "AsyncDatabase"):
         """Initialize storage with dataknobs backend.
 
         Args:

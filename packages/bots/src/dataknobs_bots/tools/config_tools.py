@@ -106,40 +106,30 @@ def _callable_from_config(config: dict[str, Any], key: str) -> Callable[..., Any
 
 
 def _get_wizard_data(context: ToolExecutionContext) -> dict[str, Any]:
-    """Extract wizard collected data from tool execution context (copy).
+    """A read-only snapshot of the wizard's collected data.
 
-    Returns a shallow copy of the wizard's collected data. Use this for
-    read-only access to wizard data.
+    A shallow copy, deliberately: the tools on this accessor hand the dict
+    to a config builder and read keys out of it, and none of them means to
+    write. :meth:`~dataknobs_llm.tools.context.ToolExecutionContext.wizard_data`
+    returns the wizard's own dict, so passing it on unguarded would make an
+    incidental write by a builder a write into live wizard state.
 
-    Args:
-        context: The tool execution context.
-
-    Returns:
-        A copy of the wizard's collected data dict, or empty dict if unavailable.
-    """
-    if context.wizard_state and context.wizard_state.collected_data:
-        return dict(context.wizard_state.collected_data)
-    return {}
-
-
-def _get_wizard_data_ref(context: ToolExecutionContext) -> dict[str, Any]:
-    """Get a mutable reference to wizard collected data.
-
-    Returns the original collected_data dict (not a copy) for tools that
-    need to mutate wizard state (e.g., KB tools that add/remove resources).
-
-    Uses ``is not None`` rather than truthiness so that an empty dict
-    (new wizard session) is still returned by reference.
+    A tool that *does* mean to write calls ``context.wizard_data()``
+    directly and handles ``None`` — see the KB tools. There is no
+    reference-returning counterpart here any more; it existed to spell the
+    same thing twice, and its empty-dict fallback let a tool write into a
+    throwaway and report success.
 
     Args:
         context: The tool execution context.
 
     Returns:
-        The wizard's collected data dict reference, or empty dict if unavailable.
+        A copy of the wizard's collected data, or an empty dict when there
+        is no wizard state. Empty and absent are not distinguished, which
+        is safe here only because nothing on this path writes.
     """
-    if context.wizard_state and context.wizard_state.collected_data is not None:
-        return context.wizard_state.collected_data
-    return {}
+    data = context.wizard_data()
+    return dict(data) if data else {}
 
 
 def _is_safe_config_name(name: str) -> bool:

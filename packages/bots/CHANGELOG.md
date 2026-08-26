@@ -7,7 +7,509 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Fixed
+
+- **`WizardConfigBuilder.add_subflow_network()` now produces a subflow the
+  loader can read.** Each value under `subflows:` is a whole wizard config --
+  `{name: ..., stages: [...]}` -- which is what `WizardConfigLoader` hands to
+  `load_from_dict` and what the subflow guide documents. The builder collected
+  a bare list of stages, so neither direction worked: `to_dict()`, whose
+  docstring promises loader compatibility, emitted a shape `load_from_dict`
+  refuses with `Wizard config must have 'stages' field`, and `from_dict()`
+  iterated a documented `subflows:` section as though it were a list and got
+  its keys, raising `dictionary update sequence element #0 has length 1`. So a
+  wizard built with the builder could not declare a subflow, and a wizard YAML
+  that declared one could not be read back into the builder -- which
+  `from_file()` is the documented way to do.
+
+  Callers still pass stages alone; the wrapping happens once, on the way in.
+  The `WizardConfig.subflows` field is now typed as the configs it holds. The
+  method had no caller and no test anywhere in the tree, which is the whole
+  explanation for how a public method that round-trips through neither
+  direction survived; the round trip is now pinned in both.
+
+- **A subflow's `is_end` stage now renders its `response_template`.** The
+  stage was entered and left inside one turn -- reaching it is what makes the
+  subflow poppable -- so the pop ran in the same step and the parent's return
+  stage rendered instead. The end stage's template was parsed, validated, and
+  on screen nowhere.
+
+  The cost is not the usual missing line. A subflow that can fail ends on a
+  stage whose whole job is to say *nothing was saved, and here is why*, and
+  that refusal was the one message that never appeared: the flow discarded
+  the work and reported success. A completion message is the natural thing to
+  put on an end stage, and it silently was not one.
+
+  The template renders **before** the pop, against the subflow's own data and
+  under its own stage name, and is prepended to the turn ahead of whatever the
+  parent's return stage renders. A value that exists only inside the subflow
+  interpolates correctly; the pop then replaces the data with the parent's, so
+  fields the parent needs still travel through `result_mapping` as before.
+
+  Both pop paths render, not just one -- the post-transition step and the
+  auto-advance loop pop through the same method now, so an end stage reached
+  by `auto_advance` says the same thing as one reached by an ordinary
+  transition. Unchanged: `auto_advance: true` on an end stage still does
+  nothing, the auto-advance loop excluding end stages by design; and `prompt`
+  is not among the templates a departing stage can offer -- only
+  `greeting_template`, `response_template` and `clarification_template` are --
+  so an end stage carrying only a `prompt` is still silent.
+
+  A template that fails to render no longer takes the departure with it.
+  Putting a render in front of the pop put it in front of a structural step
+  that never had one, and the render is reached for the first time by this
+  change: an end-stage template that raises -- `{{ data.x }}` does, the
+  render context exposing collected values as top-level names and defining no
+  `data` -- would have escaped before the pop, leaving the subflow unable to
+  exit on that turn or any later one. The message is decoration and the
+  departure is structural, so a failed render is logged and contributes
+  nothing. The same guard covers the auto-advance loop, which collects a
+  stage's message before stepping past it.
+
+- **`skip_default` no longer has to overwrite a value the user set.** The
+  block was applied with a bare `dict.update`, which cannot be asked to do
+  anything else: a key the user set five turns ago was replaced exactly as
+  readily as one never touched, with no log line and nothing left to say the
+  value had ever been different. Every downstream reader -- conditions,
+  transforms, emission, templates -- then saw the stage's default as though
+  the user had chosen it.
+
+  A stage now declares `skip_default_mode: fill` to write only where a key is
+  unset, and a key may state its own mode with `{value: ..., mode: fill}`
+  where the block's is wrong for it alone. Both directions are needed in one
+  block: an option the user configured must survive the skip that saves it,
+  while a flag guarding an unconfigured branch must be cleared by that same
+  skip or the user is pushed back into the branch they were leaving.
+  `overwrite` remains the default, so a block that names no mode behaves
+  exactly as it did.
+
+  "Unset" is the reading the rest of the package already uses -- a key is set
+  when its value is not `None`, which is what `has()`, the confidence gate and
+  schema-default application all ask. A key extraction left holding `None` is
+  one `fill` writes.
+
+  A mapping is an annotation **only when it names exactly `value` and `mode`**,
+  so a nested default keeps meaning what it reads as: `{provider: "x"}` names
+  no `value`, `{value: "", label: "Email"}` names one but would lose `label`,
+  and `{value: 3}` names nothing an annotation needs, since an entry declaring
+  no mode takes the block's anyway. A mapping that names one of the two modes
+  without being an annotation is reported and then written as the value it
+  reads as, because `{values: false, mode: fill}` is a typo whose silent
+  reading puts a *truthy* mapping where the author wrote `false`. Keys whose
+  value is actually replaced are logged at DEBUG; a default equal to what was
+  already there has replaced nothing and is not reported. Values are copied on
+  the way in, so a transform editing a nested default cannot reach the loaded
+  config the next conversation starts from.
+
+  **One config shape changes meaning:** a `skip_default` key whose value is a
+  mapping naming *exactly* `value` and `mode` was a nested default and is now
+  read as an annotation. That collision is irreducible -- the two are the same
+  text -- so wrap it to say otherwise:
+  `knob: {value: {value: 3, mode: "off"}, mode: overwrite}`.
+
+  Two things this makes explicit rather than incidental. The skip marker
+  `_skipped_<stage>` is written **before** any default lands, and that
+  ordering is now a documented guarantee -- it is what lets anything running
+  on the skip turn tell the user's own value from the stage's. And a
+  `skip_default` of the wrong shape is reported instead of dropped: the
+  `isinstance(..., dict)` guard has silently discarded scalars since the field
+  was introduced, while the config builder declared the parameter `bool | None`
+  and the package's own documentation showed a string -- so an author following
+  either got a stage that quietly did nothing on skip.
+
+  `SkipDefaults`, `SkipDefaultEntry` and the mode constants are exported from
+  `dataknobs_bots.reasoning`, so a consumer can name what `get_skip_defaults()`
+  returns. `SkipDefaults.from_stage()` is the constructor for an authored
+  block; `from_dict()` takes the projected `{"entries": ...}` shape and now
+  rejects an authored one rather than yielding an empty block that applies
+  nothing.
+
+- **A stage field left unset is no longer reported as ill-typed.**
+  `WizardFSM._stage_field` replaces a wrong-typed value with the field's
+  documented default and warns; an *absent* field reaches it as `None`, which
+  is not a wrong type but the registry's own marker for "not declared". Any
+  accessor whose default is not `None` therefore accused every config leaving
+  the field out. No accessor could reach the *absent* case before -- every
+  shipped one asks for a field the registry already defaults -- so nothing
+  warned in practice, but it made `_stage_field` unusable for exactly the
+  fields most worth reading through it. A field authored as an explicit
+  `null` did reach it, and is now read as unset rather than reported as
+  ill-typed, which is what a YAML `null` says.
+
+- **Stage-dependent state resolves against the FSM that owns the stage.**
+  `WizardNavigator` holds both the main FSM and the subflow manager, and each
+  of its methods picked one by hand; five picked the main FSM, which inside a
+  push does not have the current stage. Asking it returned an empty metadata
+  dict, indistinguishable from a stage that declared nothing -- so a subflow
+  stage declaring `can_skip: true` was told it was required, its own
+  `navigation.skip.keywords` were never found (the wizard-level defaults
+  applied instead), back landed on the right stage and then rendered one with
+  no prompt, schema or template, and an amendment jump to a subflow stage
+  found nothing. `WizardResponder` picked by hand too: a custom
+  `settings.context_template` rendering `can_skip` or `can_go_back` was handed
+  the main FSM's answer, so the system prompt told the model a skippable
+  subflow stage was required. The same stage config was correct standalone and
+  a dead end when pushed, with nothing in the config to say so.
+
+  Every site now asks `SubflowManager.fsm_for_state()`, which derives the
+  active FSM from the wizard state's subflow stack -- one rule, in the class
+  that owns the stack, correct both during a turn and outside one.
+  `WizardFSM` grew `stage_metadata_for()`, `has_stage()` and
+  `find_stage_owner()` so callers stop indexing another class's private
+  attribute. **Note for existing configs:** stage-level keywords replace the
+  wizard-level ones per command, as they always have outside a subflow, so a
+  subflow stage declaring `skip.keywords` now answers to those words and no
+  longer to the default `skip` -- keep `skip` in the list to have both.
+
+- **Amendments resolve a section against the whole flow, and unwind to reach
+  it.** The section-to-stage table confirms the wizard actually has the stage
+  it maps to, and asked that of one frame -- so the main flow never found a
+  stage living in a subflow, and once a subflow was pushed it stopped finding
+  main-flow stages, which is reachable because `complete_wizard` sets
+  completion with no subflow guard. Membership is now asked of the whole flow
+  tree (`WizardFSM.find_stage_owner`), because "is this a stage of this wizard"
+  is a property of the config and not of where the user stands. Acting on the
+  answer is separate and does read the stack: an amendment whose target lives
+  in the main flow while a subflow is open unwinds the subflow first, rather
+  than restoring the subflow's FSM to a stage it does not have; one naming a
+  stage inside some *other* subflow is declined and logged, since entering a
+  subflow needs a parent stage and a data mapping an amendment does not have.
+
+- **Restart inside a subflow leaves the subflow.** `restart_cleanup` reset the
+  main FSM and cleared data, history and banks, but left the subflow stack
+  loaded and the active subflow FSM set. The wizard then reported the main
+  flow's start stage while rendering the subflow stage's prompt, schema and
+  template -- and could not recover: `should_push` declines while already in a
+  subflow, and `should_pop` needs an end stage of the subflow, which the main
+  flow's start stage is not. Restart, the escape hatch of last resort, was
+  what wedged the wizard. It now unwinds the stack before restarting, through
+  `SubflowManager.unwind_all()` -- which also **records a `subflow_pop` for
+  each frame it tears down**, so the transition trail no longer holds a
+  `subflow_push` that nothing closes. A consumer pairing those records, or
+  reconstructing depth from them, was wrong in exactly the case this made
+  reachable.
+
+  Two further pieces of state survived the reset, because `replace_data({})`
+  empties `data` alone: **task completion** (`tasks` round-trips through
+  `fsm_state`, so a restarted wizard reported the previous run's completed
+  tasks -- a checklist that starts full on a flow the user just asked to start
+  over) and **`transient`** (merged into the metadata a UI reads). The task
+  *list* is rebuilt from the config rather than emptied: the wizard still has
+  the same tasks to do, none of them done.
+
+- **The read-only state snapshot describes the subflow stage it is standing
+  on.** `WizardReasoning.get_state_snapshot()` -- the documented way a UI reads
+  wizard state -- asked the **main** FSM for the current stage's metadata,
+  skippability and back-navigability, and inside a push the main FSM does not
+  have that stage. A skippable subflow stage therefore reported `can_skip:
+  False` and its `suggestions` came back empty, so a skip button disappeared
+  and quick replies vanished for as long as the subflow was open. `stage_index`
+  was wrong in its own way: the subflow's stage name is absent from the main
+  flow's stage list and was reported as index `0`, a progress bar that jumps
+  back to the start whenever a subflow opens -- while the same object's
+  `stages` roadmap correctly marked the *parent* stage as current, so the
+  snapshot contradicted itself. It now resolves through `_fsm_for_state()`,
+  the state-derived accessor the rest of the class already uses, and reports
+  main-flow progress against the parent stage that pushed the subflow.
+  `suggestions` now also goes through the reader the canonical metadata
+  writer uses, so a quick reply is Jinja-rendered (a UI was being handed the
+  raw `{{ ... }}` as a button label) and type-checked (a `suggestions:`
+  written as a bare string became one button per character).
+  `total_stages`, `data`, `history` and the task fields are unchanged.
+
+  **The mixed frame is documented on the type.** Inside a subflow the snapshot
+  answers `current_stage`, `can_skip`, `can_go_back` and `suggestions` for the
+  subflow stage, while `stage_index`, `total_stages` and `stages` stay on the
+  main flow and report the parent that pushed it. That table now lives on
+  `WizardStateSnapshot` itself as well as in the observability guide, so a
+  reader arriving through the API docs sees it.
+
+- **`snapshot_from_metadata()` reports the same state its instance-method
+  sibling does.** The static constructor -- the documented path for "you have
+  the conversation metadata but not the `WizardReasoning` instance" -- rebuilt
+  the stage-derived fields from `fsm_state` plus the caller's
+  `stage_definitions`, ignoring the values the wizard had already derived into
+  the same metadata dict one level up. Two consequences. `can_skip`,
+  `can_go_back` and `suggestions` were never passed to the constructor at all,
+  so they took the dataclass defaults (`False`, `True`, `[]`) in **every** flow
+  -- a UI on this path never showed a skip button and never showed a quick
+  reply, subflow or not. And inside a subflow the recomputation looked for the
+  subflow's stage name among the main flow's definitions, found nothing, and
+  reported `stage_index: 0` with no stage marked `"current"` in the roadmap.
+  All six fields now come from the metadata the wizard wrote.
+  **`stage_definitions` is unchanged for callers who need it:** it is the
+  fallback for metadata predating those fields or built by hand from
+  `fsm_state`, and is simply not consulted when the metadata is current.
+  `data` and `history` deliberately still come from `fsm_state`, so the two
+  constructors agree on those as well -- and are now **copied** out of it, as
+  the instance method already copied them. Returned by reference, a consumer
+  appending to `snapshot.history` on a type documented read-only silently
+  rewrote persisted wizard state.
+
+- **A `navigation:` block is type-checked before it is used, wherever it was
+  written.** The block is authored config and reached its readers uncoerced,
+  and every level of it was consumed without a check. `navigation: "yes"`
+  raised `AttributeError` on an ordinary turn (and, at wizard level, a
+  `ValueError` about *dictionary update sequences* out of `dataknobs-common`,
+  naming neither the wizard nor the field); a command declared as a scalar
+  raised one level down; `keywords: [1, 2]` raised out of `.lower()`; and
+  `enabled: "false"` is a **truthy string**, so a command the author turned off
+  stayed on while the field held a `str` on a dataclass declaring `bool`.
+  Quietest and worst: `keywords: "done"` was *iterated*, arming `d`, `o`, `n`
+  and `e` as four one-letter keywords, so a user answering `d` triggered a
+  command meant for `done` -- nothing raised, nothing was logged, and the
+  config read correctly.
+
+  A field that cannot be read now falls back to its documented default **alone**
+  -- a bad `skip` does not discard a good `back` -- and is reported at WARNING.
+  This is the contract `WizardFSM` gained for wrong-typed stage fields, applied
+  to the one config block that has two readers.
+
+  **Every reader now shares one implementation.** Wizard-level
+  `settings.navigation` and a stage's own `navigation:` block had a copy of the
+  merge logic each, and both copies had all four defects; they now call
+  `NavigationCommandConfig.normalize_raw()`, so what a field means cannot
+  depend on which of the two places it was written in. The stage-level report
+  is de-duplicated per stage and field, because that reader runs on every
+  navigation check of every turn.
+
+  The same is true of `keywords` wherever it appears. Four things in this
+  package are authored as a keyword list and then *iterated*, and they now
+  share one predicate (`is_keyword_list`) while responding at the layer each
+  belongs to:
+
+  - `NavigationCommandConfig.__post_init__` is the narrowest path every writer
+    goes through, including `from_dict` -- the base coercion passes a `str`
+    through untouched, so a string reached the constructor and became a tuple
+    of characters there. Constructing one with a non-list now raises
+    `TypeError`; authored config never reaches it, because `normalize_raw`
+    substitutes the documented default first.
+  - `intent_confirm:` **rejects** a wrong-typed `intents.<name>.keywords` at
+    load, beside the shape checks it already ran there -- nothing has started
+    yet and an author can still fix the file.
+  - A hand-rolled `intent_detection:` block, which no synthesizer validates,
+    **drops** an unusable override at classification time (falling back to the
+    classifier's own vocabulary, which is what declaring no keywords already
+    means) and reports it once per intent. With `per_intent_booleans`, a
+    one-character message had been matching an intent meant for a word,
+    writing its flag and firing its transition.
+
+- **A subflow guard now reads what its own stage prepared.** The condition on
+  a `_subflow` transition was evaluated *before* the stage's pre-transition
+  preparation ran, while every other transition condition is evaluated after
+  it. A guard reading a key written by its stage's `routing_transforms:` or by
+  a transition's `derive:` block therefore could not fire on the turn the key
+  was written; it fired on the next one, against a message the user had
+  written in answer to a prompt they never saw -- which was extracted against
+  the wrong stage's schema and discarded when the push finally replaced the
+  data. The guard is now a step of a shared pre-transition sequence
+  (`_prepare_and_route`), after the preparation and still before the FSM step,
+  so a push continues to pre-empt the self-loop arc a subflow transition
+  compiles into. `WIZARD_SUBFLOWS.md` states the resulting visibility boundary
+  per writer.
+
+- **`advance()` can push a subflow.** The non-conversational API ran the
+  pre-transition preparation but never asked whether a subflow should be
+  pushed, while reaching `should_pop` through the shared post-transition
+  sequence -- so it could be carried *out* of a subflow it had no way to enter.
+  Given one config and one data value it stayed where `chat()` pushed. Both
+  paths now run the same sequence.
+
+- **A wizard tool's writes to collected data are no longer discarded.** A
+  `ContextAwareTool` running in a wizard turn reached wizard state through
+  `ToolExecutionContext`, which rebuilt it from the *persisted* conversation
+  metadata. The wizard rewrites that metadata from its own state when the turn
+  is saved, so anything the tool wrote there was overwritten -- while the tool
+  reported success. `WizardReasoning` now publishes its live state on
+  `ConversationState.live_wizard_state` for the duration of the turn, so a
+  tool's writes land in wizard state and survive the save. The channel is
+  cleared beside `turn_data` when the turn tears down.
+
+- **A flow change mid-turn no longer strands a tool on abandoned data.**
+  `WizardState.data` was *rebound* on a subflow push, a subflow pop and a
+  restart, so a flow change between the start of a turn and a tool call left
+  the tool reading the collected data of the run the user had just finished
+  and writing where nothing would read it again -- both indistinguishable
+  from success. `begin_turn` auto-restarts a completed wizard when
+  `allow_post_completion_edits` is off and then continues the turn, which is
+  the shortest path to it. The three sites now call the new
+  `WizardState.replace_data()`, which empties and refills the dict in place.
+
+- **A wizard tool's reads are no longer a turn behind.** The same rebuild made
+  every read as old as the last save, which was hardest to diagnose where a
+  stage declared `tool_result_mapping`: `params:` read live state, so the tool
+  was *called* with this turn's values and *read* the previous turn's. One
+  call, two channels, one turn apart. Both now read the same state.
+
+- **A tool on the first turn of a wizard that does not greet gets real state.**
+  There was no `"wizard"` key in metadata until the first save, so
+  `context.wizard_state` was `None` and the shared accessor handed back a fresh
+  empty dict on every call -- a tool wrote into a throwaway and reported
+  success. Two shipped behaviours were wrong because of it: KB resources added
+  on the first turn vanished, and `AddBankRecordTool` /
+  `UpdateBankRecordTool` stamped `source_stage` / `modified_in_stage` as `""`
+  on the first record of every such conversation, against a comment stating
+  the opposite intent. The bank tools needed no change; they start working
+  because the strategy publishes.
+
+- **The KB tools report missing wizard state instead of writing into nothing.**
+  The five tools in `kb_tools` now reach wizard data through the public
+  `ToolExecutionContext.wizard_data()` and return an error result when it is
+  `None`. The private reference-returning accessor they shared with
+  `config_tools`, and the cross-module private import that reached it, are
+  gone; the read-only accessor `config_tools` uses for its own three tools
+  remains and still hands out a copy.
+
+- **`AddBankRecordTool`'s documented constructor arguments are the real ones.**
+  `TOOLS.md` showed `banks_override=` / `catalog_override=` /
+  `artifact_override=`, which are the internal helper's parameter names. The
+  constructor takes `banks=` / `catalog=` / `artifact=`; the example as
+  published raised `TypeError`.
+
+- **An abandoned stream no longer leaks a turn's `turn_data` into the next
+  one.** `ConversationState`'s per-turn channels are documented as cleared
+  when the turn completes, but the cleanup ran in turn *finalization*, which
+  `stream_chat()` skips when the stream was not fully consumed -- deliberately,
+  so partial output is never written to history. A caller that broke out of
+  the stream, or a client that disconnected, therefore left `turn_data`
+  populated on the cached manager, visible to anything reading that manager
+  before the next turn overwrote it. The cleanup now runs in the `finally`
+  every turn driver executes, so it covers the success, error and
+  stream-abandon paths alike.
+
+### Changed
+
+- **`WizardConfigBuilder.stage()` no longer declares a `skip_extraction`
+  keyword.** `skip_extraction` is a per-turn state flag set by auto-advance,
+  never a stage config field, so the loader discarded what the keyword wrote
+  and warned about an unrecognized field. Callers passing it are unaffected --
+  it lands in `**extra_fields` and behaves exactly as before. The typed
+  `skip_default` parameter changed from `bool | None` to
+  `dict[str, Any] | None`, which is the only shape the runtime has ever
+  honoured. A registry-sync test now asserts that every explicit `stage()`
+  keyword names a field the loader reads, so the class of drift this closes
+  cannot reopen silently.
+
+- **`WizardFSM` no longer reports a matched subflow transition as "none
+  matched".** A subflow transition compiles to a self-loop arc, so a matched
+  one leaves the FSM where it started -- indistinguishable, in the DEBUG log,
+  from a condition that failed. The step-outcome log now decides from the
+  step's own reported transition rather than from what the stage declares: a
+  step that matched nothing still says so -- the ordinary case, since a guard
+  that carries pushes the subflow and a push skips the step entirely -- and a
+  step that stood still on an arc names that arc and the subflow transitions
+  the stage holds, whose push is decided before the step. The message was
+  written twice, once in `step` and once in `step_async`; both now call one
+  `_log_step_outcome`.
+
+- **A declined subflow push says so.** `SubflowManager` logs the guard's
+  decision at DEBUG on both branches, naming the conditions that were asked.
+  A decline previously left no trace at all, so it looked the same as a stage
+  with no subflow transition, as a misspelled condition, and as one that
+  raised.
+
+- **A `WizardFSM` stage accessor returns the type it declares.** Stage
+  metadata is authored config carried through uncoerced, so a stage written
+  `can_skip: "no"` gave a *truthy string* from a method declared `-> bool` and
+  the stage the author marked unskippable was skippable; `tools:` written as a
+  bare string iterated character by character. The seven typed accessors now
+  share one `_stage_field` read that returns the field's documented default
+  when the authored value is of the wrong type, and warns once per stage and
+  field. `get_transition_condition` reports a non-string condition as `None`
+  rather than writing it into a transition record as the expression that
+  fired, and `resolve_function` treats a non-callable registry entry as
+  absent instead of handing it to a caller that will call it.
+
+- **Loading a config with an ill-typed text field no longer raises.** Two of
+  the loader's *warning* heuristics — the Python-format check over the
+  template fields and the natural-language check over conditions — searched an
+  authored value with a regex directly, so a non-string prompt or condition
+  took the whole load down with a `TypeError` out of `re`. A check that exists
+  to advise about a config now skips what it cannot read.
+
 ### Added
+
+- **The loader now says which of a subflow's config is inert.** Two config
+  surfaces parsed, validated and read as correct while doing nothing, with no
+  report at load, at runtime or in a log. Both are now warnings from
+  `WizardConfigLoader`, which loads every subflow through the same entry point
+  the top-level wizard uses.
+
+  **A pushed subflow's `settings:` block is never read.** A wizard's settings
+  are hoisted once, off the top-level flow, into the collaborators built from
+  them -- the extractor holds `extraction_scope`, the navigator the merged
+  navigation config -- and those outlive any push. So a subflow declaring
+  `extraction_scope: current_message` runs under whatever the parent declared,
+  including while its own stage is current. Honouring the block would mean
+  rebuilding that collaborator graph on every push and pop, so the config is
+  answered where it is authored instead: the warning names the keys it found
+  and points at `extraction_scope` and `auto_advance`, which are stage fields
+  and *are* read from the flow a push made active. The same file loaded on its
+  own is a wizard and honours every key, so the warning is about how the config
+  is being used, not about the config -- and a top-level wizard is not warned.
+
+  **`auto_advance: true` on an end stage is never acted on**, in a subflow or
+  out of one. `can_auto_advance` returns `False` for any stage carrying
+  `is_end` before it reaches the schema or the transition conditions; the
+  exclusion is deliberate, since advancing out of a flow that has ended has
+  nowhere to go. `auto_advance: false` on an end stage is not reported: it asks
+  for what already happens.
+
+  Both are warnings and neither refuses the config, which is this validator's
+  contract for all eight of its checks. A subflow's `settings:` is not *wrong*,
+  it is *unread*.
+
+- **`BotTestHarness.create(custom_functions=...)`** threads transition
+  functions -- routing transforms, transforms, validators -- into the wizard
+  reasoning config, so a test exercising them stays on the harness rather than
+  hand-building a bot config. **`WizardConfigBuilder.transition(derive=...)`**
+  declares a transition's derivation rules.
+
+- **`WizardState.replace_data()`** -- replaces a wizard's collected data in
+  place, keeping the dict's identity. `WizardState.data` is handed out by
+  reference, so code holding it across a subflow push, a subflow pop or a
+  restart keeps the dict the wizard is actually using.
+
+- **`greeting_template`: a wizard stage field for an opening line the stage
+  says once.** It renders on the turn the stage first speaks — the start stage
+  on `greet()`, any other stage on the turn it is entered — and is then stepped
+  over, whatever the stage's mode.
+
+  A structured stage had no way to open with fixed text. Its
+  `response_template` is the stage's *response*, deliberately re-rendered every
+  turn so a review summary tracks the data behind it, and pressed into service
+  as a greeting it repeats the same sentence for as long as the wizard stays
+  there. The only escape was `mode: conversation`, which turns extraction off.
+  A `greeting_template` opens the stage and steps aside: extraction,
+  confirmation and transitions behave exactly as they would without it.
+
+  Two things follow from "steps aside" and are worth stating, because a shared
+  counter would break both. Greeting a stage does not consume the first render
+  its `confirm_first_render` is waiting for, so a stage that greets still
+  confirms on the user's first answer. And a greeting delivered on the subflow
+  push path — which deliberately leaves the render count at 0, so the pushed
+  stage's template reads as an unanswered question — is still recorded as
+  delivered, so it is not said twice.
+
+  Available as `greeting_template` on the stage config, on
+  `WizardConfigBuilder.add_structured_stage()` and `.add_conversation_stage()`,
+  and on the test builder's `stage()` (which also gains the
+  `clarification_template` parameter it was missing). The strategy-level
+  `greeting_template` under `reasoning:` composes with it — see *Changed*.
+
+- **The loader reports a `response_template` that a `greeting_template` has
+  made unreachable.** On a `mode: conversation` stage both fields mean "first
+  render" and the greeting wins, so the `response_template` beside it never
+  appears. That is the same silent inertness the new field exists to remove,
+  so it is named at load time — a `WARNING` on the stage, pointing at
+  `clarification_template` for the later turns. `WizardConfigBuilder.validate()`
+  reports the same warning, so a config built in Python hears it before it is
+  ever loaded.
+
+  The loader's existing `str.format()`-vs-Jinja2 check now covers
+  `greeting_template`, `clarification_template` and `confirmation_template` as
+  well as `response_template` and `prompt`; it had enumerated template fields
+  by name and never caught up. Same for the builder-side copy.
 
 - **Wizard transition conditions are checked when the wizard is loaded.** A
   condition the expression engine will refuse — multiline, a syntax error,
@@ -24,6 +526,76 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   runs. Load time is the last moment the report reaches them.
 
 ### Changed
+
+- **`greeting_template` is declared once for the reasoning-strategy family, and
+  read from one place.** A new `ReasoningConfig` base carries the field and
+  every strategy config inherits it; `ReasoningStrategy.greeting_template` is
+  a read-only property resolving the two routes that supply it — the typed
+  config, and the constructor keyword a directly-subclassed strategy uses.
+
+  `ReasoningStrategy` has always documented the field as universal, but each
+  of the five configs declared it and each of the five strategies copied it
+  onto itself. A strategy that skipped either half was not reported: a config
+  class that omits a key does not reject it, it drops it. "Universal" was
+  therefore a property every strategy had to re-establish by hand, and the
+  wizard's config had already lost it once.
+
+  No behaviour changes for any built-in strategy. Consumers writing their own
+  strategy get a shorter obligation: inherit `ReasoningConfig` and the field
+  arrives, instead of declaring it and binding it correctly. The
+  constructor-keyword pattern in `CUSTOM_STRATEGIES.md` is unchanged and
+  remains supported — and is now checked, along with the config route, over
+  every registered strategy.
+
+  Read the value through `ReasoningStrategy.greeting_template`.
+  `_greeting_template` is private, is half of one route, and no longer holds
+  the config value.
+
+- **BREAKING: the five reasoning-strategy configs are keyword-only.**
+  `SimpleReasoningConfig`, `ReActReasoningConfig`, `GroundedReasoningConfig`,
+  `HybridReasoningConfig` and `WizardReasoningConfig` no longer accept
+  positional arguments. Construct them by keyword, or by `from_dict` — which
+  is how they are built from YAML, and which is unaffected.
+
+  Inheriting `greeting_template` from a base is what forces it. A base field
+  is declared ahead of every subclass field, so a defaulted one would sit in
+  front of the wizard's required `wizard_config` and the class would be
+  rejected at import. `kw_only` moves it behind the `*` instead — and that
+  shifts each config's own fields one position left.
+
+  Four of the five would have raised on a call written against the old order.
+  The wizard would not: its second positional was `greeting_template` and
+  became `config_base_path`, both `str | None`, so
+  `WizardReasoningConfig(cfg, "Hello!")` would still have constructed, with no
+  greeting and a nonsense base path. Nothing about the value distinguishes a
+  greeting from a path, so only the signature can reject it. Making the whole
+  family keyword-only turns every stale positional call into a `TypeError` at
+  the call site rather than a wrong field somewhere downstream.
+
+  Migration is mechanical: name every argument, including the first.
+  `WizardReasoningConfig(wizard_config=cfg, greeting_template="Hello!")`.
+
+- **`ReasoningConfig` is exported from `dataknobs_bots.reasoning`.** It is the
+  base a consumer's own strategy config inherits.
+
+- **Wizard bots honour the strategy-level `greeting_template`.** A wizard
+  configured with `reasoning: {strategy: wizard, greeting_template: ...}` now
+  opens with that line instead of ignoring it. It stands in as the start
+  stage's `greeting_template` when that stage sets none, so it renders once and
+  is stepped over — and a start stage carrying its own greeting still wins.
+
+  `ReasoningStrategy` documents the field as universal and every other strategy
+  reads it, but `WizardReasoning` overrides `greet()` and had nowhere to put
+  it: until a stage could carry a greeting, "render this once at the opening"
+  had no wizard-shaped meaning. So the value was discarded — silently on the
+  config-driven path, where `WizardReasoningConfig` projected the unknown key
+  away, and as a `TypeError` on the direct constructor.
+
+  **This is a documented limitation lifted, not a bug fixed.** The old
+  behaviour was stated in the configuration guide, which now documents the
+  precedence chain instead. Nothing can have depended on the old behaviour —
+  the value never reached anything — but a bot that sets the field today will
+  start greeting with it.
 
 - **A condition that fails on a turn's data is logged at `DEBUG` rather than
   `WARNING`.** `data['name']` before `name` has been captured is the ordinary
@@ -57,6 +629,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the `dataknobs-llm` entries for the typing that made this possible.
 
 ### Fixed
+
+- **`ErrorRaisingStrategy` accepts `greeting_template`, so building it from
+  config no longer raises `TypeError`.** It is a direct `ReasoningStrategy`
+  subclass, so it inherits the base `from_config`, which calls
+  `cls(greeting_template=...)` — the base class's own universal field, which
+  its constructor did not accept. Any config-driven construction of the
+  shipped strategy failed on the way in. Its `greet()` still raises, which is
+  what the construct is for; the template it now accepts is never rendered.
+
+- **Every registered reasoning strategy is held to the universal
+  `greeting_template` contract.** `ReasoningStrategy` documents the field as
+  universal, but the family has no shared config base: each strategy config
+  re-declares the field and each strategy re-binds it, and a strategy that
+  skips either half fails silently, because an undeclared key is dropped
+  rather than reported. The parity guard already in place cannot see it — it
+  compares a config class against a constructor signature, and for a
+  consumer-mixin adopter that signature is the mixin's variadic one, so the
+  comparison is empty. A registry-driven test now asserts that every
+  registered strategy accepts the field at construction and renders it from
+  `greet()`, which also covers the three built-ins whose config-factory
+  greeting round-trip was untested. Because it iterates the registry, a
+  strategy a consumer registers is held to the same contract.
 
 - **A conversation-mode stage renders its `clarification_template` when the
   turn is streamed, not only when it is buffered.** The two response paths
@@ -105,6 +699,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   now the one the author wrote, rather than the loader's rewrite of it.
 
 ### Documented
+
+- **The subflow push/pop lifecycle table said nothing about the end stage's
+  render.** Its `Pop` row went straight from "subflow reaches an `is_end` stage"
+  to `result_mapping`, so a reader following the table still had the belief that
+  an end stage is silent -- the one the pre-pop render exists to falsify, and
+  which the subflow guide contradicts at length. The row now names the render
+  and its order.
+
+- **The subflow guide now says which of a subflow's own config is live inside
+  a push.** The rule is by level rather than by field: everything a subflow
+  declares on a *stage* means the same thing inside a push as it does when the
+  same file is loaded as a wizard of its own, because the stage carries its
+  fields into the subflow's own FSM and every read of the stage in play goes
+  to the FSM that owns it. A subflow's wizard-level `settings:` block is the
+  exception and is never consulted -- settings are read once off the top-level
+  flow when the strategy is built, and the collaborators built from them
+  outlive every push and pop. The block is parsed and stored on the subflow's
+  FSM, which is why nothing about it looks wrong.
+
+  `navigation` is called out on its own, being the one word that appears at
+  both levels while the levels disagree: a subflow stage's own `navigation:`
+  block is live, and the same block written under that subflow's `settings:`
+  is not. The guide points at the stage-level `extraction_scope` and
+  `auto_advance` fields as the way to say per-subflow what `settings:` cannot,
+  and notes that `auto_advance: true` on an `is_end` stage is inert for a
+  reason unrelated to subflows. The configuration guide's push/pop lifecycle
+  table now links here from its "normal wizard processing" line, which was the
+  natural place to read the opposite.
+
+- **`WizardFSM.stages` documented a stronger guarantee than it delivers.**
+  Both the property and the configuration guide said it returns a copy "to
+  prevent external modification". The copy is shallow, so it protects the
+  table's shape and nothing else: adding or removing a key leaves the wizard's
+  stage list alone, but the stage dicts are the live ones, and the natural
+  `for name, meta in fsm.stages.items(): meta[...] = ...` edits the running
+  wizard's configuration for the life of the process. `current_metadata` and
+  `stage_metadata_for()` hand out the same live dicts with no copy at all.
+
+  The documentation now states the boundary and shows the `deepcopy` a caller
+  needs before editing a stage it read. The behaviour is unchanged and
+  deliberately so -- the callers inside this package only iterate, one of them
+  on a per-turn path, and a deep copy measures roughly 2500x the shallow one
+  for a guarantee none of them asks for. Two tests pin the boundary, so
+  documenting a stronger guarantee again fails in this package rather than in
+  a consumer's wizard.
 
 - **The multi-tenancy guides now say that the API they document is
   deprecated.** `BotManager` and the `dataknobs_bots.api` singleton helpers

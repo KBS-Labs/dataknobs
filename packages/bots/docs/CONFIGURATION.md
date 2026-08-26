@@ -2068,7 +2068,8 @@ stages:
 | `suggestions` | list | Quick-reply buttons for users |
 | `help_text` | string | Additional help shown on request |
 | `can_skip` | bool | Allow users to skip this stage |
-| `skip_default` | object | Default values to apply when user skips this stage |
+| `skip_default` | object | Default values to apply when user skips this stage. See [Skip Defaults](#skip-defaults) |
+| `skip_default_mode` | string | `fill` or `overwrite` (default) — whether `skip_default` may replace values already set |
 | `can_go_back` | bool | Allow back navigation (default: true) |
 | `tools` | list | Tool names available in this stage (must be explicit; omitting means no tools) |
 | `reasoning` | string | Tool reasoning mode: "single" (default) or "react" for multi-tool loops |
@@ -2264,13 +2265,21 @@ transitions:
 |------|-------------|
 | **Push** | Parent state saved. `data_mapping` copies fields to subflow. Subflow starts at its `is_start` stage. |
 | **In subflow** | Normal wizard processing (extraction, transitions, response templates). Parent state is frozen. |
-| **Pop** | Subflow reaches an `is_end` stage. `result_mapping` copies fields back to parent. Parent resumes at `return_stage`. |
+| **Pop** | Subflow reaches an `is_end` stage. **Its `response_template` renders first**, against the subflow's own data and before the pop. `result_mapping` then copies fields back to parent. Parent resumes at `return_stage`. |
 | **After pop** | Return stage renders its response. **Waits for user input** before evaluating transitions. |
 
 > **Critical:** After a subflow pops, the return stage does NOT automatically evaluate
 > transitions. It renders the return stage's response and waits for the next user message.
 > This means every subflow pop requires at least one user turn before the parent stage can
 > advance — including triggering a second subflow.
+
+**"Normal wizard processing" is per stage, not per wizard.** Everything a
+subflow declares on a *stage* — schema, templates, `can_skip`, `navigation`,
+`extraction_scope` — is live inside the push. A subflow's own wizard-level
+`settings:` block is not: settings are read once off the top-level flow when
+the strategy is built, so a subflow's copy is never consulted and the loader
+warns when it finds one. See
+[Which Subflow Config Is Live Inside a Push](wizard-subflows.md#which-subflow-config-is-live-inside-a-push).
 
 **Sequential subflows** — when multiple subflows can fire from the same stage (e.g., quiz
 config and KB setup both triggered from `configure_options`), they execute one at a time:
@@ -2395,6 +2404,37 @@ keywords for that command. Commands not mentioned in the stage override inherit 
 wizard-level configuration. If no navigation configuration is provided at any level,
 the default keywords above are used.
 
+**Types are checked, and `keywords` must be a list.** `navigation` and each
+command under it must be mappings, `keywords` a list of strings, and `enabled`
+`true` or `false`. A field that does not match is ignored — it falls back to
+its default *alone*, so one bad field does not discard the others — and is
+reported at WARNING. Two of these are easy to write by accident:
+
+```yaml
+navigation:
+  skip:
+    keywords: ["done"]     # a list, even for a single word
+    # keywords: done       # NOT this — a string is iterated, arming
+    #                      # "d", "o", "n" and "e" as four keywords
+    enabled: false         # a bool
+    # enabled: "false"     # NOT this — a non-empty string is TRUE
+```
+
+The same rules apply wherever the block is written: `settings.navigation` and a
+stage's own `navigation:` are read through one implementation, so a field means
+the same thing in both.
+
+**`keywords` means the same thing everywhere it appears**, including under
+`intent_detection:` and `intent_confirm:` — it is always a list of strings, and
+a bare string is always iterated one character at a time. What happens to a bad
+value differs only by when it can be caught:
+
+| Where written | A wrong-typed `keywords` |
+|---|---|
+| `settings.navigation` / a stage's `navigation:` | falls back to the command's default keywords, reported at WARNING |
+| `intent_confirm:` | **rejected at load** with a `ConfigurationError` naming the stage and the intent |
+| a hand-rolled `intent_detection:` | the override is dropped — the intent falls back to the classifier's own vocabulary, as if it declared none — and reported once at WARNING |
+
 **Lifecycle Hooks:**
 ```yaml
 hooks:
@@ -2473,7 +2513,9 @@ stages:
       - target: save
 ```
 
-**Skipping with Defaults:**
+<a id="skip-defaults"></a>
+
+**Skip Defaults:**
 
 When users skip a stage, you can apply default values using `skip_default`:
 
@@ -2511,6 +2553,71 @@ This gives users three paths:
 > Use `skip_default` for stage-level defaults (applied when the user skips the entire stage).
 > Use schema `default` for property-level defaults (applied when the user doesn't mention a
 > specific field).
+
+**Whether a default may replace a value the user already set** is the stage's
+decision, and it is per key. By default it may — `skip_default` overwrites,
+which is what it has always done, and a stage that relies on the clobber to
+leave a branch the user cannot otherwise escape depends on that. Set
+`skip_default_mode: fill` to write only where the key is unset:
+
+```yaml
+    can_skip: true
+    skip_default_mode: fill
+    skip_default:
+      kb_enabled: false          # left alone if the user already set it
+```
+
+"Unset" here is the same test the `has()` condition helper and schema
+`default` application use: a key is set when its value **is not `null`**. A key
+extraction left holding `null`, or that an earlier stage cleared, is one `fill`
+will write.
+
+One block can hold both, because a real stage needs both — an option the user
+configured must survive the skip that saves it, while a flag guarding an
+unconfigured branch must be cleared by the same skip. A key states its own mode
+by giving `value` alongside `mode`; a bare value keeps the block's:
+
+```yaml
+    skip_default:
+      kb_enabled: {value: false, mode: fill}   # preserved if already set
+      scenario_enabled: false                  # cleared regardless
+```
+
+| | |
+|---|---|
+| `overwrite` | Write the default over whatever is there. **The default.** |
+| `fill` | Write the default only where the key is unset (`null` counts as unset). |
+
+A mapping is read as an annotation **only when it names exactly `value` and
+`mode`**, so a nested default still means what it reads as. Three shapes turn
+on that rule: `llm: {provider: anthropic}` names no `value`;
+`field: {value: "", label: Email}` names one but is plainly not an annotation,
+and reading it as one would drop `label`; and `threshold: {value: 3}` names
+nothing an annotation needs, since an entry declaring no mode takes the
+block's — which is what the bare value already does.
+
+One collision is irreducible: a nested default naming *exactly* `value` and
+`mode` reads like an annotation and is taken as one. Wrap it in a real
+annotation to say otherwise:
+
+```yaml
+    skip_default:
+      knob: {value: {value: 3, mode: "off"}, mode: overwrite}   # the mapping, whole
+```
+
+A mapping that names one of these two modes without being an annotation is
+reported at `WARNING` and then written as the value it reads as — `{values:
+false, mode: fill}` is a typo, and storing that mapping where the author wrote
+`false` puts a *truthy* value on the key, so the branch the skip was meant to
+leave stays armed.
+
+**The skip marker lands before the defaults do**, and that ordering is a
+guarantee rather than an implementation detail: `_skipped_<stage>` is in
+`data` before any `skip_default` value is written, so a routing transform or
+condition running on the skip turn can still tell what the user chose from what
+the stage supplied. Every overwrite that *changes* a value the user had
+already set is logged at `DEBUG`, naming the keys; a default equal to what was
+already there has replaced nothing and is not reported.
 
 **Confirmation on New Data:**
 
@@ -2815,6 +2922,8 @@ The `context_template` supports two syntaxes:
 If no `context_template` is specified, the wizard uses a default format that includes
 stage info, collected data, and navigation hints.
 
+<a id="bot-initiated-greeting"></a>
+
 **Bot-Initiated Greeting:**
 
 Wizard bots can send an initial greeting before the user speaks. This is useful when the
@@ -2829,17 +2938,35 @@ if greeting:
 # User's first message now answers the wizard's question
 ```
 
-The greeting is generated from the wizard's **start stage**:
+The greeting is generated from the wizard's **start stage**, taking the first
+of these that applies:
 
-- If the start stage has a `response_template`, that template is rendered as the greeting
-- If no template is present, the start stage's `prompt` is sent to the LLM to generate one
+1. The start stage's `greeting_template`, rendered once and not repeated.
+2. The strategy-level `greeting_template` under `reasoning:`, which stands in
+   as the start stage's `greeting_template` when that stage sets none. It
+   behaves exactly like (1) from there on — rendered once, then stepped over.
+3. The start stage's `response_template`. What happens *after* the greeting
+   then depends on the stage's mode: a `mode: conversation` stage renders it
+   only on that opening turn, but a structured stage renders it again on every
+   turn — the template is the stage's response, not its opening line, so the
+   bot repeats it for as long as the wizard stays on that stage.
+4. The start stage's `prompt`, sent to the LLM to generate one.
+
+> Only the **start** stage has a greeting turn, so the strategy-level field
+> reaches only that stage. To open a mid-flow stage with a fixed line, set
+> `greeting_template` on the stage itself. See
+> [FSM-driven greetings](#fsm-driven-greetings) below.
+
+`greeting_template` is the field to reach for on a stage that also collects data:
+it opens the stage and steps aside, leaving extraction, confirmation and
+transitions to behave exactly as they would without it.
 
 ```yaml
 stages:
   - name: welcome
     is_start: true
     prompt: "Ask the user for their name"
-    response_template: "Hello! Welcome to the setup wizard. What is your name?"
+    greeting_template: "Hello! Welcome to the setup wizard. What is your name?"
     schema:
       type: object
       properties:
@@ -2850,6 +2977,14 @@ stages:
         condition: "data.get('name')"
 ```
 
+A `greeting_template` is not restricted to the start stage. Any stage may set
+one, and it renders on the turn that stage first speaks — including a stage
+entered mid-flow, or the first stage of a subflow. On a `mode: conversation`
+stage it takes the opening that a `response_template` would otherwise have
+had, which leaves that `response_template` unreachable; the loader reports
+that pair at load time, and `clarification_template` is what covers the later
+turns there.
+
 **Greeting behavior:**
 
 | Aspect | Behavior |
@@ -2857,7 +2992,8 @@ stages:
 | Supported strategies | Wizard only. Non-wizard bots return `None`. |
 | Conversation history | Greeting is added as an assistant message. No user message is created. |
 | Wizard state | Initialized at the start stage, ready for the user's first input. |
-| Render count | If using `response_template`, the render count is incremented to prevent duplicate rendering on the user's first turn. |
+| Greeting template | A stage's `greeting_template` renders once. Its own counter is kept separately from the render count, so greeting a stage does not consume the first render its confirmation is waiting for. |
+| Render count | Incremented when a `response_template` or `clarification_template` renders — not when a greeting does. On a `mode: conversation` stage this is what makes the template render only on the opening turn. On a structured stage the template is the stage's response and re-renders every turn regardless; use `greeting_template` for text that should be said once. |
 | Middleware | Both `before_message` and `after_message` hooks are called. |
 | Memory | If memory is configured, the greeting is stored in conversation history. |
 
@@ -2924,11 +3060,26 @@ for name, meta in wizard_fsm.stages.items():
 
 | Property | Type | Description |
 |----------|------|-------------|
-| `stages` | dict | All stage metadata (returns a copy) |
+| `stages` | dict | All stage metadata (shallow copy — see below) |
 | `stage_names` | list | Ordered list of stage names |
 | `stage_count` | int | Total number of stages |
 | `current_stage` | string | Current stage name |
 | `current_metadata` | dict | Metadata for current stage |
+
+`stages` copies the table, not the stages in it. Adding or removing a key on
+what it returns leaves the wizard's stage list alone, but the stage dicts are
+the live ones — so `meta["label"] = ...` while iterating edits the running
+wizard's configuration. Copy a stage before editing it:
+
+```python
+from copy import deepcopy
+
+welcome = deepcopy(wizard_fsm.stages["welcome"])
+welcome["label"] = "Start here"   # the wizard is unaffected
+```
+
+`current_metadata` and `stage_metadata_for()` return the live stage dict with
+no copy at all, and the same rule applies to them.
 
 **Conversation Stages:**
 
@@ -2976,7 +3127,9 @@ When `mode: conversation` is set on a stage:
 2. **Response is generated via LLM** -- The stage prompt becomes part of the system prompt
    context, and `manager.complete()` generates a response directly.  If the stage also
    has a `response_template`, it is rendered once as the initial greeting (first turn
-   only); subsequent turns use LLM mode for natural conversation.
+   only); subsequent turns use LLM mode for natural conversation, or render the
+   stage's `clarification_template` when one is set.  A `greeting_template` takes
+   that opening turn instead when the stage sets one.
 3. **No clarification loop** -- Clarification attempts are never incremented. The user
    isn't failing to provide data; they're having a conversation.
 4. **Transitions evaluate normally** -- Transition conditions are checked each turn. Use
@@ -3016,6 +3169,10 @@ transitions:
 |--------|-------------|-------------|
 | `keyword` | Fast substring matching against configured keywords. First match wins. No LLM call. | Simple triggers with known vocabulary |
 | `llm` | Lightweight LLM classification. Builds a prompt listing intents and asks the LLM to pick one. | Nuanced intent detection where keywords are insufficient |
+
+An intent's `keywords` must be a **list** of strings — `keywords: ["done"]`,
+never `keywords: done`. See **Navigation Commands** above for the full contract
+and what happens to a value that does not match.
 
 **Intent lifecycle:**
 - `_intent` is cleared at the start of each detection call
@@ -3286,18 +3443,38 @@ result = await bot.greet(
 
 When no `greeting_template` is configured, `greet()` returns `None`.
 
+<a id="fsm-driven-greetings"></a>
+
 **FSM-driven greetings** (Wizard strategy):
 
-Wizard bots generate greetings from the start stage's `response_template` or LLM
-prompt. The `greeting_template` config option is not used — wizard greetings are
-controlled entirely by the FSM definition. See the wizard `response_template`
-documentation for details.
+Wizard bots read this strategy-level option as their **start stage's default**
+greeting. The same field name exists at stage scope and means the same thing,
+so the two compose: set it here for a wizard whose opening line does not depend
+on the FSM definition, and set it on a stage when the greeting belongs with the
+stage — a start stage that carries its own wins over this one.
 
 ```yaml
 reasoning:
   strategy: wizard
-  wizard_config: path/to/wizard.yaml  # Start stage defines the greeting
+  wizard_config: path/to/wizard.yaml
+  greeting_template: "Hello! Welcome to the setup wizard."
 ```
+
+```yaml
+# path/to/wizard.yaml — a stage-level greeting takes precedence
+stages:
+  - name: welcome
+    is_start: true
+    greeting_template: "Hello! Welcome to the setup wizard."
+```
+
+Either way the greeting is rendered once and stepped over, leaving extraction,
+confirmation and transitions to behave as they would without it. Only the start
+stage has a greeting turn, so the strategy-level field never reaches a mid-flow
+stage; that is what the stage-level field is for.
+
+See [Bot-Initiated Greeting](#bot-initiated-greeting) for the full order the
+wizard resolves a greeting in.
 
 **initial_context** seeds data into the strategy's state before greeting
 generation. For wizard strategies, values are merged into `wizard_state.data` and

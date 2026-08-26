@@ -10,13 +10,14 @@ from __future__ import annotations
 
 import logging
 import time
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable, Set as AbstractSet
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
 from dataknobs_common.expressions import safe_eval, safe_eval_validate
 from dataknobs_llm import LLMStreamResponse
+from jinja2 import TemplateError
 
 from .base import ReasoningStrategy, StreamStageContext
 from .observability import create_transition_record
@@ -213,6 +214,15 @@ class WizardResponder:
         predicate about "does a template live here" rather than about
         mode is what lets a template kind be added without revisiting it.
 
+        ``greeting_template`` is the exception, and it is not an
+        oversight: a greeting is selected on its *own* count, kept apart
+        so that greeting a stage does not consume the first render its
+        confirmation is waiting for (see
+        :meth:`~.wizard_types.WizardState.increment_greeting_count`).  A
+        stage whose only template is a greeting therefore has no
+        render-count-dependent selection to serve, and counting its
+        renders here would answer a question nothing asks.
+
         Args:
             stage: Stage metadata dict.
 
@@ -223,12 +233,20 @@ class WizardResponder:
         return bool(stage.get("response_template") or stage.get("clarification_template"))
 
     @staticmethod
-    def _select_active_template(stage: dict[str, Any], state: WizardState) -> str | None:
+    def _select_active_template(
+        stage: dict[str, Any], state: WizardState
+    ) -> tuple[str | None, bool]:
         """Pick the template this stage renders now, or ``None`` for LLM mode.
 
         Single source of the selection rule for all three render paths —
         buffered, streaming, and the auto-advance collector — so a new
         template kind is added in one place instead of three.
+
+        A ``greeting_template`` wins on the stage's first render, whatever
+        its mode.  It is an *opening line* rather than a response: the
+        stage still extracts, still confirms, and still converses
+        afterwards, which is what separates it from a
+        ``response_template`` pressed into the same job.
 
         Structured stages (the default) render ``response_template`` on
         every turn: the template *is* the response, and a review summary
@@ -238,26 +256,37 @@ class WizardResponder:
         opening line, then hand the turn to the LLM so the stage can
         actually converse.  A ``clarification_template`` takes those later
         turns instead when one is set, letting the stage nudge differently
-        when the user has not engaged.
+        when the user has not engaged.  A greeting occupies that opening,
+        so a conversation stage setting both leaves its
+        ``response_template`` unreachable — which the loader reports at
+        load time rather than leaving to a transcript.
 
         Args:
             stage: Stage metadata dict.
-            state: Current wizard state, read for the stage's render count.
+            state: Current wizard state, read for the stage's counts.
 
         Returns:
-            The template string to render, or ``None`` when this turn
-            belongs to the LLM.
+            ``(template, is_greeting)``.  ``template`` is ``None`` when
+            this turn belongs to the LLM.  ``is_greeting`` tells the
+            caller which count to move, and is returned rather than
+            re-derived so that incrementing cannot change the answer.
         """
+        stage_name = stage.get("name", "unknown")
+        greeting: str | None = stage.get("greeting_template")
+        already_greeted = state.get_greeting_count(stage_name) > 0
+        if greeting and not already_greeted:
+            return greeting, True
+
         template: str | None
         if stage.get("mode") == "conversation":
-            stage_name = stage.get("name", "unknown")
-            if state.get_render_count(stage_name) == 0:
-                template = stage.get("response_template")
-            else:
+            has_spoken = state.get_render_count(stage_name) > 0 or already_greeted
+            if has_spoken:
                 template = stage.get("clarification_template")
+            else:
+                template = stage.get("response_template")
         else:
             template = stage.get("response_template")
-        return template
+        return template, False
 
     # =====================================================================
     # Public API — called by wizard.py orchestrator
@@ -308,7 +337,7 @@ class WizardResponder:
         wizard_snapshot = {"wizard": self._build_wizard_metadata(state)}
 
         # ── Template mode ────────────────────────────────────────
-        active_template = self._select_active_template(stage, state)
+        active_template, is_greeting = self._select_active_template(stage, state)
 
         if active_template:
             content, llm_response = await self._resolve_template_content(
@@ -325,7 +354,9 @@ class WizardResponder:
                 else (self.create_template_response(content))
             )
             self.add_wizard_metadata(response, state, stage)
-            if track_render and self._stage_tracks_renders(stage):
+            if is_greeting:
+                state.increment_greeting_count(stage_name)
+            elif track_render and self._stage_tracks_renders(stage):
                 state.increment_render_count(stage_name)
             return StageResponseResult(response=response)
 
@@ -770,6 +801,10 @@ class WizardResponder:
         :meth:`can_auto_advance`, rendering each stage's
         ``response_template`` before moving past it.
 
+        A step that lands on a subflow's ``is_end`` stage pops it, and
+        that stage renders too -- it is left by the same iteration, so
+        this loop is one of its only two chances to speak.
+
         A per-call closure is installed as the ``transform_context_factory``
         before each ``step_async`` call, mirroring the pattern in
         ``_execute_fsm_step``, so that auto-advance transforms have
@@ -790,7 +825,9 @@ class WizardResponder:
                 ``auto_advance`` setting.
 
         Returns:
-            List of rendered template strings from auto-advanced stages
+            Rendered template strings from the stages this loop left, in
+            the order it left them -- each stage stepped past, and a
+            subflow end stage popped on the way
         """
         from ..artifacts.transforms import TransformContext
 
@@ -810,7 +847,7 @@ class WizardResponder:
         ):
             # Render template of the stage being advanced past
             if not (skip_first_render and count == 0):
-                rendered = self._render_auto_advance_template(stage, wizard_state)
+                rendered = self.render_departing_stage(stage, wizard_state)
                 if rendered:
                     messages.append(rendered)
 
@@ -880,12 +917,19 @@ class WizardResponder:
                 new_stage_name,
             )
 
-            # Handle subflow pop if needed (no-op when no subflow is active)
-            if self._subflows.should_pop(wizard_state):
-                self._subflows.handle_pop(wizard_state)
-                active_fsm = self._subflows.get_active_fsm()
-                wizard_state.completed = False
+            # Handle subflow pop if needed (no-op when no subflow is
+            # active).  The step above may have landed on a subflow's end
+            # stage, which this loop would otherwise leave without ever
+            # rendering -- so its message joins the ones collected from
+            # the stages stepped past, in the order they were left.
+            ended_message = self._subflows.pop_if_ended(wizard_state)
+            if ended_message:
+                messages.append(ended_message)
 
+            # Unconditional because a pop changes the answer and every
+            # caller passes ``get_active_fsm()`` in to begin with, so this
+            # is the same object whenever no pop happened.
+            active_fsm = self._subflows.get_active_fsm()
             stage = active_fsm.current_metadata
 
         # If we advanced through any stages, mark the landing stage so the
@@ -938,9 +982,20 @@ class WizardResponder:
             default=False,
         )
         if not result.success:
-            # These conditions never pass through WizardConfigLoader, so
-            # there is no load-time moment at which to say this once; the
-            # check runs here instead, on the failure path only.
+            # Most conditions reaching this evaluator never pass through
+            # WizardConfigLoader, so there is no load-time moment at which
+            # to say this once; the check runs here instead, on the failure
+            # path only.
+            #
+            # Subflow guards are the exception, and it is worth naming
+            # because they are the larger half: a subflow transition IS
+            # registered inline (wizard_loader._register_inline_conditions
+            # handles SUBFLOW_TARGET explicitly), so a statically-refused
+            # subflow guard is already reported at load and is reported
+            # again here, once per failing turn. The duplicate is the
+            # accepted cost of one check that covers both populations
+            # rather than a second one keyed on provenance the evaluator
+            # cannot see.
             static_reason = safe_eval_validate(condition)
             if static_reason is not None:
                 # The expression cannot run on any data, so this condition
@@ -1218,7 +1273,7 @@ class WizardResponder:
         self,
         stage: dict[str, Any],
         state: WizardState,
-        new_data_keys: set[str],
+        new_data_keys: AbstractSet[str],
     ) -> str:
         """Build confirmation content for extracted data.
 
@@ -1231,7 +1286,8 @@ class WizardResponder:
         Args:
             stage: Current stage metadata.
             state: Current wizard state (data already merged).
-            new_data_keys: Set of field names extracted this turn.
+            new_data_keys: Field names extracted this turn.  Any set —
+                the caller's is a ``frozenset``, and this only reads it.
 
         Returns:
             Rendered confirmation string.
@@ -1566,9 +1622,20 @@ class WizardResponder:
         if not template:
             return ""
 
+        # Ask the FSM that owns *this* stage, and name the stage rather
+        # than leaning on a live position.  ``self._fsm`` is the main
+        # FSM, and the no-argument form reads its current stage: inside a
+        # push that is a subflow stage the main FSM does not have, so
+        # both fields came back as the documented default.  A stage
+        # declaring ``can_skip: true`` rendered "required" into the
+        # system prompt on the same turn the wizard would have accepted
+        # the skip.  ``_build_wizard_metadata`` builds the identical
+        # two-key context this way.
+        stage_name = stage.get("name") or state.current_stage
+        active_fsm = self._subflows.fsm_for_state(state) if self._subflows else self._fsm
         extra_context = {
-            "can_skip": self._fsm.can_skip() if self._fsm else False,
-            "can_go_back": (self._fsm.can_go_back() if self._fsm else True)
+            "can_skip": active_fsm.can_skip(stage_name) if active_fsm else False,
+            "can_go_back": (active_fsm.can_go_back(stage_name) if active_fsm else True)
             and len(state.history) > 1,
         }
 
@@ -1998,7 +2065,7 @@ class WizardResponder:
         wizard_snapshot = {"wizard": self._build_wizard_metadata(state)}
 
         # ── Template mode ────────────────────────────────────────
-        active_template = self._select_active_template(stage, state)
+        active_template, is_greeting = self._select_active_template(stage, state)
 
         if active_template:
             content, llm_response = await self._resolve_template_content(
@@ -2024,7 +2091,9 @@ class WizardResponder:
                 if model:
                     chunk_kwargs["model"] = model
             yield LLMStreamResponse(**chunk_kwargs)
-            if track_render and self._stage_tracks_renders(stage):
+            if is_greeting:
+                state.increment_greeting_count(stage_name)
+            elif track_render and self._stage_tracks_renders(stage):
                 state.increment_render_count(stage_name)
             return
 
@@ -2141,16 +2210,21 @@ class WizardResponder:
             stream_ctx.tool_restart_requested,
         ) = self._read_lifecycle_signals(completion_signal, restart_signal)
 
-    def _render_auto_advance_template(
-        self, stage: dict[str, Any], state: WizardState
-    ) -> str | None:
-        """Render a stage's active template for auto-advance collection.
+    def render_departing_stage(self, stage: dict[str, Any], state: WizardState) -> str | None:
+        """Render the template a stage shows as the turn leaves it.
 
-        Used during auto-advance to capture message stage content before
-        the stage is advanced past.  Selection goes through
+        Two paths leave a stage without giving it a turn of its own, and
+        both collect what it would have said: the auto-advance loop, which
+        steps past it, and a subflow pop, which leaves an ``is_end`` stage
+        on the same turn it was entered.  Selection goes through
         :meth:`_select_active_template`, so a stage contributes the
         template the turn would have rendered rather than whichever one it
         rendered first.
+
+        Public because the second caller reaches it through
+        :class:`~dataknobs_bots.reasoning.wizard_subflows.SubflowManager`,
+        which owns the pop and is injected with this method the way it is
+        injected with :meth:`evaluate_condition`.
 
         A stage that has no template left to offer contributes nothing.
         That is not the same as what the turn would have said — the turn
@@ -2165,19 +2239,37 @@ class WizardResponder:
         Returns:
             Rendered template string, or None if no template applies
         """
-        template = self._select_active_template(stage, state)
+        template, is_greeting = self._select_active_template(stage, state)
         if not template:
             return None
 
-        rendered = self._render_response_template(template, stage, state)
         stage_name = stage.get("name", "unknown")
+        try:
+            rendered = self._render_response_template(template, stage, state)
+        except TemplateError:
+            # A collector must not be able to abort the structural step it
+            # decorates. Both callers leave the stage either way -- the
+            # auto-advance loop has already stepped past it, and the pop
+            # runs immediately after this returns -- so raising here would
+            # strand the wizard on a stage it has finished with rather
+            # than merely losing the message.
+            logger.warning(
+                "Stage '%s' template failed to render while leaving it; "
+                "the stage contributes no message",
+                stage_name,
+                exc_info=True,
+            )
+            return None
         logger.debug(
             "Rendered message stage '%s' template during auto-advance (%d chars)",
             stage_name,
             len(rendered),
         )
-        # Track render count so re-visiting won't re-confirm
-        state.increment_render_count(stage_name)
+        if is_greeting:
+            state.increment_greeting_count(stage_name)
+        else:
+            # Track render count so re-visiting won't re-confirm
+            state.increment_render_count(stage_name)
         return rendered
 
     def _build_clarification_groups(

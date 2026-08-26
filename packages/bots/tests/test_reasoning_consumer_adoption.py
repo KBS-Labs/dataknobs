@@ -218,9 +218,15 @@ def test_config_property_is_read_only(
 # --- Per-strategy derived-state (_setup) checks --------------------------
 
 
-def test_simple_setup_binds_greeting_template() -> None:
+def test_simple_reads_greeting_template_from_config() -> None:
+    """Through the property, which is the only read since the base landed.
+
+    No strategy copies the value onto itself any more, so asserting the
+    private attribute here would assert that a binding this class no longer
+    has still runs.
+    """
     strat = SimpleReasoning.from_config({"greeting_template": "Hi {{ name }}!"})
-    assert strat._greeting_template == "Hi {{ name }}!"
+    assert strat.greeting_template == "Hi {{ name }}!"
     # Loose-kwarg construction reaches the same field (greeting_template is a
     # config field, so the mixin merges it through from_dict).
     assert SimpleReasoning(greeting_template="Hi {{ name }}!").config == strat.config
@@ -276,7 +282,7 @@ def test_grounded_setup_binds_config_and_collaborators() -> None:
         query_provider=query_provider,
         prompt_resolver=prompt_resolver,
     )
-    assert strat._greeting_template == "Hi!"
+    assert strat.greeting_template == "Hi!"
     assert strat._query_provider is query_provider
     assert strat._prompt_resolver is prompt_resolver
     # No knowledge_base / sources injected → empty source list.
@@ -288,7 +294,7 @@ def test_grounded_typed_config_only_construction() -> None:
     cfg = GroundedReasoningConfig(greeting_template="Hey")
     strat = GroundedReasoning(config=cfg)
     assert strat.config is cfg
-    assert strat._greeting_template == "Hey"
+    assert strat.greeting_template == "Hey"
 
 
 def test_hybrid_setup_builds_children() -> None:

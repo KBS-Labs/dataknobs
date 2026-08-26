@@ -293,6 +293,58 @@ data = snapshot.to_dict()
 restored = WizardStateSnapshot.from_dict(data)
 ```
 
+### Snapshots Inside a Subflow
+
+A snapshot taken while the wizard is inside a pushed subflow mixes two frames
+of reference deliberately, and a UI that renders it should know which is which:
+
+| Field | Frame | Value inside a subflow |
+|---|---|---|
+| `current_stage` | subflow | The subflow's stage name |
+| `can_skip`, `can_go_back`, `suggestions` | subflow | Read from the subflow stage's own config |
+| `stage_index`, `total_stages`, `stages` | **main flow** | The parent stage that pushed the subflow is the current one |
+
+The split is intentional. The stage-derived fields describe the stage the user
+is actually looking at, so a skip button and quick replies come from the
+subflow stage. Progress does not: a subflow is not a step of the outer flow, so
+`stage_index` stays on the main flow and reports the parent stage that pushed
+it — which keeps a progress bar steady while a subflow opens and closes, and
+keeps `stage_index` consistent with the `stages` roadmap, where the parent is
+likewise marked `"current"`.
+
+The subflow's own stages never appear in `stages`. A UI that needs to show
+where the user is *within* the subflow should read `subflow_stage` from the
+wizard metadata on the turn response.
+
+The same table is on `WizardStateSnapshot` itself, so it is visible to a reader
+who reaches the type through its API docs rather than through this guide.
+
+```python
+snapshot = reasoning.get_state_snapshot(manager)
+
+# Progress: main-flow, steady across a subflow
+progress_bar.set_value(stage_fraction(snapshot))
+
+# Actions: the stage the user is on, subflow or not
+if snapshot.can_skip:
+    show_skip_button()
+```
+
+Compute the fraction the way the wizard does, so a UI reading the snapshot and
+one reading `wizard.progress` from the turn metadata agree — the first stage is
+`0.0`, the last is `1.0`, and a one-stage flow does not divide by zero:
+
+```python
+def stage_fraction(snapshot: WizardStateSnapshot) -> float:
+    """The snapshot's position as a 0.0-1.0 fraction.
+
+    Mirrors ``stage_position``, which derives ``wizard.progress`` in the
+    turn metadata: the denominator is the distance to the *last* stage,
+    not the stage count.
+    """
+    return snapshot.stage_index / max(snapshot.total_stages - 1, 1)
+```
+
 ### Using Snapshots for UI
 
 Snapshots are designed for driving UI components:
@@ -301,8 +353,8 @@ Snapshots are designed for driving UI components:
 # In your web application
 snapshot = reasoning.get_state_snapshot(manager)
 
-# Display stage progress
-progress_bar.set_value(snapshot.stage_index / snapshot.total_stages)
+# Display stage progress (see stage_fraction above)
+progress_bar.set_value(stage_fraction(snapshot))
 stage_label.set_text(f"Stage {snapshot.stage_index + 1} of {snapshot.total_stages}")
 
 # Display task checklist
@@ -347,6 +399,17 @@ snapshot = WizardReasoning.snapshot_from_metadata(
 # - Tools succeed (completed_by: tool_result)
 # - Stages are exited (completed_by: stage_exit)
 ```
+
+Both constructors report the same thing. `snapshot_from_metadata` reads the
+stage-derived fields — position, roadmap, `can_skip`, `can_go_back`,
+`suggestions` — from what the wizard already derived into the metadata, so it
+is subflow-aware in the same way `get_state_snapshot` is and follows the frame
+split described above.
+
+`stage_definitions` is the fallback for metadata that predates those fields, or
+that a caller built by hand from `fsm_state` alone. Passing it is harmless when
+the metadata is current; it is simply not consulted.
+
 
 ## Conversion Utilities
 

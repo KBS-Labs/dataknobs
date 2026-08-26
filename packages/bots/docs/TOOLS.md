@@ -1009,14 +1009,21 @@ testing or standalone use, pass overrides directly:
 from dataknobs_bots.tools import AddBankRecordTool
 
 tool = AddBankRecordTool(
-    banks_override=my_banks,       # dict[str, MemoryBank]
-    catalog_override=my_catalog,   # ArtifactBankCatalog
-    artifact_override=my_artifact, # ArtifactBank
+    banks=my_banks,       # dict[str, MemoryBank]
+    catalog=my_catalog,   # ArtifactBankCatalog
+    artifact=my_artifact, # ArtifactBank
 )
 ```
 
 At runtime, tools also accept dependencies via `ToolExecutionContext.extra`
 (the `_context` parameter) as a fallback.
+
+A tool reaches the wizard's collected data through
+`ToolExecutionContext.wizard_data()`. Inside a wizard turn it returns the
+wizard's own dict, so a write lands in wizard state and is still there on
+the next turn. Outside one it returns `None` — not an empty dict — so a
+tool that needs wizard data can report that rather than writing into a
+throwaway and reporting success.
 
 ### Bank CRUD Tools
 

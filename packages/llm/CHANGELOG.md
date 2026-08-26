@@ -7,6 +7,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Added
+
+- **`ToolExecutionContext.wizard_data()` — a supported way for a tool to reach
+  wizard data.** Until now the only route was
+  `context.wizard_state.collected_data`, guarded by a `wizard_state` check that
+  the accessors written around it consistently collapsed into an empty dict. A
+  tool run outside a wizard therefore appended to a fresh throwaway, saw its own
+  write, and reported success. The new accessor returns `None` in that case,
+  deliberately, so the condition is one a tool can detect and report. When there
+  *is* wizard state the dict comes back by reference, as before.
+
+- **`ConversationState.live_wizard_state` — a per-turn channel a reasoning
+  strategy can publish its live wizard state on.** `ToolExecutionContext.from_manager`
+  prefers it over rebuilding state from persisted conversation metadata, which
+  is the difference between a tool seeing this turn's values and seeing the last
+  save's. It is a transient attribute alongside `turn_data`: not a dataclass
+  field, absent from `to_dict()` / `from_dict()` / `asdict()`, and never
+  persisted. A strategy that publishes nothing leaves it `None` and the metadata
+  route runs exactly as it did before.
+
+  The channel deliberately sits on `ConversationState` rather than inside
+  `metadata`: wizard data is deep-copied on restore precisely so live state and
+  persisted metadata cannot share a reference, and a live view for tools must
+  not reintroduce that sharing from the other side.
+
+  No strategy in this package publishes on it. Until one does, a wizard tool
+  still reads the last save, and its writes are still overwritten when the turn
+  is saved — which is the behaviour this channel exists to end, but does not end
+  on its own.
+
+### Deprecated
+
+- **`WizardStateSnapshot` is now `ToolWizardState`.** `dataknobs_bots` exports an
+  unrelated and much larger dataclass under the same name, and shipped prose
+  already names a field on `WizardStateSnapshot` that only one of the two has.
+  The tool-facing class is the one that moved, since it is the one whose name did
+  not say what it was. `WizardStateSnapshot` remains as an alias in
+  `dataknobs_llm.tools` and `dataknobs_llm.tools.context` for one minor version,
+  and emits a `DeprecationWarning` when read from either. Type checkers still
+  resolve it to the class, so an unmigrated call site keeps full type precision
+  while it lasts.
+
 ### Fixed
 
 - **Extra arguments to `LLMProviderFactory.create()` reach the provider.**

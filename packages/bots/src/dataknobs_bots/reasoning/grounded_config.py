@@ -8,6 +8,8 @@ from typing import Any
 
 from dataknobs_common.structured_config import StructuredConfig
 
+from dataknobs_bots.reasoning.config_base import ReasoningConfig
+
 
 @dataclass(frozen=True)
 class GroundedIntentConfig(StructuredConfig):
@@ -325,8 +327,8 @@ class GroundedSourceConfig(StructuredConfig):
         }
 
 
-@dataclass(frozen=True)
-class GroundedReasoningConfig(StructuredConfig):
+@dataclass(frozen=True, kw_only=True)
+class GroundedReasoningConfig(ReasoningConfig):
     """Top-level configuration for :class:`GroundedReasoning`.
 
     Attributes:
@@ -341,8 +343,9 @@ class GroundedReasoningConfig(StructuredConfig):
             programmatically via ``set_knowledge_base()`` / ``add_source()``.
         store_provenance: Whether to record retrieval provenance
             (queries, chunks, scores, timing) in conversation metadata.
-        greeting_template: Optional Jinja2 template for bot-initiated
-            greetings (same semantics as other strategies).
+        greeting_template: Declared once for the whole family on
+            :class:`~dataknobs_bots.reasoning.config_base.ReasoningConfig`;
+            inherited here.
     """
 
     intent: GroundedIntentConfig = field(
@@ -357,7 +360,6 @@ class GroundedReasoningConfig(StructuredConfig):
     result_processing: GroundedResultProcessingConfig | None = None
     sources: list[GroundedSourceConfig] = field(default_factory=list)
     store_provenance: bool = True
-    greeting_template: str | None = None
 
     @property
     def query_generation(self) -> GroundedIntentConfig:

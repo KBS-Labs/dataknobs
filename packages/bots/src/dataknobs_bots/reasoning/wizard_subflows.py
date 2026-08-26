@@ -20,6 +20,23 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+#: Renders the template a stage shows as the turn leaves it, or ``None``
+#: when it has nothing left to say.  Satisfied by
+#: :meth:`~dataknobs_bots.reasoning.wizard_response.WizardResponder.render_departing_stage`,
+#: which the auto-advance loop already uses for the stages it steps past.
+RenderDepartingStage = Callable[[dict[str, Any], WizardState], "str | None"]
+
+
+def _renders_nothing(_stage: dict[str, Any], _state: WizardState) -> str | None:
+    """The renderer a manager has before one is injected.
+
+    A manager built without a responder has nothing to render *with*, so
+    silence is the honest answer rather than a swallowed one.  The single
+    production constructor injects the real renderer one line after it
+    injects the condition evaluator.
+    """
+    return None
+
 
 class SubflowManager:
     """Manages the subflow stack and active FSM switching.
@@ -41,7 +58,20 @@ class SubflowManager:
     ) -> None:
         self._fsm = fsm
         self._evaluate_condition = evaluate_condition
+        self._render_departing_stage: RenderDepartingStage = _renders_nothing
         self._active_subflow_fsm: WizardFSM | None = None
+
+    def set_render_departing_stage(self, render: RenderDepartingStage) -> None:
+        """Supply the renderer :meth:`pop_if_ended` gives the end stage.
+
+        Injected rather than passed per call for the same reason
+        :meth:`set_evaluate_condition` is: this class is constructed
+        before :class:`WizardResponder`, which owns the renderer.  Passing
+        it per call would also let the two pop sites drift apart on which
+        renderer they use, which is the divergence :meth:`pop_if_ended`
+        exists to remove.
+        """
+        self._render_departing_stage = render
 
     def set_evaluate_condition(
         self,
@@ -59,12 +89,52 @@ class SubflowManager:
     # -- Active FSM access ---------------------------------------------------
 
     def get_active_fsm(self) -> WizardFSM:
-        """Get the currently active FSM (subflow or main).
+        """Get the currently active FSM (subflow or main), per the turn.
+
+        Reads ``_active_subflow_fsm``, which a turn maintains. Callers
+        holding a :class:`WizardState` should prefer
+        :meth:`fsm_for_state`, which derives the same answer from the
+        stack and is therefore also correct outside a turn.
 
         Returns:
             The active WizardFSM instance.
         """
         return self._active_subflow_fsm if self._active_subflow_fsm else self._fsm
+
+    def fsm_for_state(self, state: WizardState) -> WizardFSM:
+        """The FSM *state* says is active, asked of the state rather than the turn.
+
+        The canonical answer to "which FSM owns the stage in play", and
+        the reason it lives here rather than on either caller: this class
+        owns the stack, and both the strategy and the navigator were
+        answering the question for themselves.
+
+        :meth:`get_active_fsm` answers the same question from
+        ``_active_subflow_fsm``, an attribute a *turn* maintains. That is
+        correct during a turn and stale outside one -- after an undo it
+        still names the FSM of the turn being undone, and a snapshot is
+        taken outside a turn by definition. The rule here is the one
+        every writer of that attribute already applies (a restore, a push
+        and a pop all set it from ``subflow_stack``), so this agrees with
+        it whenever the attribute is fresh and beats it when it is not.
+
+        Prefer this wherever a ``WizardState`` is in hand.
+        :meth:`get_active_fsm` remains for the two places inside this
+        class's own push/pop that have already updated the attribute and
+        not yet the stack, or vice versa.
+
+        Args:
+            state: Wizard state naming the subflow stack, if any.
+
+        Returns:
+            The subflow's FSM when a subflow is on the stack and
+            resolvable, otherwise the main FSM.
+        """
+        if state.subflow_stack:
+            subflow = self._fsm.get_subflow(state.subflow_stack[-1].subflow_network)
+            if subflow is not None:
+                return subflow
+        return self._fsm
 
     @property
     def active_subflow_fsm(self) -> WizardFSM | None:
@@ -101,8 +171,10 @@ class SubflowManager:
 
         active_fsm = self.get_active_fsm()
         stage_meta = active_fsm.current_metadata
+        stage_name = stage_meta.get("name", "?")
 
         # Check each transition for subflow marker
+        declined: list[str] = []
         for transition in stage_meta.get("transitions", []):
             if not transition.get("is_subflow_transition"):
                 continue
@@ -113,10 +185,30 @@ class SubflowManager:
                 condition,
                 wizard_state.data,
             ):
+                declined.append(condition)
                 continue
 
             # This transition matches and is a subflow transition
-            return transition.get("subflow_config", {})
+            subflow_config: dict[str, Any] = transition.get("subflow_config", {})
+            logger.debug(
+                "Subflow guard on stage '%s' satisfied by %s: pushing '%s'",
+                stage_name,
+                f"condition {condition!r}" if condition else "an unconditional transition",
+                subflow_config.get("network", "?"),
+            )
+            return subflow_config
+
+        # A decline is otherwise indistinguishable from there being no
+        # subflow transition at all, from a misspelled condition, and from
+        # one that raised -- every one of them shows up as nothing
+        # happening. Name the conditions that were asked and said no.
+        if declined:
+            logger.debug(
+                "Subflow guard on stage '%s' declined: %d condition(s) not satisfied: %s",
+                stage_name,
+                len(declined),
+                ", ".join(repr(c) for c in declined),
+            )
 
         return None
 
@@ -198,7 +290,7 @@ class SubflowManager:
 
         # Update wizard state
         wizard_state.current_stage = to_stage
-        wizard_state.data = subflow_data
+        wizard_state.replace_data(subflow_data)
         wizard_state.history = [to_stage]
         wizard_state.stage_entry_time = time.time()
 
@@ -257,7 +349,7 @@ class SubflowManager:
 
         # Update wizard state
         wizard_state.current_stage = return_stage
-        wizard_state.data = parent_data
+        wizard_state.replace_data(parent_data)
         wizard_state.history = subflow_context.parent_history
         if return_stage not in wizard_state.history:
             wizard_state.history.append(return_stage)
@@ -289,6 +381,59 @@ class SubflowManager:
 
         return True
 
+    def unwind_all(self, state: WizardState, *, user_message: str | None = None) -> list[str]:
+        """Tear the whole subflow stack down, recording a pop for each frame.
+
+        Restart and an amendment that jumps out of a subflow both have to
+        leave the stack empty, and both used to do it by clearing the
+        list and nulling the attribute at the call site -- two partial
+        spellings of a teardown this class owns, neither of which wrote
+        anything to the audit trail. A consumer pairing ``subflow_push``
+        with ``subflow_pop`` records, or reconstructing depth from them,
+        then saw a push nothing ever closed.
+
+        Unlike :meth:`handle_pop` this applies no result mapping and
+        restores no parent data: the callers replace the data wholesale
+        (restart empties it, an amendment keeps the completed flow's).
+        What it guarantees is the part that wedged the wizard -- an empty
+        stack and no active subflow FSM -- plus the record of it.
+
+        Args:
+            state: Wizard state (mutated in place).
+            user_message: User message for the transition records.
+
+        Returns:
+            The networks unwound, outermost last. Empty in the main flow,
+            where this is a no-op.
+        """
+        if not state.subflow_stack:
+            return []
+
+        unwound: list[str] = []
+        from_stage = state.current_stage
+        duration_ms = (time.time() - state.stage_entry_time) * 1000
+        while state.subflow_stack:
+            context = state.subflow_stack.pop()
+            unwound.append(context.subflow_network)
+            state.transitions.append(
+                create_transition_record(
+                    from_stage=from_stage,
+                    to_stage=context.return_stage,
+                    trigger="subflow_unwind",
+                    duration_in_stage_ms=duration_ms,
+                    data_snapshot=state.data.copy(),
+                    user_input=user_message,
+                    subflow_pop=context.subflow_network,
+                    subflow_depth=state.subflow_depth,
+                )
+            )
+            from_stage = context.return_stage
+            duration_ms = 0.0
+
+        self._active_subflow_fsm = None
+        logger.info("Unwound subflow stack: %s", ", ".join(unwound))
+        return unwound
+
     def should_pop(self, wizard_state: WizardState) -> bool:
         """Check if the current stage is a subflow end state.
 
@@ -303,6 +448,53 @@ class SubflowManager:
 
         active_fsm = self.get_active_fsm()
         return active_fsm.is_end_stage(wizard_state.current_stage)
+
+    def pop_if_ended(self, wizard_state: WizardState) -> str | None:
+        """Pop a finished subflow, returning what its end stage had to say.
+
+        An ``is_end`` subflow stage is entered and left inside one turn --
+        :meth:`should_pop` asks only for a non-empty stack and an end
+        stage -- so this is the only moment it can speak.  Its template
+        used to render nowhere, and a subflow whose failing exit exists to
+        say *nothing was saved, and here is why* said it on the one stage
+        that was never on screen.
+
+        **The order is the whole point.** :meth:`handle_pop` swaps the
+        active FSM and replaces ``wizard_state.data`` with the parent's,
+        so a render placed after it names the parent's stage and
+        interpolates the parent's data.  Rendering first is what makes the
+        message the subflow's own.
+
+        This exists as one method rather than two lines at each call site
+        because there are two pop sites -- the post-transition sequence
+        and the auto-advance loop -- and a stage left by either must say
+        the same thing.  Clearing ``completed`` belongs here for the same
+        reason: the subflow ended, the wizard did not, and both sites were
+        already spelling that out identically.
+
+        Args:
+            wizard_state: Current wizard state, mutated in place when a
+                pop happens.
+
+        Returns:
+            The end stage's rendered template, or ``None`` when no pop
+            happened *or* the stage had no template to offer.  Callers
+            collect the message and re-read the active FSM; none of them
+            needs to tell those two cases apart.
+        """
+        if not self.should_pop(wizard_state):
+            return None
+
+        # Asked of the state's stage, because that is the stage
+        # ``should_pop`` just approved -- ``current_metadata`` would ask
+        # the FSM's, and the two need not agree outside a turn.
+        departing = self.get_active_fsm().stage_metadata_for(wizard_state.current_stage)
+        message = self._render_departing_stage(departing, wizard_state)
+        # ``handle_pop``'s bool is unread on purpose: its only ``False`` is
+        # an empty stack, which ``should_pop`` has already ruled out.
+        self.handle_pop(wizard_state)
+        wizard_state.completed = False
+        return message
 
 
 # ---------------------------------------------------------------------------

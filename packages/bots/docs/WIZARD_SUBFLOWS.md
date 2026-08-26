@@ -5,9 +5,14 @@ Reusable, nestable wizard flows that can be invoked from within a parent wizard.
 ## Table of Contents
 
 - [Overview](#overview)
+  - [First-Render Confirmation in Subflow Stages](#first-render-confirmation-in-subflow-stages)
+  - [What the End Stage Says](#what-the-end-stage-says)
 - [Configuration](#configuration)
   - [Transition Syntax](#transition-syntax)
   - [Subflow Block Fields](#subflow-block-fields)
+  - [Which Subflow Config Is Live Inside a Push](#which-subflow-config-is-live-inside-a-push)
+  - [When the Guard Is Evaluated, and What It Can See](#when-the-guard-is-evaluated-and-what-it-can-see)
+  - [Navigation Inside a Pushed Subflow](#navigation-inside-a-pushed-subflow)
 - [Data Flow](#data-flow)
   - [data_mapping (Parent to Child)](#data_mapping-parent-to-child)
   - [result_mapping (Child to Parent)](#result_mapping-child-to-parent)
@@ -78,6 +83,29 @@ stages:
 
 Alternatively, omit the `response_template` entirely (let the LLM generate the response instead).
 
+### What the End Stage Says
+
+A subflow's `is_end` stage is entered and left inside a single turn: reaching it satisfies `SubflowManager.should_pop()`, so the pop runs in the same step that landed there and the parent resumes at its `return_stage`. The end stage still gets to speak. Its `response_template` renders **before** the pop -- against the subflow's own data, under the subflow's own stage name -- and the message is prepended to the turn ahead of whatever the parent's return stage renders.
+
+```yaml
+# In a subflow definition
+  - name: saved
+    is_end: true
+    response_template: "Indexed {{ document_count }} documents."
+
+  - name: nothing_saved
+    is_end: true
+    response_template: "Nothing was saved: {{ source }} could not be read."
+```
+
+A user completing that subflow sees the end stage's line, then the parent's. This is what makes a subflow's *failing* exit usable: a branch whose only job is to explain that nothing was built has nowhere else to say it.
+
+Three consequences follow from the stage being left as soon as it is reached:
+
+- The template renders against the subflow's data, which the pop then replaces with the parent's. A value that exists only inside the subflow -- `document_count` above -- is interpolated correctly here and is gone by the time the parent renders. Fields the parent needs must still travel through [`result_mapping`](#result_mapping-child-to-parent).
+- **`prompt` is not one of the templates the pop can render.** The departing stage offers `greeting_template`, `response_template`, or `clarification_template` and nothing else, so an end stage carrying only a `prompt` is still silent. (`prompt` *is* rendered elsewhere -- into the turn's `stage_prompt` metadata -- and is handed to the model verbatim as the stage's goal. It is simply not a candidate here.) A completion message goes in `response_template`.
+- `auto_advance: true` on an end stage does nothing. The auto-advance loop excludes end stages by design; a flow that has ended has nothing to advance to. Set the template, not the flag.
+
 ## Configuration
 
 ### Transition Syntax
@@ -112,6 +140,174 @@ When the condition evaluates to true, the wizard pushes the `kb_acquisition` sub
 | `return_stage` | `str` | No | Stage to transition to when the subflow completes. Defaults to the stage that pushed the subflow. |
 | `data_mapping` | `dict[str, str]` | No | Maps parent field names to subflow field names (parent -> child). |
 | `result_mapping` | `dict[str, str]` | No | Maps subflow field names back to parent field names (child -> parent). |
+
+### Which Subflow Config Is Live Inside a Push
+
+A pushed subflow keeps its own FSM, and every read of the stage in play goes
+to whichever FSM owns that stage. So **everything a subflow declares at the
+stage level means the same thing inside a push as it does when the same file
+is loaded as a wizard of its own.** The fields travel with the stage; there is
+no separate subflow-flavoured path reading them.
+
+**A subflow's wizard-level `settings:` block is the exception, and it is
+inert.** Settings are read once, off the top-level flow, when the strategy is
+built — the extractor is constructed with that flow's `extraction_scope`, the
+navigator with that flow's `navigation` block — and those collaborators outlive
+every push and pop. Nothing re-reads `settings` from the flow a push made
+active, so a subflow declaring `extraction_scope: current_message` runs under
+whatever the parent declared, *including while its own stage is current*. The
+block is parsed and stored on the subflow's FSM; it is simply never consulted.
+
+| Level | Live inside a push? | Why |
+|---|---|---|
+| **Stage** — `prompt`, `schema`, `response_template`, `collection_mode`, `extraction_scope`, `auto_advance`, `can_skip`, `skip_default`, `navigation`, and the rest | ✅ | read from the FSM that owns the stage |
+| **Transition** — a subflow guard's `condition` | ✅ | see [When the Guard Is Evaluated](#when-the-guard-is-evaluated-and-what-it-can-see) |
+| **Wizard** — every key of `settings:` | ❌ | hoisted once off the top-level flow; **reported at load** |
+
+`navigation` is the one word that appears at both levels, and the levels
+disagree. A subflow **stage** carrying its own `navigation:` block is live, as
+[Navigation Inside a Pushed Subflow](#navigation-inside-a-pushed-subflow)
+describes. The same block written under a subflow's `settings:` is not.
+
+**Say it per stage instead.** Two of the settings have stage-level
+counterparts that *are* read from the active flow — `extraction_scope` and
+`auto_advance` — and a stage's own `extraction_scope` is preferred over the
+hoisted wizard-level one:
+
+```yaml
+# In a subflow definition. Live, because it is on the stage.
+stages:
+  - name: gather
+    extraction_scope: current_message
+```
+
+The loader does not leave this to be discovered at runtime: loading a subflow
+that declares `settings:` logs a warning naming the keys it found. It is a
+warning and not a refusal, because the block is not *wrong* — the same file
+loaded directly as a wizard honours every key of it. It is unread only here.
+
+One nearby field is inert for a reason that has nothing to do with subflows.
+`auto_advance: true` on an `is_end` stage does nothing whether the stage is in
+a subflow or not, because end stages are excluded from the auto-advance loop;
+see [What the End Stage Says](#what-the-end-stage-says). It is reported at load
+too, and for that reason the report is not limited to subflows.
+
+### When the Guard Is Evaluated, and What It Can See
+
+The `condition` on a subflow transition — the **guard** — is evaluated at
+one fixed point in the turn: after the stage's pre-transition preparation
+and before the FSM step. Both halves of that matter, and neither is
+arbitrary.
+
+**After the preparation** means a guard reads the same state an ordinary
+transition condition reads. Everything below is visible to a guard on the
+turn it is written:
+
+| Written by | Visible to the guard |
+|---|---|
+| Extraction (`schema:` fields merged from the user's message) | ✅ |
+| Tool execution and `tool_result_mapping:` | ✅ |
+| A transition's `derive:` block | ✅ |
+| The stage's `routing_transforms:` | ✅ |
+
+The last two are the ones worth naming, because they run *as part of* the
+transition decision rather than before it. A guard reading a key its own
+stage's routing transform computes fires on that turn.
+
+**Before the FSM step** means a push pre-empts an ordinary transition
+declared on the same stage. A subflow transition compiles to a *self-loop*
+arc — its FSM target is the stage it came from — so the FSM cannot perform
+the push, and if the guard were asked afterwards an unconditional sibling
+transition would have consumed the turn first.
+
+Two consequences follow from the self-loop shape and are worth knowing
+when reading logs:
+
+- The FSM evaluates the guard's condition string **a second time**, on its
+  own arc, after the push decision was already taken. That evaluation
+  moves the FSM from the stage to itself and nothing acts on its result.
+  A `WizardFSM` DEBUG line reporting that the FSM *stayed* at a stage with
+  subflow transitions is describing this, not a failed condition.
+- A guard that declines is logged by `SubflowManager` at DEBUG, naming the
+  conditions that were asked and said no. Without it, a decline looks
+  exactly like a stage with no subflow transition at all.
+
+Both `chat()`/`stream_chat()` and the non-conversational `advance()` run
+this same sequence, so a subflow is pushed at the same point on either
+path. Before this was shared, `advance()` had no guard at all and could
+be carried *out* of a subflow it had no way to enter.
+
+### Navigation Inside a Pushed Subflow
+
+**A stage config means the same thing wherever the stage is reached.** The
+navigation commands — back, skip, restart — resolve against the FSM that
+actually owns the current stage, which inside a push is the subflow's. So
+a subflow stage's `can_skip:` and its own `navigation:` block work exactly
+as they do when the same stage heads a wizard of its own:
+
+```yaml
+# In a subflow definition. Both fields are live once the subflow is pushed.
+stages:
+  - name: define_method
+    can_skip: true
+    navigation:
+      skip:
+        keywords: ["done", "that's it", "finished"]
+```
+
+Two things follow, and the second is the one to check an existing config
+against:
+
+- **Stage-level keywords replace the wizard-level ones**, per command, as
+  they always have outside a subflow. The stage above answers to `done`,
+  `that's it` and `finished` — and *not* to the default `skip`, because
+  it declared a `skip:` block and that block is the whole list. Keep
+  `skip` in the list if you want both.
+- **Restart leaves the subflow.** `restart` / `start over` returns the
+  user to the **main** flow's start stage and unwinds the subflow stack
+  with it; it is not a way to restart the subflow in place. The unwind is
+  recorded — one `subflow_pop` transition per frame torn down — so the
+  audit trail pairs with the `subflow_push` that opened it. Restart also
+  clears task completion, so a restarted wizard starts its checklist
+  empty.
+
+#### Amendment jumps across a frame boundary
+
+Amendment jumps (`allow_post_completion_edits`) resolve a section name
+against the **whole** flow — the main stages and every subflow's — so a
+section may name a stage in either frame. Two consequences worth knowing:
+
+- A jump whose target is in the main flow while a subflow is open
+  **unwinds the subflow first**, exactly as restart does. There is no
+  way to be on a main-flow stage with a subflow still loaded.
+- A jump naming a stage inside some *other*, inactive subflow is
+  **declined** and logged. Entering a subflow needs a parent stage to
+  return to and a data mapping to apply, and an amendment supplies
+  neither; the wizard stays where it is.
+
+A custom `section_to_stage_mapping` is returned before this check, as it
+always has been — naming a stage explicitly is taken at face value.
+
+A subflow stage's `navigation:` block is read through the same
+implementation as the wizard-level one, and its fields are type-checked
+the same way — `keywords` must be a **list** of strings, and a bare
+string is iterated into one keyword per character. The full contract is
+under **Navigation Commands** in the configuration guide.
+<!-- Named rather than linked: this page is transcluded into the docs
+     site verbatim, so a relative .md link resolves in one tree and not
+     the other. That is why this file carries no cross-doc links. --> The reason it is worth repeating here is that a subflow stage
+is the position where it went unnoticed: before this fix the block was
+never read at all inside a push, so a wrong-typed one was inert rather
+than wrong.
+
+Before this was resolved against the active FSM, all of the above read
+from the main FSM — which does not have the subflow's stages. Asking it
+returns an empty metadata dict, and an empty dict is indistinguishable
+from a stage that declared nothing: `can_skip` read as `false`, a stage's
+own keywords read as absent, and the stage a back command landed on
+rendered with no prompt, schema or template. A subflow stage that
+declared both fields got neither, silently, and a config that was correct
+standalone became a dead end when pushed.
 
 ## Data Flow
 
@@ -164,7 +360,17 @@ result_data = _apply_result_mapping(
     wizard_state.data, subflow_context.result_mapping
 )
 parent_data.update(result_data)
+...
+wizard_state.replace_data(parent_data)
 ```
+
+Note the last line: a push and a pop both replace the collected data
+through `WizardState.replace_data()`, which empties and refills the
+existing dict rather than assigning a new one to `wizard_state.data`. The
+dict is handed out by reference -- a wizard turn publishes it so a
+`ContextAwareTool` can read and write live wizard state -- so rebinding it
+mid-turn would leave a tool operating on the flow the turn started in.
+Hold `wizard_state.data` across a flow change and it stays the right dict.
 
 ## SubflowContext
 
@@ -218,7 +424,7 @@ stages:
             collected_url: kb_url
 
   - name: review
-    prompt: "Great, your KB is at {{ data.kb_url }}. Ready to continue?"
+    prompt: "Great, your KB is at {{ kb_url }}. Ready to continue?"
     transitions:
       - target: complete
         condition: "data.get('confirmed')"
@@ -246,7 +452,7 @@ subflows:
 
       - name: confirm_url
         is_end: true
-        prompt: "Got it: {{ data.collected_url }}"
+        prompt: "Got it: {{ collected_url }}"
 ```
 
 Inline definitions are loaded by `_load_single_subflow()` when it finds the subflow name as a key in `wizard_config["subflows"]`.
@@ -323,7 +529,7 @@ stages:
         condition: "data.get('collected_url')"
 
   - name: validate_url
-    prompt: "Checking access to {{ data.collected_url }}..."
+    prompt: "Checking access to {{ collected_url }}..."
     tools:
       - url_validator
     transitions:
@@ -454,12 +660,12 @@ stages:
   - name: complete
     is_end: true
     prompt: >
-      Your {{ data.bot_type }} bot is ready!
-      {% if data.knowledge_base_url %}
-      Knowledge base: {{ data.knowledge_base_url }}
-      ({{ data.kb_doc_count }} documents indexed)
+      Your {{ bot_type }} bot is ready!
+      {% if knowledge_base_url %}
+      Knowledge base: {{ knowledge_base_url }}
+      ({{ kb_doc_count }} documents indexed)
       {% endif %}
-      Tone: {{ data.tone }}
+      Tone: {{ tone }}
 ```
 
 ### Subflow (`subflows/kb_acquisition.yaml`)
@@ -482,7 +688,7 @@ stages:
         condition: "data.get('kb_url')"
 
   - name: ingest
-    prompt: "Indexing {{ data.kb_url }}... This may take a moment."
+    prompt: "Indexing {{ kb_url }}... This may take a moment."
     tools:
       - kb_indexer
     schema:
@@ -497,7 +703,7 @@ stages:
 
   - name: done
     is_end: true
-    prompt: "Indexed {{ data.document_count }} documents from {{ data.kb_url }}."
+    response_template: "Indexed {{ document_count }} documents from {{ kb_url }}."
 ```
 
 ### Conversation Flow
@@ -511,8 +717,9 @@ stages:
 3. `data_mapping` copies `bot_type` as `source_type` into the subflow's initial data.
 4. Subflow runs through `ask_source` -> `ingest` -> `done`.
 5. At `done` (end stage), `SubflowManager.should_pop()` returns `True`.
-6. `SubflowManager.handle_pop()` restores parent data and applies `result_mapping`:
+6. `done`'s `response_template` renders first, while the subflow's data is still in place, so `document_count` and `kb_url` interpolate. The message is prepended to the turn.
+7. `SubflowManager.handle_pop()` restores parent data and applies `result_mapping`:
    - Parent data `{"bot_type": "qa"}` is restored.
    - Subflow's `kb_url` is mapped to `knowledge_base_url`.
    - Subflow's `document_count` is mapped to `kb_doc_count`.
-7. Parent wizard resumes at `configure_personality` with the enriched data.
+8. Parent wizard resumes at `configure_personality` with the enriched data, rendering its own template after the subflow's.

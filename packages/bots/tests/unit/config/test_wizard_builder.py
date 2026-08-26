@@ -60,7 +60,7 @@ class TestWizardConfigBuilder:
                 is_start=True,
                 is_end=True,
                 can_skip=True,
-                skip_default="Anonymous",
+                skip_default={"name": "Anonymous"},
                 suggestions=["Alice", "Bob"],
                 response_template="Hello {{name}}",
                 help_text="Type your name",
@@ -74,7 +74,7 @@ class TestWizardConfigBuilder:
         assert stage.schema is not None
         assert stage.tools == ("validator",)
         assert stage.can_skip is True
-        assert stage.skip_default == "Anonymous"
+        assert stage.skip_default == {"name": "Anonymous"}
         assert stage.suggestions == ("Alice", "Bob")
         assert stage.response_template == "Hello {{name}}"
         assert stage.help_text == "Type your name"
@@ -424,6 +424,72 @@ class TestWizardConfigBuilderValidation:
         assert result.valid is True
         assert any("never be followed" in w for w in result.warnings)
 
+    def test_greeting_makes_a_conversation_response_template_unreachable(self) -> None:
+        """The builder raises the warning the loader would, before loading.
+
+        On a conversation stage the greeting takes the opening turn, so
+        the response_template beside it never renders.
+        """
+        result = (
+            WizardConfigBuilder("test")
+            .add_conversation_stage(
+                "chat",
+                "Converse",
+                is_start=True,
+                greeting_template="Hello!",
+                response_template="Never rendered.",
+            )
+            .validate()
+        )
+        assert result.valid is True
+        assert any("response_template is unreachable" in w for w in result.warnings)
+
+    def test_greeting_and_response_on_a_structured_stage_is_silent(self) -> None:
+        """Both fields on a structured stage is the supported shape."""
+        result = (
+            WizardConfigBuilder("test")
+            .add_structured_stage(
+                "collect",
+                "Collect",
+                is_start=True,
+                is_end=True,
+                greeting_template="Hello!",
+                response_template="Recorded: {{ topic }}",
+            )
+            .validate()
+        )
+        assert not [w for w in result.warnings if "unreachable" in w]
+
+    @pytest.mark.parametrize(
+        "field_name",
+        [
+            "greeting_template",
+            "response_template",
+            "clarification_template",
+            "confirmation_template",
+        ],
+    )
+    def test_python_format_syntax_warns_on_every_template_field(self, field_name: str) -> None:
+        """The str.format()-vs-Jinja2 check enumerates fields by name.
+
+        It had listed only ``response_template``, so a ``{name}`` in any
+        of its three siblings went unreported.
+        """
+        result = (
+            WizardConfigBuilder("test")
+            .add_structured_stage(
+                "start",
+                "Go",
+                is_start=True,
+                is_end=True,
+                **{field_name: "Hello {name}"},
+            )
+            .validate()
+        )
+        assert any(field_name in w and "Python format syntax" in w for w in result.warnings), (
+            result.warnings
+        )
+
     def test_max_iterations_without_reasoning_warning(self) -> None:
         result = (
             WizardConfigBuilder("test")
@@ -473,7 +539,7 @@ class TestWizardConfigSerialization:
                 "Enter data",
                 schema={"type": "object", "properties": {"x": {"type": "integer"}}},
                 can_skip=True,
-                skip_default=0,
+                skip_default={"x": 0},
             )
             .add_end_stage("done", "Goodbye")
             .add_transition("chat", "collect", condition="data.get('ready')")
@@ -603,3 +669,87 @@ class TestDynaBotConfigBuilderIntegration:
         builder = DynaBotConfigBuilder()
         result = builder.set_reasoning_wizard("path.yaml")
         assert result is builder
+
+
+class TestSubflowNetworkShape:
+    """``subflows:`` means the same thing to the builder and the loader.
+
+    ``WIZARD_SUBFLOWS.md`` documents each value under ``subflows:`` as a
+    whole wizard config -- ``{name: ..., stages: [...]}`` -- and
+    ``WizardConfigLoader._load_single_subflow`` reads it that way, handing
+    it straight to ``load_from_dict``. The builder collected a bare list
+    of stages instead, so neither direction worked: ``to_dict()`` emitted
+    a shape the loader refuses, and ``from_dict()`` iterated a documented
+    config as though it were a list and got its keys.
+
+    Neither had a caller. ``add_subflow_network`` is referenced nowhere in
+    the repository outside its own definition, which is the whole
+    explanation for how a public method that cannot round-trip survived.
+    """
+
+    @staticmethod
+    def _stages() -> list[dict[str, object]]:
+        return [
+            {
+                "name": "only",
+                "is_start": True,
+                "is_end": True,
+                "prompt": "hi",
+                "response_template": "hi",
+            }
+        ]
+
+    def _host(self) -> WizardConfigBuilder:
+        return (
+            WizardConfigBuilder("host")
+            .add_structured_stage("start", "go", is_start=True, response_template="go")
+            .add_end_stage("done", "done")
+            .add_subflow_network("helper", self._stages())
+            .add_transition(
+                "start",
+                "_subflow",
+                subflow={"network": "helper", "return_stage": "done"},
+            )
+        )
+
+    def test_a_built_subflow_network_loads(self) -> None:
+        """``to_dict`` is documented as loader-compatible; it has to be."""
+        from dataknobs_bots.reasoning.wizard_loader import WizardConfigLoader
+
+        fsm = WizardConfigLoader().load_from_dict(self._host().build().to_dict())
+
+        assert fsm.get_subflow("helper") is not None
+
+    def test_a_built_subflow_network_is_a_wizard_config(self) -> None:
+        """Not a bare list -- the shape the docs show and the loader reads."""
+        emitted = self._host().build().to_dict()["subflows"]["helper"]
+
+        assert emitted["stages"] == self._stages()
+        assert emitted["name"] == "helper"
+
+    def test_from_dict_reads_the_documented_shape(self) -> None:
+        """A real wizard YAML is the input this constructor exists for."""
+        authored = {
+            "name": "host",
+            "stages": [
+                {
+                    "name": "start",
+                    "is_start": True,
+                    "prompt": "go",
+                    "response_template": "go",
+                }
+            ],
+            "subflows": {"helper": {"name": "helper", "stages": self._stages()}},
+        }
+
+        rebuilt = WizardConfigBuilder.from_dict(authored).build().to_dict()
+
+        assert rebuilt["subflows"] == authored["subflows"]
+
+    def test_the_round_trip_is_stable(self) -> None:
+        """Twice through says the same thing as once, or one side is lying."""
+        once = self._host().build().to_dict()
+
+        twice = WizardConfigBuilder.from_dict(once).build().to_dict()
+
+        assert twice["subflows"] == once["subflows"]

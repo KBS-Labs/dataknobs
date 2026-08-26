@@ -292,6 +292,57 @@ def _collect(*targets: str) -> subprocess.CompletedProcess[str]:
         ) from exc
 
 
+def _invocation_dependent_tree_imports() -> list[str]:
+    """Imports inside a package test tree that name that tree by its own name.
+
+    ``packages/<pkg>/tests`` becomes importable as the top-level name
+    ``tests`` only when pytest puts ``packages/<pkg>`` on ``sys.path``, and it
+    does that only when that package is the run's rootdir -- a single-package
+    invocation. Name the package beside another and the rootdir widens to the
+    workspace, where ``tests`` is the workspace's own suite instead. So an
+    import rooted at the tree's own name resolves to two different packages
+    depending on the argument list.
+
+    Relative imports (``level > 0``) are excluded deliberately: they resolve
+    through the importing module's own package rather than through
+    ``sys.path``, so the argument list cannot change what they mean.
+
+    The walk is over every node, not only module-level ones. That is the
+    whole reason this check exists rather than being covered by the
+    collection backstop: an import deferred into a function body does not run
+    at collection time, so the run collects cleanly and fails later.
+    """
+    tracked = set(tracked_files())
+    findings: list[str] = []
+
+    for tests_dir in sorted(ROOT.glob("packages/*/tests")):
+        if not tests_dir.is_dir():
+            continue
+        # Derived, not written down: the ambiguous name IS the directory's
+        # own, so a tree renamed tomorrow is still checked under its new name.
+        tree_name = tests_dir.name
+
+        for path in sorted(tests_dir.rglob("*.py")):
+            if rel(path) not in tracked:
+                continue
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+            for node in ast.walk(tree):
+                if isinstance(node, ast.ImportFrom):
+                    if node.level:
+                        continue
+                    module = node.module or ""
+                    statement = f"from {module} import ..."
+                elif isinstance(node, ast.Import):
+                    module = node.names[0].name
+                    statement = f"import {module}"
+                else:
+                    continue
+                if module.split(".")[0] == tree_name:
+                    findings.append(f"{rel(path)}:{node.lineno}: {statement}")
+
+    return findings
+
+
 def test_a_whole_workspace_collection_reports_no_errors() -> None:
     """A bare ``pytest`` at the repo root must collect every test.
 
@@ -410,3 +461,45 @@ def test_every_package_pytest_block_mirrors_the_root_import_mode(
         f"would import the same files by different rules than a run that "
         f"resolves the root."
     )
+
+
+def test_no_package_test_imports_its_own_tree_by_top_level_name() -> None:
+    """A package test must not reach its own tree through a top-level name.
+
+    Such an import means one package under ``pytest packages/<pkg>/tests`` and
+    a different one under any wider invocation, so it passes in the gate --
+    which runs one process per target -- and fails for anyone who names two
+    packages or types a bare ``pytest``.
+
+    The collection backstop above does not cover this. An import deferred
+    into a function body is not executed while collecting, so the run
+    collects cleanly and the failure arrives at call time instead. Nothing
+    structural is violated either: no ``__init__.py`` reappears and no
+    package's import mode drifts, so every other check here stays green.
+    """
+    findings = _invocation_dependent_tree_imports()
+    assert not findings, (
+        "package tests reaching their own tree by a top-level name:\n  "
+        + "\n  ".join(findings)
+        + "\n\nEach resolves to that package's own tests directory under a "
+        "single-package run and to the workspace's `tests/` under any wider "
+        "one. Give the shared helper an importable home and declare its "
+        "directory an import root, as packages/llm/tests/conftest.py does."
+    )
+
+
+def test_the_import_scan_reaches_an_import_inside_a_function() -> None:
+    """Guard the guard: the walk must see a deferred import, not only headers.
+
+    A scan that read module-level imports alone would report green over
+    exactly the shape that defeated the collection backstop, which is the
+    reason the check above was written at all.
+    """
+    tree = ast.parse("def f():\n    from tests.unit.helper import thing\n")
+    found = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom) and (node.module or "").startswith("tests")
+    ]
+    assert found, "the walk does not reach imports nested inside a function body"
+    assert found[0].col_offset > 0, "the fixture's import is not actually nested"

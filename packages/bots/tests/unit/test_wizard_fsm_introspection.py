@@ -34,8 +34,13 @@ class TestStagesProperty:
         assert welcome.get("is_start") is True
         assert "suggestions" in welcome
 
-    def test_stages_returns_copy(self, wizard_fsm: Any) -> None:
-        """Verify stages returns a copy to prevent external modification."""
+    def test_stages_copies_the_table(self, wizard_fsm: Any) -> None:
+        """Verify adding or removing a stage does not reach the FSM.
+
+        This is the whole of what the copy buys -- the stages inside it
+        are shared, which :meth:`test_stages_does_not_copy_the_stages`
+        pins.
+        """
         stages1 = wizard_fsm.stages
         stages2 = wizard_fsm.stages
 
@@ -46,6 +51,32 @@ class TestStagesProperty:
         # Modifying returned dict should not affect the internal state
         stages1["new_stage"] = {"prompt": "test"}
         assert "new_stage" not in wizard_fsm.stages
+
+        del stages1["welcome"]
+        assert "welcome" in wizard_fsm.stages
+
+    def test_stages_does_not_copy_the_stages(self, wizard_fsm: Any) -> None:
+        """Verify writing *through* a returned stage does reach the FSM.
+
+        The boundary of the shallow copy, pinned so that documenting a
+        stronger guarantee than this one fails here rather than in a
+        consumer's wizard. The copy is deliberate -- see the ``stages``
+        docstring for the deepcopy measurement -- so a change making this
+        test fail is an intentional contract change, not a bug fix.
+        """
+        wizard_fsm.stages["welcome"]["label"] = "MUTATED"
+
+        assert wizard_fsm.stage_metadata_for("welcome")["label"] == "MUTATED"
+        assert wizard_fsm.stages["welcome"]["label"] == "MUTATED"
+
+    def test_current_metadata_is_the_live_stage(self, wizard_fsm: Any) -> None:
+        """Verify the single-stage readers hand out the stage itself.
+
+        ``stages`` at least copies the table; these copy nothing, so the
+        same rule reaches them more directly.
+        """
+        assert wizard_fsm.current_metadata is wizard_fsm.current_metadata
+        assert wizard_fsm.stage_metadata_for("welcome") is wizard_fsm.stages["welcome"]
 
     def test_stages_preserves_transitions(self, wizard_fsm: Any) -> None:
         """Verify stages includes transition definitions."""

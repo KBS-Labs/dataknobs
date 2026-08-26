@@ -21,15 +21,16 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
-from dataknobs_common.structured_config import StructuredConfig
+from dataknobs_bots.reasoning.config_base import ReasoningConfig
 
 
-@dataclass(frozen=True)
-class WizardReasoningConfig(StructuredConfig):
+@dataclass(frozen=True, kw_only=True)
+class WizardReasoningConfig(ReasoningConfig):
     """Typed envelope for the wizard reasoning-section config.
 
     Mirrors the keys read by :meth:`WizardReasoning.from_config`.
-    ``from_dict``/``to_dict`` are inherited from :class:`StructuredConfig`;
+    ``from_dict``/``to_dict`` are inherited from ``StructuredConfig`` via
+    :class:`ReasoningConfig`;
     the opaque sub-sections remain raw dicts (or, for ``wizard_config``, a
     path string).  Credentials nested inside ``extraction_config`` are
     masked by the base repr's interior-key descent, so no field-level
@@ -39,6 +40,19 @@ class WizardReasoningConfig(StructuredConfig):
         wizard_config: Path to a wizard YAML config file, or an inline
             wizard-definition dict (compatible with
             ``WizardConfigLoader.load_from_dict``).  Required.
+        greeting_template: Optional Jinja2 template for the bot-initiated
+            greeting, rendered with ``initial_context``.  Declared for the
+            whole family on
+            :class:`~dataknobs_bots.reasoning.config_base.ReasoningConfig`
+            and inherited here; the wizard gives it a meaning of its own,
+            which is why this entry stays.  It is the universal
+            :class:`~dataknobs_bots.reasoning.base.ReasoningStrategy` field,
+            which the wizard reads as the **start stage's default**
+            ``greeting_template``: a start stage that sets one of its own
+            wins, and the strategy-level value is otherwise rendered once on
+            the greeting turn and then stepped over, exactly as a stage-level
+            greeting is.  Mid-flow stages are unaffected — there is one
+            greeting turn and it belongs to the start stage.
         config_base_path: Base directory for resolving a relative
             ``wizard_config`` path.
         custom_functions: Custom transition functions (callables or

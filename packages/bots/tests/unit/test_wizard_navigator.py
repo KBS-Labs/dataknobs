@@ -222,7 +222,7 @@ class TestResolveNavigationConfig:
         self, wizard_loader: WizardConfigLoader
     ) -> None:
         nav = _build_navigator(_two_stage_config(), wizard_loader=wizard_loader)
-        result = nav._resolve_navigation_config("start")
+        result = nav._resolve_navigation_config(WizardState(current_stage="start"))
         assert result is nav._navigation_config
 
     def test_stage_override_replaces_keywords(self, wizard_loader: WizardConfigLoader) -> None:
@@ -232,7 +232,7 @@ class TestResolveNavigationConfig:
             ),
             wizard_loader=wizard_loader,
         )
-        result = nav._resolve_navigation_config("start")
+        result = nav._resolve_navigation_config(WizardState(current_stage="start"))
         assert result.back.keywords == ("undo", "previous")
         # Skip and restart inherit from wizard-level defaults
         assert result.skip.keywords == nav._navigation_config.skip.keywords
@@ -245,13 +245,13 @@ class TestResolveNavigationConfig:
             ),
             wizard_loader=wizard_loader,
         )
-        result = nav._resolve_navigation_config("start")
+        result = nav._resolve_navigation_config(WizardState(current_stage="start"))
         assert result.skip.enabled is False
         assert result.skip.keywords == nav._navigation_config.skip.keywords
 
     def test_unknown_stage_returns_wizard_config(self, wizard_loader: WizardConfigLoader) -> None:
         nav = _build_navigator(_two_stage_config(), wizard_loader=wizard_loader)
-        result = nav._resolve_navigation_config("nonexistent")
+        result = nav._resolve_navigation_config(WizardState(current_stage="nonexistent"))
         assert result is nav._navigation_config
 
 

@@ -19,6 +19,7 @@ from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any
 
 from .observability import create_transition_record
+from .wizard_tasks import build_initial_tasks
 from .wizard_types import NavigationCommandConfig, NavigationConfig, WizardState
 
 if TYPE_CHECKING:
@@ -111,6 +112,59 @@ class WizardNavigator:
         self._run_post_transition_lifecycle = run_post_transition_lifecycle
         self._generate_stage_response = generate_stage_response
         self._prepend_messages_to_response = prepend_messages_to_response
+        #: ``(stage, field)`` pairs already reported by
+        #: :meth:`_resolve_navigation_config`, so an unreadable block is
+        #: named once rather than on every navigation check of every turn.
+        self._reported_navigation_types: set[tuple[str, str]] = set()
+
+    # ------------------------------------------------------------------
+    # Private — which FSM owns the stage being navigated
+    # ------------------------------------------------------------------
+
+    def _fsm_for(self, state: WizardState) -> WizardFSM:
+        """The FSM that owns the stage being navigated.
+
+        This class holds a reference to the **main** FSM and to the
+        subflow manager, and every method that resolves a stage had to
+        pick one.  Picked by hand nine times, five were wrong: inside a
+        push the stage belongs to the subflow's FSM, and asking the main
+        FSM about a stage it does not have returns ``{}`` -- which
+        ``.get(key, default)`` then reports as a stage that deliberately
+        declared nothing.  ``can_skip`` reads ``False``, stage-level
+        navigation keywords read as absent, and ``current_metadata``
+        reads as a stage with no name, prompt, schema or template.
+
+        The other four were right, and they are routed through here too.
+        Two spellings of one question is how the next one goes wrong: a
+        reader who finds both has to work out whether the difference is
+        deliberate, and the answer that produced this defect was that it
+        never was.
+
+        The delegation goes further than this class for the same reason.
+        ``SubflowManager.fsm_for_state`` derives the answer from the
+        **state**'s stack rather than from the per-turn attribute
+        ``get_active_fsm`` reads, and the strategy already needed that
+        form for snapshots, which are taken outside a turn.  Two rules
+        for one question is the same hazard as two spellings, so there is
+        one rule and this asks for it.
+
+        There is no site in this class where the main FSM is the right
+        answer *while a subflow is active*.  The one that looks like an
+        exception is restart, which returns the user to the main flow's
+        start stage -- but it gets there by unwinding the subflow first
+        (see :meth:`restart_cleanup`), so by the time it resolves a stage
+        no subflow is active and this method answers with the main FSM
+        anyway.  Restart is therefore correct through this accessor
+        rather than in spite of it, and a subflow-scoped restart added
+        later would not have to remember to change the call.
+
+        Args:
+            state: The state whose stack names the active subflow.
+
+        Returns:
+            The active subflow's FSM, or the main FSM outside a push.
+        """
+        return self._subflows.fsm_for_state(state)
 
     # ------------------------------------------------------------------
     # Public API — conversational (used by generate())
@@ -139,7 +193,7 @@ class WizardNavigator:
             Response if navigation handled, None otherwise
         """
         lower = message.lower().strip()
-        nav = self._resolve_navigation_config(state.current_stage)
+        nav = self._resolve_navigation_config(state)
 
         if nav.back.enabled and lower in nav.back.keywords:
             return await self._execute_back(message, state, manager, llm)
@@ -182,6 +236,35 @@ class WizardNavigator:
             return None
 
         target_stage = amendment["target_stage"]
+
+        # Which frame owns the target, and can we get there from here?
+        # ``map_section_to_stage`` answers "is this a stage of this
+        # wizard" without consulting the stack, because that is a
+        # property of the config.  Acting on the answer is where the
+        # stack matters: restoring the *subflow's* FSM to a main-flow
+        # stage is the same defect this class was fixed for, one method
+        # further along.
+        active_fsm = self._fsm_for(state)
+        if not active_fsm.has_stage(target_stage):
+            if not self._fsm.has_stage(target_stage):
+                # The target is inside some other subflow, which is not
+                # a jump this can express: entering one needs a parent
+                # stage to return to and a data mapping to apply, and an
+                # amendment has neither.  Declining is what the wizard
+                # did before the section table learned about subflows.
+                logger.info(
+                    "Amendment target '%s' is not reachable from '%s'; ignoring",
+                    target_stage,
+                    state.current_stage,
+                )
+                return None
+            # The target is in the main flow and a subflow is open. The
+            # stack has to come down with the jump, for the reason
+            # ``restart_cleanup`` documents: left standing it wedges the
+            # wizard, which can then neither push nor pop.
+            self._subflows.unwind_all(state, user_message=message)
+            active_fsm = self._fsm_for(state)
+
         from_stage = state.current_stage
         duration_ms = (time.time() - state.stage_entry_time) * 1000
 
@@ -192,7 +275,6 @@ class WizardNavigator:
             state.history.append(target_stage)
 
         # Restore FSM to target stage
-        active_fsm = self._subflows.get_active_fsm()
         active_fsm.restore(
             {
                 "current_stage": target_stage,
@@ -257,7 +339,7 @@ class WizardNavigator:
         Returns:
             True if navigation succeeded, False if at beginning.
         """
-        active_fsm = self._subflows.get_active_fsm()
+        active_fsm = self._fsm_for(state)
         if not active_fsm.can_go_back() or len(state.history) <= 1:
             return False
 
@@ -296,6 +378,27 @@ class WizardNavigator:
         Performs the skip operation (mark skipped, apply defaults, step
         FSM, run post-transition lifecycle) without generating a response.
 
+        **The skip marker is written before the defaults are applied, and
+        that ordering is part of the contract.** ``_skipped_<stage>``
+        going into ``state.data`` first is what lets anything downstream
+        tell "this value arrived with a skip" from "the user said this on
+        an ordinary turn" -- a routing transform reading a flag on the
+        skip turn sees the user's own value, not the stage's default.
+        Without the guarantee that distinction is unrecoverable, because
+        an overwritten value leaves nothing behind to say it was ever
+        different. The ordering predates ``skip_default`` (the marker was
+        written two weeks before the defaults were appended below it), so
+        it was never chosen; it is stated here because consumers depend
+        on it and a refactor would otherwise be free to reverse it.
+
+        Which defaults may land on a key that is already set is the
+        stage's decision, per key -- see
+        :meth:`WizardFSM.get_skip_defaults` and
+        :class:`~dataknobs_bots.reasoning.wizard_skip.SkipDefaults`. A
+        default that replaces a value the user set is logged at DEBUG,
+        naming the keys, because the alternative is a field changing with
+        nothing anywhere saying so.
+
         Hook coverage (when ``consistent_lifecycle=True``):
         - Full post-transition lifecycle: enter hook, auto-advance,
           subflow pop, complete hook — matching the forward path
@@ -311,17 +414,24 @@ class WizardNavigator:
         Returns:
             Tuple of (success, auto_advance_messages).  ``success`` is
             False when the stage cannot be skipped; ``auto_advance_messages``
-            contains rendered templates from any stages auto-advanced
-            through during the post-transition lifecycle.
+            contains rendered templates from the stages the lifecycle
+            left -- those auto-advanced through, and a popped subflow's
+            ``is_end`` stage.
         """
-        active_fsm = self._subflows.get_active_fsm()
+        active_fsm = self._fsm_for(state)
         if not active_fsm.can_skip():
             return False, []
 
+        # The marker is written BEFORE the defaults land, and that
+        # ordering is a guarantee -- see this method's docstring.
         state.data[f"_skipped_{state.current_stage}"] = True
-        skip_default = active_fsm.current_metadata.get("skip_default")
-        if skip_default and isinstance(skip_default, dict):
-            state.data.update(skip_default)
+        replaced = active_fsm.get_skip_defaults().apply(state.data)
+        if replaced:
+            logger.debug(
+                "skip_default replaced user-set keys on '%s': %s",
+                state.current_stage,
+                replaced,
+            )
         state.clarification_attempts = 0
         # Clear skip_extraction — if the user skips a stage they were
         # auto-advanced to, the stale flag must not carry over to suppress
@@ -411,6 +521,25 @@ class WizardNavigator:
         if self._hooks:
             await self._hooks.trigger_restart()
 
+        # Unwind any subflow FIRST.  Restart returns the user to the MAIN
+        # flow's start stage, so restarting the main FSM is right -- but
+        # the subflow state around it has to come down with it, and it
+        # used not to.  What was left behind wedged the wizard: with the
+        # stack still loaded ``should_push`` declines (it refuses to push
+        # while already in a subflow) and ``should_pop`` cannot fire (the
+        # main flow's start stage is not an end stage of the subflow), so
+        # the wizard could neither enter a subflow nor leave one, while
+        # reporting the main stage's name and rendering the subflow
+        # stage's prompt, schema and template.  Restart is the escape
+        # hatch of last resort; it must not be what closes the exit.
+        #
+        # ``unwind_all`` owns this rather than the two lines that used to
+        # be here: the stack belongs to ``SubflowManager``, an amendment
+        # jumping out of a subflow needs the same teardown, and doing it
+        # inline wrote nothing to the audit trail -- leaving a
+        # ``subflow_push`` record that nothing ever closed.
+        self._subflows.unwind_all(state, user_message=message)
+
         self._fsm.restart()
         to_stage = self._fsm.current_stage
 
@@ -427,7 +556,17 @@ class WizardNavigator:
         previous_transitions = [*state.transitions, transition]
 
         state.current_stage = to_stage
-        state.data = {}
+        state.replace_data({})
+        # ``replace_data`` empties ``data`` alone.  The two collections
+        # beside it are wizard state too and were left standing: a
+        # restarted wizard reported the previous run's completed tasks
+        # (``tasks`` round-trips through ``fsm_state``, so this survived
+        # even a reload), and ``transient`` is merged into the metadata a
+        # UI reads, so the first stage of the new run saw the old one's
+        # ephemeral keys.  The task *list* is rebuilt rather than emptied
+        # -- the wizard still has the same tasks to do, none of them done.
+        state.transient.clear()
+        state.tasks = build_initial_tasks(self._fsm.stages)
         state.history = [state.current_stage]
         state.completed = False
         state.clarification_attempts = 0
@@ -560,7 +699,7 @@ class WizardNavigator:
             back navigation is not possible.
         """
         if await self.navigate_back(state, user_message=message):
-            stage = self._fsm.current_metadata
+            stage = self._fsm_for(state).current_metadata
             await self.branch_for_revisited_stage(manager, state.current_stage)
             response = await self._generate_stage_response(manager, llm, stage, state, None)
             return response
@@ -597,7 +736,7 @@ class WizardNavigator:
             Response for the next stage, or an explanation if skip is
             not allowed.
         """
-        if not self._fsm.can_skip():
+        if not self._fsm_for(state).can_skip():
             return await manager.complete(
                 system_prompt_override=(
                     manager.system_prompt
@@ -612,7 +751,7 @@ class WizardNavigator:
             user_message=message,
         )
 
-        stage = self._subflows.get_active_fsm().current_metadata
+        stage = self._fsm_for(state).current_metadata
         response = await self._generate_stage_response(manager, llm, stage, state, None)
         if auto_advance_messages:
             self._prepend_messages_to_response(response, auto_advance_messages)
@@ -646,7 +785,7 @@ class WizardNavigator:
         """
         await self.restart_cleanup(state, message)
 
-        stage = self._fsm.current_metadata
+        stage = self._fsm_for(state).current_metadata
         await self.branch_for_revisited_stage(manager, state.current_stage)
         response = await self._generate_stage_response(manager, llm, stage, state, None)
         return response
@@ -655,52 +794,136 @@ class WizardNavigator:
     # Private — config resolution and mapping
     # ------------------------------------------------------------------
 
-    def _resolve_navigation_config(self, stage_name: str) -> NavigationConfig:
-        """Resolve the effective navigation config for a stage.
+    def _resolve_navigation_config(self, state: WizardState) -> NavigationConfig:
+        """Resolve the effective navigation config for the current stage.
 
         Per-stage overrides use **replace** semantics: if a stage specifies
         keywords for a command, those fully replace the wizard-level keywords
         for that command.  Commands not mentioned in the stage override
         inherit from the wizard-level config.
 
+        The block is authored config and is carried here uncoerced, so
+        each level is checked before it is used: ``navigation`` and each
+        command under it must be mappings, and ``keywords`` must be a
+        list of strings.  Anything else falls back to the wizard-level
+        value **for that field alone** -- a bad ``skip`` does not discard
+        a good ``back`` -- and is reported once per stage and field by
+        :meth:`_report_navigation_type`.  A bare ``keywords`` string is
+        the case worth naming: it is iterable, so before this it became
+        one keyword per character.
+
+        The stage is taken from *state* rather than passed beside it:
+        the frame that owns the stage is read off the same state, and two
+        flows may legitimately name a stage the same.  A name and a state
+        that disagreed would resolve one flow's block against the other's
+        position, which is the class of defect this accessor exists to
+        close.
+
         Args:
-            stage_name: Current stage name.
+            state: Wizard state naming the stage and the frame it is in.
 
         Returns:
-            Resolved ``NavigationConfig`` for the given stage.
+            Resolved ``NavigationConfig`` for the state's current stage.
         """
-        stage_meta = self._fsm._stage_metadata.get(stage_name, {})
+        stage_name = state.current_stage
+        stage_meta = self._fsm_for(state).stage_metadata_for(stage_name)
         stage_nav = stage_meta.get("navigation")
+        if stage_nav is not None and not isinstance(stage_nav, dict):
+            self._report_navigation_type(stage_name, "navigation", stage_nav, "a mapping")
+            stage_nav = None
         if not stage_nav:
             return self._navigation_config
 
-        # Merge: per-command, stage overrides wizard-level
+        # Merge: per-command, stage overrides wizard-level.  The checks
+        # live on NavigationCommandConfig because the wizard-level reader
+        # needs the same ones; the base config supplies the defaults, so
+        # "unreadable" and "not declared" both mean "inherit".
         def _merge_command(
+            command: str,
             base: NavigationCommandConfig,
-            override_raw: dict[str, Any] | None,
+            override_raw: Any,
         ) -> NavigationCommandConfig:
             if override_raw is None:
                 return base
-            keywords_raw = override_raw.get("keywords")
-            keywords = (
-                tuple(k.lower() for k in keywords_raw)
-                if keywords_raw is not None
-                else base.keywords
+
+            def _report(field: str, value: Any, expected: str) -> None:
+                path = f"navigation.{command}.{field}" if field else f"navigation.{command}"
+                self._report_navigation_type(stage_name, path, value, expected)
+
+            return NavigationCommandConfig(
+                **NavigationCommandConfig.normalize_raw(
+                    override_raw,
+                    base.keywords,
+                    base.enabled,
+                    on_invalid=_report,
+                )
             )
-            enabled = override_raw.get("enabled", base.enabled)
-            return NavigationCommandConfig(keywords=keywords, enabled=enabled)
 
         return NavigationConfig(
-            back=_merge_command(self._navigation_config.back, stage_nav.get("back")),
-            skip=_merge_command(self._navigation_config.skip, stage_nav.get("skip")),
-            restart=_merge_command(self._navigation_config.restart, stage_nav.get("restart")),
+            back=_merge_command("back", self._navigation_config.back, stage_nav.get("back")),
+            skip=_merge_command("skip", self._navigation_config.skip, stage_nav.get("skip")),
+            restart=_merge_command(
+                "restart", self._navigation_config.restart, stage_nav.get("restart")
+            ),
+        )
+
+    def _report_navigation_type(
+        self,
+        stage_name: str,
+        field: str,
+        value: Any,
+        expected: str,
+    ) -> None:
+        """Say once that a stage's navigation config could not be read.
+
+        De-duplicated per ``(stage, field)`` because
+        :meth:`_resolve_navigation_config` runs on every navigation check
+        of every turn -- the same discipline, and for the same reason, as
+        the one-shot report in :meth:`WizardFSM._stage_field`.
+
+        A load-time check naming the stage would be better than any
+        runtime line, since a config author is not reading bot logs;
+        ``WizardConfigLoader._validate_config`` is where that belongs.
+
+        Args:
+            stage_name: The stage whose config could not be read.
+            field: Dotted path of the field, for the message.
+            value: The authored value, reported by type only.
+            expected: What the field must be, in words.
+        """
+        if (stage_name, field) in self._reported_navigation_types:
+            return
+        self._reported_navigation_types.add((stage_name, field))
+        logger.warning(
+            "Stage '%s' declares %s as %s; %s is required, using the "
+            "wizard-level navigation config for it",
+            stage_name,
+            field,
+            type(value).__name__,
+            expected,
         )
 
     def map_section_to_stage(self, section: str) -> str | None:
         """Map a section name to a wizard stage name.
 
         First checks custom mapping from settings, then falls back to
-        built-in defaults.
+        built-in defaults.  A built-in target is returned only if the
+        wizard actually has such a stage -- asked of the **whole** flow
+        tree, main and subflows alike, because "is this a stage of this
+        wizard" is a property of the configuration and not of where the
+        user currently stands.
+
+        Asking one frame gets it wrong in both directions: the main FSM
+        alone never finds a stage that lives in a subflow, and the active
+        FSM alone stops finding main-flow stages the moment a subflow is
+        pushed.  A custom ``section_to_stage_mapping`` is returned before
+        this check, as it always has been -- an author naming a stage
+        explicitly is taken at their word.
+
+        Deciding *which frame* to act in is a separate question with a
+        different input: :meth:`handle_amendment` resolves it from the
+        wizard state, and unwinds when the target lives outside the
+        subflow in play.
 
         Args:
             section: Section identifier from extraction
@@ -734,7 +957,7 @@ class WizardNavigator:
         }
 
         mapped_stage = default_mapping.get(section_lower)
-        if mapped_stage and mapped_stage in self._fsm._stage_metadata:
+        if mapped_stage and self._fsm.find_stage_owner(mapped_stage) is not None:
             return mapped_stage
 
         return None

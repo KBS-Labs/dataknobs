@@ -30,6 +30,7 @@ from dataknobs_common.serialization import sanitize_for_json
 from dataknobs_common.structured_config import StructuredConfigConsumer
 from dataknobs_llm import LLMStreamResponse
 from dataknobs_llm.conversations.storage import ConversationNode, get_node_by_id
+from dataknobs_llm.tools.context import ToolWizardState
 
 from .base import (
     ProcessResult,
@@ -722,8 +723,25 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
         # is constructed (resolves the circular dependency).
         self._subflows.set_evaluate_condition(self._response.evaluate_condition)
 
-        # Build navigation keyword config from wizard-level settings
+        # Same dependency, same resolution: the pop is the only moment an
+        # is_end subflow stage can render, and the renderer lives on the
+        # responder.
+        self._subflows.set_render_departing_stage(self._response.render_departing_stage)
+
+        # Build navigation keyword config from wizard-level settings.
+        # Guarded here rather than inside NavigationConfig because
+        # StructuredConfig.from_dict calls dict(config) before any of that
+        # class's own normalisation runs -- so a scalar `navigation:` failed
+        # with a ValueError about dictionary update sequences, raised from
+        # common, naming neither the wizard nor the field.
         nav_settings = wizard_fsm.settings.get("navigation", {})
+        if nav_settings and not isinstance(nav_settings, dict):
+            logger.warning(
+                "settings.navigation is %s; a mapping is required, using the "
+                "default navigation keywords",
+                type(nav_settings).__name__,
+            )
+            nav_settings = {}
         self._navigation_config: NavigationConfig = NavigationConfig.from_dict(nav_settings or {})
 
         # Navigation module — handles back/skip/restart, amendments,
@@ -1669,8 +1687,8 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
         # Close every resident conversation's banks + catalog. Each slot's
         # teardown is error-isolated (per :meth:`_close_conversation_slot`), so
         # one conversation's failing close does not leak another's dbs.
-        for key, state in list(self._conv_state.items()):
-            self._close_conversation_slot(key, state)
+        for conv_key, state in list(self._conv_state.items()):
+            self._close_conversation_slot(conv_key, state)
         self._conv_state.clear()
 
     def _partition_data(self, data: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -2095,9 +2113,13 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
         """Generate a bot-initiated greeting from the wizard's start stage.
 
         Initializes wizard state (restarting the FSM to the start stage) and
-        generates a response using the start stage's ``response_template`` or
-        LLM prompt — exactly as ``generate()`` would, but without a user
-        message.
+        generates a response from the start stage — exactly as ``generate()``
+        would, but without a user message.  The stage resolves its opening
+        line in the usual order, with one addition that applies only here:
+        the strategy-level ``greeting_template`` stands in as the start
+        stage's ``greeting_template`` when the stage sets none, so the
+        universal :class:`~dataknobs_bots.reasoning.base.ReasoningStrategy`
+        field reaches a wizard instead of being discarded.
 
         This enables wizard scenarios to begin with the bot greeting the user
         (e.g. "Welcome! What is your name?") so the user's first turn answers
@@ -2136,6 +2158,20 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
         # (and any consumer hooks) apply on the greeting turn too.
         await self._fire_turn_start_hook(manager, wizard_state)
         stage = active_fsm.current_metadata
+        # The strategy-level ``greeting_template`` is the start stage's
+        # *default*: a start stage carrying its own wins, and this one
+        # otherwise becomes the stage's greeting rather than a value
+        # ``greet()`` renders for itself. Standing it up as stage data is
+        # what keeps the rest of the turn intact — selection stays the one
+        # rule in ``WizardResponder._select_active_template``, and the
+        # greeting is followed by auto-advance, revisit branching and wizard
+        # metadata exactly as a stage-level greeting is.
+        #
+        # Applied to a copy because ``current_metadata`` is the FSM's own
+        # stage dict, which outlives this turn and is shared with every other
+        # reader of the stage.
+        if self.greeting_template and not stage.get("greeting_template"):
+            stage = {**stage, "greeting_template": self.greeting_template}
         await self._navigator.branch_for_revisited_stage(manager, stage.get("name", ""))
         stage_result = await self._response.generate_stage_response(
             manager,
@@ -2243,6 +2279,8 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
         for key in self._per_turn_keys:
             wizard_state.data.pop(key, None)
             wizard_state.transient.pop(key, None)
+
+        self._publish_live_state(manager, wizard_state)
 
         # Fire turn-start hooks AFTER the per-turn key clear (so a hook
         # re-populating an ephemeral key isn't immediately wiped) and
@@ -2779,8 +2817,14 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
                     first_state_key = next(iter(trm_entry.mapping.values()))
                     wizard_state.data[first_state_key] = result_data
 
-        # Check for subflow push BEFORE regular FSM transition
-        subflow_config = self._subflows.should_push(wizard_state, user_message)
+        # Get current stage for transition derivations and routing
+        active_fsm = self._subflows.get_active_fsm()
+        stage = active_fsm.current_metadata
+
+        # Pre-transition preparation, then the subflow guard: one shared
+        # sequence, also run by advance().  See _prepare_and_route for why
+        # the guard sits after the preparation and before the FSM step.
+        subflow_config = await self._prepare_and_route(stage, wizard_state, user_message)
         if subflow_config and self._subflows.handle_push(
             wizard_state, subflow_config, user_message
         ):
@@ -2796,14 +2840,6 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
                 subflow_pushed=True,
                 subflow_new_stage=new_stage,
             )
-
-        # Get current stage for transition derivations and routing
-        active_fsm = self._subflows.get_active_fsm()
-        stage = active_fsm.current_metadata
-
-        # Pre-transition preparation: derivations, routing transforms,
-        # and snapshot update (shared with advance).
-        await self._prepare_transition(stage, wizard_state)
 
         # Log pre-transition state
         logger.debug(
@@ -3223,8 +3259,7 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
             (``on_enter`` / ``on_exit``) continue to fire on their
             own surface, distinct from the turn-lifecycle surface.
         """
-        extract_mode = isinstance(user_input, str)
-        if extract_mode and llm is None and navigation is None:
+        if isinstance(user_input, str) and llm is None and navigation is None:
             raise ValueError(
                 "llm parameter is required when user_input is a string "
                 "and no navigation command is provided"
@@ -3263,7 +3298,11 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
             active_fsm = self._subflows.get_active_fsm()
             stage = active_fsm.current_metadata
 
-            if extract_mode:
+            # The string/dict distinction *is* the mode: a string is raw
+            # user text to extract from, a dict is data to merge directly.
+            # Testing it inline rather than through a captured boolean keeps
+            # that correlation visible to the reader and the type checker.
+            if isinstance(user_input, str):
                 # Extraction mode: run the full pipeline
                 pipeline_result = await self._extraction.run_extraction_pipeline(
                     user_input,
@@ -3280,25 +3319,36 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
                 await self._hooks.trigger_exit(state.current_stage, state.data)
             update_stage_exit_tasks(state, state.current_stage)
 
-            # Pre-transition preparation: derivations, routing transforms,
-            # and snapshot update (shared with _finalize_preamble).
-            await self._prepare_transition(stage, state)
+            # Pre-transition preparation, then the subflow guard: the same
+            # shared sequence _finalize_preamble runs.  This path had the
+            # preparation and not the guard, so it could be carried *out*
+            # of a subflow -- should_pop reaches it through the shared
+            # post-transition sequence -- that it had no way to enter.
+            raw_message = user_input if isinstance(user_input, str) else ""
+            subflow_config = await self._prepare_and_route(stage, state, raw_message)
 
-            # Execute FSM step (shared method)
-            await self._execute_fsm_step(state, llm=llm)
+            if subflow_config and self._subflows.handle_push(state, subflow_config, raw_message):
+                # A push replaces the stage, the data and the active FSM.
+                # The FSM step and the post-transition sequence belong to
+                # the transition that did not happen; _finalize_preamble
+                # returns at this point for the same reason.
+                transitioned = state.current_stage != from_stage
+            else:
+                # Execute FSM step (shared method)
+                await self._execute_fsm_step(state, llm=llm)
 
-            transitioned = state.current_stage != from_stage
+                transitioned = state.current_stage != from_stage
 
-            # Post-transition sequence: auto-save, re-extraction, lifecycle
-            # (shared method — see also _finalize_preamble()).
-            # extract_mode=False when user_input is a dict (direct merge),
-            # so re-extraction is skipped (no raw text to extract from).
-            auto_advance_messages = await self._run_post_transition_sequence(
-                state,
-                from_stage,
-                user_input if extract_mode else None,
-                llm=llm,
-            )
+                # Post-transition sequence: auto-save, re-extraction,
+                # lifecycle (shared method — see also _finalize_preamble()).
+                # A dict user_input was merged directly, so there is no raw
+                # text to re-extract from and re-extraction is skipped.
+                auto_advance_messages = await self._run_post_transition_sequence(
+                    state,
+                    from_stage,
+                    user_input if isinstance(user_input, str) else None,
+                    llm=llm,
+                )
 
         # Build result.  Every field below that describes the stage is read
         # out of `metadata` rather than derived a second time: this method
@@ -3309,7 +3359,7 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
         # position where the builder reads the state, which is the pair that
         # drifted everywhere else it was written twice.
         metadata = self._build_wizard_metadata(state)
-        stage_meta = self._fsm_for_state(state).stages.get(state.current_stage, {})
+        stage_meta = self._fsm_for_state(state).stage_metadata_for(state.current_stage)
 
         advance_result = WizardAdvanceResult(
             state=state,
@@ -3514,6 +3564,61 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
         }
         await self._hooks.trigger_turn_end(event)
 
+    def _publish_live_state(self, manager: Any, wizard_state: WizardState) -> None:
+        """Publish this turn's wizard state where a tool can reach it.
+
+        A tool reaches wizard state through ``ToolExecutionContext``, which
+        without this rebuilds it from the *persisted* conversation
+        metadata. That makes the tool's reads as old as the last save and
+        its writes worthless, because the wizard rewrites that metadata
+        from its own state when the turn is saved.
+
+        ``collected_data`` is therefore ``wizard_state.data`` itself, not a
+        copy. That is the whole point rather than an optimisation: a copy
+        would fix nothing on either side -- the tool's writes would land in
+        the copy and be dropped, and its reads would still miss values
+        extracted later in the same turn.
+
+        ``stage_metadata`` *is* copied, because it is the FSM's own stage
+        configuration rather than turn state, and a tool has no business
+        editing the wizard's definition of its stages.
+
+        The channel is transient. ``DynaBot`` clears it beside
+        ``turn_data`` in the turn's teardown -- in the ``finally`` every
+        turn driver runs, not in finalization, which a stream abandoned
+        part-way skips by design -- so nothing here outlives the turn or
+        reaches storage.  Like ``turn_data``, it assumes one turn at a
+        time against a given manager.
+
+        Holding the dict by reference is only sound because the flow
+        changes that replace collected data -- a subflow push or pop, a
+        restart -- go through :meth:`WizardState.replace_data`, which
+        empties and refills the dict rather than rebinding the attribute.
+        They are reachable *after* this publish and *before* a tool runs:
+        ``begin_turn``'s auto-restart arm is the shortest such path, and
+        rebinding there used to hand the tool the answers of the run the
+        user had just finished while its writes went to a dict nothing
+        would read again.
+
+        Args:
+            manager: ConversationManager instance for this turn.
+            wizard_state: The turn's restored wizard state.
+        """
+        state = getattr(manager, "state", None)
+        if state is None:
+            return
+
+        active_fsm = self._subflows.get_active_fsm()
+        stage_metadata = active_fsm.current_metadata if active_fsm else None
+
+        state.live_wizard_state = ToolWizardState(
+            current_stage=wizard_state.current_stage,
+            collected_data=wizard_state.data,
+            history=wizard_state.history,
+            completed=wizard_state.completed,
+            stage_metadata=dict(stage_metadata or {}),
+        )
+
     def _get_wizard_state(self, manager: Any) -> WizardState:
         """Get or create wizard state from conversation manager.
 
@@ -3674,6 +3779,11 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
         subflow push/pop both set it from ``subflow_stack``), so this agrees
         with it whenever the attribute is fresh and beats it when it is not.
 
+        The rule itself lives on :class:`SubflowManager`, which owns the
+        stack: this class and ``WizardNavigator`` both need it, and two
+        implementations of one rule is the shape that produced the defect
+        it exists to prevent.
+
         Args:
             state: Wizard state naming the subflow stack, if any.
 
@@ -3681,11 +3791,7 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
             The subflow's FSM when a subflow is on the stack and resolvable,
             otherwise the main FSM.
         """
-        if state.subflow_stack:
-            subflow = self._fsm.get_subflow(state.subflow_stack[-1].subflow_network)
-            if subflow is not None:
-                return subflow
-        return self._fsm
+        return self._subflows.fsm_for_state(state)
 
     def _build_wizard_metadata(self, state: WizardState) -> dict[str, Any]:
         """The canonical wizard metadata: a function of ``state`` and nothing else.
@@ -3737,7 +3843,7 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
         """
         active_fsm = self._fsm_for_state(state)
         stage = state.current_stage
-        stage_meta = active_fsm.stages.get(stage, {})
+        stage_meta = active_fsm.stage_metadata_for(stage)
 
         # Always report main-flow progress for the roadmap / breadcrumb.
         # During a subflow the "effective" main-flow stage is the parent
@@ -4061,8 +4167,11 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
                 ``advance()`` path).
 
         Returns:
-            List of rendered template strings from auto-advanced
-            stages (empty when no transition occurred).
+            Rendered template strings collected from the stages this
+            turn left: those auto-advanced through, and a subflow's
+            ``is_end`` stage on the turn it is popped.  A pop can
+            contribute the only entry, so a non-empty list does not
+            imply an auto-advance happened.
         """
         # No transition — nothing to do
         if state.current_stage == from_stage:
@@ -4125,26 +4234,29 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
                 condition) is always enforced.
 
         Returns:
-            List of rendered template strings from auto-advanced stages.
+            The turn's collected template strings: a finished subflow's
+            end stage first, then every stage auto-advance stepped past.
         """
-        # Subflow pop check
-        if self._subflows.should_pop(state):
-            self._subflows.handle_pop(state)
-            state.completed = False
+        # Subflow pop check.  The end stage is left in this step, so its
+        # template renders here or nowhere -- and ahead of the parent's
+        # return render, which is what the turn goes on to produce.
+        messages: list[str] = []
+        ended_message = self._subflows.pop_if_ended(state)
+        if ended_message:
+            messages.append(ended_message)
 
         # Auto-advance through stages with all required fields filled
         active_fsm = self._subflows.get_active_fsm()
         stage = active_fsm.current_metadata
-        auto_advance_messages = await self._response.run_auto_advance_loop(
-            state,
-            active_fsm,
-            stage,
-            llm=llm,
-            after_re_extraction=after_re_extraction,
+        messages.extend(
+            await self._response.run_auto_advance_loop(
+                state,
+                active_fsm,
+                stage,
+                llm=llm,
+                after_re_extraction=after_re_extraction,
+            )
         )
-
-        # Re-fetch in case subflow pop occurred during auto-advance
-        active_fsm = self._subflows.get_active_fsm()
 
         # Stage entry hook
         if self._hooks:
@@ -4154,7 +4266,7 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
         if state.completed and self._hooks:
             await self._hooks.trigger_complete(state.data)
 
-        return auto_advance_messages
+        return messages
 
     async def _run_post_transition_re_extraction(
         self,
@@ -4389,6 +4501,51 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
         await self._execute_routing_transforms(stage, state)
         if stage.get("confirm_on_new_data"):
             self._confirmation.save_snapshot(stage, state)
+
+    async def _prepare_and_route(
+        self,
+        stage: dict[str, Any],
+        state: WizardState,
+        user_message: str,
+    ) -> dict[str, Any] | None:
+        """Prepare the transition, then decide whether a subflow is pushed.
+
+        The whole pre-transition sequence, in one place, for the same
+        reason :meth:`_prepare_transition` gives: both transition paths
+        call it, so a step added here cannot reach one and miss the other.
+        That is not hypothetical -- the subflow guard was the one step
+        left outside, and :meth:`advance` consequently never had it.
+
+        **The guard runs after the preparation** so that a subflow
+        condition reads what every other transition condition reads.
+        ``a10dbddb`` inserted the routing transforms with the comment
+        *"before condition evaluation"*; a subflow guard is a condition
+        evaluation, and it was already sitting above them.
+
+        **It still runs before the FSM step**, which is what
+        ``a05edd98``'s ordering was protecting.  A subflow transition
+        compiles to a *self-loop* arc
+        (``WizardConfigLoader._translate_transition``), so the FSM cannot
+        perform the push -- and an ordinary transition declared alongside
+        it would consume the turn first.
+
+        What a guard can see follows from where this sits, and the
+        boundary is worth stating because it is not the obvious one:
+        extraction, tool results and ``tool_result_mapping`` all land
+        before this method is called and are visible; the derivations and
+        routing transforms it runs are visible from here on.
+
+        Args:
+            stage: Current stage metadata.
+            state: Wizard state, mutated in place by the preparation.
+            user_message: Raw user text for the guard's context, empty on
+                the non-conversational path when the input was a dict.
+
+        Returns:
+            The subflow config to push, or ``None`` to transition normally.
+        """
+        await self._prepare_transition(stage, state)
+        return self._subflows.should_push(state, user_message)
 
     def _apply_transition_derivations(
         self,
@@ -4663,7 +4820,7 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
         live position, so the delegate is correct outside a turn for the same
         reason :meth:`_build_wizard_metadata` is.
         """
-        stage_meta = self._fsm_for_state(state).stages.get(state.current_stage, {})
+        stage_meta = self._fsm_for_state(state).stage_metadata_for(state.current_stage)
         return self._response.render_suggestions(suggestions, state, stage_meta)
 
     def _build_default_context(
@@ -4741,6 +4898,13 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
         Useful for UI components that need to display current state, progress,
         and available actions.
 
+        Inside a pushed subflow the result mixes two frames of reference on
+        purpose.  The stage-derived fields -- ``current_stage``, ``can_skip``,
+        ``can_go_back``, ``suggestions`` -- describe the **subflow** stage the
+        user is looking at.  Progress does not: a subflow is not a step of the
+        outer flow, so ``stage_index``, ``total_stages`` and ``stages`` stay on
+        the main flow and report the parent stage that pushed the subflow.
+
         Args:
             manager: ConversationManager instance
 
@@ -4748,16 +4912,39 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
             WizardStateSnapshot with complete state information
         """
         wizard_state = self._get_wizard_state(manager)
-        stage = self._fsm.current_metadata
+        stage_name = wizard_state.current_stage
 
-        position = stage_position(self._fsm.stage_names, wizard_state.current_stage)
+        # Which FSM answers: the one that owns the stage.  Inside a push
+        # the stage belongs to the subflow's FSM, and asking the main FSM
+        # about a stage it does not have returns ``{}`` -- surfaced here
+        # as a stage that cannot be skipped and offers no quick replies,
+        # which is what a UI would then render.  ``_fsm_for_state`` reads
+        # the stack off the *state* rather than off the per-turn
+        # attribute, which is what a snapshot needs: it is taken outside
+        # a turn by definition.
+        active_fsm = self._fsm_for_state(wizard_state)
+        stage = active_fsm.stage_metadata_for(stage_name)
+
+        # Progress stays main-flow.  A subflow is not a step of the outer
+        # flow, so the stage to locate is the parent that pushed it --
+        # the substitution ``_build_wizard_metadata`` and
+        # ``build_stages_roadmap`` both make.  Without it this object
+        # contradicted its own ``stages`` field, which already marks the
+        # parent "current" while ``stage_index`` reported 0: a progress
+        # bar that jumps back to the start whenever a subflow opens.
+        effective_main_stage = (
+            wizard_state.subflow_stack[-1].parent_stage
+            if wizard_state.subflow_stack
+            else stage_name
+        )
+        position = stage_position(self._fsm.stage_names, effective_main_stage)
 
         # Get task info
         task_list = wizard_state.tasks
         available_tasks = task_list.get_available_tasks()
 
         return WizardStateSnapshot(
-            current_stage=wizard_state.current_stage,
+            current_stage=stage_name,
             data=dict(wizard_state.data),
             history=list(wizard_state.history),
             transitions=list(wizard_state.transitions),
@@ -4773,26 +4960,47 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
             task_progress_percent=task_list.calculate_progress(),
             # Stage info
             stage_index=position.index,
-            total_stages=self._fsm.stage_count,
-            can_skip=self._fsm.can_skip(),
-            can_go_back=self._fsm.can_go_back() and len(wizard_state.history) > 1,
-            suggestions=stage.get("suggestions", []),
+            total_stages=position.total,
+            can_skip=active_fsm.can_skip(stage_name),
+            can_go_back=active_fsm.can_go_back(stage_name) and len(wizard_state.history) > 1,
+            # The same reader ``_build_wizard_metadata`` uses, and so the
+            # same reader the other constructor of this type reaches
+            # through the metadata.  Read straight off the stage dict,
+            # ``suggestions`` skipped both halves of it: the templates
+            # came back unrendered (a UI showed the user a raw Jinja
+            # expression as a button label) and a value of the wrong
+            # shape came back as itself, so a bare string became one
+            # quick reply per character.
+            suggestions=self._response.render_suggestions(
+                active_fsm.get_stage_suggestions(stage_name),
+                wizard_state,
+                stage,
+            ),
             stages=self._response.build_stages_roadmap(wizard_state),
         )
 
     @staticmethod
     def snapshot_from_metadata(
         metadata: dict[str, Any],
-        stage_definitions: dict[str, Any] | None = None,
+        stage_definitions: dict[str, Any] | list[dict[str, Any]] | None = None,
     ) -> WizardStateSnapshot | None:
         """Create snapshot from conversation manager metadata.
 
         This static method is useful when you have access to conversation
         metadata but not the WizardReasoning instance itself.
 
+        The stage-derived fields -- position, roadmap, and the actions the
+        stage allows -- are read from what the wizard already derived into
+        the metadata, which is subflow-aware.  ``stage_definitions`` is the
+        fallback for metadata written before those fields existed, or built
+        by hand from ``fsm_state`` alone.
+
         Args:
             metadata: Conversation manager metadata dict
-            stage_definitions: Optional stage definitions for index calculation
+            stage_definitions: Stage definitions used to derive the
+                position and roadmap **when the metadata does not already
+                carry them**.  Either the wizard config's ``stages`` list
+                (as the example below passes) or a name-keyed dict.
 
         Returns:
             WizardStateSnapshot if wizard metadata exists, None otherwise
@@ -4823,46 +5031,84 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
         task_list = WizardTaskList.from_dict(tasks_data) if tasks_data else WizardTaskList()
         available_tasks = task_list.get_available_tasks()
 
-        # Calculate stage index if definitions provided
-        current_stage = fsm_state.get("current_stage", "unknown")
-        stage_names: list[str] = []
-        if stage_definitions:
-            if isinstance(stage_definitions, dict):
-                stage_names = list(stage_definitions.keys())
-            elif isinstance(stage_definitions, list):
-                stage_names = [s.get("name", "") for s in stage_definitions]
-        position = stage_position(stage_names, current_stage)
+        # Everything the stage decides was already derived by
+        # ``_build_wizard_metadata`` and stored beside ``fsm_state`` --
+        # subflow and all -- and ``normalize_wizard_state`` is the reader
+        # for it.  Recomputing it here from the *main* flow's definitions
+        # is how a subflow stage came back as index 0 with nothing marked
+        # current, and ``can_skip``, ``can_go_back`` and ``suggestions``
+        # were not recomputed at all: they were never passed to the
+        # constructor, so they took the dataclass defaults in every flow.
+        #
+        # Imported inside the method for the reason the
+        # ``PROVIDER_ROLE_EXTRACTION`` imports above are: reasoning sits
+        # below the bot layer and must not import it at module scope.
+        from dataknobs_bots.bot.base import normalize_wizard_state
 
-        # Build stages roadmap from definitions if available
-        stages: list[dict[str, str]] = []
-        if stage_definitions:
-            history_set = set(fsm_state.get("history", []))
+        normalized = normalize_wizard_state(wizard_meta)
+        current_stage = normalized["current_stage"] or "unknown"
+
+        # ``data`` and ``history`` deliberately stay on ``fsm_state``.
+        # The normalized ``data`` prefers ``wizard_meta["data"]``, which
+        # carries transient keys as well; ``get_state_snapshot`` reports
+        # the persistent set, and the two constructors of this type
+        # agreeing is the whole point of the change.
+        # Copied, as the sibling constructor copies them.  These are the
+        # live objects inside ``manager.metadata``: handed out by
+        # reference, a consumer appending to ``snapshot.history`` --
+        # which the type documents as read-only -- rewrote persisted
+        # wizard state.
+        data = dict(fsm_state.get("data", {}))
+        history = list(fsm_state.get("history", []))
+
+        if "stage_index" in wizard_meta:
+            stage_index = normalized["stage_index"]
+            total_stages = normalized["total_stages"]
+            stages = list(normalized["stages"])
+        else:
+            # Metadata predating the derived fields, or hand-built from
+            # ``fsm_state``: the caller's definitions are all there is.
+            # Both shapes are unfolded once, into (name, label) pairs, and
+            # the position and the roadmap are read off the same list --
+            # the dict/list branch used to be written twice, once for
+            # each, which is two chances to disagree about what a
+            # definition is called.
+            pairs: list[tuple[str, str]] = []
             if isinstance(stage_definitions, dict):
-                for name, meta in stage_definitions.items():
-                    label = meta.get("label", name) if isinstance(meta, dict) else name
-                    if name == current_stage:
-                        status = "current"
-                    elif name in history_set:
-                        status = "completed"
-                    else:
-                        status = "pending"
-                    stages.append({"name": name, "label": label, "status": status})
+                pairs = [
+                    (name, meta.get("label", name) if isinstance(meta, dict) else name)
+                    for name, meta in stage_definitions.items()
+                ]
             elif isinstance(stage_definitions, list):
-                for s in stage_definitions:
-                    name = s.get("name", "")
-                    label = s.get("label", name)
-                    if name == current_stage:
-                        status = "current"
-                    elif name in history_set:
-                        status = "completed"
-                    else:
-                        status = "pending"
-                    stages.append({"name": name, "label": label, "status": status})
+                pairs = [
+                    (s.get("name", ""), s.get("label", s.get("name", "")))
+                    for s in stage_definitions
+                ]
+
+            position = stage_position([name for name, _ in pairs], current_stage)
+            stage_index = position.index
+            total_stages = position.total
+
+            history_set = set(history)
+            stages = [
+                {
+                    "name": name,
+                    "label": label,
+                    "status": (
+                        "current"
+                        if name == current_stage
+                        else "completed"
+                        if name in history_set
+                        else "pending"
+                    ),
+                }
+                for name, label in pairs
+            ]
 
         return WizardStateSnapshot(
             current_stage=current_stage,
-            data=fsm_state.get("data", {}),
-            history=fsm_state.get("history", []),
+            data=data,
+            history=history,
             transitions=transitions,
             completed=fsm_state.get("completed", False),
             snapshot_timestamp=time.time(),
@@ -4873,7 +5119,10 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
             total_tasks=len(task_list),
             available_task_ids=[t.id for t in available_tasks],
             task_progress_percent=task_list.calculate_progress(),
-            stage_index=position.index,
-            total_stages=position.total,
+            stage_index=stage_index,
+            total_stages=total_stages,
+            can_skip=normalized["can_skip"],
+            can_go_back=normalized["can_go_back"],
+            suggestions=normalized["suggestions"],
             stages=stages,
         )

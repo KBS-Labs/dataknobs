@@ -129,6 +129,11 @@ _STAGE_FIELDS: tuple[_StageField, ...] = (
     # scope (later-wins) so response templates can reference computed
     # values without a consumer subclassing the renderer.
     _StageField("inputs"),
+    # Rendered once when the stage first speaks, then stepped over.  The
+    # opening line for a stage of any mode — where response_template is
+    # the stage's *response*, which a structured stage re-renders every
+    # turn because the data behind it changes.
+    _StageField("greeting_template"),
     _StageField("response_template"),
     _StageField("clarification_template"),
     _StageField("confirmation_template"),
@@ -141,6 +146,9 @@ _STAGE_FIELDS: tuple[_StageField, ...] = (
     # Navigation
     _StageField("can_skip", default=False),
     _StageField("skip_default"),
+    # Block-level mode for every key in skip_default that does not name
+    # its own; "overwrite" (today's behaviour) when absent.
+    _StageField("skip_default_mode"),
     _StageField("can_go_back", default=True),
     _StageField("auto_advance"),
     # Confirmation
@@ -257,6 +265,8 @@ class WizardConfigLoader:
         custom_functions: dict[str, Callable[..., Any] | str] | None = None,
         transform_context_factory: Callable[..., Any] | None = None,
         config_root: str | Path | None = None,
+        *,
+        is_subflow: bool = False,
     ) -> WizardFSM:
         """Load wizard config and create WizardFSM.
 
@@ -274,6 +284,13 @@ class WizardConfigLoader:
                 but stays bounded to this root, so a shared subflow directory
                 beside the wizard is reachable while the tree is still a
                 boundary.
+            is_subflow: Whether this config is being loaded to be *pushed*
+                rather than run on its own. Loader-internal: it is set by
+                :meth:`_load_single_subflow` at its own recursion sites and
+                is readable from no config, because the same file is a
+                wizard when loaded directly and a subflow when pushed --
+                which of the two it is, is a property of the caller. It
+                reaches :meth:`_validate_config` and nothing else.
 
         Returns:
             Configured WizardFSM instance
@@ -297,6 +314,7 @@ class WizardConfigLoader:
             config_base_path=config_path.parent,
             transform_context_factory=transform_context_factory,
             config_root=config_root,
+            is_subflow=is_subflow,
         )
 
     def load_from_dict(
@@ -306,6 +324,8 @@ class WizardConfigLoader:
         config_base_path: Path | None = None,
         transform_context_factory: Callable[..., Any] | None = None,
         config_root: str | Path | None = None,
+        *,
+        is_subflow: bool = False,
     ) -> WizardFSM:
         """Load wizard config from dict and create WizardFSM.
 
@@ -324,6 +344,8 @@ class WizardConfigLoader:
                 :class:`TransformContext`.
             config_root: Directory that subflow names may address within, at
                 any depth. Defaults to ``config_base_path``.
+            is_subflow: Whether this config is being loaded to be *pushed*.
+                Loader-internal; see :meth:`load`.
 
         Returns:
             Configured WizardFSM instance
@@ -360,7 +382,7 @@ class WizardConfigLoader:
         self._synthesize_stages(wizard_config)
 
         # Warn about common config issues
-        self._validate_config(wizard_config)
+        self._validate_config(wizard_config, is_subflow=is_subflow)
 
         # Translate wizard config to FSM config
         fsm_config = self._translate_to_fsm(wizard_config)
@@ -431,7 +453,12 @@ class WizardConfigLoader:
                         validate(stage)
                     synthesizer.synthesize(stage)
 
-    def _validate_config(self, wizard_config: dict[str, Any]) -> None:
+    def _validate_config(
+        self,
+        wizard_config: dict[str, Any],
+        *,
+        is_subflow: bool = False,
+    ) -> None:
         """Validate wizard config and warn about common issues.
 
         Checks for:
@@ -439,13 +466,25 @@ class WizardConfigLoader:
         2. Non-end stages with no ``schema`` and no ``response_template``
            (pure LLM-driven — unreliable for data collection)
         3. Conditions that look like English rather than Python
-        4. Template syntax using Python str.format() instead of Jinja2
+        4. Invalid ``re_extract_on_entry`` values
+        5. A ``response_template`` made unreachable by a
+           ``greeting_template`` on a conversation-mode stage
+        6. Template syntax using Python str.format() instead of Jinja2
+        7. ``auto_advance: true`` on an end stage, which is never acted on
+        8. ``settings:`` on a config being loaded as a subflow, which is
+           never read
 
         All issues are logged as warnings, not errors — the config will
-        still load.
+        still load. That is the whole contract of this method, and it is
+        why #8 reports a subflow's ``settings:`` rather than refusing it:
+        the block is not *wrong*, it is *unread*, and the same file
+        loaded on its own honours every key of it.
 
         Args:
             wizard_config: Wizard configuration dict
+            is_subflow: Whether this config is being loaded to be pushed.
+                Only #8 consults it — every other check asks about the
+                config alone, and gets the same answer either way.
         """
         for stage in wizard_config.get("stages", []):
             stage_name = stage.get("name", "<unnamed>")
@@ -481,7 +520,7 @@ class WizardConfigLoader:
             # 3. English-language conditions
             for transition in stage.get("transitions", []):
                 condition = transition.get("condition", "")
-                if condition:
+                if condition and isinstance(condition, str):
                     for pattern in _ENGLISH_CONDITION_PATTERNS:
                         if pattern.search(condition):
                             logger.warning(
@@ -510,9 +549,39 @@ class WizardConfigLoader:
                     re_extract,
                 )
 
-            # 5. Python str.format() syntax in templates and prompts
-            for field_name in ("response_template", "prompt"):
+            # 5. A greeting occupies a conversation stage's opening, so
+            #    the response_template that would have filled it never
+            #    renders.  Reported here rather than left to a transcript:
+            #    a template that silently never appears is the defect this
+            #    field exists to remove, not one to reintroduce.
+            if (
+                stage.get("mode") == "conversation"
+                and stage.get("greeting_template")
+                and stage.get("response_template")
+            ):
+                logger.warning(
+                    "Stage '%s': 'greeting_template' and 'response_template' "
+                    "are both set on a conversation-mode stage; "
+                    "'response_template' is unreachable — use "
+                    "'clarification_template' for later turns.",
+                    stage_name,
+                )
+
+            # 6. Python str.format() syntax in templates and prompts
+            for field_name in (
+                "greeting_template",
+                "response_template",
+                "clarification_template",
+                "confirmation_template",
+                "prompt",
+            ):
                 text = stage.get(field_name, "")
+                # These checks exist to WARN about a config; a value of the
+                # wrong type must not take the load down with a TypeError
+                # out of the regex engine. The type itself is reported
+                # where the field is read (WizardFSM._stage_field).
+                if not isinstance(text, str):
+                    continue
                 if text and _PYTHON_FORMAT_PATTERN.search(text):
                     matches = _PYTHON_FORMAT_PATTERN.findall(text)
                     logger.warning(
@@ -523,6 +592,63 @@ class WizardConfigLoader:
                         matches[0],
                         matches[0],
                     )
+
+            # 7. auto_advance on an end stage.  WizardResponder
+            #    .can_auto_advance returns False for any stage carrying
+            #    `is_end`, before it reaches the schema or the transition
+            #    conditions, so the field is read, found true, and
+            #    discarded.  The exclusion is deliberate -- advancing out
+            #    of a flow that has ended has nowhere to go -- so this is
+            #    a config saying something the engine will not do, which
+            #    is exactly what this method is for.  `false` is not
+            #    reported: it asks for what already happens, and warning
+            #    about agreement teaches a reader to skip the line that
+            #    matters.
+            if stage.get("is_end") and stage.get("auto_advance") is True:
+                logger.warning(
+                    "Stage '%s': 'auto_advance: true' on an end stage is never "
+                    "acted on — end stages are excluded from the auto-advance "
+                    "loop, because advancing out of a flow that has ended has "
+                    "nowhere to go. Drop the field, or drop 'is_end' if the "
+                    "stage is meant to continue.",
+                    stage_name,
+                )
+
+        # 8. settings: on a config being loaded as a subflow.  Every
+        #    setting is hoisted once, off the top-level flow, into the
+        #    collaborators built from it -- the extractor holds
+        #    `extraction_scope`, the navigator the merged navigation
+        #    config -- and those outlive any push.  Nothing re-reads
+        #    `.settings` off the flow a push made active, so a pushed
+        #    subflow's block is in force at no point, including while its
+        #    own stage is current.
+        subflow_settings = wizard_config.get("settings")
+        if is_subflow and subflow_settings:
+            # A check whose purpose is to advise about a config must not
+            # be the thing that refuses it -- and the keys are authored
+            # too, not just the block. An unquoted YAML numeric key is an
+            # `int`, which neither sorts against a string nor joins, and
+            # the exception would not stop here: `_load_subflow_networks`
+            # catches it and re-raises, so naming the keys would take the
+            # whole wizard down. Naming them is worth a `str()`; a block
+            # that is not a mapping at all is shown rather than iterated.
+            declared = (
+                ", ".join(sorted(str(key) for key in subflow_settings))
+                if isinstance(subflow_settings, dict)
+                else repr(subflow_settings)
+            )
+            logger.warning(
+                "Subflow '%s': 'settings' is declared but never read. A "
+                "wizard's settings are hoisted once, off the top-level flow, "
+                "into collaborators that outlive any push, so a pushed "
+                "subflow's own block is in force at no point — including "
+                "while its own stage is current. The per-stage "
+                "'extraction_scope' and 'auto_advance' fields ARE read from "
+                "the active flow and are how to say this for a subflow. "
+                "Declared and unread: %s",
+                wizard_config.get("name", "<unnamed>"),
+                declared,
+            )
 
     def _translate_to_fsm(self, wizard_config: dict[str, Any]) -> Any:
         """Translate wizard config to FSM format.
@@ -605,7 +731,15 @@ class WizardConfigLoader:
                 "suggestions": stage.get("suggestions", []),
                 "help_text": stage.get("help_text"),
                 "can_skip": stage.get("can_skip", False),
-                "skip_default": stage.get("skip_default"),
+                # skip_default is deliberately absent. This block is a
+                # hand-built subset carried on the FSM's own StateConfig;
+                # the metadata WizardFSM reads is the registry-driven one
+                # from _extract_metadata. A copy here answers "what does
+                # this stage write on skip?" without the sibling
+                # skip_default_mode that says which of those writes may
+                # land on a key the user set -- so it can only ever give
+                # the pre-mode answer. Read it through
+                # WizardFSM.get_skip_defaults(), which reads both.
                 "can_go_back": stage.get("can_go_back", True),
                 "tools": stage.get("tools", []),
                 "mode": stage.get("mode"),
@@ -1086,6 +1220,7 @@ class WizardConfigLoader:
                 custom_functions,
                 config_base_path=anchor.base if anchor else None,
                 config_root=anchor.root if anchor else None,
+                is_subflow=True,
             )
 
         # Try to load from file
@@ -1109,7 +1244,12 @@ class WizardConfigLoader:
             if subflow_path.exists():
                 # The root travels with the recursion; the position moves to
                 # the subflow's own directory when `load` re-anchors there.
-                return self.load(str(subflow_path), custom_functions, config_root=anchor.root)
+                return self.load(
+                    str(subflow_path),
+                    custom_functions,
+                    config_root=anchor.root,
+                    is_subflow=True,
+                )
 
         logger.warning(
             "Subflow '%s' not found in config or as file at %s",

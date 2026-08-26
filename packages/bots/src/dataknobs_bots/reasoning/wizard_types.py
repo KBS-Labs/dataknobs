@@ -26,7 +26,7 @@ from __future__ import annotations
 
 import logging
 import time
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
@@ -171,6 +171,31 @@ _DEFAULT_NEGATIVE_PHRASES: tuple[str, ...] = (
 DEFAULT_BACK_KEYWORDS: tuple[str, ...] = ("back", "go back", "previous")
 DEFAULT_SKIP_KEYWORDS: tuple[str, ...] = ("skip", "skip this", "use default", "use defaults")
 DEFAULT_RESTART_KEYWORDS: tuple[str, ...] = ("restart", "start over")
+
+
+def is_keyword_list(value: Any) -> bool:
+    """Whether *value* is usable as a list of matchable keywords.
+
+    A ``str`` is rejected deliberately even though it is iterable: that
+    is the whole failure this guards, since iterating one yields a
+    keyword per character.
+
+    Four things in this package are authored as a keyword list and
+    *iterated* by their reader -- the three navigation commands, and the
+    ``keywords`` of an intent, whether written under ``intent_confirm:``
+    or in a hand-rolled ``intent_detection:`` block.  They share this
+    predicate so that what the field means cannot depend on which block
+    it was written in.  What they do about a bad value differs by layer
+    and should: a load-time validator raises, a runtime reader takes the
+    documented default and says so once.
+
+    Args:
+        value: The authored value.
+
+    Returns:
+        ``True`` when *value* is a list or tuple of strings.
+    """
+    return isinstance(value, (list, tuple)) and all(isinstance(item, str) for item in value)
 
 
 # =========================================================================
@@ -337,6 +362,35 @@ class WizardState:
         if not self.history:
             self.history = [self.current_stage]
 
+    def replace_data(self, new_data: dict[str, Any]) -> None:
+        """Replace the collected data **in place**, keeping the dict's identity.
+
+        Every flow change that starts a stage with different data -- a
+        subflow push, a subflow pop, a restart -- goes through here rather
+        than assigning to :attr:`data`, because ``data`` is handed out by
+        reference and rebinding it silently strands whoever is holding it.
+
+        The holder that makes this load-bearing is a tool: a reasoning
+        strategy publishes this dict for the duration of a turn so a
+        ``ContextAwareTool`` can read and write live wizard state, and
+        those two things happen at *different points* in the same turn.
+        A rebinding in between leaves the tool reading the answers of the
+        run the user just finished and writing where nothing will read --
+        both of which look like success from inside the tool.
+
+        Callers must pass a dict they own. Each of the three call sites
+        already builds a fresh one, and passing ``state.data`` itself
+        would clear the source before copying it back.
+
+        Args:
+            new_data: The data to hold from here on. Copied into the
+                existing dict, which is emptied first.
+        """
+        if new_data is self.data:
+            return
+        self.data.clear()
+        self.data.update(new_data)
+
     @property
     def is_in_subflow(self) -> bool:
         """Check if currently executing within a subflow.
@@ -377,7 +431,33 @@ class WizardState:
 
     def get_render_count(self, stage_name: str) -> int:
         """Get the current render count for a stage."""
-        return self.data.get("_stage_render_counts", {}).get(stage_name, 0)
+        counts: dict[str, int] = self.data.get("_stage_render_counts", {})
+        return counts.get(stage_name, 0)
+
+    def increment_greeting_count(self, stage_name: str) -> int:
+        """Increment and return the greeting-render count for a stage.
+
+        Kept apart from the render count because the two answer
+        different questions.  The render count is also read as "has this
+        stage rendered its ``response_template`` yet?" — the gate for
+        ``confirm_first_render`` — so counting a greeting there would
+        silently switch off a stage's confirmation because an unrelated
+        field was set.
+
+        It is also incremented regardless of the caller's
+        ``track_render``, which exists to keep a *question* unanswered
+        until the user replies.  Whether a greeting has already been
+        said is not a question, and suppressing the fact would show the
+        greeting twice.
+        """
+        counts: dict[str, int] = self.data.setdefault("_stage_greeting_counts", {})
+        counts[stage_name] = counts.get(stage_name, 0) + 1
+        return counts[stage_name]
+
+    def get_greeting_count(self, stage_name: str) -> int:
+        """Get the number of times a stage has rendered its greeting."""
+        counts: dict[str, int] = self.data.get("_stage_greeting_counts", {})
+        return counts.get(stage_name, 0)
 
     def save_stage_snapshot(self, stage_name: str, schema_props: set[str]) -> None:
         """Save current schema property values for confirm_on_new_data comparison."""
@@ -388,7 +468,8 @@ class WizardState:
 
     def get_stage_snapshot(self, stage_name: str) -> dict[str, Any]:
         """Get saved schema snapshot for a stage."""
-        return self.data.get("_stage_rendered_snapshot", {}).get(stage_name, {})
+        snapshots: dict[str, dict[str, Any]] = self.data.get("_stage_rendered_snapshot", {})
+        return snapshots.get(stage_name, {})
 
     def set_stage_snapshot(
         self,
@@ -470,9 +551,11 @@ class WizardAdvanceResult:
         completed: Whether the wizard has reached its end state.
         transitioned: Whether a stage transition occurred.
         from_stage: Stage before the advance (None if no transition).
-        auto_advance_messages: Rendered template strings from stages
-            auto-advanced through during post-transition lifecycle.
-            Empty when no auto-advance occurred.
+        auto_advance_messages: Rendered template strings collected from
+            the stages this turn left -- those auto-advanced through,
+            and a subflow's ``is_end`` stage on the turn it is popped.
+            A pop can contribute the only entry, so this is not empty
+            merely because no auto-advance occurred.
         metadata: Full wizard metadata dict for UI rendering.
         extraction: Extraction result when ``advance()`` ran with raw
             text input.  ``None`` when ``user_input`` was a dict.
@@ -579,8 +662,9 @@ class FinalizePreambleResult:
             (only set when ``subflow_pushed`` is True).
         from_stage: Stage name before FSM transition.
         new_stage: Stage metadata after FSM transition + post-lifecycle.
-        auto_advance_messages: Rendered messages from auto-advanced
-            intermediate stages.
+        auto_advance_messages: Rendered messages from the stages the
+            turn left -- auto-advanced intermediate stages, and a
+            popped subflow's ``is_end`` stage.
         completed_before: Whether the wizard was completed before this
             turn's response generation.
     """
@@ -811,7 +895,8 @@ class StageSchema:
     @property
     def required_fields(self) -> list[str]:
         """Required field names (empty list if none or no schema)."""
-        return self._raw.get("required", [])
+        required: list[str] = self._raw.get("required", [])
+        return required
 
     @property
     def has_required_fields(self) -> bool:
@@ -821,7 +906,8 @@ class StageSchema:
     @property
     def properties(self) -> dict[str, Any]:
         """Schema properties dict (empty if none or no schema)."""
-        return self._raw.get("properties", {})
+        properties: dict[str, Any] = self._raw.get("properties", {})
+        return properties
 
     @property
     def property_names(self) -> set[str]:
@@ -830,7 +916,8 @@ class StageSchema:
 
     def get_property(self, name: str) -> dict[str, Any]:
         """Get a single property definition (empty dict if not found)."""
-        return self.properties.get(name, {})
+        definition: dict[str, Any] = self.properties.get(name, {})
+        return definition
 
     def field_type(self, name: str) -> str | None:
         """Get the declared type of a field (None if not found)."""
@@ -880,16 +967,123 @@ class NavigationCommandConfig(StructuredConfig):
     keywords: tuple[str, ...]
     enabled: bool = True
 
+    @classmethod
+    def normalize_raw(
+        cls,
+        raw: Any,
+        default_keywords: Sequence[str],
+        default_enabled: bool = True,
+        on_invalid: Callable[[str, Any, str], None] | None = None,
+    ) -> dict[str, Any]:
+        """Project one authored command block onto this config's fields.
+
+        A navigation command block is authored config and reaches its
+        readers uncoerced, so every level of it is checked here: the
+        block must be a mapping, ``keywords`` a list of strings and
+        ``enabled`` a bool. A field that fails falls back to the default
+        supplied for it **alone**, so one bad field does not discard the
+        others -- the same contract :meth:`WizardFSM._stage_field` gives
+        a wrong-typed stage field.
+
+        A bare ``keywords`` string is the case this exists for. It is
+        iterable, so consuming it without a check yields one keyword per
+        *character*: ``keywords: "done"`` armed ``d``, ``o``, ``n`` and
+        ``e``, which raises nothing and reads correctly in the config.
+
+        There are two readers -- wizard-level ``settings.navigation``
+        through :meth:`NavigationConfig._normalize_dict`, and a stage's
+        own block through ``WizardNavigator._resolve_navigation_config``
+        -- and they had a copy of this logic each. Both copies had the
+        same defect, which is the reason it lives here now: what a field
+        means must not depend on which of the two places it was written.
+
+        Args:
+            raw: The authored command block, or ``None`` if absent.
+            default_keywords: Keywords to use when none are readable.
+            default_enabled: ``enabled`` to use when it is not readable.
+            on_invalid: Called as ``(field, value, expected)`` for each
+                field that could not be read -- ``field`` is ``""`` for
+                the block itself. The caller supplies the context and
+                decides how loudly to say it.
+
+        Returns:
+            A dict with ``keywords`` and ``enabled``, ready to construct
+            this class or to be rebuilt by ``from_dict``'s recursion.
+        """
+
+        def _fallback() -> dict[str, Any]:
+            return {"keywords": list(default_keywords), "enabled": default_enabled}
+
+        if raw is None:
+            return _fallback()
+        if not isinstance(raw, dict):
+            if on_invalid is not None:
+                on_invalid("", raw, "a mapping")
+            return _fallback()
+
+        keywords_raw = raw.get("keywords")
+        if keywords_raw is None:
+            keywords = list(default_keywords)
+        elif is_keyword_list(keywords_raw):
+            keywords = [keyword.lower() for keyword in keywords_raw]
+        else:
+            if on_invalid is not None:
+                on_invalid("keywords", keywords_raw, "a list of strings")
+            keywords = list(default_keywords)
+
+        enabled = raw.get("enabled", default_enabled)
+        if not isinstance(enabled, bool):
+            # Declared ``bool``; an authored "false" is a truthy STRING,
+            # so a command the author turned off stayed on.
+            if on_invalid is not None:
+                on_invalid("enabled", enabled, "true or false")
+            enabled = default_enabled
+
+        return {"keywords": keywords, "enabled": enabled}
+
     def __post_init__(self) -> None:
-        """Coerce ``keywords`` to a tuple (raw config arrives as a list).
+        """Coerce ``keywords`` to a tuple, rejecting what must not be coerced.
 
         The ``from_dict`` path already coerces ``tuple[str, ...]`` fields via
-        the base ``_coerce_field``; this guard covers the direct-construction
-        path (``NavigationCommandConfig(keywords=[...])``).  Running on the
-        dict path too is a harmless no-op (the value is already a tuple).
+        the base ``_coerce_field``; this covers the direct-construction path
+        (``NavigationCommandConfig(keywords=[...])``).  Coercing a value that
+        is already a tuple is a no-op, and matches how every sibling config
+        in the package normalises its sequence fields.
+
+        The check is here because this is the **narrowest common path**:
+        every writer goes through it, including ``from_dict``, which the
+        base coercion passes a ``str`` through untouched (a string is not
+        one of the sequence types it recognises).  ``tuple("done")`` is
+        ``('d', 'o', 'n', 'e')`` -- four one-letter keywords that raise
+        nothing and read correctly in a config.
+
+        Authored config never reaches this with a bad value:
+        :meth:`normalize_raw` substitutes the command's documented
+        default first, because a YAML author cannot act on a traceback.
+        Reaching here with one therefore means a caller wrote it in code,
+        which is a bug and gets an exception.
+
+        Raises:
+            TypeError: If ``keywords`` is not a list or tuple of strings.
         """
-        if not isinstance(self.keywords, tuple):
-            object.__setattr__(self, "keywords", tuple(self.keywords))
+        if not is_keyword_list(self.keywords):
+            # Held as ``Any`` deliberately: the field is *declared*
+            # ``tuple[str, ...]``, so a type checker narrows it and calls
+            # the string branch unreachable -- which is true of every
+            # caller that honoured the declaration, and false of the one
+            # this exists to catch.
+            written: Any = self.keywords
+            hint = (
+                " A bare string is iterated one character at a time; write "
+                f"[{written!r}] to mean one keyword."
+                if isinstance(written, str)
+                else ""
+            )
+            raise TypeError(
+                f"{type(self).__name__}.keywords must be a list or tuple of "
+                f"strings, got {type(written).__name__} ({written!r}).{hint}"
+            )
+        object.__setattr__(self, "keywords", tuple(self.keywords))
 
 
 @dataclass(frozen=True)
@@ -942,22 +1136,29 @@ class NavigationConfig(StructuredConfig):
         """
 
         def _command(
-            raw_cmd: dict[str, Any] | None,
+            command: str,
+            raw_cmd: Any,
             default_keywords: tuple[str, ...],
         ) -> dict[str, Any]:
-            if raw_cmd is None:
-                return {"keywords": list(default_keywords)}
-            keywords = raw_cmd.get("keywords")
-            if keywords is not None:
-                keywords = [k.lower() for k in keywords]
-            else:
-                keywords = list(default_keywords)
-            return {"keywords": keywords, "enabled": raw_cmd.get("enabled", True)}
+            def _report(field: str, value: Any, expected: str) -> None:
+                logger.warning(
+                    "settings.navigation.%s declares %s as %s; %s is required, using the default",
+                    command,
+                    field or "the command",
+                    type(value).__name__,
+                    expected,
+                )
+
+            return NavigationCommandConfig.normalize_raw(
+                raw_cmd,
+                default_keywords,
+                on_invalid=_report,
+            )
 
         return {
-            "back": _command(raw.get("back"), DEFAULT_BACK_KEYWORDS),
-            "skip": _command(raw.get("skip"), DEFAULT_SKIP_KEYWORDS),
-            "restart": _command(raw.get("restart"), DEFAULT_RESTART_KEYWORDS),
+            "back": _command("back", raw.get("back"), DEFAULT_BACK_KEYWORDS),
+            "skip": _command("skip", raw.get("skip"), DEFAULT_SKIP_KEYWORDS),
+            "restart": _command("restart", raw.get("restart"), DEFAULT_RESTART_KEYWORDS),
         }
 
 

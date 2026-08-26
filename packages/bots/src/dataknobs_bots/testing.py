@@ -113,19 +113,21 @@ class WizardConfigBuilder:
         is_start: bool = False,
         is_end: bool = False,
         prompt: str = "",
+        greeting_template: str | None = None,
         response_template: str | None = None,
+        clarification_template: str | None = None,
         confirmation_template: str | None = None,
         mode: str | None = None,
         extraction_scope: str | None = None,
         auto_advance: bool | None = None,
-        skip_extraction: bool | None = None,
         derivation_enabled: bool | None = None,
         recovery_enabled: bool | None = None,
         re_extract_on_entry: bool | str | None = None,
         confirm_first_render: bool | None = None,
         confirm_on_new_data: bool | None = None,
         can_skip: bool | None = None,
-        skip_default: bool | None = None,
+        skip_default: dict[str, Any] | None = None,
+        skip_default_mode: str | None = None,
         can_go_back: bool | None = None,
         reasoning: str | None = None,
         max_iterations: int | None = None,
@@ -144,8 +146,13 @@ class WizardConfigBuilder:
             is_start: Whether this is the start stage.
             is_end: Whether this is an end stage.
             prompt: Stage prompt text.
+            greeting_template: Jinja2 template rendered once, as this
+                stage's opening line, and not repeated afterwards.
             response_template: Jinja2 template rendered after extraction
                 to confirm captured data.
+            clarification_template: Jinja2 template rendered on a
+                conversation-mode stage's later turns, in place of
+                handing them to the LLM.
             confirmation_template: Optional Jinja2 template rendered
                 during confirmation instead of the auto-generated
                 summary.  Requires ``response_template`` to also be
@@ -156,7 +163,6 @@ class WizardConfigBuilder:
             mode: Stage mode (e.g. ``"conversation"``).
             extraction_scope: Per-stage extraction scope override.
             auto_advance: Per-stage auto-advance override.
-            skip_extraction: Whether to skip extraction on this stage.
             derivation_enabled: Per-stage field derivation override.
                 Set to ``False`` to suppress derivation on this stage.
             recovery_enabled: Per-stage recovery pipeline override.
@@ -176,7 +182,13 @@ class WizardConfigBuilder:
             confirm_on_new_data: Whether to re-confirm when schema
                 property values change on subsequent renders.
             can_skip: Whether the user can skip this stage.
-            skip_default: Default value to use when the stage is skipped.
+            skip_default: Values written into the collected data when
+                the stage is skipped, as ``{key: value}``.  A key may
+                instead give ``{"value": ..., "mode": "fill"}`` to
+                override the block mode for itself alone.
+            skip_default_mode: ``"fill"`` (write only where the key
+                is unset -- ``None`` counts as unset, matching
+                ``has()``) or ``"overwrite"`` (the default).
             can_go_back: Whether the user can navigate back from this
                 stage.
             reasoning: Reasoning strategy for this stage
@@ -207,8 +219,12 @@ class WizardConfigBuilder:
             stage["is_start"] = True
         if is_end:
             stage["is_end"] = True
+        if greeting_template is not None:
+            stage["greeting_template"] = greeting_template
         if response_template is not None:
             stage["response_template"] = response_template
+        if clarification_template is not None:
+            stage["clarification_template"] = clarification_template
         if confirmation_template is not None:
             stage["confirmation_template"] = confirmation_template
         if mode is not None:
@@ -217,8 +233,6 @@ class WizardConfigBuilder:
             stage["extraction_scope"] = extraction_scope
         if auto_advance is not None:
             stage["auto_advance"] = auto_advance
-        if skip_extraction is not None:
-            stage["skip_extraction"] = skip_extraction
         if derivation_enabled is not None:
             stage["derivation_enabled"] = derivation_enabled
         if recovery_enabled is not None:
@@ -233,6 +247,8 @@ class WizardConfigBuilder:
             stage["can_skip"] = can_skip
         if skip_default is not None:
             stage["skip_default"] = skip_default
+        if skip_default_mode is not None:
+            stage["skip_default_mode"] = skip_default_mode
         if can_go_back is not None:
             stage["can_go_back"] = can_go_back
         if reasoning is not None:
@@ -323,6 +339,7 @@ class WizardConfigBuilder:
         condition: str | None = None,
         priority: int | None = None,
         *,
+        derive: dict[str, Any] | None = None,
         subflow_network: str | None = None,
         return_stage: str | None = None,
         data_mapping: dict[str, str] | None = None,
@@ -341,6 +358,9 @@ class WizardConfigBuilder:
             target: Target stage name (or return stage for subflows).
             condition: Python expression evaluated against wizard state.
             priority: Transition evaluation priority (lower = first).
+            derive: Data derivation rules applied before this stage's
+                transition conditions are evaluated. Keys already present
+                in the wizard state are left alone.
             subflow_network: Name of the subflow network to push.
                 When set, this becomes a subflow transition with
                 ``target="_subflow"``.
@@ -378,6 +398,8 @@ class WizardConfigBuilder:
             t["condition"] = condition
         if priority is not None:
             t["priority"] = priority
+        if derive is not None:
+            t["derive"] = derive
         transitions.append(t)
         return self
 
@@ -758,6 +780,7 @@ class BotTestHarness:
         platform_middleware: list[Any] | None = None,
         platform_conversation_middleware: list[Any] | None = None,
         strategy: ReasoningStrategy | None = None,
+        custom_functions: dict[str, Any] | None = None,
         strict_tools: bool = True,
         strict: bool = False,
     ) -> BotTestHarness:
@@ -812,6 +835,12 @@ class BotTestHarness:
                 custom strategy implementations (e.g. strategies that
                 implement ``StreamingPhasedProtocol`` with ``iterate=True``)
                 through the full DynaBot orchestration.
+            custom_functions: Transition functions -- routing transforms,
+                transition ``transform:`` names, validators -- as callables
+                or ``"module:function"`` strings, threaded into the wizard
+                reasoning config. Only applies when ``wizard_config`` is
+                used; a caller supplying ``bot_config`` places them in its
+                own ``reasoning:`` block.
             strict_tools: If True (default), the EchoProvider raises
                 ValueError when a scripted response contains tool_calls
                 but no tools were provided to complete(). Set to False
@@ -891,6 +920,8 @@ class BotTestHarness:
                     },
                 },
             }
+            if custom_functions:
+                bot_config["reasoning"]["custom_functions"] = custom_functions
 
         # Create bot. Platform middleware is routed through from_config so the
         # additive channel is exercised for real (the config-resolved
@@ -1370,7 +1401,7 @@ class CaptureReplay:
         """
         provider = EchoProvider({"provider": "echo", "model": "capture-replay"})
         if self._main_responses:
-            provider.set_responses(self._main_responses)
+            provider.set_responses(list(self._main_responses))
         return provider
 
     def extraction_provider(self) -> EchoProvider:
@@ -1381,7 +1412,7 @@ class CaptureReplay:
         """
         provider = EchoProvider({"provider": "echo", "model": "capture-replay"})
         if self._extraction_responses:
-            provider.set_responses(self._extraction_responses)
+            provider.set_responses(list(self._extraction_responses))
         return provider
 
     def inject_into_bot(self, bot: Any) -> None:
@@ -1408,6 +1439,12 @@ class ErrorRaisingStrategy(ReasoningStrategy):
 
     Args:
         error: The exception to raise. Defaults to ``ValueError("test error")``.
+        greeting_template: Accepted for parity with the universal
+            ``ReasoningStrategy`` field so that ``from_config`` — which the
+            reasoning registry calls with it — constructs rather than raising
+            ``TypeError``.  This strategy's ``greet()`` raises by design, so
+            the template is never rendered; accepting it is what keeps the
+            construct usable wherever a strategy is built from config.
 
     Example:
         ```python
@@ -1419,8 +1456,13 @@ class ErrorRaisingStrategy(ReasoningStrategy):
         ```
     """
 
-    def __init__(self, error: Exception | None = None) -> None:
-        super().__init__()
+    def __init__(
+        self,
+        error: Exception | None = None,
+        *,
+        greeting_template: str | None = None,
+    ) -> None:
+        super().__init__(greeting_template=greeting_template)
         self._error = error or ValueError("test error")
 
     async def generate(

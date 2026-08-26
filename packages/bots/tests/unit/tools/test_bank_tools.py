@@ -6,7 +6,7 @@ from typing import Any
 
 import pytest
 from dataknobs_data.backends.memory import SyncMemoryDatabase
-from dataknobs_llm.tools.context import ToolExecutionContext, WizardStateSnapshot
+from dataknobs_llm.tools.context import ToolExecutionContext, ToolWizardState
 
 from dataknobs_bots.memory.bank import BankRecord, MemoryBank
 from dataknobs_bots.memory.artifact_bank import ArtifactBank
@@ -66,7 +66,7 @@ def _make_context_with_stage(
     return ToolExecutionContext(
         conversation_id="test-conv",
         user_id="test-user",
-        wizard_state=WizardStateSnapshot(current_stage=current_stage),
+        wizard_state=ToolWizardState(current_stage=current_stage),
         extra={"banks": banks},
     )
 

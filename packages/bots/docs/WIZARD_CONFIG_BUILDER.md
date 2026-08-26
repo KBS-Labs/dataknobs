@@ -213,6 +213,7 @@ builder.add_conversation_stage(
 | `is_start` | `bool` | Whether this is the start stage |
 | `suggestions` | `list[str] \| None` | Quick-reply suggestions |
 | `intent_detection` | `dict \| None` | Intent detection config (method + intents) |
+| `greeting_template` | `str \| None` | Opening line, rendered once before the stage starts conversing. Takes the opening turn from `response_template`, which is then unreachable — use `clarification_template` for later turns |
 | `**kwargs` | `Any` | Additional `StageConfig` fields |
 
 #### `add_structured_stage()`
@@ -226,7 +227,7 @@ builder.add_structured_stage(
     schema={"type": "object", "properties": {"name": {"type": "string"}}},
     is_start=True,
     can_skip=True,
-    skip_default="Anonymous",
+    skip_default={"name": "Anonymous"},
     reasoning="react",
     max_iterations=5,
     response_template="Got it, {{ name }}!",
@@ -246,9 +247,11 @@ builder.add_structured_stage(
 | `is_start` | `bool` | Whether this is the start stage |
 | `is_end` | `bool` | Whether this is an end stage |
 | `can_skip` | `bool` | Whether the user can skip |
-| `skip_default` | `Any` | Default value when skipped |
+| `skip_default` | `dict[str, Any] \| None` | Values written into the collected data when skipped, as `{key: value}` |
+| `skip_default_mode` | `str \| None` | `"fill"` (write only where the key is unset — `null` counts as unset) or `"overwrite"` (the default) |
 | `suggestions` | `list[str] \| None` | Quick-reply suggestions |
-| `response_template` | `str \| None` | Template-driven response (bypasses LLM) |
+| `greeting_template` | `str \| None` | Opening line, rendered once when the stage first speaks and not repeated |
+| `response_template` | `str \| None` | Template-driven response (bypasses LLM), re-rendered every turn on a structured stage |
 | `help_text` | `str \| None` | Help message |
 | `reasoning` | `str \| None` | Strategy name: `"single"`, `"react"`, `"grounded"`, or any registered strategy |
 | `reasoning_config` | `dict \| None` | Strategy-specific config (forwarded to `from_config()`) |
@@ -488,7 +491,8 @@ All fields available on `StageConfig`:
 | `is_start` | `bool` | `False` | Whether this is the start stage |
 | `is_end` | `bool` | `False` | Whether this is an end stage |
 | `can_skip` | `bool` | `False` | Whether the user can skip this stage |
-| `skip_default` | `Any` | `None` | Default value if skipped |
+| `skip_default` | `dict[str, Any] \| None` | `None` | Values written into the collected data when the stage is skipped |
+| `skip_default_mode` | `str \| None` | `None` | Block-level mode for those values: `"fill"` or `"overwrite"` (the default). See [Skip Defaults](configuration.md#skip-defaults) |
 | `can_go_back` | `bool` | `True` | Whether the user can go back |
 | `auto_advance` | `bool \| None` | `None` | Auto-advance past this stage. `true` overrides global to enable, `false` overrides global to disable, absent/`None` defers to `auto_advance_filled_stages`. See [Message Stages](context-aware-wizards.md#message-stages) |
 | `confirm_first_render` | `bool` | `True` | Whether to pause for confirmation on first render. Set to `false` to skip and evaluate transitions immediately |
@@ -503,7 +507,9 @@ All fields available on `StageConfig`:
 | `reasoning_config` | `dict[str, Any] \| None` | `None` | Strategy-specific config (forwarded to `from_config()`) |
 | `max_iterations` | `int \| None` | `None` | Max ReAct iterations |
 | `extraction_model` | `str \| None` | `None` | Model for extraction |
+| `greeting_template` | `str \| None` | `None` | Opening line, rendered once when the stage first speaks |
 | `response_template` | `str \| None` | `None` | Template-driven response |
+| `clarification_template` | `str \| None` | `None` | Rendered on a `mode: conversation` stage's later turns in place of the LLM |
 | `confirmation_template` | `str \| None` | `None` | Jinja2 template for confirmation. Overrides auto-generated confirmation |
 | `llm_assist` | `bool` | `False` | Enable LLM-assisted responses |
 | `llm_assist_prompt` | `str \| None` | `None` | Custom LLM assist prompt |
