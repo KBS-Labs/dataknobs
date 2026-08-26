@@ -700,6 +700,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Documented
 
+- **The subflow guide now says which of a subflow's own config is live inside
+  a push.** The rule is by level rather than by field: everything a subflow
+  declares on a *stage* means the same thing inside a push as it does when the
+  same file is loaded as a wizard of its own, because the stage carries its
+  fields into the subflow's own FSM and every read of the stage in play goes
+  to the FSM that owns it. A subflow's wizard-level `settings:` block is the
+  exception and is never consulted -- settings are read once off the top-level
+  flow when the strategy is built, and the collaborators built from them
+  outlive every push and pop. The block is parsed and stored on the subflow's
+  FSM, which is why nothing about it looks wrong.
+
+  `navigation` is called out on its own, being the one word that appears at
+  both levels while the levels disagree: a subflow stage's own `navigation:`
+  block is live, and the same block written under that subflow's `settings:`
+  is not. The guide points at the stage-level `extraction_scope` and
+  `auto_advance` fields as the way to say per-subflow what `settings:` cannot,
+  and notes that `auto_advance: true` on an `is_end` stage is inert for a
+  reason unrelated to subflows. The configuration guide's push/pop lifecycle
+  table now links here from its "normal wizard processing" line, which was the
+  natural place to read the opposite.
+
 - **`WizardFSM.stages` documented a stronger guarantee than it delivers.**
   Both the property and the configuration guide said it returns a copy "to
   prevent external modification". The copy is shallow, so it protects the
