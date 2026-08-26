@@ -265,6 +265,8 @@ class WizardConfigLoader:
         custom_functions: dict[str, Callable[..., Any] | str] | None = None,
         transform_context_factory: Callable[..., Any] | None = None,
         config_root: str | Path | None = None,
+        *,
+        is_subflow: bool = False,
     ) -> WizardFSM:
         """Load wizard config and create WizardFSM.
 
@@ -282,6 +284,13 @@ class WizardConfigLoader:
                 but stays bounded to this root, so a shared subflow directory
                 beside the wizard is reachable while the tree is still a
                 boundary.
+            is_subflow: Whether this config is being loaded to be *pushed*
+                rather than run on its own. Loader-internal: it is set by
+                :meth:`_load_single_subflow` at its own recursion sites and
+                is readable from no config, because the same file is a
+                wizard when loaded directly and a subflow when pushed --
+                which of the two it is, is a property of the caller. It
+                reaches :meth:`_validate_config` and nothing else.
 
         Returns:
             Configured WizardFSM instance
@@ -305,6 +314,7 @@ class WizardConfigLoader:
             config_base_path=config_path.parent,
             transform_context_factory=transform_context_factory,
             config_root=config_root,
+            is_subflow=is_subflow,
         )
 
     def load_from_dict(
@@ -314,6 +324,8 @@ class WizardConfigLoader:
         config_base_path: Path | None = None,
         transform_context_factory: Callable[..., Any] | None = None,
         config_root: str | Path | None = None,
+        *,
+        is_subflow: bool = False,
     ) -> WizardFSM:
         """Load wizard config from dict and create WizardFSM.
 
@@ -332,6 +344,8 @@ class WizardConfigLoader:
                 :class:`TransformContext`.
             config_root: Directory that subflow names may address within, at
                 any depth. Defaults to ``config_base_path``.
+            is_subflow: Whether this config is being loaded to be *pushed*.
+                Loader-internal; see :meth:`load`.
 
         Returns:
             Configured WizardFSM instance
@@ -368,7 +382,7 @@ class WizardConfigLoader:
         self._synthesize_stages(wizard_config)
 
         # Warn about common config issues
-        self._validate_config(wizard_config)
+        self._validate_config(wizard_config, is_subflow=is_subflow)
 
         # Translate wizard config to FSM config
         fsm_config = self._translate_to_fsm(wizard_config)
@@ -439,7 +453,12 @@ class WizardConfigLoader:
                         validate(stage)
                     synthesizer.synthesize(stage)
 
-    def _validate_config(self, wizard_config: dict[str, Any]) -> None:
+    def _validate_config(
+        self,
+        wizard_config: dict[str, Any],
+        *,
+        is_subflow: bool = False,
+    ) -> None:
         """Validate wizard config and warn about common issues.
 
         Checks for:
@@ -451,12 +470,21 @@ class WizardConfigLoader:
         5. A ``response_template`` made unreachable by a
            ``greeting_template`` on a conversation-mode stage
         6. Template syntax using Python str.format() instead of Jinja2
+        7. ``auto_advance: true`` on an end stage, which is never acted on
+        8. ``settings:`` on a config being loaded as a subflow, which is
+           never read
 
         All issues are logged as warnings, not errors — the config will
-        still load.
+        still load. That is the whole contract of this method, and it is
+        why #8 reports a subflow's ``settings:`` rather than refusing it:
+        the block is not *wrong*, it is *unread*, and the same file
+        loaded on its own honours every key of it.
 
         Args:
             wizard_config: Wizard configuration dict
+            is_subflow: Whether this config is being loaded to be pushed.
+                Only #8 consults it — every other check asks about the
+                config alone, and gets the same answer either way.
         """
         for stage in wizard_config.get("stages", []):
             stage_name = stage.get("name", "<unnamed>")
@@ -564,6 +592,58 @@ class WizardConfigLoader:
                         matches[0],
                         matches[0],
                     )
+
+            # 7. auto_advance on an end stage.  WizardResponder
+            #    .can_auto_advance returns False for any stage carrying
+            #    `is_end`, before it reaches the schema or the transition
+            #    conditions, so the field is read, found true, and
+            #    discarded.  The exclusion is deliberate -- advancing out
+            #    of a flow that has ended has nowhere to go -- so this is
+            #    a config saying something the engine will not do, which
+            #    is exactly what this method is for.  `false` is not
+            #    reported: it asks for what already happens, and warning
+            #    about agreement teaches a reader to skip the line that
+            #    matters.
+            if stage.get("is_end") and stage.get("auto_advance") is True:
+                logger.warning(
+                    "Stage '%s': 'auto_advance: true' on an end stage is never "
+                    "acted on — end stages are excluded from the auto-advance "
+                    "loop, because advancing out of a flow that has ended has "
+                    "nowhere to go. Drop the field, or drop 'is_end' if the "
+                    "stage is meant to continue.",
+                    stage_name,
+                )
+
+        # 8. settings: on a config being loaded as a subflow.  Every
+        #    setting is hoisted once, off the top-level flow, into the
+        #    collaborators built from it -- the extractor holds
+        #    `extraction_scope`, the navigator the merged navigation
+        #    config -- and those outlive any push.  Nothing re-reads
+        #    `.settings` off the flow a push made active, so a pushed
+        #    subflow's block is in force at no point, including while its
+        #    own stage is current.
+        subflow_settings = wizard_config.get("settings")
+        if is_subflow and subflow_settings:
+            declared = (
+                ", ".join(sorted(subflow_settings))
+                if isinstance(subflow_settings, dict)
+                # A check whose purpose is to advise about a config must
+                # not be the thing that refuses it, so a wrong-typed
+                # block is shown rather than iterated.
+                else repr(subflow_settings)
+            )
+            logger.warning(
+                "Subflow '%s': 'settings' is declared but never read. A "
+                "wizard's settings are hoisted once, off the top-level flow, "
+                "into collaborators that outlive any push, so a pushed "
+                "subflow's own block is in force at no point — including "
+                "while its own stage is current. The per-stage "
+                "'extraction_scope' and 'auto_advance' fields ARE read from "
+                "the active flow and are how to say this for a subflow. "
+                "Declared and unread: %s",
+                wizard_config.get("name", "<unnamed>"),
+                declared,
+            )
 
     def _translate_to_fsm(self, wizard_config: dict[str, Any]) -> Any:
         """Translate wizard config to FSM format.
@@ -1135,6 +1215,7 @@ class WizardConfigLoader:
                 custom_functions,
                 config_base_path=anchor.base if anchor else None,
                 config_root=anchor.root if anchor else None,
+                is_subflow=True,
             )
 
         # Try to load from file
@@ -1158,7 +1239,12 @@ class WizardConfigLoader:
             if subflow_path.exists():
                 # The root travels with the recursion; the position moves to
                 # the subflow's own directory when `load` re-anchors there.
-                return self.load(str(subflow_path), custom_functions, config_root=anchor.root)
+                return self.load(
+                    str(subflow_path),
+                    custom_functions,
+                    config_root=anchor.root,
+                    is_subflow=True,
+                )
 
         logger.warning(
             "Subflow '%s' not found in config or as file at %s",

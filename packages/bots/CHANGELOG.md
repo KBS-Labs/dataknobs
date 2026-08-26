@@ -410,6 +410,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The loader now says which of a subflow's config is inert.** Two config
+  surfaces parsed, validated and read as correct while doing nothing, with no
+  report at load, at runtime or in a log. Both are now warnings from
+  `WizardConfigLoader`, which loads every subflow through the same entry point
+  the top-level wizard uses.
+
+  **A pushed subflow's `settings:` block is never read.** A wizard's settings
+  are hoisted once, off the top-level flow, into the collaborators built from
+  them -- the extractor holds `extraction_scope`, the navigator the merged
+  navigation config -- and those outlive any push. So a subflow declaring
+  `extraction_scope: current_message` runs under whatever the parent declared,
+  including while its own stage is current. Honouring the block would mean
+  rebuilding that collaborator graph on every push and pop, so the config is
+  answered where it is authored instead: the warning names the keys it found
+  and points at `extraction_scope` and `auto_advance`, which are stage fields
+  and *are* read from the flow a push made active. The same file loaded on its
+  own is a wizard and honours every key, so the warning is about how the config
+  is being used, not about the config -- and a top-level wizard is not warned.
+
+  **`auto_advance: true` on an end stage is never acted on**, in a subflow or
+  out of one. `can_auto_advance` returns `False` for any stage carrying
+  `is_end` before it reaches the schema or the transition conditions; the
+  exclusion is deliberate, since advancing out of a flow that has ended has
+  nowhere to go. `auto_advance: false` on an end stage is not reported: it asks
+  for what already happens.
+
+  Both are warnings and neither refuses the config, which is this validator's
+  contract for all eight of its checks. A subflow's `settings:` is not *wrong*,
+  it is *unread*.
+
 - **`BotTestHarness.create(custom_functions=...)`** threads transition
   functions -- routing transforms, transforms, validators -- into the wizard
   reasoning config, so a test exercising them stays on the harness rather than

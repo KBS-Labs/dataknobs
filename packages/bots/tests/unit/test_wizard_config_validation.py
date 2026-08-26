@@ -173,6 +173,54 @@ class TestLoaderValidation:
             loader.load_from_dict(config)
         assert not any("Python format syntax" in r.message for r in caplog.records)
 
+    def test_end_stage_with_auto_advance_warns(self, caplog: pytest.LogCaptureFixture) -> None:
+        """``auto_advance: true`` on an end stage is never acted on.
+
+        ``WizardResponder.can_auto_advance`` returns ``False`` for any
+        stage carrying ``is_end``, before it reaches the schema or the
+        transition conditions -- so the field is read, found true, and
+        discarded. Nothing says so at load, at runtime or in a log.
+        """
+        config = _minimal_config(auto_advance=True)
+        loader = WizardConfigLoader()
+        with caplog.at_level(logging.WARNING):
+            loader.load_from_dict(config)
+        assert any("end stage" in r.message and "auto_advance" in r.message for r in caplog.records)
+
+    def test_end_stage_without_auto_advance_does_not_warn(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """An end stage that says nothing about auto-advance is not flagged."""
+        config = _minimal_config()
+        loader = WizardConfigLoader()
+        with caplog.at_level(logging.WARNING):
+            loader.load_from_dict(config)
+        assert not any("auto_advance" in r.message for r in caplog.records)
+
+    def test_end_stage_with_auto_advance_false_does_not_warn(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """``auto_advance: false`` on an end stage agrees with the engine.
+
+        Redundant, not inert: it asks for what already happens. Warning
+        about it would train a reader to skip the line that matters.
+        """
+        config = _minimal_config(auto_advance=False)
+        loader = WizardConfigLoader()
+        with caplog.at_level(logging.WARNING):
+            loader.load_from_dict(config)
+        assert not any("auto_advance" in r.message for r in caplog.records)
+
+    def test_non_end_stage_with_auto_advance_does_not_warn(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """The field is only inert on an end stage; elsewhere it is honoured."""
+        config = _two_stage_config(first_overrides={"auto_advance": True})
+        loader = WizardConfigLoader()
+        with caplog.at_level(logging.WARNING):
+            loader.load_from_dict(config)
+        assert not any("auto_advance" in r.message for r in caplog.records)
+
     def test_conversation_mode_no_schema_no_warning(self, caplog: pytest.LogCaptureFixture) -> None:
         """Conversation-mode stages don't warn about missing schema."""
         config = _minimal_config(
