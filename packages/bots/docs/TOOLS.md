@@ -1025,6 +1025,10 @@ the next turn. Outside one it returns `None` — not an empty dict — so a
 tool that needs wizard data can report that rather than writing into a
 throwaway and reporting success.
 
+The object behind that accessor is `ToolWizardState`, and which of its two
+suppliers built it decides whether a write survives the turn. See
+[Tool Execution Context](https://github.com/KBS-Labs/dataknobs/blob/main/packages/llm/docs/TOOL_CONTEXT.md) in `dataknobs-llm`.
+
 ### Bank CRUD Tools
 
 | Tool | Name | Parameters | Effects |

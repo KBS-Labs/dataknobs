@@ -272,6 +272,12 @@
             }
           ]
         }
+      ],
+      "transclude": [
+        {
+          "package": "TOOL_CONTEXT.md",
+          "site": "guides/tool-context.md"
+        }
       ]
     },
     "bots": {

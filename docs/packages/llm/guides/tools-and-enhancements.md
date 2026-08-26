@@ -16,6 +16,11 @@ Recent enhancements to the LLM package include:
 
 The tool system provides abstractions for LLM function calling, enabling LLMs to call external functions during generation.
 
+This section covers tools that work from their arguments alone. A tool whose
+answer depends on the conversation — wizard data, the calling user, the
+conversation ID — extends `ContextAwareTool` and receives a
+`ToolExecutionContext`; see [Tool Execution Context](tool-context.md).
+
 ### Defining Tools
 
 Create a tool by subclassing the `Tool` base class:
@@ -521,3 +526,4 @@ print(f"Conversation {user_id}: ${total_cost:.4f} total")
 - [LLM API](../../../api/dataknobs-llm.md) - Core LLM interface
 - [Middleware API](../api/conversations.md#middleware) - Creating custom middleware
 - [Tools API](../api/tools.md) - Tool system reference
+- [Tool Execution Context](tool-context.md) - `ContextAwareTool`, `ToolExecutionContext`, and `ToolWizardState`

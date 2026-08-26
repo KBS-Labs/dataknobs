@@ -192,6 +192,7 @@ nav:
         - packages/llm/guides/versioning.md
         - packages/llm/guides/performance.md
         - packages/llm/guides/tools-and-enhancements.md
+        - packages/llm/guides/tool-context.md
         - packages/llm/guides/extraction.md
         - packages/llm/guides/intent-classification.md
         - packages/llm/guides/testing.md

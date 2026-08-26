@@ -241,6 +241,8 @@ Five `ContextAwareTool` implementations for RAG resource management during wizar
 
 KB tools operate on wizard collected data to track knowledge sources, supporting both file references and inline content. The `knowledge_dir` parameter is resolved from the constructor or wizard data `_knowledge_dir` key.
 
+They reach that data through `ToolExecutionContext.wizard_data()`, which reads a `ToolWizardState` — see [Tool Execution Context](../../llm/guides/tool-context.md) for what a tool may and may not do with it, and why a write does not always survive the turn.
+
 ## Consumer Extension Pattern
 
 The toolkit uses composition, not subclassing. Consumers provide:

@@ -9,6 +9,11 @@ The tools API provides abstractions for defining functions that LLMs can call du
 - **Tool**: Abstract base class for defining callable tools
 - **ToolRegistry**: Central registry for managing available tools
 
+Tools that need to know something about the conversation they are running
+inside — wizard data, the calling user, the conversation ID — extend
+`ContextAwareTool` instead and receive a `ToolExecutionContext`. See
+[Tool Execution Context](../guides/tool-context.md).
+
 ## Complete API Reference
 
 For comprehensive auto-generated API documentation with all classes, methods, and full signatures, see:
@@ -169,5 +174,6 @@ The `to_anthropic_tool_definition()` method returns Claude-compatible tool defin
 ## See Also
 
 - [Tools Guide](../guides/tools-and-enhancements.md) - Comprehensive usage guide
+- [Tool Execution Context](../guides/tool-context.md) - `ContextAwareTool`, `ToolExecutionContext`, and `ToolWizardState`
 - [LLM API](../../../api/dataknobs-llm.md) - LLM provider interface
 - [Conversations API](conversations.md) - Conversation management

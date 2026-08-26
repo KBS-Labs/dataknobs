@@ -271,6 +271,7 @@ snapshot = WizardStateSnapshot(
     can_skip=True,
     can_go_back=True,
     suggestions=["Create a math tutor", "Build a quiz bot"],
+    stage_metadata={"prompt": "What should the bot be called?", "can_skip": True},
 )
 
 # Query tasks from snapshot
@@ -301,7 +302,7 @@ of reference deliberately, and a UI that renders it should know which is which:
 | Field | Frame | Value inside a subflow |
 |---|---|---|
 | `current_stage` | subflow | The subflow's stage name |
-| `can_skip`, `can_go_back`, `suggestions` | subflow | Read from the subflow stage's own config |
+| `can_skip`, `can_go_back`, `suggestions`, `stage_metadata` | subflow | Read from the subflow stage's own config |
 | `stage_index`, `total_stages`, `stages` | **main flow** | The parent stage that pushed the subflow is the current one |
 
 The split is intentional. The stage-derived fields describe the stage the user
@@ -344,6 +345,38 @@ def stage_fraction(snapshot: WizardStateSnapshot) -> float:
     """
     return snapshot.stage_index / max(snapshot.total_stages - 1, 1)
 ```
+
+### The Stage's Own Configuration
+
+`stage_metadata` carries what `current_stage` declares — its prompt, schema,
+`can_skip`, and anything else in the stage config. **Only
+`get_state_snapshot()` can supply it.** Stage metadata is not written into the
+persisted `fsm_state`, so `WizardReasoning.snapshot_from_metadata()` has
+nothing to read and reports `{}`; `stage_definitions` is not a substitute,
+since it holds the *main* flow's declarations and so describes a different
+stage than `current_stage` does inside a push.
+
+An empty dict therefore means either "this snapshot came off the metadata
+route" or "the stage declares nothing", and the two are deliberately not
+distinguished.
+
+### Handing a Snapshot to a Tool
+
+`to_tool_view()` converts a snapshot into the `ToolWizardState` a
+`ContextAwareTool` receives:
+
+```python
+from dataknobs_llm.tools import ToolExecutionContext
+
+snapshot = reasoning.get_state_snapshot(manager)
+context = ToolExecutionContext(wizard_state=snapshot.to_tool_view())
+```
+
+The conversion runs in this direction only — a snapshot carries transitions,
+task tracking and progress that the tool view has no room for — and its
+payloads are **copies**, so writes to the view do not reach the snapshot. See
+[Tool Execution Context](../../llm/guides/tool-context.md) for what a tool may
+and may not do with the result.
 
 ### Using Snapshots for UI
 

@@ -696,7 +696,8 @@ and the distinction has two halves that are worth separating:
 Both halves require a wizard: the tools reach this data through
 `ToolExecutionContext.wizard_data()`, and outside a wizard conversation it
 returns `None` and the tool reports an error rather than writing somewhere
-nothing will read.
+nothing will read. The object it reads from is `ToolWizardState` — see
+[Tool Execution Context](https://github.com/KBS-Labs/dataknobs/blob/main/packages/llm/docs/TOOL_CONTEXT.md) for what a tool may and may not do with it.
 
 ### Example
 

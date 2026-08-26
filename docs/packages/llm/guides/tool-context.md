@@ -1,0 +1,1 @@
+--8<-- "packages/llm/docs/TOOL_CONTEXT.md"
