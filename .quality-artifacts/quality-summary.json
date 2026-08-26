@@ -1,12 +1,10 @@
 {
-  "timestamp": "2026-08-26T03:04:41Z",
+  "timestamp": "2026-08-26T17:15:35Z",
   "overall_status": "PASS",
-  "run_mode": "pr",
+  "run_mode": "all",
   "environment": "host",
-  "packages": "bots",
-  "tested_packages": [
-    "bots"
-  ],
+  "packages": "all",
+  "tested_packages": [],
   "coverage_percent": null,
   "package_hashes": {
     "bots": "0c723531101ccfe79940dac4e283cf3a5aaa7d71ccb5efebbe01db3678e4bfc4",
@@ -22,11 +20,11 @@
     "_algorithm_version": 3
   },
   "workspace_hashes": {
-    "toolchain": "5f0fe9459553efff1fbb0ca11dc37a8b13e58e8d73c02abc90eb6663a15f9d25",
+    "toolchain": "b8fef81eab151679fd401f458d0b54256c47710502cc9b48d5d1836b0a9b2a3c",
     "workspace_tests": "9128a2d959b19de24296bfdd094348acc54f701212f90ad81ef8d9a534a1e840",
-    "docs": "76fa4fb62c10e2cbfcc6d5999dc4847ddf7d8703f3d88078ac14571aca274acb"
+    "docs": "71d61851bc5fe1b78c6d52d556f2ddfaad898ca29e92be82820d324d658d3c4b"
   },
-  "total_seconds": 152,
+  "total_seconds": 293,
   "checks": {
     "workflow_lint": {
       "status": "pass",
@@ -44,14 +42,14 @@
       "status": "pass",
       "exit_code": 0,
       "tool": "quality-contract.py",
-      "duration_seconds": 0
+      "duration_seconds": 4
     },
     "validation": {
       "status": "pass",
       "exit_code": 0,
       "skipped": false,
       "tool": "validate.sh",
-      "duration_seconds": 29
+      "duration_seconds": 81
     },
     "documentation": {
       "status": "pass",
@@ -65,7 +63,7 @@
       "exit_code": 0,
       "skipped": false,
       "tool": "docs-update-versions.sh",
-      "duration_seconds": 1
+      "duration_seconds": 0
     },
     "documentation_mirrors": {
       "status": "pass",
@@ -78,14 +76,14 @@
       "status": "pass",
       "exit_code": 0,
       "skipped": false,
-      "duration_seconds": 80,
-      "workspace_guards_seconds": 59
+      "duration_seconds": 114,
+      "workspace_guards_seconds": 58
     },
     "integration_tests": {
       "status": "pass",
       "exit_code": 0,
       "skipped": false,
-      "duration_seconds": 10
+      "duration_seconds": 58
     }
   }
 }
