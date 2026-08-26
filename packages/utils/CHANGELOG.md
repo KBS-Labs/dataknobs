@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Fixed
+
+- **An emoji immediately after the Status Counts block was dropped from the
+  loaded data, and nothing said so.** `EmojiData._load_emoji_test` verified the
+  file's status tallies with a nested `for line in f` over the *same* handle as
+  the outer loop. The line that terminated the inner loop had already been
+  consumed by the time the outer loop resumed, so it was never classified — if
+  it was an emoji definition, that emoji was silently absent from the result.
+  The check is now a mode of the single loop, so the terminating line is
+  classified like every other. In the shipped Unicode 15.0 data that line is
+  blank and nothing was lost, which is precisely what made this worth fixing
+  rather than leaving: whether an emoji went missing depended on a property of
+  the input file that nothing stated and nothing checked.
+
 ## v2.0.1 - 2026-08-19
 
 ### Fixed
