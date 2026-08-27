@@ -1,13 +1,11 @@
 {
-  "timestamp": "2026-08-27T03:25:59Z",
+  "timestamp": "2026-08-27T03:56:47Z",
   "overall_status": "PASS",
   "run_mode": "pr",
   "environment": "host",
-  "packages": "bots data fsm llm",
+  "packages": "bots llm",
   "tested_packages": [
     "bots",
-    "data",
-    "fsm",
     "llm"
   ],
   "coverage_percent": null,
@@ -27,41 +25,41 @@
   "workspace_hashes": {
     "toolchain": "5e08837aacf98c40de40f090d87973f00a7da9b1f2a6dff870ea01d3df063476",
     "workspace_tests": "a2e45aea5384f7bab78185dcc7e1d4bd80abef821b1c8fda61b877da2eef19e9",
-    "docs": "3dcc1da431162116867e6522c35b8c24119563ea73f1c7bad26f4fc841ab0a24"
+    "docs": "a28afaf66cc3dd477c8927df83038cf8e25049cbb243c377684387cb79e1798a"
   },
-  "total_seconds": 244,
+  "total_seconds": 186,
   "checks": {
     "workflow_lint": {
       "status": "pass",
       "exit_code": 0,
       "tool": "lint-workflows.sh",
-      "duration_seconds": 0
+      "duration_seconds": 1
     },
     "shell_lint": {
       "status": "pass",
       "exit_code": 0,
       "tool": "lint-shell.sh",
-      "duration_seconds": 5
+      "duration_seconds": 4
     },
     "contract": {
       "status": "pass",
       "exit_code": 0,
       "tool": "quality-contract.py",
-      "duration_seconds": 1
+      "duration_seconds": 2
     },
     "validation": {
       "status": "pass",
       "exit_code": 0,
       "skipped": false,
       "tool": "validate.sh",
-      "duration_seconds": 64
+      "duration_seconds": 39
     },
     "documentation": {
       "status": "pass",
       "exit_code": 0,
       "skipped": false,
       "tool": "mkdocs",
-      "duration_seconds": 25
+      "duration_seconds": 26
     },
     "documentation_versions": {
       "status": "pass",
@@ -81,14 +79,14 @@
       "status": "pass",
       "exit_code": 0,
       "skipped": false,
-      "duration_seconds": 89,
+      "duration_seconds": 80,
       "workspace_guards_seconds": 58
     },
     "integration_tests": {
       "status": "pass",
       "exit_code": 0,
       "skipped": false,
-      "duration_seconds": 55
+      "duration_seconds": 31
     }
   }
 }

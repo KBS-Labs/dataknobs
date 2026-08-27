@@ -457,7 +457,7 @@ class RateLimitMiddleware(Middleware):
         return None
 ```
 
-See the [Rate Limiting guide](../../packages/common/ratelimit.md) for the full `InMemoryRateLimiter` API, including per-category rates, weighted operations, and distributed backends.
+See the [Rate Limiting guide](../../common/docs/guides/ratelimit.md) for the full `InMemoryRateLimiter` API, including per-category rates, weighted operations, and distributed backends.
 
 ### Example: Tool Execution Auditing
 

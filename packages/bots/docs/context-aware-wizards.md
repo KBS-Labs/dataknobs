@@ -711,7 +711,7 @@ Each rule specifies:
 
 ### Built-In Transforms
 
-The derivation system provides 22 transforms across 6 categories. See the full reference in the [MkDocs guide](../../docs/packages/bots/guides/context-aware-wizards.md).
+The derivation system provides 21 transforms across the 5 categories below.
 
 #### String Formatting
 
