@@ -29,26 +29,76 @@ Purpose:
 - Getting started guides
 - Rendered by MkDocs
 
+## One Document, One Name
+
+Both trees spell a document the same way: **lower-hyphen** —
+`user-guide.md`, `configuration.md`, `05.updated-plan.md`. Never
+`USER_GUIDE.md`, never `template_vars.md`.
+
+This is not a style preference. A `symlink` or `transclude` page is one
+file served at two paths, so a link inside it is read from both — and
+`[Configuration](configuration.md)` can be correct in both trees only if
+both trees agree on the filename. While they did not, **89 package-tree
+links were broken** and the rendered site was clean, so nothing reported
+it for as long as the guard had existed.
+
+`bin/docs-mirror-check.py` enforces two halves of that:
+
+| Check | What fails |
+|---|---|
+| **doc spelling** | a package doc whose filename is not lower-hyphen. `README.md` is the one exemption — GitHub renders it as a directory index, and `readme.md` on a case-sensitive host does not get that treatment. |
+| **name parity** | a `symlink` / `transclude` / `mirror` pair spelled differently on its two sides. `diverge` is exempt: that class records two genuinely *different* documents, so requiring a shared name would contradict it. |
+
+The site tree is covered through the pair rather than directly, so a
+genuinely site-only page may keep a name taken from the module it
+documents (`docs/packages/fsm/api/async_simple.md`). Served from one tree,
+it has no second tree for its link text to disagree with.
+
+Only the basename is compared. The two trees nest some documents
+differently — `packages/llm/docs/best-practices.md` against
+`docs/packages/llm/guides/best-practices.md` — and no filename reconciles
+that.
+
+### Links must resolve, in every tree the doc is served from
+
+Relative `.md` links are resolved case-**sensitively**, because
+`Path.exists()` is not: on macOS it answers *yes* for `configuration.md`
+when only `CONFIGURATION.md` is on disk. That is how 31 of the 89 stayed
+invisible on the machines they were written on.
+
+A link broken by *spelling* — the document is in that directory under
+another name — **fails the guard**. A link whose target is absent under
+any spelling is **printed and counted, not failed**: the trees nest some
+documents differently, some targets exist only in the site tree
+(generated API reference, site-native examples), and no rename reaches
+either. What such a link should become instead — an absolute site URL, a
+prose mention, a repaired path — is an open question per kind. The guard
+prints the live list on every run rather than recording it anywhere, so
+it cannot go stale, and it reaching zero is what retires the report.
+
 ## Update Requirements
 
 When updating documentation for any package:
 
-1. **Update BOTH locations:**
+1. **Name the doc `lower-hyphen.md`, identically in both trees** — see
+   [One Document, One Name](#one-document-one-name) above.
+
+2. **Update BOTH locations:**
    - `packages/<PACKAGE>/docs/` - Package-specific docs
    - `docs/packages/<PACKAGE>/` - MkDocs site docs
 
-2. **Verify MkDocs build succeeds:**
+3. **Verify MkDocs build succeeds:**
    ```bash
    uv run mkdocs build --strict
    ```
    - Must complete without errors
    - Warnings about missing files or broken links must be fixed
 
-3. **Check navigation:**
+4. **Check navigation:**
    - Ensure new pages are added to `mkdocs.yml` if needed
    - Verify cross-links work
 
-4. **Classify the pair in the doc-mirror manifest:**
+5. **Classify the pair in the doc-mirror manifest:**
    ```bash
    python3 bin/docs-mirror-check.py
    ```

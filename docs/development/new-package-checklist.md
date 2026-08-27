@@ -120,6 +120,12 @@ docs/
     └── integration_example.py
 ```
 
+Doc filenames are `lower-hyphen.md` — `README.md` is the one exception, since
+GitHub renders it as a directory index. `bin/docs-mirror-check.py` fails
+anything else, and fails a doc whose site counterpart is spelled differently:
+a bare link to a sibling has to read the same from the package tree and from
+the rendered site, and it only can if both trees agree on the filename.
+
 ### 4. Integrate with MkDocs (if requires_docs_build=True)
 
 **Location**: `docs/packages/<name>/`

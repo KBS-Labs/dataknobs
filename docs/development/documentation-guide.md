@@ -179,6 +179,12 @@ root
 4. **Use admonitions for important notes**
 5. **Keep line length under 80 characters for code blocks**
 6. **Use semantic versioning in changelog**
+7. **Name a package doc `lower-hyphen.md`, spelled the same in both trees** —
+   `bin/docs-mirror-check.py` fails a package doc that is not lower-hyphen
+   (`README.md` excepted) and a pair spelled two ways. A bare link to a sibling
+   has to read the same from the package tree and the site, and it only can if
+   the two agree on the filename. See
+   [Documentation Mirror Check](ci-cd.md#documentation-mirror-check).
 
 ## Contributing
 

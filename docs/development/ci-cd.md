@@ -103,6 +103,19 @@ classification in `.dataknobs/docs-mirror-manifest.json`. See the
 [Documentation Guide](documentation-guide.md) and the manifest itself for the
 available classifications.
 
+It also enforces that both trees spell a document the same way. A package doc
+must be named `lower-hyphen.md` (`README.md` excepted), and a paired doc must
+carry the same filename on both sides — otherwise a bare link to it resolves in
+at most one of the trees it is served from, which is how 89 package-tree links
+came to be broken while the rendered site stayed clean. Relative `.md` links are
+resolved case-**sensitively**, because `Path.exists()` is not: on macOS it
+answers *yes* for `configuration.md` when only `CONFIGURATION.md` is present.
+
+A link broken by spelling fails the check. A link whose target is absent under
+any spelling is printed and counted instead — the two trees nest some documents
+differently and some targets are site-native, so no rename reaches those. The
+guard prints that list on every run rather than recording it anywhere.
+
 ### Documentation Version Check
 
 Package versions live in `pyproject.toml` files and in `.dataknobs/packages.json`.

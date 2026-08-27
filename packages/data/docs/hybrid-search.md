@@ -373,6 +373,6 @@ uv run pytest tests/test_hybrid_search.py -v
 
 ## Related
 
-- [Vector Search](vector-getting-started.md) - Pure vector search
+- [Vector Search](history/vector-implementation/vector-getting-started.md) - Pure vector search
 - [Query Operations](boolean-logic-operators.md) - Query filtering
-- [Elasticsearch Backend](../history/vector-implementation/vector-implementation-summary.md) - ES implementation details
+- [Elasticsearch Backend](history/vector-implementation/vector-implementation-summary.md) - ES implementation details

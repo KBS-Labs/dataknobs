@@ -484,16 +484,278 @@ def test_fix_skips_ambiguous_exception_without_corrupting(tree: _Tree) -> None:
 
 
 def test_run_returns_zero_on_clean_tree(tree: _Tree) -> None:
+    """The package source is lower-hyphen because ``run`` now requires it.
+
+    The fixture used to be ``API_REFERENCE.md``, which exercised the
+    canonicaliser through the mirror comparison. That job now belongs to the
+    unit tests above; a package doc reaching ``run`` in the old spelling is a
+    failure, so keeping it here would have asserted the opposite of the rule.
+    The link fold it was really testing is still here, in the link text.
+    """
     mod, pkg, site = tree
-    _w(pkg / "API_REFERENCE.md", "# API\n\nsee [G](OTHER_DOC.md)\n")
+    _w(pkg / "api-reference.md", "# API\n\nsee [G](OTHER_DOC.md)\n")
     _w(site / "api-reference.md", "# API\n\nsee [G](other-doc.md)\n")
-    manifest = _manifest(mirror=[{"package": "API_REFERENCE.md", "site": "api-reference.md"}])
+    manifest = _manifest(mirror=[{"package": "api-reference.md", "site": "api-reference.md"}])
     assert mod.run(manifest, only=None, fix=False) == 0
 
 
 def test_run_returns_one_on_drift(tree: _Tree) -> None:
     mod, pkg, site = tree
-    _w(pkg / "API_REFERENCE.md", "# API\n\ntruth\n")
+    _w(pkg / "api-reference.md", "# API\n\ntruth\n")
     _w(site / "api-reference.md", "# API\n\ndrifted\n")
-    manifest = _manifest(mirror=[{"package": "API_REFERENCE.md", "site": "api-reference.md"}])
+    manifest = _manifest(mirror=[{"package": "api-reference.md", "site": "api-reference.md"}])
     assert mod.run(manifest, only=None, fix=False) == 1
+
+
+def test_run_reports_unresolved_links_without_failing(
+    tree: _Tree, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A link no rename can reach is printed, counted, and does not fail the run.
+
+    This pins the join between the two halves of the link work: the naming half
+    is enforced, and the half that depends on the two trees nesting documents
+    differently is reported until a policy exists for it. The count is derived
+    on every run, so it is the work list rather than a transcription of one.
+    """
+    mod, pkg, _site = tree
+    _w(pkg / "guide.md", "# G\n\nsee [X](../elsewhere/nothing.md)\n")
+    manifest = _manifest(package_only=["guide.md"])
+    assert mod.run(manifest, only=None, fix=False) == 0
+    out = capsys.readouterr().out
+    assert "1 relative .md link(s) do not resolve" in out
+    assert "../elsewhere/nothing.md" in out
+    assert "Reported, not failed." in out
+
+
+# --------------------------------------------------------------------------
+# one document, one name  (name parity + lower-hyphen spelling)
+# --------------------------------------------------------------------------
+
+
+def test_paired_doc_spelled_two_ways_is_detected(tree: _Tree) -> None:
+    """Reproduces the shape that made 89 package-tree links unresolvable.
+
+    When the package tree spells a doc one way and the site tree another, a
+    bare link to it is correct in at most one of them -- and whichever tree
+    loses, nothing was checking it.
+    """
+    mod, pkg, site = tree
+    _w(pkg / "user-guide.md", "# G\n")
+    _w(site / "userguide.md", "# G\n")
+    res = mod.Result()
+    mod.check_name_parity({"mirror": [{"package": "user-guide.md", "site": "userguide.md"}]}, res)
+    assert not res.ok
+    assert any("name parity" in e for e in res.errors)
+
+
+def test_paired_doc_nested_differently_but_named_alike_passes(tree: _Tree) -> None:
+    """Only the basename is compared; the two trees nest some docs differently.
+
+    ``guides/tools.md`` against ``tools.md`` is not a naming failure and no
+    rename fixes it, so name parity must not claim it.
+    """
+    mod, _pkg, _site = tree
+    res = mod.Result()
+    mod.check_name_parity({"symlink": [{"package": "tools.md", "site": "guides/tools.md"}]}, res)
+    assert res.ok, res.errors
+
+
+def test_diverge_pair_may_be_spelled_two_ways(tree: _Tree) -> None:
+    """``diverge`` records two genuinely different documents, so parity cannot bind it.
+
+    Requiring a shared name would contradict the classification -- and two real
+    pairs rely on this (``multi-tenant.md`` <-> ``guides/bot-manager.md`` and
+    ``environment-variable-substitution.md`` <-> ``environment-variables.md``).
+    """
+    mod, _pkg, _site = tree
+    res = mod.Result()
+    mod.check_name_parity(
+        {"diverge": [{"package": "multi-tenant.md", "site": "guides/bot-manager.md"}]}, res
+    )
+    assert res.ok, res.errors
+
+
+def test_upper_snake_package_doc_is_detected(tree: _Tree) -> None:
+    """The recurrence guard: a *new* doc in the old convention, paired or not.
+
+    Name parity cannot see this one -- a new doc need not be paired with
+    anything -- which is why the spelling rule is a separate check rather than
+    a property of the pair.
+    """
+    mod, pkg, _site = tree
+    _w(pkg / "TOOL_CONTEXT.md", "# T\n")
+    res = mod.Result()
+    mod.check_doc_spelling(pkg, res)
+    assert not res.ok
+    assert any("doc spelling" in e and "tool-context.md" in e for e in res.errors)
+
+
+def test_nested_package_doc_is_checked_even_when_not_recursive(tree: _Tree) -> None:
+    """``recursive`` scopes which docs must be *classified*, not how they are spelled.
+
+    A doc can be spelled wrong without being classified at all, which is exactly
+    the case worth catching, so this check reads the tree rather than the
+    manifest.
+    """
+    mod, pkg, _site = tree
+    (pkg / "guides").mkdir()
+    _w(pkg / "guides" / "MULTI_TENANT.md", "# M\n")
+    res = mod.Result()
+    mod.check_doc_spelling(pkg, res)
+    assert not res.ok
+    assert any("multi-tenant.md" in e for e in res.errors)
+
+
+def test_readme_is_exempt_from_the_spelling_rule(tree: _Tree) -> None:
+    """GitHub renders ``README.md`` as a directory index; ``readme.md`` does not."""
+    mod, pkg, _site = tree
+    _w(pkg / "README.md", "# index\n")
+    res = mod.Result()
+    mod.check_doc_spelling(pkg, res)
+    assert res.ok, res.errors
+
+
+def test_conforming_package_tree_is_quiet(tree: _Tree) -> None:
+    mod, pkg, _site = tree
+    _w(pkg / "user-guide.md", "# G\n")
+    _w(pkg / "05.updated-plan.md", "# P\n")
+    res = mod.Result()
+    mod.check_doc_spelling(pkg, res)
+    assert res.ok, res.errors
+
+
+# --------------------------------------------------------------------------
+# link resolution
+# --------------------------------------------------------------------------
+
+
+def test_link_broken_only_by_spelling_is_detected(tree: _Tree) -> None:
+    """The defect PR-scale renaming drained: right link text, wrong filename.
+
+    Nothing checked link resolution before this, which is how 89 of them
+    accumulated while every guard reported green.
+    """
+    mod, pkg, site = tree
+    _w(pkg / "architecture.md", "# A\n\nsee [C](configuration.md)\n")
+    _w(pkg / "CONFIGURATION.md", "# C\n")
+    unresolved: list[tuple[str, str, str]] = []
+    res = mod.Result()
+    mod.check_link_resolution(
+        {"package_only": ["architecture.md", "CONFIGURATION.md"]}, pkg, site, res, unresolved
+    )
+    assert not res.ok
+    assert any("link spelling" in e and "CONFIGURATION.md" in e for e in res.errors)
+    assert unresolved == []
+
+
+def test_spelling_break_is_caught_where_path_exists_would_lie(tree: _Tree) -> None:
+    """The regression that hid the whole population: case-insensitive existence.
+
+    ``Path.exists()`` answers *yes* on a case-insensitive checkout when the link
+    says ``configuration.md`` and only ``CONFIGURATION.md`` is on disk -- so the
+    obvious implementation of this check would have reported green on the very
+    tree that motivated it, on the machine it was written on.
+
+    Both assertions hold on either kind of filesystem. The naive verdict is
+    captured rather than asserted, because *it* is what differs by platform;
+    that is the point.
+    """
+    mod, pkg, site = tree
+    _w(pkg / "architecture.md", "# A\n\nsee [C](configuration.md)\n")
+    _w(pkg / "CONFIGURATION.md", "# C\n")
+
+    naive = (pkg / "configuration.md").exists()  # True on macOS, False on CI
+    assert not mod._exists_cs(pkg / "configuration.md"), (
+        f"case-sensitive existence must not follow Path.exists() (which said {naive})"
+    )
+
+    unresolved: list[tuple[str, str, str]] = []
+    res = mod.Result()
+    mod.check_link_resolution(
+        {"package_only": ["architecture.md", "CONFIGURATION.md"]}, pkg, site, res, unresolved
+    )
+    assert not res.ok, f"verdict must not depend on the filesystem (Path.exists said {naive})"
+
+
+def test_link_with_no_target_under_any_spelling_is_reported_not_failed(tree: _Tree) -> None:
+    """No rename reaches these, so they are counted rather than failed.
+
+    A target absent under every spelling means the document is not in that
+    directory at all: the two trees nest it differently, or it is site-native,
+    or it is gone. Answering that is a policy decision about what a package doc
+    may link to, not a naming one.
+    """
+    mod, pkg, site = tree
+    _w(pkg / "guide.md", "# G\n\nsee [X](../api/reference.md)\n")
+    unresolved: list[tuple[str, str, str]] = []
+    res = mod.Result()
+    mod.check_link_resolution({"package_only": ["guide.md"]}, pkg, site, res, unresolved)
+    assert res.ok, res.errors
+    assert len(unresolved) == 1
+    assert unresolved[0][1] == "../api/reference.md"
+
+
+def test_symlink_doc_link_is_resolved_against_both_trees(tree: _Tree) -> None:
+    """One file served at two paths must resolve from both of them.
+
+    A symlinked page is the same bytes under a second path, so a sibling link
+    in it is read from the site directory too -- and a sibling that exists only
+    in the package tree leaves the site copy pointing at nothing.
+    """
+    mod, pkg, site = tree
+    _w(pkg / "tools.md", "# T\n\nsee [C](context.md)\n")
+    _w(pkg / "context.md", "# C\n")
+    (site / "tools.md").symlink_to(pkg / "tools.md")
+    unresolved: list[tuple[str, str, str]] = []
+    res = mod.Result()
+    mod.check_link_resolution(
+        {"symlink": [{"package": "tools.md", "site": "tools.md"}]}, pkg, site, res, unresolved
+    )
+    assert res.ok, res.errors
+    assert [u[2] for u in unresolved] == ["docs/packages/demo"]
+
+
+def test_link_in_a_fence_or_code_span_is_not_resolved(tree: _Tree) -> None:
+    """Example text is not a link, so it cannot be a broken one.
+
+    Same two primitives the canonicaliser uses -- a doc showing markdown syntax
+    would otherwise report a finding for every sample it contains.
+    """
+    mod, pkg, site = tree
+    _w(
+        pkg / "guide.md",
+        "# G\n\n```md\n[a](NOT_A_REAL_DOC.md)\n```\n\nand `[b](ALSO_NOT.md)` inline\n",
+    )
+    unresolved: list[tuple[str, str, str]] = []
+    res = mod.Result()
+    mod.check_link_resolution({"package_only": ["guide.md"]}, pkg, site, res, unresolved)
+    assert res.ok, res.errors
+    assert unresolved == []
+
+
+def test_urls_anchors_and_non_md_targets_are_not_resolved(tree: _Tree) -> None:
+    mod, pkg, site = tree
+    _w(
+        pkg / "guide.md",
+        "# G\n\n[a](https://x.test/FOO.md) [b](#section) [c](script.py) [d](/abs/x.md)\n",
+    )
+    unresolved: list[tuple[str, str, str]] = []
+    res = mod.Result()
+    mod.check_link_resolution({"package_only": ["guide.md"]}, pkg, site, res, unresolved)
+    assert res.ok, res.errors
+    assert unresolved == []
+
+
+def test_resolving_links_pass_quietly(tree: _Tree) -> None:
+    mod, pkg, site = tree
+    _w(pkg / "guide.md", "# G\n\nsee [C](configuration.md) and [S](sub/deep.md)\n")
+    _w(pkg / "configuration.md", "# C\n")
+    (pkg / "sub").mkdir()
+    _w(pkg / "sub" / "deep.md", "# D\n")
+    unresolved: list[tuple[str, str, str]] = []
+    res = mod.Result()
+    mod.check_link_resolution(
+        {"package_only": ["guide.md", "configuration.md"]}, pkg, site, res, unresolved
+    )
+    assert res.ok, res.errors
+    assert unresolved == []
