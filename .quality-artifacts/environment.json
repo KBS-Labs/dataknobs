@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-08-27T01:34:40Z",
+  "timestamp": "2026-08-27T02:09:38Z",
   "python_version": "Python 3.12.12",
   "uv_version": "uv 0.12.5 (Homebrew 2026-08-14 aarch64-apple-darwin)",
   "os": "Darwin",
   "os_version": "24.6.0",
-  "git_branch": "sbk/snapshot-tool-view",
-  "git_commit": "1fad21076bf1516b7405992127cbf942643b5834",
+  "git_branch": "sbk/alias-removal-version",
+  "git_commit": "ef946d5f71ce97a86ad0946674832cd0c719a848",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }

@@ -52,8 +52,8 @@ __all__ = [
     "ContextEnhancedTool",
     "ToolExecutionContext",
     "ToolWizardState",
-    # Deprecated alias for ToolWizardState; warns on access, then removed
-    # after one minor version.
+    # Deprecated alias for ToolWizardState since 0.8.0; warns on access,
+    # and is removed at 1.0.0.
     "WizardStateSnapshot",
     "default_wizard_data_injector",
     # Observability
@@ -75,8 +75,9 @@ def __getattr__(name: str) -> type:
     """
     if name == "WizardStateSnapshot":
         warnings.warn(
-            "WizardStateSnapshot is deprecated; use ToolWizardState instead. "
-            "The alias resolves for one minor version and is then removed.",
+            "WizardStateSnapshot is deprecated since 0.8.0; use "
+            "ToolWizardState instead. The alias resolves until 1.0.0, when "
+            "it is removed.",
             DeprecationWarning,
             stacklevel=2,
         )

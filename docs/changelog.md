@@ -126,7 +126,7 @@ and both readers of the format descended it until the stack ran out.
 - `ConversationState.live_wizard_state` — a per-turn channel a reasoning strategy publishes live wizard state on, preferred by `ToolExecutionContext.from_manager` over rebuilding from persisted metadata. It sits on `ConversationState` rather than inside `metadata` because wizard data is deep-copied on restore precisely so live state and persisted metadata cannot share a reference
 
 #### Deprecated
-- `WizardStateSnapshot` is now `ToolWizardState`; `dataknobs_bots` exports an unrelated and much larger dataclass under the same name. The old name remains an alias in `dataknobs_llm.tools` and `dataknobs_llm.tools.context` for one minor version and warns when read from either, while type checkers still resolve it to the class
+- `WizardStateSnapshot` is now `ToolWizardState`; `dataknobs_bots` exports an unrelated and much larger dataclass under the same name. The old name remains an alias in `dataknobs_llm.tools` and `dataknobs_llm.tools.context` until 1.0.0, when it is removed, and warns when read from either, while type checkers still resolve it to the class
 
 #### Fixed
 - extra arguments to `LLMProviderFactory.create()` reach the provider. The signature has taken `**kwargs` and the docstring has described them as passed to the constructor since before the provider registry existed, and neither branch ever passed them on
