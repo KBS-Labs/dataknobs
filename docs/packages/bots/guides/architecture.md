@@ -1,1 +1,1 @@
-../../../../packages/bots/docs/ARCHITECTURE.md
+../../../../packages/bots/docs/architecture.md

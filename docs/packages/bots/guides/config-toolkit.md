@@ -110,9 +110,9 @@ result = validator.validate(config)
 validator.register_validator("my_check", my_validator_fn)
 ```
 
---8<-- "packages/bots/docs/CONFIG_TOOLKIT.md:marker-rule"
+--8<-- "packages/bots/docs/config-toolkit.md:marker-rule"
 
---8<-- "packages/bots/docs/CONFIG_TOOLKIT.md:combining-results"
+--8<-- "packages/bots/docs/config-toolkit.md:combining-results"
 
 ### Templates
 
@@ -168,7 +168,7 @@ set, the `backend` key is ignored and the class handles its own initialization.
 
 `ToolCatalog` maps tool names to fully-qualified class paths and default configuration. Built on `Registry[ToolEntry]` for thread safety, metrics, and consistent error handling.
 
-The `default_catalog` singleton is pre-populated with all 21 built-in tools. Use `create_default_catalog()` for an extensible copy. The full table — name, class, tags, and declared dependencies — is in [CONFIG_TOOLKIT.md](https://github.com/KBS-Labs/dataknobs/blob/main/packages/bots/docs/CONFIG_TOOLKIT.md#built-in-tools).
+The `default_catalog` singleton is pre-populated with all 21 built-in tools. Use `create_default_catalog()` for an extensible copy. The full table — name, class, tags, and declared dependencies — is in [config-toolkit.md](https://github.com/KBS-Labs/dataknobs/blob/main/packages/bots/docs/config-toolkit.md#built-in-tools).
 
 ```python
 from dataknobs_bots.config import (
@@ -197,7 +197,7 @@ config = catalog.to_bot_config("knowledge_search", k=10)
 
 Tool classes can self-describe via `catalog_metadata()` classmethod (the `CatalogDescribable` protocol). `WizardConfigBuilder` validates stage tool names against the catalog when one is provided via `set_tool_catalog()`.
 
-A parameter a tool declares under `requires` has two spellings — the live object, or the YAML value the tool builds one from (`template_registry` or `template_dir`, `draft_manager` or `config_dir`, a `builder_factory` callable or a dotted path to it). Both arrive in the same params dict, and the tool prefers the live object. Writing your own tool with a `requires` entry? `injected_dependency(config, key, expected)` is the one line that tells the two apart; pass `InjectedCallable` as `expected` where the YAML form is a dotted path. The two spellings, per parameter, are tabulated under [Supplying a declared dependency](https://github.com/KBS-Labs/dataknobs/blob/main/packages/bots/docs/CONFIG_TOOLKIT.md#supplying-a-declared-dependency).
+A parameter a tool declares under `requires` has two spellings — the live object, or the YAML value the tool builds one from (`template_registry` or `template_dir`, `draft_manager` or `config_dir`, a `builder_factory` callable or a dotted path to it). Both arrive in the same params dict, and the tool prefers the live object. Writing your own tool with a `requires` entry? `injected_dependency(config, key, expected)` is the one line that tells the two apart; pass `InjectedCallable` as `expected` where the YAML form is a dotted path. The two spellings, per parameter, are tabulated under [Supplying a declared dependency](https://github.com/KBS-Labs/dataknobs/blob/main/packages/bots/docs/config-toolkit.md#supplying-a-declared-dependency).
 
 The catalog also offers tag-based filtering, dependency validation, serialization, and self-describing tool support via `catalog_metadata()`.
 

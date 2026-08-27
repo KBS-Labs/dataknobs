@@ -409,7 +409,7 @@ async def domain_scoped_store(
 # JSONB-containment probe there, orthogonal to the column scope —
 # whereas memory/faiss/chroma carry ``domain_id`` in metadata. That
 # divergence is inherent to pgvector's richer schema and is documented
-# in VECTOR_FILTER_SEMANTICS.md, not pinned here.
+# in vector-filter-semantics.md, not pinned here.
 
 
 @pytest.mark.asyncio

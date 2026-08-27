@@ -370,7 +370,7 @@ _EXPECTED_POLICY: dict[str, tuple[int, bool, bool]] = {
 
 #: The published copy of the same contract. Transcluded into the site, so this
 #: is what a deployment reads when deciding whether a route can be public.
-_POLICY_DOC = Path(__file__).resolve().parents[1] / "docs" / "MULTI_TENANT.md"
+_POLICY_DOC = Path(__file__).resolve().parents[1] / "docs" / "multi-tenant.md"
 
 #: The header cell that identifies the status table among the doc's several
 #: tables. Matching on content rather than position, so an added table above it
@@ -379,7 +379,7 @@ _POLICY_TABLE_HEADER = "DataKnobs error"
 
 
 def _documented_policy() -> dict[str, tuple[int, bool, bool]]:
-    """Parse the status/disclosure table out of ``MULTI_TENANT.md``.
+    """Parse the status/disclosure table out of ``multi-tenant.md``.
 
     Raises rather than returning something partial for every shape it does not
     recognise. A parser that quietly yields an empty dict on a reworded header
@@ -1010,7 +1010,7 @@ class TestErrorPolicyTable:
     def test_the_documented_table_matches_the_declared_contract(self):
         """The published table is the third copy, and the one nobody runs.
 
-        ``MULTI_TENANT.md`` states each type's status and whether it is
+        ``multi-tenant.md`` states each type's status and whether it is
         disclosed, and that section is transcluded into the site, so it is
         what a deployment reads when deciding whether a route can be public.
         Flipping a row in the source without editing it would leave the

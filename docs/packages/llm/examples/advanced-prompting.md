@@ -153,7 +153,7 @@ result = await builder.render_user_prompt(
 # RAG results automatically retrieved and injected at {{RAG_DOCS}}
 ```
 
-**Note**: RAG adapters are provided through FSM resource integration. See `packages/llm/docs/RAG_CACHING.md` for comprehensive RAG documentation.
+**Note**: RAG adapters are provided through FSM resource integration. See `packages/llm/docs/rag-caching.md` for comprehensive RAG documentation.
 
 ### Multiple RAG Sources
 
@@ -489,7 +489,7 @@ await manager.switch_to_node("0")
 await manager.complete(branch_name="alternative")
 ```
 
-See `packages/llm/docs/RAG_CACHING.md` for details.
+See `packages/llm/docs/rag-caching.md` for details.
 
 ### Parallel RAG Searches
 

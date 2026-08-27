@@ -65,7 +65,7 @@ class VectorStore(ABC, VectorStoreBase):
         **This may raise.** A store with a ``persist_path`` persists here
         as well as releasing, and that write can fail — most notably with
         ``ConcurrencyError`` when another instance has written the file
-        since (see ``VECTOR_FILTER_SEMANTICS.md``). Releasing and
+        since (see ``vector-filter-semantics.md``). Releasing and
         persisting are separate obligations, so an implementation must
         release regardless: the exception propagates, because rows are
         being lost, but a second ``close()`` must not raise again on a

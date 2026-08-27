@@ -1,1 +1,1 @@
-../../../../packages/bots/docs/PROVIDER_REGISTRY.md
+../../../../packages/bots/docs/provider-registry.md

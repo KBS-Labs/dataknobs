@@ -1,1 +1,1 @@
-../../../packages/data/docs/DEDUP.md
+../../../packages/data/docs/dedup.md

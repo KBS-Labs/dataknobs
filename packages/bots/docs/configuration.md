@@ -1,0 +1,4287 @@
+# Configuration Reference
+
+Complete reference for configuring DynaBot instances.
+
+## Table of Contents
+
+- [Overview](#overview)
+- [Configuration Structure](#configuration-structure)
+- [Environment-Aware Configuration](#environment-aware-configuration)
+- [LLM Configuration](#llm-configuration)
+- [Conversation Storage](#conversation-storage)
+- [Memory Configuration](#memory-configuration)
+  - [Memory Banks (Wizard Data Collection)](#memory-banks-wizard-data-collection)
+- [Knowledge Base Configuration](#knowledge-base-configuration)
+- [Reasoning Configuration](#reasoning-configuration)
+- [Tools Configuration](#tools-configuration)
+- [Prompts Configuration](#prompts-configuration)
+- [Middleware Configuration](#middleware-configuration)
+- [Resource Resolution](#resource-resolution)
+- [Environment Variables](#environment-variables)
+- [Complete Examples](#complete-examples)
+
+---
+
+## Overview
+
+DynaBot uses a configuration-first approach where all bot behavior is defined through configuration files (YAML/JSON) or dictionaries. This allows for:
+
+- Easy bot customization without code changes
+- Configuration version control
+- Environment-specific configurations
+- Dynamic bot creation
+
+### Configuration Formats
+
+DynaBot supports multiple configuration formats:
+
+**Python Dictionary:**
+```python
+config = {
+    "llm": {"provider": "ollama", "model": "gemma3:1b"},
+    "conversation_storage": {"backend": "memory"}
+}
+bot = await DynaBot.from_config(config)
+```
+
+**YAML File:**
+```yaml
+# bot_config.yaml
+llm:
+  provider: ollama
+  model: gemma3:1b
+
+conversation_storage:
+  backend: memory
+```
+
+```python
+import yaml
+
+with open("bot_config.yaml") as f:
+    config = yaml.safe_load(f)
+
+bot = await DynaBot.from_config(config)
+```
+
+**JSON File:**
+```json
+{
+  "llm": {
+    "provider": "ollama",
+    "model": "gemma3:1b"
+  },
+  "conversation_storage": {
+    "backend": "memory"
+  }
+}
+```
+
+### Construction shapes and the typed `DynaBotConfig`
+
+`DynaBot.from_config()` accepts either a config mapping (the dict/YAML/JSON
+shape above) or a typed `DynaBotConfig` snapshot. Construction runs through
+the shared structured-config lifecycle, so the bot always carries a typed
+`bot.config: DynaBotConfig`:
+
+```python
+from dataknobs_bots.bot.config import DynaBotConfig
+
+# Equivalent — a typed config snapshot or a raw mapping.
+cfg = DynaBotConfig.from_dict({
+    "llm": {"provider": "ollama", "model": "gemma3:1b"},
+    "conversation_storage": {"backend": "memory"},
+})
+bot = await DynaBot.from_config(cfg)            # typed
+bot = await DynaBot.from_config(cfg.to_dict())  # mapping — same result
+```
+
+`DynaBotConfig` is a deliberately thin envelope: typed scalars plus the
+documented config sections. The polymorphic sections (`memory`,
+`knowledge_base`, `reasoning`) and the provider section (`llm`) stay raw
+mappings — their concrete type is selected by a discriminator key in the
+subsystem registries, not rebuilt from the static field graph.
+
+For programmatic construction with pre-built collaborators, the direct
+constructor and its named alias `from_components()` are equivalent:
+
+```python
+bot = DynaBot(
+    llm=provider,                       # an AsyncLLMProvider instance
+    prompt_builder=prompt_builder,
+    conversation_storage=storage,
+)
+# Same, named:
+bot = DynaBot.from_components(
+    llm=provider, prompt_builder=prompt_builder, conversation_storage=storage,
+)
+```
+
+`DynaBotConfig` is distinct from the `DynaBotConfigBuilder` /
+`DynaBotConfigSchema` config toolkit (which *produces* config mappings —
+see [Config Toolkit](config-toolkit.md)).
+
+### Validating config sections without constructing the bot
+
+`from_dict` is deliberately tolerant — it forwards each polymorphic section
+(`memory`, `knowledge_base`, …) to its subsystem factory verbatim and does
+not look inside. For flows that parse a config but do not immediately build
+the bot (CI config-linting, a write-time check in a multi-tenant config
+store, a config editor), call `validate()` to dry-run-build the resolved
+section configs and surface malformed or unknown sections at parse time:
+
+```python
+from dataknobs_bots.bot.config import DynaBotConfig
+
+cfg = DynaBotConfig.from_dict(loaded_yaml)
+cfg.validate()   # raises if a section is malformed; does not construct the bot
+```
+
+`validate()` is opt-in (never auto-run by `from_dict` or construction) and
+discards the dry-run objects — the sections stay raw mappings. It covers:
+
+- **`llm`** — an unknown `provider` raises `ConfigurationError`; a field error
+  in the resolved `LLMConfig` raises.
+- **`memory`** — an unknown backend `type` raises `ConfigurationError`; a
+  field error in the resolved memory config raises. A `composite` memory's
+  `strategies` are validated element-wise. A `summary` memory's dedicated
+  `llm` section and a `vector` memory's nested `embedding` section are
+  validated by the same descent. (`vector` is the only memory type that
+  carries an `embedding` section — `buffer`, `summary`, and `composite`
+  have none, so no other memory type needs an `embedding` binding.)
+- **`knowledge_base`** — an unknown `type` raises; and because the resolved
+  `RAGKnowledgeBaseConfig` carries its own `vector_store` and `embedding`
+  bindings, the single call **descends into the nested `vector_store` and
+  `embedding` sections** too (an unknown vector-store `backend`, an unknown
+  embedding `provider`, or a bad nested field is caught from the same
+  `cfg.validate()`). Only the nested `embedding` dict is validated; the legacy
+  flat keys (`embedding_provider` / `embedding_model` / `dimensions` /
+  `api_base` / `api_key`) are left unvalidated.
+- **`reasoning`** — an unknown `strategy` raises `ConfigurationError`; a field
+  error in the resolved strategy config raises. Because the `grounded` and
+  `hybrid` strategy configs carry nested sub-config trees (`intent`,
+  `retrieval`, `synthesis`, …), the single call **descends into those nested
+  sections** too. All five built-in strategies (`simple`, `react`, `grounded`,
+  `hybrid`, `wizard`) carry a typed config, so a `reasoning` section is always
+  checked. (The wizard definition referenced by `wizard_config` is resolved by
+  the wizard loader, not re-validated here — only the reasoning-section
+  envelope, whose `wizard_config` field is required (no default).)
+
+A backend or strategy registered as a bare callable (no typed config) is
+recognized and skipped rather than rejected. `conversation_storage` is not
+validated yet (no registry-resolvable typed config family). See the common
+[Polymorphic-section validation](../../common/structured-config.md#polymorphic-section-validation-validate-config_registries)
+guide for the underlying mechanism.
+
+---
+
+## Configuration Structure
+
+### Minimal Configuration
+
+The minimal configuration requires only LLM and conversation storage:
+
+```yaml
+llm:
+  provider: ollama
+  model: gemma3:1b
+
+conversation_storage:
+  backend: memory
+```
+
+### Full Configuration Schema
+
+```yaml
+# Required: LLM Configuration
+llm:
+  provider: string
+  model: string
+  temperature: float (optional, default: 0.7)
+  max_tokens: int (optional, default: 1000)
+  # ... provider-specific options
+
+# Required: Conversation Storage
+conversation_storage:
+  backend: string              # For default DataknobsConversationStorage
+  storage_class: string        # OR import path to custom ConversationStorage class
+                               # ("module:Class" recommended; "module.Class" also works)
+  # ... backend-specific or class-specific options
+
+# Optional: Memory
+memory:
+  type: string
+  # ... memory-type-specific options
+
+# Optional: Knowledge Base (RAG)
+knowledge_base:
+  enabled: boolean
+  # ... knowledge base options
+
+# Optional: Reasoning Strategy
+reasoning:
+  strategy: string
+  # ... strategy-specific options
+
+# Optional: Tools
+tools:
+  - class: string
+    params: dict
+  # or
+  - xref:tools[tool_name]
+
+# Optional: Tool Definitions
+tool_definitions:
+  tool_name:
+    class: string
+    params: dict
+
+# Optional: Prompts Library
+prompts:
+  prompt_name: string
+  # or
+  prompt_name:
+    template: string
+    type: string
+
+# Optional: System Prompt (smart detection)
+system_prompt:
+  name: string            # Explicit template reference
+  strict: boolean         # If true, error if template not found
+  # or
+  content: string         # Inline content
+  rag_configs: list       # RAG configs for inline content
+  # or just
+system_prompt: string     # Smart detection: template if exists in library, else inline
+
+# Optional: Middleware
+middleware:
+  - class: string
+    params: dict
+
+# Optional: Content Security
+context_transform: string   # Dotted import path to a (str) -> str callable
+                             # Applied to KB chunks and memory context before
+                             # injection into the prompt (e.g. XML escaping)
+
+# Optional: Tool Execution
+max_tool_iterations: int     # Max tool execution rounds (default: 5)
+                             # Caps the DynaBot-level tool loop for strategies
+                             # that don't handle tool_calls internally
+
+# Optional: Per-conversation state bounds (see "Bounding Per-Conversation
+# State" below). Both default to None (unbounded — today's behavior).
+max_cached_conversations: int  # Bound the in-memory ConversationManager cache;
+                               # a positive value LRU-evicts the least-recently
+                               # -used conversation once exceeded (default: None)
+max_undo_checkpoints: int      # Bound the retained undo checkpoints per
+                               # conversation; a positive value tail-retains only
+                               # the most recent N (default: None)
+```
+
+---
+
+## Bounding Per-Conversation State
+
+DynaBot keeps two per-conversation structures in memory: the cached
+`ConversationManager` (the conversation's node tree) and the per-turn undo
+checkpoints that back `undo_last_turn` / `rewind_to_turn`. In a single-user
+or embedded bot these are naturally small and never need bounding. A
+**long-lived server that handles many distinct conversations** (or a single
+conversation that runs for a very large number of turns) can grow them
+without limit unless it calls `clear_conversation` for every conversation it
+ever serves. Two independent, opt-in bounds cap that growth.
+
+Both default to `None` — **unbounded, byte-for-byte the historical
+behavior.** Set them only on a long-running multi-conversation deployment. A
+`0` or negative value is rejected at config validation.
+
+```yaml
+# Bound the in-memory conversation-manager cache to 500 conversations.
+max_cached_conversations: 500
+# Retain at most the 100 most-recent undo checkpoints per conversation.
+max_undo_checkpoints: 100
+```
+
+### `max_cached_conversations`
+
+Turns the `ConversationManager` cache into an **access-ordered LRU**. Once the
+number of cached conversations exceeds the bound, the least-recently-used
+conversation is evicted. Any access (a turn, an `undo`, a
+`get_conversation_manager`) marks a conversation most-recently-used, so an
+actively-used conversation stays warm. Eviction co-drops the evicted
+conversation's undo checkpoints through the same teardown path as an explicit
+`clear_conversation`, so the two structures can never drift apart.
+
+The **in-flight conversation of an active turn is pinned** and never evicted
+out from under its own turn — if every cached conversation is currently
+in-flight, the cache is allowed to exceed the bound transiently rather than
+evict a live turn (in-flight correctness wins; the bound is a target, not a
+hard ceiling). Evicting a conversation only drops its in-memory cache entry —
+persisted conversation state (in the configured `conversation_storage`) is
+untouched, and a later message resumes it from storage.
+
+### `max_undo_checkpoints`
+
+Bounds the undo checkpoints retained **per conversation**. A positive value
+tail-retains only the most recent N checkpoints, trimming the oldest from the
+front as new turns arrive, so a single very long conversation cannot grow its
+undo history without limit.
+
+- `undo_last_turn` (relative — "undo the last turn") is unaffected: it always
+  operates on the most-recent retained checkpoint.
+- `rewind_to_turn` (absolute — "rewind to turn N") maps the absolute turn
+  index through the trimmed offset. Rewinding to a turn whose checkpoint has
+  been trimmed raises a clear **"beyond the retained undo window"** error
+  (naming the oldest still-rewindable turn) rather than silently landing on
+  the wrong node. Rewinding to a turn still within the retained window works
+  exactly as before.
+
+Undo checkpoints anchor on a prior turn's terminal node, which always lives in
+the retained head of any later turn's in-loop history compaction (see the
+ReAct `history_compaction` option). Compaction is non-destructive, so it never
+dangles an undo target — bounding undo history and in-loop compaction
+interoperate cleanly.
+
+---
+
+## Environment-Aware Configuration
+
+DynaBot supports environment-aware configuration for deploying the same bot across different environments (development, staging, production) where infrastructure differs. This is the **recommended approach** for production deployments.
+
+### The Problem
+
+Without environment-aware configuration, bot configs contain environment-specific details:
+
+```yaml
+# PROBLEMATIC: This config is not portable
+llm:
+  provider: ollama
+  model: qwen3:8b
+  base_url: http://localhost:11434  # Local only!
+
+conversation_storage:
+  backend: sqlite
+  path: ~/.local/share/myapp/conversations.db  # Local path!
+```
+
+When stored in a shared registry or database, this config fails in production because:
+- The Ollama URL doesn't exist in production
+- The local path doesn't exist in containers
+
+### The Solution: Resource References
+
+Use **logical resource references** (`$resource`) to separate bot behavior from infrastructure:
+
+```yaml
+# PORTABLE: This config works in any environment
+bot:
+  llm:
+    $resource: default        # Logical name
+    type: llm_providers       # Resource type
+    temperature: 0.7          # Behavioral setting (portable)
+
+  conversation_storage:
+    $resource: conversations
+    type: databases
+```
+
+The logical names (`default`, `conversations`) are resolved at **instantiation time** against environment-specific bindings.
+
+### Environment Configuration Files
+
+Environment configs define concrete implementations for logical names:
+
+**Development** (`config/environments/development.yaml`):
+```yaml
+name: development
+resources:
+  llm_providers:
+    default:
+      provider: ollama
+      model: qwen3:8b
+      base_url: http://localhost:11434
+
+  databases:
+    conversations:
+      backend: memory
+```
+
+**Production** (`config/environments/production.yaml`):
+```yaml
+name: production
+resources:
+  llm_providers:
+    default:
+      provider: openai
+      model: gpt-4
+      api_key: ${OPENAI_API_KEY}
+
+  databases:
+    conversations:
+      backend: postgres
+      connection_string: ${DATABASE_URL}
+```
+
+### Using Environment-Aware Configuration
+
+#### Method 1: BotResourceResolver (Recommended)
+
+```python
+from dataknobs_config import EnvironmentConfig
+from dataknobs_bots.config import BotResourceResolver
+
+# Load environment (auto-detects from DATAKNOBS_ENVIRONMENT)
+env = EnvironmentConfig.load()
+
+# Create resolver with all DynaBot factories registered
+resolver = BotResourceResolver(env)
+
+# Get initialized resources
+llm = await resolver.get_llm("default")
+db = await resolver.get_database("conversations")
+vs = await resolver.get_vector_store("knowledge")
+embedder = await resolver.get_embedding_provider("default")
+```
+
+#### Method 2: Lower-Level Resolution
+
+```python
+from dataknobs_config import EnvironmentConfig
+from dataknobs_bots.config import create_bot_resolver
+
+# Load environment
+env = EnvironmentConfig.load("production", config_dir="config/environments")
+
+# Create resolver
+resolver = create_bot_resolver(env)
+
+# Resolve resources manually
+llm = resolver.resolve("llm_providers", "default")
+await llm.initialize()
+
+db = resolver.resolve("databases", "conversations")
+await db.connect()
+```
+
+### Environment Detection
+
+The environment is determined in this order:
+
+1. **Explicit**: `DATAKNOBS_ENVIRONMENT=production`
+2. **Cloud indicators**: AWS Lambda, ECS, Kubernetes, Google Cloud Run, Azure Functions
+3. **Default**: `development`
+
+```bash
+# Set environment explicitly
+export DATAKNOBS_ENVIRONMENT=production
+
+# Or auto-detect based on cloud environment
+# (AWS_EXECUTION_ENV, KUBERNETES_SERVICE_HOST, etc.)
+```
+
+### Resource Reference Syntax
+
+```yaml
+# Full syntax with type and capability requirements
+llm:
+  $resource: default
+  type: llm_providers
+  $requires: [function_calling]   # Optional: required capabilities
+  $required: true                 # Optional: absent resource raises, not degrades
+  temperature: 0.7                # Override/default value
+
+# Supported resource types
+# - llm_providers
+# - databases
+# - vector_stores
+# - embedding_providers
+```
+
+**`$requires`** declares capabilities the bot needs from the resource. If the resolved resource declares `capabilities` metadata, the system validates that all requirements are met at config resolution time. Requirements are also **inferred** from bot config structure (e.g., `react` strategy + `tools` implies `function_calling`). A `$requires` against a resource the environment does not define raises — an absent resource satisfies no capability.
+
+**`$required`** declares that the resource must exist. Without it, a reference naming a resource the environment does not define warns and degrades to the reference's inline defaults (or to an empty config, which usually means the factory's own default — an in-memory database, for instance, that holds state until the process restarts). `$required: false` opts a reference out of the strictness `$requires` and a resolver-wide setting would otherwise impose.
+
+That resolver-wide setting is `strict_resources`, and every entry point that resolves a config accepts it: `strict_resources=` on a `DynaBot.from_environment_aware_config` call, or on a `BotRegistry` / `InMemoryBotRegistry` / `BotManager` / `ConfigCachingManager` constructor. The `create_memory_registry` factory forwards it, and everything else, to `InMemoryBotRegistry`. It is lenient by default everywhere except `ConfigCachingManager`, which has always raised and keeps doing so. An operator with no access to application code has a fourth lever: `settings: {strict_resources: true}` in the environment file itself.
+
+Additional fields in a resource reference are **inline defaults**: they fill
+keys the environment's resource does not set, and are discarded wherever it
+does. The environment wins — a binding is the deployment's to decide, and a
+config that could override it would be able to point production at something
+the operator did not choose.
+
+```yaml
+# In bot config
+llm:
+  $resource: default
+  type: llm_providers
+  $requires: [function_calling]
+  temperature: 0.9   # discarded: the environment sets `temperature`
+  timeout: 30        # kept: the environment does not
+
+# If environment defines:
+# llm_providers:
+#   default:
+#     provider: openai
+#     model: gpt-4
+#     temperature: 0.7
+#     capabilities: [chat, function_calling, streaming]
+
+# Resolved config (markers stripped):
+# provider: openai
+# model: gpt-4
+# temperature: 0.7                                    # the environment's, not 0.9
+# capabilities: [chat, function_calling, streaming]   # passed through, see below
+# timeout: 30                                         # the default that survived
+```
+
+### Capability Metadata on Resources
+
+Environment configs can declare what capabilities each resource provides:
+
+```yaml
+resources:
+  llm_providers:
+    default:
+      provider: ollama
+      model: qwen3:8b
+      capabilities: [chat, function_calling, streaming]
+    fast:
+      provider: ollama
+      model: gemma3:4b
+      capabilities: [chat, streaming]
+```
+
+`capabilities` is validation metadata, but it is **not** stripped: it is read to validate `$requires` and then passed through with the rest of the resource config, so a factory that receives one must tolerate the keyword. `$requires` is the field that is stripped — it is a marker, and markers never reach the factory. Available capability names: `text_generation`, `chat`, `embeddings`, `function_calling`, `vision`, `code`, `json_mode`, `streaming`.
+
+### Standard Resource Naming Convention
+
+| Name | Capability Contract | Typical Models |
+|------|-------------------|----------------|
+| `default` | chat, function_calling, streaming | qwen3:8b, gpt-4, claude-3 |
+| `fast` | chat, streaming | gemma3:4b, gpt-4o-mini |
+| `micro` | text_generation | gemma3:1b, qwen3:1.7b |
+| `extraction` | chat, code, json_mode | qwen3-coder, claude-3-haiku |
+| `embedding` | embeddings | nomic-embed-text, text-embedding-3-small |
+
+Key principle: **`default` always supports function calling.**
+
+### Best Practices
+
+1. **Store portable configs**: Only store configs with `$resource` references in databases
+2. **Resolve at instantiation**: Call `resolve_for_build()` immediately before creating objects
+3. **Use environment variables for secrets**: Never hardcode API keys or credentials
+4. **Define all environments**: Create config files for development, staging, and production
+5. **Use logical names consistently**: Use the same logical names across all environment configs
+
+---
+
+## LLM Configuration
+
+Configure the Large Language Model provider.
+
+### Common Options
+
+```yaml
+llm:
+  provider: string      # Required: LLM provider name
+  model: string         # Required: Model identifier
+  temperature: float    # Optional: Randomness (0.0-1.0), default: 0.7
+  max_tokens: int       # Optional: Max response tokens, default: 1000
+  api_key: string       # Optional: API key (use env var reference)
+  base_url: string      # Optional: Custom API endpoint
+```
+
+### Provider-Specific Configurations
+
+#### Ollama (Local)
+
+```yaml
+llm:
+  provider: ollama
+  model: qwen3:8b
+  base_url: http://localhost:11434  # Optional, default
+  temperature: 0.7
+  max_tokens: 1000
+```
+
+**Recommended Models by Capability:**
+
+| Model | Tool Calling | Best For |
+|-------|:---:|----------|
+| `qwen3:8b` | Yes | Default — chat, tools, reasoning |
+| `llama3.1:8b` | Yes | Advanced reasoning, tool use |
+| `mistral:7b` | Yes | General purpose with tools |
+| `command-r:latest` | Yes | Tool use, RAG |
+| `gemma3:4b` | No | Fast chat (no tools) |
+| `gemma3:1b` | No | Minimal/micro tasks |
+| `phi3:mini` | Yes | Compact tool-capable model |
+
+**Setup:**
+```bash
+# Install Ollama
+curl -fsSL https://ollama.ai/install.sh | sh
+
+# Pull recommended default model (tool-capable)
+ollama pull qwen3:8b
+```
+
+#### OpenAI
+
+```yaml
+llm:
+  provider: openai
+  model: gpt-4
+  api_key: ${OPENAI_API_KEY}  # Reference environment variable
+  temperature: 0.7
+  max_tokens: 2000
+  organization: ${OPENAI_ORG_ID}  # Optional
+```
+
+**Supported Models:**
+- `gpt-4` - Most capable
+- `gpt-4-turbo` - Faster, cheaper
+- `gpt-3.5-turbo` - Fast, economical
+
+**Environment Variables:**
+```bash
+export OPENAI_API_KEY=sk-...
+export OPENAI_ORG_ID=org-...  # Optional
+```
+
+#### Anthropic
+
+```yaml
+llm:
+  provider: anthropic
+  model: claude-3-sonnet-20240229
+  api_key: ${ANTHROPIC_API_KEY}
+  temperature: 0.7
+  max_tokens: 4096
+```
+
+**Supported Models:**
+- `claude-3-opus-20240229` - Most capable
+- `claude-3-sonnet-20240229` - Balanced
+- `claude-3-haiku-20240307` - Fast, economical
+
+**Environment Variables:**
+```bash
+export ANTHROPIC_API_KEY=sk-ant-...
+```
+
+#### Azure OpenAI
+
+```yaml
+llm:
+  provider: azure_openai
+  model: gpt-4
+  api_key: ${AZURE_OPENAI_KEY}
+  api_base: ${AZURE_OPENAI_ENDPOINT}
+  api_version: "2023-05-15"
+  deployment_name: my-gpt4-deployment
+```
+
+---
+
+## Conversation Storage
+
+Configure where conversation history is stored.
+
+### Memory Backend (Development Only)
+
+In-memory storage, not persistent:
+
+```yaml
+conversation_storage:
+  backend: memory
+```
+
+**Use Cases:**
+- Development and testing
+- Demos and prototyping
+- Ephemeral conversations
+
+**Limitations:**
+- Data lost on restart
+- Not suitable for production
+- No horizontal scaling
+
+### PostgreSQL Backend (Production)
+
+Persistent database storage:
+
+```yaml
+conversation_storage:
+  backend: postgres
+  host: localhost
+  port: 5432
+  database: myapp_db
+  user: postgres
+  password: ${DB_PASSWORD}
+  min_pool_size: 5       # Optional, default: 2
+  max_pool_size: 20      # Optional, default: 5
+```
+
+**Environment Variables:**
+```bash
+export DB_PASSWORD=your-secure-password
+```
+
+**Docker Setup:**
+```bash
+docker run -d \
+  --name postgres-bots \
+  -e POSTGRES_PASSWORD=postgres \
+  -e POSTGRES_DB=myapp_db \
+  -p 5432:5432 \
+  postgres:14
+```
+
+**Connection Options:**
+- `host`: Database host
+- `port`: Database port (default: 5432)
+- `database`: Database name
+- `user`: Database user
+- `password`: Database password
+- `min_pool_size`: Lower bound on the asyncpg pool (default: 2)
+- `max_pool_size`: Upper bound on the asyncpg pool (default: 5)
+- `command_timeout`: asyncpg command timeout in seconds
+- `ssl`: asyncpg-native SSL configuration — `True` requires TLS, a string
+  selects a mode, and an `ssl.SSLContext` is passed through
+
+### Custom Storage Class
+
+For full control over conversation persistence (e.g., tenant-scoped PostgreSQL,
+per-message metadata, relational schemas), provide a custom `ConversationStorage`
+implementation via `storage_class`:
+
+```yaml
+conversation_storage:
+  storage_class: "myapp.storage:AcmeConversationStorage"
+  db_url: "postgres://user:pass@host/db"
+  tenant_id: "acme-corp"
+```
+
+Both `"module.path:ClassName"` (recommended, matches Python entry-point syntax)
+and `"module.path.ClassName"` formats are supported for the import path.
+
+When `storage_class` is set, the `backend` key is ignored. The referenced class
+must:
+
+1. **Provide an async `create(config)` classmethod** — the one requirement
+   checked when the config loads. It receives the remaining config dict (with
+   `storage_class` already removed) and returns an initialized instance. A
+   resolved class without it raises `ConfigurationError`, naming the key and
+   what the dotted path resolved to
+2. **Implement `ConversationStorage`** (from `dataknobs_llm.conversations`) —
+   expected, but deliberately not gated with an `issubclass` check, so a
+   duck-typed class providing the same methods is accepted. The trade is that
+   a partial implementation is caught at first use rather than at load
+3. **Optionally override `close()`** — called by `DynaBot.close()` for resource
+   cleanup (the default is a no-op)
+
+```python
+from dataknobs_llm.conversations import ConversationStorage
+
+class AcmeConversationStorage(ConversationStorage):
+    @classmethod
+    async def create(cls, config: dict) -> "AcmeConversationStorage":
+        db_url = config["db_url"]
+        tenant_id = config.get("tenant_id")
+        # Set up connection pool, run migrations, etc.
+        instance = cls(db_url=db_url, tenant_id=tenant_id)
+        await instance.initialize()
+        return instance
+
+    async def close(self) -> None:
+        await self._pool.close()
+
+    async def save_conversation(self, state): ...
+    async def load_conversation(self, conversation_id): ...
+    async def delete_conversation(self, conversation_id): ...
+    async def list_conversations(self, **kwargs): ...
+    async def search_conversations(self, **kwargs): ...
+    async def delete_conversations(self, **kwargs): ...
+```
+
+The class is resolved using the same dotted import path convention as tools and
+middleware (`"module.path:ClassName"` or `"module.path.ClassName"`).
+
+---
+
+## Memory Configuration
+
+Configure conversation context memory.
+
+### Buffer Memory
+
+Simple sliding window of recent messages:
+
+```yaml
+memory:
+  type: buffer
+  max_messages: 10  # Number of recent messages to keep
+```
+
+**Characteristics:**
+- Fast and simple
+- Low memory usage
+- No semantic understanding
+- Perfect for short conversations
+
+**Recommended Settings:**
+- Short conversations: `max_messages: 5-10`
+- Medium conversations: `max_messages: 15-20`
+- Long conversations: `max_messages: 30-50`
+
+#### Read-time history redaction
+
+Buffer memory can rewrite assistant-role messages on the way out of
+`get_context()` so transient artifacts like citation tokens do not
+re-enter the model's prompt as if they were a reusable pool of sources.
+Add an ordered list of `(pattern, replacement)` rules under
+`history_redactions`:
+
+```yaml
+memory:
+  type: buffer
+  max_messages: 10
+  history_redactions:
+    # Bracketed citation header — MUST come first (more specific).
+    - pattern: '\[bib:\d+[^\]]*\]'
+      replacement: '[prior citation]'
+    # Bare bib token — comes second (more general).
+    - pattern: '\bbib:\d+\b'
+      replacement: '[prior citation]'
+```
+
+Patterns apply in declared order to assistant-role content only — user
+and system messages pass through unchanged. The rewrite is **read-time
+only**: the underlying buffer keeps the original text, so the UI,
+exports, and any consumer reading `memory.messages` directly see the
+unredacted form. Default is an empty list (passthrough).
+
+Each rule's `pattern` is **required and non-empty** — and the regex is
+compiled eagerly at config-load time, so an empty pattern or a
+malformed regex (e.g. unbalanced parens) raises a clear error when
+the bot config is parsed rather than corrupting messages silently or
+failing during the first turn. `replacement` defaults to `""` (strip
+the match).
+
+If the same redaction needs to apply at the conversation-manager layer
+(e.g. for bots whose memory backend is not the leak surface), use the
+`HistoryRedactionMiddleware` from `dataknobs-llm` via the bot-level
+`conversation_middleware:` field documented under
+[Middleware Configuration](#middleware-configuration).
+
+### Summary Memory
+
+LLM-based compression of older messages into a running summary:
+
+```yaml
+memory:
+  type: summary
+  recent_window: 10        # Number of recent messages to keep verbatim
+  summary_prompt: null     # Custom summarization prompt (optional)
+```
+
+By default, summary memory uses the bot's configured LLM for summarization.
+To use a dedicated (e.g. smaller/cheaper) model instead, add an `llm` section:
+
+```yaml
+memory:
+  type: summary
+  recent_window: 10
+  llm:
+    provider: ollama
+    model: gemma3:1b       # Lightweight model for summarization
+```
+
+**Characteristics:**
+- Long effective context window
+- Preserves key points from entire conversation
+- Trades exact recall for capacity
+- Graceful degradation if LLM fails (older messages dropped)
+
+**When to Use:**
+- Very long conversations where buffer memory would lose important context
+- When you need conversation continuity without high token costs
+- When exact verbatim recall of old messages is not required
+
+#### Read-time history redaction
+
+Summary memory accepts the same `history_redactions` list as buffer
+memory. Patterns rewrite assistant-role entries in **two** places:
+
+1. The **recent buffer** on the way out of `get_context()`, and
+2. The **oldest messages** as they overflow `recent_window` and are
+   formatted into the summarizer prompt in `_summarize_oldest()`.
+
+```yaml
+memory:
+  type: summary
+  recent_window: 10
+  history_redactions:
+    - pattern: '\[bib:\d+[^\]]*\]'
+      replacement: '[prior citation]'
+    - pattern: '\bbib:\d+\b'
+      replacement: '[prior citation]'
+```
+
+The second redaction site is the load-bearing one: the running summary
+header is a **system-role** message that the default `redact_roles`
+(assistant only) deliberately leaves unchanged on the read path, so any
+citation tokens that reach the summarizer survive forever as an
+unredacted system header. Redacting the summarizer's INPUT (rather than
+trying to redact a fully-formed summary on the OUTPUT) closes that
+carry-over leak.
+
+> **Note:** A summarizer LLM may still generate citation-format text
+> on its own (independent of the input it was given). That is a
+> separate concern — address it by tightening the summarization
+> prompt, not by widening `redact_roles`.
+
+As with buffer memory, the rewrite is read-time only (the recent deque
+and the popped overflow messages are not mutated in place) and the
+default is an empty list (passthrough). See the
+[Buffer Memory redaction notes](#read-time-history-redaction) for the
+pattern shape, ordering, and validation semantics.
+
+### Vector Memory
+
+Semantic search over conversation history:
+
+```yaml
+memory:
+  type: vector
+  max_messages: 100
+  embedding_provider: ollama
+  embedding_model: nomic-embed-text
+  backend: faiss
+  dimension: 384      # Must match embedding model dimension
+  metric: cosine      # Optional: cosine, l2, ip
+```
+
+**Embedding Models:**
+
+| Provider | Model | Dimension | Use Case |
+|----------|-------|-----------|----------|
+| Ollama | nomic-embed-text | 384 | General purpose, fast |
+| OpenAI | text-embedding-3-small | 1536 | High quality |
+| OpenAI | text-embedding-3-large | 3072 | Best quality |
+| OpenAI | text-embedding-ada-002 | 1536 | Legacy |
+
+**Characteristics:**
+- Semantic understanding
+- Finds relevant context regardless of recency
+- Higher memory usage
+- Slightly slower than buffer memory
+
+**When to Use:**
+- Long conversations with topic changes
+- Need to recall specific information
+- Complex context requirements
+
+**Tenant/Domain Scoping:**
+
+VectorMemory supports `default_metadata`, `default_filter`, and
+`immutable_metadata_keys` for multi-tenant isolation. Default metadata is
+merged into every stored vector, default filters scope every search to
+matching vectors, and immutable keys lock specific default-metadata values
+against caller override:
+
+```yaml
+memory:
+  type: vector
+  backend: pgvector
+  dimension: 768
+  embedding_provider: ollama
+  embedding_model: nomic-embed-text
+  default_metadata:
+    user_id: "u123"       # Tagged on every stored message
+  default_filter:
+    user_id: "u123"       # Only this user's messages are returned
+  immutable_metadata_keys:
+    - user_id             # Caller cannot override user_id via add_message metadata
+```
+
+All three keys are optional. By default, caller-supplied metadata in
+`add_message()` overrides defaults for the same keys (backward-compatible
+behavior). Use `immutable_metadata_keys` to lock the keys you treat as
+authoritative — caller attempts to override them are logged as warnings and
+the configured value is preserved. These work with any metadata key — the
+framework does not prescribe a specific tenancy model.
+
+**Tenant-scoped clear:**
+
+`VectorMemory.clear()` honors `default_filter` automatically — calling
+`mem.clear()` with no args on a tenant-scoped instance removes only that
+tenant's slice. Pass `filter_metadata=` explicitly to scope the clear to a
+different subset (e.g. one category/conversation within a tenant). To
+genuinely wipe an entire shared store regardless of tenant scoping, call
+`mem.vector_store.clear()` directly to bypass the wrapper.
+
+#### Read-time history redaction
+
+Vector memory accepts the same `history_redactions` list as buffer
+memory. Patterns rewrite assistant-role **search-result rows** on the way
+out of `get_context()`:
+
+```yaml
+memory:
+  type: vector
+  backend: faiss
+  dimension: 384
+  embedding_provider: ollama
+  embedding_model: nomic-embed-text
+  history_redactions:
+    - pattern: '\[bib:\d+[^\]]*\]'
+      replacement: '[prior citation]'
+    - pattern: '\bbib:\d+\b'
+      replacement: '[prior citation]'
+```
+
+Redaction runs **after** the similarity search, so stored vectors and
+vector-store rows are untouched and scoring is unaffected. Only the
+`content` of assistant-role result rows is rewritten — `role`,
+`similarity`, and `metadata` carry over unchanged. Default is an empty
+list (passthrough). See the
+[Buffer Memory redaction notes](#read-time-history-redaction) for the
+pattern shape, ordering, and validation semantics.
+
+### Composite Memory
+
+Combine multiple memory strategies for best-of-both-worlds context:
+
+```yaml
+memory:
+  type: composite
+  primary: 0              # Index of the primary strategy (default: 0)
+  strategies:
+    - type: summary
+      recent_window: 10
+    - type: vector
+      backend: memory
+      dimension: 384
+      embedding_provider: ollama
+      embedding_model: nomic-embed-text
+      max_results: 5
+```
+
+Each entry in `strategies` is a complete memory configuration (same format as
+a standalone memory config). The `primary` field selects which strategy's
+results appear first in `get_context()`.
+
+> **Read-time history redaction** is configured per strategy, not on the
+> composite. `CompositeMemory.get_context()` delegates to its children, so
+> a child carrying `history_redactions` redacts on its own path —
+> `composite` itself has no `history_redactions` field.
+
+**How it works:**
+
+- **Writes:** Every `add_message()` is forwarded to all strategies.
+- **Reads:** Primary results appear first, then deduplicated secondary results.
+- **Deduplication:** Messages with identical role and content are not repeated.
+- **Graceful degradation:** If a strategy fails, the composite logs a warning
+  and continues with the remaining strategies.
+- **`pop_messages()`:** Delegated to the primary strategy only.
+- **`close()`:** Propagated to all strategies.
+
+**Common Patterns:**
+
+```yaml
+# Summary + Vector: session compression + cross-session recall
+memory:
+  type: composite
+  primary: 0
+  strategies:
+    - type: summary
+      recent_window: 10
+    - type: vector
+      backend: pgvector
+      dimension: 768
+      embedding_provider: ollama
+      embedding_model: nomic-embed-text
+      default_metadata:
+        user_id: "u123"
+      default_filter:
+        user_id: "u123"
+
+# Buffer + Vector: simple recent context + semantic recall
+memory:
+  type: composite
+  strategies:
+    - type: buffer
+      max_messages: 20
+    - type: vector
+      backend: faiss
+      dimension: 384
+      embedding_provider: ollama
+      embedding_model: all-minilm
+```
+
+**When to Use:**
+- Need both recent-context awareness and long-term semantic recall
+- Multi-session bots that should remember past conversations
+- Any case where a single memory strategy is insufficient
+
+### Custom Memory Backends
+
+The built-in memory types (`buffer`, `vector`, `summary`, `composite`) are
+registered in a plugin registry keyed by the `type` field. Register your own
+backend to make it selectable by config — no core changes required:
+
+```python
+from dataknobs_bots import register_memory_backend
+from dataknobs_bots.memory import Memory
+
+class RedisMemory(Memory):
+    ...
+
+# A Memory subclass (with from_config / from_config_async) or a factory
+# callable accepting (config, *, llm_provider=None, prompt_resolver=None, **_)
+register_memory_backend("redis", RedisMemory)
+```
+
+```yaml
+memory:
+  type: redis        # now resolved to your backend
+  ...
+```
+
+Companion helpers: `list_memory_backends()`, `is_memory_backend_registered(name)`,
+and `get_memory_backend_factory(name)` (all importable from
+`dataknobs_bots.memory`). This mirrors `register_strategy()` for reasoning
+strategies. Knowledge bases and grounded sources expose the same pattern via
+`register_knowledge_base_backend()` and `register_source_backend()`.
+
+### Memory Banks (Wizard Data Collection)
+
+Memory Banks are a separate concept from conversation memory. While the memory types above
+(buffer, summary, vector) manage cross-turn conversation context, **Memory Banks** manage
+structured record collections within wizard flows — ingredients, contacts, configuration
+items, or any list of typed records.
+
+Memory Banks are configured as part of wizard settings and are only relevant when using
+`strategy: wizard`.
+
+#### Bank Configuration
+
+Define banks in the wizard `settings.banks` section:
+
+```yaml
+# wizard.yaml
+name: recipe-wizard
+settings:
+  banks:
+    ingredients:
+      schema:
+        required: [name]
+      max_records: 50
+      duplicate_detection:
+        strategy: reject
+        match_fields: [name]
+
+    steps:
+      schema:
+        required: [instruction]
+
+stages:
+  - name: collect_ingredients
+    is_start: true
+    prompt: "What ingredient would you like to add?"
+    collection_mode: collection
+    collection_config:
+      bank_name: ingredients
+      done_keywords: ["done", "that's all", "finished"]
+    schema:
+      type: object
+      properties:
+        name: { type: string }
+        amount: { type: string }
+      required: [name]
+    transitions:
+      - target: collect_steps
+        condition: "data.get('_collection_done') and bank('ingredients').count() > 0"
+
+  - name: collect_steps
+    prompt: "Add a recipe step:"
+    collection_mode: collection
+    collection_config:
+      bank_name: steps
+      done_keywords: ["done", "finished"]
+    schema:
+      type: object
+      properties:
+        instruction: { type: string }
+      required: [instruction]
+    transitions:
+      - target: review
+        condition: "data.get('_collection_done') and bank('steps').count() > 0"
+
+  - name: review
+    is_end: true
+    prompt: "Recipe summary"
+    response_template: |
+      Here's your recipe:
+
+      **Ingredients ({{ bank('ingredients').count() }}):**
+      {% for item in bank('ingredients').all() %}
+      - {{ item.data.name }}{% if item.data.amount %}: {{ item.data.amount }}{% endif %}
+      {% endfor %}
+
+      **Steps ({{ bank('steps').count() }}):**
+      {% for step in bank('steps').all() %}
+      {{ loop.index }}. {{ step.data.instruction }}
+      {% endfor %}
+```
+
+**Bank Settings:**
+
+| Property | Type | Default | Description |
+|----------|------|---------|-------------|
+| `schema` | object | `{}` | JSON Schema for records. `required` fields are enforced. |
+| `max_records` | int | unlimited | Maximum number of records the bank can hold |
+| `duplicate_detection.strategy` | string | `"allow"` | `"allow"`, `"reject"`, or `"merge"` |
+| `duplicate_detection.match_fields` | list | all fields | Fields used for duplicate comparison |
+
+#### Duplicate Detection Strategies
+
+| Strategy | Behavior |
+|----------|----------|
+| `allow` | Always insert (default). Duplicates are permitted. |
+| `reject` | If a matching record exists, silently return its ID without inserting. |
+| `merge` | If a matching record exists, update it with the new data fields. |
+
+When `match_fields` is specified, only those fields are compared. When omitted, all
+data fields are compared for equality.
+
+#### Collection Mode
+
+Stages with `collection_mode: collection` loop to collect multiple records into a bank.
+The user adds records one at a time until they signal "done":
+
+```yaml
+collection_mode: collection
+collection_config:
+  bank_name: ingredients         # Which bank to write to
+  done_keywords: ["done", "finished", "that's all"]  # Stop signals
+```
+
+**Collection Config Properties:**
+
+| Property | Type | Default | Description |
+|----------|------|---------|-------------|
+| `bank_name` | string | required | Name of the bank (must be declared in `settings.banks`) |
+| `done_keywords` | list | `[]` | Keywords that signal collection is complete (required for done detection) |
+
+**Collection flow:**
+1. User provides input → extracted against the stage schema
+2. Extracted data is added to the bank as a new record
+3. Schema fields are cleared from wizard state for the next record
+4. Stage prompt is re-rendered, inviting the next record
+5. When user says a done keyword, `_collection_done` is set in wizard state
+6. Transition conditions can check both `_collection_done` and `bank('...').count()`
+
+#### Using Banks in Conditions
+
+The `bank()` function is available in transition conditions:
+
+```yaml
+transitions:
+  # Single bank check
+  - target: review
+    condition: "bank('ingredients').count() > 0"
+
+  # Cross-bank condition
+  - target: summary
+    condition: "bank('team').count() > 0 and bank('milestones').count() > 0"
+
+  # Combined with data checks
+  - target: next
+    condition: "data.get('_collection_done') and bank('items').count() >= 3"
+```
+
+If a bank name is not found, `bank()` returns a safe null object (count=0, all=[])
+rather than raising an error.
+
+#### Using Banks in Templates
+
+The `bank()` function is also available in `response_template` Jinja2 templates:
+
+```yaml
+response_template: |
+  Team members: {{ bank('team').count() }}
+  {% for m in bank('team').all() %}
+  - {{ m.data.name }}: {{ m.data.role }}
+  {% endfor %}
+```
+
+Each record object in templates has these properties:
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `record_id` | string | Unique record identifier |
+| `data` | dict | The record's field values (e.g. `m.data.name`) |
+| `source_stage` | string | Name of the stage that produced this record |
+| `source_node_id` | string | Conversation tree node that created this record (used for undo) |
+| `created_at` | float | Unix timestamp of record creation |
+| `updated_at` | float | Unix timestamp of last update |
+
+#### Navigation Behavior with Banks
+
+| Action | Bank Behavior |
+|--------|--------------|
+| Forward | Banks preserved |
+| Back | Banks preserved (records are not removed on back navigation) |
+| Skip | Banks preserved, `_collection_done` may be set |
+| Restart | **Banks cleared** (all records removed, same as `state.data = {}`) |
+| Undo (`undo_last_turn`) | Records whose `source_node_id` is not an ancestor of the checkpoint node are removed via `undo_to_checkpoint()` |
+
+#### Memory Banks vs Memory (Conversation Context)
+
+| | Memory (buffer/summary/vector) | Memory Banks |
+|---|---|---|
+| **Purpose** | Conversation context for LLM | Structured data collection |
+| **Scope** | Cross-turn, within conversation | Per-wizard-flow |
+| **Content** | Message history | Schema-typed records |
+| **Operations** | store/recall | CRUD + count/find/clear |
+| **Configuration** | Top-level `memory` key | Wizard `settings.banks` |
+
+### Bank Persistence
+
+By default, memory banks use an in-memory backend and data is lost when the process
+exits. For persistent storage, configure a database backend per bank.
+
+```yaml
+settings:
+  banks:
+    ingredients:
+      schema:
+        required: [name]
+      backend: sqlite                 # "memory" (default), "sqlite", "postgres", etc.
+      backend_config:
+        path: ./wizard-data.db        # Backend-specific options
+      duplicate_detection:
+        strategy: reject              # "allow" (default), "reject", "update"
+        match_fields: [name]
+```
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `backend` | string | `"memory"` | Database backend key (any `dataknobs-data` backend) |
+| `backend_config` | dict | `{}` | Backend-specific options (e.g. `path` for SQLite) |
+| `schema` | dict | `{}` | JSON Schema defining expected record fields |
+| `max_records` | int | *none* | Optional limit on records in the bank |
+| `duplicate_detection.strategy` | string | `"allow"` | `"allow"`, `"reject"`, or `"update"` |
+| `duplicate_detection.match_fields` | list | *none* | Fields to compare for duplicates |
+
+Storage mode is determined automatically: `"inline"` for in-memory backends,
+`"external"` for persistent backends (SQLite, PostgreSQL, etc.). The
+`MemoryBank` constructor accepts a `db: SyncDatabase` parameter — any
+`dataknobs-data` backend works transparently.
+
+### Artifact Seeding
+
+Pre-populate an artifact from a JSON or JSONL file on first initialization.
+Seeding runs once — if the artifact already has data, it is skipped.
+
+```yaml
+settings:
+  artifact:
+    name: recipe
+    fields:
+      recipe_name:
+        required: true
+    sections:
+      ingredients:
+        schema: { required: [name, amount] }
+      instructions:
+        schema: { required: [instruction] }
+    seed:
+      source: ./data/default-recipes.jsonl   # File path (required)
+      format: jsonl                          # Optional; auto-detected from extension
+      select: "Chocolate Chip Cookies"       # Optional; selects entry in JSONL book
+```
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `seed.source` | string | *required* | Path to JSON or JSONL file |
+| `seed.format` | string | *auto* | `"json"` or `"jsonl"`; detected from file extension |
+| `seed.select` | string | *none* | For JSONL: match against `_artifact_name` or any top-level string field |
+
+**JSON format**: A single compiled artifact dict with fields and section records.
+
+**JSONL format** ("book"): One artifact per line. Use `select` to pick a specific
+entry by name. Without `select`, the first entry is loaded.
+
+Failures (missing file, parse errors, no matching entry) are logged as warnings
+and do not prevent the wizard from starting with an empty artifact.
+
+### Collection Mode Options
+
+Control how collection stages process user input.
+
+#### Capture Mode
+
+Determines whether the LLM is used to extract structured data from user messages.
+
+```yaml
+stages:
+  - name: recipe_name
+    schema:
+      required: [recipe_name]
+      properties:
+        recipe_name: { type: string }
+    collection_config:
+      capture_mode: auto            # "auto" (default), "verbatim", or "extract"
+```
+
+| Value | Behavior |
+|-------|----------|
+| `auto` | Schema-based detection: if the schema has a single required string field with no constraints, use verbatim capture; otherwise use LLM extraction |
+| `verbatim` | Always capture the raw user message as-is, skip LLM extraction |
+| `extract` | Always use LLM extraction, even for simple fields |
+
+Verbatim capture is faster and avoids LLM hallucination for simple string inputs.
+
+#### Help Detection
+
+During collection, the wizard classifies user intent before extraction:
+
+- **`data_input`** (default) — proceed to extraction or verbatim capture
+- **`help`** — the user is asking for guidance; respond with a help message instead
+
+Help is detected via keyword matching. Custom keywords can be configured per stage:
+
+```yaml
+stages:
+  - name: ingredients
+    collection_config:
+      help_keywords: ["what should I", "how do I", "help"]
+```
+
+---
+
+## Knowledge Base Configuration
+
+Enable Retrieval Augmented Generation (RAG).
+
+### Basic Configuration
+
+```yaml
+knowledge_base:
+  enabled: true
+  documents_path: ./docs
+  vector_store:
+    backend: faiss
+    dimensions: 384
+  embedding_provider: ollama
+  embedding_model: nomic-embed-text
+```
+
+### Identity Bindings
+
+`tenant_id` and `domain_id` bind the knowledge base to one scope.
+Every write stamps the binding into chunk metadata and into the
+chunk-id prefix, so two knowledge bases over one physical vector store
+stay isolated.
+
+Which of them also composes onto the store filter depends on where the
+value came from. A binding the knowledge base configures **itself** is
+composed onto every read, `count`, `clear` and `update_metadata_where`,
+because nothing else is enforcing it. A `domain_id` **adopted from the
+store** — as in the example below — is not: the store already confines
+every one of those surfaces to that domain, by its own means and
+identically on every backend, and naming the key in the filter as well
+would move the read onto a surface whose behaviour is backend-specific.
+
+```yaml
+knowledge_base:
+  enabled: true
+  documents_path: ./docs
+  tenant_id: acme
+  vector_store:
+    backend: faiss
+    dimensions: 384
+    domain_id: bot-a        # the knowledge base adopts this
+```
+
+`domain_id` is the one binding with a default: left unset on the
+knowledge base, it falls back to the **vector store's** own
+`domain_id`, so a consumer who scoped the store does not have to
+configure the same value twice. Set it at the knowledge-base level
+only for a deliberately unscoped store whose domains are
+distinguished at the chunk layer; setting it to something a scoped
+store disagrees with is reported at WARNING, because the resulting
+chunks are written and can never be read back.
+
+See the [multi-tenant knowledge base guide](../knowledge/multi-tenant.md)
+for the full precedence rules.
+
+### Embedder Endpoint
+
+The embedder endpoint is `api_base`, either at the top level or inside
+the nested `embedding` section:
+
+```yaml
+knowledge_base:
+  embedding:
+    provider: ollama
+    model: nomic-embed-text
+    api_base: http://embedder.internal:11434
+```
+
+`embedding_base_url` is accepted as a legacy alias for a top-level
+`api_base`, and a top-level `api_base` wins when both are present.
+Prefer the nested form regardless: when an `embedding` section is
+configured, the embedder reads its endpoint, key and dimensions from
+inside it and the top-level passthroughs are not consulted at all.
+
+### Context Injection Control
+
+By default, when the knowledge base is enabled, search results are automatically
+injected into every user message before it reaches the LLM. This is controlled
+by the `auto_context` setting:
+
+| Value | Behavior |
+|-------|----------|
+| `true` (default) | KB results are automatically injected into every message |
+| `false` | KB is available only through tools (e.g., `KnowledgeSearchTool`) |
+
+```yaml
+# Auto-context mode (default) — KB results injected into every message
+knowledge_base:
+  enabled: true
+  auto_context: true       # default, can be omitted
+  # ...
+```
+
+```yaml
+# Tool-only mode — LLM decides when to search via KnowledgeSearchTool
+knowledge_base:
+  enabled: true
+  auto_context: false
+  # ...
+
+tools:
+  - class: dataknobs_bots.tools.KnowledgeSearchTool
+```
+
+Use `auto_context: false` when:
+
+- The bot uses a **ReAct reasoning strategy** and should decide when to search
+- You want the LLM to call `knowledge_search` explicitly rather than always
+  receiving pre-injected context
+- You need to **test tool-based KB access** without auto-injected results
+  masking tool usage
+
+When `auto_context: false`, the knowledge base is still created and injected
+into any tool that declares `requires: ("knowledge_base",)` in its catalog
+metadata.
+
+### Advanced Configuration
+
+```yaml
+knowledge_base:
+  enabled: true
+  auto_context: true       # Auto-inject KB results (default: true)
+  documents_path: ./docs
+
+  # Vector store configuration
+  vector_store:
+    backend: faiss          # faiss, chroma, pinecone, weaviate
+    dimensions: 384          # Must match embedding dimension
+    # collection_name: knowledge   # chroma only
+    metric: cosine         # Similarity metric
+
+  # Embedding configuration
+  embedding_provider: ollama
+  embedding_model: nomic-embed-text
+
+  # Document chunking
+  chunking:
+    chunker: markdown_tree  # Chunker implementation (default: markdown_tree)
+    max_chunk_size: 500     # Max characters per chunk
+    combine_under_heading: true
+    generate_embeddings: true
+    transforms:             # Optional post-processing pipeline
+      - merge_small:
+          min_size: 200
+
+  # File processing
+  file_types:
+    - txt
+    - md
+    - pdf                  # Requires pdfplumber
+    - docx                 # Requires python-docx
+
+  # Metadata
+  metadata_fields:
+    - filename
+    - created_at
+    - source
+```
+
+### Custom Chunkers
+
+The `chunker` key in the chunking section selects the chunker implementation.
+The default is `"markdown_tree"`, which wraps the existing `MarkdownChunker`.
+
+You can use a custom chunker by specifying a dotted import path:
+
+```yaml
+knowledge_base:
+  chunking:
+    chunker: my_project.chunkers.RFCChunker
+    max_chunk_size: 1200
+```
+
+Or by registering a chunker under a short name and referencing it:
+
+```yaml
+knowledge_base:
+  chunking:
+    chunker: rfc
+    max_chunk_size: 1200
+```
+
+Custom chunkers must subclass `dataknobs_xization.chunking.Chunker` and
+implement the `chunk(content, document_info)` method.  A `from_config(config)`
+classmethod is detected automatically for config-driven construction.
+
+### Transform Pipeline
+
+Add a `transforms` key to apply post-processing after chunking:
+
+```yaml
+knowledge_base:
+  chunking:
+    chunker: markdown_tree
+    max_chunk_size: 800
+    transforms:
+      - merge_small:
+          min_size: 200
+          max_size: 800
+      - split_large:
+          max_size: 1000
+      - quality_filter:
+          min_content_chars: 50
+```
+
+Built-in transforms: `merge_small`, `split_large`, `quality_filter`.
+Custom transforms subclass `ChunkTransform` and can be referenced by
+registry key or dotted import path.
+
+Chunk metadata also includes `char_start`/`char_end` source positions
+for citation and highlighting use cases.
+
+See the [Chunking Abstraction](https://kbs-labs.github.io/dataknobs/packages/xization/chunking-abstraction/)
+documentation in `dataknobs-xization` for full details.
+
+### Vector Store Backends
+
+#### FAISS (Local)
+
+```yaml
+vector_store:
+  backend: faiss
+  dimensions: 384
+  index_type: IVF        # Optional: Flat, IVF, HNSW
+  nlist: 100            # Optional: For IVF index
+```
+
+**Characteristics:**
+- Fast local search
+- No external dependencies
+- Good for small to medium datasets
+- Not distributed
+
+#### Chroma (Local/Hosted)
+
+```yaml
+vector_store:
+  backend: chroma
+  dimensions: 384
+  collection_name: knowledge
+  persist_directory: ./chroma_db  # Optional
+```
+
+**Characteristics:**
+- Easy to use
+- Local or hosted
+- Good developer experience
+- Persistent storage
+
+#### Pinecone (Cloud)
+
+```yaml
+vector_store:
+  backend: pinecone
+  api_key: ${PINECONE_API_KEY}
+  environment: us-west1-gcp
+  index_name: knowledge
+  dimensions: 384
+```
+
+**Characteristics:**
+- Fully managed
+- High scalability
+- Low latency
+- Paid service
+
+### Document Processing
+
+```yaml
+knowledge_base:
+  enabled: true
+  documents_path: ./docs
+
+  # Process on startup
+  auto_index: true
+
+  # File filtering
+  include_patterns:
+    - "**/*.md"
+    - "**/*.txt"
+    - "docs/**/*.pdf"
+
+  exclude_patterns:
+    - "**/draft/*"
+    - "**/_archive/*"
+    - "**/README.md"
+
+  # Chunking strategy
+  chunking:
+    strategy: recursive    # recursive, character, token
+    max_chunk_size: 500
+```
+
+---
+
+## Reasoning Configuration
+
+Configure multi-step reasoning strategies.
+
+### Simple Reasoning
+
+Direct LLM response without reasoning steps:
+
+```yaml
+reasoning:
+  strategy: simple
+  greeting_template: "Hello {{ user_name }}! How can I help?"  # Optional
+```
+
+**Configuration Options:**
+- `greeting_template` (string, optional): Jinja2 template for bot-initiated
+  greetings. Variables from `initial_context` are available as top-level template
+  variables (e.g. `{{ user_name }}`). See [Bot Greetings](#bot-greetings).
+
+**Use Cases:**
+- Simple Q&A
+- Chatbots without tools
+- Fast responses
+
+### ReAct Reasoning
+
+Reasoning + Acting with tools:
+
+```yaml
+reasoning:
+  strategy: react
+  max_iterations: 5       # Max reasoning steps
+  verbose: true           # Log reasoning steps
+  store_trace: true       # Store reasoning trace
+  early_stopping: true    # Stop when answer found
+  truncation_retry_max_tokens: 8192  # Optional: retry a truncated tool call once
+  greeting_template: "Hi! I can help with research using tools."  # Optional
+  history_compaction:     # Optional: bound in-loop history growth
+    enabled: true
+    keep_recent_iterations: 3
+    strategy: window      # "window" (default) or "summarize"
+```
+
+> Building a long-running tool bot? See the LLM Best Practices guide's
+> [Productionizing a Tool-Using Bot](../../llm/guides/best-practices.md#productionizing-a-tool-using-bot)
+> checklist for which provider-boundary protections you get for free and when to
+> opt into `history_compaction` and `truncation_retry_max_tokens`.
+
+**Configuration Options:**
+- `max_iterations` (int): Maximum reasoning loops (default: 5)
+- `verbose` (bool): Enable debug-level logging for reasoning steps (default: false)
+- `store_trace` (bool): Store reasoning trace in conversation metadata for debugging (default: false)
+- `early_stopping` (bool): Stop when final answer is reached (default: true)
+- `history_compaction` (mapping, optional): Opt into bounding the conversation
+  history a **long tool loop** accumulates, so it never trips a vendor
+  input-context overflow. Disabled by default — an unset/`enabled: false` block
+  is byte-identical to no compaction (no token estimation, no compaction call).
+  When enabled, before each in-loop completion the strategy estimates the path's
+  tokens and, if over budget, compacts the **oldest complete tool iterations**
+  while always keeping the system prompt, the current-turn user message, and the
+  most recent `keep_recent_iterations` iterations. A `tool_use` is never
+  separated from its `tool_result` (compaction happens only at whole-iteration
+  boundaries). A caught context-overflow error is also a backstop: it compacts
+  once and retries instead of failing the turn. Fields:
+    - `enabled` (bool): Master switch (default `false`).
+    - `budget_fraction` (float, default `0.75`): The proactive threshold as a
+      fraction of the provider's resolved input ceiling
+      (`ModelConstraints.max_input_tokens` — the Claude family resolves this from
+      the live Models API / bundled fallback). The common path. Must be in
+      `(0, 1]`.
+    - `history_token_budget` (int, optional): Absolute-token fallback used when
+      no input ceiling resolves (non-Anthropic providers / unknown model). When
+      neither a ceiling nor this is available, proactive compaction is disabled
+      and only the reactive backstop applies.
+    - `keep_recent_iterations` (int, default `3`): How many recent tool
+      iterations to retain verbatim. Must be `>= 0`.
+    - `strategy` (string, default `"window"`): `"window"` drops the oldest
+      iterations (LLM-free); `"summarize"` folds them into one summary node via
+      an LLM call.
+    - `summary_llm` (mapping, optional): Provider config for the `"summarize"`
+      strategy. `None` reuses the bot's main provider as the summarizer.
+  > **Note:** the proactive token count uses a character-ratio heuristic
+  > (`TokenCounter`), not the vendor's exact tokenizer — it can occasionally
+  > under-estimate, which is precisely why the reactive overflow backstop exists.
+- `truncation_retry_max_tokens` (int, optional): When set, a tool-call turn the
+  provider truncated at the token budget (`LLMResponse.truncated`) is retried
+  **once per truncated tool-call iteration** at this `max_tokens` before being
+  abandoned. Useful when the truncated call *was* the work (a large structured
+  tool payload). Must be a positive integer — `0` or a negative value is rejected
+  at config load. Default (`None`/unset) keeps the safe terminal behavior: a
+  truncated tool call is abandoned and the turn is synthesized without retry.
+  Set it comfortably above the configured `max_tokens` so the retry has room.
+  When the model advertises an output ceiling (e.g. the Claude family) the
+  provider clamps the request to it, so an oversized value is safe; providers
+  without a known ceiling (the project-default Ollama, HuggingFace, Echo) pass
+  it through unclamped. Loop-safety does not depend on the clamp — the retry is
+  single-shot, so a still-truncated retry falls back to the terminal path (one
+  attempt, no loop). If the retry call itself errors, the turn degrades to the
+  same abandon-and-synthesize path as the default (never a hard failure).
+- `greeting_template` (string, optional): Jinja2 template for bot-initiated
+  greetings. See [Bot Greetings](#bot-greetings).
+
+**Termination reason (observability):**
+
+Every ReAct turn ends for one of six reasons. That reason is surfaced two ways
+— both additive, requiring no config:
+
+1. **Always-on conversation metadata.** After each turn the strategy writes a
+   machine-readable record under the `reasoning_termination` metadata key,
+   **independent of `store_trace`** (which defaults to `false`):
+
+   ```python
+   conv = await bot.get_conversation(conversation_id)
+   conv.metadata["reasoning_termination"]
+   # {"strategy": "react", "reason": "max_iterations_reached", "iterations_used": 2}
+   ```
+
+   The `reason` value is one of the `ReActTerminationReason` enum values
+   (`from dataknobs_bots.reasoning import ReActTerminationReason`), whose
+   `.value` is byte-identical to the reasoning-trace `status` string (so the
+   two never drift):
+
+   | `reason` | Meaning |
+   |---|---|
+   | `completed` | The LLM returned a final answer (no tool calls). |
+   | `max_iterations_reached` | The iteration cap was hit; a final answer is synthesized. |
+   | `truncated_tool_call` | The response was truncated mid-tool-call and the incomplete call was abandoned. |
+   | `duplicate_tool_calls_detected` | The duplicate-tool-call break guard fired. |
+   | `tools_not_supported` | The model cannot call tools; a graceful message was returned. |
+   | `truncation_retry_exhausted` | The adaptive-budget retry (`truncation_retry_max_tokens`) did not recover a complete call — still truncated, or the retry errored — so the truncated turn was abandoned. |
+
+2. **Opt-in callback topic (`react:turn:end`).** For dashboards / alerting /
+   adaptive policy, register a callback on the strategy's lazy
+   `termination_callbacks` registry, which fires once per terminated turn with
+   the same payload. Zero overhead until a callback (or an EventBus fan-out
+   target) is registered:
+
+   ```python
+   from dataknobs_bots.reasoning import REACT_TERMINATION_TOPIC
+
+   strategy = bot.reasoning_strategy  # a ReActReasoning
+   strategy.termination_callbacks.register(REACT_TERMINATION_TOPIC, my_callback)
+
+   # Cross-replica fan-out — the topic is already fully namespaced, so no
+   # topic_prefix is needed:
+   strategy.termination_callbacks.also_publish_to(event_bus)
+   ```
+
+   `ReActReasoning` advertises `Capability.CALLBACK_REGISTRY`
+   (`strategy.supports(Capability.CALLBACK_REGISTRY)` is `True`), so the
+   observability channel is machine-queryable.
+
+**Use Cases:**
+- Tool-using agents
+- Multi-step problem solving
+- Research and analysis tasks
+
+**Example Trace:**
+```
+Iteration 1:
+  Thought: I need to calculate 15 * 7
+  Action: calculator(operation=multiply, a=15, b=7)
+  Observation: 105
+
+Iteration 2:
+  Thought: I have the answer
+  Final Answer: 15 multiplied by 7 is 105
+```
+
+### Wizard Reasoning
+
+Guided conversational flows with FSM-backed state management:
+
+```yaml
+reasoning:
+  strategy: wizard
+  wizard_config: path/to/wizard.yaml  # Required: wizard definition file
+  strict_validation: true              # Enforce JSON Schema validation
+  extraction_config:                   # Optional: LLM for data extraction
+    provider: ollama
+    model: qwen3:1b
+  hooks:                               # Optional: lifecycle callbacks
+    on_enter:
+      - "myapp.hooks:log_stage_entry"
+    on_complete:
+      - "myapp.hooks:save_wizard_results"
+```
+
+**Configuration Options:**
+- `wizard_config` (string, required): Path to wizard YAML configuration file
+- `strict_validation` (bool): Enforce JSON Schema validation per stage (default: true)
+- `extraction_config` (dict): LLM configuration for extracting structured data from user input
+- `custom_functions` (dict): Custom Python functions for transition conditions
+- `hooks` (dict): Lifecycle hooks for stage transitions and completion
+
+**Use Cases:**
+- Multi-step data collection (onboarding, forms)
+- Guided workflows with validation
+- Branching conversational flows
+- Complex wizards with conditional logic
+
+**Wizard FSM Lifecycle:**
+
+A `WizardFSM` driven through its **synchronous** `step()` lazily allocates
+a daemon event-loop thread, so a synchronously-stepped wizard holds an OS
+resource that outlives the call. It must be released.
+
+Through a bot, this is automatic: `DynaBot.close()` closes the reasoning
+strategy, which closes the FSM it built. Nothing extra is required.
+
+Building an FSM directly — in a script, a tool, or a test — makes you the
+owner. `with` / `async with` is the form that cannot be forgotten:
+
+```python
+from dataknobs_bots.reasoning.wizard_loader import WizardConfigLoader
+
+with WizardConfigLoader().load_from_dict(wizard_config) as fsm:
+    fsm.step({"name": "Alice"})
+# bridge thread released here, along with every owned subflow's
+```
+
+`close()` and `aclose()` are also available directly. Both are idempotent,
+and both leave the FSM **steppable**: a later `step()` lazily rebuilds the
+bridge rather than raising, which is what makes an unconditional teardown
+safe without tracking whether the FSM was ever stepped.
+
+That applies to the bridge, not to registered resources. Closing is
+terminal for the resource manager — providers are closed and not
+re-registered, so an FSM holding resources should not be stepped after
+close. Wizard FSMs built by the loader register none, which is why the
+unconditional teardown above is safe for them.
+
+Prefer `aclose()` from async code: it does everything `close()` does and
+additionally awaits providers whose cleanup is a coroutine, and it keeps
+the bridge join off the event loop.
+
+Ownership is explicit and defaults to *not owned*. `WizardReasoning`
+closes the FSM only when it built one itself (via `from_config`); an FSM
+handed to its constructor belongs to the caller, who may still be stepping
+it, and is left open. See
+[Wizard Subflows](wizard-subflows.md#subflow-lifecycle-and-ownership) for
+how the same rule applies one level down.
+
+**Wizard Configuration File Format:**
+
+```yaml
+# wizard.yaml
+name: onboarding-wizard
+version: "1.0"
+description: User onboarding flow
+
+stages:
+  - name: welcome
+    is_start: true
+    prompt: "What kind of bot would you like to create?"
+    schema:
+      type: object
+      properties:
+        intent:
+          type: string
+          enum: [tutor, quiz, companion]
+    suggestions: ["Create a tutor", "Build a quiz", "Make a companion"]
+    transitions:
+      - target: select_template
+        condition: "data.get('intent')"
+
+  - name: select_template
+    prompt: "Would you like to start from a template?"
+    can_skip: true
+    help_text: "Templates provide pre-configured settings for common use cases."
+    schema:
+      type: object
+      properties:
+        use_template:
+          type: boolean
+    transitions:
+      - target: configure
+        condition: "data.get('use_template') == True"
+      - target: configure
+
+  - name: configure
+    prompt: "Enter the bot name:"
+    schema:
+      type: object
+      properties:
+        bot_name:
+          type: string
+          minLength: 3
+      required: ["bot_name"]
+    transitions:
+      - target: complete
+
+  - name: complete
+    is_end: true
+    prompt: "Your bot '{{bot_name}}' is ready!"
+```
+
+**Stage Properties:**
+| Property | Type | Description |
+|----------|------|-------------|
+| `name` | string | Unique stage identifier (required) |
+| `prompt` | string | User-facing message for this stage (required). Supports Jinja2 templates (e.g. `{{ topic \| default('your topic') }}`); rendered with state data before returning in `WizardAdvanceResult`. |
+| `is_start` | bool | Mark as wizard entry point |
+| `is_end` | bool | Mark as wizard completion point |
+| `schema` | object | JSON Schema for data validation |
+| `suggestions` | list | Quick-reply buttons for users |
+| `help_text` | string | Additional help shown on request |
+| `can_skip` | bool | Allow users to skip this stage |
+| `skip_default` | object | Default values to apply when user skips this stage. See [Skip Defaults](#skip-defaults) |
+| `skip_default_mode` | string | `fill` or `overwrite` (default) — whether `skip_default` may replace values already set |
+| `can_go_back` | bool | Allow back navigation (default: true) |
+| `tools` | list | Tool names available in this stage (must be explicit; omitting means no tools) |
+| `reasoning` | string | Tool reasoning mode: "single" (default) or "react" for multi-tool loops |
+| `max_iterations` | int | Max ReAct iterations for this stage (overrides wizard default) |
+| `mode` | string | Stage mode: "conversation" for free-form chat (default: structured) |
+| `intent_detection` | object | Intent detection configuration for triggering transitions from natural language |
+| `routing_transforms` | list | Transform function names to execute before transition condition evaluation (see [Routing Transforms](#routing-transforms)) |
+| `transitions` | list | Rules for transitioning to next stage |
+| `tasks` | list | Task definitions for granular progress tracking |
+
+**Task Configuration:**
+
+Tasks enable granular progress tracking within and across wizard stages. Define per-stage tasks or global tasks that span stages.
+
+```yaml
+stages:
+  configure_identity:
+    prompt: "Let's set up your bot's identity..."
+    schema:
+      type: object
+      properties:
+        bot_name: { type: string }
+        description: { type: string }
+    # Per-stage task definitions
+    tasks:
+      - id: collect_bot_name
+        description: "Collect bot name"
+        completed_by: field_extraction
+        field_name: bot_name
+        required: true
+      - id: collect_description
+        description: "Collect bot description"
+        completed_by: field_extraction
+        field_name: description
+        required: false
+
+# Global tasks (not tied to a specific stage)
+global_tasks:
+  - id: preview_config
+    description: "Preview the configuration"
+    completed_by: tool_result
+    tool_name: preview_config
+    required: false
+  - id: validate_config
+    description: "Validate the configuration"
+    completed_by: tool_result
+    tool_name: validate_config
+    required: true
+  - id: save_config
+    description: "Save the configuration"
+    completed_by: tool_result
+    tool_name: save_config
+    required: true
+    depends_on: [validate_config]  # Must validate first
+```
+
+**Task Properties:**
+| Property | Type | Description |
+|----------|------|-------------|
+| `id` | string | Unique task identifier (required) |
+| `description` | string | Human-readable description (required) |
+| `completed_by` | string | Completion trigger: `field_extraction`, `tool_result`, `stage_exit`, `manual` |
+| `field_name` | string | For `field_extraction`: which field triggers completion |
+| `tool_name` | string | For `tool_result`: which tool triggers completion |
+| `required` | bool | Whether task is required for wizard completion (default: true) |
+| `depends_on` | list | List of task IDs that must complete first |
+
+**Task Completion Triggers:**
+| Trigger | Description |
+|---------|-------------|
+| `field_extraction` | Completed when specified field is extracted from user input |
+| `tool_result` | Completed when specified tool executes successfully |
+| `stage_exit` | Completed when user leaves the associated stage |
+| `manual` | Completed programmatically via code |
+
+For full task tracking API, see the Wizard Observability guide in the documentation.
+
+**Transition Condition Expressions:**
+
+Transition conditions are Python expressions evaluated in a restricted namespace.
+Available variables:
+
+| Variable | Description |
+|----------|-------------|
+| `data` | Wizard state data dict — use `data.get('field')` to access values |
+| `bank` | Memory bank accessor — use `bank('name').count()` etc. |
+| `has` | Field presence check — `has('field')` is `data.get('field') is not None` |
+| `artifact` | ArtifactBank instance (if configured) — see the note below |
+| `true` / `false` | Aliases for Python `True` / `False` (for YAML/JSON convention) |
+| `null` / `none` | Aliases for Python `None` |
+
+**`artifact` does not resolve in FSM transition conditions.** A transition's
+condition is evaluated in two different places and only one of them binds
+`artifact`: the auto-advance gate and subflow guards resolve it, while the FSM
+arc the loader registers does not. A condition naming `artifact` therefore
+fails with `name 'artifact' is not defined` whenever the FSM evaluates it —
+logged at `DEBUG`, so the transition simply never fires. Reach artifact state
+through `data` instead.
+
+Examples:
+
+```yaml
+transitions:
+  - target: next_stage
+    condition: "data.get('name')"           # truthy check
+  - target: review
+    condition: "data.get('confirmed') == True"  # explicit boolean
+  - target: summary
+    condition: "true"                       # unconditional (YAML convention)
+  - target: done
+    condition: "bank('items').count() >= 3" # bank count check
+```
+
+Both Python (`True`/`False`/`None`) and YAML/JSON (`true`/`false`/`null`)
+boolean literals are accepted. Python builtins like `len`, `str`, `int` are
+also available.
+
+**When a condition is reported.** Conditions are checked once, when the wizard
+is loaded. A condition the expression engine refuses outright — a multiline
+expression, a syntax error, dunder access — is reported as a `WARNING` naming
+the stage, the target and the reason. The wizard still loads and the transition
+still registers; it simply never fires, exactly as before the check existed.
+Load time is where the report is actionable, because the fix is to the config
+and the author is still holding it.
+
+A condition the engine *accepts* but that fails on a given turn's data —
+`data['name']` before `name` has been captured — is logged at `DEBUG`, not
+`WARNING`. That is the ordinary state of a guard whose input has not yet
+arrived, and it resolves itself when the data lands. The corollary is that a
+condition naming something that never resolves, such as the `artifact` case
+above, is also `DEBUG`: the load-time check reports what the engine will
+refuse, not whether every name in the expression exists.
+
+**Subflows:**
+
+Subflows are nested wizard FSMs pushed from a parent stage's transition. They enable
+complex optional paths (quiz configuration, KB setup) that run as isolated flows and
+return data to the parent via result mapping.
+
+```yaml
+# Parent wizard — inline subflow definition
+subflows:
+  quiz_config:
+    name: quiz_config
+    description: Configure quiz-specific settings
+    settings:
+      extraction_scope: current_message
+    stages:
+      - name: configure_quiz
+        label: "Quiz Setup"
+        is_start: true
+        prompt: "Configure quiz settings..."
+        schema:
+          type: object
+          properties:
+            quiz_question_count:
+              type: integer
+          required: [quiz_question_count]
+        transitions:
+          - target: quiz_complete
+            condition: "data.get('quiz_question_count')"
+            derive:
+              _quiz_configured: "true"
+
+      - name: quiz_complete
+        is_end: true
+        auto_advance: true
+        response_template: "Quiz settings saved!"
+        transitions: []
+```
+
+**Pushing into a subflow** — use `target: "_subflow"` on a transition:
+
+```yaml
+# In the parent stage's transitions:
+transitions:
+  - target: "_subflow"
+    condition: "data.get('intent') == 'quiz' and not data.get('_quiz_configured')"
+    subflow:
+      network: quiz_config           # Name of subflow defined in `subflows:`
+      return_stage: configure_options # Parent stage to return to after completion
+      data_mapping:                  # Fields copied parent → subflow on push
+        domain_id: domain_id
+        subject: subject
+      result_mapping:                # Fields copied subflow → parent on pop
+        quiz_question_count: quiz_question_count
+        _quiz_configured: _quiz_configured
+```
+
+**Subflow push/pop lifecycle:**
+
+| Step | What Happens |
+|------|-------------|
+| **Push** | Parent state saved. `data_mapping` copies fields to subflow. Subflow starts at its `is_start` stage. |
+| **In subflow** | Normal wizard processing (extraction, transitions, response templates). Parent state is frozen. |
+| **Pop** | Subflow reaches an `is_end` stage. **Its `response_template` renders first**, against the subflow's own data and before the pop. `result_mapping` then copies fields back to parent. Parent resumes at `return_stage`. |
+| **After pop** | Return stage renders its response. **Waits for user input** before evaluating transitions. |
+
+> **Critical:** After a subflow pops, the return stage does NOT automatically evaluate
+> transitions. It renders the return stage's response and waits for the next user message.
+> This means every subflow pop requires at least one user turn before the parent stage can
+> advance — including triggering a second subflow.
+
+**"Normal wizard processing" is per stage, not per wizard.** Everything a
+subflow declares on a *stage* — schema, templates, `can_skip`, `navigation`,
+`extraction_scope` — is live inside the push. A subflow's own wizard-level
+`settings:` block is not: settings are read once off the top-level flow when
+the strategy is built, so a subflow's copy is never consulted and the loader
+warns when it finds one. See
+[Which Subflow Config Is Live Inside a Push](wizard-subflows.md#which-subflow-config-is-live-inside-a-push).
+
+**Sequential subflows** — when multiple subflows can fire from the same stage (e.g., quiz
+config and KB setup both triggered from `configure_options`), they execute one at a time:
+
+```
+User message → configure_options → quiz subflow pushes (condition matches first)
+  [quiz subflow processes across N turns]
+  quiz_complete (is_end) → pop → configure_options renders response
+User message → configure_options → KB subflow pushes (now its condition matches)
+  [KB subflow processes across N turns]
+  kb_complete (is_end) → pop → configure_options renders response
+User message → configure_options → review transition fires (all guards satisfied)
+```
+
+Each subflow requires a user turn to trigger. The response template on the return stage
+should guide the user through the sequence naturally:
+
+```yaml
+response_template: |
+  {% if _quiz_configured and kb_enabled and not _kb_configured %}
+  Quiz settings saved! Now let's set up your knowledge base.
+  {% elif _quiz_configured or _kb_configured %}
+  Settings configured. Ready to review?
+  {% else %}
+  Let's configure your options...
+  {% endif %}
+```
+
+**Guard flags** prevent re-push after edit-back. When a user completes a subflow, edits
+from review, and returns to the parent stage, the guard flag ensures the subflow doesn't
+fire again:
+
+```yaml
+transitions:
+  # Guard: only push if not already configured
+  - target: "_subflow"
+    condition: "data.get('intent') == 'quiz' and not data.get('_quiz_configured')"
+    subflow:
+      network: quiz_config
+      # ...
+      result_mapping:
+        _quiz_configured: _quiz_configured  # Set by derive in subflow
+
+  # Normal path: only fires when all subflows are complete
+  - target: review
+    condition: >
+      (data.get('intent') != 'quiz' or data.get('_quiz_configured')) and
+      (not data.get('kb_enabled') or data.get('_kb_configured'))
+```
+
+**Extraction context after pop:** When a subflow pops and the user sends their next
+message, that message is processed by the **parent stage's** extraction schema — not
+the subflow's. This means user messages like "Skip the knowledge base" can be
+misinterpreted as field updates by the parent stage (e.g., extracting `kb_enabled=false`
+instead of being a skip command within the KB subflow). Design conversation prompts to
+guide users toward messages that preserve parent state.
+
+**Subflow properties:**
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `network` | string | Name of the subflow (must match a key in `subflows:`) |
+| `return_stage` | string | Parent stage to resume at after subflow completes |
+| `data_mapping` | dict | Maps parent field names to subflow field names (copied on push) |
+| `result_mapping` | dict | Maps subflow field names to parent field names (copied on pop) |
+
+**Navigation Commands:**
+
+Users can navigate the wizard with natural language. The default keywords are:
+
+| Command | Default Keywords | Effect |
+|---------|-----------------|--------|
+| Back | "back", "go back", "previous" | Return to previous stage |
+| Skip | "skip", "skip this", "use default", "use defaults" | Skip current stage (if `can_skip: true`) and apply `skip_default` values |
+| Restart | "restart", "start over" | Restart from beginning |
+
+When a stage is revisited via back or restart, the conversation tree creates a
+sibling branch from the point where the stage was previously entered rather than
+chaining deeper. This preserves prior conversation paths as separate branches.
+
+Navigation keywords are configurable at both the wizard level and per-stage. To customize
+keywords, add a `navigation` section to wizard settings:
+
+```yaml
+# wizard.yaml
+settings:
+  navigation:
+    back:
+      keywords: ["back", "go back", "undo", "change my answer"]
+    skip:
+      keywords: ["skip", "next", "pass"]
+    restart:
+      keywords: ["restart", "begin again", "start fresh"]
+```
+
+**Per-Stage Overrides:**
+
+Individual stages can override wizard-level navigation keywords or disable commands entirely:
+
+```yaml
+stages:
+  - name: review
+    prompt: "Review your answers"
+    navigation:
+      skip:
+        enabled: false     # Disable skip for this stage
+      back:
+        keywords: ["change my answer", "edit"]  # Custom keywords for this stage
+    transitions:
+      - target: complete
+```
+
+**Navigation Configuration Properties:**
+
+| Property | Type | Default | Description |
+|----------|------|---------|-------------|
+| `keywords` | list | (see defaults above) | Keywords that trigger the command (case-insensitive) |
+| `enabled` | bool | `true` | Whether the command is active |
+
+When a stage specifies navigation overrides, those keywords **replace** the wizard-level
+keywords for that command. Commands not mentioned in the stage override inherit the
+wizard-level configuration. If no navigation configuration is provided at any level,
+the default keywords above are used.
+
+**Types are checked, and `keywords` must be a list.** `navigation` and each
+command under it must be mappings, `keywords` a list of strings, and `enabled`
+`true` or `false`. A field that does not match is ignored — it falls back to
+its default *alone*, so one bad field does not discard the others — and is
+reported at WARNING. Two of these are easy to write by accident:
+
+```yaml
+navigation:
+  skip:
+    keywords: ["done"]     # a list, even for a single word
+    # keywords: done       # NOT this — a string is iterated, arming
+    #                      # "d", "o", "n" and "e" as four keywords
+    enabled: false         # a bool
+    # enabled: "false"     # NOT this — a non-empty string is TRUE
+```
+
+The same rules apply wherever the block is written: `settings.navigation` and a
+stage's own `navigation:` are read through one implementation, so a field means
+the same thing in both.
+
+**`keywords` means the same thing everywhere it appears**, including under
+`intent_detection:` and `intent_confirm:` — it is always a list of strings, and
+a bare string is always iterated one character at a time. What happens to a bad
+value differs only by when it can be caught:
+
+| Where written | A wrong-typed `keywords` |
+|---|---|
+| `settings.navigation` / a stage's `navigation:` | falls back to the command's default keywords, reported at WARNING |
+| `intent_confirm:` | **rejected at load** with a `ConfigurationError` naming the stage and the intent |
+| a hand-rolled `intent_detection:` | the override is dropped — the intent falls back to the classifier's own vocabulary, as if it declared none — and reported once at WARNING |
+
+**Lifecycle Hooks:**
+```yaml
+hooks:
+  on_enter:                    # Called when entering any stage
+    - "myapp.hooks:log_entry"
+  on_exit:                     # Called when leaving any stage
+    - "myapp.hooks:validate_exit"
+  on_complete:                 # Called when wizard finishes
+    - "myapp.hooks:submit_results"
+  on_restart:                  # Called when wizard is restarted
+    - "myapp.hooks:log_restart"
+  on_error:                    # Called on processing errors
+    - "myapp.hooks:handle_error"
+```
+
+A hook path that cannot be resolved raises a `ConfigurationError` at bot
+construction, and every bad path in the block is reported together. These were
+previously logged as a WARNING and skipped, which produced a bot that started
+successfully and never fired the hook — including the case where the
+`function` key was omitted entirely, which did not even log.
+
+Resolving a hook path **imports and executes** the target module. Hook paths
+must come from the same trust domain as the application's own code; see the
+[dotted-path guide](https://kbs-labs.github.io/dataknobs/packages/common/dotted-paths/).
+
+**Function Reference Syntax:**
+
+Hook functions and custom transition functions are specified as string references.
+Two formats are supported:
+
+| Format | Example | Description |
+|--------|---------|-------------|
+| Colon (preferred) | `myapp.hooks:log_entry` | Explicit separator between module path and function |
+| Dot (accepted) | `myapp.hooks.log_entry` | Last segment is treated as function name |
+
+The colon format is preferred as it's unambiguous. The dot format is accepted for
+convenience but requires the function to be the final segment.
+
+**Error Messages:**
+
+Invalid function references produce helpful error messages:
+
+```
+ImportError: Cannot import module 'myapp.hooks' from reference 'myapp.hooks:missing_func':
+No module named 'myapp'. Ensure the module is installed and the path is correct.
+
+AttributeError: Function 'missing_func' not found in module 'myapp.hooks'.
+Available functions: log_entry, validate_data, submit_results
+```
+
+Hooks that fail to load are skipped with a warning, allowing the wizard to continue
+operating even if some hooks are misconfigured.
+
+**Tool Availability:**
+
+Tools are only available to stages that explicitly list them via the `tools` property.
+Stages without a `tools` key receive **no tools** by default. This prevents accidental
+tool calls during data collection stages that could produce blank responses.
+
+```yaml
+stages:
+  # Data collection stage - no tools available
+  - name: configure_identity
+    prompt: "What should we call your bot?"
+    schema:
+      type: object
+      properties:
+        bot_name: { type: string }
+    # Note: no 'tools' key = no tools available
+
+  # Tool-using stage - explicit tool list
+  - name: review
+    prompt: "Let's review your configuration"
+    tools: [preview_config, validate_config]  # Only these tools available
+    transitions:
+      - target: save
+```
+
+<a id="skip-defaults"></a>
+
+**Skip Defaults:**
+
+When users skip a stage, you can apply default values using `skip_default`:
+
+```yaml
+stages:
+  - name: configure_llm
+    prompt: "Which AI provider should power your bot?"
+    can_skip: true
+    skip_default:
+      llm_provider: anthropic
+      llm_model: claude-3-sonnet
+    schema:
+      type: object
+      properties:
+        llm_provider:
+          type: string
+          enum: [anthropic, openai, ollama]
+        llm_model:
+          type: string
+    transitions:
+      - target: next_stage
+        condition: "data.get('llm_provider')"
+```
+
+This gives users three paths:
+1. **Explicit choice**: User says "Use OpenAI GPT-4" → extraction captures their choice
+2. **Accept defaults**: User says "skip" or "use defaults" → `skip_default` values applied
+3. **Guided help**: User says "I'm not sure" → wizard explains options and re-prompts
+
+> **Note:** Schema `default` values are stripped before extraction so the LLM only extracts
+> what the user actually said. After extraction, defaults are **applied back** to wizard data
+> for any property that was not set — this ensures template conditions like
+> `{% if difficulty %}` evaluate True when the schema defines `default: medium`.
+>
+> Use `skip_default` for stage-level defaults (applied when the user skips the entire stage).
+> Use schema `default` for property-level defaults (applied when the user doesn't mention a
+> specific field).
+
+**Whether a default may replace a value the user already set** is the stage's
+decision, and it is per key. By default it may — `skip_default` overwrites,
+which is what it has always done, and a stage that relies on the clobber to
+leave a branch the user cannot otherwise escape depends on that. Set
+`skip_default_mode: fill` to write only where the key is unset:
+
+```yaml
+    can_skip: true
+    skip_default_mode: fill
+    skip_default:
+      kb_enabled: false          # left alone if the user already set it
+```
+
+"Unset" here is the same test the `has()` condition helper and schema
+`default` application use: a key is set when its value **is not `null`**. A key
+extraction left holding `null`, or that an earlier stage cleared, is one `fill`
+will write.
+
+One block can hold both, because a real stage needs both — an option the user
+configured must survive the skip that saves it, while a flag guarding an
+unconfigured branch must be cleared by the same skip. A key states its own mode
+by giving `value` alongside `mode`; a bare value keeps the block's:
+
+```yaml
+    skip_default:
+      kb_enabled: {value: false, mode: fill}   # preserved if already set
+      scenario_enabled: false                  # cleared regardless
+```
+
+| | |
+|---|---|
+| `overwrite` | Write the default over whatever is there. **The default.** |
+| `fill` | Write the default only where the key is unset (`null` counts as unset). |
+
+A mapping is read as an annotation **only when it names exactly `value` and
+`mode`**, so a nested default still means what it reads as. Three shapes turn
+on that rule: `llm: {provider: anthropic}` names no `value`;
+`field: {value: "", label: Email}` names one but is plainly not an annotation,
+and reading it as one would drop `label`; and `threshold: {value: 3}` names
+nothing an annotation needs, since an entry declaring no mode takes the
+block's — which is what the bare value already does.
+
+One collision is irreducible: a nested default naming *exactly* `value` and
+`mode` reads like an annotation and is taken as one. Wrap it in a real
+annotation to say otherwise:
+
+```yaml
+    skip_default:
+      knob: {value: {value: 3, mode: "off"}, mode: overwrite}   # the mapping, whole
+```
+
+A mapping that names one of these two modes without being an annotation is
+reported at `WARNING` and then written as the value it reads as — `{values:
+false, mode: fill}` is a typo, and storing that mapping where the author wrote
+`false` puts a *truthy* value on the key, so the branch the skip was meant to
+leave stays armed.
+
+**The skip marker lands before the defaults do**, and that ordering is a
+guarantee rather than an implementation detail: `_skipped_<stage>` is in
+`data` before any `skip_default` value is written, so a routing transform or
+condition running on the skip turn can still tell what the user chose from what
+the stage supplied. Every overwrite that *changes* a value the user had
+already set is logged at `DEBUG`, naming the keys; a default equal to what was
+already there has replaced nothing and is not reported.
+
+**Confirmation on New Data:**
+
+Stages with `response_template` automatically show a confirmation summary when new data is
+first extracted. By default, the confirmation auto-generates a summary from the stage's
+schema field descriptions and the extracted values, e.g.:
+
+```
+Here's what I got:
+- **Subject topic for the quiz:** English grammar
+
+Is that correct?
+```
+
+To customize the confirmation message, set `confirmation_template` — a Jinja2 template
+with access to the same context as `response_template` (all wizard state data, `bank`,
+`artifact`, etc.):
+
+```yaml
+stages:
+  - name: define_topic
+    response_template: "What topic should the quiz cover?"
+    confirmation_template: |
+      Got it — topic is **{{ topic }}**.
+      Say "looks good" to proceed or provide more details.
+    schema:
+      type: object
+      properties:
+        topic: { type: string, description: Subject topic for the quiz }
+```
+
+When `confirmation_template` is omitted, the auto-generated summary is used. When it is
+defined, it replaces the auto-generated summary entirely.
+
+By default, confirmation fires only once (the first render). Two per-stage flags control
+this behavior:
+
+- `confirm_first_render` (default `true`): Controls whether the first-render confirmation
+  fires. Set to `false` to skip the confirmation pause and evaluate transitions immediately.
+  Useful for subflow stages where the user already provided data in the parent context and
+  expects the subflow to process it without an extra confirmation turn.
+- `confirm_on_new_data` (default `false`): Re-confirms whenever schema property values
+  change on subsequent renders (e.g., the user says "change difficulty to hard" after the
+  initial summary was shown).
+
+```yaml
+stages:
+  - name: define_topic
+    confirm_on_new_data: true
+    response_template: |
+      - **Topic:** {{ topic }}
+      - **Difficulty:** {{ difficulty }}
+    schema:
+      type: object
+      properties:
+        topic: { type: string }
+        difficulty: { type: string, default: medium }
+
+  - name: configure_quiz
+    confirm_first_render: false    # Skip confirmation, evaluate transitions immediately
+    response_template: |
+      Quiz settings: {{ quiz_question_count }} questions
+    schema:
+      type: object
+      properties:
+        quiz_question_count: { type: integer }
+      required: [quiz_question_count]
+    transitions:
+      - target: quiz_complete
+        condition: "data.get('quiz_question_count')"
+```
+
+With `confirm_on_new_data`, the engine tracks a snapshot of schema property values at each
+render. When the user provides updated values, the snapshot differs and a re-render is
+triggered — letting the user verify the changes before proceeding.
+
+Both flags can be combined: a stage with `confirm_first_render: false` and
+`confirm_on_new_data: true` skips the initial confirmation but still re-confirms when
+data values change on subsequent visits.
+
+**Auto-Advance:**
+
+When pre-populating wizard data (e.g., from templates or previous sessions), stages can
+automatically advance if all required fields are already filled. Enable globally or per-stage:
+
+```yaml
+# wizard.yaml
+name: configbot
+settings:
+  auto_advance_filled_stages: true  # Global setting
+
+stages:
+  - name: configure_identity
+    prompt: "What's your bot's name?"
+    schema:
+      type: object
+      properties:
+        bot_name: { type: string }
+        description: { type: string }
+      required: [bot_name, description]
+    # If both bot_name and description exist in wizard data,
+    # this stage will auto-advance to the next stage
+    transitions:
+      - target: configure_llm
+        condition: "data.get('bot_name')"
+
+  - name: configure_llm
+    auto_advance: true  # Per-stage override (works even if global is false)
+    prompt: "Which LLM provider?"
+    schema:
+      type: object
+      properties:
+        llm_provider: { type: string }
+      required: [llm_provider]
+    transitions:
+      - target: done
+```
+
+Auto-advance conditions:
+- Global `auto_advance_filled_stages: true` in settings, OR stage has `auto_advance: true`
+- Stage has a schema with `required` fields (or all `properties` if no `required` list)
+- All required fields have non-empty values in wizard data
+- Stage is not an end stage (`is_end: false`)
+- At least one transition condition is satisfied
+
+This enables "template-first" workflows where users select a template that pre-fills most
+fields, and the wizard skips to the first stage needing user input.
+
+**Ephemeral Keys (Transient/Persistent Partition):**
+
+Wizard data is partitioned into **persistent** keys (saved to storage) and **transient**
+keys (available during the current request only, never persisted). This prevents
+non-serializable runtime objects and per-step ephemeral data from contaminating storage.
+
+Framework-level keys that are always transient:
+- `_corpus` — live ArtifactCorpus object (non-serializable)
+- `_message` — per-step raw user message
+- `_intent` — per-step intent detection result
+- `_transform_error` — per-step transform error
+
+Declare additional domain-specific ephemeral keys in `settings.ephemeral_keys`:
+
+```yaml
+settings:
+  ephemeral_keys:
+    - _dedup_result        # Per-question dedup output
+    - _review_summary      # Pre-finalization display data
+    - _batch_passed_count  # Per-batch counter (recomputed each step)
+```
+
+Transforms continue writing to the flat `data` dict as before — the partition is
+transparent. At save time, ephemeral keys are separated into `WizardState.transient`
+(available to templates and UI metadata) while only persistent keys reach storage.
+
+As a safety net, any value that fails a JSON-serializability check is automatically
+moved to transient (with a warning log), even if not declared in `ephemeral_keys`.
+
+**Per-Turn Keys:**
+
+Some fields represent **current-turn user intent** rather than persistent wizard data
+(e.g., `action` cycling through `accept`, `view_bank`, `generate_more`; or `confirmed`
+toggling between `true` and `false` at a review stage). These must be cleared at the
+start of each turn to prevent stale values from triggering incorrect transitions when
+extraction misses the field. Declare them in `settings.per_turn_keys`:
+
+```yaml
+settings:
+  per_turn_keys:
+    - action               # User action per turn (accept, skip, edit, etc.)
+    - feedback             # User feedback text (only relevant for current turn)
+    - confirmed            # Confirmation boolean (only meaningful at review)
+    - edit_section         # Which section to edit (only meaningful when editing)
+```
+
+Per-turn keys are:
+- **Cleared** from `state.data` and `state.transient` at the start of each `generate()` call
+- **Merged** into ephemeral keys (never persisted to storage)
+- **Suppressed** in conflict detection (no "Data conflict detected" warnings)
+
+**When to use per-turn keys:** Any schema field that controls a transition based on the
+user's intent *this turn* (rather than accumulated data) should be a per-turn key. The
+critical signal: if the field's *absence* should mean "do nothing" rather than "use the
+last known value", it belongs in `per_turn_keys`. Without this, a stale `edit_section`
+from a previous edit request can re-trigger the edit transition after the user returns
+to the stage, creating an infinite loop.
+
+**When NOT to use:** Fields that accumulate over the wizard lifecycle (`domain_name`,
+`subject`, `kb_enabled`) should NOT be per-turn keys — their values persist intentionally.
+Guard flags (`_quiz_configured`, `_kb_configured`) that track completion state also persist.
+
+**Relationship to derive:** Note that `derive` blocks on transitions cannot overwrite
+existing keys (line 5782). Per-turn keys solve the complementary problem: clearing stale
+values that derive cannot touch. Use derive for *setting* new values, per-turn keys for
+*clearing* intent signals between turns.
+
+**Post-Completion Amendments:**
+
+Allow users to make changes after the wizard has completed. When enabled, the wizard
+detects edit requests and re-opens at the relevant stage:
+
+```yaml
+# wizard.yaml
+name: configbot
+settings:
+  allow_post_completion_edits: true
+  section_to_stage_mapping:    # Optional: custom section-to-stage mapping
+    model: configure_llm
+    ai: configure_llm
+    bot: configure_identity
+
+stages:
+  - name: configure_llm
+    prompt: "Which LLM provider?"
+    # ...
+  - name: configure_identity
+    prompt: "What's your bot's name?"
+    # ...
+  - name: save
+    is_end: true
+    prompt: "Configuration saved!"
+```
+
+After completing the wizard, if the user says "change the LLM to ollama", the wizard:
+1. Detects the edit intent using extraction
+2. Maps "llm" to `configure_llm` stage
+3. Re-opens the wizard at that stage
+4. Normal wizard flow resumes (user makes change, wizard advances through review/save)
+
+Default section-to-stage mappings:
+| Section | Stage |
+|---------|-------|
+| llm, model, ai | configure_llm |
+| identity, name | configure_identity |
+| knowledge, kb, rag | configure_knowledge |
+| tools | configure_tools |
+| behavior | configure_behavior |
+| template | select_template |
+| config | review |
+
+Custom mappings in `section_to_stage_mapping` override defaults. Only stages that exist
+in your wizard configuration are valid targets.
+
+Requirements for amendment detection:
+- `allow_post_completion_edits: true` in settings
+- An `extraction_config` must be specified (extractor is used to detect edit intent)
+- The target stage must exist in the wizard
+
+**Context Template:**
+
+Customize how stage context is formatted in the system prompt using Jinja2 templates:
+
+```yaml
+# wizard.yaml
+name: configbot
+settings:
+  context_template: |
+    ## Wizard Stage: {{stage_name}}
+
+    **Goal**: {{stage_prompt}}
+
+    ((Additional help: {{help_text}}))
+
+    {% if collected_data %}
+    ### Already Collected (DO NOT ASK AGAIN)
+    {% for key, value in collected_data.items() %}
+    - **{{key}}**: {{value}}
+    {% endfor %}
+    {% endif %}
+
+    {% if not completed %}
+    Navigation: {% if can_skip %}Can skip{% endif %}{% if can_go_back %}, Can go back{% endif %}
+    {% endif %}
+
+    {% if suggestions %}
+    Suggestions: {{ suggestions | join(', ') }}
+    {% endif %}
+```
+
+Available template variables:
+| Variable | Type | Description |
+|----------|------|-------------|
+| `stage_name` | string | Current stage name |
+| `stage_label` | string | Stage display label (falls back to stage name) |
+| `stage_prompt` | string | Stage's goal/prompt text |
+| `help_text` | string | Additional help text (empty string if none) |
+| `suggestions` | list | Quick-reply suggestions |
+| `collected_data` | dict | User-facing data (excludes `_` prefixed keys) |
+| `all_data` | dict | All state data including internal and transient keys |
+| `raw_data` | dict | Persistent wizard data including internal keys |
+| `completed` | bool | Whether wizard is complete |
+| `history` | list | List of visited stage names |
+| `can_skip` | bool | Whether current stage can be skipped |
+| `can_go_back` | bool | Whether back navigation is allowed |
+| *(top-level keys)* | varies | Each key in `state.data` and `state.transient` is available as a top-level variable (e.g. `{{ topic }}`) |
+
+The `context_template` supports two syntaxes:
+- **Jinja2** (primary): `{{ var }}`, `{% if %}`, `{% for %}`, `{{ var | filter }}`
+- **`(( ))` conditionals** (preprocessing): `((content with {{var}}))` — section removed if all variables inside are empty/missing; rendered if any variable has a value
+
+**Security note:** The `(( ))` preprocessor only receives author-controlled values (stage metadata, navigation flags). User-entered state data is only available as Jinja2 context variables. Use `{% if %}` for conditionals on user data, not `(( ))`. See [template-security.md](template-security.md) for details.
+
+If no `context_template` is specified, the wizard uses a default format that includes
+stage info, collected data, and navigation hints.
+
+<a id="bot-initiated-greeting"></a>
+
+**Bot-Initiated Greeting:**
+
+Wizard bots can send an initial greeting before the user speaks. This is useful when the
+bot should start the conversation (e.g., "Welcome! What is your name?") rather than
+waiting for a user message.
+
+```python
+context = BotContext(conversation_id="conv-123", client_id="harness")
+greeting = await bot.greet(context)
+if greeting:
+    print(f"Bot: {greeting}")
+# User's first message now answers the wizard's question
+```
+
+The greeting is generated from the wizard's **start stage**, taking the first
+of these that applies:
+
+1. The start stage's `greeting_template`, rendered once and not repeated.
+2. The strategy-level `greeting_template` under `reasoning:`, which stands in
+   as the start stage's `greeting_template` when that stage sets none. It
+   behaves exactly like (1) from there on — rendered once, then stepped over.
+3. The start stage's `response_template`. What happens *after* the greeting
+   then depends on the stage's mode: a `mode: conversation` stage renders it
+   only on that opening turn, but a structured stage renders it again on every
+   turn — the template is the stage's response, not its opening line, so the
+   bot repeats it for as long as the wizard stays on that stage.
+4. The start stage's `prompt`, sent to the LLM to generate one.
+
+> Only the **start** stage has a greeting turn, so the strategy-level field
+> reaches only that stage. To open a mid-flow stage with a fixed line, set
+> `greeting_template` on the stage itself. See
+> [FSM-driven greetings](#fsm-driven-greetings) below.
+
+`greeting_template` is the field to reach for on a stage that also collects data:
+it opens the stage and steps aside, leaving extraction, confirmation and
+transitions to behave exactly as they would without it.
+
+```yaml
+stages:
+  - name: welcome
+    is_start: true
+    prompt: "Ask the user for their name"
+    greeting_template: "Hello! Welcome to the setup wizard. What is your name?"
+    schema:
+      type: object
+      properties:
+        name: { type: string }
+      required: [name]
+    transitions:
+      - target: next_stage
+        condition: "data.get('name')"
+```
+
+A `greeting_template` is not restricted to the start stage. Any stage may set
+one, and it renders on the turn that stage first speaks — including a stage
+entered mid-flow, or the first stage of a subflow. On a `mode: conversation`
+stage it takes the opening that a `response_template` would otherwise have
+had, which leaves that `response_template` unreachable; the loader reports
+that pair at load time, and `clarification_template` is what covers the later
+turns there.
+
+**Greeting behavior:**
+
+| Aspect | Behavior |
+|--------|----------|
+| Supported strategies | Wizard only. Non-wizard bots return `None`. |
+| Conversation history | Greeting is added as an assistant message. No user message is created. |
+| Wizard state | Initialized at the start stage, ready for the user's first input. |
+| Greeting template | A stage's `greeting_template` renders once. Its own counter is kept separately from the render count, so greeting a stage does not consume the first render its confirmation is waiting for. |
+| Render count | Incremented when a `response_template` or `clarification_template` renders — not when a greeting does. On a `mode: conversation` stage this is what makes the template render only on the opening turn. On a structured stage the template is the stage's response and re-renders every turn regardless; use `greeting_template` for text that should be said once. |
+| Middleware | Both `before_message` and `after_message` hooks are called. |
+| Memory | If memory is configured, the greeting is stored in conversation history. |
+
+**Wizard State API:**
+
+Access wizard state programmatically from your application code:
+
+```python
+# Get current wizard state for a conversation
+state = await bot.get_wizard_state("conversation-123")
+
+if state:
+    print(f"Stage: {state['current_stage']} ({state['stage_index'] + 1}/{state['total_stages']})")
+    print(f"Progress: {state['progress'] * 100:.0f}%")
+    print(f"Collected: {state['data']}")
+
+    if state['can_skip']:
+        print("User can skip this stage")
+    if not state['completed']:
+        print(f"Suggestions: {state['suggestions']}")
+```
+
+The `get_wizard_state()` method returns a normalized dict with these fields:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `current_stage` | string | Name of the current stage |
+| `stage_index` | int | Zero-based index of current stage |
+| `total_stages` | int | Total number of stages in wizard |
+| `progress` | float | Completion progress (0.0 to 1.0) |
+| `completed` | bool | Whether wizard has finished |
+| `data` | dict | All data (persistent + transient, sanitized for JSON) |
+| `can_skip` | bool | Whether current stage can be skipped |
+| `can_go_back` | bool | Whether back navigation is allowed |
+| `suggestions` | list | Quick-reply suggestions for current stage |
+| `history` | list | List of visited stage names |
+| `stage_mode` | string | Current stage's mode: "conversation" or "structured" |
+
+Returns `None` if the conversation doesn't exist or has no active wizard.
+
+**WizardFSM Introspection:**
+
+When working directly with WizardFSM instances (e.g., in custom reasoning strategies),
+you can introspect the wizard structure:
+
+```python
+from dataknobs_bots.reasoning.wizard_loader import WizardConfigLoader
+
+loader = WizardConfigLoader()
+wizard_fsm = loader.load("path/to/wizard.yaml")
+
+# Get all stage names in order
+print(wizard_fsm.stage_names)  # ['welcome', 'configure', 'review', 'complete']
+
+# Get total stage count
+print(wizard_fsm.stage_count)  # 4
+
+# Get full stage metadata
+for name, meta in wizard_fsm.stages.items():
+    print(f"{name}: {meta.get('prompt', 'No prompt')}")
+    if meta.get('can_skip'):
+        print(f"  - Can be skipped")
+```
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `stages` | dict | All stage metadata (shallow copy — see below) |
+| `stage_names` | list | Ordered list of stage names |
+| `stage_count` | int | Total number of stages |
+| `current_stage` | string | Current stage name |
+| `current_metadata` | dict | Metadata for current stage |
+
+`stages` copies the table, not the stages in it. Adding or removing a key on
+what it returns leaves the wizard's stage list alone, but the stage dicts are
+the live ones — so `meta["label"] = ...` while iterating edits the running
+wizard's configuration. Copy a stage before editing it:
+
+```python
+from copy import deepcopy
+
+welcome = deepcopy(wizard_fsm.stages["welcome"])
+welcome["label"] = "Start here"   # the wizard is unaffected
+```
+
+`current_metadata` and `stage_metadata_for()` return the live stage dict with
+no copy at all, and the same rule applies to them.
+
+**Conversation Stages:**
+
+Stages can be configured with `mode: conversation` to act as free-form chat rather than
+structured data collection. This enables a "unified wizard paradigm" where all bots use
+`strategy: wizard`, with conversation stages for open-ended interaction and structured
+stages for data collection.
+
+```yaml
+stages:
+  - name: tutoring
+    is_start: true
+    mode: conversation
+    prompt: |
+      You are a Socratic tutor for {{subject}}. Engage in helpful
+      educational conversation. Guide the student through concepts.
+    suggestions:
+      - "Quiz me on this topic"
+      - "Explain a concept"
+    intent_detection:
+      method: keyword
+      intents:
+        - id: start_quiz
+          keywords: ["quiz", "test me", "assessment"]
+          description: "Student wants to take a quiz"
+    transitions:
+      - target: quiz_start
+        condition: "data.get('_intent') == 'start_quiz'"
+
+  - name: quiz_start
+    prompt: "Let's start a quiz! Answer the following question."
+    schema:
+      type: object
+      properties:
+        answer: { type: string }
+    transitions:
+      - target: quiz_results
+        condition: "data.get('answer')"
+```
+
+When `mode: conversation` is set on a stage:
+
+1. **Extraction is skipped** -- The user is conversing, not filling a form. No structured
+   data extraction runs, even if a schema is present.
+2. **Response is generated via LLM** -- The stage prompt becomes part of the system prompt
+   context, and `manager.complete()` generates a response directly.  If the stage also
+   has a `response_template`, it is rendered once as the initial greeting (first turn
+   only); subsequent turns use LLM mode for natural conversation, or render the
+   stage's `clarification_template` when one is set.  A `greeting_template` takes
+   that opening turn instead when the stage sets one.
+3. **No clarification loop** -- Clarification attempts are never incremented. The user
+   isn't failing to provide data; they're having a conversation.
+4. **Transitions evaluate normally** -- Transition conditions are checked each turn. Use
+   intent detection (below) to trigger transitions from natural language.
+
+Stages without a `mode` key default to `"structured"` (the original wizard behavior).
+
+**Intent Detection:**
+
+Intent detection classifies user messages into named intents, enabling natural-language
+transition triggers. Configure it on any stage (conversation or structured):
+
+```yaml
+intent_detection:
+  method: keyword              # keyword | llm
+  intents:
+    - id: start_quiz
+      keywords: ["quiz", "test me", "assessment", "practice questions"]
+      description: "Student wants to take a quiz"
+    - id: need_help
+      keywords: ["help", "explain", "confused", "don't understand"]
+      description: "Student needs help with a concept"
+```
+
+The detected intent is stored in `wizard_state.data["_intent"]` before transition
+conditions are evaluated, so conditions can reference it:
+
+```yaml
+transitions:
+  - target: quiz_start
+    condition: "data.get('_intent') == 'start_quiz'"
+```
+
+**Detection Methods:**
+
+| Method | Description | When to Use |
+|--------|-------------|-------------|
+| `keyword` | Fast substring matching against configured keywords. First match wins. No LLM call. | Simple triggers with known vocabulary |
+| `llm` | Lightweight LLM classification. Builds a prompt listing intents and asks the LLM to pick one. | Nuanced intent detection where keywords are insufficient |
+
+An intent's `keywords` must be a **list** of strings — `keywords: ["done"]`,
+never `keywords: done`. See **Navigation Commands** above for the full contract
+and what happens to a value that does not match.
+
+**Intent lifecycle:**
+- `_intent` is cleared at the start of each detection call
+- If no intent matches, `_intent` is not present in wizard data
+- `_intent` is not persisted across turns (cleared and re-detected each time)
+
+**Intent Detection on Structured Stages:**
+
+When `intent_detection` is configured on a structured stage (not `mode: conversation`),
+intent detection runs after extraction but before the clarification check. If an intent
+is detected, the clarification/validation path is skipped and the transition fires. This
+enables "detour" patterns where the user can interrupt structured data collection:
+
+```yaml
+stages:
+  - name: collect_preferences
+    prompt: "Tell me about your preferences."
+    schema:
+      type: object
+      properties:
+        subject: { type: string }
+        grade_level: { type: string }
+    intent_detection:
+      method: keyword
+      intents:
+        - id: need_help
+          keywords: ["help", "confused", "wait", "hold on"]
+    transitions:
+      - target: help_conversation
+        condition: "data.get('_intent') == 'need_help'"
+        priority: 0
+      - target: next_stage
+        condition: "data.get('subject') and data.get('grade_level')"
+        priority: 1
+
+  - name: help_conversation
+    mode: conversation
+    prompt: "How can I help? When you're ready, say 'continue'."
+    intent_detection:
+      method: keyword
+      intents:
+        - id: resume
+          keywords: ["continue", "let's go", "back to setup", "ready"]
+    transitions:
+      - target: collect_preferences
+        condition: "data.get('_intent') == 'resume'"
+```
+
+**How round-trips work:** `wizard_state.data` persists across stage transitions. When the
+user detours from a structured stage to a conversation stage and back, previously extracted
+fields remain in the data dict. The structured stage resumes where it left off, prompting
+only for remaining missing fields.
+
+### Routing Transforms
+
+Routing transforms are stage-level transform functions that run **before** transition
+condition evaluation. They are useful when a stage needs to classify or preprocess
+user input (e.g., via an LLM call) to produce a routing signal that transition
+conditions can then check.
+
+```yaml
+stages:
+  - name: assess_needs
+    prompt: "What would you like to do today?"
+    routing_transforms:
+      - classify_user_need        # Runs before condition evaluation
+    transitions:
+      - target: set_vision
+        condition: "data.get('classified_need') == 'planning'"
+      - target: pick_topic
+        condition: "data.get('classified_need') == 'exploration'"
+      - target: review_progress
+        condition: "data.get('classified_need') == 'review'"
+```
+
+Each entry in `routing_transforms` is the name of a registered transform function.
+The framework resolves each name via the FSM's function registry and executes it
+with `state.data` as input. The transform can modify `state.data` in place (e.g.,
+setting `classified_need`) before transition conditions are evaluated.
+
+Routing transforms run after the extraction pipeline (extract, normalize, merge,
+defaults, derivations, recovery) and after transition derivations, but before
+FSM condition evaluation. They execute in both `generate()` and `advance()`.
+
+Register transform functions when loading the wizard:
+
+```python
+async def classify_user_need(data: dict) -> dict:
+    # ... classify using LLM or rules ...
+    data["classified_need"] = classification
+    return data
+
+loader = WizardConfigLoader()
+wizard_fsm = loader.load_from_dict(
+    config,
+    custom_functions={"classify_user_need": classify_user_need},
+)
+```
+
+**`_message` in Transition Conditions:**
+
+The raw user message is available as `data.get('_message')` within transition condition
+expressions. This enables keyword-based transitions without intent detection:
+
+```yaml
+transitions:
+  - target: quiz_start
+    condition: "'quiz' in data.get('_message', '').lower()"
+```
+
+`_message` is injected before transition evaluation and cleaned up afterward -- it is
+not persisted in wizard state data.
+
+**UI Rendering with `stage_mode`:**
+
+The wizard metadata includes a `stage_mode` field indicating how the current stage should
+be rendered:
+
+| `stage_mode` Value | UI Guidance |
+|--------------------|-------------|
+| `"conversation"` | Render as normal chat with optional action buttons |
+| `"structured"` | Render with wizard chrome (progress breadcrumb, structured content) |
+
+Access via `get_wizard_state()`:
+
+```python
+state = await bot.get_wizard_state("conversation-123")
+if state and state["stage_mode"] == "conversation":
+    # Render as normal chat UI
+    pass
+else:
+    # Render with wizard progress indicators
+    pass
+```
+
+**Per-State Strategy Injection:**
+
+Wizard stages can use any registered reasoning strategy — not just the built-in
+`single` (direct LLM call) and `react` (tool loop). Any strategy registered in
+the strategy registry (including custom strategies) can be referenced by name.
+
+```yaml
+# wizard.yaml
+name: configbot
+settings:
+  tool_reasoning: single       # Default for all stages
+  max_tool_iterations: 3       # Default max tool-calling iterations
+
+stages:
+  - name: research
+    prompt: "Let me look that up for you"
+    reasoning: grounded        # Use grounded retrieval for this stage
+    reasoning_config:          # Strategy-specific config
+      intent: { mode: extract, num_queries: 3 }
+      retrieval: { top_k: 5 }
+    transitions:
+      - target: review
+
+  - name: review
+    prompt: "Let's review your configuration"
+    reasoning: react           # Use ReAct loop for this stage
+    max_iterations: 5          # Override: allow up to 5 tool calls
+    tools: [preview_config, validate_config]
+    transitions:
+      - target: save
+
+  - name: configure_llm
+    prompt: "Which LLM provider?"
+    # No reasoning specified = uses wizard-level default (single)
+    # No tools specified = no tools available
+    transitions:
+      - target: review
+```
+
+The `reasoning` field accepts any registered strategy name. Built-in options:
+
+| Value | Behavior |
+|-------|----------|
+| `single` (default) | Direct `manager.complete()` call — fast, one LLM round-trip |
+| `react` | ReAct reason-act loop with tool calls |
+| `grounded` | Deterministic multi-source KB retrieval + synthesis |
+| `hybrid` | Grounded retrieval + ReAct tool loop |
+| `simple` | Routes through `SimpleReasoning.generate()` (functionally equivalent to `single`) |
+| *custom name* | Any strategy registered via `register_strategy()` |
+
+The optional `reasoning_config` dict is forwarded to the strategy's `from_config()`.
+This lets you pass strategy-specific parameters (e.g. grounded retrieval settings,
+custom strategy options) at the stage level.
+
+**ReAct Behavior:**
+
+With `reasoning: react`, the wizard:
+1. Calls the LLM with available tools
+2. If LLM requests a tool call, executes it
+3. Adds tool result to conversation
+4. Repeats from step 1 (up to `max_iterations`)
+5. When LLM responds without tool calls, returns that as the final response
+
+This enables complex multi-tool interactions in a single wizard turn:
+
+```
+User: "Show me the config and validate it"
+LLM calls: preview_config
+Tool returns: {preview: {...}}
+LLM calls: validate_config
+Tool returns: {valid: true, errors: []}
+LLM responds: "Here's your config preview: ... Validation passed!"
+```
+
+**Configuration Options:**
+
+| Setting | Level | Description |
+|---------|-------|-------------|
+| `tool_reasoning` | wizard settings | Default strategy for all stages: `"single"` or any registered strategy name |
+| `max_tool_iterations` | wizard settings | Default max iterations for strategies that support iteration |
+| `store_trace` | wizard settings / stage | Store reasoning trace in conversation metadata. Per-stage value overrides wizard-level. Default: `false` |
+| `verbose` | wizard settings / stage | Enable debug-level logging. Per-stage value overrides wizard-level. Default: `false` |
+| `reasoning` | stage | Per-stage strategy: `"single"` or any registered strategy name |
+| `reasoning_config` | stage | Strategy-specific config dict (forwarded to `from_config()`) |
+| `max_iterations` | stage | Per-stage max iterations override |
+
+**Strategy name validation:** Unknown strategy names produce a warning at wizard
+construction time (not a hard error), catching typos early.
+
+**When to Use Each Strategy:**
+
+Use `reasoning: react` for stages where:
+- Multiple tools may need to be called together
+- Tool results inform subsequent tool calls
+- You want the LLM to reason about tool outputs before responding
+
+Use `reasoning: grounded` for stages where:
+- Responses must be grounded in KB content
+- You need deterministic retrieval (not LLM-decided)
+
+Keep `reasoning: single` (default) for:
+- Data collection stages without tools
+- Simple single-tool stages
+- Stages where you want predictable single-call behavior
+
+---
+
+### Bot Greetings
+
+All reasoning strategies support bot-initiated greetings — a message the bot
+sends before the user speaks. This is useful for onboarding flows, wizard
+introductions, and welcome messages.
+
+**Template-based greetings** (Simple and ReAct strategies):
+
+```yaml
+reasoning:
+  strategy: simple
+  greeting_template: "Hello {{ user_name }}! Welcome to {{ app_name }}."
+```
+
+The `greeting_template` is a Jinja2 template string. Variables from
+`initial_context` (passed to `DynaBot.greet()`) are available as top-level
+template variables.
+
+```python
+result = await bot.greet(
+    context,
+    initial_context={"user_name": "Alice", "app_name": "DataKnobs"},
+)
+# result == "Hello Alice! Welcome to DataKnobs."
+```
+
+When no `greeting_template` is configured, `greet()` returns `None`.
+
+<a id="fsm-driven-greetings"></a>
+
+**FSM-driven greetings** (Wizard strategy):
+
+Wizard bots read this strategy-level option as their **start stage's default**
+greeting. The same field name exists at stage scope and means the same thing,
+so the two compose: set it here for a wizard whose opening line does not depend
+on the FSM definition, and set it on a stage when the greeting belongs with the
+stage — a start stage that carries its own wins over this one.
+
+```yaml
+reasoning:
+  strategy: wizard
+  wizard_config: path/to/wizard.yaml
+  greeting_template: "Hello! Welcome to the setup wizard."
+```
+
+```yaml
+# path/to/wizard.yaml — a stage-level greeting takes precedence
+stages:
+  - name: welcome
+    is_start: true
+    greeting_template: "Hello! Welcome to the setup wizard."
+```
+
+Either way the greeting is rendered once and stepped over, leaving extraction,
+confirmation and transitions to behave as they would without it. Only the start
+stage has a greeting turn, so the strategy-level field never reaches a mid-flow
+stage; that is what the stage-level field is for.
+
+See [Bot-Initiated Greeting](#bot-initiated-greeting) for the full order the
+wizard resolves a greeting in.
+
+**initial_context** seeds data into the strategy's state before greeting
+generation. For wizard strategies, values are merged into `wizard_state.data` and
+available to the start stage's prompt template and transforms. For simple/react
+strategies, values are available as Jinja2 template variables.
+
+**Streaming:** `stream_chat()` also supports greetings. When a reasoning strategy
+is configured, `DynaBot.stream_chat()` delegates to the strategy's
+`stream_generate()` method. `SimpleReasoning` provides true token-level streaming;
+wizard and react strategies yield a single complete response.
+
+---
+
+## Tools Configuration
+
+Configure tools that extend bot capabilities.
+
+### Tool Loading Methods
+
+#### Direct Class Instantiation
+
+```yaml
+tools:
+  - class: my_module.CalculatorTool
+    params:
+      precision: 2
+
+  - class: my_module.WeatherTool
+    params:
+      api_key: ${WEATHER_API_KEY}
+      default_location: "New York"
+```
+
+#### XRef to Predefined Tools
+
+```yaml
+# Define reusable tool configurations
+tool_definitions:
+  calculator_2dp:
+    class: my_module.CalculatorTool
+    params:
+      precision: 2
+
+  calculator_5dp:
+    class: my_module.CalculatorTool
+    params:
+      precision: 5
+
+  weather:
+    class: my_module.WeatherTool
+    params:
+      api_key: ${WEATHER_API_KEY}
+
+# Reference tools by name
+tools:
+  - xref:tools[calculator_2dp]
+  - xref:tools[weather]
+```
+
+#### Mixed Approach
+
+```yaml
+tool_definitions:
+  weather:
+    class: my_module.WeatherTool
+    params:
+      api_key: ${WEATHER_API_KEY}
+
+tools:
+  # Direct instantiation
+  - class: my_module.CalculatorTool
+    params:
+      precision: 3
+
+  # XRef reference
+  - xref:tools[weather]
+```
+
+### Built-in Tools
+
+#### Knowledge Search Tool
+
+Automatically available when knowledge base is enabled:
+
+```yaml
+knowledge_base:
+  enabled: true
+  # ... knowledge base config
+
+tools:
+  - class: dataknobs_bots.tools.KnowledgeSearchTool
+    params:
+      k: 5  # Number of results to return
+```
+
+### Custom Tool Structure
+
+Custom tools must inherit from `dataknobs_llm.tools.Tool`:
+
+```python
+# my_tools.py
+from dataknobs_llm.tools import Tool
+from typing import Dict, Any
+
+class CalculatorTool(Tool):
+    def __init__(self, precision: int = 2):
+        super().__init__(
+            name="calculator",
+            description="Performs basic arithmetic"
+        )
+        self.precision = precision
+
+    @property
+    def schema(self) -> Dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {
+                "operation": {
+                    "type": "string",
+                    "enum": ["add", "subtract", "multiply", "divide"]
+                },
+                "a": {"type": "number"},
+                "b": {"type": "number"}
+            },
+            "required": ["operation", "a", "b"]
+        }
+
+    async def execute(self, operation: str, a: float, b: float) -> float:
+        # Implementation
+        pass
+```
+
+**Configuration:**
+```yaml
+tools:
+  - class: my_tools.CalculatorTool
+    params:
+      precision: 3
+```
+
+See [tools.md](tools.md) for detailed tool development guide.
+
+---
+
+## Prompts Configuration
+
+Configure custom prompts for the bot.
+
+### Simple String Prompts
+
+```yaml
+prompts:
+  helpful_assistant: "You are a helpful AI assistant."
+  technical_support: "You are a technical support specialist."
+  creative_writer: "You are a creative writing assistant."
+
+system_prompt:
+  name: helpful_assistant
+```
+
+### Structured Prompts
+
+```yaml
+prompts:
+  customer_support:
+    type: system
+    template: |
+      You are a customer support agent for {company_name}.
+
+      Your role:
+      - Be helpful and friendly
+      - Answer questions about {product}
+      - Escalate complex issues
+
+      Guidelines:
+      - Always greet customers
+      - Use simple language
+      - Stay professional
+
+system_prompt:
+  name: customer_support
+```
+
+### Prompt Variables
+
+Use variables in prompts:
+
+```yaml
+prompts:
+  personalized:
+    template: |
+      You are an AI assistant helping {user_name}.
+      Context: {user_context}
+
+system_prompt:
+  name: personalized
+```
+
+Provide variables at runtime:
+
+```python
+# Pass variables in BotContext
+context = BotContext(
+    conversation_id="conv-123",
+    client_id="client-456",
+    session_metadata={
+        "user_name": "Alice",
+        "user_context": "Premium customer since 2020"
+    }
+)
+```
+
+### System Prompt Configuration
+
+The `system_prompt` field supports multiple formats for flexibility with **smart detection**.
+
+#### Smart Detection (Recommended)
+
+When you provide a string, DynaBot uses **smart detection** to determine if it's a template name or inline content:
+
+- If the string **exists in the prompt library** → treated as template name
+- If the string **does not exist in the library** → treated as inline content
+
+```yaml
+# Example 1: String exists in prompts - used as template name
+prompts:
+  helpful_assistant: "You are a helpful AI assistant."
+
+system_prompt: helpful_assistant  # Found in prompts → template reference
+```
+
+```yaml
+# Example 2: String does NOT exist in prompts - used as inline content
+prompts: {}  # Empty or no prompts section
+
+system_prompt: "You are a helpful AI assistant."  # Not found → inline content
+```
+
+This means you can write short, simple prompts directly without needing to define them in the prompts library first.
+
+#### 1. Dict with Template Name (Explicit)
+
+Explicitly reference a prompt defined in the `prompts` section:
+
+```yaml
+prompts:
+  helpful_assistant: "You are a helpful AI assistant."
+
+system_prompt:
+  name: helpful_assistant
+```
+
+#### 2. Dict with Strict Mode
+
+Use `strict: true` to raise an error if the template doesn't exist:
+
+```yaml
+system_prompt:
+  name: my_template
+  strict: true  # Raises ValueError if my_template doesn't exist
+```
+
+#### 3. Dict with Inline Content
+
+Provide the prompt content directly without defining it in `prompts`:
+
+```yaml
+system_prompt:
+  content: "You are a helpful AI assistant specialized in customer support."
+```
+
+#### 4. Dict with Inline Content + RAG
+
+Inline content can also include RAG configurations for context injection:
+
+```yaml
+system_prompt:
+  content: |
+    You are a helpful assistant.
+
+    Use the following context to answer questions:
+    {{CONTEXT}}
+  rag_configs:
+    - adapter_name: docs
+      query: "assistant guidelines"
+      placeholder: CONTEXT
+      k: 3
+```
+
+#### 5. Multi-line String as Inline Content
+
+Multi-line strings are common for inline prompts in YAML:
+
+```yaml
+system_prompt: |
+  You are a helpful AI assistant specialized in customer support.
+
+  Key responsibilities:
+  - Answer questions accurately and helpfully
+  - Be polite and professional at all times
+  - Escalate complex issues to human agents when necessary
+
+  Remember to always verify customer identity before sharing sensitive information.
+```
+
+This format is ideal when:
+- Writing prompts directly in YAML without a separate prompts library
+- The prompt is specific to this configuration and won't be reused
+- You want to keep the entire configuration self-contained
+
+#### Best Practices
+
+**Use template names when:**
+- The same prompt is reused across multiple configurations
+- You want centralized prompt management
+- Prompts need variables/templating
+- You want to version control prompts separately
+
+**Use inline content when:**
+- The prompt is specific to one configuration
+- You want a self-contained YAML file
+- Quick prototyping or testing
+
+**Use strict mode when:**
+- You want to catch configuration errors early
+- The template MUST exist (e.g., production configs)
+
+---
+
+## Middleware Configuration
+
+Add request/response processing middleware for logging, cost tracking, and more.
+
+### Built-in Middleware
+
+DataKnobs Bots provides two built-in middleware classes:
+
+**CostTrackingMiddleware** - Tracks LLM costs and token usage:
+
+```yaml
+middleware:
+  - class: dataknobs_bots.middleware.CostTrackingMiddleware
+    params:
+      track_tokens: true
+      cost_rates:  # Optional: override default rates
+        openai:
+          gpt-4o:
+            input: 0.0025
+            output: 0.01
+```
+
+**LoggingMiddleware** - Logs all interactions:
+
+```yaml
+middleware:
+  - class: dataknobs_bots.middleware.LoggingMiddleware
+    params:
+      log_level: INFO
+      include_metadata: true
+      json_format: false  # Set true for log aggregation
+```
+
+### Custom Middleware
+
+```yaml
+middleware:
+  - class: my_middleware.RateLimitMiddleware
+    params:
+      max_requests: 100
+      window_seconds: 60
+
+  - class: my_middleware.AuthMiddleware
+    params:
+      api_key: ${API_KEY}
+```
+
+### Middleware Interface
+
+`Middleware` is a concrete base class with all hooks as no-ops. Override only
+the hooks you need:
+
+```python
+from dataknobs_bots.middleware.base import Middleware
+from dataknobs_bots.bot.turn import TurnState
+
+class MyMiddleware(Middleware):
+    def __init__(self, **params):
+        # Initialize with params
+        pass
+
+    async def on_turn_start(self, turn: TurnState) -> str | None:
+        # Pre-processing, plugin_data writes, message transforms
+        return None
+
+    async def after_turn(self, turn: TurnState) -> None:
+        # Post-processing — fires for all turn types (chat, stream, greet)
+        pass
+
+    async def on_error(
+        self, error: Exception, message: str, context: BotContext
+    ) -> None:
+        # Error handling
+        pass
+```
+
+Legacy hooks (`before_message`, `after_message`, `post_stream`) are still
+dispatched for backward compatibility but are deprecated. See the
+[Middleware Guide](middleware.md) for the full hook reference, `TurnState`
+fields, `plugin_data` bridge, and migration guidance.
+
+### LLM-call middleware via `conversation_middleware:`
+
+The bot-level `middleware:` list above wraps **bot-turn lifecycle hooks**
+(`on_turn_start`, `after_turn`, `on_error`, …). To wrap the LLM call
+itself — `process_request` / `process_response` around every
+`ConversationManager.complete()` / `stream_complete()` — configure
+`conversation_middleware:` at the same top level as `middleware:`:
+
+```yaml
+# Bot-turn-lifecycle hooks (above) — implement Middleware from
+# dataknobs_bots.middleware.base.
+middleware:
+  - class: dataknobs_bots.middleware.LoggingMiddleware
+    params:
+      log_level: INFO
+
+# LLM-call wrap (below) — implement ConversationMiddleware from
+# dataknobs_llm.conversations.middleware.
+conversation_middleware:
+  - class: dataknobs_llm.conversations.HistoryRedactionMiddleware
+    params:
+      redactions:
+        - pattern: '\[bib:\d+[^\]]*\]'
+          replacement: '[prior citation]'
+        - pattern: '\bbib:\d+\b'
+          replacement: '[prior citation]'
+```
+
+Each entry uses the same `{class, params, optional}` spec shape as
+`middleware`. The bot constructs each entry once at startup and forwards
+the resulting list to every `ConversationManager` it builds, so the
+wraps apply across all conversations the bot manages.
+
+The two lists are intentionally kept separate because the interfaces are
+structurally different (bot-turn hooks vs. LLM-call wraps). Pick the
+list that matches the layer you want to instrument.
+
+### Programmatic Middleware via `from_config()`
+
+Use the `middleware=` keyword argument to inject middleware instances
+programmatically, bypassing config-driven construction:
+
+```python
+bot = await DynaBot.from_config(
+    config,
+    middleware=[cost_tracker, logger_mw],  # Overrides config middleware
+)
+```
+
+Similarly, use `llm=` to inject a pre-built shared provider:
+
+```python
+# At startup — create shared provider once
+shared_llm = AnthropicProvider({...})
+await shared_llm.initialize()
+
+# Per-request — reuse the provider
+bot = await DynaBot.from_config(
+    config,
+    llm=shared_llm,          # Skips provider creation; caller owns lifecycle
+    middleware=[cost_mw],
+)
+```
+
+When `llm=` is passed, `config["llm"]` becomes optional and the provider is NOT
+closed when the bot closes (originator-owns-lifecycle). When `middleware=` is
+passed, it completely replaces any middleware defined in config.
+
+---
+
+## Resource Resolution
+
+The `dataknobs_bots.config` module provides utilities for resolving resources from environment configurations.
+
+### BotResourceResolver
+
+High-level resolver that automatically initializes resources:
+
+```python
+from dataknobs_config import EnvironmentConfig
+from dataknobs_bots.config import BotResourceResolver
+
+# Load environment
+env = EnvironmentConfig.load()  # Auto-detects environment
+
+# Create resolver
+resolver = BotResourceResolver(env)
+
+# Get initialized LLM (calls initialize() automatically)
+llm = await resolver.get_llm("default")
+
+# Get connected database (calls connect() automatically)
+db = await resolver.get_database("conversations")
+
+# Get initialized vector store (calls initialize() automatically)
+vs = await resolver.get_vector_store("knowledge")
+
+# Get initialized embedding provider
+embedder = await resolver.get_embedding_provider("default")
+
+# With config overrides
+llm = await resolver.get_llm("default", temperature=0.9)
+
+# Without caching (create new instance)
+llm = await resolver.get_llm("default", use_cache=False)
+
+# Clear cache
+resolver.clear_cache()  # All resources
+resolver.clear_cache("llm_providers")  # Specific type
+```
+
+### create_bot_resolver
+
+Lower-level function for creating a ConfigBindingResolver with DynaBot factories:
+
+```python
+from dataknobs_config import EnvironmentConfig
+from dataknobs_bots.config import create_bot_resolver
+
+env = EnvironmentConfig.load("production")
+resolver = create_bot_resolver(env)
+
+# Resolve without auto-initialization
+llm = resolver.resolve("llm_providers", "default")
+await llm.initialize()  # Manual initialization
+
+# Check registered factories
+resolver.has_factory("llm_providers")  # True
+resolver.get_registered_types()  # ['llm_providers', 'databases', ...]
+```
+
+### Individual Factory Registration
+
+Register factories individually for custom resolvers:
+
+```python
+from dataknobs_config import ConfigBindingResolver, EnvironmentConfig
+from dataknobs_bots.config import (
+    register_llm_factory,
+    register_database_factory,
+    register_vector_store_factory,
+    register_embedding_factory,
+)
+
+env = EnvironmentConfig.load()
+resolver = ConfigBindingResolver(env)
+
+# Register only what you need
+register_llm_factory(resolver)
+register_database_factory(resolver)
+
+# Or use create_bot_resolver with register_defaults=False
+from dataknobs_bots.config import create_bot_resolver
+resolver = create_bot_resolver(env, register_defaults=False)
+register_llm_factory(resolver)  # Register only LLM factory
+```
+
+### Factory Overview
+
+| Resource Type | Factory | Creates |
+|---------------|---------|---------|
+| `llm_providers` | `LLMProviderFactory(is_async=True)` | Async LLM providers |
+| `databases` | `AsyncDatabaseFactory()` | Database backends |
+| `vector_stores` | `VectorStoreFactory()` | Vector store backends |
+| `embedding_providers` | `LLMProviderFactory(is_async=True)` | Embedding providers |
+
+---
+
+## Environment Variables
+
+### Using Environment Variables
+
+Reference environment variables in configuration:
+
+```yaml
+llm:
+  provider: openai
+  api_key: ${OPENAI_API_KEY}
+
+conversation_storage:
+  backend: postgres
+  password: ${DB_PASSWORD}
+
+tools:
+  - class: my_tools.WeatherTool
+    params:
+      api_key: ${WEATHER_API_KEY}
+```
+
+### Setting Environment Variables
+
+**Shell:**
+```bash
+export OPENAI_API_KEY=sk-...
+export DB_PASSWORD=secure-password
+export WEATHER_API_KEY=abc123
+```
+
+**.env File:**
+```bash
+# .env
+OPENAI_API_KEY=sk-...
+DB_PASSWORD=secure-password
+WEATHER_API_KEY=abc123
+```
+
+**Load with python-dotenv:**
+```python
+from dotenv import load_dotenv
+import yaml
+
+# Load environment variables
+load_dotenv()
+
+# Load configuration
+with open("config.yaml") as f:
+    config = yaml.safe_load(f)
+
+# Create bot
+bot = await DynaBot.from_config(config)
+```
+
+---
+
+## Complete Examples
+
+### Production Configuration
+
+```yaml
+# production_config.yaml
+
+# LLM
+llm:
+  provider: openai
+  model: gpt-4
+  api_key: ${OPENAI_API_KEY}
+  temperature: 0.7
+  max_tokens: 2000
+
+# Storage
+conversation_storage:
+  backend: postgres
+  host: ${DB_HOST}
+  port: 5432
+  database: ${DB_NAME}
+  user: ${DB_USER}
+  password: ${DB_PASSWORD}
+  max_pool_size: 20
+
+# Memory
+memory:
+  type: buffer
+  max_messages: 20
+
+# Knowledge Base
+knowledge_base:
+  enabled: true
+  documents_path: /app/docs
+  vector_store:
+    backend: pinecone
+    api_key: ${PINECONE_API_KEY}
+    environment: us-west1-gcp
+    index_name: production-kb
+    dimensions: 1536
+  embedding_provider: openai
+  embedding_model: text-embedding-3-small
+  chunking:
+    max_chunk_size: 500
+
+# Reasoning
+reasoning:
+  strategy: react
+  max_iterations: 5
+  verbose: false
+  store_trace: false
+  history_compaction:               # Recommended for long tool loops
+    enabled: true
+    keep_recent_iterations: 3
+    budget_fraction: 0.75
+  truncation_retry_max_tokens: 8192  # Optional: complete (not just abandon) a truncated tool payload
+
+# Tools
+tool_definitions:
+  weather:
+    class: tools.WeatherTool
+    params:
+      api_key: ${WEATHER_API_KEY}
+
+  calendar:
+    class: tools.CalendarTool
+    params:
+      api_key: ${CALENDAR_API_KEY}
+
+tools:
+  - xref:tools[weather]
+  - xref:tools[calendar]
+
+# Prompts
+prompts:
+  customer_support: |
+    You are a customer support AI assistant.
+    Be helpful, friendly, and professional.
+    Use the knowledge base to answer questions accurately.
+
+system_prompt:
+  name: customer_support
+
+# Middleware
+middleware:
+  - class: middleware.LoggingMiddleware
+    params:
+      log_level: INFO
+
+  - class: middleware.MetricsMiddleware
+    params:
+      export_endpoint: ${METRICS_ENDPOINT}
+```
+
+### Development Configuration
+
+```yaml
+# development_config.yaml
+
+llm:
+  provider: ollama
+  model: gemma3:1b
+  temperature: 0.7
+
+conversation_storage:
+  backend: memory
+
+memory:
+  type: buffer
+  max_messages: 10
+
+reasoning:
+  strategy: react
+  max_iterations: 5
+  verbose: true
+  store_trace: true
+
+tools:
+  - class: tools.CalculatorTool
+    params:
+      precision: 2
+
+prompts:
+  dev_assistant: "You are a development assistant. Be concise."
+
+system_prompt:
+  name: dev_assistant
+```
+
+---
+
+## Configuration Validation
+
+### Validation Best Practices
+
+1. **Required Fields**: Ensure all required fields are present
+2. **Type Checking**: Validate field types match expected types
+3. **Value Ranges**: Check numeric values are within valid ranges
+4. **Dependencies**: Verify dependent configurations are present
+
+### Example Validation
+
+```python
+def validate_config(config: dict) -> None:
+    """Validate configuration."""
+    # Check required fields
+    assert "llm" in config, "LLM configuration required"
+    assert "conversation_storage" in config, "Storage configuration required"
+
+    # Validate LLM
+    llm = config["llm"]
+    assert "provider" in llm, "LLM provider required"
+    assert "model" in llm, "LLM model required"
+
+    # Validate temperature range
+    if "temperature" in llm:
+        temp = llm["temperature"]
+        assert 0.0 <= temp <= 1.0, "Temperature must be between 0.0 and 1.0"
+
+    # Validate knowledge base dependencies
+    if config.get("knowledge_base", {}).get("enabled"):
+        kb = config["knowledge_base"]
+        assert "vector_store" in kb, "Vector store required for knowledge base"
+        assert "embedding_provider" in kb, "Embedding provider required for knowledge base"
+        assert "embedding_model" in kb, "Embedding model required for knowledge base"
+```
+
+---
+
+## See Also
+
+- [Migration Guide](migration.md) - Migrate existing configs to environment-aware pattern
+- [API Reference](../api/reference.md) - Complete API documentation
+- [User Guide](user-guide.md) - Tutorials and how-to guides
+- [Tools Development](tools.md) - Creating custom tools
+- [Architecture](architecture.md) - System design

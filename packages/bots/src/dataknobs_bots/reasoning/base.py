@@ -499,7 +499,7 @@ class ReasoningStrategy(ABC):
         there are two.  A strategy built from a typed config carries the
         value on ``self.config`` (the ``StructuredConfigConsumer`` path);
         a strategy subclassed directly carries it in the attribute
-        :meth:`__init__` sets, which is the pattern ``CUSTOM_STRATEGIES.md``
+        :meth:`__init__` sets, which is the pattern ``custom-strategies.md``
         documents.  Every read goes through here, so neither route needs a
         strategy to copy the value onto itself -- which is what five
         strategies each used to do, and what a sixth could have forgotten

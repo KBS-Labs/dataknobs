@@ -1,1 +1,1 @@
-../../../../packages/bots/docs/CONFIGURATION.md
+../../../../packages/bots/docs/configuration.md

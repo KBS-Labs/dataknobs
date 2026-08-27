@@ -514,7 +514,7 @@ async def test_pack_middleware_is_additive_to_the_bots_own(
 # here, and a bots consumer builds their escalation table from this table.
 
 
-_BEHAVIOR_PACKS_GUIDE = pathlib.Path(__file__).parents[1] / "docs" / "BEHAVIOR_PACKS.md"
+_BEHAVIOR_PACKS_GUIDE = pathlib.Path(__file__).parents[1] / "docs" / "behavior-packs.md"
 
 
 def _assert_documented_vocabulary_is_real(text: str) -> None:

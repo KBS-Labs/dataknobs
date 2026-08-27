@@ -337,7 +337,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   rule keys on what was declared, not on what the value is.
 
 - **Docs: a push arc that exceeds the depth limit does not throw.**
-  `FSM_PROCESSING_FLOW.md` said it raises `StateTransitionError`, in both the
+  `fsm-processing-flow.md` said it raises `StateTransitionError`, in both the
   prose and the flowchart. It logs an error and returns `False`, so the engine
   tries the next available arc — the same as every other push failure. A
   reader following the doc would have written a handler for an exception that
@@ -1280,7 +1280,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   filterable end-to-end via the ``metadata.X`` dot-notation
   field-path convention (JSONB pushdown on Postgres; JSON-extract
   pushdown on SQLite and DuckDB; ``Record.get_value`` traversal on
-  memory / file).  See ``packages/fsm/docs/FSM_CONFIG_GUIDE.md``
+  memory / file).  See ``packages/fsm/docs/fsm-config-guide.md``
   for usage examples.
 
 - **``load_steps`` filter / pagination kwargs** —

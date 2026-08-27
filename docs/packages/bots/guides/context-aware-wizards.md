@@ -163,7 +163,7 @@ Render response_template with full context
 
 ### Prompt Rendering
 
-> **Security:** All template rendering uses Jinja2 `SandboxedEnvironment`. See [TEMPLATE_SECURITY.md](TEMPLATE_SECURITY.md) for the full security model and config authoring guidelines.
+> **Security:** All template rendering uses Jinja2 `SandboxedEnvironment`. See [template-security.md](template-security.md) for the full security model and config authoring guidelines.
 
 The `prompt` field is itself a Jinja2 template rendered with wizard state data. All state data (including `_`-prefixed transform outputs) is available as top-level template variables. Stage prompts in `WizardAdvanceResult.stage_prompt` and `metadata["stage_prompt"]` are returned fully rendered.
 
@@ -284,7 +284,7 @@ Plain suggestions (no `{{ }}` markers) pass through unchanged — no Jinja2 proc
 
 All state data (including `_`-prefixed keys) is available in the suggestion template context, matching the canonical context used by all rendering sites. Suggestions in `WizardAdvanceResult.suggestions` are returned fully rendered.
 
-See [TEMPLATE_SECURITY.md](TEMPLATE_SECURITY.md) for the full variable availability table and security model.
+See [template-security.md](template-security.md) for the full variable availability table and security model.
 
 ## Extraction Context
 

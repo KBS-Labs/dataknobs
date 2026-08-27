@@ -113,7 +113,7 @@ flow = ConversationFlow(
 
 Complete flow documentation is available in the local package:
 
-**Location**: `packages/llm/docs/` (FSM-related sections in USER_GUIDE.md)
+**Location**: `packages/llm/docs/` (FSM-related sections in user-guide.md)
 
 ## Common Patterns
 

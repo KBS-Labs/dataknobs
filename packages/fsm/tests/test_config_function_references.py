@@ -304,7 +304,7 @@ def test_bare_string_shorthand_resolves_registered_or_inline_only() -> None:
 def test_documented_config_guide_builtin_example_runs() -> None:
     """The corrected FSM_CONFIG_GUIDE builtin example builds and runs.
 
-    Mirrors the exact form documented in ``FSM_CONFIG_GUIDE.md`` so a future
+    Mirrors the exact form documented in ``fsm-config-guide.md`` so a future
     edit that re-breaks the headline example fails here.
     """
     config = _single_state_config(

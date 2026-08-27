@@ -1,3 +1,3 @@
 # Behavior Packs
 
---8<-- "packages/bots/docs/BEHAVIOR_PACKS.md"
+--8<-- "packages/bots/docs/behavior-packs.md"

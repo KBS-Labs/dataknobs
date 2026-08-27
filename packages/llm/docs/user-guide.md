@@ -1,0 +1,2178 @@
+# Dataknobs LLM - User Guide
+
+**Package**: `dataknobs_llm`
+**Version**: 0.1.0
+**Last Updated**: 2025-10-29
+
+---
+
+## Table of Contents
+
+1. [Introduction](#introduction)
+2. [Installation](#installation)
+3. [Quick Start](#quick-start)
+4. [Prompt Library System](#prompt-library-system)
+5. [Conversation Management](#conversation-management)
+6. [Middleware](#middleware)
+7. [Advanced Features](#advanced-features)
+   - [Synchronous vs Asynchronous](#synchronous-vs-asynchronous)
+   - [Error Handling](#error-handling)
+   - [Per-Request Config Overrides](#per-request-config-overrides)
+   - [Metadata Tracking](#metadata-tracking)
+8. [Intent Classification](#intent-classification)
+9. [Complete Examples](#complete-examples)
+10. [Troubleshooting](#troubleshooting)
+
+---
+
+## Introduction
+
+The Dataknobs LLM package provides a comprehensive system for managing prompts and multi-turn conversations with Large Language Models. It includes:
+
+- **Prompt Library**: Template-based prompt management with validation and RAG
+- **Resource Adapters**: Plug in any data source for dynamic content
+- **Conversation Management**: Multi-turn conversations with branching and persistence
+- **Middleware System**: Logging, validation, content filtering, and custom processing
+- **LLM Integration**: Works with OpenAI, Anthropic, Ollama, and more
+
+---
+
+## Installation
+
+```bash
+# Install the package
+uv add dataknobs-llm
+```
+
+File-based (YAML) prompt libraries need no extra — `pyyaml` is a base
+dependency of this package.
+
+**Dependencies**:
+- `dataknobs-common` - Utilities
+- `dataknobs-config` - Configuration management
+- `dataknobs-data` - Database backends (for conversation storage)
+- `pyyaml` - YAML support (optional)
+
+---
+
+## Quick Start
+
+### Simple Prompt Rendering
+
+```python
+from dataknobs_llm.prompts import render_template
+
+# Basic template
+result = render_template(
+    "Hello {{name}}!",
+    {"name": "Alice"}
+)
+print(result.content)  # "Hello Alice!"
+
+# With conditional sections
+result = render_template(
+    "Hello {{name}}((, you are {{age}} years old))",
+    {"name": "Alice", "age": 30}
+)
+print(result.content)  # "Hello Alice, you are 30 years old"
+
+# Missing optional parameter
+result = render_template(
+    "Hello {{name}}((, you are {{age}} years old))",
+    {"name": "Alice"}
+)
+print(result.content)  # "Hello Alice"
+```
+
+### One-Off LLM Interaction
+
+```python
+from dataknobs_llm.llm import OpenAIProvider
+from dataknobs_llm.prompts import AsyncPromptBuilder, ConfigPromptLibrary
+
+# Create prompt library
+config = {
+    "user": {
+        "analyze_code": {
+            0: {"template": "Analyze this {{language}} code:\n{{code}}"}
+        }
+    }
+}
+library = ConfigPromptLibrary(config)
+
+# Create builder and LLM
+builder = AsyncPromptBuilder(library=library)
+llm = OpenAIProvider(
+    config={"api_key": "your-key"},
+    prompt_builder=builder
+)
+
+# Render and execute in one call
+result = await llm.render_and_complete(
+    "analyze_code",
+    params={"code": "def hello(): print('hi')", "language": "python"}
+)
+print(result.content)
+```
+
+---
+
+## Prompt Library System
+
+### Template Syntax
+
+The prompt library uses a simple, powerful template syntax:
+
+```python
+# Variable substitution
+"{{variable}}"  # Required variable
+
+# Conditional sections (removed if variables missing)
+"((optional content with {{variable}}))"
+
+# Nested conditionals
+"Hello {{name}}((, age {{age}}((, from {{city}})))"
+```
+
+### Creating Prompts
+
+#### Option 1: Config-Based Library (In-Memory)
+
+```python
+from dataknobs_llm.prompts import ConfigPromptLibrary
+
+config = {
+    "system": {
+        "helpful_assistant": {
+            "template": "You are a helpful assistant specializing in {{domain}}.",
+            "defaults": {"domain": "general knowledge"},
+            "validation": {
+                "level": "warn",
+                "required_params": []
+            }
+        }
+    },
+    "user": {
+        "ask_question": {
+            0: {"template": "{{question}}"},
+            1: {"template": "{{question}}\n\nPlease be concise."}
+        }
+    }
+}
+
+library = ConfigPromptLibrary(config)
+```
+
+#### Option 2: Filesystem Library (File-Based)
+
+Create directory structure:
+```
+prompts/
+├── system/
+│   └── helpful_assistant.yaml
+├── user/
+│   └── ask_question.yaml
+└── rag/
+    └── docs_search.yaml
+```
+
+**system/helpful_assistant.yaml**:
+```yaml
+template: "You are a helpful assistant specializing in {{domain}}."
+defaults:
+  domain: "general knowledge"
+validation:
+  level: "warn"
+  required_params: []
+```
+
+**user/ask_question.yaml**:
+```yaml
+template: "{{question}}"
+validation:
+  level: "error"
+  required_params: ["question"]
+```
+
+**Load the library**:
+```python
+from dataknobs_llm.prompts import FileSystemPromptLibrary
+from pathlib import Path
+
+library = FileSystemPromptLibrary(Path("prompts/"))
+```
+
+#### Option 3: Composite Library (Layered Overrides)
+
+```python
+from dataknobs_llm.prompts import CompositePromptLibrary
+
+# Custom overrides + base defaults
+composite = CompositePromptLibrary(
+    libraries=[custom_library, base_library],
+    names=["custom", "base"]
+)
+
+# First library wins (custom overrides base)
+prompt = composite.get_system_prompt("helpful_assistant")
+```
+
+### Using Prompt Builder
+
+```python
+from dataknobs_llm.prompts import AsyncPromptBuilder
+
+builder = AsyncPromptBuilder(library=library)
+
+# Render system prompt from library
+result = await builder.render_system_prompt(
+    "helpful_assistant",
+    params={"domain": "Python programming"}
+)
+print(result.content)
+
+# Render user prompt from library
+result = await builder.render_user_prompt(
+    "ask_question",
+    params={"question": "What is async/await?"}
+)
+print(result.content)
+```
+
+### Inline Prompt Rendering
+
+For quick prototyping or dynamic prompts, use inline rendering without defining templates in the library:
+
+```python
+# Render inline system prompt
+result = await builder.render_inline_system_prompt(
+    content="You are a helpful {{role}} assistant.",
+    params={"role": "coding"}
+)
+print(result.content)  # "You are a helpful coding assistant."
+
+# Render inline user prompt
+result = await builder.render_inline_user_prompt(
+    content="Help me understand {{topic}}",
+    params={"topic": "decorators"}
+)
+```
+
+Inline prompts also support RAG enhancement:
+
+```python
+# Inline system prompt with RAG
+result = await builder.render_inline_system_prompt(
+    content="You are a helpful assistant.\n\nContext:\n{{CONTEXT}}",
+    rag_configs=[{
+        "adapter_name": "docs",
+        "query": "assistant guidelines",
+        "placeholder": "CONTEXT",
+        "k": 3
+    }]
+)
+```
+
+This is useful for:
+- Prototyping prompts before adding to a library
+- Creating one-off prompts that don't need versioning
+- Dynamically constructing prompts at runtime
+
+### Validation Levels
+
+```python
+from dataknobs_llm.prompts import ValidationLevel
+
+# Three levels available:
+ValidationLevel.ERROR   # Raise exception for missing required params
+ValidationLevel.WARN    # Log warning but continue
+ValidationLevel.IGNORE  # No validation
+
+# Validation hierarchy (highest priority first):
+# 1. Runtime override
+# 2. Template config
+# 3. Builder default
+# 4. Global default (WARN)
+
+# Runtime override
+result = await builder.render_user_prompt(
+    "ask_question",
+    params={},
+    validation_level=ValidationLevel.ERROR  # Override
+)
+```
+
+### Resource Adapters (RAG)
+
+Resource adapters provide dynamic content injection:
+
+```python
+from dataknobs_llm.prompts import (
+    AsyncDictResourceAdapter,
+    AsyncDataknobsBackendAdapter
+)
+from dataknobs_data.backends import AsyncMemoryDatabase
+
+# Dictionary adapter
+config_data = {
+    "coding_standards": {
+        "python": "Use PEP 8 style guide",
+        "javascript": "Use ESLint recommended"
+    }
+}
+config_adapter = AsyncDictResourceAdapter(config_data)
+
+# Database adapter
+docs_db = AsyncMemoryDatabase()
+# ... populate database with documents ...
+docs_adapter = AsyncDataknobsBackendAdapter(
+    docs_db,
+    text_field="content",
+    metadata_fields=["title", "category"]
+)
+
+# Create builder with adapters
+builder = AsyncPromptBuilder(
+    library=library,
+    adapters={
+        "config": config_adapter,
+        "docs": docs_adapter
+    }
+)
+```
+
+### RAG Configuration
+
+**rag/docs_search.yaml**:
+```yaml
+adapter_name: "docs"
+query: "{{topic}} {{language}}"
+k: 5
+filters:
+  category: "documentation"
+score_threshold: 0.7
+```
+
+**Reference RAG from prompts**:
+```yaml
+# system/analyze_code.yaml
+template: |
+  You are a code analyzer.
+
+  Relevant documentation:
+  {{RAG_CONTENT}}
+
+  Analyze this code: {{code}}
+
+rag_config_refs: ["docs_search"]  # Reference RAG config
+defaults:
+  language: "python"
+```
+
+**Using RAG**:
+```python
+# RAG executes automatically with include_rag=True (default)
+result = await builder.render_system_prompt(
+    "analyze_code",
+    params={"code": code_snippet, "topic": "async programming"},
+    include_rag=True  # Default
+)
+
+# Result includes RAG content injected into {{RAG_CONTENT}}
+```
+
+### Template Composition
+
+Templates can inherit from other templates:
+
+```yaml
+# system/base_assistant.yaml
+template: |
+  {{HEADER}}
+
+  {{INSTRUCTIONS}}
+
+  {{FOOTER}}
+
+sections:
+  HEADER: "You are a helpful AI assistant."
+  INSTRUCTIONS: "Answer questions accurately."
+  FOOTER: "Be concise and clear."
+
+# system/code_assistant.yaml
+extends: "base_assistant"  # Inherit from base
+
+sections:
+  HEADER: "You are an expert code reviewer."  # Override
+  INSTRUCTIONS: |
+    Review code for:
+    - Bugs and errors
+    - Best practices
+    - Security issues
+```
+
+**Result**: The code_assistant inherits the template structure but overrides specific sections.
+
+---
+
+## Conversation Management
+
+### Creating Conversations
+
+```python
+from dataknobs_llm.conversations import (
+    ConversationManager,
+    DataknobsConversationStorage
+)
+from dataknobs_llm.llm import OpenAIProvider
+from dataknobs_llm.prompts import AsyncPromptBuilder, FileSystemPromptLibrary
+from dataknobs_data.backends import AsyncMemoryDatabase
+
+# Setup components
+library = FileSystemPromptLibrary("prompts/")
+builder = AsyncPromptBuilder(library=library)
+llm = OpenAIProvider(config={"api_key": "your-key"})
+storage = DataknobsConversationStorage(AsyncMemoryDatabase())
+
+# Create new conversation
+manager = await ConversationManager.create(
+    llm=llm,
+    prompt_builder=builder,
+    storage=storage,
+    system_prompt_name="helpful_assistant",  # Initial system prompt
+    system_params={"domain": "Python programming"}
+)
+
+print(f"Conversation ID: {manager.conversation_id}")
+```
+
+### Adding Messages
+
+```python
+# Add user message from prompt template
+await manager.add_message(
+    role="user",
+    prompt_name="ask_question",
+    params={"question": "What is async/await?"}
+)
+
+# Add user message with direct content
+await manager.add_message(
+    role="user",
+    content="Can you explain with examples?"
+)
+
+# Add inline content with RAG enhancement
+await manager.add_message(
+    role="system",
+    content="You are a helpful assistant.\n\nContext:\n{{CONTEXT}}",
+    rag_configs=[{
+        "adapter_name": "docs",
+        "query": "assistant guidelines",
+        "placeholder": "CONTEXT",
+        "k": 3
+    }]
+)
+
+# Get LLM response
+response = await manager.complete()
+print(response.content)
+```
+
+### Multi-Turn Conversations
+
+```python
+# Turn 1
+await manager.add_message(
+    role="user",
+    content="Explain Python decorators"
+)
+response1 = await manager.complete()
+
+# Turn 2
+await manager.add_message(
+    role="user",
+    content="Show me an example"
+)
+response2 = await manager.complete()
+
+# Turn 3
+await manager.add_message(
+    role="user",
+    content="How about with arguments?"
+)
+response3 = await manager.complete()
+
+# Get full history
+messages = manager.state.get_current_messages()
+for msg in messages:
+    print(f"{msg.role}: {msg.content[:50]}...")
+```
+
+### Streaming Responses
+
+```python
+await manager.add_message(
+    role="user",
+    content="Write a long explanation of generators"
+)
+
+# Stream response chunks
+async for chunk in manager.stream_complete():
+    print(chunk.delta, end="", flush=True)
+
+print("\n")  # New line after streaming
+```
+
+### Conversation Branching
+
+The conversation system uses a tree structure, allowing multiple alternative paths:
+
+```python
+# Initial conversation
+await manager.add_message(role="user", content="Explain lists")
+response1 = await manager.complete()  # Node "0.0"
+
+# Continue main branch
+await manager.add_message(role="user", content="What about tuples?")
+response2 = await manager.complete()  # Node "0.0.0"
+
+# Go back and create alternative response
+await manager.switch_to_node("0")  # Back to "Explain lists"
+response1_alt = await manager.complete(branch_name="alternative")  # Node "0.1"
+
+# Explore branches
+branches = manager.get_branches()
+for branch in branches:
+    print(f"Branch {branch['node_id']}: {branch['branch_name']}")
+    print(f"  Content: {branch['message'].content[:50]}...")
+```
+
+#### Branching from an Existing Node
+
+Use `branch_from()` to create a sibling of a specific node. This navigates to
+the node's parent so the next message becomes a sibling rather than a child:
+
+```python
+# Conversation has node "0.0" (an assistant response)
+# Create a sibling — a new branch from the same parent
+await manager.branch_from("0.0")  # Now positioned at node "0"
+response_alt = await manager.complete()  # Creates node "0.1"
+```
+
+This is useful when revisiting a conversation point to explore an alternative
+path without manually locating the parent node. The wizard reasoning strategy
+uses this internally when stages are revisited via back or restart navigation.
+
+### RAG Caching
+
+When using prompts with RAG (Retrieval-Augmented Generation), you can enable caching to improve performance and reduce costs:
+
+```python
+manager = await ConversationManager.create(
+    llm=llm,
+    prompt_builder=builder,
+    storage=storage,
+    system_prompt_name="assistant",
+    cache_rag_results=True,        # Store RAG metadata in conversation nodes
+    reuse_rag_on_branch=True       # Reuse cached RAG when branching
+)
+
+# First message executes RAG search
+await manager.add_message(
+    role="user",
+    prompt_name="code_question",
+    params={"language": "python", "topic": "decorators"}
+)
+await manager.complete()
+
+# Branch back to earlier point
+await manager.switch_to_node("0")
+
+# This reuses cached RAG results (same query parameters!)
+await manager.add_message(
+    role="user",
+    prompt_name="code_question",
+    params={"language": "python", "topic": "decorators"}  # Same params = cache hit
+)
+```
+
+**How it works:**
+- `cache_rag_results=True` stores RAG metadata (queries, results, hashes) in conversation nodes
+- `reuse_rag_on_branch=True` searches the conversation tree for cached results before executing new RAG searches
+- Cache matching uses query hashes to ensure identical queries reuse results
+
+**Inspecting RAG metadata:**
+
+```python
+# Get RAG metadata from current node
+metadata = manager.get_rag_metadata()
+
+if metadata:
+    for placeholder, rag_data in metadata.items():
+        print(f"Query: {rag_data['query']}")
+        print(f"Results: {len(rag_data['results'])}")
+        print(f"Timestamp: {rag_data['timestamp']}")
+```
+
+For detailed information about RAG caching, including cache matching logic, best practices, and troubleshooting, see [rag-caching.md](rag-caching.md).
+
+### Persistence and Resumption
+
+```python
+# Create conversation
+manager1 = await ConversationManager.create(
+    llm=llm,
+    prompt_builder=builder,
+    storage=storage,
+    system_prompt_name="helpful_assistant"
+)
+
+# Have some conversation
+await manager1.add_message(role="user", content="Hello")
+await manager1.complete()
+
+# Save conversation ID
+conv_id = manager1.conversation_id
+
+# ... later, possibly in different session ...
+
+# Resume conversation
+manager2 = await ConversationManager.resume(
+    conversation_id=conv_id,
+    llm=llm,
+    prompt_builder=builder,
+    storage=storage
+)
+
+# Continue where we left off
+await manager2.add_message(role="user", content="Tell me more")
+response = await manager2.complete()
+```
+
+### Storage Backends
+
+The conversation system works with any dataknobs backend:
+
+```python
+from dataknobs_data.backends import AsyncMemoryDatabase  # In-memory (testing)
+from dataknobs_data.backends.file import AsyncFileDatabase  # Local files
+from dataknobs_data.backends.postgres import AsyncPostgresDatabase  # PostgreSQL
+from dataknobs_data.backends.sqlite_async import AsyncSQLiteDatabase  # SQLite
+
+# In-memory storage (testing)
+storage = DataknobsConversationStorage(AsyncMemoryDatabase())
+
+# File-based storage (local development)
+storage = DataknobsConversationStorage(
+    AsyncFileDatabase(path="conversations/store.json")
+)
+
+# PostgreSQL (production)
+storage = DataknobsConversationStorage(
+    AsyncPostgresDatabase(connection_string="postgresql://...")
+)
+
+# SQLite (simple persistence)
+storage = DataknobsConversationStorage(
+    AsyncSQLiteDatabase(path="conversations.db")
+)
+```
+
+### Querying Conversations
+
+```python
+# List all conversations
+conversations = await storage.list_conversations(limit=10)
+
+# List most recently updated conversations
+conversations = await storage.list_conversations(
+    sort_by="updated_at",
+    sort_order="desc",
+    limit=10,
+)
+
+# Filter by metadata
+customer_convs = await storage.list_conversations(
+    filter_metadata={"customer_id": "12345"},
+    sort_by="updated_at",
+    limit=50,
+)
+
+# Count conversations (efficient backend-level count)
+total = await storage.count_conversations()
+customer_count = await storage.count_conversations(
+    filter_metadata={"customer_id": "12345"}
+)
+
+# Load specific conversation
+state = await storage.load_conversation(conversation_id)
+if state:
+    print(f"Conversation created: {state.created_at}")
+    print(f"Last updated: {state.updated_at}")
+    print(f"Message count: {len(state.get_current_messages())}")
+```
+
+#### Metadata propagation
+
+`state.metadata` is mirrored into the underlying `Record.metadata` on save,
+so backends with a dedicated metadata column (Postgres, Elasticsearch, etc.)
+can index and filter on it. `filter_metadata={"key": value}` translates to a
+`metadata.<key>` query that SQL backends route to the metadata column
+directly. The serialized state in the data column also still includes the
+metadata block, so loading a conversation and round-tripping it is
+unaffected.
+
+`state.metadata` is typed `Dict[str, Any]` and may contain JSON-serializable
+nested values; the persistence layer deep-copies `state.metadata` on save,
+so post-save mutations of nested values do not affect already-persisted
+rows. SQL backends index top-level keys, so nested-value filtering is
+outside the `filter_metadata` contract.
+
+---
+
+## Middleware
+
+Middleware processes requests before LLM calls and responses after LLM calls.
+
+### Built-in Middleware
+
+#### LoggingMiddleware
+
+```python
+from dataknobs_llm.conversations import LoggingMiddleware
+import logging
+
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
+
+logging_mw = LoggingMiddleware(logger)
+
+manager = await ConversationManager.create(
+    llm=llm,
+    prompt_builder=builder,
+    storage=storage,
+    middleware=[logging_mw]
+)
+
+# All interactions will be logged
+await manager.add_message(role="user", content="Hello")
+await manager.complete()
+# Output: "Conversation <id> - Sending 2 messages to LLM"
+# Output: "Conversation <id> - Received response: 150 chars, model=gpt-4, finish_reason=stop"
+```
+
+#### ContentFilterMiddleware
+
+```python
+from dataknobs_llm.conversations import ContentFilterMiddleware
+
+# Define filter words
+filter_mw = ContentFilterMiddleware(
+    filter_words=["inappropriate", "offensive"],
+    replacement="[FILTERED]",
+    case_sensitive=False
+)
+
+manager = await ConversationManager.create(
+    llm=llm,
+    prompt_builder=builder,
+    storage=storage,
+    middleware=[filter_mw]
+)
+
+# Filtered words will be replaced in responses
+response = await manager.complete()
+# If LLM returns "This is inappropriate", it becomes "This is [FILTERED]"
+```
+
+#### HistoryRedactionMiddleware
+
+```python
+from dataknobs_llm.conversations import (
+    HistoryRedaction,
+    HistoryRedactionMiddleware,
+)
+
+# Block citation carry-over for a bot that emits [bib:N · …] headers
+# and bare bib:N references in its responses. Either the typed
+# HistoryRedaction shape (preferred) or the legacy dict shape works;
+# mixing the two in one call raises TypeError.
+redaction_mw = HistoryRedactionMiddleware(
+    redactions=[
+        # Bracketed header MUST come first (more specific) — if the
+        # bare-token rule ran first it would consume the bib:N inside
+        # the bracket and leave a malformed `[ · vendor · …]` header.
+        HistoryRedaction(pattern=r"\[bib:\d+[^\]]*\]",
+                         replacement="[prior citation]"),
+        HistoryRedaction(pattern=r"\bbib:\d+\b",
+                         replacement="[prior citation]"),
+    ],
+)
+
+# Equivalent legacy dict shape (the config-spec path):
+redaction_mw = HistoryRedactionMiddleware(
+    redactions=[
+        {"pattern": r"\[bib:\d+[^\]]*\]",
+         "replacement": "[prior citation]"},
+        {"pattern": r"\bbib:\d+\b",
+         "replacement": "[prior citation]"},
+    ],
+)
+
+manager = await ConversationManager.create(
+    llm=llm,
+    prompt_builder=builder,
+    storage=storage,
+    middleware=[redaction_mw],
+)
+```
+
+`process_request` rewrites assistant-role content as messages are
+forwarded to the LLM; `process_response` is a passthrough so the fresh
+response keeps its full citation set for rendering. The persisted
+assistant node keeps the original text — only the in-memory prompt-feed
+sees the redacted form. Pass `redact_roles=(...)` to widen the rewrite
+beyond the assistant role (the default `("assistant",)` matches the
+dominant leak source).
+
+Non-content fields on assistant messages — `tool_calls`, `tool_call_id`,
+`name`, `function_call`, `metadata` — are preserved when content is
+rewritten, so agent / tool-use loops that interleave bib tokens with
+tool invocations keep their invocation and pairing fields intact across
+the redaction.
+
+Each redaction spec is validated up front: a missing `pattern` key, an
+empty pattern, or an invalid regex raises a clear `ValueError` /
+`re.error` at construction time (the config-load boundary) instead of
+crashing mid-loop on the first request.
+
+#### ValidationMiddleware
+
+```python
+from dataknobs_llm.conversations import ValidationMiddleware
+
+# Create validation LLM (can be different from main LLM)
+validation_llm = OpenAIProvider(config={"api_key": "your-key"})
+
+validation_mw = ValidationMiddleware(
+    llm=validation_llm,
+    prompt_builder=builder,
+    validation_prompt="validate_response",  # Prompt that checks if response is valid
+    auto_retry=False  # Raise error on validation failure
+)
+
+manager = await ConversationManager.create(
+    llm=llm,
+    prompt_builder=builder,
+    storage=storage,
+    middleware=[validation_mw]
+)
+
+# Responses will be validated
+# If validation fails, ValueError is raised (auto_retry=False)
+# If auto_retry=True, response.metadata["retry_requested"] = True
+```
+
+**Validation prompt example** (user/validate_response.yaml):
+```yaml
+template: |
+  Check if this response is appropriate and helpful:
+
+  {{response}}
+
+  Respond with "VALID" if appropriate, "INVALID" otherwise.
+```
+
+#### MetadataMiddleware
+
+```python
+from dataknobs_llm.conversations import MetadataMiddleware
+from datetime import datetime
+
+# Static metadata
+metadata_mw = MetadataMiddleware(
+    request_metadata={"source": "web_app", "version": "1.0"},
+    response_metadata={"processed": True}
+)
+
+# Dynamic metadata with function
+def get_timestamp():
+    return {"timestamp": datetime.now().isoformat()}
+
+dynamic_mw = MetadataMiddleware(
+    response_metadata_fn=get_timestamp
+)
+
+manager = await ConversationManager.create(
+    llm=llm,
+    prompt_builder=builder,
+    storage=storage,
+    middleware=[metadata_mw, dynamic_mw]
+)
+```
+
+#### PromoteToPersistMiddleware
+
+Promote allowlisted flat `response.metadata` keys into the `_persist`
+sub-dictionary so they flow onto the persisted assistant conversation node.
+See "Persisting Middleware Audit Data" below for the contract; this entry
+is a quick API reference.
+
+```python
+from dataknobs_llm.conversations import (
+    PromoteToPersistMiddleware,
+    RateLimitMiddleware,
+)
+
+# Position-[0] so it runs LAST on response (after RateLimitMiddleware writes
+# its flat keys). See the ordering note under "Persisting Middleware Audit
+# Data" below.
+manager = await ConversationManager.create(
+    llm=llm,
+    prompt_builder=builder,
+    storage=storage,
+    middleware=[
+        PromoteToPersistMiddleware(keys=[
+            "rate_limit_count",    # from RateLimitMiddleware
+            "eval_duration",       # from an Ollama-style provider
+        ]),
+        RateLimitMiddleware(max_requests=10, window_seconds=60),
+    ],
+)
+```
+
+### Middleware Execution Order
+
+Middleware executes in "onion model":
+- **Requests**: Forward order (first to last)
+- **Responses**: Reverse order (last to first)
+
+```python
+middleware = [
+    LoggingMiddleware(logger),      # 1st for requests, 3rd for responses
+    ValidationMiddleware(...),       # 2nd for requests, 2nd for responses
+    MetadataMiddleware(...)          # 3rd for requests, 1st for responses
+]
+
+# Request flow:  Logging → Validation → Metadata → LLM
+# Response flow: LLM → Metadata → Validation → Logging
+```
+
+### Custom Middleware
+
+```python
+from dataknobs_llm.conversations import ConversationMiddleware
+
+class TokenCounterMiddleware(ConversationMiddleware):
+    """Count tokens in requests and responses."""
+
+    def __init__(self):
+        self.request_tokens = 0
+        self.response_tokens = 0
+
+    async def process_request(self, messages, state):
+        # Count tokens in messages
+        for msg in messages:
+            self.request_tokens += len(msg.content.split())
+        return messages
+
+    async def process_response(self, response, state):
+        # Count tokens in response
+        self.response_tokens += len(response.content.split())
+
+        # Add to metadata
+        if not response.metadata:
+            response.metadata = {}
+        response.metadata["total_tokens"] = (
+            self.request_tokens + self.response_tokens
+        )
+
+        return response
+
+# Use custom middleware
+counter_mw = TokenCounterMiddleware()
+
+manager = await ConversationManager.create(
+    llm=llm,
+    prompt_builder=builder,
+    storage=storage,
+    middleware=[counter_mw]
+)
+
+response = await manager.complete()
+print(f"Total tokens: {response.metadata['total_tokens']}")
+```
+
+### Per-Turn (Scoped) Middleware
+
+Some middleware must be constructed fresh for each turn — for example a
+post-processor that depends on that turn's retrieval candidates or captures
+per-turn audit state in its closure. For these cases, attach middleware via
+`ConversationManager.scoped_middleware()` instead of the permanent
+`middleware=[...]` constructor argument.
+
+`scoped_middleware()` is an async context manager that appends the given
+middleware on entry and removes it on exit — including when an exception
+is raised inside the `with` block. Onion ordering is preserved: permanent
+middleware wraps around scoped middleware.
+
+```python
+# Build a fresh per-turn middleware holding this turn's retrieval context
+citation_mw = CitationRenderingMiddleware(
+    candidates=retrieval_results,
+    config=cull_config,
+)
+
+async with manager.scoped_middleware(citation_mw):
+    response = await manager.complete(...)
+
+# After the `with` block, citation_mw is removed from manager.middleware.
+# The scoped middleware's process_response runs before the assistant-node
+# snapshot, so any response mutations it makes are persisted.
+```
+
+Multiple middleware can be attached in one call; they detach in reverse
+order:
+
+```python
+async with manager.scoped_middleware(outer, inner):
+    # Execution: outer.request → inner.request → LLM → inner.response → outer.response
+    await manager.complete()
+```
+
+`scoped_middleware` is not safe for concurrent use on the same manager
+instance. `ConversationManager` is already single-turn / single-caller;
+multi-user concurrency is handled at a higher layer (e.g. an
+application that caches one manager per session or conversation id).
+
+**Streaming caveat.** With `stream_complete`, `process_response` runs
+only after the stream generator is fully drained (it is invoked in the
+post-stream finalization step). If the consumer breaks out of the
+`async for` loop early, `process_response` is never called, so any
+mutation the scoped middleware performs there will not land on the
+persisted assistant node. The middleware is still detached correctly
+via `finally`, so there is no leak — but if you rely on scoped
+`process_response` behavior, use `complete()` or drain the stream.
+
+### Persisting Middleware Audit Data
+
+Middleware writes to `response.metadata` are **ephemeral by default** —
+they live on the `LLMResponse` for this call but do not flow to the
+persisted assistant conversation node. This keeps the default payload
+small and avoids silent contract creep from libraries that write perf
+counters or internal state.
+
+To **opt in** to persistence, write into the `_persist` sub-dictionary.
+Keys inside `_persist` are merged into the assistant node's metadata by
+`ConversationManager._finalize_completion`. The `_persist` marker itself
+is not propagated — only the keys inside it.
+
+```python
+from dataknobs_llm.conversations import ConversationMiddleware
+
+
+class CitationAuditMiddleware(ConversationMiddleware):
+    """Persist a per-turn citation culling outcome onto the assistant node."""
+
+    def __init__(self, outcome: dict):
+        self._outcome = outcome
+
+    async def process_request(self, messages, state):
+        return messages
+
+    async def process_response(self, response, state):
+        if response.metadata is None:
+            response.metadata = {}
+        # The `_persist` key is the single opt-in gate for persistence.
+        persist = response.metadata.setdefault("_persist", {})
+        persist["citation_audit"] = self._outcome
+        return response
+```
+
+After the LLM call, `node.data.metadata["citation_audit"]` will hold the
+outcome dict. The `_persist` key itself will not be on the node.
+
+**Collision rules** — canonical framework fields (`usage`, `model`,
+`provider`, `finish_reason`, cost, config overrides,
+`system_prompt_override`) and the caller's `metadata=` kwarg win over
+`_persist` values of the same key. Middleware audits; it does not
+replace. Non-dict `_persist` values are skipped with a WARNING log.
+
+**Promoting existing writers.** If you want to persist keys that are
+written as **flat** `response.metadata` entries by a provider or an
+existing middleware (e.g. `RateLimitMiddleware`'s `rate_limit_count`,
+Ollama's `eval_duration`/`total_duration`), register
+`PromoteToPersistMiddleware` at position `[0]` of the `middleware` list
+with the key allowlist:
+
+```python
+from dataknobs_llm.conversations import (
+    PromoteToPersistMiddleware,
+    RateLimitMiddleware,
+)
+
+manager = await ConversationManager.create(
+    llm=llm,
+    prompt_builder=builder,
+    storage=storage,
+    middleware=[
+        # Position-[0] — runs LAST on response, after other middleware have
+        # written their flat keys. Onion-execution runs `process_response`
+        # in reverse order: middleware[-1] first, middleware[0] last. If
+        # the promoter is at the end of the list, it runs first on response
+        # and captures nothing written by later middleware.
+        PromoteToPersistMiddleware(keys=[
+            "rate_limit_count",
+            "eval_duration",
+            "total_duration",
+        ]),
+        RateLimitMiddleware(max_requests=10, window_seconds=60),
+    ],
+)
+```
+
+Provider writes (e.g. an Ollama-style provider populating
+`response.metadata["eval_duration"]`) are already in place **before** any
+middleware runs, so the promoter's position in the list is irrelevant
+for provider-sourced keys. It only matters for keys written by other
+middleware.
+
+**Per-call promotion.** For one-shot promotion (e.g., a single call where
+you want to capture a flat key without adding a permanent middleware),
+register the promoter via `scoped_middleware()` instead. The context
+manager attaches the promoter on entry and removes it on exit, preserving
+the same onion-ordering semantics relative to the permanent stack:
+
+```python
+async with manager.scoped_middleware(
+    PromoteToPersistMiddleware(keys=["eval_duration"])
+):
+    response = await manager.complete()
+```
+
+**Collision with an existing `_persist` write.** If another middleware
+has already written a same-named key into `_persist`, the promoter uses
+`setdefault` and does not overwrite — native `_persist` writes take
+precedence over passive promotion. This is distinct from collision
+between two native `_persist` writers: those use
+`persist[key] = ...` / `persist.update(...)` and follow onion ordering —
+the outer middleware (earlier in the `middleware` list) runs last on
+response and its write wins.
+
+---
+
+## Advanced Features
+
+### Synchronous vs Asynchronous
+
+The library provides both sync and async versions:
+
+```python
+# Async version (recommended)
+from dataknobs_llm.prompts import AsyncPromptBuilder, AsyncDictResourceAdapter
+
+builder = AsyncPromptBuilder(
+    library=library,
+    adapters={"data": AsyncDictResourceAdapter(data)}
+)
+result = await builder.render_system_prompt("prompt_name", params={...})
+
+# Sync version (for non-async code)
+from dataknobs_llm.prompts import PromptBuilder, DictResourceAdapter
+
+builder = PromptBuilder(
+    library=library,
+    adapters={"data": DictResourceAdapter(data)}
+)
+result = builder.render_system_prompt("prompt_name", params={...})
+```
+
+### Error Handling
+
+```python
+
+try:
+    result = await builder.render_user_prompt(
+        "non_existent_prompt",
+        params={}
+    )
+except PromptNotFoundError as e:
+    print(f"Prompt not found: {e}")
+
+# Validation errors
+from dataknobs_llm.prompts import ValidationLevel
+
+try:
+    result = await builder.render_user_prompt(
+        "prompt_name",
+        params={},  # Missing required params
+        validation_level=ValidationLevel.ERROR
+    )
+except ValueError as e:
+    print(f"Validation failed: {e}")
+```
+
+### Per-Request Config Overrides
+
+Override LLM configuration on a per-request basis without modifying the provider's base config. This enables A/B testing, fallback routing, cost optimization, and dynamic model switching.
+
+#### Basic Usage
+
+```python
+from dataknobs_llm.llm import OpenAIProvider, LLMConfig
+
+# Create provider with default config
+config = LLMConfig(
+    provider="openai",
+    model="gpt-4",
+    temperature=0.7
+)
+llm = OpenAIProvider(config)
+
+# Override config for a specific request
+response = await llm.complete(
+    "Write a creative story",
+    config_overrides={
+        "model": "gpt-4-turbo",  # Use different model
+        "temperature": 1.2,      # More creative
+        "max_tokens": 2000
+    }
+)
+
+# Streaming with overrides
+async for chunk in llm.stream_complete(
+    "Explain quantum physics",
+    config_overrides={"model": "gpt-3.5-turbo", "temperature": 0.3}
+):
+    print(chunk.delta, end="")
+```
+
+#### Supported Override Fields
+
+| Field | Description |
+|-------|-------------|
+| `model` | Switch models per-request |
+| `temperature` | Adjust creativity (0.0-2.0) |
+| `max_tokens` | Control response length |
+| `top_p` | Nucleus sampling parameter |
+| `stop_sequences` | Custom stop tokens |
+| `seed` | Reproducibility seed |
+| `presence_penalty` | Presence penalty (-2.0 to 2.0) |
+| `frequency_penalty` | Frequency penalty (-2.0 to 2.0) |
+| `logit_bias` | Token biases |
+| `response_format` | Output format ("text" or "json") |
+| `functions` | Dynamic function definitions |
+| `function_call` | Function calling mode |
+| `options` | Provider-specific options (merged with base) |
+
+#### Override Presets
+
+Register named presets for common override combinations:
+
+```python
+from dataknobs_llm.llm import AsyncLLMProvider
+
+# Register presets (class-level, shared across all providers)
+AsyncLLMProvider.register_preset("creative", {
+    "temperature": 1.2,
+    "top_p": 0.95,
+    "presence_penalty": 0.5
+})
+
+AsyncLLMProvider.register_preset("precise", {
+    "temperature": 0.1,
+    "top_p": 0.9
+})
+
+AsyncLLMProvider.register_preset("fast", {
+    "model": "gpt-3.5-turbo",
+    "max_tokens": 500
+})
+
+# Use preset
+response = await llm.complete(
+    "Write a poem",
+    config_overrides={"preset": "creative"}
+)
+
+# Override preset values
+response = await llm.complete(
+    "Write a short poem",
+    config_overrides={
+        "preset": "creative",
+        "max_tokens": 100  # Override preset's lack of max_tokens
+    }
+)
+
+# List available presets
+print(AsyncLLMProvider.list_presets())  # ["creative", "precise", "fast"]
+
+# Get preset config
+print(AsyncLLMProvider.get_preset("creative"))
+# {"temperature": 1.2, "top_p": 0.95, "presence_penalty": 0.5}
+```
+
+#### Override Callbacks for Logging/Metrics
+
+Register callbacks to track override usage:
+
+```python
+from dataknobs_llm.llm import AsyncLLMProvider, LLMConfig
+
+# Define callback
+def log_overrides(provider, overrides: dict, runtime_config: LLMConfig):
+    print(f"Overrides applied: {overrides}")
+    print(f"Runtime model: {runtime_config.model}")
+    print(f"Runtime temperature: {runtime_config.temperature}")
+
+# Register callback (class-level)
+AsyncLLMProvider.on_override_applied(log_overrides)
+
+# Now every request with overrides will trigger the callback
+response = await llm.complete(
+    "Hello",
+    config_overrides={"temperature": 0.5}
+)
+# Output:
+# Overrides applied: {'temperature': 0.5}
+# Runtime model: gpt-4
+# Runtime temperature: 0.5
+
+# Clear callbacks when done (important for testing)
+AsyncLLMProvider.clear_override_callbacks()
+```
+
+**Use cases for callbacks:**
+- Logging override usage for debugging
+- Collecting metrics on model/parameter usage
+- A/B testing analytics
+- Cost tracking per-request
+
+#### Options Dict Merging
+
+The `options` field is shallowly merged with the base config's options:
+
+```python
+# Base config with options
+config = LLMConfig(
+    provider="echo",
+    model="echo-model",
+    options={
+        "echo_prefix": "Response: ",
+        "mock_tokens": True
+    }
+)
+llm = EchoProvider(config)
+
+# Override merges with base options
+response = await llm.complete(
+    "Hello",
+    config_overrides={
+        "options": {"echo_prefix": "Custom: "}  # Override one option
+    }
+)
+# Result: options = {"echo_prefix": "Custom: ", "mock_tokens": True}
+```
+
+#### ConversationManager Integration
+
+Overrides work with ConversationManager via `llm_config_overrides`:
+
+```python
+from dataknobs_llm.conversations import ConversationManager
+
+manager = await ConversationManager.create(
+    llm=llm,
+    prompt_builder=builder,
+    storage=storage,
+    system_prompt_name="assistant"
+)
+
+# Add message and complete with overrides
+await manager.add_message(role="user", content="Hello")
+response = await manager.complete(
+    llm_config_overrides={"model": "gpt-4-turbo", "temperature": 0.9}
+)
+
+# Streaming with overrides
+async for chunk in manager.stream_complete(
+    llm_config_overrides={"model": "gpt-3.5-turbo"}
+):
+    print(chunk.delta, end="")
+```
+
+#### Error Handling
+
+Invalid override fields raise `ValueError`:
+
+```python
+try:
+    response = await llm.complete(
+        "Hello",
+        config_overrides={"invalid_field": "value"}
+    )
+except ValueError as e:
+    print(e)
+    # "Unsupported config overrides: {'invalid_field'}.
+    #  Allowed fields: {'model', 'temperature', ...}"
+
+# Unknown preset raises ValueError
+try:
+    response = await llm.complete(
+        "Hello",
+        config_overrides={"preset": "nonexistent"}
+    )
+except ValueError as e:
+    print(e)
+    # "Unknown preset: 'nonexistent'. Available presets: ['creative', 'precise']"
+```
+
+### Metadata Tracking
+
+```python
+# Conversation metadata
+manager = await ConversationManager.create(
+    llm=llm,
+    prompt_builder=builder,
+    storage=storage,
+    metadata={
+        "user_id": "alice",
+        "session_id": "abc123",
+        "app_version": "1.0"
+    }
+)
+
+# Add metadata during conversation
+await manager.state.metadata.update({"topic": "python"})
+
+# Node metadata (per message)
+await manager.add_message(
+    role="user",
+    content="Hello",
+    metadata={"intent": "greeting"}
+)
+```
+
+#### Pre-state metadata: `seed_metadata` vs `set_metadata`
+
+`ConversationManager` holds metadata in two buckets:
+
+- `state.metadata` — the live, persisted bucket; the unit of persistence.
+- An internal seed bucket — what was passed to `metadata=` on `create()`;
+  copied onto `state.metadata` at the first message.
+
+The existing `set_metadata` / `update_metadata` / `remove_metadata` methods
+write only to `state.metadata`, so they **silently no-op** before the
+first message has materialized state. This is by design — they pair with
+the post-state-only `metadata` property — but it surprises callers that
+want to seed a value before the first turn.
+
+For writes that must survive across the pre-/post-state boundary, use
+the `seed_*` family:
+
+```python
+manager = await ConversationManager.create(
+    llm=llm, prompt_builder=builder, storage=storage,
+)
+
+# Pre-state: set_metadata silently no-ops; seed_metadata works.
+manager.set_metadata("active_project_id", "proj-42")
+assert manager.get_metadata("active_project_id") is None  # !!
+
+manager.seed_metadata("active_project_id", "proj-42")
+assert manager.get_seed_metadata("active_project_id") == "proj-42"
+
+# After the first turn, the seeded value is on state.metadata.
+await manager.add_message(role="user", content="hi")
+assert manager.state.metadata["active_project_id"] == "proj-42"
+```
+
+Use `seed_metadata` when:
+
+- A UI-driven endpoint mutates a conversation-level value (a tenant ID,
+  an active-project ID, an ownership marker) before the first message.
+- A route handler does an ownership check on a not-yet-materialized
+  conversation: `manager.get_seed_metadata("owner")` works pre- and
+  post-state.
+
+Use `set_metadata` (the existing family) when the write should only
+apply once the conversation has at least one message — i.e., per-turn
+state that has no meaning before the first turn.
+
+The full seed-aware family:
+
+| Method | Sibling of | Persists immediately? |
+|---|---|---|
+| `seed_metadata(key, value)` | `set_metadata` | No — call `save()` |
+| `update_seed_metadata(updates)` | `update_metadata` | No — call `save()` |
+| `remove_seed_metadata(key)` | `remove_metadata` | No — call `save()` |
+| `await add_seed_metadata(key, value)` | `await add_metadata` | **Yes** (post-state) |
+| `get_seed_metadata(key=None, default=None)` | `get_metadata` | n/a (read) |
+
+The sync `seed_metadata` / `update_seed_metadata` / `remove_seed_metadata`
+trio matches the non-persisting contract of the existing sync family —
+call `await manager.save()` (or rely on the next turn's persisted
+append) to durably store the write. The async `add_seed_metadata` is
+the seed analogue of `add_metadata`: pre-state it writes to the seed
+bucket and short-circuits the persistence step (there is no state to
+persist yet, but the write survives state materialization); post-state
+it writes the live bucket and persists immediately, so a subsequent
+`resume()` observes the value without an intervening turn.
+
+```python
+# Pre-state: works, no persistence yet (nothing to persist).
+await manager.add_seed_metadata("active_project_id", "proj-42")
+
+# After the first turn the seed value lands on state.metadata as usual.
+await manager.add_message(role="user", content="hi")
+assert manager.state.metadata["active_project_id"] == "proj-42"
+
+# Post-state: writes + persists; a fresh resume sees the value.
+await manager.add_seed_metadata("tenant_id", "tenant-a")
+resumed = await ConversationManager.resume(
+    conversation_id=manager.conversation_id,
+    llm=llm, prompt_builder=builder, storage=storage,
+)
+assert resumed.get_seed_metadata("tenant_id") == "tenant-a"
+```
+
+Unlike `add_metadata`, the seed analogue does NOT raise pre-state —
+that's the whole point of being seed-aware.
+
+### `save()`: durably persisting sync writes
+
+Both metadata families include sync writers (`set_metadata`,
+`seed_metadata`, etc.) that mutate in-memory state without
+auto-persisting. `await manager.save()` is the public escape hatch
+that persists the current state to storage. Pre-state the call is a
+silent no-op (there is no state to persist).
+
+```python
+manager.seed_metadata("user_tier", "premium")
+await manager.save()  # durable
+```
+
+---
+
+## Intent Classification
+
+`dataknobs_llm.intent` ships a pluggable intent-classification surface
+usable by any LLM-layer consumer that needs to route user input by
+intent — tool routers, reasoning strategies, RAG query classifiers,
+or downstream packages (for example, `dataknobs-bots` consumes it
+from its wizard `intent_detection:` block).
+
+The protocol is intentionally narrow: one async `classify` method
+returning a frozen `IntentMatchResult`. Per-classifier configuration
+(vocabulary, LLM provider, tokenizer) lives on the implementation,
+injected at construction.
+
+### Quick start
+
+```python
+from dataknobs_llm.intent import (
+    IntentSpec,
+    KeywordIntentClassifier,
+)
+
+clf = KeywordIntentClassifier()
+result = await clf.classify(
+    "yes please",
+    [
+        IntentSpec(name="accept", target="confirm"),
+        IntentSpec(name="decline", target="abort"),
+    ],
+)
+print(result.intent.name if result.intent else "no-match")
+# → "accept"
+```
+
+`IntentSpec` declares each intent (`name`, `target`, optional
+`keywords:` override, optional `extract:` field name). The classifier
+returns an `IntentMatchResult` with the matched `intent`, an optional
+`extracted` payload (from LLM-tier classifiers), a `rule_based` flag,
+the preserved `raw_reply`, and a `confidence: float | None` field
+that calibrated-confidence backends populate.
+
+### Built-in classifiers
+
+| Class | When to use |
+|---|---|
+| `KeywordIntentClassifier` | Rule-based vocab + tokenizer. Default tokenizer is word-boundary regex (a bare `"yes"` matches a standalone `"yes"` but not the `"yes"` substring of `"yesterday"`). Inject a custom tokenizer for I18N / fuzzy / N-gram / morphological matching. |
+| `LLMIntentClassifier` | LLM-backed. Injectable provider + prompt template. Lenient response parsing accepts both the `DEFAULT_LLM_PROMPT_TEMPLATE` JSON shape (`{"intent": ..., "extracted": ...}`) and a bare intent ID. Provider errors return no-match (logged at WARNING); `asyncio.CancelledError` propagates. |
+| `CompositeIntentClassifier` | Chain backends. `"first_match"` (default) returns the first non-None match — the standard "keyword first, optional LLM fallback" shape. `"vote"` queries every backend and breaks ties by classifier order. |
+| `NegationFilter` | Decorator wrapping any classifier. Drops matches when `dataknobs_llm.extraction.grounding.has_negation` fires (closes the `"no, I don't want to accept that"` foot-gun). |
+
+### Backend registry
+
+`intent_classifier_backends` is a `Registry[IntentClassifierFactory]`
+mirroring `event_bus_backends` and `lock_backends`. Built-in factories
+`"keyword"`, `"llm"`, `"composite"` auto-register at import; consumers
+register their own (embedding similarity, fuzzy match, locale-specific
+keyword variants):
+
+```python
+from dataknobs_llm.intent import (
+    create_intent_classifier,
+    intent_classifier_backends,
+)
+
+def _embedding_factory(config: dict) -> "IntentClassifier":
+    return MyEmbeddingClassifier(threshold=config.get("threshold", 0.8))
+
+intent_classifier_backends.register("embedding", _embedding_factory)
+
+clf = create_intent_classifier("embedding", {"threshold": 0.9})
+```
+
+`create_intent_classifier(name, config=None)` resolves a backend by
+name and forwards the config dict. Unknown names raise `ValueError`
+listing every registered backend (mirrors the `create_event_bus` /
+`create_lock` shape).
+
+### Injecting a custom tokenizer
+
+```python
+from dataknobs_llm.intent import KeywordIntentClassifier
+
+def fuzzy_tokenizer(keyword: str, message: str) -> bool:
+    # Both args arrive pre-lowercased.
+    return keyword in message  # substring fallback
+
+clf = KeywordIntentClassifier(tokenizer=fuzzy_tokenizer)
+```
+
+The tokenizer signature is `(keyword: str, message: str) -> bool`;
+both arguments arrive pre-lowercased.
+
+### Composing keyword + LLM fallback
+
+```python
+from dataknobs_llm.intent import (
+    CompositeIntentClassifier,
+    KeywordIntentClassifier,
+    LLMIntentClassifier,
+    NegationFilter,
+)
+
+base = CompositeIntentClassifier(
+    [KeywordIntentClassifier(), LLMIntentClassifier(llm=provider)],
+    strategy="first_match",
+)
+clf = NegationFilter(base, suppress_intents=frozenset({"accept"}))
+```
+
+`first_match` short-circuits on the first non-None match — keyword
+match is fast and runs first; the LLM tier only runs when the keyword
+classifier returns no match. The `NegationFilter` then drops `accept`
+matches when negation is detected, leaving `decline` matches alone.
+
+### Phrase-priority mode
+
+`KeywordIntentClassifier` ships an opt-in `phrase_priority` mode that
+makes multi-word phrases beat single-word matches and surfaces
+same-tier ambiguity instead of resolving by iteration order. The
+extraction layer's
+`dataknobs_llm.extraction.grounding.detect_boolean_signal` helper
+opts in to preserve the load-bearing affirmative/negative
+two-tier-vocabulary semantic.
+
+- `phrase_priority=True` with a `phrases` mapping makes multi-word
+  phrases beat single-word matches.
+- Two intents tying at the same tier (both phrase-matched or both
+  word-matched only) return `intent=None` — useful when the caller
+  wants ambiguity surfaced rather than resolved by iteration order.
+
+```python
+from dataknobs_llm.intent import (
+    IntentSpec,
+    KeywordIntentClassifier,
+)
+
+specs = [
+    IntentSpec(name="affirmative", target="accept"),
+    IntentSpec(name="negative", target="decline"),
+]
+
+clf = KeywordIntentClassifier(
+    vocabulary={
+        "affirmative": frozenset({"yes", "confirm"}),
+        "negative": frozenset({"no", "cancel"}),
+    },
+    phrases={
+        "affirmative": frozenset({"looks good", "sounds good"}),
+        "negative": frozenset({"not yet", "hold on"}),
+    },
+    phrase_priority=True,
+)
+
+# "no, looks good" → affirmative wins (phrase beats negative word)
+# "yes and no"     → None (both word-tier matches, ambiguous)
+# "not yet, but ok maybe" → negative wins (phrase beats word)
+```
+
+Classification work is pure-CPU: `classify()` is a thin async
+wrapper over the private `_classify_sync()` core. Same-package
+synchronous callers (notably `detect_boolean_signal`) dispatch
+through the sync core directly. Default behaviour is unchanged when
+the mode is not opted in — the iteration-order first-match-wins
+semantic is byte-identical to the pre-`phrase_priority` shape.
+
+### Re-exports
+
+`DEFAULT_VOCABULARY`, `DEFAULT_LLM_PROMPT_TEMPLATE`,
+`DEFAULT_NEGATION_KEYWORDS`, `DEFAULT_AFFIRMATIVE_SIGNALS`,
+`DEFAULT_NEGATIVE_SIGNALS`, `word_in_text`, and
+`default_word_boundary_tokenizer` are importable directly from
+`dataknobs_llm.intent`. The single-token English yes/no vocabularies
+live in `dataknobs_llm.intent.defaults` under these public names;
+consumers needing the same primitives for boolean recovery or
+analogous text-classification tasks import them from there directly.
+
+---
+
+## Complete Examples
+
+### Example 1: Code Review Assistant
+
+```python
+"""
+Complete code review assistant with validation and logging.
+"""
+import logging
+from pathlib import Path
+from dataknobs_llm.llm import OpenAIProvider
+from dataknobs_llm.prompts import AsyncPromptBuilder, FileSystemPromptLibrary
+from dataknobs_llm.conversations import (
+    ConversationManager,
+    DataknobsConversationStorage,
+    LoggingMiddleware,
+    ValidationMiddleware
+)
+from dataknobs_data.backends.postgres import AsyncPostgresDatabase
+
+# Setup logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+async def create_code_review_assistant():
+    # Load prompts
+    library = FileSystemPromptLibrary(Path("prompts/code_review/"))
+    builder = AsyncPromptBuilder(library=library)
+
+    # Create LLM
+    llm = OpenAIProvider(config={
+        "api_key": "your-key",
+        "model": "gpt-4"
+    })
+
+    # Create validation LLM
+    validation_llm = OpenAIProvider(config={
+        "api_key": "your-key",
+        "model": "gpt-3.5-turbo"  # Cheaper for validation
+    })
+
+    # Setup storage
+    storage = DataknobsConversationStorage(
+        AsyncPostgresDatabase(connection_string="postgresql://...")
+    )
+
+    # Setup middleware
+    middleware = [
+        LoggingMiddleware(logger),
+        ValidationMiddleware(
+            llm=validation_llm,
+            prompt_builder=builder,
+            validation_prompt="validate_code_review",
+            auto_retry=True
+        )
+    ]
+
+    # Create conversation
+    manager = await ConversationManager.create(
+        llm=llm,
+        prompt_builder=builder,
+        storage=storage,
+        system_prompt_name="code_reviewer",
+        system_params={"language": "python"},
+        middleware=middleware,
+        metadata={"type": "code_review"}
+    )
+
+    return manager
+
+async def review_code(manager, code: str):
+    # Submit code for review
+    await manager.add_message(
+        role="user",
+        prompt_name="submit_code",
+        params={"code": code}
+    )
+
+    # Get review
+    review = await manager.complete()
+    print("Review:", review.content)
+
+    # Ask follow-up
+    await manager.add_message(
+        role="user",
+        content="What about performance?"
+    )
+
+    performance_review = await manager.complete()
+    print("Performance notes:", performance_review.content)
+
+    return manager.conversation_id
+
+# Usage
+async def main():
+    manager = await create_code_review_assistant()
+
+    code = """
+    def process_data(items):
+        result = []
+        for item in items:
+            result.append(item * 2)
+        return result
+    """
+
+    conv_id = await review_code(manager, code)
+    print(f"Review saved as conversation: {conv_id}")
+
+# Run
+import asyncio
+asyncio.run(main())
+```
+
+### Example 2: Customer Support Bot with Branching
+
+```python
+"""
+Customer support bot that explores multiple solution paths.
+"""
+from dataknobs_llm.llm import AnthropicProvider
+from dataknobs_llm.prompts import AsyncPromptBuilder, ConfigPromptLibrary
+from dataknobs_llm.conversations import (
+    ConversationManager,
+    DataknobsConversationStorage,
+    ContentFilterMiddleware
+)
+from dataknobs_data.backends.sqlite_async import AsyncSQLiteDatabase
+
+async def create_support_bot():
+    # Define prompts
+    config = {
+        "system": {
+            "support_agent": {
+                "template": "You are a helpful {{company}} support agent."
+            }
+        },
+        "user": {
+            "customer_issue": {
+                0: {"template": "Customer issue: {{issue}}"}
+            }
+        }
+    }
+
+    library = ConfigPromptLibrary(config)
+    builder = AsyncPromptBuilder(library=library)
+
+    llm = AnthropicProvider(config={
+        "api_key": "your-key",
+        "model": "claude-3-sonnet-20240229"
+    })
+
+    storage = DataknobsConversationStorage(
+        AsyncSQLiteDatabase(path="support.db")
+    )
+
+    # Filter inappropriate content
+    middleware = [
+        ContentFilterMiddleware(
+            filter_words=["spam", "abuse"],
+            replacement="[filtered]",
+            case_sensitive=False
+        )
+    ]
+
+    manager = await ConversationManager.create(
+        llm=llm,
+        prompt_builder=builder,
+        storage=storage,
+        system_prompt_name="support_agent",
+        system_params={"company": "TechCorp"},
+        middleware=middleware,
+        metadata={"channel": "chat"}
+    )
+
+    return manager
+
+async def handle_support_request(manager, issue: str):
+    # Initial issue
+    await manager.add_message(
+        role="user",
+        prompt_name="customer_issue",
+        params={"issue": issue}
+    )
+
+    # Get initial solution
+    solution1 = await manager.complete(branch_name="solution-A")
+    print("Solution A:", solution1.content)
+
+    # Try alternative approach
+    await manager.switch_to_node("0")  # Back to initial issue
+    solution2 = await manager.complete(branch_name="solution-B")
+    print("Solution B:", solution2.content)
+
+    # Get all branches
+    branches = manager.get_branches()
+    print(f"\nExplored {len(branches)} solution paths")
+
+    return manager.conversation_id
+
+async def main():
+    manager = await create_support_bot()
+
+    conv_id = await handle_support_request(
+        manager,
+        "My login isn't working"
+    )
+
+    print(f"Support ticket: {conv_id}")
+
+import asyncio
+asyncio.run(main())
+```
+
+### Example 3: Document Analysis with RAG
+
+```python
+"""
+Document analysis assistant with RAG integration.
+"""
+from dataknobs_llm.llm import OpenAIProvider
+from dataknobs_llm.prompts import (
+    AsyncPromptBuilder,
+    FileSystemPromptLibrary,
+    AsyncDataknobsBackendAdapter
+)
+from dataknobs_llm.conversations import ConversationManager, DataknobsConversationStorage
+from dataknobs_data.backends import AsyncMemoryDatabase
+from dataknobs_data.records import Record
+
+async def setup_document_database():
+    """Create database with sample documents."""
+    db = AsyncMemoryDatabase()
+
+    # Add documents
+    docs = [
+        {"id": "1", "content": "Python asyncio enables concurrent programming", "category": "python"},
+        {"id": "2", "content": "React hooks simplify state management", "category": "javascript"},
+        {"id": "3", "content": "PostgreSQL supports JSONB for flexible schemas", "category": "database"}
+    ]
+
+    for doc in docs:
+        record = Record(data=doc, storage_id=doc["id"])
+        await db.upsert(doc["id"], record)
+
+    return db
+
+async def create_analysis_assistant():
+    # Setup document database
+    docs_db = await setup_document_database()
+
+    # Create adapter
+    docs_adapter = AsyncDataknobsBackendAdapter(
+        docs_db,
+        text_field="content",
+        metadata_fields=["category"]
+    )
+
+    # Load prompts (with RAG config)
+    library = FileSystemPromptLibrary(Path("prompts/analysis/"))
+
+    # Create builder with adapter
+    builder = AsyncPromptBuilder(
+        library=library,
+        adapters={"docs": docs_adapter}
+    )
+
+    llm = OpenAIProvider(config={"api_key": "your-key"})
+    storage = DataknobsConversationStorage(AsyncMemoryDatabase())
+
+    manager = await ConversationManager.create(
+        llm=llm,
+        prompt_builder=builder,
+        storage=storage,
+        system_prompt_name="document_analyzer"  # Uses RAG
+    )
+
+    return manager
+
+async def analyze_topic(manager, topic: str):
+    await manager.add_message(
+        role="user",
+        prompt_name="analyze_topic",
+        params={"topic": topic}
+        # RAG automatically retrieves relevant documents
+    )
+
+    # Stream analysis
+    print(f"Analysis of '{topic}':\n")
+    async for chunk in manager.stream_complete():
+        print(chunk.delta, end="", flush=True)
+    print("\n")
+
+async def main():
+    manager = await create_analysis_assistant()
+
+    # Analyze different topics
+    await analyze_topic(manager, "async programming")
+    await analyze_topic(manager, "state management")
+
+import asyncio
+asyncio.run(main())
+```
+
+---
+
+## Troubleshooting
+
+### Common Issues
+
+#### Issue: "Prompt not found"
+
+```python
+# Check if prompt exists
+prompts = library.list_system_prompts()
+print("Available system prompts:", prompts)
+
+prompts = library.list_user_prompts()
+print("Available user prompts:", prompts)
+```
+
+#### Issue: "Validation failed - missing required parameter"
+
+```python
+# Check what parameters are required
+prompt = library.get_user_prompt("prompt_name")
+if prompt and "validation" in prompt:
+    print("Required params:", prompt["validation"].get("required_params", []))
+
+# Provide all required parameters
+result = await builder.render_user_prompt(
+    "prompt_name",
+    params={"required_param": "value"}
+)
+```
+
+#### Issue: "Wrong adapter type for builder"
+
+```python
+# AsyncPromptBuilder requires async adapters
+from dataknobs_llm.prompts import AsyncDictResourceAdapter
+
+# NOT DictResourceAdapter (that's for sync PromptBuilder)
+adapter = AsyncDictResourceAdapter(data)
+
+builder = AsyncPromptBuilder(
+    library=library,
+    adapters={"data": adapter}
+)
+```
+
+#### Issue: "Conversation not found when resuming"
+
+```python
+# Check if conversation exists
+state = await storage.load_conversation(conversation_id)
+if state is None:
+    print(f"Conversation {conversation_id} not found")
+    # Create new conversation instead
+    manager = await ConversationManager.create(...)
+else:
+    # Resume existing conversation
+    manager = await ConversationManager.resume(
+        conversation_id=conversation_id,
+        llm=llm,
+        prompt_builder=builder,
+        storage=storage
+    )
+```
+
+#### Issue: "RAG not working"
+
+```python
+# Ensure RAG is enabled
+result = await builder.render_system_prompt(
+    "prompt_name",
+    params={...},
+    include_rag=True  # Must be True
+)
+
+# Check RAG config exists
+rag_config = library.get_rag_config("config_name")
+print("RAG config:", rag_config)
+
+# Verify adapter is registered
+print("Available adapters:", builder.adapters.keys())
+```
+
+### Performance Tips
+
+1. **Use async for better concurrency**
+   ```python
+   # Good - parallel RAG searches
+   builder = AsyncPromptBuilder(library, adapters)
+
+   # Slower - sequential operations
+   builder = PromptBuilder(library, adapters)
+   ```
+
+2. **Reuse LLM and builder instances**
+   ```python
+   # Create once, use many times
+   llm = OpenAIProvider(config)
+   builder = AsyncPromptBuilder(library)
+
+   # Don't recreate for each request
+   ```
+
+3. **Choose appropriate storage backend**
+   ```python
+   # Development: Memory or SQLite
+   storage = DataknobsConversationStorage(AsyncMemoryDatabase())
+
+   # Production: PostgreSQL
+   storage = DataknobsConversationStorage(AsyncPostgresDatabase(...))
+   ```
+
+4. **Limit conversation history**
+   ```python
+   # For very long conversations, consider summarization
+   messages = manager.state.get_current_messages()
+   if len(messages) > 50:
+       # Implement summarization or pruning
+       pass
+   ```
+
+### Getting Help
+
+- **Documentation**: Check this guide and API docstrings
+- **Examples**: See complete examples above and in test files
+- **Issues**: Report bugs at https://github.com/kbs-labs/dataknobs/issues
+- **Tests**: Review test files for additional usage patterns
+
+---
+
+## Next Steps
+
+1. **Read Best Practices Guide** - Learn patterns for production use
+2. **Review Examples** - Study complete examples above
+3. **Experiment** - Try building your own prompts and conversations
+4. **Explore Tests** - See `tests/prompts/` and `tests/conversations/` for more examples
+
+---
+
+**Happy prompting!**

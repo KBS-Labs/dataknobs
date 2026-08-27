@@ -1,1 +1,1 @@
-../../../../packages/llm/docs/PARALLEL_EXECUTION.md
+../../../../packages/llm/docs/parallel-execution.md

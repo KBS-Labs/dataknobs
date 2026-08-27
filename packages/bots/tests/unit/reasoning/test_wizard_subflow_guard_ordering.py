@@ -469,7 +469,7 @@ async def test_a_declined_push_says_so(caplog: pytest.LogCaptureFixture) -> None
 
 @pytest.mark.asyncio
 async def test_a_subflow_guard_sees_an_extracted_key_on_the_turn_it_is_written() -> None:
-    """The other row of WIZARD_SUBFLOWS.md's visibility table.
+    """The other row of wizard-subflows.md's visibility table.
 
     Extraction lands before the pre-transition sequence and was never
     affected by the guard's position -- which is exactly why it belongs in

@@ -231,7 +231,7 @@ llm = await resolver.get_llm("default")
 db = await resolver.get_database("conversations")
 ```
 
-See [docs/CONFIGURATION.md](docs/CONFIGURATION.md#environment-aware-configuration) for complete documentation.
+See [docs/configuration.md](docs/configuration.md#environment-aware-configuration) for complete documentation.
 
 ## Core Concepts
 
@@ -344,7 +344,7 @@ system_prompt:
   name: helpful_assistant
 ```
 
-See [docs/CONFIGURATION.md](docs/CONFIGURATION.md) for complete configuration reference.
+See [docs/configuration.md](docs/configuration.md) for complete configuration reference.
 
 ## Examples
 
@@ -379,16 +379,16 @@ See [examples/README.md](examples/README.md) for detailed information on each ex
 
 ### User Documentation
 
-- [User Guide](docs/USER_GUIDE.md) - Tutorials and how-to guides
-- [Configuration Reference](docs/CONFIGURATION.md) - Complete configuration options
-- [Environment-Aware Configuration](docs/CONFIGURATION.md#environment-aware-configuration) - Portable configs for multi-environment deployments
-- [Migration Guide](docs/MIGRATION.md) - Migrate existing configs to environment-aware pattern
-- [Tools Development](docs/TOOLS.md) - Creating and configuring tools
+- [User Guide](docs/user-guide.md) - Tutorials and how-to guides
+- [Configuration Reference](docs/configuration.md) - Complete configuration options
+- [Environment-Aware Configuration](docs/configuration.md#environment-aware-configuration) - Portable configs for multi-environment deployments
+- [Migration Guide](docs/migration.md) - Migrate existing configs to environment-aware pattern
+- [Tools Development](docs/tools.md) - Creating and configuring tools
 
 ### Developer Documentation
 
-- [API Reference](docs/API.md) - Complete API documentation
-- [Architecture](docs/ARCHITECTURE.md) - System design and components
+- [API Reference](docs/api.md) - Complete API documentation
+- [Architecture](docs/architecture.md) - System design and components
 - [Examples](examples/README.md) - Working code examples
 
 ## Development

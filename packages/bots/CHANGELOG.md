@@ -461,7 +461,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   data. The guard is now a step of a shared pre-transition sequence
   (`_prepare_and_route`), after the preparation and still before the FSM step,
   so a push continues to pre-empt the self-loop arc a subflow transition
-  compiles into. `WIZARD_SUBFLOWS.md` states the resulting visibility boundary
+  compiles into. `wizard-subflows.md` states the resulting visibility boundary
   per writer.
 
 - **`advance()` can push a subflow.** The non-conversational API ran the
@@ -517,7 +517,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   remains and still hands out a copy.
 
 - **`AddBankRecordTool`'s documented constructor arguments are the real ones.**
-  `TOOLS.md` showed `banks_override=` / `catalog_override=` /
+  `tools.md` showed `banks_override=` / `catalog_override=` /
   `artifact_override=`, which are the internal helper's parameter names. The
   constructor takes `banks=` / `catalog=` / `artifact=`; the example as
   published raised `TypeError`.
@@ -699,7 +699,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   No behaviour changes for any built-in strategy. Consumers writing their own
   strategy get a shorter obligation: inherit `ReasoningConfig` and the field
   arrives, instead of declaring it and binding it correctly. The
-  constructor-keyword pattern in `CUSTOM_STRATEGIES.md` is unchanged and
+  constructor-keyword pattern in `custom-strategies.md` is unchanged and
   remains supported — and is now checked, along with the config route, over
   every registered strategy.
 
@@ -769,7 +769,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   resolves — `artifact`, which the FSM arc does not bind — is a *runtime*
   failure by this split and so lands at `DEBUG`, where it used to warn. The
   load-time check reports what the engine will refuse, not whether every name
-  in the expression exists. `CONFIGURATION.md` now documents both the split
+  in the expression exists. `configuration.md` now documents both the split
   and the `artifact` case.
 
 - **The three places a bot builds an LLM provider from config call
@@ -922,7 +922,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   gap, so the turn fell back to plain text retrieval instead of reporting
   a broken index.
 
-- **The built-in tool table is the catalog again.** `CONFIG_TOOLKIT.md` gave
+- **The built-in tool table is the catalog again.** `config-toolkit.md` gave
   twelve rows for the twenty-one tools `default_catalog` registers, and stated
   twelve as the count above them; the site page repeated the count. The nine
   wizard tools — bank CRUD, artifact lifecycle, and the two completion signals
@@ -940,7 +940,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `context.extra` on the turn that calls them, taking a constructor argument
   only as an override, which is why they declare no `requires` — by the time
   the value exists there is no constructor left to inject it into. Their
-  parameters and effects stay documented in `TOOLS.md`, which the table now
+  parameters and effects stay documented in `tools.md`, which the table now
   points at.
 
 - **What a custom `storage_class` actually has to provide.** Three pages
@@ -2060,7 +2060,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   process-global registry would be a multi-tenant hazard.
   `BehaviorPackSpec`, `BehaviorPackRegistry`, and
   `verify_stage_synthesizers` are exported from the top-level
-  `dataknobs_bots` namespace. See `docs/BEHAVIOR_PACKS.md`.
+  `dataknobs_bots` namespace. See `docs/behavior-packs.md`.
 
 - **`build_middleware()`, `build_conversation_middleware()`, and
   `resolve_middleware_from_spec()`** in `dataknobs_bots.middleware`
@@ -3180,7 +3180,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   subsystem-specific keys (e.g. the stream-abandonment path
   attaches `state_saved=False`) without extending the protocol
   signature. Hook callbacks read named keys off the event
-  payload. Documented in USER_GUIDE.md "Turn-Lifecycle Hooks".
+  payload. Documented in user-guide.md "Turn-Lifecycle Hooks".
 - `WizardReasoning` fires `on_turn_end` on every turn exit, with a
   per-site `reason` discriminator on the event payload:
   `"normal"` from the canonical `finalize_turn` /
@@ -3348,7 +3348,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   After expansion the synthesizer removes the original
   `intent_confirm:` block from the stage dict so the FSM-metadata
   layer carries only the synthesized primitives — no parallel
-  source of truth. Documented in USER_GUIDE.md "Wizard-as-advisor:
+  source of truth. Documented in user-guide.md "Wizard-as-advisor:
   intent confirmation".
 - `clarification_template:` stage field — optional template rendered
   on re-render of a conversation-mode stage when no extraction or
@@ -3370,7 +3370,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   FSM translation, so downstream validator and FSM build code see
   only the normalized shape. `IntentConfirmSynthesizer` is the
   in-tree reference adopter; it auto-registers at module import.
-  Documented in USER_GUIDE.md "Shipping your own wizard stage
+  Documented in user-guide.md "Shipping your own wizard stage
   primitive".
 - `WizardConfigBuilder` recognizes `intent_confirm:` and
   `clarification_template:` on stage configs. `intent_confirm:` is
@@ -3397,7 +3397,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Loadable from config via `LifecycleHooks.from_config({...})` with
   dotted-path callback resolution (sync or async callables). Importable
   standalone — adoptable by any `ReasoningStrategy` implementation, not
-  wizard-specific. Documented adoption recipe in USER_GUIDE.md
+  wizard-specific. Documented adoption recipe in user-guide.md
   "Adopting LifecycleHooks in Your Own Reasoning Strategy".
   Public introspection surface: `turn_start_count` /
   `turn_end_count` properties and a `clear()` method that drains
@@ -3466,7 +3466,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   sites opt in via the new `_forwarded_components` keyword-only
   parameter on `WizardReasoning.__init__`. Consumer composing
   strategies adopting the same mixin pattern get the same forwarding
-  discipline (see USER_GUIDE.md "Building your own composing
+  discipline (see user-guide.md "Building your own composing
   strategy").
 - `RAGKnowledgeBase(tenant_id=...)` (also accepted on
   `RAGKnowledgeBaseConfig`) binds a tenant identity to the KB. When set,

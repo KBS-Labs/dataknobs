@@ -88,7 +88,7 @@ nav:
       - packages/config/environment-aware.md
       - packages/config/factory-registration.md
       - packages/config/inheritance.md
-      - packages/config/template_vars.md
+      - packages/config/template-vars.md
       - packages/config/configurable-base.md
       - packages/config/api.md
     - Data:
@@ -253,7 +253,7 @@ nav:
           - packages/bots/guides/config-versioning.md
           - packages/bots/guides/config-toolkit.md
           - packages/bots/guides/wizard-config-builder.md
-          - packages/bots/guides/TEMPLATE_SECURITY.md
+          - packages/bots/guides/template-security.md
         - Prompt System:
           - packages/bots/guides/prompt-reference.md
           - packages/bots/guides/prompt-customization.md

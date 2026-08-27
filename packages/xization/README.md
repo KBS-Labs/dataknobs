@@ -49,7 +49,7 @@ for chunk in chunks:
     print(f"Text: {chunk.text}\n")
 ```
 
-For more details, see the [Markdown Chunking documentation](docs/markdown/MARKDOWN_CHUNKING.md).
+For more details, see the [Markdown Chunking documentation](docs/markdown/markdown-chunking.md).
 
 ### Content Transformation
 

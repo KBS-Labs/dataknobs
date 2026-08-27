@@ -56,7 +56,7 @@ Efficiency note:
     Backends without a JSONB column fall back to per-row matching via
     the ``metadata.X`` field-path translation in their respective
     query translators; this is also correct but unindexed.  See
-    ``packages/bots/docs/DYNAMIC_REGISTRATION.md`` for the full
+    ``packages/bots/docs/dynamic-registration.md`` for the full
     contract.
 
 FastAPI is treated as an optional dependency: importing this module

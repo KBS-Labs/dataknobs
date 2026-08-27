@@ -1,1 +1,1 @@
-../../../../packages/bots/docs/TOOLS.md
+../../../../packages/bots/docs/tools.md

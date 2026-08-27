@@ -1,1 +1,1 @@
-../../../../packages/bots/docs/ARTIFACTS.md
+../../../../packages/bots/docs/artifacts.md

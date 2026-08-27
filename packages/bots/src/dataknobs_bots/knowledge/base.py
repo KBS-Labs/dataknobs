@@ -60,7 +60,7 @@ class KnowledgeBase(ABC):
         * Treat ``filter=None`` as "remove everything" (the historical
           unscoped behavior).
         * Treat a non-``None`` ``filter`` as a four-quadrant metadata
-          filter (see ``VECTOR_FILTER_SEMANTICS.md``) and remove only
+          filter (see ``vector-filter-semantics.md``) and remove only
           matching records.
 
         Args:

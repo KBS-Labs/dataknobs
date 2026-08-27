@@ -137,7 +137,7 @@ Packages add ergonomics: `register_tool(tool)` wraps base
 ### Artifacts Created
 
 - ✅ `/tmp/active/serialization-design-verification.md` (ROI analysis and decision rationale)
-- ✅ `/tmp/active/serialization-usage-guide.md` (comprehensive usage guide for new code)
+- ✅ `/tmp/active/serialization.md` (comprehensive usage guide for new code)
 
 ---
 
@@ -219,7 +219,7 @@ All guides are self-contained with complete context for independent use:
 - Package-specific strategies (LLM, Bots, Data)
 
 ### 3. Serialization Usage Guide
-**File**: `/tmp/active/serialization-usage-guide.md`
+**File**: `/tmp/active/serialization.md`
 
 **Contents:**
 - When to use common serialization
@@ -346,7 +346,7 @@ All guides are self-contained with complete context for independent use:
 ├── exceptions-design-verification.md     (FSM exceptions design validation)
 ├── exceptions-migration-guide.md         (Complete exception migration guide)
 ├── serialization-design-verification.md  (ROI analysis and decision)
-├── serialization-usage-guide.md          (Usage guide for new code)
+├── serialization.md          (Usage guide for new code)
 └── common-components-migration-summary.md (This file)
 ```
 

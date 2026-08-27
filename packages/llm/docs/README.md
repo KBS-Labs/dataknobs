@@ -9,7 +9,7 @@
 ## Documentation Index
 
 ### Getting Started
-- **[User Guide](USER_GUIDE.md)** - Comprehensive guide with examples
+- **[User Guide](user-guide.md)** - Comprehensive guide with examples
   - Installation
   - Quick start
   - Prompt library system
@@ -18,7 +18,7 @@
   - Complete examples
 
 ### Production Use
-- **[Best Practices](BEST_PRACTICES.md)** - Patterns for production deployments
+- **[Best Practices](best-practices.md)** - Patterns for production deployments
   - Prompt design guidelines
   - Template organization
   - Validation strategy
@@ -31,7 +31,7 @@
   - Production deployment
 
 ### Technical Reference
-- **[Schema Versioning](SCHEMA_VERSIONING.md)** - Storage schema management
+- **[Schema Versioning](schema-versioning.md)** - Storage schema management
   - Version format and history
   - Automatic migration
   - Adding new versions

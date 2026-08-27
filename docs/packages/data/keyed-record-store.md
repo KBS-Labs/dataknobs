@@ -1,1 +1,1 @@
-../../../packages/data/docs/KEYED_RECORD_STORE.md
+../../../packages/data/docs/keyed-record-store.md

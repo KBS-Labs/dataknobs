@@ -159,8 +159,8 @@ The LLM package provides comprehensive LLM abstractions, providers, and FSM inte
 ## Documentation
 
 For detailed documentation, see:
-- [Configuration Guide](docs/FSM_CONFIG_GUIDE.md) - Complete configuration reference
-- [Processing Flow](docs/FSM_PROCESSING_FLOW.md) - Understanding FSM execution
+- [Configuration Guide](docs/fsm-config-guide.md) - Complete configuration reference
+- [Processing Flow](docs/fsm-processing-flow.md) - Understanding FSM execution
 - [Examples Documentation](docs/README.md) - Detailed example descriptions
 
 ## Testing

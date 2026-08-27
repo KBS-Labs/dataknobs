@@ -181,8 +181,8 @@ rag_configs:
 ```
 
 For comprehensive RAG documentation, including caching and configuration, see:
-- **Location**: `packages/llm/docs/RAG_CACHING.md`
-- **Location**: `packages/llm/docs/USER_GUIDE.md` (RAG section)
+- **Location**: `packages/llm/docs/rag-caching.md`
+- **Location**: `packages/llm/docs/user-guide.md` (RAG section)
 
 ### Template Modes
 

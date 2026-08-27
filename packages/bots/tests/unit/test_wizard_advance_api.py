@@ -846,7 +846,7 @@ class TestAutoAdvanceMessages:
 class TestNavigationHookCoverage:
     """Assert documented hook coverage for each navigation type.
 
-    See the 'Hooks by navigation type' table in WIZARD_ADVANCE_API.md.
+    See the 'Hooks by navigation type' table in wizard-advance-api.md.
     """
 
     @pytest.mark.asyncio

@@ -383,6 +383,6 @@ await bus.publish("knowledge:trigger", Event(
 
 - [Knowledge Base Ingestion Guide](ingestion-guide.md) — all three
   ingestion paths end-to-end
-- [KnowledgeIngestionManager](../RAG_INGESTION.md) — the dispatch target
+- [KnowledgeIngestionManager](../rag-ingestion.md) — the dispatch target
 - [Events](../../../common/docs/guides/events.md) — `EventBus`,
   `Event`, `EventType`, and `InMemoryEventBus`

@@ -1,0 +1,773 @@
+# RAG Ingestion and Hybrid Search
+
+This document covers the RAGKnowledgeBase methods for loading documents from directories and performing hybrid search queries.
+
+## Overview
+
+The RAGKnowledgeBase provides two powerful methods for working with document collections:
+
+1. **`load_from_directory()`**: Batch load documents using KnowledgeBaseConfig
+2. **`hybrid_query()`**: Search using combined text and vector similarity
+
+## Quick Start
+
+### Loading Documents
+
+```python
+from dataknobs_bots.knowledge import (
+    RAGKnowledgeBase,
+    KnowledgeBaseConfig,
+    FilePatternConfig,
+)
+
+# Create knowledge base
+kb = await RAGKnowledgeBase.from_config({
+    "vector_store": {"backend": "memory", "dimensions": 384},
+    "embedding_provider": "openai",
+    "embedding_model": "text-embedding-3-small",
+})
+
+# Load documents with configuration
+config = KnowledgeBaseConfig(
+    name="product-docs",
+    patterns=[
+        FilePatternConfig(pattern="api/**/*.json", text_fields=["title", "description"]),
+        FilePatternConfig(pattern="**/*.md"),
+    ],
+    exclude_patterns=["**/drafts/**"],
+)
+
+results = await kb.load_from_directory("./docs", config=config)
+print(f"Loaded {results['total_chunks']} chunks from {results['total_files']} files")
+```
+
+### Hybrid Search
+
+```python
+# Combine text and vector search
+results = await kb.hybrid_query(
+    "how to configure authentication",
+    k=5,
+    text_weight=0.4,
+    vector_weight=0.6,
+)
+
+for r in results:
+    print(f"[{r['similarity']:.3f}] {r['heading_path']}")
+    print(f"  text: {r['text_score']:.3f}, vector: {r['vector_score']:.3f}")
+    print(r['text'][:100])
+```
+
+## load_from_directory()
+
+Load documents from a directory using the xization DirectoryProcessor with configurable patterns, chunking, and metadata.
+
+### Method Signature
+
+```python
+async def load_from_directory(
+    self,
+    directory: str | Path,
+    config: KnowledgeBaseConfig | None = None,
+    progress_callback: Callable[[str, int], None] | None = None,
+) -> dict[str, Any]:
+```
+
+### Parameters
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `directory` | `str \| Path` | Directory path containing documents |
+| `config` | `KnowledgeBaseConfig \| None` | Configuration for processing. If None, loads from `knowledge_base.(yaml\|yml\|json)` at the directory root, or from `_metadata/knowledge_base.*` as a fallback; uses defaults when no file is found |
+| `progress_callback` | `Callable \| None` | Optional callback `(file_path, num_chunks)` for progress tracking |
+
+### Returns
+
+Dictionary with loading statistics:
+
+```python
+{
+    "total_files": 15,
+    "total_chunks": 234,
+    "files_by_type": {
+        "markdown": 10,
+        "json": 4,
+        "jsonl": 1,
+    },
+    "errors": [],
+    "documents": [
+        {"source": "/path/to/file.md", "type": "markdown", "chunks": 12, "errors": []},
+        # ...
+    ]
+}
+```
+
+### Examples
+
+#### Basic Usage
+
+```python
+# Auto-load config from directory
+results = await kb.load_from_directory("./docs")
+
+print(f"Files: {results['total_files']}")
+print(f"Chunks: {results['total_chunks']}")
+print(f"Errors: {len(results['errors'])}")
+```
+
+#### With Explicit Configuration
+
+```python
+from dataknobs_bots.knowledge import KnowledgeBaseConfig, FilePatternConfig
+
+config = KnowledgeBaseConfig(
+    name="api-docs",
+    default_chunking={
+        "chunker": "markdown_tree",  # default, can be omitted
+        "max_chunk_size": 500,
+        # Optional: post-processing pipeline
+        # "transforms": [{"merge_small": {"min_size": 200}}],
+    },
+    patterns=[
+        FilePatternConfig(
+            pattern="api/**/*.json",
+            text_fields=["title", "description", "examples"],
+        ),
+        FilePatternConfig(
+            pattern="guides/**/*.md",
+            chunking={"max_chunk_size": 800},  # Override for guides
+        ),
+        # Custom chunker for specific file patterns:
+        # FilePatternConfig(
+        #     pattern="rfcs/**/*.md",
+        #     chunking={"chunker": "my_project.chunkers.RFCChunker", "max_chunk_size": 1200},
+        # ),
+    ],
+    exclude_patterns=[
+        "**/drafts/**",
+        "**/test/**",
+        "*.tmp",
+    ],
+    default_metadata={
+        "version": "2.0",
+        "source": "documentation",
+    },
+)
+
+results = await kb.load_from_directory("./docs", config=config)
+```
+
+#### With Progress Tracking
+
+```python
+def on_progress(file_path: str, num_chunks: int):
+    print(f"Processed {file_path}: {num_chunks} chunks")
+
+results = await kb.load_from_directory(
+    "./docs",
+    progress_callback=on_progress,
+)
+```
+
+#### Processing Large Directories
+
+```python
+import asyncio
+
+async def load_with_batching(kb, directory: str, batch_size: int = 10):
+    """Load documents with batched progress output."""
+    progress = {"files": 0, "chunks": 0}
+
+    def on_progress(path: str, chunks: int):
+        progress["files"] += 1
+        progress["chunks"] += chunks
+        if progress["files"] % batch_size == 0:
+            print(f"Progress: {progress['files']} files, {progress['chunks']} chunks")
+
+    results = await kb.load_from_directory(directory, progress_callback=on_progress)
+
+    print(f"Complete: {results['total_files']} files, {results['total_chunks']} chunks")
+    return results
+```
+
+## ingest_from_backend()
+
+Ingest documents from a `KnowledgeResourceBackend` (file, in-memory, or
+S3). Drives the same `DirectoryProcessor` pipeline as
+`load_from_directory()`, so full `KnowledgeBaseConfig` richness
+(patterns, excludes, per-pattern chunking, streaming JSON) applies.
+
+### Method Signature
+
+```python
+async def ingest_from_backend(
+    self,
+    backend: "KnowledgeResourceBackend",
+    domain_id: str,
+    config: KnowledgeBaseConfig | None = None,
+    progress_callback: Callable[[str, int], None] | None = None,
+    extra_metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+```
+
+### Parameters
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `backend` | `KnowledgeResourceBackend` | Storage backend; caller must `initialize()` it first |
+| `domain_id` | `str` | Domain / KB identifier within the backend |
+| `config` | `KnowledgeBaseConfig \| None` | Optional; see below for resolution |
+| `progress_callback` | `Callable[[str, int], None] \| None` | Invoked after each ingested file |
+| `extra_metadata` | `dict[str, Any] \| None` | Optional metadata merged onto every chunk; caller-provided keys win. Used by `KnowledgeIngestionManager` to thread `domain_id` onto chunks for multi-tenant filtering. |
+
+### Config Resolution
+
+When `config` is `None`, the method attempts to load a config document
+from the backend's domain namespace. Both the domain root and a
+`_metadata/` subdirectory are checked, in this order:
+
+1. `knowledge_base.yaml`
+2. `knowledge_base.yml`
+3. `knowledge_base.json`
+4. `_metadata/knowledge_base.yaml`
+5. `_metadata/knowledge_base.yml`
+6. `_metadata/knowledge_base.json`
+
+The domain-root location matches the local-corpus convention used by
+`load_from_directory`, so a corpus can be promoted from a local
+directory to a backend without relocating the config file. The
+`_metadata/` location is available for consumers that prefer to keep
+metadata visually separated from content.
+
+If no config document is found, defaults to
+`KnowledgeBaseConfig(name=domain_id)`. YAML configs require `PyYAML`
+to be installed. If a config file IS present but fails to parse,
+`ingest_from_backend` raises `IngestionConfigError` — symmetric with
+`load_from_directory`, which also fails loudly on a malformed config.
+
+### Example
+
+```python
+from dataknobs_bots.knowledge import (
+    RAGKnowledgeBase,
+    create_knowledge_backend,
+)
+
+backend = create_knowledge_backend("s3", {
+    "bucket": "my-kb-bucket",
+    "prefix": "domains/",
+})
+await backend.initialize()
+
+# First-time setup only — skip if the KB already exists in the bucket.
+# Create the KB and upload documents (caller or upstream process):
+await backend.create_kb("my-domain")
+await backend.put_file("my-domain", "intro.md", b"# Intro\n...")
+# Optional: upload a _metadata/knowledge_base.yaml for pattern/chunking config.
+
+kb = await RAGKnowledgeBase.from_config(rag_config)
+stats = await kb.ingest_from_backend(backend, "my-domain")
+print(f"Ingested {stats['total_chunks']} chunks from {stats['total_files']} files")
+```
+
+### Return Value
+
+Same shape as `load_from_directory()`:
+
+```python
+{
+    "total_files": int,
+    "total_chunks": int,
+    "files_by_type": {"markdown": int, "json": int, "jsonl": int},
+    "errors": list[dict[str, Any]],
+    "documents": list[dict[str, Any]],
+}
+```
+
+### See Also
+
+- [Knowledge Base Ingestion Guide](knowledge/ingestion-guide.md) —
+  when to use each ingestion path
+- [IngestOrchestrator](knowledge/orchestrator.md) — event-driven
+  wrapper for `ingest_if_changed`
+
+## load_markdown_text()
+
+Load markdown content from a string. This is the method to use when your
+content is already in memory (e.g., rendered from a database, generated by
+another service, or assembled from API responses) rather than in a file on disk.
+
+All file-based loading methods (`load_markdown_document`, `load_json_document`,
+`load_yaml_document`, `load_csv_document`) delegate to this method internally.
+
+### Method Signature
+
+```python
+async def load_markdown_text(
+    self,
+    markdown_text: str,
+    source: str,
+    metadata: dict[str, Any] | None = None,
+) -> int:
+```
+
+### Parameters
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `markdown_text` | `str` | Markdown content to parse, chunk, embed, and store |
+| `source` | `str` | Source identifier for metadata (e.g., `"api-docs"`, `"artifact-123"`) |
+| `metadata` | `dict \| None` | Optional metadata to attach to all chunks |
+
+### Returns
+
+`int` — Number of chunks created.
+
+### Examples
+
+```python
+# Load rendered content from a service
+article = await render_article(article_id)
+num_chunks = await kb.load_markdown_text(
+    article.markdown,
+    source=f"article-{article_id}",
+    metadata={"category": "articles", "author": article.author},
+)
+
+# Load content assembled from API data
+markdown = f"# {product.name}\n\n{product.description}\n\n## Features\n\n"
+markdown += "\n".join(f"- {f}" for f in product.features)
+await kb.load_markdown_text(
+    markdown,
+    source=f"product-{product.id}",
+    metadata={"content_type": "product"},
+)
+```
+
+## hybrid_query()
+
+Query the knowledge base using hybrid search that combines keyword matching with semantic vector search.
+
+### Method Signature
+
+```python
+async def hybrid_query(
+    self,
+    query: str,
+    k: int = 5,
+    text_weight: float = 0.5,
+    vector_weight: float = 0.5,
+    fusion_strategy: str = "rrf",
+    text_fields: list[str] | None = None,
+    filter_metadata: dict[str, Any] | None = None,
+    min_similarity: float = 0.0,
+    merge_adjacent: bool = False,
+    max_chunk_size: int | None = None,
+) -> list[dict[str, Any]]:
+```
+
+### Parameters
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `query` | `str` | required | Query text to search for |
+| `k` | `int` | 5 | Number of results to return |
+| `text_weight` | `float` | 0.5 | Weight for text search (0.0-1.0) |
+| `vector_weight` | `float` | 0.5 | Weight for vector search (0.0-1.0) |
+| `fusion_strategy` | `str` | "rrf" | Fusion method: "rrf", "weighted_sum", or "native" |
+| `text_fields` | `list[str] \| None` | None | Fields to search (default: ["text"]) |
+| `filter_metadata` | `dict \| None` | None | Metadata filters to apply |
+| `min_similarity` | `float` | 0.0 | Minimum combined score threshold |
+| `merge_adjacent` | `bool` | False | Merge adjacent chunks from same section |
+| `max_chunk_size` | `int \| None` | None | Max size for merged chunks |
+
+### Returns
+
+List of result dictionaries:
+
+```python
+[
+    {
+        "text": "Chunk content...",
+        "source": "/path/to/file.md",
+        "heading_path": "Section > Subsection",
+        "similarity": 0.85,          # Combined score
+        "text_score": 0.75,          # Text match score
+        "vector_score": 0.92,        # Vector similarity score
+        "metadata": {...},           # Full chunk metadata
+    },
+    # ...
+]
+```
+
+### Examples
+
+#### Basic Hybrid Search
+
+```python
+results = await kb.hybrid_query("database configuration", k=5)
+
+for r in results:
+    print(f"[{r['similarity']:.3f}] {r['heading_path']}")
+    print(r['text'][:200])
+    print()
+```
+
+#### Weighted Toward Semantic Search
+
+```python
+# When exact keywords are less important than meaning
+results = await kb.hybrid_query(
+    "how do I set up user authentication",
+    k=5,
+    text_weight=0.3,
+    vector_weight=0.7,
+)
+```
+
+#### Weighted Toward Keyword Search
+
+```python
+# When exact terms matter (e.g., error codes, product names)
+results = await kb.hybrid_query(
+    "ERROR_CODE_AUTH_FAILED",
+    k=5,
+    text_weight=0.8,
+    vector_weight=0.2,
+)
+```
+
+#### Using Weighted Sum Fusion
+
+```python
+results = await kb.hybrid_query(
+    "install dependencies",
+    k=5,
+    fusion_strategy="weighted_sum",
+    text_weight=0.5,
+    vector_weight=0.5,
+)
+```
+
+#### With Metadata Filtering
+
+```python
+results = await kb.hybrid_query(
+    "API endpoints",
+    k=10,
+    filter_metadata={"document_type": "api", "version": "2.0"},
+)
+```
+
+#### With Chunk Merging
+
+```python
+# Merge adjacent chunks for more context
+results = await kb.hybrid_query(
+    "authentication flow",
+    k=5,
+    merge_adjacent=True,
+    max_chunk_size=2000,
+)
+
+for r in results:
+    print(f"[{r['similarity']:.3f}] {r['heading_path']}")
+    print(f"Content length: {len(r['text'])} chars")
+```
+
+#### Custom Text Fields
+
+```python
+# Search specific metadata fields
+results = await kb.hybrid_query(
+    "OAuth 2.0",
+    k=5,
+    text_fields=["text", "heading_path", "source"],
+)
+```
+
+## Fusion Strategies
+
+### RRF (Reciprocal Rank Fusion)
+
+Default strategy. Combines based on rank position:
+
+```
+RRF_score(d) = sum(weight / (k + rank))
+```
+
+**Best for:**
+- General-purpose hybrid search
+- When score distributions differ between text and vector
+- Robust default choice
+
+```python
+results = await kb.hybrid_query(query, fusion_strategy="rrf")
+```
+
+### Weighted Sum
+
+Combines normalized scores directly:
+
+```
+combined = text_weight * norm(text_score) + vector_weight * norm(vector_score)
+```
+
+**Best for:**
+- When scores are comparable
+- Fine-tuned weight control needed
+
+```python
+results = await kb.hybrid_query(query, fusion_strategy="weighted_sum")
+```
+
+### Native
+
+Uses backend's native hybrid search if available:
+
+```python
+results = await kb.hybrid_query(query, fusion_strategy="native")
+# Falls back to RRF if backend doesn't support native
+```
+
+## Complete Example
+
+```python
+from dataknobs_bots.knowledge import (
+    RAGKnowledgeBase,
+    KnowledgeBaseConfig,
+    FilePatternConfig,
+)
+
+async def build_and_query_kb():
+    # Create knowledge base
+    kb = await RAGKnowledgeBase.from_config({
+        "vector_store": {"backend": "faiss", "dimensions": 384, "persist_path": "./kb_index"},
+        "embedding_provider": "openai",
+        "embedding_model": "text-embedding-3-small",
+    })
+
+    # Load documents
+    config = KnowledgeBaseConfig(
+        name="docs",
+        patterns=[
+            FilePatternConfig(pattern="**/*.md"),
+            FilePatternConfig(pattern="api/*.json", text_fields=["title", "body"]),
+        ],
+    )
+
+    results = await kb.load_from_directory("./docs", config=config)
+    print(f"Loaded {results['total_chunks']} chunks")
+
+    # Hybrid search
+    search_results = await kb.hybrid_query(
+        "How do I configure OAuth authentication?",
+        k=5,
+        text_weight=0.4,
+        vector_weight=0.6,
+        merge_adjacent=True,
+    )
+
+    # Format for LLM
+    context = kb.format_context(search_results)
+    print(context)
+
+    # Save and close
+    await kb.close()
+
+# Run
+import asyncio
+asyncio.run(build_and_query_kb())
+```
+
+## Exported Types
+
+The following types are re-exported from the knowledge module for convenience:
+
+```python
+from dataknobs_bots.knowledge import (
+    # Main class
+    RAGKnowledgeBase,
+
+    # Ingestion types
+    DirectoryProcessor,
+    FilePatternConfig,
+    KnowledgeBaseConfig,
+    ProcessedDocument,
+
+    # Low-level ingestion (file-backend to vector-store)
+    KnowledgeIngestionManager,
+    IngestionResult,
+
+    # Event-driven orchestration
+    IngestOrchestrator,
+
+    # Hybrid search types
+    FusionStrategy,
+    HybridSearchConfig,
+    HybridSearchResult,
+)
+```
+
+## Testing
+
+```bash
+cd packages/bots
+uv run pytest tests/test_knowledge.py -v -k "load_from_directory or hybrid_query"
+```
+
+## Automatic Ingestion with KnowledgeIngestionService
+
+The `KnowledgeIngestionService` provides high-level ingestion management
+with automatic population checks and skip-if-populated behavior.
+
+### Basic Usage
+
+```python
+from dataknobs_bots.knowledge import (
+    RAGKnowledgeBase,
+    KnowledgeIngestionService,
+)
+
+# Create service
+service = KnowledgeIngestionService()
+
+# Create knowledge base
+kb = await RAGKnowledgeBase.from_config(rag_config)
+
+# Ensure populated (skips if already has documents)
+result = await service.ensure_ingested(kb, {
+    "enabled": True,
+    "documents_path": "path/to/docs",
+    "document_pattern": "**/*.md",
+})
+
+if result.skipped:
+    print(f"Skipped: {result.reason}")
+else:
+    print(f"Ingested {result.total_chunks} chunks")
+```
+
+### Convenience Function
+
+For one-off ingestion checks:
+
+```python
+from dataknobs_bots.knowledge import ensure_knowledge_base_ingested
+
+result = await ensure_knowledge_base_ingested(
+    kb,
+    {"enabled": True, "documents_path": "./docs"},
+    force=False,  # Skip if already populated
+)
+```
+
+### Using with Registry Managers
+
+Use the `AutoIngestionMixin` to add auto-ingestion to bot managers:
+
+```python
+from dataknobs_bots.registry import CachingRegistryManager, InMemoryBackend
+from dataknobs_bots.knowledge import AutoIngestionMixin, get_ingestion_service
+
+class MyBotManager(CachingRegistryManager[MyBot], AutoIngestionMixin):
+    def __init__(self, auto_ingest: bool = False, **kwargs):
+        super().__init__(**kwargs)
+        self._auto_ingest = auto_ingest
+        self._ingestion_service = get_ingestion_service()
+
+    async def register(self, domain_id: str, config: dict, ingest: bool | None = None):
+        await super().register(domain_id, config)
+
+        should_ingest = ingest if ingest is not None else self._auto_ingest
+        if should_ingest:
+            await self._ensure_knowledge_base_ingested(domain_id, config)
+```
+
+#### What the mixin forwards to the ingest knowledge base
+
+`_ensure_knowledge_base_ingested` builds a temporary
+`RAGKnowledgeBase` for the ingest, from the same `knowledge_base`
+section the bot's own knowledge base is built from. It forwards that
+section **whole**, minus three keys it consumes itself:
+
+| Excluded key | Why |
+|---|---|
+| `enabled` | The gate the mixin reads to decide whether to ingest at all |
+| `documents_path` | `RAGKnowledgeBase._ainit` ingests this at *construction*, which would run before the skip-if-populated check and ignore `force`. The ingestion service reads it from the config directly, which is the path that honours both |
+| `document_pattern` | Travels with `documents_path` |
+
+Everything else reaches the knowledge base, including `tenant_id`,
+`domain_id`, the nested `embedding` section, `chunking`, `merger` and
+`formatter`. Forwarding whole is what keeps the ingest knowledge base
+and the bot's own from disagreeing: a projection that enumerated what
+to *keep* silently dropped anything it had not thought of, and a
+dropped `tenant_id` meant the ingest wrote untagged chunks that the
+bot's tenant-scoped reads could never match.
+
+The registration's own `domain_id` becomes the knowledge base's
+binding when the config does not set one, so an adopter sharing one
+vector store across bots gets namespaced chunk ids with no config
+change. The full precedence is:
+
+```
+knowledge_base["domain_id"]  ->  the registration's domain_id  ->  vector_store["domain_id"]
+```
+
+The Ollama embedder defaults (`ollama` / `nomic-embed-text`) still
+apply, but only when neither a nested `embedding` section nor a flat
+`embedding_provider` is configured.
+
+`embedding_base_url` is accepted as a legacy alias for `api_base`.
+
+### Service Methods
+
+| Method | Description |
+|--------|-------------|
+| `check_needs_ingestion(kb, min_chunks=1)` | Returns True if KB needs ingestion |
+| `ingest_from_config(kb, config)` | Run ingestion based on config |
+| `ensure_ingested(kb, config, force=False)` | Check and ingest if needed |
+
+### Configuration Options
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `enabled` | bool | False | Whether KB is enabled |
+| `documents_path` | str | None | Path to documents directory |
+| `document_pattern` | str | "**/*.md" | Glob pattern for files |
+| `tenant_id` | str | None | Tenant binding for the knowledge base |
+| `domain_id` | str | None | Domain binding; defaults to the vector store's own `domain_id` |
+
+### Result Types
+
+There are two result types at different abstraction levels:
+
+**`IngestionResult`** (from `KnowledgeIngestionManager`):
+- Lower-level, for file-backend-to-vector-store coordination
+- Tracks `files_processed`, `files_skipped`, `chunks_created`
+- Requires `domain_id`
+
+**`EnsureIngestionResult`** (from `KnowledgeIngestionService`):
+- Higher-level, for "ensure populated" operations
+- Has `skipped` and `reason` for skip-if-populated semantics
+- Tracks `total_files`, `total_chunks`
+
+```python
+# Check result status
+if result.skipped:
+    print(f"Skipped: {result.reason}")
+elif result.success:
+    print(f"Ingested {result.total_chunks} chunks")
+else:
+    print(f"Failed: {result.error}")
+```
+
+## Related
+
+- [Knowledge Base Ingestion Guide](knowledge/ingestion-guide.md) -
+  Three ingestion paths end-to-end (local / backend / event-driven)
+- [IngestOrchestrator](knowledge/orchestrator.md) - Event-driven
+  subscriber API
+- [RAG Retrieval](rag-retrieval.md) - Chunk merging and formatting
+- [RAG Query](rag-query.md) - Query transformation and expansion
+- [User Guide](user-guide.md) - Complete bot usage guide

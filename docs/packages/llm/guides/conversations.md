@@ -122,7 +122,7 @@ rag_info = await manager.get_rag_metadata()
 ```
 
 For complete RAG caching documentation, see:
-**Location**: `packages/llm/docs/RAG_CACHING.md`
+**Location**: `packages/llm/docs/rag-caching.md`
 
 ### Middleware System
 
@@ -296,13 +296,13 @@ For one-shot promotion on a single call, register the promoter via
 `manager.scoped_middleware(PromoteToPersistMiddleware(keys=[...]))`
 instead of adding it to the permanent `middleware=[...]` list.
 
-See `packages/llm/docs/USER_GUIDE.md` for the full contract.
+See `packages/llm/docs/user-guide.md` for the full contract.
 
 ## Detailed Documentation
 
 For comprehensive conversation management documentation:
 
-**Location**: `packages/llm/docs/USER_GUIDE.md` (Conversation section)
+**Location**: `packages/llm/docs/user-guide.md` (Conversation section)
 
 Topics covered:
 - Tree-based conversation structure

@@ -1,1 +1,1 @@
---8<-- "packages/llm/docs/TOOL_CONTEXT.md"
+--8<-- "packages/llm/docs/tool-context.md"
