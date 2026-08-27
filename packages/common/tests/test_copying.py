@@ -141,12 +141,8 @@ class TestTheMemo:
         second = copy_structure({"second_key": subtree}, seen)
 
         assert first is not second
-        assert "second_key" in second, (
-            "the memo answered for a freed source whose id was reused"
-        )
-        assert first["first_key"] is second["second_key"], (
-            "the shared subtree is still shared"
-        )
+        assert "second_key" in second, "the memo answered for a freed source whose id was reused"
+        assert first["first_key"] is second["second_key"], "the shared subtree is still shared"
 
     def test_separate_calls_without_a_memo_do_not_share(self) -> None:
         """The contrast that makes passing one memo a decision."""
@@ -161,9 +157,7 @@ class TestTheMemo:
 class TestNonContainers:
     """Everything else is returned as itself."""
 
-    @pytest.mark.parametrize(
-        "value", ["text", 42, 3.5, True, None, (1, 2), frozenset({1})]
-    )
+    @pytest.mark.parametrize("value", ["text", 42, 3.5, True, None, (1, 2), frozenset({1})])
     def test_returned_by_identity(self, value: Any) -> None:
         assert copy_structure(value) is value
 
@@ -180,3 +174,20 @@ class TestNonContainers:
         handed_out = copy_structure(source)
 
         assert handed_out["pair"][0] is inner
+
+    def test_a_mutable_set_is_not_rebuilt(self) -> None:
+        """The pass-through that is not safe by immutability.
+
+        ``tuple`` is the example the docs lead with, and its safety comes
+        from being immutable. A ``set`` passes through on the same rule
+        while being mutable, so a write through the result reaches the
+        source -- the one case where "leaves are shared" costs isolation
+        rather than merely declining to buy more of it.
+        """
+        source = {"tags": {"a", "b"}}
+
+        handed_out = copy_structure(source)
+        assert handed_out["tags"] is source["tags"]
+
+        handed_out["tags"].add("added")
+        assert "added" in source["tags"]

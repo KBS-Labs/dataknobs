@@ -43,6 +43,12 @@ def copy_structure(value: Any, seen: dict[int, Any] | None = None) -> Any:
     configuration loaded from YAML or JSON -- the result is a full
     isolation at a fraction of the price.
 
+    A ``set`` is the leaf worth naming, because it is the mutable one. It
+    passes through like any other non-container, so ``add()`` on a set
+    reachable from the result reaches the source. Nothing nests below it
+    -- a set cannot hold a dict or a list -- but the set itself is shared,
+    and a caller who will be adding to one should rebuild it.
+
     ``seen`` is the memo, kept from ``deepcopy`` for the same reason
     ``deepcopy`` has one. A container reached twice is copied once and
     the same copy used both times, so a structure that refers back to

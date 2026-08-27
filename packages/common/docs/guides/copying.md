@@ -30,13 +30,16 @@ is still the source's own object, so a consumer adjusting a nested
 section writes back into a structure that outlives the hand-out:
 
 ```python
-source = {"schema": {"type": "object"}}
+def stage():
+    return {"schema": {"type": "object"}}
 
+source = stage()
 shallow = dict(source)
 shallow["schema"]["type"] = "array"
 assert source["schema"]["type"] == "array"        # reached the source
 
-structural = copy_structure(source)
+source = stage()                                  # a fresh one; the write above
+structural = copy_structure(source)               # really did reach the last
 structural["schema"]["type"] = "array"
 assert source["schema"]["type"] == "object"       # did not
 ```
@@ -69,8 +72,14 @@ copied. When the leaves are immutable — the ordinary case for
 configuration loaded from YAML or JSON — the result is full isolation at
 a fraction of the price.
 
-Only `dict` and `list` are rebuilt. A `tuple` is immutable, so its
-identity is not a hazard — but a dict *inside* one is not reached.
+Only `dict` and `list` are rebuilt. A `tuple` passes through, and a dict
+*inside* one is not reached — the tuple itself is immutable, but what it
+holds need not be.
+
+A `set` passes through too, and that one **is** mutable: `add()` on a set
+reachable from the result reaches the source. A set cannot contain a dict
+or a list, so nothing nests below it, but the set object itself is shared.
+Rebuild it yourself if a caller will be adding to it.
 
 ## The memo
 
@@ -90,8 +99,14 @@ source's:
 seen: dict[int, Any] = {}
 config = copy_structure(resources[name], seen)
 for key, value in defaults.items():
-    config.setdefault(key, copy_structure(value, seen))
+    if key not in config:
+        config[key] = copy_structure(value, seen)
 ```
+
+Guard the assignment rather than reaching for `setdefault`: its second
+argument is evaluated whether or not the key is missing, so
+`config.setdefault(key, copy_structure(value, seen))` copies every default
+and throws most of the copies away.
 
 Omit it when copying one value. Two separate calls without a shared memo
 produce independently copied subtrees, which is usually what you want.

@@ -14,6 +14,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   unchanged, so mutating the result never reaches the source while the leaf
   objects it holds are never duplicated.
 
+  Only `dict` and `list` are rebuilt. A `set` is the pass-through worth
+  naming, because it is the mutable one: `add()` on a set reachable from the
+  result reaches the source. Nothing nests below it — a set cannot hold a dict
+  or a list — but the set itself is shared.
+
   A shallow copy isolates one level, which is the gap a "returns a copy"
   docstring most often turns out to have: every nested container in the result
   is still the source's own object. `copy.deepcopy` closes that gap but
