@@ -433,6 +433,14 @@
           "site": "guides/configuration.md"
         },
         {
+          "package": "knowledge/observability.md",
+          "site": "knowledge/observability.md"
+        },
+        {
+          "package": "knowledge/orchestrator.md",
+          "site": "knowledge/orchestrator.md"
+        },
+        {
           "package": "migration.md",
           "site": "guides/migration.md"
         },
@@ -541,6 +549,16 @@
           "package": "json/json-chunking.md",
           "site": "json-chunking.md",
           "reason": "The site page is a condensation of the module doc (9 sections against 12, about half the length). Recorded so both files are existence-checked."
+        }
+      ],
+      "symlink": [
+        {
+          "package": "ingestion/directory-processor.md",
+          "site": "ingestion/directory-processor.md"
+        },
+        {
+          "package": "ingestion/document-source.md",
+          "site": "ingestion/document-source.md"
         }
       ]
     }
