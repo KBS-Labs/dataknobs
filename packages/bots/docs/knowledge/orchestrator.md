@@ -383,6 +383,8 @@ await bus.publish("knowledge:trigger", Event(
 
 - [Knowledge Base Ingestion Guide](ingestion-guide.md) — all three
   ingestion paths end-to-end
-- [KnowledgeIngestionManager](../rag-ingestion.md) — the dispatch target
-- [Events](../../../common/docs/guides/events.md) — `EventBus`,
-  `Event`, `EventType`, and `InMemoryEventBus`
+- [RAG Ingestion and Hybrid Search](https://kbs-labs.github.io/dataknobs/packages/bots/guides/rag-ingestion/) —
+  `KnowledgeIngestionManager`, the dispatch target: `load_from_directory`,
+  progress callbacks, hybrid search
+- [Events](https://kbs-labs.github.io/dataknobs/packages/common/events/) — `EventBus`, `Event`, `EventType`,
+  and `InMemoryEventBus`

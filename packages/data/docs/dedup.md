@@ -205,7 +205,7 @@ result = await corpus.check_dedup({"stem": "What is 2+2?"})
 
 When a corpus is created with a dedup checker, the dedup configuration is stored in the corpus artifact content. `ArtifactCorpus.load()` reconstructs the checker and re-registers existing items so dedup works across session reloads.
 
-See [Artifact Corpus](../bots/guides/artifact-corpus.md) for full documentation.
+See [Artifact Corpus](https://kbs-labs.github.io/dataknobs/packages/bots/guides/artifact-corpus/) for full documentation.
 
 ## Serialization
 

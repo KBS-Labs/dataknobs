@@ -382,4 +382,4 @@ assert data["_corpus_summary"]["corpus_status"] == "approved"
 
 - [Artifact System](artifacts.md) — Core artifact models, registry, and lifecycle
 - [Rubric Evaluation System](rubrics.md) — Evaluating artifacts with structured rubrics
-- [Content Deduplication](../../data/dedup.md) — DedupChecker for hash and semantic dedup
+- [Content Deduplication](https://kbs-labs.github.io/dataknobs/packages/data/dedup/) — DedupChecker for hash and semantic dedup

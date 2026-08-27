@@ -390,4 +390,4 @@ The environment-aware system is **fully backward compatible**:
 ## Next Steps
 
 - See [Configuration Reference](configuration.md) for complete configuration reference
-- See [API Reference](../api/reference.md) for API reference
+- See [API Reference](https://kbs-labs.github.io/dataknobs/packages/bots/api/reference/) for API reference

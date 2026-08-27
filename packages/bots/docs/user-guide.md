@@ -2575,8 +2575,8 @@ config["reasoning"]["store_trace"] = True
 
 ## Next Steps
 
-- **Explore Examples**: Check out [examples/](../examples/index.md) for more patterns
-- **Read API Docs**: See [api.md](../api/reference.md) for complete API reference
+- **Explore Examples**: Check out the [examples](https://kbs-labs.github.io/dataknobs/packages/bots/examples/) for more patterns
+- **Read API Docs**: See the [API Reference](https://kbs-labs.github.io/dataknobs/packages/bots/api/reference/) for every class and function
 - **Configuration Deep Dive**: Read [configuration.md](configuration.md)
 - **Build Custom Tools**: Follow [tools.md](tools.md) guide
 - **Understand Architecture**: Study [architecture.md](architecture.md)
@@ -2588,4 +2588,4 @@ config["reasoning"]["store_trace"] = True
 - **GitHub Issues**: [Report bugs or request features](https://github.com/kbs-labs/dataknobs/issues)
 - **Discussions**: [Ask questions and share ideas](https://github.com/kbs-labs/dataknobs/discussions)
 - **Documentation**: You're reading it!
-- **Examples**: [Working code examples](../examples/index.md)
+- **Examples**: [Working code examples](https://kbs-labs.github.io/dataknobs/packages/bots/examples/)

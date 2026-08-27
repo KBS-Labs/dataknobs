@@ -7,7 +7,7 @@ resolution folds the selection into a single composed declaration.
 
 `dataknobs_bots.behavior_packs` supplies the *vocabulary*; the composition
 machinery is `dataknobs_common.packs` (see the
-[Pack Composition guide](../../common/packs.md) for merge-rule
+[Pack Composition guide](https://kbs-labs.github.io/dataknobs/packages/common/packs/) for merge-rule
 semantics, binding syntax, warnings, and error families).
 
 > **DataKnobs ships zero packs.** This module gives you the field names and
@@ -150,7 +150,7 @@ from dataknobs_common.packs import merge_bindings
 resolution = registry.resolve(merge_bindings(platform_bindings, tenant_bindings))
 ```
 
-See [Pack Composition → Bindings](../../common/packs.md) for
+See [Pack Composition → Bindings](https://kbs-labs.github.io/dataknobs/packages/common/packs/) for
 the full binding contract (`enabled` / `locked` / `priority`, field
 overrides, layering, and why unknown keys are rejected rather than ignored).
 
@@ -318,7 +318,7 @@ Note that two packs agreeing on `required_strategy` reconcile silently —
 
 ## See Also
 
-- [Pack Composition](../../common/packs.md) — merge rules,
+- [Pack Composition](https://kbs-labs.github.io/dataknobs/packages/common/packs/) — merge rules,
   bindings, warnings, custom reducers
 - [Middleware](middleware.md) — the spec shape, the two flavors, and the
   additive platform channel

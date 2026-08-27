@@ -588,7 +588,7 @@ manager = ConversationManager(
 )
 ```
 
-When the limit is exceeded, `RateLimitError` is raised with a `retry_after` attribute indicating when to retry. See the [Rate Limiting guide](../../common/ratelimit.md) for the underlying `InMemoryRateLimiter` API.
+When the limit is exceeded, `RateLimitError` is raised with a `retry_after` attribute indicating when to retry. See the [Rate Limiting guide](https://kbs-labs.github.io/dataknobs/packages/common/ratelimit/) for the underlying `InMemoryRateLimiter` API.
 
 **Example - Token counting**:
 ```python
@@ -1189,7 +1189,7 @@ configuration — do not re-implement or over-configure them:
 | **Tool-loop bounds** | Wall-clock-bounded by `tool_loop_timeout` (default `120.0` s) and iteration-capped by `max_tool_iterations` (default `5`), both on `DynaBotConfig`. |
 | **Truncated tool call** | A tool call the provider truncated at the token budget (`LLMResponse.truncated`) is safely abandoned and the turn synthesized — never a hard failure. |
 | **Vendor API errors** | Translated to typed `dataknobs` exceptions (including `ContextLengthExceededError`) at a single choke point in the base provider, so you catch `dataknobs_llm.exceptions` types, not raw SDK errors. |
-| **Termination reason** | Written to the `reasoning_termination` conversation metadata on every ReAct turn, independent of `store_trace`. See [ReAct Reasoning](../../bots/guides/configuration.md#react-reasoning). |
+| **Termination reason** | Written to the `reasoning_termination` conversation metadata on every ReAct turn, independent of `store_trace`. See [ReAct Reasoning](https://kbs-labs.github.io/dataknobs/packages/bots/guides/configuration/#react-reasoning). |
 | **Orphaned `tool_use` pairing** | Repaired in the shared DynaBot turn-finalize, so an unmatched `tool_use`/`tool_result` pair never reaches the provider as a `400`. This runs for **every** tool strategy (see the cross-strategy note below). |
 
 #### Opt in for a long tool loop
@@ -1220,7 +1220,7 @@ estimated history exceeds `budget_fraction` of the resolved input ceiling, and a
 **reactive** backstop that catches a `ContextLengthExceededError`, compacts once,
 and retries. The reactive backstop exists because the proactive estimate is a
 character-ratio heuristic that can under-count — do not rely on the proactive leg
-alone. See [ReAct Reasoning](../../bots/guides/configuration.md#react-reasoning)
+alone. See [ReAct Reasoning](https://kbs-labs.github.io/dataknobs/packages/bots/guides/configuration/#react-reasoning)
 for the full field reference.
 
 **`truncation_retry_max_tokens` — optional.** The safe abandon-and-synthesize
@@ -1277,7 +1277,7 @@ reasoning:
 ```
 
 This is a *recommended set*, not a full schema — the complete field references
-live in the bots [Configuration guide](../../bots/guides/configuration.md#react-reasoning)
+live in the bots [Configuration guide](https://kbs-labs.github.io/dataknobs/packages/bots/guides/configuration/#react-reasoning)
 and the [Providers guide](providers.md). `ContextLengthExceededError` is importable
 from `dataknobs_llm.exceptions`.
 

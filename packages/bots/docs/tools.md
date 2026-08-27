@@ -874,7 +874,7 @@ class MyAsyncTool(Tool):
 
 ### Complete Calculator Tool
 
-See [Custom Tools Example](../examples/custom-tools.md) for complete code
+See [Custom Tools Example](https://kbs-labs.github.io/dataknobs/packages/bots/examples/custom-tools/) for complete code
 
 ### Complete API Integration Tool
 
@@ -1203,7 +1203,7 @@ stages:
 
 ## See Also
 
-- [API Reference](../api/reference.md) - Complete API documentation
+- [API Reference](https://kbs-labs.github.io/dataknobs/packages/bots/api/reference/) - Complete API documentation
 - [User Guide](user-guide.md) - Usage tutorials
 - [Configuration Reference](configuration.md) - Configuration options
-- [Examples](../examples/custom-tools.md) - Working tool examples
+- [Examples](https://kbs-labs.github.io/dataknobs/packages/bots/examples/custom-tools/) - Working tool examples

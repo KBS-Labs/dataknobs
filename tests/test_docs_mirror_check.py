@@ -484,18 +484,29 @@ def test_fix_skips_ambiguous_exception_without_corrupting(tree: _Tree) -> None:
 
 
 def test_run_returns_zero_on_clean_tree(tree: _Tree) -> None:
-    """The package source is lower-hyphen because ``run`` now requires it.
+    """Clean now includes every relative link resolving, so the fixture links.
 
-    The fixture used to be ``API_REFERENCE.md``, which exercised the
-    canonicaliser through the mirror comparison. That job now belongs to the
-    unit tests above; a package doc reaching ``run`` in the old spelling is a
-    failure, so keeping it here would have asserted the opposite of the rule.
-    The link fold it was really testing is still here, in the link text.
+    Two earlier versions of this fixture are worth recording, because each was
+    clean under the rule of its day and is a failure under the next one.
+    ``API_REFERENCE.md`` exercised the canonicaliser through the mirror
+    comparison, and stopped being clean when ``run`` began requiring
+    lower-hyphen package docs. It became ``OTHER_DOC.md`` against
+    ``other-doc.md`` -- the same fold moved into the link text -- which was
+    clean only while an unresolvable link was reported rather than failed. It
+    is one spelling now, present in both trees, and the fold it was testing
+    belongs to the unit tests above.
     """
     mod, pkg, site = tree
-    _w(pkg / "api-reference.md", "# API\n\nsee [G](OTHER_DOC.md)\n")
+    _w(pkg / "api-reference.md", "# API\n\nsee [G](other-doc.md)\n")
     _w(site / "api-reference.md", "# API\n\nsee [G](other-doc.md)\n")
-    manifest = _manifest(mirror=[{"package": "api-reference.md", "site": "api-reference.md"}])
+    _w(pkg / "other-doc.md", "# O\n")
+    _w(site / "other-doc.md", "# O\n")
+    manifest = _manifest(
+        mirror=[
+            {"package": "api-reference.md", "site": "api-reference.md"},
+            {"package": "other-doc.md", "site": "other-doc.md"},
+        ]
+    )
     assert mod.run(manifest, only=None, fix=False) == 0
 
 
@@ -507,24 +518,46 @@ def test_run_returns_one_on_drift(tree: _Tree) -> None:
     assert mod.run(manifest, only=None, fix=False) == 1
 
 
-def test_run_reports_unresolved_links_without_failing(
+def test_run_fails_on_a_link_no_rename_can_reach(
     tree: _Tree, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """A link no rename can reach is printed, counted, and does not fail the run.
+    """The population that was reported is now failed, end to end through run().
 
-    This pins the join between the two halves of the link work: the naming half
-    is enforced, and the half that depends on the two trees nesting documents
-    differently is reported until a policy exists for it. The count is derived
-    on every run, so it is the work list rather than a transcription of one.
+    Both halves of the link work are enforced here. The naming half always was;
+    this half waited on a policy for what a package doc may link to when the
+    target is in another package, is site-native, or is gone. There is one now,
+    so the informational branch is gone and the two populations differ only in
+    the remedy their message names.
     """
     mod, pkg, _site = tree
     _w(pkg / "guide.md", "# G\n\nsee [X](../elsewhere/nothing.md)\n")
     manifest = _manifest(package_only=["guide.md"])
-    assert mod.run(manifest, only=None, fix=False) == 0
+    assert mod.run(manifest, only=None, fix=False) != 0
     out = capsys.readouterr().out
-    assert "1 relative .md link(s) do not resolve" in out
+    assert "link resolution" in out
     assert "../elsewhere/nothing.md" in out
-    assert "Reported, not failed." in out
+
+
+def test_absolute_site_url_is_not_a_relative_link(tree: _Tree) -> None:
+    """The policy's targets are exempt by construction, not by an allowlist.
+
+    A characterisation test, not a reproduce-first one: it passes today and is
+    written to keep passing. The whole policy rests on it -- an absolute site
+    URL is simply not a relative ``.md`` link, so nothing has to declare that a
+    cross-tree link was deliberate. If ``link_targets`` ever started resolving
+    ``https://`` targets, every one of those decisions would turn into a
+    finding at once, and this is what turns that into a red test instead.
+    """
+    mod, pkg, site = tree
+    _w(
+        pkg / "guide.md",
+        "# G\n\nsee [X](https://kbs-labs.github.io/dataknobs/packages/common/packs/)\n"
+        "and [Y](https://kbs-labs.github.io/dataknobs/api/reference/bots/#dataknobs_bots.DynaBot)\n",
+    )
+    assert mod.link_targets((pkg / "guide.md").read_text()) == []
+    res = mod.Result()
+    mod.check_link_resolution({"package_only": ["guide.md"]}, pkg, site, res)
+    assert res.ok, res.errors
 
 
 # --------------------------------------------------------------------------
@@ -638,14 +671,12 @@ def test_link_broken_only_by_spelling_is_detected(tree: _Tree) -> None:
     mod, pkg, site = tree
     _w(pkg / "architecture.md", "# A\n\nsee [C](configuration.md)\n")
     _w(pkg / "CONFIGURATION.md", "# C\n")
-    unresolved: list[tuple[str, str, str]] = []
     res = mod.Result()
     mod.check_link_resolution(
-        {"package_only": ["architecture.md", "CONFIGURATION.md"]}, pkg, site, res, unresolved
+        {"package_only": ["architecture.md", "CONFIGURATION.md"]}, pkg, site, res
     )
     assert not res.ok
     assert any("link spelling" in e and "CONFIGURATION.md" in e for e in res.errors)
-    assert unresolved == []
 
 
 def test_spelling_break_is_caught_where_path_exists_would_lie(tree: _Tree) -> None:
@@ -669,30 +700,30 @@ def test_spelling_break_is_caught_where_path_exists_would_lie(tree: _Tree) -> No
         f"case-sensitive existence must not follow Path.exists() (which said {naive})"
     )
 
-    unresolved: list[tuple[str, str, str]] = []
     res = mod.Result()
     mod.check_link_resolution(
-        {"package_only": ["architecture.md", "CONFIGURATION.md"]}, pkg, site, res, unresolved
+        {"package_only": ["architecture.md", "CONFIGURATION.md"]}, pkg, site, res
     )
     assert not res.ok, f"verdict must not depend on the filesystem (Path.exists said {naive})"
 
 
-def test_link_with_no_target_under_any_spelling_is_reported_not_failed(tree: _Tree) -> None:
-    """No rename reaches these, so they are counted rather than failed.
+def test_link_with_no_target_under_any_spelling_fails(tree: _Tree) -> None:
+    """A target absent under every spelling fails, now that a policy exists.
 
-    A target absent under every spelling means the document is not in that
-    directory at all: the two trees nest it differently, or it is site-native,
-    or it is gone. Answering that is a policy decision about what a package doc
-    may link to, not a naming one.
+    This population used to be counted and printed, because no rename reaches
+    it and answering it needed a decision: the two trees nest the same document
+    differently, or the target is site-native, or it is gone. The decision was
+    made -- link the published page by its absolute site URL, publish the
+    target into the package tree, or name it in prose -- so the check no longer
+    distinguishes the two populations and simply requires every relative link
+    to resolve in every tree its document is served from.
     """
     mod, pkg, site = tree
     _w(pkg / "guide.md", "# G\n\nsee [X](../api/reference.md)\n")
-    unresolved: list[tuple[str, str, str]] = []
     res = mod.Result()
-    mod.check_link_resolution({"package_only": ["guide.md"]}, pkg, site, res, unresolved)
-    assert res.ok, res.errors
-    assert len(unresolved) == 1
-    assert unresolved[0][1] == "../api/reference.md"
+    mod.check_link_resolution({"package_only": ["guide.md"]}, pkg, site, res)
+    assert not res.ok
+    assert any("link resolution" in e and "../api/reference.md" in e for e in res.errors)
 
 
 def test_symlink_doc_link_is_resolved_against_both_trees(tree: _Tree) -> None:
@@ -706,13 +737,12 @@ def test_symlink_doc_link_is_resolved_against_both_trees(tree: _Tree) -> None:
     _w(pkg / "tools.md", "# T\n\nsee [C](context.md)\n")
     _w(pkg / "context.md", "# C\n")
     (site / "tools.md").symlink_to(pkg / "tools.md")
-    unresolved: list[tuple[str, str, str]] = []
     res = mod.Result()
     mod.check_link_resolution(
-        {"symlink": [{"package": "tools.md", "site": "tools.md"}]}, pkg, site, res, unresolved
+        {"symlink": [{"package": "tools.md", "site": "tools.md"}]}, pkg, site, res
     )
-    assert res.ok, res.errors
-    assert [u[2] for u in unresolved] == ["docs/packages/demo"]
+    assert not res.ok
+    assert any("docs/packages/demo" in e for e in res.errors), res.errors
 
 
 def test_link_in_a_fence_or_code_span_is_not_resolved(tree: _Tree) -> None:
@@ -726,11 +756,9 @@ def test_link_in_a_fence_or_code_span_is_not_resolved(tree: _Tree) -> None:
         pkg / "guide.md",
         "# G\n\n```md\n[a](NOT_A_REAL_DOC.md)\n```\n\nand `[b](ALSO_NOT.md)` inline\n",
     )
-    unresolved: list[tuple[str, str, str]] = []
     res = mod.Result()
-    mod.check_link_resolution({"package_only": ["guide.md"]}, pkg, site, res, unresolved)
+    mod.check_link_resolution({"package_only": ["guide.md"]}, pkg, site, res)
     assert res.ok, res.errors
-    assert unresolved == []
 
 
 def test_urls_anchors_and_non_md_targets_are_not_resolved(tree: _Tree) -> None:
@@ -739,11 +767,9 @@ def test_urls_anchors_and_non_md_targets_are_not_resolved(tree: _Tree) -> None:
         pkg / "guide.md",
         "# G\n\n[a](https://x.test/FOO.md) [b](#section) [c](script.py) [d](/abs/x.md)\n",
     )
-    unresolved: list[tuple[str, str, str]] = []
     res = mod.Result()
-    mod.check_link_resolution({"package_only": ["guide.md"]}, pkg, site, res, unresolved)
+    mod.check_link_resolution({"package_only": ["guide.md"]}, pkg, site, res)
     assert res.ok, res.errors
-    assert unresolved == []
 
 
 def test_resolving_links_pass_quietly(tree: _Tree) -> None:
@@ -752,10 +778,6 @@ def test_resolving_links_pass_quietly(tree: _Tree) -> None:
     _w(pkg / "configuration.md", "# C\n")
     (pkg / "sub").mkdir()
     _w(pkg / "sub" / "deep.md", "# D\n")
-    unresolved: list[tuple[str, str, str]] = []
     res = mod.Result()
-    mod.check_link_resolution(
-        {"package_only": ["guide.md", "configuration.md"]}, pkg, site, res, unresolved
-    )
+    mod.check_link_resolution({"package_only": ["guide.md", "configuration.md"]}, pkg, site, res)
     assert res.ok, res.errors
-    assert unresolved == []

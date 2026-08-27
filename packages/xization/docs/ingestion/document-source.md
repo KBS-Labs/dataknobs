@@ -184,5 +184,7 @@ processor = DirectoryProcessor(config, MyCustomSource())
 
 - [DirectoryProcessor](directory-processor.md) — async-primary processor
   that consumes `DocumentSource`
-- [RAG Ingestion Guide](../../../bots/docs/knowledge/ingestion-guide.md) — consumer-facing
-  guide covering local/backend/event-driven ingestion
+- [Knowledge Base Ingestion (overview)](https://kbs-labs.github.io/dataknobs/packages/xization/ingestion/) — configuration
+  reference and end-to-end examples
+- [RAG Ingestion Guide](https://kbs-labs.github.io/dataknobs/packages/bots/knowledge/ingestion-guide/) —
+  consumer-facing guide covering local/backend/event-driven ingestion

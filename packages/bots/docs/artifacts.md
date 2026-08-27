@@ -1231,4 +1231,4 @@ compiled-format import; if omitted, the artifact structure is inferred heuristic
 
 - [Artifact Corpus](artifact-corpus.md) — Managing collections of related artifacts with dedup
 - [Rubric Evaluation System](rubrics.md) — Evaluating artifacts with structured rubrics
-- [Context Accumulator](context.md) — Building context from artifacts
+- [Context Accumulator](https://kbs-labs.github.io/dataknobs/packages/bots/guides/context/) — Building context from artifacts

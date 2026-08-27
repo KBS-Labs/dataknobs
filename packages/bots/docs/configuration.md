@@ -170,7 +170,7 @@ discards the dry-run objects — the sections stay raw mappings. It covers:
 A backend or strategy registered as a bare callable (no typed config) is
 recognized and skipped rather than rejected. `conversation_storage` is not
 validated yet (no registry-resolvable typed config family). See the common
-[Polymorphic-section validation](../../common/structured-config.md#polymorphic-section-validation-validate-config_registries)
+[Polymorphic-section validation](https://kbs-labs.github.io/dataknobs/packages/common/structured-config/#polymorphic-section-validation-validate-config_registries)
 guide for the underlying mechanism.
 
 ---
@@ -1517,7 +1517,7 @@ distinguished at the chunk layer; setting it to something a scoped
 store disagrees with is reported at WARNING, because the resulting
 chunks are written and can never be read back.
 
-See the [multi-tenant knowledge base guide](../knowledge/multi-tenant.md)
+See the [multi-tenant knowledge base guide](https://kbs-labs.github.io/dataknobs/packages/bots/knowledge/multi-tenant/)
 for the full precedence rules.
 
 ### Embedder Endpoint
@@ -1804,7 +1804,7 @@ reasoning:
 ```
 
 > Building a long-running tool bot? See the LLM Best Practices guide's
-> [Productionizing a Tool-Using Bot](../../llm/guides/best-practices.md#productionizing-a-tool-using-bot)
+> [Productionizing a Tool-Using Bot](https://kbs-labs.github.io/dataknobs/packages/llm/guides/best-practices/#productionizing-a-tool-using-bot)
 > checklist for which provider-boundary protections you get for free and when to
 > opt into `history_compaction` and `truncation_retry_max_tokens`.
 
@@ -4281,7 +4281,7 @@ def validate_config(config: dict) -> None:
 ## See Also
 
 - [Migration Guide](migration.md) - Migrate existing configs to environment-aware pattern
-- [API Reference](../api/reference.md) - Complete API documentation
+- [API Reference](https://kbs-labs.github.io/dataknobs/packages/bots/api/reference/) - Complete API documentation
 - [User Guide](user-guide.md) - Tutorials and how-to guides
 - [Tools Development](tools.md) - Creating custom tools
 - [Architecture](architecture.md) - System design

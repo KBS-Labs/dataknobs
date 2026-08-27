@@ -679,4 +679,4 @@ print(f"Score: {evaluations[0]['weighted_score']:.0%}")  # "100%"
 ## Related Documentation
 
 - [Artifact System](artifacts.md) — Core artifact models, provenance, registry, transforms, and tools
-- [Context Accumulator](context.md) — Building context from evaluation results
+- [Context Accumulator](https://kbs-labs.github.io/dataknobs/packages/bots/guides/context/) — Building context from evaluation results
