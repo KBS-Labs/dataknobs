@@ -200,7 +200,7 @@ class TestToolWizardState:
 
 
 class TestDeprecatedWizardStateSnapshotAlias:
-    """``WizardStateSnapshot`` resolves for one minor version, and warns."""
+    """``WizardStateSnapshot`` resolves until 1.0.0, and warns."""
 
     def test_alias_is_the_renamed_class(self) -> None:
         """The alias is the class itself, not a subclass or a copy."""
@@ -243,6 +243,26 @@ class TestDeprecatedWizardStateSnapshotAlias:
 
         assert isinstance(context.wizard_state, ToolWizardState)
         assert context.wizard_data() == {"a": 1}
+
+    def test_alias_warning_names_the_deprecation_period(self) -> None:
+        """Both warnings say when the alias arrived and when it goes.
+
+        "One minor version" is not a schedule a caller can act on: it
+        names neither the release that started the clock nor the one that
+        stops it, so nothing about it is checkable. Both warning sites
+        must carry the period, because a caller reaches the alias through
+        either module and only ever sees one of them.
+        """
+        with pytest.warns(DeprecationWarning) as module_warning:
+            _ = context_module.WizardStateSnapshot
+
+        with pytest.warns(DeprecationWarning) as package_warning:
+            _ = dataknobs_llm.tools.WizardStateSnapshot
+
+        for caught in (module_warning, package_warning):
+            message = str(caught[0].message)
+            assert "0.8.0" in message, message
+            assert "1.0.0" in message, message
 
     def test_an_unknown_attribute_still_raises(self) -> None:
         """``__getattr__`` must not turn typos into silent successes."""

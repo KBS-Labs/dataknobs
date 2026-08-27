@@ -312,17 +312,18 @@ def __getattr__(name: str) -> type:
     class under an import of this one — so the tool-facing class is now
     spelled :class:`ToolWizardState`.
 
-    The old name keeps resolving for one minor version and is then
-    removed. Warning on access rather than aliasing silently follows the
-    ``S3SessionConfig`` precedent in :mod:`dataknobs_data.pooling.s3`:
-    there, the package-root alias is *permanent* and resolves quietly,
-    while the deep module path warns. This one is temporary, so it warns.
+    The old name was deprecated in 0.8.0 and keeps resolving until
+    1.0.0, when it is removed. Warning on access rather than aliasing
+    silently follows the ``S3SessionConfig`` precedent in
+    :mod:`dataknobs_data.pooling.s3`: there, the package-root alias is
+    *permanent* and resolves quietly, while the deep module path warns.
+    This one is temporary, so it warns.
     """
     target = _DEPRECATED_ALIASES.get(name)
     if target is not None:
         warnings.warn(
-            f"{name} is deprecated; use ToolWizardState instead. The alias "
-            "resolves for one minor version and is then removed.",
+            f"{name} is deprecated since 0.8.0; use ToolWizardState "
+            "instead. The alias resolves until 1.0.0, when it is removed.",
             DeprecationWarning,
             stacklevel=2,
         )

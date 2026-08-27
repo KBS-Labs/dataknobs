@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Changed
+
+- **The `WizardStateSnapshot` deprecation names its versions.** 0.8.0 announced
+  the alias as resolving "for one minor version", which names neither the
+  release that started the clock nor the one that stops it — a caller could not
+  act on it, and nothing could check it. Both warnings and the surrounding
+  prose now say the alias was deprecated in 0.8.0 and is removed at 1.0.0. The
+  v0.8.0 entry below is amended to match, so a reader arriving at it later is
+  not told the wrong schedule. Nothing about what the alias resolves to, or
+  when it warns, changes.
+
 ## v0.8.0 - 2026-08-26
 
 ### Added
@@ -46,10 +57,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   already names a field on `WizardStateSnapshot` that only one of the two has.
   The tool-facing class is the one that moved, since it is the one whose name did
   not say what it was. `WizardStateSnapshot` remains as an alias in
-  `dataknobs_llm.tools` and `dataknobs_llm.tools.context` for one minor version,
-  and emits a `DeprecationWarning` when read from either. Type checkers still
-  resolve it to the class, so an unmigrated call site keeps full type precision
-  while it lasts.
+  `dataknobs_llm.tools` and `dataknobs_llm.tools.context` until 1.0.0, when it
+  is removed, and emits a `DeprecationWarning` when read from either. Type
+  checkers still resolve it to the class, so an unmigrated call site keeps full
+  type precision while it lasts.
 
 ### Fixed
 
