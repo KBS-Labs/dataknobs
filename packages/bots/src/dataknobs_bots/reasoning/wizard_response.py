@@ -74,7 +74,7 @@ def _maybe_strict_signature_hint(
         f"opaquely to each stage's sub-strategy (this turn: {keys_repr}). "
         "Wizard-stage-safe sub-strategies should declare a permissive "
         "``**kwargs`` on ``from_config`` so unrelated forwarded keys are "
-        "absorbed. See packages/bots/docs/USER_GUIDE.md "
+        "absorbed. See packages/bots/docs/user-guide.md "
         '("Writing a wizard-stage-safe sub-strategy").'
     )
 
@@ -1784,7 +1784,7 @@ class WizardResponder:
                 "Nested wizards share the conversation manager, causing "
                 "metadata collisions, and the inner wizard's multi-turn "
                 "FSM cannot function within a single outer-stage turn. "
-                "Use wizard subflows instead — see WIZARD_SUBFLOWS.md.",
+                "Use wizard subflows instead — see wizard-subflows.md.",
                 context={"stage": stage.get("name", "?")},
             )
 

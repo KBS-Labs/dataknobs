@@ -1,0 +1,1 @@
+../../../packages/config/docs/template-vars.md

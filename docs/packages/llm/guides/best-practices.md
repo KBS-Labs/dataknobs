@@ -1,1 +1,1 @@
-../../../../packages/llm/docs/BEST_PRACTICES.md
+../../../../packages/llm/docs/best-practices.md

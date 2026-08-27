@@ -84,10 +84,10 @@ For comprehensive documentation on the prompt system, additional resources are a
 
 The LLM package includes detailed documentation in `packages/llm/docs/`:
 
-- **USER_GUIDE.md** - Complete user guide covering template syntax, libraries, RAG, and validation
-- **JINJA2_INTEGRATION.md** - Comprehensive Jinja2 features guide with 50+ filters
-- **JINJA2_MIGRATION.md** - Migration guide for transitioning to Jinja2
-- **BEST_PRACTICES.md** - Best practices for prompt engineering
+- **user-guide.md** - Complete user guide covering template syntax, libraries, RAG, and validation
+- **jinja2-integration.md** - Comprehensive Jinja2 features guide with 50+ filters
+- **jinja2-migration.md** - Migration guide for transitioning to Jinja2
+- **best-practices.md** - Best practices for prompt engineering
 
 These files are available in the source package at `packages/llm/docs/` or in the [GitHub repository](https://github.com/kbs-labs/dataknobs/tree/main/packages/llm/docs)
 

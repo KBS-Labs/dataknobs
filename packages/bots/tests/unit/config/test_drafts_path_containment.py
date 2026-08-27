@@ -193,7 +193,7 @@ def test_finalize_creates_the_subdirectory_it_writes_into(
 ) -> None:
     """A nested name must not require the caller to pre-create the tree.
 
-    ``CONFIG_TOOLKIT.md`` advertises ``reports/quarterly``, and nothing
+    ``config-toolkit.md`` advertises ``reports/quarterly``, and nothing
     in that contract says the directory has to exist first. The sibling
     test above pre-creates ``team/``, so it would not notice if the
     ``mkdir`` were lost; this one asserts the manager does it.

@@ -48,8 +48,8 @@ def rel(path: Path) -> str:
 HISTORICAL = (
     "/docs/history/",
     "packages/fsm/docs/active/",
-    "packages/data/docs/DESIGN_PLAN.md",
-    "packages/llm/docs/LLM_ARCHITECTURE_EXPLORATION.md",
+    "packages/data/docs/design-plan.md",
+    "packages/llm/docs/llm-architecture-exploration.md",
 )
 
 

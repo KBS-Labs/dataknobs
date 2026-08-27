@@ -163,5 +163,5 @@ extension directly against a `Path`. Since the Phase 1 refactor:
 
 - [DocumentSource](document-source.md) — async protocol for file
   enumeration and reads
-- [Knowledge Base Ingestion (overview)](INGESTION.md) — configuration
+- [Knowledge Base Ingestion (overview)](ingestion.md) — configuration
   reference and end-to-end examples

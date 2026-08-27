@@ -142,8 +142,8 @@ Comprehensive performance documentation is available in the package:
 
 The LLM package includes detailed documentation in `packages/llm/docs/`:
 
-- **RAG_CACHING.md** - RAG metadata caching, query hashing, and cache configuration
-- **BEST_PRACTICES.md** - Performance best practices and optimization patterns
+- **rag-caching.md** - RAG metadata caching, query hashing, and cache configuration
+- **best-practices.md** - Performance best practices and optimization patterns
 
 These files are available in the source package at `packages/llm/docs/` or in the [GitHub repository](https://github.com/kbs-labs/dataknobs/tree/main/packages/llm/docs)
 

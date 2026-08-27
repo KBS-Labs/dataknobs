@@ -267,7 +267,7 @@ class TestTheGuardCatchesEachWayOfFailingTheContract:
             assert_accepts_universal_greeting(UnboundReasoning)
 
     def test_a_direct_subclass_that_omits_the_constructor_keyword(self) -> None:
-        """The second population — the one ``CUSTOM_STRATEGIES.md`` teaches.
+        """The second population — the one ``custom-strategies.md`` teaches.
 
         A directly-subclassed strategy inherits the base ``from_config``,
         which calls ``cls(greeting_template=…)``.  Omitting the keyword makes
@@ -309,7 +309,7 @@ def registered_consumer_strategy() -> Any:
     """
 
     class ConsumerStrategy(ReasoningStrategy):
-        """The three-site pattern ``CUSTOM_STRATEGIES.md`` teaches."""
+        """The three-site pattern ``custom-strategies.md`` teaches."""
 
         def __init__(self, *, greeting_template: str | None = None) -> None:
             super().__init__(greeting_template=greeting_template)

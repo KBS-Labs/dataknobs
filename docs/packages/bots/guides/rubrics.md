@@ -1,1 +1,1 @@
-../../../../packages/bots/docs/RUBRICS.md
+../../../../packages/bots/docs/rubrics.md

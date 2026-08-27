@@ -674,7 +674,7 @@ class TestDynaBotConfigBuilderIntegration:
 class TestSubflowNetworkShape:
     """``subflows:`` means the same thing to the builder and the loader.
 
-    ``WIZARD_SUBFLOWS.md`` documents each value under ``subflows:`` as a
+    ``wizard-subflows.md`` documents each value under ``subflows:`` as a
     whole wizard config -- ``{name: ..., stages: [...]}`` -- and
     ``WizardConfigLoader._load_single_subflow`` reads it that way, handing
     it straight to ``load_from_dict``. The builder collected a bare list

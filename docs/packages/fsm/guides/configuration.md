@@ -337,7 +337,7 @@ Tilde-prefixed values (e.g. `FSM_DATA_DIR=~/data`) are returned literally;
 downstream code decides whether to expand `~`.
 
 For full details see the package-level
-[FSM Configuration Guide](https://github.com/KBS-Labs/dataknobs/blob/main/packages/fsm/docs/FSM_CONFIG_GUIDE.md#environment-variables).
+[FSM Configuration Guide](https://github.com/KBS-Labs/dataknobs/blob/main/packages/fsm/docs/fsm-config-guide.md#environment-variables).
 
 ## Troubleshooting
 

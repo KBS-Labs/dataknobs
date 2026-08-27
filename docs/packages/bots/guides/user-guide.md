@@ -1,1 +1,1 @@
-../../../../packages/bots/docs/USER_GUIDE.md
+../../../../packages/bots/docs/user-guide.md

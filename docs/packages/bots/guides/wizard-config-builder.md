@@ -1,1 +1,1 @@
---8<-- "packages/bots/docs/WIZARD_CONFIG_BUILDER.md"
+--8<-- "packages/bots/docs/wizard-config-builder.md"

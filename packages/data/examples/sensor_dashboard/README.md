@@ -100,7 +100,7 @@ Based on this real-world example, we recommend:
 5. **Provide database.list() method**
 6. **Document BatchConfig parameters clearly**
 
-See `docs/API_IMPROVEMENTS.md` for detailed findings.
+See `docs/api-improvements.md` for detailed findings.
 
 ## Running the Tests
 

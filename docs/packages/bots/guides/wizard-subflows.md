@@ -1,1 +1,1 @@
---8<-- "packages/bots/docs/WIZARD_SUBFLOWS.md"
+--8<-- "packages/bots/docs/wizard-subflows.md"

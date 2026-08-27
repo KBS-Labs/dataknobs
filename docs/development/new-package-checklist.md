@@ -101,19 +101,19 @@ uv run pytest packages/<name>/tests/ --cov=packages/<name>/src --cov-report=term
 
 **Tasks**:
 - [ ] Create `README.md` with overview and quick examples
-- [ ] Write `USER_GUIDE.md` with tutorials and how-to guides
-- [ ] Create `API.md` with complete API reference
-- [ ] Add `CONFIGURATION.md` if package uses configuration
+- [ ] Write `user-guide.md` with tutorials and how-to guides
+- [ ] Create `api.md` with complete API reference
+- [ ] Add `configuration.md` if package uses configuration
 - [ ] Include code examples in `examples/` directory
 
 **Recommended Structure**:
 ```
 docs/
 ├── README.md              # Package overview
-├── USER_GUIDE.md          # Tutorials and guides
-├── API.md                 # API reference
-├── CONFIGURATION.md       # Configuration options (if needed)
-├── ARCHITECTURE.md        # Design decisions (if complex)
+├── user-guide.md          # Tutorials and guides
+├── api.md                 # API reference
+├── configuration.md       # Configuration options (if needed)
+├── architecture.md        # Design decisions (if complex)
 └── examples/
     ├── basic_usage.py
     ├── advanced_usage.py

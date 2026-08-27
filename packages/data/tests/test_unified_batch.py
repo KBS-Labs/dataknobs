@@ -261,7 +261,7 @@ class TestBatchConfigCompatibility:
         """Test that documentation exists for when to use each config."""
         from pathlib import Path
 
-        docs_path = Path(__file__).parent.parent / "docs" / "BATCH_PROCESSING_GUIDE.md"
+        docs_path = Path(__file__).parent.parent / "docs" / "batch-processing-guide.md"
 
         assert docs_path.exists()
 

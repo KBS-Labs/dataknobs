@@ -80,7 +80,7 @@ When updating documentation for any package:
    | Class | Use when |
    |---|---|
    | `transclude` | Site page is a `--8<--` include of the package source (**preferred for new docs** — drift is structurally impossible) |
-   | `symlink` | Site page symlinks the source; no intra-doc links need site-form rewriting |
+   | `symlink` | Site page symlinks the source; bare sibling-filename links in it read the same from either tree |
    | `mirror` | Hand-authored copy, content-guarded; `--fix` regenerates it |
    | `diverge` | Intentional divergence; recorded, not content-checked. Add `shared_sections` for any block that must still stay identical |
    | `package_only` / `site_only` | Genuinely unpaired — **not** a fallback for a pair you did not want to classify |
@@ -125,14 +125,14 @@ When updating documentation for any package:
    — and pull it into the site page where the copy used to be:
 
    ```markdown
-   --8<-- "packages/bots/docs/MULTI_TENANT.md:catching-api-errors"
+   --8<-- "packages/bots/docs/multi-tenant.md:catching-api-errors"
    ```
 
    Then declare it, so replacing the include with a fresh copy fails the
    guard rather than silently restoring the drift:
 
    ```json
-   { "package": "MULTI_TENANT.md", "site": "guides/bot-manager.md",
+   { "package": "multi-tenant.md", "site": "guides/bot-manager.md",
      "reason": "...", "shared_sections": ["catching-api-errors"] }
    ```
 

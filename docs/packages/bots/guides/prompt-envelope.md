@@ -1,3 +1,3 @@
 # Prompt Envelope
 
---8<-- "packages/bots/docs/PROMPT_ENVELOPE.md"
+--8<-- "packages/bots/docs/prompt-envelope.md"

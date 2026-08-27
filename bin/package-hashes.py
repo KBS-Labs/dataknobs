@@ -250,7 +250,7 @@ def _is_quality_input(path: Path) -> bool:
     Naming what counts, rather than taking everything not obviously junk, is
     also what keeps the answer identical on a developer's machine and on a CI
     checkout: ``.DS_Store`` reaches the shebang test and fails it, while
-    ``USER_GUIDE.md.orig`` and ``USER_GUIDE.md~`` carry suffixes of their own and
+    ``user-guide.md.orig`` and ``user-guide.md~`` carry suffixes of their own and
     are rejected outright. A file git does not track cannot move the hash.
     """
     if not path.is_file():

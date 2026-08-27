@@ -1,3 +1,3 @@
 # Dynamic Registration
 
---8<-- "packages/bots/docs/DYNAMIC_REGISTRATION.md"
+--8<-- "packages/bots/docs/dynamic-registration.md"

@@ -335,7 +335,7 @@ class WizardConfig(StructuredConfig):
     global_tasks: tuple[dict[str, Any], ...] = ()
     #: Each value is a whole wizard config, which is what
     #: ``WizardConfigLoader._load_single_subflow`` hands to
-    #: ``load_from_dict`` and what ``WIZARD_SUBFLOWS.md`` documents. A bare
+    #: ``load_from_dict`` and what ``wizard-subflows.md`` documents. A bare
     #: list of stages is what a caller supplies; the wrapping happens in
     #: :meth:`WizardConfigBuilder.add_subflow_network`, once, rather than
     #: at every surface that has to agree with the loader.
@@ -742,7 +742,7 @@ class WizardConfigBuilder:
         The network is stored as a wizard config of its own --
         ``{"name": name, "stages": [...]}`` -- because that is what the
         loader reads each ``subflows:`` value as, and what
-        ``WIZARD_SUBFLOWS.md`` shows. Callers still supply stages alone,
+        ``wizard-subflows.md`` shows. Callers still supply stages alone,
         since a subflow's own ``settings:`` is not read when it is pushed.
 
         Args:

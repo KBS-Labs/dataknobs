@@ -266,7 +266,7 @@ bot:
     temperature: 0.7
 ```
 
-See the [Migration Guide](../docs/MIGRATION.md) for how to convert existing configs.
+See the [Migration Guide](../docs/migration.md) for how to convert existing configs.
 
 ## Next Steps
 

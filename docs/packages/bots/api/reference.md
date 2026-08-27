@@ -1,1 +1,1 @@
-../../../../packages/bots/docs/API.md
+../../../../packages/bots/docs/api.md

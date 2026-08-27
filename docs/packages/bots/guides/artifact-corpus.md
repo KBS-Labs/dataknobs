@@ -1,1 +1,1 @@
-../../../../packages/bots/docs/ARTIFACT_CORPUS.md
+../../../../packages/bots/docs/artifact-corpus.md

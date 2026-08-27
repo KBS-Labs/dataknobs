@@ -471,5 +471,5 @@ excludes, per-pattern chunking, streaming JSON apply in every case.
   async protocol underlying the unified pipeline
 - [DirectoryProcessor](../../../xization/docs/ingestion/directory-processor.md)
   — async-primary processor
-- [RAG Ingestion (historical reference)](../RAG_INGESTION.md) —
+- [RAG Ingestion (historical reference)](../rag-ingestion.md) —
   `load_from_directory`, hybrid search, progress callbacks

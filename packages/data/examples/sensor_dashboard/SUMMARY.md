@@ -72,7 +72,7 @@ tests/
 └── test_generator_debug.py          # Generator testing
 
 docs/
-└── API_IMPROVEMENTS.md   # Detailed findings and recommendations
+└── api-improvements.md   # Detailed findings and recommendations
 ```
 
 ## Next Steps

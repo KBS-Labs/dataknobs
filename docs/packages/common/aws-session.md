@@ -1,1 +1,1 @@
---8<-- "packages/common/docs/AWS_SESSION.md"
+--8<-- "packages/common/docs/aws-session.md"

@@ -230,7 +230,7 @@ def test_strict_from_config_raises_when_forwarded_unknown_kwarg() -> None:
     # diagnosis time.
     assert "Hint:" in str(exc_info.value)
     assert "**kwargs" in str(exc_info.value)
-    assert "USER_GUIDE.md" in str(exc_info.value)
+    assert "user-guide.md" in str(exc_info.value)
 
 
 # ---------------------------------------------------------------------------

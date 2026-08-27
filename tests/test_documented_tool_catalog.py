@@ -1,6 +1,6 @@
 """Reproduce-first guard: the documented tool catalog must be the catalog.
 
-``packages/bots/docs/CONFIG_TOOLKIT.md`` carries a table of every tool
+``packages/bots/docs/config-toolkit.md`` carries a table of every tool
 ``default_catalog`` is pre-populated with, and states the count in prose above
 it; the site page states the same count with no table. The table stopped at
 twelve rows and both counts said twelve while the catalog held twenty-one --
@@ -52,7 +52,7 @@ NOT COVERED
 
     **Tool classes that exist but are not registered.** ``ListCatalogTool``,
     ``SaveToCatalogTool`` and ``LoadFromCatalogTool`` are exported from
-    ``dataknobs_bots.tools`` and documented in ``TOOLS.md``, and their absence
+    ``dataknobs_bots.tools`` and documented in ``tools.md``, and their absence
     from the catalog is deliberate. This guard asks what the registry holds,
     never what the module exports -- the two are different questions and only
     the first one is what the table claims to answer.
@@ -68,7 +68,7 @@ from dataknobs_bots.config import default_catalog
 from tests._workspace import ROOT, documentation_files, rel
 
 #: The table this guard checks, and the prose count that closes it.
-CATALOG_DOC = ROOT / "packages" / "bots" / "docs" / "CONFIG_TOOLKIT.md"
+CATALOG_DOC = ROOT / "packages" / "bots" / "docs" / "config-toolkit.md"
 
 #: This file, for the one failure that asks the reader to come and edit it.
 GUARD = ROOT / "tests" / "test_documented_tool_catalog.py"

@@ -214,7 +214,7 @@ Comprehensive versioning and A/B testing documentation:
 
 ### Versioning Guide
 
-**Location**: `packages/llm/docs/VERSIONING.md`
+**Location**: `packages/llm/docs/versioning.md`
 
 Topics covered:
 - Semantic versioning
@@ -227,7 +227,7 @@ Topics covered:
 
 ### A/B Testing Guide
 
-**Location**: `packages/llm/docs/AB_TESTING.md`
+**Location**: `packages/llm/docs/ab-testing.md`
 
 Topics covered:
 - Creating experiments

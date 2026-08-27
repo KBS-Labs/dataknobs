@@ -443,7 +443,7 @@ print(f"Streamed {result.total_processed} records")
 
 ## Documentation
 
-For complete API documentation, see [API Reference](docs/API_REFERENCE.md).
+For complete API documentation, see [API Reference](docs/api-reference.md).
 
 ## Custom Backend
 

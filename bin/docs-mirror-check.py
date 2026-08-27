@@ -3,8 +3,11 @@
 
 The dual-docs rule keeps two copies of most package docs:
 
-  * package-local  ``packages/<pkg>/docs/*``   (GitHub, UPPER_SNAKE.md)
-  * mkdocs site    ``docs/packages/<pkg>/*``    (site, lower-hyphen.md)
+  * package-local  ``packages/<pkg>/docs/*``   (GitHub)
+  * mkdocs site    ``docs/packages/<pkg>/*``    (site)
+
+Both trees spell a doc the same way -- lower-hyphen -- so a bare link to a
+sibling doc reads identically from either.
 
 Historically nothing enforced that the two agree, so pages drifted silently
 until the rendered site taught a fictional API. This guard closes that gap.
@@ -435,12 +438,18 @@ def check_diverge(pair: dict, pkg_dir: Path, site_dir: Path, res: Result) -> Non
 
 
 def _canon_name(name: str) -> str:
-    """The comparison key for one doc: its basename in site form.
+    """The comparison key for one doc: its basename, depth discarded.
 
-    ``USER_GUIDE.md`` and ``guides/user-guide.md`` share it; so do
-    ``html/HTML_CONVERSION.md`` and ``html-conversion.md``. Applied to
-    both sides, so a site page that kept the package spelling
-    (``guides/TEMPLATE_SECURITY.md``) matches too.
+    ``user-guide.md`` and ``guides/user-guide.md`` share it; so do
+    ``html/html-conversion.md`` and ``html-conversion.md``. That is what
+    lets an entry be matched against a counterpart the other tree nests
+    differently.
+
+    The case/underscore fold is a residual. Both trees now spell every
+    doc in lower-hyphen, so it folds nothing that currently exists; it
+    stays because nothing yet *enforces* that spelling, and a doc added
+    in the old convention should still match its counterpart rather than
+    silently read as unpaired.
     """
     return Path(name).name.lower().replace("_", "-")
 

@@ -1,1 +1,1 @@
-../../../../packages/bots/docs/MIGRATION.md
+../../../../packages/bots/docs/migration.md

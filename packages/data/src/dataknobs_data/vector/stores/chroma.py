@@ -62,7 +62,7 @@ class ChromaVectorStore(VectorStore):
         # metadata materialization for the common multi-tenant
         # scoping pattern (e.g. ``{"domain_id": "x"}``).
         # Defaults to empty (current post-filter behavior preserved).
-        # See ``VECTOR_FILTER_SEMANTICS.md`` for the partition rules.
+        # See ``vector-filter-semantics.md`` for the partition rules.
         self.scalar_metadata_keys: frozenset[str] = cfg.scalar_metadata_keys or frozenset()
 
         # Handle embedding function
@@ -1076,7 +1076,7 @@ class ChromaVectorStore(VectorStore):
           include=["metadatas"])`` materializes matching metadata
           for Python-side narrowing. A first-class filtered-count
           API is a Chroma upstream limitation. See
-          ``VECTOR_FILTER_SEMANTICS.md`` for details and the
+          ``vector-filter-semantics.md`` for details and the
           ``scalar_metadata_keys`` opt-in.
         """
         if not self._initialized:

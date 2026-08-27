@@ -1,0 +1,2591 @@
+# User Guide
+
+Complete guide to using DataKnobs Bots with tutorials and how-to guides.
+
+## Table of Contents
+
+- [Getting Started](#getting-started)
+- [Basic Tutorials](#basic-tutorials)
+  - [Tutorial 1: Your First Chatbot](#tutorial-1-your-first-chatbot)
+  - [Tutorial 2: Adding Memory](#tutorial-2-adding-memory)
+  - [Tutorial 3: Streaming Responses](#tutorial-3-streaming-responses)
+  - [Per-Request Config Overrides](#per-request-config-overrides)
+  - [Conversation Undo & Rewind](#conversation-undo-rewind)
+  - [Tutorial 4: Building a RAG Chatbot](#tutorial-4-building-a-rag-chatbot)
+  - [Tutorial 5: Creating Tool-Using Agents](#tutorial-5-creating-tool-using-agents)
+  - [Tutorial 6: Building Guided Wizard Flows](#tutorial-6-building-guided-wizard-flows)
+- [Advanced Topics](#advanced-topics)
+  - [Multi-Tenant Deployment](#multi-tenant-deployment)
+  - [Custom Tools Development](#custom-tools-development)
+  - [Production Deployment](#production-deployment)
+- [Common Patterns](#common-patterns)
+- [Troubleshooting](#troubleshooting)
+
+---
+
+## Getting Started
+
+### Prerequisites
+
+- Python 3.12 or higher
+- Basic understanding of async/await in Python
+- (Optional) Ollama installed for local LLM testing
+
+### Installation
+
+```bash
+# Basic installation
+pip install dataknobs-bots
+
+# With PostgreSQL support
+pip install dataknobs-bots[postgres]
+
+# With all optional dependencies
+pip install dataknobs-bots[all]
+```
+
+### Install Ollama (Optional, for Local Testing)
+
+```bash
+# macOS/Linux
+curl -fsSL https://ollama.ai/install.sh | sh
+
+# Pull a model
+ollama pull gemma3:1b
+```
+
+---
+
+## Basic Tutorials
+
+### Tutorial 1: Your First Chatbot
+
+Build a simple conversational chatbot in 5 minutes.
+
+#### Step 1: Create the Bot Configuration
+
+```python
+# first_bot.py
+import asyncio
+from dataknobs_bots import DynaBot, BotContext
+
+async def main():
+    # Configuration
+    config = {
+        "llm": {
+            "provider": "ollama",
+            "model": "gemma3:1b",
+            "temperature": 0.7,
+            "max_tokens": 500
+        },
+        "conversation_storage": {
+            "backend": "memory"
+        }
+    }
+
+    # Create bot
+    bot = await DynaBot.from_config(config)
+    print("✓ Bot created successfully!")
+
+    # Create context
+    context = BotContext(
+        conversation_id="tutorial-1",
+        client_id="my-app"
+    )
+
+    # Chat loop
+    print("\nChat with the bot (type 'quit' to exit):\n")
+    while True:
+        user_input = input("You: ")
+        if user_input.lower() == "quit":
+            break
+
+        response = await bot.chat(user_input, context)
+        print(f"Bot: {response}\n")
+
+if __name__ == "__main__":
+    asyncio.run(main())
+```
+
+#### Step 2: Run the Bot
+
+```bash
+python first_bot.py
+```
+
+#### Step 3: Try It Out
+
+```
+You: Hello!
+Bot: Hi there! How can I help you today?
+
+You: What can you do?
+Bot: I'm a conversational AI assistant. I can chat with you about various topics, answer questions, and help with tasks.
+
+You: quit
+```
+
+#### What's Happening?
+
+1. **Configuration**: Defines LLM (Ollama) and storage (in-memory)
+2. **Bot Creation**: `from_config()` creates a configured bot
+3. **Context**: Identifies the conversation
+4. **Chat**: `bot.chat()` processes messages and returns responses
+
+#### Adding a System Prompt
+
+You can add a system prompt to customize the bot's behavior:
+
+```python
+config = {
+    "llm": {
+        "provider": "ollama",
+        "model": "gemma3:1b",
+    },
+    "conversation_storage": {
+        "backend": "memory"
+    },
+    # Add a system prompt (smart detection: if not in prompts library,
+    # treated as inline content)
+    "system_prompt": "You are a helpful coding assistant. Be concise and technical."
+}
+```
+
+DynaBot uses **smart detection** for system prompts:
+- If the string exists in the `prompts` library → used as a template reference
+- If not → treated as inline content
+
+#### Next Steps
+
+- Try different models: `llama3.1:8b`, `phi3:mini`
+- Adjust temperature (0.0 = focused, 1.0 = creative)
+- Change max_tokens for longer/shorter responses
+- See [configuration.md](configuration.md) for all system prompt options
+
+---
+
+### Tutorial 2: Adding Memory
+
+Add conversation memory so the bot remembers previous messages.
+
+#### Step 1: Add Memory Configuration
+
+```python
+# memory_bot.py
+import asyncio
+from dataknobs_bots import DynaBot, BotContext
+
+async def main():
+    config = {
+        "llm": {
+            "provider": "ollama",
+            "model": "gemma3:1b",
+        },
+        "conversation_storage": {
+            "backend": "memory"
+        },
+        # Add memory configuration
+        "memory": {
+            "type": "buffer",
+            "max_messages": 10  # Remember last 10 messages
+        }
+    }
+
+    bot = await DynaBot.from_config(config)
+
+    context = BotContext(
+        conversation_id="tutorial-2",
+        client_id="my-app",
+        user_id="user-123"
+    )
+
+    # Test memory
+    print("Testing conversation memory:\n")
+
+    response1 = await bot.chat("My name is Alice", context)
+    print(f"Bot: {response1}\n")
+
+    response2 = await bot.chat("What is my name?", context)
+    print(f"Bot: {response2}\n")
+
+    response3 = await bot.chat("Tell me about yourself", context)
+    print(f"Bot: {response3}\n")
+
+if __name__ == "__main__":
+    asyncio.run(main())
+```
+
+#### Step 2: Run and Observe
+
+```bash
+python memory_bot.py
+```
+
+**Output:**
+```
+Testing conversation memory:
+
+Bot: Nice to meet you, Alice! How can I help you today?
+
+Bot: Your name is Alice!
+
+Bot: I'm an AI assistant designed to have helpful, harmless conversations...
+```
+
+#### Understanding Memory Types
+
+**Buffer Memory** (What we used):
+- Keeps last N messages
+- Fast and simple
+- Good for most use cases
+
+**Summary Memory** (LLM-based compression):
+```python
+"memory": {
+    "type": "summary",
+    "recent_window": 10  # Keep last 10 messages verbatim, summarize older
+}
+```
+
+**Vector Memory** (Semantic recall):
+```python
+"memory": {
+    "type": "vector",
+    "embedding_provider": "ollama",
+    "embedding_model": "nomic-embed-text",
+    "backend": "faiss",
+    "dimension": 384
+}
+```
+
+**Composite Memory** (Combine strategies):
+```python
+"memory": {
+    "type": "composite",
+    "strategies": [
+        {"type": "summary", "recent_window": 10},
+        {
+            "type": "vector",
+            "backend": "memory",
+            "dimension": 384,
+            "embedding_provider": "ollama",
+            "embedding_model": "nomic-embed-text"
+        }
+    ]
+}
+```
+
+See [configuration.md](configuration.md#composite-memory) for full details on
+composite memory and vector memory tenant scoping.
+
+---
+
+### Tutorial 3: Streaming Responses
+
+Stream LLM responses token-by-token for better user experience.
+
+#### Why Streaming?
+
+- **Better UX**: Users see responses as they're generated
+- **Lower Latency**: First tokens appear immediately
+- **Interactive**: Users can interrupt or cancel if response isn't useful
+
+#### Step 1: Basic Streaming
+
+```python
+# streaming_bot.py
+import asyncio
+from dataknobs_bots import DynaBot, BotContext
+
+async def main():
+    config = {
+        "llm": {
+            "provider": "ollama",
+            "model": "gemma3:1b",
+        },
+        "conversation_storage": {
+            "backend": "memory"
+        }
+    }
+
+    bot = await DynaBot.from_config(config)
+
+    context = BotContext(
+        conversation_id="streaming-demo",
+        client_id="my-app"
+    )
+
+    print("Bot: ", end="", flush=True)
+
+    # Stream response token by token — each chunk is an LLMStreamResponse
+    async for chunk in bot.stream_chat("Write a haiku about coding", context):
+        print(chunk.delta, end="", flush=True)
+
+    print()  # Newline after response
+
+    await bot.close()
+
+if __name__ == "__main__":
+    asyncio.run(main())
+```
+
+#### Step 2: Run and See Streaming
+
+```bash
+python streaming_bot.py
+```
+
+**Output** (tokens appear one-by-one):
+```
+Bot: Fingers on the keys
+Bugs hide in the midnight code
+Coffee grows cold now
+```
+
+#### Step 3: Accumulating the Full Response
+
+```python
+# If you need the complete response
+full_response = ""
+async for chunk in bot.stream_chat("Tell me a joke", context):
+    full_response += chunk.delta
+    print(chunk.delta, end="", flush=True)
+
+print()
+print(f"\n[Total length: {len(full_response)} characters]")
+```
+
+#### Step 4: Streaming with a Web API
+
+```python
+# api_streaming.py
+from fastapi import FastAPI
+from fastapi.responses import StreamingResponse
+from dataknobs_bots import DynaBot, BotContext
+
+app = FastAPI()
+bot = None
+
+@app.on_event("startup")
+async def startup():
+    global bot
+    bot = await DynaBot.from_config(config)
+
+@app.post("/chat/stream")
+async def stream_chat(request: ChatRequest):
+    context = BotContext(
+        conversation_id=request.conversation_id,
+        client_id=request.client_id
+    )
+
+    async def generate():
+        async for chunk in bot.stream_chat(request.message, context):
+            yield chunk.delta
+
+    return StreamingResponse(generate(), media_type="text/plain")
+```
+
+#### Streaming vs Non-Streaming
+
+| Feature | `chat()` | `stream_chat()` |
+|---------|----------|-----------------|
+| Return type | `str` | `AsyncGenerator[LLMStreamResponse, None]` |
+| Response timing | All at once | Token by token |
+| Middleware hook | `after_message()` | `post_stream()` |
+| Memory updates | After response | After stream completes |
+| Best for | Simple integrations | Interactive UIs |
+
+#### Error Handling in Streaming
+
+```python
+try:
+    async for chunk in bot.stream_chat("Hello", context):
+        print(chunk.delta, end="", flush=True)
+except Exception as e:
+    print(f"\nStreaming error: {e}")
+    # Middleware's on_error() is automatically called
+    # Memory is NOT updated with partial responses
+```
+
+---
+
+### Per-Request Config Overrides
+
+Override LLM configuration on a per-request basis without creating a new bot instance.
+
+#### Why Use Config Overrides?
+
+- **A/B Testing**: Compare models or parameters without redeployment
+- **Dynamic Model Selection**: Switch models based on request type
+- **Cost Optimization**: Use cheaper models for simple queries
+- **Fallback Routing**: Route to different models for specific use cases
+
+#### Basic Usage
+
+```python
+# Override model and temperature for a single request
+response = await bot.chat(
+    "Explain quantum computing in simple terms",
+    context,
+    llm_config_overrides={
+        "model": "gpt-4-turbo",
+        "temperature": 0.3
+    }
+)
+```
+
+#### Streaming with Overrides
+
+```python
+async for chunk in bot.stream_chat(
+    "Write a creative poem",
+    context,
+    llm_config_overrides={
+        "model": "claude-3-opus",
+        "temperature": 0.9,
+        "max_tokens": 2000
+    }
+):
+    print(chunk.delta, end="", flush=True)
+```
+
+#### Supported Override Fields
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `model` | `str` | Model identifier (e.g., "gpt-4-turbo", "llama3.2:8b") |
+| `temperature` | `float` | Sampling temperature (0.0-2.0) |
+| `max_tokens` | `int` | Maximum tokens in response |
+| `top_p` | `float` | Nucleus sampling threshold |
+| `stop_sequences` | `list[str]` | Stop generation at these sequences |
+| `seed` | `int` | Random seed for reproducibility |
+| `options` | `dict` | Provider-specific options |
+
+#### Tracking Override Usage
+
+The bot automatically tracks which overrides were applied in the conversation metadata:
+
+```python
+# Chat with overrides
+response = await bot.chat(
+    "Hello",
+    context,
+    llm_config_overrides={"model": "gpt-4-turbo"}
+)
+
+# Check what was used
+conversation = await bot.get_conversation(context.conversation_id)
+tree = conversation.message_tree
+assistant_nodes = tree.find_nodes(
+    lambda node: node.data.message and node.data.message.role == "assistant"
+)
+
+# See which overrides were applied
+metadata = assistant_nodes[-1].data.metadata
+print(metadata.get("config_overrides_applied"))
+# Output: {"model": "gpt-4-turbo"}
+```
+
+#### Use Cases
+
+**A/B Testing Models**:
+```python
+import random
+
+model = random.choice(["gpt-4", "claude-3-sonnet"])
+response = await bot.chat(
+    message,
+    context,
+    llm_config_overrides={"model": model}
+)
+```
+
+**Query Complexity Routing**:
+```python
+# Simple queries → faster/cheaper model
+# Complex queries → more capable model
+if len(message) < 50:
+    overrides = {"model": "gpt-3.5-turbo"}
+else:
+    overrides = {"model": "gpt-4"}
+
+response = await bot.chat(message, context, llm_config_overrides=overrides)
+```
+
+**Creative vs Factual Responses**:
+```python
+# High temperature for creative tasks
+creative_response = await bot.chat(
+    "Write a poem about coding",
+    context,
+    llm_config_overrides={"temperature": 0.9}
+)
+
+# Low temperature for factual queries
+factual_response = await bot.chat(
+    "What is the capital of France?",
+    context,
+    llm_config_overrides={"temperature": 0.1}
+)
+```
+
+---
+
+### Conversation Undo & Rewind
+
+DynaBot supports undoing turns and rewinding conversations to earlier points.
+Undo navigates the conversation tree to a checkpoint recorded before the turn,
+creating a new branch. The original path is preserved — except when undoing or
+rewinding back through the very first turn, which clears the conversation to
+empty (see [Rewinding to the start](#rewinding-to-the-start) below).
+
+#### Undo the Last Turn
+
+```python
+from dataknobs_bots import DynaBot, BotContext
+
+bot = await DynaBot.from_config(config)
+context = BotContext(conversation_id="undo-demo", client_id="my-app")
+
+await bot.chat("Hello", context)
+await bot.chat("Tell me about Python", context)
+
+# Undo the last turn (removes "Tell me about Python" + its response)
+result = await bot.undo_last_turn(context)
+print(f"Undid: {result.undone_user_message}")
+print(f"Remaining turns: {result.remaining_turns}")
+
+# Next chat() creates a new branch from the checkpoint
+await bot.chat("Tell me about Rust instead", context)
+```
+
+#### Rewind to a Specific Turn
+
+```python
+await bot.chat("First message", context)   # Turn 0
+await bot.chat("Second message", context)  # Turn 1
+await bot.chat("Third message", context)   # Turn 2
+
+# Rewind to after turn 0 (removes turns 1 and 2)
+result = await bot.rewind_to_turn(context, 0)
+
+# Rewind to start (removes all turns)
+result = await bot.rewind_to_turn(context, -1)
+```
+
+##### Rewinding to the start
+
+Undoing or rewinding all the way back through the **first** turn
+(`rewind_to_turn(context, -1)`, or `undo_last_turn` on a single-turn
+conversation) resets the conversation to genuinely empty: the conversation tree,
+memory, memory banks, and any per-turn reasoning-strategy state (e.g. a wizard's
+current stage and collected data) are all cleared in lock-step, and the next
+`chat()` starts a fresh single-turn conversation reusing the same
+`conversation_id`.
+
+Unlike a later-turn undo — which preserves the undone turn as a sibling branch
+you can return to — the first turn's branch is **discarded**, because nothing
+precedes it to branch from. A start-boundary undo therefore reports
+`branching=False` and `remaining_turns=0`. After it, the conversation is empty
+but still active: a further `undo_last_turn` reports `"Nothing to undo"` (not
+`"No active conversation"`, which is reserved for a conversation that was never
+started or was evicted), and a `rewind_to_turn(context, -1)` is a clean no-op.
+
+Rewinding to the turn the conversation already sits at is a **clean no-op**:
+it returns a well-formed `UndoResult` with empty `undone_*` fields,
+`branching=False`, and the correct `remaining_turns` — it does not raise.
+Rewinding past the valid range still raises `ValueError` ("Invalid turn N:
+conversation has M turns"), and rewinding on a conversation that was never
+started raises "No active conversation".
+
+> **Bounding undo history.** By default every turn's checkpoint is retained
+> for the life of the conversation. On a long-running server you can cap this
+> with `max_undo_checkpoints` (see [Bounding Per-Conversation
+> State](configuration.md#bounding-per-conversation-state)). When a cap is set,
+> `undo_last_turn` is unaffected, but `rewind_to_turn` to a turn whose
+> checkpoint has been trimmed raises a clear "beyond the retained undo window"
+> error instead of landing on the wrong node.
+
+#### UndoResult
+
+Both methods return an `UndoResult` dataclass:
+
+```python
+from dataknobs_bots import UndoResult
+
+# Fields:
+#   undone_user_message: str   - The user message that was undone
+#   undone_bot_response: str   - The bot response that was undone
+#   remaining_turns: int       - Number of user turns remaining
+#   branching: bool            - Whether the undo created a branch
+```
+
+#### What Gets Rolled Back
+
+Undo coordinates rollback across all DynaBot subsystems:
+
+| Component | Rollback behavior |
+|-----------|-------------------|
+| Conversation tree | Navigates to checkpoint node; next message branches |
+| Memory (Buffer/Summary) | Pops messages added since checkpoint |
+| Wizard FSM state | Restores from per-node metadata |
+| Memory banks | Removes records whose `source_node_id` is not an ancestor of the checkpoint |
+
+#### Limitations
+
+- **VectorMemory** does not support undo (`pop_messages` raises `NotImplementedError`)
+- **SummaryMemory** can only undo messages still in its recent window; summarized messages cannot be individually undone
+- Undo does not reverse external side effects (tool calls that wrote to a database, sent emails, etc.)
+
+---
+
+### Tutorial 4: Building a RAG Chatbot
+
+Create a chatbot that answers questions using your documents.
+
+#### Step 1: Prepare Documents
+
+```bash
+# Create a docs directory
+mkdir my_docs
+
+# Add some documents
+echo "Our company was founded in 2020 by Alice and Bob." > my_docs/about.txt
+echo "We offer Premium ($99/month) and Enterprise ($299/month) plans." > my_docs/pricing.txt
+echo "Email support@company.com for help or call 555-0123." > my_docs/contact.txt
+```
+
+#### Step 2: Create RAG Bot
+
+```python
+# rag_bot.py
+import asyncio
+from dataknobs_bots import DynaBot, BotContext
+
+async def main():
+    config = {
+        "llm": {
+            "provider": "ollama",
+            "model": "gemma3:1b",
+        },
+        "conversation_storage": {
+            "backend": "memory"
+        },
+        # Enable knowledge base
+        "knowledge_base": {
+            "enabled": True,
+            "documents_path": "./my_docs",
+            "vector_store": {
+                "backend": "faiss",
+                "dimension": 384,
+                "collection": "my_knowledge"
+            },
+            "embedding_provider": "ollama",
+            "embedding_model": "nomic-embed-text",
+            "chunking": {
+                "max_chunk_size": 500
+            }
+        }
+    }
+
+    print("Creating RAG bot and indexing documents...")
+    bot = await DynaBot.from_config(config)
+    print("✓ Bot ready!\n")
+
+    context = BotContext(
+        conversation_id="tutorial-3",
+        client_id="my-app"
+    )
+
+    # Ask questions about documents
+    questions = [
+        "When was the company founded?",
+        "What are the pricing plans?",
+        "How can I contact support?",
+    ]
+
+    for question in questions:
+        print(f"Question: {question}")
+        response = await bot.chat(question, context)
+        print(f"Answer: {response}\n")
+
+if __name__ == "__main__":
+    asyncio.run(main())
+```
+
+#### Step 3: Pull Required Model
+
+```bash
+ollama pull nomic-embed-text
+```
+
+#### Step 4: Run the RAG Bot
+
+```bash
+python rag_bot.py
+```
+
+**Output:**
+```
+Creating RAG bot and indexing documents...
+✓ Bot ready!
+
+Question: When was the company founded?
+Answer: According to the documents, the company was founded in 2020 by Alice and Bob.
+
+Question: What are the pricing plans?
+Answer: We offer two pricing plans: Premium at $99/month and Enterprise at $299/month.
+
+Question: How can I contact support?
+Answer: You can email support@company.com or call 555-0123 for help.
+```
+
+#### How RAG Works
+
+```
+User Question
+    ↓
+1. Convert to embedding
+    ↓
+2. Search knowledge base
+    ↓
+3. Retrieve relevant chunks
+    ↓
+4. Add chunks to LLM context
+    ↓
+5. Generate answer with context
+```
+
+---
+
+### Tutorial 5: Creating Tool-Using Agents
+
+Build an agent that can use tools to perform actions.
+
+#### Step 1: Define Custom Tools
+
+```python
+# tools.py
+from dataknobs_llm.tools import Tool
+from typing import Dict, Any
+
+class CalculatorTool(Tool):
+    """Tool for arithmetic operations."""
+
+    def __init__(self, precision: int = 2):
+        super().__init__(
+            name="calculator",
+            description="Performs basic arithmetic: add, subtract, multiply, divide"
+        )
+        self.precision = precision
+
+    @property
+    def schema(self) -> Dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {
+                "operation": {
+                    "type": "string",
+                    "enum": ["add", "subtract", "multiply", "divide"],
+                    "description": "Operation to perform"
+                },
+                "a": {"type": "number", "description": "First number"},
+                "b": {"type": "number", "description": "Second number"}
+            },
+            "required": ["operation", "a", "b"]
+        }
+
+    async def execute(self, operation: str, a: float, b: float) -> float:
+        operations = {
+            "add": lambda x, y: x + y,
+            "subtract": lambda x, y: x - y,
+            "multiply": lambda x, y: x * y,
+            "divide": lambda x, y: x / y if y != 0 else float('inf')
+        }
+        result = operations[operation](a, b)
+        return round(result, self.precision)
+
+
+class WeatherTool(Tool):
+    """Mock weather tool (in real use, call weather API)."""
+
+    def __init__(self):
+        super().__init__(
+            name="get_weather",
+            description="Get current weather for a location"
+        )
+
+    @property
+    def schema(self) -> Dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {
+                "location": {
+                    "type": "string",
+                    "description": "City name or location"
+                }
+            },
+            "required": ["location"]
+        }
+
+    async def execute(self, location: str) -> str:
+        # Mock weather data (in real use, call API)
+        weather_data = {
+            "new york": "Sunny, 72°F",
+            "london": "Cloudy, 15°C",
+            "tokyo": "Rainy, 20°C"
+        }
+        location_lower = location.lower()
+        return weather_data.get(location_lower, f"Weather data not available for {location}")
+```
+
+#### Step 2: Create Agent with Tools
+
+```python
+# agent.py
+import asyncio
+from dataknobs_bots import DynaBot, BotContext
+
+async def main():
+    config = {
+        "llm": {
+            "provider": "ollama",
+            "model": "phi3:mini",  # phi3 is good with tools
+        },
+        "conversation_storage": {
+            "backend": "memory"
+        },
+        # Enable ReAct reasoning
+        "reasoning": {
+            "strategy": "react",
+            "max_iterations": 5,
+            "verbose": True,  # See reasoning steps
+            "store_trace": True
+        },
+        # Configure tools
+        "tools": [
+            {
+                "class": "tools.CalculatorTool",
+                "params": {"precision": 2}
+            },
+            {
+                "class": "tools.WeatherTool",
+                "params": {}
+            }
+        ]
+    }
+
+    print("Creating agent with tools...\n")
+    bot = await DynaBot.from_config(config)
+    print("✓ Agent ready!\n")
+
+    context = BotContext(
+        conversation_id="tutorial-4",
+        client_id="my-app"
+    )
+
+    # Tasks requiring tools
+    tasks = [
+        "What is 15 multiplied by 7?",
+        "What's the weather in Tokyo?",
+        "Calculate 100 divided by 4, then add 10 to that result"
+    ]
+
+    for task in tasks:
+        print(f"Task: {task}\n")
+        response = await bot.chat(task, context)
+        print(f"Agent: {response}\n")
+        print("-" * 60 + "\n")
+
+if __name__ == "__main__":
+    asyncio.run(main())
+```
+
+#### Step 3: Run the Agent
+
+```bash
+python agent.py
+```
+
+**Output:**
+```
+Creating agent with tools...
+✓ Agent ready!
+
+Task: What is 15 multiplied by 7?
+
+[Iteration 1]
+Thought: I need to multiply 15 by 7
+Action: calculator
+Action Input: {"operation": "multiply", "a": 15, "b": 7}
+Observation: 105
+
+[Iteration 2]
+Thought: I have the answer
+Agent: 15 multiplied by 7 is 105.
+
+------------------------------------------------------------
+
+Task: What's the weather in Tokyo?
+
+[Iteration 1]
+Thought: I need to check the weather
+Action: get_weather
+Action Input: {"location": "Tokyo"}
+Observation: Rainy, 20°C
+
+[Iteration 2]
+Thought: I have the weather information
+Agent: The weather in Tokyo is rainy with a temperature of 20°C.
+```
+
+#### Understanding ReAct
+
+ReAct = **Rea**soning + **Act**ing
+
+Each iteration:
+1. **Thought**: What should I do?
+2. **Action**: Which tool to use?
+3. **Observation**: What did the tool return?
+4. **Repeat or Answer**: Continue or provide final answer
+
+---
+
+### Tutorial 6: Building Guided Wizard Flows
+
+Create multi-step conversational wizards with validation and branching.
+
+**You'll Learn:**
+- Creating wizard configuration files
+- Stage-based data collection
+- JSON Schema validation
+- Navigation commands (back, skip, restart)
+- Lifecycle hooks
+
+**Use Cases:**
+- User onboarding flows
+- Form-based data collection
+- Multi-step configuration wizards
+- Guided decision trees
+
+#### Step 1: Create Wizard Configuration
+
+Create a `wizard.yaml` file:
+
+```yaml
+# wizard.yaml
+name: onboarding-wizard
+version: "1.0"
+description: User onboarding flow
+
+stages:
+  - name: welcome
+    is_start: true
+    prompt: "Welcome! What type of project are you creating?"
+    schema:
+      type: object
+      properties:
+        project_type:
+          type: string
+          enum: [web, mobile, api]
+    suggestions:
+      - "Web application"
+      - "Mobile app"
+      - "API service"
+    transitions:
+      - target: name_project
+        condition: "data.get('project_type')"
+
+  - name: name_project
+    prompt: "What would you like to name your project?"
+    help_text: "Choose a descriptive name (3-30 characters)"
+    schema:
+      type: object
+      properties:
+        project_name:
+          type: string
+          minLength: 3
+          maxLength: 30
+      required: ["project_name"]
+    transitions:
+      - target: features
+
+  - name: features
+    prompt: "Which features do you need? (comma-separated)"
+    can_skip: true
+    schema:
+      type: object
+      properties:
+        features:
+          type: array
+          items:
+            type: string
+    suggestions:
+      - "Authentication"
+      - "Database"
+      - "File uploads"
+    transitions:
+      - target: complete
+
+  - name: complete
+    is_end: true
+    prompt: |
+      Your project is configured!
+      - Name: {{project_name}}
+      - Type: {{project_type}}
+      - Features: {{features}}
+```
+
+#### Step 2: Create Wizard Bot
+
+```python
+# wizard_bot.py
+import asyncio
+from dataknobs_bots import DynaBot, BotContext
+
+async def main():
+    config = {
+        "llm": {
+            "provider": "ollama",
+            "model": "gemma3:1b"
+        },
+        "conversation_storage": {
+            "backend": "memory"
+        },
+        "reasoning": {
+            "strategy": "wizard",
+            "wizard_config": "wizard.yaml",
+            "strict_validation": True
+        }
+    }
+
+    print("Creating wizard bot...\n")
+    bot = await DynaBot.from_config(config)
+    print("✓ Wizard ready!\n")
+
+    context = BotContext(
+        conversation_id="onboarding-001",
+        client_id="my-app"
+    )
+
+    # Interactive loop
+    print("Start the wizard by sending any message.")
+    print("Type 'quit' to exit.\n")
+
+    while True:
+        user_input = input("You: ").strip()
+        if user_input.lower() == 'quit':
+            break
+
+        response = await bot.chat(user_input, context)
+        print(f"Bot: {response}\n")
+
+if __name__ == "__main__":
+    asyncio.run(main())
+```
+
+#### Step 3: Run the Wizard
+
+```bash
+python wizard_bot.py
+```
+
+**Example Session:**
+```
+Creating wizard bot...
+✓ Wizard ready!
+
+Start the wizard by sending any message.
+Type 'quit' to exit.
+
+You: hello
+Bot: Welcome! What type of project are you creating?
+     Suggestions: Web application, Mobile app, API service
+
+You: I want to build a web app
+Bot: Great choice! What would you like to name your project?
+
+You: MyAwesomeProject
+Bot: Which features do you need? (comma-separated)
+     Suggestions: Authentication, Database, File uploads
+     (You can skip this step by saying "skip")
+
+You: authentication, database
+Bot: Your project is configured!
+     - Name: MyAwesomeProject
+     - Type: web
+     - Features: ['authentication', 'database']
+```
+
+#### Bot-Initiated Greeting
+
+Instead of requiring the user to send the first message, wizard bots can greet the user
+proactively using `bot.greet()`:
+
+```python
+context = BotContext(conversation_id="onboarding-001", client_id="my-app")
+
+# Bot speaks first — renders the start stage's response_template or uses LLM
+greeting = await bot.greet(context)
+if greeting:
+    print(f"Bot: {greeting}")
+
+# Now the user's first message answers the wizard's question
+while True:
+    user_input = input("You: ").strip()
+    if user_input.lower() == "quit":
+        break
+    response = await bot.chat(user_input, context)
+    print(f"Bot: {response}\n")
+```
+
+This works with wizard bots only. Non-wizard bots return `None` from `greet()`. See the
+[Configuration Reference](configuration.md#reasoning-configuration) for details.
+
+#### Navigation Commands
+
+Users can navigate naturally using keyword commands:
+
+| Say | Effect |
+|-----|--------|
+| "back" / "go back" / "previous" | Return to previous stage |
+| "skip" / "skip this" | Skip optional stage (if `can_skip: true`) |
+| "restart" / "start over" | Begin from start |
+
+**Example:**
+```
+You: Actually, go back
+Bot: Returning to previous step. What would you like to name your project?
+
+You: restart
+Bot: Starting over. Welcome! What type of project are you creating?
+```
+
+These keywords are the defaults. You can customize them per-wizard or per-stage via
+the `navigation` section in wizard settings. See the
+[Configuration Reference](configuration.md#reasoning-configuration) for details.
+
+**Conversation Tree Branching:**
+
+When a wizard stage is revisited via back or restart, the conversation tree
+creates a **sibling branch** from the point where the stage was previously
+entered. This preserves earlier conversation paths rather than chaining
+messages deeper into a single linear chain. For example, restarting a wizard
+that was on the greeting stage creates a new greeting node as a sibling of the
+original, both sharing the same parent node.
+
+#### Adding Lifecycle Hooks
+
+Customize behavior at stage transitions:
+
+```python
+from dataknobs_bots.reasoning.wizard_hooks import WizardHooks
+
+# Create hooks instance
+hooks = WizardHooks()
+
+# Log every stage entry
+def log_entry(stage: str, data: dict):
+    print(f"[Entering {stage}] Data so far: {data}")
+
+hooks.on_enter(log_entry)
+
+# Validate before exit (stage-specific)
+async def validate_exit(stage: str, data: dict):
+    name = data.get("project_name", "")
+    if name.lower() in ["test", "temp"]:
+        raise ValueError("Please choose a more descriptive name")
+
+hooks.on_exit(validate_exit, stage="name_project")
+
+# Save on completion
+async def save_project(data: dict):
+    print(f"Saving project: {data}")
+    # Save to database, create files, etc.
+
+hooks.on_complete(save_project)
+```
+
+**Configuration-based hooks** (for YAML configs):
+
+```yaml
+reasoning:
+  strategy: wizard
+  wizard_config: wizard.yaml
+  hooks:
+    on_enter:
+      - "myapp.hooks:log_entry"
+      - function: "myapp.hooks:validate_welcome"
+        stage: welcome  # Stage-specific hook
+    on_complete:
+      - "myapp.hooks:save_project"
+```
+
+> **A hook path that cannot be resolved is fatal.** It raises a
+> `ConfigurationError` at bot construction, and every bad path in the block is
+> reported together. These were previously logged as a WARNING and skipped, so
+> a typo produced a bot that started cleanly and never fired the hook. Both
+> `module:name` and `module.name` are accepted.
+>
+> Resolving a path **imports and executes** the target module — see the
+> [dotted-path guide](https://kbs-labs.github.io/dataknobs/packages/common/dotted-paths/).
+
+#### Turn-Lifecycle Hooks
+
+`on_enter` / `on_exit` fire on stage transitions. For pre-turn /
+post-turn extension — bridging sub-strategy signals into
+transition-eval scope, tenant context binding, audit trails, writer
+hooks publishing for the next turn — use the turn-lifecycle hooks
+`on_turn_start` / `on_turn_end`:
+
+```python
+from dataknobs_bots.reasoning.wizard_hooks import WizardHooks
+
+async def bind_tenant(event):
+    state = event["state"]
+    manager = event["manager"]
+    if manager is None:
+        return  # advance() has no manager — see firing-points table
+    state.data["tenant_id"] = manager.metadata.get("tenant_id")
+
+async def emit_audit(event):
+    audit_log.record(
+        event["stage"],
+        reason=event["reason"],
+        snapshot=dict(event["state"].data),
+    )
+
+hooks = WizardHooks()
+hooks.on_turn_start(bind_tenant)
+hooks.on_turn_end(emit_audit, stage="triage")  # per-stage scope
+```
+
+**Configuration-based:**
+
+```yaml
+hooks:
+  on_turn_start:
+    - function: "myapp.hooks:bind_tenant"
+  on_turn_end:
+    - function: "myapp.hooks:emit_audit"
+      stage: "triage"
+```
+
+**Event payload.** Callbacks receive a single opaque `event:
+dict[str, Any]` and may be sync or async. The wizard publishes
+these canonical keys; consumers depend on them by name:
+
+| Key | Type | Meaning |
+|---|---|---|
+| `stage` | `str` | The FSM stage name resolved at fire-point (the active subflow's stage when inside a pushed subflow). Per-stage scoping (`stage=` on registration) matches against this key. |
+| `phase` | `"start"` or `"end"` | Discriminator for callbacks registered against both surfaces. |
+| `reason` | `str` | Why the trigger fired. The wizard publishes `"normal"` from the canonical save→fire path; `"amendment"` / `"navigation"` / `"clarification"` / `"collection_help"` / `"collection_loop"` / `"confirmation"` / `"validation_error"` from the early-return exits; `"abandoned"` from stream abandonment; `"advance"` from the non-conversational `advance()` API. |
+| `manager` | `ConversationManager \| None` | The bot's conversation manager, or `None` on the `advance()` path (which has no manager). |
+| `state` | `WizardState` | The wizard state at the fire-point. Always present. |
+
+Adopters add their own keys without extending the trigger
+signature — the wizard's stream-abandonment path attaches
+`state_saved=False` so consumers can distinguish abandonment from
+the normal save→fire path on that basis when they don't want to
+filter on `reason` alone.
+
+**Firing points:**
+
+- `on_turn_start` fires from `begin_turn` AFTER the per-turn
+  ephemeral-key clear and BEFORE early-return dispatch (so a hook
+  can re-populate keys cleared above OR influence amendment /
+  auto-restart / navigation routing). Also fires from `greet` so
+  bot-initiated greetings inherit the surface.
+- `on_turn_end` fires on **every** turn exit — discriminated via
+  `event["reason"]`:
+
+  | Exit path | `reason` value | Where the fire happens |
+  |---|---|---|
+  | Canonical `finalize_turn` (normal + subflow-push) | `"normal"` | AFTER `_save_wizard_state` |
+  | Streaming canonical (normal + subflow-push, fully consumed) | `"normal"` | AFTER `_save_wizard_state` |
+  | Stream abandonment (`aclose()`) | `"abandoned"` (with `state_saved=False`) | `GeneratorExit` branch in `stream_finalize_turn` |
+  | Post-completion amendment early-return | `"amendment"` | After state save in `begin_turn` |
+  | Navigation keyword (back / skip / restart) early-return | `"navigation"` | After state save in `begin_turn` |
+  | Low-confidence clarification early-return | `"clarification"` | After state save in `process_input` |
+  | Collection-mode help intent early-return | `"collection_help"` | After state save in `process_input` |
+  | Collection-mode loop record early-return | `"collection_loop"` | After state save (inside `_handle_collection_mode`) in `process_input` |
+  | Confirmation render early-return | `"confirmation"` | After state save in `process_input` |
+  | Strict-validation failure early-return | `"validation_error"` | After state save in `process_input` |
+  | Non-conversational `advance()` API | `"advance"` (with `manager=None`) | After the result is built in `advance` |
+
+  A consumer observing `chat()` and `stream_chat()` sees the same
+  set of fire-points for the same conversation outcomes. State-
+  mirroring consumers that want to ignore non-advancing turns
+  filter on `event.get("reason") == "normal"`; observability /
+  audit / metric consumers typically observe every exit and tag
+  records with the reason.
+
+  **Pairing semantics.** Every conversational turn fires exactly
+  one `on_turn_start` followed by exactly one `on_turn_end` —
+  including early-return turns. A turn ending with
+  `reason="amendment"` (or any other early-return reason) still
+  fired its `on_turn_start` at the start of that same turn. The
+  one exception is the non-conversational `advance()` API: it
+  fires only `on_turn_end` (with `reason="advance"`, `manager=None`)
+  and has no paired `on_turn_start`. Consumers correlating
+  start/end events match pairs by `event["manager"]` + the turn
+  ordering observed on a single manager; consumers that need to
+  ignore the unpaired `advance()` end-event filter on
+  `event.get("manager") is None` or `event.get("reason") ==
+  "advance"`.
+
+**Runtime hook attachment.** When the wizard was built without a
+`WizardHooks` instance at construction (e.g., the
+`manager_metadata_inbox_key` knob alone), runtime callers can
+attach turn-lifecycle callbacks via `WizardReasoning`'s public
+surface:
+
+```python
+wizard = bot.reasoning_strategy  # WizardReasoning
+wizard.add_turn_start_hook(bind_tenant)
+wizard.add_turn_end_hook(emit_audit, stage="triage")
+```
+
+Both methods lazy-create the embedded `WizardHooks` if needed, so
+they're safe regardless of construction-time wiring. The full
+legacy surface (`on_enter`, `on_exit`, `on_complete`, `on_restart`,
+`on_error`) remains construction-time only — those hook types
+belong alongside the wizard's immutable configuration.
+
+#### Manager-Metadata Inbox Bridge
+
+The wizard transition-eval safe scope (`{data, has, bank,
+artifact}`) intentionally excludes `manager.metadata`. But a
+per-stage sub-strategy (e.g. a pipeline-reasoning step) sometimes
+needs to publish a rules-first signal that the FSM transition
+should gate on — its own context evaporates after the step runs.
+
+The typed knob
+`WizardReasoningConfig.manager_metadata_inbox_key`
+auto-registers a built-in `on_turn_start` hook that pops the named
+`manager.metadata` key(s) and merges their contents into
+`wizard_state.data`:
+
+```yaml
+reasoning:
+  strategy: wizard
+  wizard_config: wizard.yaml
+  manager_metadata_inbox_key: "_wizard_inbox"   # str or list[str]
+```
+
+**Multi-key support** — `manager_metadata_inbox_key:
+["_signals", "_audit"]` drains both keys per turn (in declared
+order).
+
+**Custom merge function:**
+
+```python
+from dataknobs_bots.reasoning.wizard_config import WizardReasoningConfig
+
+def merge_in_place(target, source):
+    for k, v in source.items():
+        if isinstance(v, dict) and isinstance(target.get(k), dict):
+            merge_in_place(target[k], v)
+        else:
+            target[k] = v
+
+config = WizardReasoningConfig(
+    wizard_config=...,
+    manager_metadata_inbox_key="_inbox",
+    inbox_merge_fn=merge_in_place,
+)
+```
+
+> **Caveat — `inbox_merge_fn` mutates; `dataknobs_config.deep_merge`
+> returns.** The signature is `Callable[[dict, dict], None]`: the merger
+> writes into `target`, and its return value is discarded.
+> `dataknobs_config.deep_merge` is the codebase's canonical dict merge, but
+> it is deliberately *non-mutating*, so passing it here leaves the inbox
+> payload silently unapplied with nothing raised. Wrap it to get its
+> semantics:
+>
+> ```python
+> from dataknobs_config import deep_merge
+>
+> def apply_deep_merge(target, source):
+>     target.update(deep_merge(target, source))
+> ```
+>
+> One difference from the hand-rolled version above, if anything holds a
+> reference to a nested section: `deep_merge` builds a *new* dict wherever
+> both sides supply one, so `update` **rebinds** `target`'s nested values
+> rather than merging into them. A caller holding `target["section"]` from
+> before the call keeps seeing the pre-merge contents. The recursive version
+> above writes into that same dict, so the holder sees the update. Neither is
+> more correct; the wizard itself holds no such reference.
+
+**Writer helper** — for consumer code (pipeline steps, custom
+logic) that publishes to the inbox for the NEXT turn:
+
+```python
+from dataknobs_bots.reasoning.wizard_inbox import write_to_inbox
+
+write_to_inbox(manager, "_wizard_inbox", {
+    "_proposal_queued": True,
+    "proposal_id": "asrm",
+})
+```
+
+The writer stamps the payload onto `manager.metadata`; the
+consume-on-read pop on the next turn means each turn's writer
+fully owns that turn's inbox content (no merge-conflict worries
+across turns).
+
+**Bridge contract:**
+
+| Property | Behaviour |
+|---|---|
+| Consume-on-read | Keys are popped, not get'd. Stale signals can't leak. |
+| None-as-eviction | Inbox value `{x: None}` writes `None` into `state.data[x]` (with the default merge). |
+| Empty-dict no-op | `{}` is silently skipped (key still popped). |
+| Non-mapping payload | WARNING logged + skip (writer-side bug doesn't crash the wizard). |
+| Across-turn semantics | Turn N's writer publishes AFTER turn N's transition; turn N+1's `begin_turn` consumes. |
+| `greet` inherits | Bot-initiated greetings also fire the hook, so the bridge applies on the greeting turn too. |
+
+**Why not widen the safe-eval scope?** Exposing `manager` directly
+would let any condition read arbitrary metadata. The inbox is a
+narrow channel: the wizard reads exactly the consumer-configured
+keys per turn.
+
+**Concurrency safety.** The hook runs through the wizard's per-turn
+handle and the `manager` parameter — no instance attributes.
+Multi-replica / multi-tenant runtimes adopting the knob get the
+bridge without inheriting any per-turn shared state hazard.
+
+#### State Bridges — the named-key bridging contract
+
+The inbox hook above is one consumer of a general contract:
+**`StateBridge`** codifies *how* one component publishes state for
+another to consume, named by key, over a host's `metadata` mapping
+(typically a `ConversationManager`). The inbox hook's
+consume-on-read pop is just one point in that design space; if you
+need a *variation* — peek instead of pop, a symmetric writer side, a
+projected subset, or observability of every read/write — build on
+the shipped reference implementations instead of hand-rolling a
+parallel hook.
+
+```python
+from dataknobs_bots.reasoning.state_bridge import (
+    InboxOnlyBridge,      # read = pop;   write raises NotImplementedError
+    PeekBridge,           # read = get;   write raises NotImplementedError
+    BiDirectionalBridge,  # read = pop;   write = assign or in-place merge
+    SubsetBridge,         # read = pop;   write = metadata[key] = project(value)
+    SubscribingBridge,    # wraps any bridge; fires read/write callbacks
+)
+```
+
+`StateBridge[InboxT, OutboxT]` is a `@runtime_checkable` generic
+Protocol with two methods — `read_inbox(host, key) -> InboxT | None`
+and `write_outbox(host, key, value)`. The type parameters are
+variance-annotated (`InboxT` covariant — return-only; `OutboxT`
+contravariant — parameter-only; spelled `InboxT_co` / `OutboxT_contra`
+in the source, per the sibling `ScopeProjector` / `ResourceResolver`
+families). The Protocol is shape-only; it does **not** define the
+payload shape (per-key payload conventions stay consumer-controlled,
+exactly as the inbox bridge documents its own payload). Read-only
+bridges raise `NotImplementedError` on write (rather than silently
+no-op'ing) with a message pointing at `BiDirectionalBridge` /
+`SubsetBridge`.
+
+| Impl | Read | Write |
+|---|---|---|
+| `InboxOnlyBridge` | pop (consume-on-read) | `NotImplementedError` |
+| `PeekBridge` | `get` (peek, key survives) | `NotImplementedError` |
+| `BiDirectionalBridge(merge_fn=None)` | pop | assign, or in-place merge |
+| `SubsetBridge(project)` | pop | `metadata[key] = project(value)` |
+| `SubscribingBridge(inner, *, registry, ...)` | delegate + fire callback | delegate + fire callback |
+
+**Re-platformed inbox hook.** The wizard's
+`make_metadata_inbox_hook` routes its per-key read through
+`InboxOnlyBridge.read_inbox` — same consume-on-read behavior,
+now on the shared contract.
+
+**`BiDirectionalBridge` merge.** With `merge_fn=None` every write
+overwrites `host.metadata[key]`. Supply a `(existing, new) -> None`
+in-place mutator AND a dict-valued existing key to merge in place; a
+non-dict existing key (or non-mapping value) falls back to
+assignment.
+
+```python
+bridge = BiDirectionalBridge(merge_fn=lambda existing, new: existing.update(new))
+bridge.write_outbox(manager, "_acc", {"a": 1})   # assign (key absent)
+bridge.write_outbox(manager, "_acc", {"b": 2})   # merge -> {"a": 1, "b": 2}
+```
+
+**Scope-projector interop (`SubsetBridge`).** `project` accepts
+EITHER a bare `Callable[[Any], OutboxT]` OR a scope projector
+(duck-typed on `.project`, e.g. a
+`dataknobs_common.scope.WhitelistProjector`) — a consumer's
+projector drops in with no glue. The two Protocols stay distinct;
+only the `project` callable is shared.
+
+> **Caveat — source-honoring vs source-capturing projectors.** The
+> write `value` is the projection source. A *source-honoring*
+> projector (bare callable, `CallableProjector`, `IdentityProjector`)
+> projects that `value` — the expected case. A *source-capturing*
+> projector (`WhitelistProjector`, `ReadOnlyProjector`) captures its
+> source at construction and ignores `project(source)`, so the write
+> `value` is silently dropped and the captured source is projected.
+> Pick a source-honoring projector when the write `value` must drive
+> the projection.
+
+**Observability (`SubscribingBridge`).** Wrap any bridge to fire
+read/write topics on a `CallbackRegistry`, so a metrics consumer
+monitors bridge activity without touching the production bridge:
+
+```python
+from dataknobs_common.callbacks import CallbackRegistry
+
+registry = CallbackRegistry()
+registry.register("state_bridge:read", lambda p: log_read(p["key"]))
+observed = SubscribingBridge(InboxOnlyBridge(), registry=registry)
+```
+
+Dispatch is synchronous (`CallbackRegistry.fire`): registered
+callbacks MUST be sync — a coroutine-function callback raises
+`TypeError` rather than silently creating an unawaited coroutine.
+Compose the registry's `also_publish_to(bus, ...)` fan-out to extend
+observability across replicas via a shared `EventBus`.
+
+**Capability advertisement.** `Capability.STATE_BRIDGE_INBOX_ONLY`
+and `Capability.STATE_BRIDGE_BIDIRECTIONAL` (the `state_bridge`
+family) let a host advertise how it bridges named-key state. Shipped
+as available members for adoption-on-demand.
+
+#### Adopting `LifecycleHooks` in Your Own Reasoning Strategy
+
+The wizard isn't the only composing strategy that wants pre-turn /
+post-turn extension. Any custom `ReasoningStrategy` implementation
+can adopt the same hook surface without rebuilding a hook system —
+or pulling in wizard-specific machinery — by importing the generic
+`LifecycleHooks`:
+
+```python
+from dataknobs_bots.reasoning.base import ReasoningStrategy
+from dataknobs_bots.reasoning.lifecycle import LifecycleHooks
+
+
+class MyPipelineReasoning(ReasoningStrategy):
+    def __init__(
+        self,
+        *,
+        steps: list,
+        hooks: LifecycleHooks | None = None,
+    ) -> None:
+        self._steps = steps
+        self._hooks = hooks
+
+    async def generate(self, manager, llm, tools=None, **kwargs):
+        ctx = MyContext(manager=manager, llm=llm, tools=tools)
+        stage_name = "pipeline"  # or e.g. self._current_step.name
+
+        if self._hooks is not None:
+            await self._hooks.trigger_turn_start({
+                "stage": stage_name,
+                "phase": "start",
+                "reason": "normal",
+                "manager": manager,
+                "state": ctx,
+            })
+
+        for step in self._steps:
+            await step.execute(ctx)
+
+        if self._hooks is not None:
+            await self._hooks.trigger_turn_end({
+                "stage": stage_name,
+                "phase": "end",
+                "reason": "normal",
+                "manager": manager,
+                "state": ctx,
+            })
+
+        return ctx.response
+```
+
+Triggers exchange a single opaque `event: dict[str, Any]` so
+adopters can attach subsystem-specific keys (e.g. a step counter,
+a per-step latency, a `reason` discriminator) without changing the
+protocol signature. The wizard publishes a documented set of
+canonical keys (`stage` / `phase` / `reason` / `manager` /
+`state`) — see "Turn-Lifecycle Hooks" above; non-wizard adopters
+are encouraged to publish the same names for cross-strategy
+hook portability.
+
+The same `on_turn_start` hooks consumers already write for the
+wizard (tenant binding, audit injection, signal bridging) become
+reusable across both strategies. No additional protocol,
+mixin-adoption, or fork required.
+
+The wizard's `WizardHooks` composes `LifecycleHooks` internally;
+consumer composing strategies receiving a `WizardHooks` instance
+can detach the turn-lifecycle surface via the `hooks.lifecycle`
+property if they want to share it with a sibling strategy.
+
+#### Wizard-as-advisor: intent confirmation
+
+Many wizards reach a turn where the bot proposes something and the
+user just says *yes* or *no* (sometimes *"actually, use X instead"*).
+Hand-rolling that turn means writing a one-off response template, an
+intent-detection block, a boolean schema, and a routing transition —
+four moving parts that all have to line up.
+
+The `intent_confirm:` stage primitive expresses the same shape in
+one declarative block. At load time the wizard expands it into
+existing primitives (`mode: conversation` + `response_template` +
+`intent_detection` + `schema` + `transitions`); at runtime every
+step goes through the existing wizard machinery. There is no new
+dispatch surface — `intent_confirm:` is pure sugar.
+
+```yaml
+stages:
+  - name: propose_framework
+    is_start: true
+    intent_confirm:
+      proposal_template: |
+        I'd suggest the ASRM framework for this. Want to use it?
+      intents:
+        accept:
+          target: configure_asrm
+        decline:
+          target: pick_alternative
+        alternative:
+          target: configure_alternative
+          extract: framework_name      # captures the user-named value
+          llm_fallback: true            # opt-in LLM tier for this intent
+      on_no_match:
+        clarification_template: "Was that a yes, no, or another framework?"
+
+  - name: configure_asrm
+    is_end: true
+    response_template: "Activated ASRM."
+
+  - name: pick_alternative
+    is_end: true
+    response_template: "Skipped."
+
+  - name: configure_alternative
+    is_end: true
+    response_template: "Activating {{ framework_name }}."
+```
+
+A complete, loadable version of this shape ships at
+`packages/bots/examples/configs/wizards/propose-consent-wizard.yaml`
+(exercised in CI by `packages/bots/tests/test_example_wizards.py`). It
+also shows the `on_no_match.target` routing variant described below.
+
+What the synthesized stage looks like under the hood (visible in the
+loader output and in stage metadata):
+
+- `mode: conversation` — first render emits `proposal_template`
+  literally (no LLM call). Subsequent renders run intent detection.
+- `response_template: <proposal_template>` — the first-turn proposal.
+- `clarification_template: <on_no_match.clarification_template>` —
+  optional; shown on re-render when no intent matched.
+- `intent_detection:` — keyword classifier by default, composite
+  (keyword → LLM) when any intent declares `llm_fallback: true` (or
+  when the top-level block sets `llm_fallback: true`).
+- `schema:` — `{name: boolean}` per intent, plus `{extract_field:
+  string}` for every intent declaring `extract:`.
+- `transitions:` — one per intent (`condition: "data.get(name) ==
+  True"`), plus an optional `on_no_match` fallback (`condition: "not
+  any(data.get(k) for k in [<intent names>])"`).
+
+Validation rules (enforced at load time, before the broader wizard
+config validator runs):
+
+- A stage that declares `intent_confirm:` cannot also declare
+  `schema:`, `response_template:`, or `transitions:` — the primitive
+  is the source of truth. The loader raises
+  `ConfigurationError` naming the collisions.
+- `intents:` must be non-empty and a mapping. Each intent value must
+  be a mapping with at least a `target:`. The loader raises
+  `ConfigurationError` naming the offending intent if any of those
+  invariants is violated.
+
+Naming constraint — intent names occupy the stage's `data` namespace:
+
+- The synthesizer emits one boolean schema property per intent name
+  (e.g. `accept`, `decline`). Those names share the same `state.data`
+  dictionary as every other field the wizard collects, so an intent
+  name like `title` will collide with a later stage's `title` data
+  field. Choose intent names that won't shadow any data field the
+  rest of the wizard consumes. The reserved name `_intent` (still
+  written for back-compat) is also off-limits as an intent name.
+
+Per-intent overrides:
+
+- `keywords: [...]` — replace the default vocabulary entry for that
+  intent name. `accept` / `decline` / `unclear` ship with sensible
+  English defaults from `DEFAULT_VOCABULARY`. Other intent names fall
+  back to per-intent `keywords:` (or LLM matching when
+  `llm_fallback: true`).
+- `extract: <field_name>` — when the LLM tier matches this intent,
+  the user-named payload is written to `state.data[field_name]` and
+  becomes available to the next stage's templates (e.g.
+  `{{ framework_name }}`).
+- `llm_fallback: true` (per-intent OR at the block level) — promote
+  the classifier from `keyword` to a `composite` chain (keyword first,
+  LLM second).
+- `negation_filter: true` (block level) — wrap the classifier in
+  `NegationFilter` so `"no, I don't want to accept that"` doesn't
+  match `accept`.
+
+#### Picking a confirmation primitive
+
+Two wizard surfaces have "confirm" in the name and are easy to mix up.
+They face opposite directions:
+
+- `intent_confirm:` is **forward-looking**. The bot *proposes*
+  something and the user accepts, declines, or names an alternative.
+  It is a load-time stage primitive (YAML sugar) that expands into a
+  proposal template, intent detection, a schema, and routing
+  `transitions`. A "no" — or a no-match against `on_no_match` —
+  **routes to another stage**.
+- `ConfirmationEvaluator` is **backward-looking**. The wizard has
+  already *collected* values and this asks the user to double-check
+  them before moving on. It is stateless runtime decision logic
+  (`reasoning/wizard_confirmation.py`) driven by the
+  `confirm_first_render` / `confirm_on_new_data` stage knobs, the
+  stage's render count, and a snapshot diff of the gathered data. A
+  "no" or a correction **re-prompts and re-extracts those same
+  values** — it does not route to a different stage.
+
+| Axis | `intent_confirm:` | `ConfirmationEvaluator` |
+|---|---|---|
+| Direction | Forward — propose, then act on the answer | Backward — confirm values already gathered |
+| What it is | Load-time stage primitive (YAML sugar) | Runtime decision logic (stage knobs) |
+| A "no" | Routes to another stage (`on_no_match` / per-intent target) | Re-prompts / re-extracts the same values |
+| Author surface | The `intent_confirm:` block | `confirm_first_render` / `confirm_on_new_data` |
+
+Use `intent_confirm:` when the bot offers or suggests and branches on
+the reply. Use the `confirm_first_render` / `confirm_on_new_data` knobs
+(evaluated by `ConfirmationEvaluator`) when the bot must double-check
+data it just captured before acting on it.
+
+#### Word-boundary keyword matching
+
+The default keyword classifier matches whole tokens — `"yes"`
+matches a standalone `"yes"` but NOT a substring of `"yesterday"`.
+This closes the long-standing foot-gun where bare-token vocabulary
+entries would silently substring-match unrelated user input.
+
+If you need looser matching for I18N, fuzzy matching, n-grams, or
+morphological matching, inject your own tokenizer:
+
+```python
+from dataknobs_llm.intent import KeywordIntentClassifier
+
+def fuzzy_tokenizer(keyword: str, message: str) -> bool:
+    # Both args are pre-lowercased.
+    return keyword in message  # substring fallback
+
+classifier = KeywordIntentClassifier(tokenizer=fuzzy_tokenizer)
+```
+
+Pass `tokenizer=` to the keyword classifier (or register a backend
+that does so under your own name in `intent_classifier_backends`).
+The signature is `(keyword: str, message: str) -> bool`; both
+arguments arrive pre-lowercased.
+
+#### Shipping your own wizard stage primitive
+
+`intent_confirm:` is one example of a *stage primitive* — a
+declarative block that the loader expands into existing wizard
+primitives. You can ship your own. The loader iterates a registry
+of `StageSynthesizer` objects during a dedicated synthesis phase
+that runs BEFORE config validation and FSM translation, so the
+downstream validator and FSM build see only the normalized shape.
+
+Minimum surface area:
+
+```python
+from typing import Any
+
+from dataknobs_bots.reasoning import (
+    register_stage_synthesizer,
+    validate_no_conflicting_fields,
+)
+
+
+class VendorSelectSynthesizer:
+    """Expand `vendor_select:` into a routing stage."""
+
+    field = "vendor_select"
+
+    # Optional: load-time invariants. Skip when there are none.
+    def validate(self, stage: dict[str, Any]) -> None:
+        validate_no_conflicting_fields(
+            stage, self.field,
+            ["schema", "response_template", "transitions"],
+        )
+        block = stage[self.field]
+        if not block.get("vendors"):
+            from dataknobs_common.exceptions import ConfigurationError
+            raise ConfigurationError(
+                f"Stage '{stage.get('name')}': vendor_select: requires "
+                "non-empty vendors.",
+            )
+
+    def synthesize(self, stage: dict[str, Any]) -> None:
+        block = stage[self.field]
+        stage["response_template"] = block["prompt"]
+        stage["schema"] = {
+            "type": "object",
+            "properties": {
+                "vendor": {"type": "string", "enum": list(block["vendors"])},
+            },
+        }
+        stage["transitions"] = [
+            {
+                "target": block["target"],
+                "condition": "data.get('vendor') is not None",
+            },
+        ]
+
+
+register_stage_synthesizer(VendorSelectSynthesizer())
+```
+
+After registration, every wizard config loaded by
+`WizardConfigLoader.load_from_dict` (and the bot's
+`reasoning.wizard_config:` path) picks up your primitive
+automatically:
+
+```yaml
+stages:
+  - name: pick_vendor
+    is_start: true
+    vendor_select:
+      prompt: "Which vendor?"
+      vendors: [acme, contoso, northwind]
+      target: configure_vendor
+```
+
+Notes on the synthesizer contract:
+
+- **`field`** — the YAML key your primitive claims. Must be unique
+  across registered synthesizers (later registration overwrites).
+- **`synthesize(stage)`** — mutates the stage dict IN PLACE. Expand
+  the primitive into whatever combination of `response_template`,
+  `intent_detection`, `schema`, `transitions`, `clarification_template`,
+  etc. you need. Populate fields from `KNOWN_STAGE_FIELDS` (in
+  `wizard_loader`) — unknown fields are warned about by the
+  validator and ignored by the FSM build pipeline.
+- **`validate(stage)`** — optional. Raise `ConfigurationError` for any
+  load-time invariant violation. `validate_no_conflicting_fields()`
+  is the standard helper for "primitive vs hand-rolled" collision
+  errors.
+- **Zero new runtime branches.** A synthesizer is pure load-time
+  YAML transformation. After it runs, the loader validates and
+  translates as if the consumer wrote the expanded shape by hand.
+
+For test/teardown, `unregister_stage_synthesizer(field)` removes a
+registration. The full registry surface is also re-exported from
+`dataknobs_bots.reasoning.wizard_loader` for callers that prefer
+the single-module import.
+
+#### Conditional Branching
+
+Create dynamic flows based on user input:
+
+```yaml
+stages:
+  - name: experience
+    prompt: "What's your experience level?"
+    schema:
+      type: object
+      properties:
+        level:
+          type: string
+          enum: [beginner, intermediate, advanced]
+    transitions:
+      - target: beginner_path
+        condition: "data.get('level') == 'beginner'"
+      - target: advanced_path
+        condition: "data.get('level') == 'advanced'"
+      - target: intermediate_path  # Default
+
+  - name: beginner_path
+    prompt: "Let's start with the basics..."
+    # ... beginner-specific flow
+
+  - name: advanced_path
+    prompt: "Here are the advanced options..."
+    # ... advanced-specific flow
+```
+
+#### Understanding Wizard Reasoning
+
+| Strategy | Best For | Key Feature |
+|----------|----------|-------------|
+| Simple | Basic Q&A | Single LLM call |
+| ReAct | Tool use | Iterative reasoning |
+| **Wizard** | Multi-step flows | FSM-backed stages |
+
+Wizard reasoning is ideal when you need:
+- Structured data collection
+- Input validation per step
+- Conditional flow branching
+- Progress tracking
+- User navigation (back/skip)
+
+---
+
+## Advanced Topics
+
+### Multi-Tenant Deployment
+
+Deploy a single bot instance serving multiple clients.
+
+```python
+# multi_tenant_bot.py
+import asyncio
+from dataknobs_bots import DynaBot, BotContext
+
+async def handle_client_request(
+    bot: DynaBot,
+    client_id: str,
+    user_id: str,
+    message: str
+):
+    """Handle request from a specific client."""
+    context = BotContext(
+        conversation_id=f"{client_id}-{user_id}",
+        client_id=client_id,
+        user_id=user_id,
+        session_metadata={
+            "client_name": f"Client {client_id}",
+            "subscription": "premium"
+        }
+    )
+
+    response = await bot.chat(message, context)
+    return response
+
+
+async def main():
+    # Shared bot configuration
+    config = {
+        "llm": {"provider": "ollama", "model": "gemma3:1b"},
+        "conversation_storage": {
+            "backend": "postgres",  # Shared storage
+            "host": "localhost",
+            "database": "multi_tenant_db"
+        },
+        "memory": {"type": "buffer", "max_messages": 10}
+    }
+
+    bot = await DynaBot.from_config(config)
+
+    # Simulate multiple clients
+    tasks = [
+        handle_client_request(bot, "client-A", "user-1", "Hello from Client A"),
+        handle_client_request(bot, "client-B", "user-2", "Hello from Client B"),
+        handle_client_request(bot, "client-A", "user-3", "Another user from A"),
+    ]
+
+    responses = await asyncio.gather(*tasks)
+    for i, response in enumerate(responses):
+        print(f"Response {i+1}: {response}\n")
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
+```
+
+**Key Points**:
+- Single bot instance
+- Separate `client_id` for each tenant
+- Conversations isolated by ID
+- Shared storage with tenant partitioning
+
+---
+
+### Custom Tools Development
+
+See [tools.md](tools.md) for comprehensive guide.
+
+**Quick Example**:
+
+```python
+from dataknobs_llm.tools import Tool
+from typing import Dict, Any
+import httpx
+
+class StockPriceTool(Tool):
+    """Get current stock price."""
+
+    def __init__(self, api_key: str):
+        super().__init__(
+            name="get_stock_price",
+            description="Get current stock price for a ticker symbol"
+        )
+        self.api_key = api_key
+
+    @property
+    def schema(self) -> Dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {
+                "ticker": {
+                    "type": "string",
+                    "description": "Stock ticker symbol (e.g., AAPL, GOOGL)"
+                }
+            },
+            "required": ["ticker"]
+        }
+
+    async def execute(self, ticker: str) -> Dict[str, Any]:
+        async with httpx.AsyncClient() as client:
+            response = await client.get(
+                f"https://api.example.com/stock/{ticker}",
+                headers={"Authorization": f"Bearer {self.api_key}"}
+            )
+            data = response.json()
+            return {
+                "ticker": ticker,
+                "price": data["price"],
+                "change": data["change"]
+            }
+```
+
+**Usage**:
+```python
+config = {
+    # ... other config
+    "tools": [
+        {
+            "class": "my_tools.StockPriceTool",
+            "params": {"api_key": "${STOCK_API_KEY}"}
+        }
+    ]
+}
+```
+
+---
+
+### Post-Construction Step Injection
+
+Pipeline-shaped reasoning strategies expose their steps as a public
+list. When a step needs a runtime collaborator that the YAML config
+can't carry — for example, a resource owned by your application's
+lifespan — inject it after the bot is built using
+`bot.get_steps_of_type(step_cls)`:
+
+```python
+from myapp.steps import MyHandler
+
+bot = await DynaBot.from_config(config)
+
+for step in bot.get_steps_of_type(MyHandler):
+    step.attach_service(service)
+```
+
+`get_steps_of_type` returns a typed `list[step_cls]`, so the loop body
+calls `step_cls`-specific methods without `isinstance` filtering or
+`cast`. Returns `[]` when the bot has no reasoning strategy or when
+the strategy doesn't expose a `steps` attribute.
+
+---
+
+### Forwarding Strategy Components at Construction
+
+Reasoning strategies that read collaborators from the components
+channel (e.g. ReAct's `extra_context`, `artifact_registry`,
+`review_executor`, `context_builder`, `prompt_refresher`) accept
+those collaborators at construction time. Pass them to
+`DynaBot.from_config` via the `reasoning_components` kwarg:
+
+```python
+bot = await DynaBot.from_config(
+    config,
+    reasoning_components={
+        "extra_context": {"tenant_id": tenant_id, "policy_client": client},
+        "artifact_registry": registry,
+    },
+)
+```
+
+The dict is forwarded into the strategy's components channel; the
+strategy picks up the keys it reads and silently absorbs the rest.
+Use this for bot-lifetime collaborators that the YAML config can't
+carry (auth clients, tenant-scoped resources, application services).
+
+Bot-managed components (`knowledge_base`, `prompt_resolver`,
+`prompt_envelope`) cannot be overridden through this kwarg — supply
+them through the corresponding config fields. A collision raises
+`ConfigurationError` naming the offending key.
+
+#### Wizard sub-strategy collaborator forwarding
+
+When a `wizard` reasoning strategy resolves a per-stage `reasoning:`
+sub-strategy, the bot-level construction collaborators it received
+(`knowledge_base`, `prompt_resolver`, `prompt_envelope`, every key in
+`reasoning_components`, and any other consumer-supplied kwarg) land on
+the wizard's `self.components` mapping (via the
+`StructuredConfigConsumer` mixin's standard pass-through channel) and
+are forwarded to that sub-strategy's own `from_config` call.
+
+```yaml
+- name: ground_in_framework
+  reasoning: pipeline
+  reasoning_config:
+    steps:
+      - { type: grounded_retrieval, ... }  # consumes knowledge_base
+      - { type: grounded_synthesis, ... }
+```
+
+The bot's `knowledge_base` reaches the `pipeline` sub-strategy at
+construction time without any per-stage YAML escape hatch.
+
+**Pass-through is opaque.** The wizard does not introspect which keys
+a sub-strategy consumes; each sub-strategy's `from_config` absorbs
+(via `**kwargs`) or consumes what it accepts.
+
+**Per-stage-safe contract.** Strategies with strict
+`from_config(config)` signatures (no `**kwargs` absorption) surface a
+clear `ConfigurationError` if the outer wizard forwards an
+unrecognized key. The convention for wizard-stage-safe strategies is
+`def from_config(cls, config, **kwargs)`.
+
+**The wizard's own FSM is never forwarded.** `WizardReasoning`
+declares `INTERNAL_COMPONENTS = frozenset({"wizard_fsm"})`, so the
+outer wizard's FSM handle stays on `self.components` for the wizard's
+own consumption but is excluded from the
+`forwardable_components()` view used at sub-strategy construction.
+
+#### Writing a wizard-stage-safe sub-strategy
+
+If you ship a `ReasoningStrategy` that consumers will use as a wizard
+per-stage `reasoning:` strategy, the wizard will forward its
+parent-level shared collaborators (typically `knowledge_base`,
+`prompt_resolver`, `prompt_envelope`, and any consumer-supplied
+`reasoning_components`) into your `from_config` at construction time.
+Your strategy doesn't have to *use* all of those — but it does have
+to *accept* them. Otherwise the wizard's `_resolve_stage_strategy`
+surfaces a `ConfigurationError` whose underlying cause is a
+`TypeError("got an unexpected keyword argument 'X'")` at the very
+first turn that resolves your strategy.
+
+The convention is one line: declare `**kwargs` on `from_config` and
+let it absorb anything you don't consume.
+
+```python
+# ❌ Strict signature — wizard-stage-unsafe. Consumers placing this
+# strategy under a wizard stage will hit:
+#   ConfigurationError: Failed to create strategy 'my_strat' ...
+#     unexpected keyword argument 'knowledge_base' | Hint: ...
+class MyStrategy(ReasoningStrategy):
+    @classmethod
+    def from_config(cls, config: dict[str, Any]) -> "MyStrategy":
+        return cls(threshold=config.get("threshold", 0.5))
+```
+
+```python
+# ✅ Permissive signature — wizard-stage-safe. Unrelated forwarded
+# keys are absorbed; the strategy still picks out what it actually
+# needs.
+class MyStrategy(ReasoningStrategy):
+    @classmethod
+    def from_config(
+        cls,
+        config: dict[str, Any],
+        *,
+        knowledge_base: Any | None = None,  # used; named for clarity
+        **_: Any,  # absorbs other forwarded collaborators
+    ) -> "MyStrategy":
+        return cls(
+            threshold=config.get("threshold", 0.5),
+            knowledge_base=knowledge_base,
+        )
+```
+
+This convention is also enforced at the abstraction-layer level by
+`StructuredConfigConsumer`'s `_ainit` / `_adopt_components` hooks
+(signature-aware delivery: collaborators a hook doesn't declare are
+not crashed-on, they're dropped at `DEBUG`). But for strategies
+built via the reasoning registry's `create()` — including every
+wizard sub-strategy — the `from_config` signature is the
+load-bearing surface, and the `**kwargs` opt-in is the simplest way
+to be wizard-stage-safe regardless of which collaborators a future
+wizard release decides to forward.
+
+The standalone, no-wizard construction path is unaffected: when no
+caller supplies the extra collaborators, the absorbed `**kwargs` is
+empty and the strategy behaves identically to its strict-signature
+predecessor.
+
+#### Building your own composing strategy
+
+The pass-through pattern is a first-class mixin surface. Any class
+adopting `StructuredConfigConsumer` that composes children built from
+a registry can declare what it consumes via `INTERNAL_COMPONENTS` and
+forward the rest via the inherited `forwardable_components()` method
+— no copy-pasted helper, no per-class reimplementation:
+
+```python
+from typing import Any, ClassVar
+from dataknobs_common.structured_config import StructuredConfigConsumer
+from dataknobs_bots.reasoning.base import ReasoningStrategy
+from dataknobs_bots.reasoning.registry import get_registry
+
+class MyComposingStrategy(
+    StructuredConfigConsumer[MyConfig], ReasoningStrategy,
+):
+    #: Declare collaborators THIS class consumes itself.
+    #: Inherited ``forwardable_components()`` excludes these from the
+    #: pass-through to children.
+    INTERNAL_COMPONENTS: ClassVar[frozenset[str]] = frozenset(
+        {"my_internal_collaborator"}
+    )
+
+    @classmethod
+    def from_config(cls, config: dict[str, Any], **components: Any):
+        built_internal = _build_my_internal_collaborator(config)
+        return cls(
+            config=cls._coerce_config(config),
+            _components={
+                "my_internal_collaborator": built_internal,
+                **components,  # opaque pass-through to children
+            },
+        )
+
+    def _build_child(self, child_config: dict[str, Any]):
+        return get_registry().create(
+            config=child_config,
+            **self.forwardable_components(),  # inherited from mixin
+        )
+```
+
+Consumer composing strategies get the same per-stage forwarding
+discipline as the wizard — and the same single point of evolution
+when the pass-through contract grows (e.g. a future
+`ComposingStrategy` mixin that subsumes child caching and
+`add_source` fan-out).
+
+---
+
+### Production Deployment
+
+#### Configuration for Production
+
+```yaml
+# production.yaml
+llm:
+  provider: openai
+  model: gpt-4
+  api_key: ${OPENAI_API_KEY}
+  temperature: 0.7
+  max_tokens: 2000
+
+conversation_storage:
+  backend: postgres
+  host: ${DB_HOST}
+  port: 5432
+  database: ${DB_NAME}
+  user: ${DB_USER}
+  password: ${DB_PASSWORD}
+  min_pool_size: 5
+  max_pool_size: 20
+
+memory:
+  type: buffer
+  max_messages: 20
+
+reasoning:
+  strategy: react
+  max_iterations: 5
+  verbose: false
+  store_trace: false
+
+# Logging middleware
+middleware:
+  - class: middleware.RequestLoggingMiddleware
+    params:
+      log_level: INFO
+  - class: middleware.MetricsMiddleware
+    params:
+      statsd_host: ${STATSD_HOST}
+```
+
+#### Docker Deployment
+
+```dockerfile
+# Dockerfile
+FROM python:3.12-slim
+
+WORKDIR /app
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY . .
+
+CMD ["python", "app.py"]
+```
+
+```yaml
+# docker-compose.yml
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:14
+    environment:
+      POSTGRES_DB: botdb
+      POSTGRES_USER: botuser
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+
+  bot:
+    build: .
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - DB_HOST=postgres
+      - DB_NAME=botdb
+      - DB_USER=botuser
+      - DB_PASSWORD=${DB_PASSWORD}
+    depends_on:
+      - postgres
+    ports:
+      - "8000:8000"
+    deploy:
+      replicas: 3
+
+volumes:
+  postgres_data:
+```
+
+#### Health Checks
+
+```python
+# app.py
+from fastapi import FastAPI
+from dataknobs_bots import DynaBot
+
+app = FastAPI()
+bot = None
+
+@app.on_event("startup")
+async def startup():
+    global bot
+    bot = await DynaBot.from_config(config)
+
+@app.get("/health")
+async def health_check():
+    return {"status": "healthy", "bot_ready": bot is not None}
+
+@app.post("/chat")
+async def chat(request: ChatRequest):
+    context = BotContext(
+        conversation_id=request.conversation_id,
+        client_id=request.client_id,
+        user_id=request.user_id
+    )
+    response = await bot.chat(request.message, context)
+    return {"response": response}
+```
+
+---
+
+## Common Patterns
+
+### Pattern 1: Configuration per Environment
+
+```python
+import os
+import yaml
+
+def load_config():
+    env = os.getenv("ENV", "development")
+    config_file = f"config/{env}.yaml"
+
+    with open(config_file) as f:
+        config = yaml.safe_load(f)
+
+    return config
+
+config = load_config()
+bot = await DynaBot.from_config(config)
+```
+
+### Pattern 2: Dynamic Tool Loading
+
+```python
+config = {
+    # ... base config
+    "tool_definitions": {
+        "calculator": {
+            "class": "tools.CalculatorTool",
+            "params": {"precision": 2}
+        },
+        "weather": {
+            "class": "tools.WeatherTool",
+            "params": {}
+        }
+    },
+    "tools": []  # Empty initially
+}
+
+# Load tools based on user subscription
+if user.has_feature("calculator"):
+    config["tools"].append("xref:tools[calculator]")
+
+if user.has_feature("weather"):
+    config["tools"].append("xref:tools[weather]")
+
+bot = await DynaBot.from_config(config)
+```
+
+### Pattern 3: Conversation Handoff
+
+```python
+async def escalate_to_human(conversation_id: str):
+    """Transfer conversation to human agent."""
+    # Get conversation history
+    history = await storage.load_conversation(conversation_id)
+
+    # Send to human agent system
+    await human_agent_system.create_ticket(
+        conversation_id=conversation_id,
+        history=history,
+        priority="high"
+    )
+
+    # Update conversation metadata
+    await storage.update_metadata(
+        conversation_id,
+        {"status": "escalated", "escalated_at": datetime.now()}
+    )
+```
+
+---
+
+## Troubleshooting
+
+### Issue: Bot responses are too slow
+
+**Possible Causes**:
+- Using a large LLM model
+- Knowledge base search is slow
+- Network latency to LLM API
+
+**Solutions**:
+```python
+# Use a faster model
+config["llm"]["model"] = "gemma3:1b"  # Instead of "llama3.1:70b"
+
+# Reduce max_tokens
+config["llm"]["max_tokens"] = 500  # Instead of 2000
+
+# Use local LLM (Ollama)
+config["llm"]["provider"] = "ollama"
+
+# Optimize knowledge base
+config["knowledge_base"]["chunking"]["max_chunk_size"] = 300  # Smaller chunks
+```
+
+### Issue: Out of memory errors
+
+**Possible Causes**:
+- Too many cached conversations
+- Vector memory using too much RAM
+- Large knowledge base in memory
+
+**Solutions**:
+```python
+# Use buffer memory instead of vector
+config["memory"] = {"type": "buffer", "max_messages": 10}
+
+# Use external vector store
+config["knowledge_base"]["vector_store"]["backend"] = "pinecone"
+
+# Implement conversation cache eviction
+# (Future feature)
+```
+
+### Issue: Knowledge base doesn't find relevant docs
+
+**Possible Causes**:
+- Poor chunking strategy
+- Embeddings don't match query semantics
+- Wrong similarity threshold
+
+**Solutions**:
+```python
+# Adjust chunking
+config["knowledge_base"]["chunking"] = {
+    "max_chunk_size": 500   # Larger chunks
+}
+
+# Try different embedding model
+config["knowledge_base"]["embedding_model"] = "text-embedding-3-large"
+
+# Return more results
+# In query: kb.query(query, k=10)  # Instead of k=3
+```
+
+### Issue: Tools not being called
+
+**Possible Causes**:
+- Tool description not clear
+- Model not good at tool use
+- Max iterations too low
+
+**Solutions**:
+```python
+# Use a model better at tool use
+config["llm"]["model"] = "phi3:mini"  # Or "gpt-4"
+
+# Increase max iterations
+config["reasoning"]["max_iterations"] = 10
+
+# Improve tool descriptions
+class MyTool(Tool):
+    def __init__(self):
+        super().__init__(
+            name="my_tool",
+            description="VERY CLEAR description of what this tool does, when to use it, and what it returns"  # Be explicit!
+        )
+```
+
+### Debug Mode
+
+Enable verbose logging:
+
+```python
+import logging
+
+logging.basicConfig(level=logging.DEBUG)
+
+config["reasoning"]["verbose"] = True
+config["reasoning"]["store_trace"] = True
+```
+
+---
+
+## Next Steps
+
+- **Explore Examples**: Check out [examples/](../examples/index.md) for more patterns
+- **Read API Docs**: See [api.md](../api/reference.md) for complete API reference
+- **Configuration Deep Dive**: Read [configuration.md](configuration.md)
+- **Build Custom Tools**: Follow [tools.md](tools.md) guide
+- **Understand Architecture**: Study [architecture.md](architecture.md)
+
+---
+
+## Getting Help
+
+- **GitHub Issues**: [Report bugs or request features](https://github.com/kbs-labs/dataknobs/issues)
+- **Discussions**: [Ask questions and share ideas](https://github.com/kbs-labs/dataknobs/discussions)
+- **Documentation**: You're reading it!
+- **Examples**: [Working code examples](../examples/index.md)

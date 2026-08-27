@@ -958,7 +958,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   Filtered search is exact on every index type as a result, including
   `hnsw` and `ivfflat`, and no longer uses the index — see
-  `VECTOR_FILTER_SEMANTICS.md` for what that costs and when to prefer
+  `vector-filter-semantics.md` for what that costs and when to prefer
   `pgvector`. Unfiltered search is unchanged.
 
 - **`is_default_backend()` reads the default's aliases when given a
@@ -2108,7 +2108,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Chroma (where it was silently a no-op) now get real tenant
   isolation — `count()`/`search()`/`clear()` will scope to that
   tenant. One residual cross-backend divergence remains and is
-  documented in `VECTOR_FILTER_SEMANTICS.md`: an *explicit*
+  documented in `vector-filter-semantics.md`: an *explicit*
   `filter={"domain_id": "x"}` is a metadata-key match on Memory/
   FAISS/Chroma but a JSONB-containment probe on PgVector (which
   stores the configured tenant in a column, not in JSONB) — rely on
@@ -2183,11 +2183,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `count(filter=...)` then fetches IDs only (no metadata
   materialization) when the filter pushes down fully — eliminating
   the memory-bound trade-off documented in
-  `VECTOR_FILTER_SEMANTICS.md` for the common multi-tenant scoping
+  `vector-filter-semantics.md` for the common multi-tenant scoping
   pattern (e.g. `{"domain_id": "x"}`). Backward compat preserved:
   keys not declared keep the conservative post-filter behavior.
 
-- **`VECTOR_FILTER_SEMANTICS.md` documents the pgvector
+- **`vector-filter-semantics.md` documents the pgvector
   config-level `domain_id` swap asymmetry** — when runtime-swapping
   between vector-store backends, `PgVectorStore`'s config-level
   `domain_id` scopes `clear()` automatically while the other three
@@ -2346,7 +2346,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   id-population, metadata serialization edge cases). The new
   helpers were previously covered only transitively via integration
   tests requiring a live Postgres.
-- `packages/data/docs/RECORD_SERIALIZATION.md` documents the new
+- `packages/data/docs/record-serialization.md` documents the new
   `record_to_row` static and the inbound/outbound boundary
   contract, with a forward-reference to the Item 114 cautionary
   tale.
