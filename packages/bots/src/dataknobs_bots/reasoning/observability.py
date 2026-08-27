@@ -90,13 +90,31 @@ class TransitionRecord:
     def from_dict(cls, data: dict[str, Any]) -> "TransitionRecord":
         """Create record from dictionary.
 
+        ``data_snapshot`` is copied rather than bound.  Every caller here
+        deserializes a dict it does not own, and three of the four read
+        straight out of ``manager.metadata`` -- so a record restored from
+        one used to hold the *persisted* dict, and a consumer writing
+        through ``snapshot.transitions[i].data_snapshot`` rewrote
+        conversation state that had already been saved.  This classmethod
+        is the boundary all four cross, which is why the copy is here
+        rather than at each of them.
+
+        ``copy_structure`` rather than ``dict``: a recorded snapshot is
+        whatever the stage collected, so a nested value would otherwise
+        stay the object inside the metadata.  It passes ``None`` through
+        unchanged, so a transition that recorded nothing still carries
+        nothing.
+
         Args:
             data: Dictionary containing record fields
 
         Returns:
             TransitionRecord instance
         """
-        return cls(**data)
+        fields = dict(data)
+        if "data_snapshot" in fields:
+            fields["data_snapshot"] = copy_structure(fields["data_snapshot"])
+        return cls(**fields)
 
 
 @dataclass
@@ -548,6 +566,14 @@ class WizardStateSnapshot:
     def from_dict(cls, data: dict[str, Any]) -> "WizardStateSnapshot":
         """Create snapshot from dictionary.
 
+        The containers are copied out of ``data`` rather than bound to it.
+        This type documents itself as read-only, and that is a claim about
+        the object, so it has to hold however the object was built -- the
+        two live constructors copy their payloads and this one, reading a
+        dict the caller loaded from somewhere, must not be the exception.
+        One memo across the reads, so a subtree the serialized form shares
+        between two fields is still shared in the result.
+
         Args:
             data: Dictionary containing snapshot fields
 
@@ -555,27 +581,28 @@ class WizardStateSnapshot:
             WizardStateSnapshot instance
         """
         transitions = [TransitionRecord.from_dict(t) for t in data.get("transitions", [])]
+        seen: dict[int, Any] = {}
         return cls(
             current_stage=data["current_stage"],
-            data=data.get("data", {}),
-            history=data.get("history", []),
+            data=copy_structure(data.get("data", {}), seen),
+            history=copy_structure(data.get("history", []), seen),
             transitions=transitions,
             completed=data.get("completed", False),
             snapshot_timestamp=data.get("snapshot_timestamp", time.time()),
             clarification_attempts=data.get("clarification_attempts", 0),
-            tasks=data.get("tasks", []),
+            tasks=copy_structure(data.get("tasks", []), seen),
             pending_tasks=data.get("pending_tasks", 0),
             completed_tasks=data.get("completed_tasks", 0),
             total_tasks=data.get("total_tasks", 0),
-            available_task_ids=data.get("available_task_ids", []),
+            available_task_ids=copy_structure(data.get("available_task_ids", []), seen),
             task_progress_percent=data.get("task_progress_percent", 0.0),
             stage_index=data.get("stage_index", 0),
             total_stages=data.get("total_stages", 0),
             can_skip=data.get("can_skip", False),
             can_go_back=data.get("can_go_back", True),
-            suggestions=data.get("suggestions", []),
-            stages=data.get("stages", []),
-            stage_metadata=data.get("stage_metadata", {}),
+            suggestions=copy_structure(data.get("suggestions", []), seen),
+            stages=copy_structure(data.get("stages", []), seen),
+            stage_metadata=copy_structure(data.get("stage_metadata", {}), seen),
         )
 
     def to_tool_view(self) -> ToolWizardState:

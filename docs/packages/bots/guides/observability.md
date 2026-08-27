@@ -247,6 +247,21 @@ query = TransitionHistoryQuery(
 
 `WizardStateSnapshot` provides a complete read-only view of wizard state, useful for UI rendering and debugging:
 
+**Read-only means owned, not merely conventional.** Every container a
+snapshot exposes is copied out of the wizard rather than read from it, and
+the copies are structural — nested values are copied too. Writing into
+`snapshot.data`, `snapshot.stage_metadata`, `snapshot.suggestions`,
+`snapshot.stages` or `snapshot.transitions[i].data_snapshot` changes nothing
+outside the snapshot. That is a property of the object, so it holds however
+the snapshot was built: `get_state_snapshot()`, `snapshot_from_metadata()`
+and `from_dict()` all produce one you can write into freely.
+
+The wizard's own accessors are the opposite and deliberately so —
+`WizardFSM.stages`, `current_metadata` and `stage_metadata_for()` hand back
+the live stage dict, on the per-turn path. Copy a stage you intend to edit,
+as `stages` documents.
+
+
 ```python
 from dataknobs_bots.reasoning.observability import WizardStateSnapshot
 

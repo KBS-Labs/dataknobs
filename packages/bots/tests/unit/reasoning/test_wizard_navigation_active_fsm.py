@@ -1525,7 +1525,7 @@ async def test_the_static_snapshot_does_not_alias_the_state_it_read() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 17-20. The stage metadata the two constructors can and cannot supply
+# 21-26. The stage metadata the two constructors can and cannot supply
 # ---------------------------------------------------------------------------
 #
 # ``ToolWizardState`` -- what a ``ContextAwareTool`` is handed -- carries
@@ -1736,7 +1736,7 @@ async def test_a_second_instance_snapshots_the_stage_the_state_reports() -> None
 
 
 # ---------------------------------------------------------------------------
-# 21-24. What the snapshot's copies actually isolate
+# 27-30. What the snapshot's copies actually isolate
 # ---------------------------------------------------------------------------
 #
 # The snapshot is documented read-only, and its payloads were copied one
@@ -1891,3 +1891,151 @@ def test_the_tool_view_does_not_alias_nested_payloads() -> None:
 
     assert snapshot.data["profile"]["city"] == "Boston"
     assert "injected" not in snapshot.stage_metadata["schema"]["properties"]
+
+
+# ---------------------------------------------------------------------------
+# 31-33. The fields the copies had not reached
+# ---------------------------------------------------------------------------
+#
+# The section above copies ``data``, ``history`` and ``stage_metadata``.
+# Three payloads reachable from the same read-only object still handed out
+# the live thing:
+#
+# * ``suggestions`` -- taken from the normalizer with no copy at all;
+# * ``stages`` -- outer list copied, so every roadmap entry was shared; and
+# * ``transitions[i].data_snapshot`` -- bound by reference in
+#   ``TransitionRecord.from_dict``, which exposed **both** constructors,
+#   the live one included, since ``_get_wizard_state`` restores through
+#   the same classmethod.
+#
+# The first two are fixed on ``normalize_wizard_state`` and the third on
+# ``TransitionRecord.from_dict``, because those are where the alias is
+# created rather than where it happened to be noticed.
+
+
+def _suggested_config() -> dict[str, Any]:
+    """A flow whose stages declare quick replies.
+
+    ``suggestions`` is empty unless a stage asks for it, and an empty list
+    aliases just as thoroughly as a full one -- but a test that cannot show
+    a value surviving is not showing much.
+    """
+    builder = WizardConfigBuilder("suggested")
+    builder.stage(
+        "intro",
+        is_start=True,
+        prompt="Pick one.",
+        response_template="INTRO",
+        confirm_first_render=False,
+        suggestions=["yes", "no"],
+    )
+    builder.field("choice", field_type="string", required=True)
+    builder.transition("wrap", condition="has('choice')")
+    builder.stage(
+        "wrap",
+        is_end=True,
+        prompt="All done.",
+        response_template="WRAP",
+        suggestions=["again"],
+    )
+    return builder.build()
+
+
+@pytest.mark.asyncio
+async def test_the_static_snapshot_does_not_alias_the_suggestions_it_read() -> None:
+    """``suggestions=normalized["suggestions"]`` was the persisted list.
+
+    Not a shallow copy -- no copy.  A consumer appending a quick reply to
+    a snapshot the type documents as read-only appended it to conversation
+    metadata, where the next turn would read it back.
+    """
+    async with await BotTestHarness.create(
+        wizard_config=_suggested_config(),
+        main_responses=["r"] * 8,
+        extraction_results=[[{"choice": "yes"}], []],
+    ) as harness:
+        await harness.chat("hi")
+        manager = harness.bot.get_conversation_manager(harness.context.conversation_id)
+        persisted = manager.metadata["wizard"]
+        assert persisted.get("suggestions"), "precondition: the stage declares some"
+
+        snapshot = WizardReasoning.snapshot_from_metadata(manager.metadata)
+        assert snapshot is not None
+        before = list(persisted["suggestions"])
+
+        snapshot.suggestions.append("injected")
+
+        assert persisted["suggestions"] == before, (
+            "appending to the snapshot's quick replies rewrote persisted state"
+        )
+
+
+@pytest.mark.asyncio
+async def test_the_static_snapshot_does_not_alias_a_roadmap_entry() -> None:
+    """``list(...)`` copied the roadmap but not the stages in it.
+
+    Each entry is a ``dict`` living in ``manager.metadata``, so marking a
+    stage complete through the snapshot marked it complete for the wizard.
+    """
+    async with await BotTestHarness.create(
+        wizard_config=_suggested_config(),
+        main_responses=["r"] * 8,
+        extraction_results=[[{"choice": "yes"}], []],
+    ) as harness:
+        await harness.chat("hi")
+        manager = harness.bot.get_conversation_manager(harness.context.conversation_id)
+        persisted = manager.metadata["wizard"]
+        assert persisted.get("stages"), "precondition: the roadmap was derived"
+
+        snapshot = WizardReasoning.snapshot_from_metadata(manager.metadata)
+        assert snapshot is not None
+        before = persisted["stages"][0]["status"]
+
+        snapshot.stages[0]["status"] = "tampered"
+
+        assert persisted["stages"][0]["status"] == before, (
+            "writing into the snapshot's roadmap rewrote persisted state"
+        )
+
+
+@pytest.mark.asyncio
+async def test_neither_snapshot_aliases_a_transition_data_snapshot() -> None:
+    """The one exposure both constructors shared.
+
+    ``transitions`` looked like a list of value records, and the record
+    *is* one -- but ``data_snapshot`` on it is a dict, and ``from_dict``
+    bound it straight from the serialized transition inside
+    ``manager.metadata``.  The live route restores through the same
+    classmethod, so ``list(wizard_state.transitions)`` handed the same
+    dict out again.
+    """
+    async with await BotTestHarness.create(
+        wizard_config=_nested_data_config(),
+        main_responses=["r"] * 8,
+        extraction_results=[[{"profile": {"city": "Boston"}}], []],
+    ) as harness:
+        await harness.chat("hi")
+        manager = harness.bot.get_conversation_manager(harness.context.conversation_id)
+        persisted = manager.metadata["wizard"]["fsm_state"]
+        recorded = [
+            t for t in persisted.get("transitions", []) if isinstance(t.get("data_snapshot"), dict)
+        ]
+        assert recorded, "precondition: a transition recorded a data snapshot"
+
+        static = WizardReasoning.snapshot_from_metadata(manager.metadata)
+        assert static is not None
+        live = _strategy(harness).get_state_snapshot(manager)
+
+        for snapshot, route in ((static, "static"), (live, "live")):
+            carried = [
+                record for record in snapshot.transitions if isinstance(record.data_snapshot, dict)
+            ]
+            assert carried, f"precondition: the {route} snapshot carried one"
+            for record in carried:
+                assert record.data_snapshot is not None
+                record.data_snapshot["injected"] = True
+
+        for stored in recorded:
+            assert "injected" not in stored["data_snapshot"], (
+                "writing into a transition's recorded data rewrote persisted state"
+            )

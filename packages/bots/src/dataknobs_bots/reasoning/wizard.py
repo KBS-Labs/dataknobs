@@ -5159,6 +5159,12 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
             total_stages=total_stages,
             can_skip=normalized["can_skip"],
             can_go_back=normalized["can_go_back"],
+            # Owned, not aliased -- but the copy is in
+            # ``normalize_wizard_state``, which is where the metadata is
+            # read.  Both of its consumers hand the result to someone who
+            # may write into it, so copying at one of them would have left
+            # the other exposed.  Do not "simplify" that away: the tests
+            # for it observe the effect from here.
             suggestions=normalized["suggestions"],
             stages=stages,
             # ``stage_metadata`` is deliberately not passed, and this is
