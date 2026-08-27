@@ -405,5 +405,5 @@ def test_vector_field_serialization():
 ## See Also
 
 - [Record ID Architecture](record-id-architecture.md) - How record IDs are managed
-- [Vector Store Design](vector-store-design.md) - Vector-specific storage details
+- [Vector Store Design](history/vector-implementation/vector-store-design.md) - Vector-specific storage details
 - [Architecture Overview](architecture.md) - General system architecture

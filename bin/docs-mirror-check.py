@@ -46,6 +46,23 @@ closes that: an entry whose counterpart exists in the other tree (matched on
 the canonicalized basename, at any depth) fails. Two same-named documents that
 are genuinely unrelated are recorded with ``diverge`` and a reason.
 
+Beyond the per-class invariant, three properties hold across every doc:
+
+  **One document, one name.** A paired doc is spelled the same in both trees,
+  so a bare link to a sibling reads identically from either. ``diverge`` is
+  exempt -- that class records two genuinely different documents, and
+  requiring them to share a name would contradict the classification.
+
+  **Lower-hyphen spelling.** Every package doc is ``lower-hyphen.md``
+  (``README.md`` excepted -- GitHub renders it as a directory index). This is
+  what stops the old ``UPPER_SNAKE.md`` convention returning through a doc
+  that is new, or unpaired, and so invisible to the rule above.
+
+  **Links resolve.** Every relative ``.md`` link resolves -- case-sensitively --
+  in every tree its document is served from. A link broken by *spelling* fails.
+  One whose target is absent under any spelling is counted and printed instead:
+  the two trees nest some documents differently, so no rename reaches those.
+
 Completeness: every ``*.md`` **in scope** MUST be classified. An unclassified
 file (or a manifest entry with no file on disk) fails the check -- that is
 what makes silent drift impossible to introduce: a doc in scope forces a
@@ -89,6 +106,7 @@ import difflib
 import json
 import re
 import sys
+from collections.abc import Iterator
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -150,14 +168,42 @@ _FENCE_RE = re.compile(r"^\s*(`{3,}|~{3,})")
 _CODE_SPAN_RE = re.compile(r"(`+).*?\1")
 
 
-def canonicalize_line(line: str) -> str:
-    """Rewrite intra-doc ``.md`` link targets to site form, outside code spans.
+def _protected_spans(line: str) -> list[tuple[int, int]]:
+    """Character ranges of ``line`` holding literal example text.
 
-    Link syntax that appears inside an inline ``code span`` is literal example
-    text: its character range is protected and left untouched, so only real
-    links in the prose portion of the line are canonicalized.
+    Link syntax inside an inline ``code span`` is a sample, not a link. Both
+    things this module does with links -- rewriting them and resolving them --
+    have to agree about that, so the rule is defined once here.
     """
-    protected = [(m.start(), m.end()) for m in _CODE_SPAN_RE.finditer(line)]
+    return [(m.start(), m.end()) for m in _CODE_SPAN_RE.finditer(line)]
+
+
+def _iter_lines(text: str) -> Iterator[tuple[str, bool]]:
+    """Yield ``(line, literal)`` for each line, tracking fenced-code state.
+
+    ``literal`` is True for a fence delimiter and for everything between an
+    opening and closing run: that content is a code sample, so a ``](target)``
+    in it is neither a link to rewrite nor a link to resolve. Same rationale as
+    :func:`_protected_spans`, one line-scope up, and defined once for the same
+    reason.
+    """
+    fence: str | None = None
+    for ln in text.splitlines():
+        m = _FENCE_RE.match(ln)
+        if m:
+            marker = m.group(1)[0]
+            if fence is None:
+                fence = marker
+            elif fence == marker:
+                fence = None
+            yield ln, True
+            continue
+        yield ln, fence is not None
+
+
+def canonicalize_line(line: str) -> str:
+    """Rewrite intra-doc ``.md`` link targets to site form, outside code spans."""
+    protected = _protected_spans(line)
 
     def repl(m: re.Match[str]) -> str:
         if any(start <= m.start() < end for start, end in protected):
@@ -168,30 +214,51 @@ def canonicalize_line(line: str) -> str:
 
 
 def canonicalize_text(text: str) -> list[str]:
-    """Canonicalize link targets line-by-line, skipping fenced code blocks.
+    """Canonicalize link targets line-by-line, skipping fenced code blocks."""
+    return [ln if literal else canonicalize_line(ln) for ln, literal in _iter_lines(text)]
 
-    A fenced code block (opened and closed by a ``` or ~~~ run) holds literal
-    example text; rewriting ``](target)`` inside it would corrupt code samples.
-    Fence state is tracked across lines so fenced content passes through verbatim.
+
+def link_targets(text: str) -> list[str]:
+    """Every relative ``.md`` link target in the prose of ``text``, in order.
+
+    Fenced blocks and inline code spans contribute nothing, via the same two
+    primitives the canonicaliser uses. Skipped as well: anything with a URL
+    scheme or a leading ``/`` (not resolved against a doc tree at all) and any
+    target with no ``.md`` file part (a same-page ``#anchor``, an image, a
+    ``.py``). What is left is exactly the population that has to resolve inside
+    one of the two trees.
     """
     out: list[str] = []
-    fence: str | None = None
-    for ln in text.splitlines():
-        m = _FENCE_RE.match(ln)
-        if m:
-            marker = m.group(1)[0]
-            if fence is None:
-                fence = marker
-            elif fence == marker:
-                fence = None
-            out.append(ln)
+    for line, literal in _iter_lines(text):
+        if literal:
             continue
-        out.append(ln if fence is not None else canonicalize_line(ln))
+        protected = _protected_spans(line)
+        for m in _LINK_RE.finditer(line):
+            if any(start <= m.start() < end for start, end in protected):
+                continue
+            file_part = m.group("target").partition("#")[0]
+            if not file_part or ":" in file_part or file_part.startswith("/"):
+                continue
+            if file_part.endswith(".md"):
+                out.append(file_part)
     return out
 
 
 def _read(path: Path) -> str:
     return path.read_text(encoding="utf-8")
+
+
+def _rel(path: Path) -> str:
+    """``path`` shown relative to the repo root, or absolute if it is outside it.
+
+    A link target can normalise its way above ``ROOT``, and a symlink can
+    resolve anywhere; both are worth naming in a message rather than crashing
+    the check that found them.
+    """
+    try:
+        return path.relative_to(ROOT).as_posix()
+    except ValueError:
+        return str(path)
 
 
 class Result:
@@ -308,11 +375,7 @@ def check_symlink(pair: dict, pkg_dir: Path, site_dir: Path, res: Result) -> Non
         )
         return
     if site_path.resolve() != pkg_path.resolve():
-        target = site_path.resolve()
-        try:
-            shown = target.relative_to(ROOT)
-        except ValueError:
-            shown = target
+        shown = _rel(site_path.resolve())
         res.fail(
             f"symlink: {site_path.relative_to(ROOT)} resolves to '{shown}' but "
             f"should point at the package source '{pkg_path.relative_to(ROOT)}'."
@@ -454,6 +517,41 @@ def _canon_name(name: str) -> str:
     return Path(name).name.lower().replace("_", "-")
 
 
+def _exists_cs(path: Path) -> bool:
+    """Case-SENSITIVE existence, answered from the parent's directory listing.
+
+    ``Path.exists()`` answers *yes* on a case-insensitive checkout when a link
+    says ``configuration.md`` and only ``CONFIGURATION.md`` is on disk. That is
+    not a hypothetical risk: it is why 89 broken package-tree links passed
+    every local run until they were measured this way. Comparing the name
+    against the listing gives macOS the same verdict as the CI runner, which is
+    the only way this check means anything where it is actually written.
+    """
+    try:
+        return path.name in {p.name for p in path.parent.iterdir()}
+    except OSError:
+        return False
+
+
+def _fold_sibling(path: Path) -> str | None:
+    """A name in ``path``'s directory differing from it only in spelling.
+
+    :func:`_canon_name` folds case and underscores, so a hit means "the
+    document is right there, spelled the other way" -- the one kind of
+    unresolved link a rename can fix, and the kind the one-name convention
+    exists to make impossible.
+    """
+    try:
+        siblings = {p.name for p in path.parent.iterdir()}
+    except OSError:
+        return None
+    want = _canon_name(path.name)
+    for name in sorted(siblings):
+        if name != path.name and _canon_name(name) == want:
+            return name
+    return None
+
+
 def check_unpaired(entry: dict, pkg_dir: Path, site_dir: Path, res: Result) -> None:
     """``package_only`` / ``site_only`` must mean unpaired, not unclassified.
 
@@ -526,6 +624,177 @@ def check_unpaired(entry: dict, pkg_dir: Path, site_dir: Path, res: Result) -> N
                 f"(symlink / transclude / mirror), or record the divergence with "
                 f"`diverge` and a reason if the two are genuinely different documents."
             )
+
+
+#: Classes whose two sides are the *same* document -- one file served at two
+#: paths (``symlink``, ``transclude``) or two content-locked copies of it
+#: (``mirror``). ``diverge`` is deliberately absent: it records two genuinely
+#: different documents that happen to be counterparts, so requiring them to
+#: share a name would contradict the classification. Two pairs differ today
+#: and both are correct.
+_SAME_DOCUMENT_CLASSES = ("symlink", "transclude", "mirror")
+
+#: A conforming doc filename: lower case, digits, hyphens and dots only.
+_LOWER_HYPHEN_RE = re.compile(r"^[a-z0-9][a-z0-9.-]*\.md$")
+
+#: GitHub renders ``README.md`` as a directory index; ``readme.md`` on a
+#: case-sensitive host does not get that treatment. The only exemption.
+_SPELLING_EXEMPT = frozenset({"README.md"})
+
+
+def check_name_parity(entry: dict, res: Result) -> None:
+    """One document, one name: a paired doc is spelled the same in both trees.
+
+    This is what lets a bare link to a sibling read identically from either
+    tree -- and so what lets ``symlink`` and ``transclude``, one file served at
+    two paths, carry cross-doc links at all. Without it the same link text can
+    resolve in at most one of the trees the document is served from, which is
+    how 89 package-tree links came to be broken while the rendered site stayed
+    clean and every guard reported green.
+
+    Only the basename is compared. The two trees nest some documents
+    differently and no filename reconciles that; :func:`check_link_resolution`
+    is where the consequences of the nesting show up.
+    """
+    for kind in _SAME_DOCUMENT_CLASSES:
+        for pair in entry.get(kind, []):
+            pkg_name = Path(pair["package"]).name
+            site_name = Path(pair["site"]).name
+            if pkg_name == site_name:
+                continue
+            res.fail(
+                f"name parity: {kind} pair '{pair['package']}' <-> '{pair['site']}' "
+                f"spells one document two ways ('{pkg_name}' / '{site_name}'). A "
+                f"bare link to it then resolves in at most one tree. Give both "
+                f"sides the same filename, or -- if these are really two "
+                f"different documents -- record them as `diverge` with a reason "
+                f"in {MANIFEST.relative_to(ROOT)}."
+            )
+
+
+def check_doc_spelling(pkg_dir: Path, res: Result) -> None:
+    """Every package doc filename is lower-hyphen.
+
+    The package tree is where the old ``UPPER_SNAKE.md`` convention lived, where
+    every unresolved link was found, and the tree an author populates by
+    following ``docs/development/new-package-checklist.md``. A doc added in the
+    old spelling breaks a sibling's bare link the moment someone writes one, and
+    :func:`check_name_parity` would not see it: a new doc need not be paired.
+
+    The site tree is covered transitively rather than directly. A paired site
+    page must match its package counterpart, which this requires to be
+    lower-hyphen -- so the only site pages outside the rule are the genuinely
+    site-only ones, whose names are published URLs and are sometimes taken from
+    the module they document (``fsm/api/async_simple.md``). Renaming those would
+    move a URL to fix nothing: a document served from one tree has no second
+    tree for its link text to disagree with.
+
+    Read from disk, and recursively whatever the package's ``recursive`` flag
+    says. That flag scopes which docs must be *classified*; a doc can be spelled
+    wrong without being classified at all, and that is the case worth catching.
+    """
+    if not pkg_dir.is_dir():
+        return
+    for path in sorted(pkg_dir.rglob("*.md")):
+        if path.name in _SPELLING_EXEMPT or _LOWER_HYPHEN_RE.match(path.name):
+            continue
+        res.fail(
+            f"doc spelling: {_rel(path)} is not lower-hyphen. Both trees spell a "
+            f"document the same way, so a bare link to it reads identically from "
+            f"either; uppercase or underscores break that for every doc that "
+            f"links to it. Rename it to '{_canon_name(path.name)}' and update the "
+            f"references."
+        )
+
+
+def _served_docs(entry: dict, pkg_dir: Path, site_dir: Path) -> Iterator[tuple[Path, list[Path]]]:
+    """Yield ``(file, [directory, ...])`` for every classified doc.
+
+    A ``symlink`` or ``transclude`` pair is **one** document served at two
+    paths, so its text is read once and must resolve from both directories: the
+    symlink is the same file under the site path, and a transclusion is inlined
+    into the site page, so the source's relative links are resolved from the
+    site page's location. The remaining classes hold two independent files, each
+    served only from its own tree.
+    """
+    for kind in ("symlink", "transclude"):
+        for pair in entry.get(kind, []):
+            yield (
+                pkg_dir / pair["package"],
+                [(pkg_dir / pair["package"]).parent, (site_dir / pair["site"]).parent],
+            )
+    for kind in ("mirror", "diverge"):
+        for pair in entry.get(kind, []):
+            yield pkg_dir / pair["package"], [(pkg_dir / pair["package"]).parent]
+            yield site_dir / pair["site"], [(site_dir / pair["site"]).parent]
+    for name in entry.get("package_only", []):
+        yield pkg_dir / name, [(pkg_dir / name).parent]
+    for name in entry.get("site_only", []):
+        yield site_dir / name, [(site_dir / name).parent]
+
+
+def check_link_resolution(
+    entry: dict,
+    pkg_dir: Path,
+    site_dir: Path,
+    res: Result,
+    unresolved: list[tuple[str, str, str]],
+) -> None:
+    """A relative ``.md`` link resolves in every tree its document is served from.
+
+    Two populations, and only one of them can be failed today.
+
+    **Spelling.** The target is absent from that directory but a file differing
+    from it only in case or underscores is present. The document is right there
+    under the other name, so either the link or the file is misspelled and a
+    rename fixes it. This fails.
+
+    **Everything else.** The target is absent under any spelling. No rename
+    reaches these: the two trees nest the same document differently
+    (``packages/<pkg>/docs/`` against ``docs/packages/<pkg>/guides/``), or the
+    target exists only in the site tree (generated API reference, site-native
+    examples), or it exists nowhere at all. Making them resolve is a decision
+    about what a package doc may link to -- per kind, plausibly differently --
+    not a naming question, so they are counted and printed instead.
+
+    The count is derived on every run rather than recorded anywhere, so it
+    cannot rot the way a docstring figure or a ceiling file would; and its
+    reaching zero is exactly what retires the informational branch.
+    """
+    seen: set[tuple[str, str, str]] = set()
+    for src, dirs in _served_docs(entry, pkg_dir, site_dir):
+        if not src.is_file():
+            # A classified file that is not there is already reported by its own
+            # class check (or by the completeness pass); saying so again here,
+            # once per link it does not have, would bury that one real error.
+            continue
+        try:
+            text = _read(src)
+        except (OSError, UnicodeDecodeError):
+            continue
+        targets = link_targets(text)
+        if not targets:
+            continue
+        rel_src = _rel(src)
+        for base in dirs:
+            for target in targets:
+                path = (base / target).resolve() if "/" in target else base / target
+                if _exists_cs(path):
+                    continue
+                key = (rel_src, target, _rel(path.parent))
+                if key in seen:
+                    continue
+                seen.add(key)
+                fold = _fold_sibling(path)
+                if fold is None:
+                    unresolved.append(key)
+                    continue
+                res.fail(
+                    f"link spelling: {rel_src} links to '{target}', which does not "
+                    f"exist in {key[2]} -- but '{fold}' does. Both trees spell a "
+                    f"document the same way, so the link and the file have to "
+                    f"agree: rename the file, or correct the link."
+                )
 
 
 def check_completeness(entry: dict, pkg_dir: Path, site_dir: Path, res: Result) -> None:
@@ -656,10 +925,54 @@ def fix_mirror(pair: dict, pkg_dir: Path, site_dir: Path) -> bool:
     return True
 
 
+def _report_unresolved(unresolved: list[tuple[str, str, str]]) -> None:
+    """Print the links that do not resolve and cannot be fixed by a rename.
+
+    Not a failure, and the message has to say why without sounding like one.
+    Every entry here has a target that is absent from that directory under any
+    spelling -- a misspelled link fails :func:`check_link_resolution` instead --
+    so what is left is the consequence of the two trees nesting the same
+    document differently, of a target that exists only in the site tree, or of a
+    target that exists nowhere. None of those is answerable by naming.
+
+    One line per (document, target). A document served at two paths is resolved
+    from both, so a link missing from each would otherwise be listed twice, and
+    the count in brackets says so instead. Repeats *within* a page are already
+    gone by here -- :func:`check_link_resolution` keys on the directory it
+    looked in, so the page that carries the same link to generated API
+    reference twenty-two times contributes one entry, which is right: it is one
+    decision to make, not twenty-two.
+    """
+    by_target: dict[tuple[str, str], int] = {}
+    for src, target, _base in unresolved:
+        by_target[(src, target)] = by_target.get((src, target), 0) + 1
+    print()
+    print(
+        yellow(
+            f"i {len(by_target)} relative .md link(s) do not resolve in a tree their "
+            f"document is served from:"
+        )
+    )
+    for (src, target), count in sorted(by_target.items()):
+        times = f"  (x{count})" if count > 1 else ""
+        print(yellow(f"    {src} -> {target}{times}"))
+    print(
+        cyan(
+            "  None of these is a spelling mismatch -- that fails the check instead.\n"
+            "  Each target is absent from that directory under any spelling, so no rename\n"
+            "  reaches it: the two trees nest the same document differently\n"
+            "  (packages/<pkg>/docs/ vs docs/packages/<pkg>/guides/), or the target is\n"
+            "  site-native, or it exists nowhere. Making these resolve is a decision about\n"
+            "  what a package doc may link to. Reported, not failed."
+        )
+    )
+
+
 def run(manifest: dict, only: str | None, fix: bool) -> int:
     packages = manifest["packages"]
     names = [only] if only else sorted(packages)
     overall = Result()
+    unresolved: list[tuple[str, str, str]] = []
 
     for name in names:
         if name not in packages:
@@ -684,6 +997,9 @@ def run(manifest: dict, only: str | None, fix: bool) -> int:
         res = Result()
         check_completeness(entry, pkg_dir, site_dir, res)
         check_unpaired(entry, pkg_dir, site_dir, res)
+        check_name_parity(entry, res)
+        check_doc_spelling(pkg_dir, res)
+        check_link_resolution(entry, pkg_dir, site_dir, res, unresolved)
         for pair in entry.get("symlink", []):
             check_symlink(pair, pkg_dir, site_dir, res)
         for pair in entry.get("mirror", []):
@@ -721,6 +1037,9 @@ def run(manifest: dict, only: str | None, fix: bool) -> int:
 
     if fix:
         return 0
+
+    if unresolved:
+        _report_unresolved(unresolved)
 
     print()
     if overall.ok:

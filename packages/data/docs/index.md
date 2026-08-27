@@ -163,7 +163,7 @@ The package documentation is integrated into the main DataKnobs documentation at
 
 ## Contributing
 
-See the main DataKnobs [CONTRIBUTING.md](../../../CONTRIBUTING.md) for guidelines.
+See the main DataKnobs [contributing guide](../../../docs/development/contributing.md) for guidelines.
 
 ## License
 
