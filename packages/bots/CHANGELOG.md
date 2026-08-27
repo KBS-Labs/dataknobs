@@ -7,6 +7,101 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Added
+
+- **`WizardStateSnapshot` carries the current stage's configuration, and
+  converts to the state a tool is handed.** The snapshot gains
+  `stage_metadata` — the declared config of `current_stage`: prompt, schema,
+  `can_skip`, and whatever else the stage declares — and a
+  `to_tool_view()` method returning the `ToolWizardState` a
+  `ContextAwareTool` receives.
+
+  The two go together. `ToolWizardState` has five fields and `stage_metadata`
+  was the only one with no snapshot counterpart, so a conversion written
+  before this could not have populated it: every tool handed a converted
+  snapshot would have seen an empty dict, with nothing to say the value had
+  been dropped rather than genuinely absent.
+
+  **Only the live constructor supplies the new field.** Stage metadata is not
+  written into the persisted `fsm_state`, so `get_state_snapshot()` reads it
+  from the FSM that owns the stage — the subflow's, inside a push — while
+  `snapshot_from_metadata()` has nothing to read and reports `{}`. That is the
+  same answer, for the same reason, that
+  `ToolWizardState.from_manager_metadata()` already gives. `stage_definitions`
+  is not a substitute: it is the *main* flow's declarations, so inside a push
+  it describes a different stage than `current_stage` does, and it is optional
+  besides.
+
+  The conversion **copies** its payloads. A *published* `ToolWizardState`
+  holds `collected_data` by reference on purpose — that is the live channel,
+  and a tool's writes are meant to land in wizard state. A snapshot is not
+  that channel, so writes to a converted view go nowhere and the copy makes
+  that structural rather than a matter of documentation.
+
+  **`to_dict()` gains a key.** The change is otherwise additive — the field is
+  defaulted and appended, and `from_dict()` tolerates its absence, so
+  snapshots serialised by an earlier version still load — but a consumer
+  asserting an exact key set on a serialised snapshot will see one more.
+
+### Fixed
+
+- **A snapshot's payloads are copied in depth, so writing through one cannot
+  reach what it was taken from.** `WizardStateSnapshot` is documented
+  read-only and its payloads were copied one level. A shallow copy isolates
+  only the top, so writing through `snapshot.stage_metadata["schema"]` reached
+  the FSM's live stage configuration and reconfigured the running wizard for
+  every later turn — silently, and for the life of the process.
+
+  Three sites now copy through `dataknobs_common.copy_structure`:
+  `get_state_snapshot`'s `stage_metadata`, `snapshot_from_metadata`'s `data`
+  (which read the persisted dict directly, so a nested collected value aliased
+  conversation metadata), and `to_tool_view()`, which hands both to a tool.
+
+  `WizardFSM.stages`, `current_metadata` and `stage_metadata_for` are
+  **unchanged**: they still return the live stage dict, deliberately and on
+  the per-turn path, where a deep copy would charge every turn for a guarantee
+  no caller there asks for. `stages` already documented that a caller
+  intending to edit a stage it read must copy it; the snapshot is that caller,
+  and now does.
+
+  `tasks` is left as it was — it is rebuilt from `WizardTaskList` on every
+  call. `get_state_snapshot`'s `data` needed no change either:
+  `_get_wizard_state` already deep-copies it out of the metadata, so what the
+  snapshot copies is a per-call transient.
+
+- **A snapshot's `suggestions`, roadmap and recorded transition data no longer
+  alias the conversation they were read from.** Three payloads reachable from
+  the same read-only object were still the live ones, and each is fixed where
+  the alias was created rather than where it surfaced.
+
+  `normalize_wizard_state` now copies the containers it hands out. It read
+  `data`, `history`, `suggestions` and `stages` straight off the metadata and
+  put the same objects in its result — so `snapshot_from_metadata`'s
+  `suggestions` was the persisted list itself, with no copy at any level, and
+  its `stages` was copied only at the outer list, leaving every roadmap entry
+  shared. Appending a quick reply to a snapshot, or marking a stage complete
+  through one, rewrote conversation metadata that the next turn reads back.
+
+  `WizardStateSnapshot.from_dict` now copies the containers it reads. It is
+  the type's third constructor and the only one that bound its payloads to
+  the caller's dict, so a snapshot restored from persisted JSON shared `data`,
+  `stage_metadata`, `suggestions`, `stages`, `history`, `tasks` and
+  `available_task_ids` with whatever had been loaded. "Read-only" is a claim
+  about the object, so it has to hold however the object was built.
+
+  `TransitionRecord.from_dict` now copies `data_snapshot`. It bound the field
+  by reference from a dict the caller does not own, and all four of its call
+  sites deserialize one — three of them straight out of `manager.metadata`.
+  This exposed **both** snapshot constructors, the live one included, because
+  `_get_wizard_state` restores transitions through the same classmethod.
+
+- **`DynaBot.get_wizard_state()` returns a dict the caller owns.** It is the
+  second consumer of `normalize_wizard_state`, and on the in-memory fast path
+  what it normalized was the live metadata — so writing into the returned
+  `data`, or into a roadmap entry in the returned `stages`, rewrote persisted
+  conversation state through a public read API. Fixing the reader rather than
+  either caller is what closes this and the snapshot together.
+
 ## v0.12.0 - 2026-08-26
 
 ### Changed

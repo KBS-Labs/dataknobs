@@ -24,6 +24,7 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, ClassVar
 
+from dataknobs_common.copying import copy_structure
 from dataknobs_common.lifecycle import aclose_if_owned
 from dataknobs_common.paths import safe_join_or_raise
 from dataknobs_common.serialization import sanitize_for_json
@@ -4900,10 +4901,11 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
 
         Inside a pushed subflow the result mixes two frames of reference on
         purpose.  The stage-derived fields -- ``current_stage``, ``can_skip``,
-        ``can_go_back``, ``suggestions`` -- describe the **subflow** stage the
-        user is looking at.  Progress does not: a subflow is not a step of the
-        outer flow, so ``stage_index``, ``total_stages`` and ``stages`` stay on
-        the main flow and report the parent stage that pushed the subflow.
+        ``can_go_back``, ``suggestions``, ``stage_metadata`` -- describe the
+        **subflow** stage the user is looking at.  Progress does not: a subflow
+        is not a step of the outer flow, so ``stage_index``, ``total_stages``
+        and ``stages`` stay on the main flow and report the parent stage that
+        pushed the subflow.
 
         Args:
             manager: ConversationManager instance
@@ -4977,6 +4979,28 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
                 stage,
             ),
             stages=self._response.build_stages_roadmap(wizard_state),
+            # ``stage``, resolved above from the stage name the *state*
+            # reports -- the same dict ``suggestions`` is rendered
+            # against, and the subflow's inside a push.
+            # ``active_fsm.current_metadata`` answers the same today, but
+            # only because it reads the FSM's *per-turn* ``current_stage``
+            # and ``_fsm_for_state`` has already synced it: asked of an
+            # instance that has not run a turn it reports the **start**
+            # stage instead.  Sourcing a snapshot from a per-turn
+            # attribute is the coupling this method avoids everywhere
+            # else, so it is avoided here too.
+            # Copied: ``stage_metadata_for`` documents that it hands back
+            # the FSM's live stage dict, and this object is read-only.
+            # ``copy_structure`` rather than ``dict``: a shallow copy
+            # leaves the stage's nested ``schema``/``navigation`` dicts
+            # pointing at the FSM's live config, so a write through this
+            # read-only object reconfigured the running wizard for every
+            # later turn.  ``WizardFSM.stages`` documents that boundary
+            # and tells a caller intending to edit a stage it read to
+            # copy it -- this is that caller doing so.  The FSM's own
+            # accessors are unchanged: they hand out the live dict, on
+            # the per-turn path, deliberately.
+            stage_metadata=copy_structure(stage),
         )
 
     @staticmethod
@@ -4994,6 +5018,11 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
         the metadata, which is subflow-aware.  ``stage_definitions`` is the
         fallback for metadata written before those fields existed, or built
         by hand from ``fsm_state`` alone.
+
+        ``stage_metadata`` is the one field this route cannot supply: the
+        stage's declared configuration is not persisted into ``fsm_state``,
+        so the result always carries ``{}`` there.  ``get_state_snapshot``
+        is the constructor that has it.
 
         Args:
             metadata: Conversation manager metadata dict
@@ -5058,7 +5087,14 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
         # reference, a consumer appending to ``snapshot.history`` --
         # which the type documents as read-only -- rewrote persisted
         # wizard state.
-        data = dict(fsm_state.get("data", {}))
+        # Structural, not shallow.  ``dict()`` isolates only the top
+        # level, so a nested collected value stayed the object inside
+        # ``manager.metadata`` and a consumer writing into it rewrote
+        # persisted wizard state.  ``_get_wizard_state`` already copies
+        # this dict in depth on the way out of metadata; this is the
+        # same rule on the other route out.  ``history`` is a list of
+        # strings, where a shallow copy is already a full one.
+        data = copy_structure(fsm_state.get("data", {}))
         history = list(fsm_state.get("history", []))
 
         if "stage_index" in wizard_meta:
@@ -5123,6 +5159,22 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
             total_stages=total_stages,
             can_skip=normalized["can_skip"],
             can_go_back=normalized["can_go_back"],
+            # Owned, not aliased -- but the copy is in
+            # ``normalize_wizard_state``, which is where the metadata is
+            # read.  Both of its consumers hand the result to someone who
+            # may write into it, so copying at one of them would have left
+            # the other exposed.  Do not "simplify" that away: the tests
+            # for it observe the effect from here.
             suggestions=normalized["suggestions"],
             stages=stages,
+            # ``stage_metadata`` is deliberately not passed, and this is
+            # the one field where the two constructors of this type do
+            # not agree.  It is not written into ``fsm_state``, so there
+            # is nothing here to read -- the live publisher is its only
+            # holder.  ``stage_definitions`` is not a substitute: it is
+            # the *main* flow's declarations, so inside a push it
+            # describes a different stage than ``current_stage``, and it
+            # is optional besides.  Empty is the honest answer, and the
+            # same one ``ToolWizardState.from_manager_metadata`` gives
+            # for the same reason.
         )

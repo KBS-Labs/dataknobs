@@ -76,6 +76,7 @@ nav:
       - packages/common/sync-bridge.md
       - packages/common/structured-config.md
       - packages/common/serialization.md
+      - packages/common/copying.md
       - packages/common/plugin-registry.md
       - packages/common/packs.md
       - packages/common/testing.md
@@ -192,6 +193,7 @@ nav:
         - packages/llm/guides/versioning.md
         - packages/llm/guides/performance.md
         - packages/llm/guides/tools-and-enhancements.md
+        - packages/llm/guides/tool-context.md
         - packages/llm/guides/extraction.md
         - packages/llm/guides/intent-classification.md
         - packages/llm/guides/testing.md

@@ -7,6 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Added
+
+- **`copy_structure` — the copy between `dict()` and `copy.deepcopy()`.** It
+  rebuilds nested dicts and lists and passes every other value through
+  unchanged, so mutating the result never reaches the source while the leaf
+  objects it holds are never duplicated.
+
+  Only `dict` and `list` are rebuilt. A `set` is the pass-through worth
+  naming, because it is the mutable one: `add()` on a set reachable from the
+  result reaches the source. Nothing nests below it — a set cannot hold a dict
+  or a list — but the set itself is shared.
+
+  A shallow copy isolates one level, which is the gap a "returns a copy"
+  docstring most often turns out to have: every nested container in the result
+  is still the source's own object. `copy.deepcopy` closes that gap but
+  overshoots — a structure assembled in Python may hold a connection pool, a
+  provider, or a lock, and duplicating one silently gives its owner a second;
+  a value that cannot be pickled raises out of what was meant to be an
+  ordinary read. It is also about twice the cost.
+
+  The optional `seen` memo makes a self-referential structure terminate rather
+  than raise `RecursionError`, and keeps a subtree shared between two keys
+  shared on the way out. Pass one memo across the several calls that build a
+  single hand-out; omit it otherwise.
+
+  Promoted from a private helper in `dataknobs-config`, which now imports it.
+  The extraction surfaced a defect the private version's call sites never hit:
+  the memo is keyed on `id()`, and an id is only unique among live objects, so
+  a source freed between two calls sharing one memo could have its id reused
+  and the memo would answer for an unrelated object. It now holds a reference
+  to every source it has seen, as `copy.deepcopy` does for the same reason.
+
 ## v3.1.0 - 2026-08-26
 
 ### Added

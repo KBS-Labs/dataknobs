@@ -23,6 +23,10 @@
           "site": "testing.md"
         },
         {
+          "package": "guides/copying.md",
+          "site": "copying.md"
+        },
+        {
           "package": "guides/dotted-paths.md",
           "site": "dotted-paths.md"
         },
@@ -271,6 +275,12 @@
               "site": "See also: [dataknobs-bots Prompt Key Reference](../../bots/guides/prompt-reference.md)"
             }
           ]
+        }
+      ],
+      "transclude": [
+        {
+          "package": "TOOL_CONTEXT.md",
+          "site": "guides/tool-context.md"
         }
       ]
     },

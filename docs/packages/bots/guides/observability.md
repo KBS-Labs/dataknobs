@@ -247,6 +247,21 @@ query = TransitionHistoryQuery(
 
 `WizardStateSnapshot` provides a complete read-only view of wizard state, useful for UI rendering and debugging:
 
+**Read-only means owned, not merely conventional.** Every container a
+snapshot exposes is copied out of the wizard rather than read from it, and
+the copies are structural — nested values are copied too. Writing into
+`snapshot.data`, `snapshot.stage_metadata`, `snapshot.suggestions`,
+`snapshot.stages` or `snapshot.transitions[i].data_snapshot` changes nothing
+outside the snapshot. That is a property of the object, so it holds however
+the snapshot was built: `get_state_snapshot()`, `snapshot_from_metadata()`
+and `from_dict()` all produce one you can write into freely.
+
+The wizard's own accessors are the opposite and deliberately so —
+`WizardFSM.stages`, `current_metadata` and `stage_metadata_for()` hand back
+the live stage dict, on the per-turn path. Copy a stage you intend to edit,
+as `stages` documents.
+
+
 ```python
 from dataknobs_bots.reasoning.observability import WizardStateSnapshot
 
@@ -271,6 +286,7 @@ snapshot = WizardStateSnapshot(
     can_skip=True,
     can_go_back=True,
     suggestions=["Create a math tutor", "Build a quiz bot"],
+    stage_metadata={"prompt": "What should the bot be called?", "can_skip": True},
 )
 
 # Query tasks from snapshot
@@ -301,7 +317,7 @@ of reference deliberately, and a UI that renders it should know which is which:
 | Field | Frame | Value inside a subflow |
 |---|---|---|
 | `current_stage` | subflow | The subflow's stage name |
-| `can_skip`, `can_go_back`, `suggestions` | subflow | Read from the subflow stage's own config |
+| `can_skip`, `can_go_back`, `suggestions`, `stage_metadata` | subflow | Read from the subflow stage's own config |
 | `stage_index`, `total_stages`, `stages` | **main flow** | The parent stage that pushed the subflow is the current one |
 
 The split is intentional. The stage-derived fields describe the stage the user
@@ -344,6 +360,46 @@ def stage_fraction(snapshot: WizardStateSnapshot) -> float:
     """
     return snapshot.stage_index / max(snapshot.total_stages - 1, 1)
 ```
+
+### The Stage's Own Configuration
+
+`stage_metadata` carries what `current_stage` declares — its prompt, schema,
+`can_skip`, and anything else in the stage config. **Only
+`get_state_snapshot()` can supply it.** Stage metadata is not written into the
+persisted `fsm_state`, so `WizardReasoning.snapshot_from_metadata()` has
+nothing to read and reports `{}`; `stage_definitions` is not a substitute,
+since it holds the *main* flow's declarations and so describes a different
+stage than `current_stage` does inside a push.
+
+An empty dict therefore means either "this snapshot came off the metadata
+route" or "the stage declares nothing", and the two are deliberately not
+distinguished.
+
+The snapshot's copy of it is structural, not shallow, so adjusting a nested
+section of the stage config you read here does not reconfigure the running
+wizard. Reading the same stage through `WizardFSM.stages`,
+`current_metadata` or `stage_metadata_for()` does hand you the live dict —
+those are on the per-turn path and unchanged. Copy a stage you intend to
+edit, as `stages` documents.
+
+### Handing a Snapshot to a Tool
+
+`to_tool_view()` converts a snapshot into the `ToolWizardState` a
+`ContextAwareTool` receives:
+
+```python
+from dataknobs_llm.tools import ToolExecutionContext
+
+snapshot = reasoning.get_state_snapshot(manager)
+context = ToolExecutionContext(wizard_state=snapshot.to_tool_view())
+```
+
+The conversion runs in this direction only — a snapshot carries transitions,
+task tracking and progress that the tool view has no room for — and its
+payloads are **copied in depth**, so neither a write to the view nor a write
+into something nested inside it reaches the snapshot or the wizard. See
+[Tool Execution Context](../../llm/guides/tool-context.md) for what a tool may
+and may not do with the result.
 
 ### Using Snapshots for UI
 

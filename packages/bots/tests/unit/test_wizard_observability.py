@@ -215,6 +215,51 @@ class TestTransitionRecord:
         assert record.subflow_push is None
         assert record.subflow_depth == 0
 
+    def test_from_dict_does_not_alias_the_snapshot_it_read(self) -> None:
+        """``cls(**data)`` bound ``data_snapshot`` by reference.
+
+        Every caller of this deserializes a dict it does not own -- three
+        of the four read straight out of ``manager.metadata``.  A record
+        restored from one held the *persisted* dict, so a consumer reading
+        ``snapshot.transitions[i].data_snapshot`` and writing into it
+        rewrote conversation state that had already been saved.
+
+        The record is the boundary: nothing mutates ``data_snapshot`` after
+        construction -- every writer passes a fresh ``state.data.copy()`` --
+        so copying on the way in costs one restore and closes all four
+        call sites at once.
+        """
+        source: dict[str, Any] = {
+            "from_stage": "welcome",
+            "to_stage": "configure",
+            "timestamp": 1234567890.0,
+            "trigger": "user_input",
+            "data_snapshot": {"profile": {"city": "Boston"}},
+        }
+
+        record = TransitionRecord.from_dict(source)
+
+        assert record.data_snapshot is not None
+        assert record.data_snapshot is not source["data_snapshot"]
+        assert record.data_snapshot["profile"] is not source["data_snapshot"]["profile"], (
+            "a nested value is where a shallow copy stops"
+        )
+
+        record.data_snapshot["profile"]["city"] = "tampered"
+        assert source["data_snapshot"]["profile"]["city"] == "Boston"
+
+    def test_from_dict_leaves_an_absent_snapshot_absent(self) -> None:
+        """Copying must not invent a snapshot where the source had none."""
+        base: dict[str, Any] = {
+            "from_stage": "a",
+            "to_stage": "b",
+            "timestamp": 1.0,
+            "trigger": "auto",
+        }
+
+        assert TransitionRecord.from_dict(dict(base)).data_snapshot is None
+        assert TransitionRecord.from_dict({**base, "data_snapshot": None}).data_snapshot is None
+
 
 class TestCreateTransitionRecord:
     """Tests for the create_transition_record factory function."""
@@ -1360,6 +1405,145 @@ class TestWizardStateSnapshot:
         """Stages defaults to empty list."""
         snapshot = WizardStateSnapshot(current_stage="welcome")
         assert snapshot.stages == []
+
+    def test_snapshot_round_trips_stage_metadata(self) -> None:
+        """``to_dict()``/``from_dict()`` preserve the stage metadata.
+
+        Both serialisers enumerate every field by hand, so a field added
+        to the dataclass reaches neither of them for free. Omitting the
+        ``to_dict()`` key drops the metadata; omitting the ``from_dict()``
+        read resets it to ``{}``. Neither raises anywhere -- a consumer
+        persisting a snapshot and reloading it just finds the stage
+        metadata gone. This is the assertion that catches either half.
+        """
+        stage_metadata = {"prompt": "Tell me your name.", "can_skip": True}
+        snapshot = WizardStateSnapshot(
+            current_stage="gather",
+            stage_metadata=stage_metadata,
+        )
+
+        data = snapshot.to_dict()
+        assert data["stage_metadata"] == stage_metadata
+
+        restored = WizardStateSnapshot.from_dict(data)
+        assert restored.stage_metadata == stage_metadata
+
+    def test_snapshot_from_dict_tolerates_absent_stage_metadata(self) -> None:
+        """A dict serialised before the field existed still loads.
+
+        ``from_dict()`` is the reader for persisted snapshots, and
+        snapshots persisted by an earlier version have no
+        ``stage_metadata`` key at all.
+        """
+        restored = WizardStateSnapshot.from_dict({"current_stage": "gather"})
+        assert restored.stage_metadata == {}
+
+    def test_snapshot_from_dict_does_not_alias_the_dict_it_read(self) -> None:
+        """The third constructor of a type documented as read-only.
+
+        ``get_state_snapshot`` and ``snapshot_from_metadata`` both copy
+        their payloads; this one bound every container straight out of the
+        source dict, so a snapshot restored from persisted JSON shared its
+        ``data``, ``stage_metadata``, ``suggestions`` and ``stages`` with
+        whatever the caller had loaded -- and a write through the snapshot
+        reached it.
+
+        The claim the type makes is about the object, so it has to hold
+        however the object was built.
+        """
+        source: dict[str, Any] = {
+            "current_stage": "gather",
+            "data": {"profile": {"city": "Boston"}},
+            "history": ["welcome"],
+            "tasks": [{"id": "collect_name", "status": "completed"}],
+            "available_task_ids": ["collect_description"],
+            "suggestions": ["yes", "no"],
+            "stages": [{"name": "gather", "label": "Gather", "status": "current"}],
+            "stage_metadata": {"schema": {"properties": {"name": {}}}},
+        }
+
+        restored = WizardStateSnapshot.from_dict(source)
+
+        restored.data["profile"]["city"] = "tampered"
+        restored.history.append("injected")
+        restored.tasks[0]["status"] = "tampered"
+        restored.available_task_ids.append("injected")
+        restored.suggestions.append("injected")
+        restored.stages[0]["status"] = "tampered"
+        restored.stage_metadata["schema"]["properties"]["injected"] = {}
+
+        assert source["data"]["profile"]["city"] == "Boston"
+        assert source["history"] == ["welcome"]
+        assert source["tasks"][0]["status"] == "completed"
+        assert source["available_task_ids"] == ["collect_description"]
+        assert source["suggestions"] == ["yes", "no"]
+        assert source["stages"][0]["status"] == "current"
+        assert "injected" not in source["stage_metadata"]["schema"]["properties"]
+
+
+class TestSnapshotToToolView:
+    """``WizardStateSnapshot.to_tool_view()`` -- the one-way conversion.
+
+    ``ToolWizardState`` is what a ``ContextAwareTool`` is handed;
+    ``WizardStateSnapshot`` is what observability holds. Every field of
+    the former has a counterpart on the latter, so the conversion exists
+    in this direction and not the reverse: a snapshot carries fifteen
+    further fields a tool view has no room for.
+    """
+
+    def test_to_tool_view_is_complete(self) -> None:
+        """Every ``ToolWizardState`` field is populated from the snapshot.
+
+        ``stage_metadata`` is the one that makes this worth asserting: it
+        is the sole tool-view field with no snapshot counterpart before
+        this change, so a conversion written against the old dataclass
+        could only have left it ``{}`` -- silently handing every tool an
+        empty dict where the publisher's route supplies a real one.
+        """
+        snapshot = WizardStateSnapshot(
+            current_stage="gather",
+            data={"name": "Alice"},
+            history=["intro", "gather"],
+            completed=False,
+            stage_metadata={"prompt": "Tell me your name."},
+        )
+
+        view = snapshot.to_tool_view()
+
+        assert view.current_stage == "gather"
+        assert view.collected_data == {"name": "Alice"}
+        assert view.history == ["intro", "gather"]
+        assert view.completed is False
+        assert view.stage_metadata == {"prompt": "Tell me your name."}, (
+            "the field the tool view has and the snapshot did not; a "
+            "conversion that predates it can only report {}"
+        )
+
+    def test_to_tool_view_copies_payloads(self) -> None:
+        """The view's mutable payloads are copies, not aliases.
+
+        A *published* ``ToolWizardState`` holds ``collected_data`` by
+        reference on purpose -- that is the live channel, and a tool's
+        writes are meant to land in wizard state. A snapshot is not that
+        channel: it is already a copy taken at a point in time, so
+        handing a tool a writable reference into it would promise a
+        write-back that cannot happen.
+        """
+        snapshot = WizardStateSnapshot(
+            current_stage="gather",
+            data={"name": "Alice"},
+            history=["intro", "gather"],
+            stage_metadata={"prompt": "Tell me your name."},
+        )
+
+        view = snapshot.to_tool_view()
+        view.collected_data["name"] = "Bob"
+        view.history.append("wrap")
+        view.stage_metadata["prompt"] = "changed"
+
+        assert snapshot.data == {"name": "Alice"}
+        assert snapshot.history == ["intro", "gather"]
+        assert snapshot.stage_metadata == {"prompt": "Tell me your name."}
 
 
 class TestConversionUtilities:

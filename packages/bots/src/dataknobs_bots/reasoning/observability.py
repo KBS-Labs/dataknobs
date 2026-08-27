@@ -19,12 +19,14 @@ import time
 from dataclasses import asdict, dataclass, field
 from typing import Any, Literal
 
+from dataknobs_common.copying import copy_structure
 from dataknobs_fsm.observability import (
     ExecutionHistoryQuery,
     ExecutionRecord,
     ExecutionStats,
     ExecutionTracker,
 )
+from dataknobs_llm.tools.context import ToolWizardState
 
 
 @dataclass
@@ -88,13 +90,31 @@ class TransitionRecord:
     def from_dict(cls, data: dict[str, Any]) -> "TransitionRecord":
         """Create record from dictionary.
 
+        ``data_snapshot`` is copied rather than bound.  Every caller here
+        deserializes a dict it does not own, and three of the four read
+        straight out of ``manager.metadata`` -- so a record restored from
+        one used to hold the *persisted* dict, and a consumer writing
+        through ``snapshot.transitions[i].data_snapshot`` rewrote
+        conversation state that had already been saved.  This classmethod
+        is the boundary all four cross, which is why the copy is here
+        rather than at each of them.
+
+        ``copy_structure`` rather than ``dict``: a recorded snapshot is
+        whatever the stage collected, so a nested value would otherwise
+        stay the object inside the metadata.  It passes ``None`` through
+        unchanged, so a transition that recorded nothing still carries
+        nothing.
+
         Args:
             data: Dictionary containing record fields
 
         Returns:
             TransitionRecord instance
         """
-        return cls(**data)
+        fields = dict(data)
+        if "data_snapshot" in fields:
+            fields["data_snapshot"] = copy_structure(fields["data_snapshot"])
+        return cls(**fields)
 
 
 @dataclass
@@ -441,6 +461,7 @@ class WizardStateSnapshot:
     ``can_skip``                      the **subflow** stage
     ``can_go_back``                   the **subflow** stage
     ``suggestions``                   the **subflow** stage
+    ``stage_metadata``                the **subflow** stage
     ``stage_index``                   the **main** flow
     ``total_stages``                  the **main** flow
     ``stages``                        the **main** flow
@@ -476,6 +497,17 @@ class WizardStateSnapshot:
             rendered
         stages: Ordered list of **main**-flow stage dicts with name,
             label, and status
+        stage_metadata: The declared configuration of ``current_stage`` --
+            prompt, schema, ``can_skip``, and whatever else the stage
+            declares. **Only the live constructor can supply it.** Stage
+            metadata is not written into the persisted ``fsm_state``, so
+            ``WizardReasoning.snapshot_from_metadata`` has nothing to read
+            and leaves this empty; ``get_state_snapshot`` reads it from
+            the FSM that owns the stage. An empty dict therefore means
+            either "this came off the metadata route" or "the stage
+            declares nothing", and the two are deliberately not
+            distinguished -- the same boundary
+            ``WizardFSM.stage_metadata_for`` documents.
     """
 
     current_stage: str
@@ -499,6 +531,7 @@ class WizardStateSnapshot:
     can_go_back: bool = True
     suggestions: list[str] = field(default_factory=list)
     stages: list[dict[str, str]] = field(default_factory=list)
+    stage_metadata: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         """Convert snapshot to dictionary.
@@ -526,11 +559,20 @@ class WizardStateSnapshot:
             "can_go_back": self.can_go_back,
             "suggestions": self.suggestions,
             "stages": self.stages,
+            "stage_metadata": self.stage_metadata,
         }
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "WizardStateSnapshot":
         """Create snapshot from dictionary.
+
+        The containers are copied out of ``data`` rather than bound to it.
+        This type documents itself as read-only, and that is a claim about
+        the object, so it has to hold however the object was built -- the
+        two live constructors copy their payloads and this one, reading a
+        dict the caller loaded from somewhere, must not be the exception.
+        One memo across the reads, so a subtree the serialized form shares
+        between two fields is still shared in the result.
 
         Args:
             data: Dictionary containing snapshot fields
@@ -539,26 +581,63 @@ class WizardStateSnapshot:
             WizardStateSnapshot instance
         """
         transitions = [TransitionRecord.from_dict(t) for t in data.get("transitions", [])]
+        seen: dict[int, Any] = {}
         return cls(
             current_stage=data["current_stage"],
-            data=data.get("data", {}),
-            history=data.get("history", []),
+            data=copy_structure(data.get("data", {}), seen),
+            history=copy_structure(data.get("history", []), seen),
             transitions=transitions,
             completed=data.get("completed", False),
             snapshot_timestamp=data.get("snapshot_timestamp", time.time()),
             clarification_attempts=data.get("clarification_attempts", 0),
-            tasks=data.get("tasks", []),
+            tasks=copy_structure(data.get("tasks", []), seen),
             pending_tasks=data.get("pending_tasks", 0),
             completed_tasks=data.get("completed_tasks", 0),
             total_tasks=data.get("total_tasks", 0),
-            available_task_ids=data.get("available_task_ids", []),
+            available_task_ids=copy_structure(data.get("available_task_ids", []), seen),
             task_progress_percent=data.get("task_progress_percent", 0.0),
             stage_index=data.get("stage_index", 0),
             total_stages=data.get("total_stages", 0),
             can_skip=data.get("can_skip", False),
             can_go_back=data.get("can_go_back", True),
-            suggestions=data.get("suggestions", []),
-            stages=data.get("stages", []),
+            suggestions=copy_structure(data.get("suggestions", []), seen),
+            stages=copy_structure(data.get("stages", []), seen),
+            stage_metadata=copy_structure(data.get("stage_metadata", {}), seen),
+        )
+
+    def to_tool_view(self) -> ToolWizardState:
+        """Convert to the wizard state a ``ContextAwareTool`` is handed.
+
+        ``ToolWizardState`` is the tool-facing projection of wizard
+        state: five fields, every one of which has a counterpart here.
+        The conversion runs in this direction only -- a snapshot carries
+        transitions, task tracking and main-flow progress that the tool
+        view has no room for, so the inverse would have to invent them.
+        A tool that needs those reads the snapshot.
+
+        **The payloads are copies, in depth.** A *published*
+        ``ToolWizardState`` holds ``collected_data`` by reference on
+        purpose: that is the live channel, and a tool's writes are meant
+        to land in wizard state for the rest of the turn. A snapshot is
+        not that channel -- it is already a copy taken at a point in time
+        -- so handing a tool a writable reference into one would promise
+        a write-back that cannot happen. Writes to the returned object go
+        nowhere, and ``copy_structure`` is what makes that true of a
+        *nested* write as well: a shallow copy would leave a tool one
+        level away from the objects the snapshot was taken from.
+
+        ``stage_metadata`` is empty when this snapshot came off
+        ``WizardReasoning.snapshot_from_metadata``; see the attribute.
+
+        Returns:
+            ToolWizardState with copied payloads
+        """
+        return ToolWizardState(
+            current_stage=self.current_stage,
+            collected_data=copy_structure(self.data),
+            history=list(self.history),
+            completed=self.completed,
+            stage_metadata=copy_structure(self.stage_metadata),
         )
 
     def get_task(self, task_id: str) -> dict[str, Any] | None:

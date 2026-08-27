@@ -1522,3 +1522,520 @@ async def test_the_static_snapshot_does_not_alias_the_state_it_read() -> None:
         assert "injected" not in persisted["data"], (
             "writing to the snapshot's data rewrote the persisted state"
         )
+
+
+# ---------------------------------------------------------------------------
+# 21-26. The stage metadata the two constructors can and cannot supply
+# ---------------------------------------------------------------------------
+#
+# ``ToolWizardState`` -- what a ``ContextAwareTool`` is handed -- carries
+# ``stage_metadata``, and ``WizardStateSnapshot`` did not. That is the one
+# tool-view field with no snapshot counterpart, so anything converting a
+# snapshot into a tool view could only ever have reported ``{}``.
+#
+# The field is supplied by exactly one of the two constructors, and the
+# asymmetry is real rather than an oversight: stage metadata is not part
+# of the persisted ``fsm_state`` -- the live publisher is the only holder
+# -- so ``snapshot_from_metadata`` has nothing to read. It reports ``{}``
+# and says so, which is the honest answer; filling it from
+# ``stage_definitions`` would make the two constructors agree by
+# inventing a value the metadata route does not have, and the caller
+# passing those definitions is not required to pass any.
+
+
+@pytest.mark.asyncio
+async def test_the_live_snapshot_carries_the_stage_metadata() -> None:
+    """``get_state_snapshot`` supplies the field, from the owning FSM.
+
+    Read for the stage the *state* says we are on, which inside a push is
+    the subflow's -- the same resolution every other stage-derived field
+    in this constructor uses, and the reason the assertion is taken
+    inside a subflow rather than in the main flow.
+    """
+    async with await BotTestHarness.create(
+        wizard_config=_snapshot_config(),
+        main_responses=["r"] * 10,
+        extraction_results=[[{"greeting": "hi"}], [{"name": "Alice"}], [], []],
+    ) as harness:
+        await harness.chat("hi")
+        await harness.chat("my name is Alice")
+        assert harness.wizard_stage == "sub_start", "the subflow was not pushed"
+
+        snapshot = _snapshot_inside_the_subflow(harness)
+
+        assert snapshot.stage_metadata.get("prompt") == "Which detail?", (
+            "the stage metadata belongs to the subflow stage the snapshot "
+            "reports; an empty dict is the main FSM answering about a stage "
+            "it does not have"
+        )
+        assert snapshot.stage_metadata.get("can_skip") is True
+        assert snapshot.stage_metadata.get("suggestions") == ["Colour", "Size"]
+
+
+@pytest.mark.asyncio
+async def test_the_live_snapshot_copies_the_stage_metadata() -> None:
+    """The stage dict is the FSM's live one, and must not be handed out.
+
+    ``stage_metadata_for`` documents that it returns the live dict rather
+    than a copy. A snapshot is documented read-only, so writing through
+    one must not reconfigure the stage for every later turn.
+    """
+    async with await BotTestHarness.create(
+        wizard_config=_snapshot_config(),
+        main_responses=["r"] * 10,
+        extraction_results=[[{"greeting": "hi"}], [{"name": "Alice"}], [], []],
+    ) as harness:
+        await harness.chat("hi")
+        await harness.chat("my name is Alice")
+
+        snapshot = _snapshot_inside_the_subflow(harness)
+        snapshot.stage_metadata["prompt"] = "tampered"
+
+        again = _snapshot_inside_the_subflow(harness)
+        assert again.stage_metadata.get("prompt") == "Which detail?", (
+            "writing to the snapshot's stage metadata reconfigured the stage"
+        )
+
+
+@pytest.mark.asyncio
+async def test_the_static_snapshot_leaves_the_stage_metadata_empty() -> None:
+    """The metadata route has nothing to read, and reports that.
+
+    ``stage_metadata`` is not written into ``fsm_state``, so this
+    constructor cannot supply it. ``{}`` is the honest answer -- and it
+    stays ``{}`` even when the caller passes ``stage_definitions``, which
+    is a different thing (the main flow's *declarations*, not the stage
+    the wizard is standing on) and is optional besides.
+    """
+    async with await BotTestHarness.create(
+        wizard_config=_snapshot_config(),
+        main_responses=["r"] * 10,
+        extraction_results=[[{"greeting": "hi"}], [{"name": "Alice"}], [], []],
+    ) as harness:
+        await harness.chat("hi")
+        await harness.chat("my name is Alice")
+
+        snapshot = WizardReasoning.snapshot_from_metadata(
+            _wizard_metadata(harness),
+            stage_definitions=_main_stage_definitions(),
+        )
+
+        assert snapshot is not None
+        assert snapshot.stage_metadata == {}
+
+
+@pytest.mark.asyncio
+async def test_the_tool_view_of_a_live_snapshot_is_complete() -> None:
+    """The conversion carries every field, including the new one.
+
+    This is the assertion that fails if ``to_tool_view()`` ships without
+    the dataclass field behind it: the method would still return a
+    ``ToolWizardState``, and its ``stage_metadata`` would be ``{}`` with
+    nothing to say so.
+    """
+    async with await BotTestHarness.create(
+        wizard_config=_snapshot_config(),
+        main_responses=["r"] * 10,
+        extraction_results=[[{"greeting": "hi"}], [{"name": "Alice"}], [], []],
+    ) as harness:
+        await harness.chat("hi")
+        await harness.chat("my name is Alice")
+
+        snapshot = _snapshot_inside_the_subflow(harness)
+        view = snapshot.to_tool_view()
+
+        # Every tool-view field, against its snapshot counterpart --
+        # which is what "complete" means here.  Note that inside a push
+        # ``data`` and ``history`` are the *subflow's*: the parent's are
+        # swapped out until it pops, so "Alice" is not in view and its
+        # absence is the push working, not the conversion dropping it.
+        assert view.current_stage == snapshot.current_stage == "sub_start"
+        assert view.collected_data == snapshot.data
+        assert view.history == snapshot.history == ["sub_start"]
+        assert view.completed is snapshot.completed is False
+        assert view.stage_metadata == snapshot.stage_metadata
+        assert view.stage_metadata.get("prompt") == "Which detail?", (
+            "a tool handed this view sees the stage it is standing on; {} "
+            "is the conversion running against a snapshot without the field"
+        )
+
+
+@pytest.mark.asyncio
+async def test_the_tool_view_of_a_static_snapshot_is_honest() -> None:
+    """Converting the fallback route does not invent the missing field.
+
+    The metadata constructor leaves ``stage_metadata`` empty, and the
+    conversion reports that rather than filling it from somewhere else --
+    the same answer ``ToolWizardState.from_manager_metadata`` gives for
+    the same reason, reached by a different path.
+    """
+    async with await BotTestHarness.create(
+        wizard_config=_snapshot_config(),
+        main_responses=["r"] * 10,
+        extraction_results=[[{"greeting": "hi"}], [{"name": "Alice"}], [], []],
+    ) as harness:
+        await harness.chat("hi")
+        await harness.chat("my name is Alice")
+
+        snapshot = WizardReasoning.snapshot_from_metadata(
+            _wizard_metadata(harness),
+            stage_definitions=_main_stage_definitions(),
+        )
+        assert snapshot is not None
+
+        view = snapshot.to_tool_view()
+
+        assert view.current_stage == "sub_start"
+        assert view.stage_metadata == {}
+
+
+@pytest.mark.asyncio
+async def test_a_second_instance_snapshots_the_stage_the_state_reports() -> None:
+    """The documented case: the conversation, but not the instance that ran it.
+
+    ``get_state_snapshot`` is taken outside a turn by definition, so it
+    resolves every stage-derived field from the stage the *state*
+    reports. ``stage_metadata`` has to come from the same place. An FSM
+    that has not run a turn in this process answers ``current_metadata``
+    with its **start** stage -- observed below, before the read -- so a
+    constructor sourcing the field from that property would describe the
+    wrong stage's configuration, and would do so only on the path where
+    nobody has taken a turn yet.
+
+    Both harnesses load the same wizard config; the second reads the
+    first's conversation manager, which is what a restarted process or a
+    second replica has.
+    """
+    async with await BotTestHarness.create(
+        wizard_config=_snapshot_config(),
+        main_responses=["r"] * 10,
+        extraction_results=[[{"greeting": "hi"}], []],
+    ) as first:
+        await first.chat("hi")
+        assert first.wizard_stage == "gather", "expected the main flow's second stage"
+        manager = first.bot.get_conversation_manager(first.context.conversation_id)
+
+        async with await BotTestHarness.create(
+            wizard_config=_snapshot_config(),
+            main_responses=["r"] * 10,
+        ) as second:
+            strategy = _strategy(second)
+            assert strategy._fsm.current_metadata.get("prompt") == "Say hello.", (
+                "precondition: an FSM with no turn behind it reports the "
+                "start stage, which is not the stage the conversation is on"
+            )
+
+            snapshot = strategy.get_state_snapshot(manager)
+
+            assert snapshot.current_stage == "gather"
+            assert snapshot.stage_metadata.get("prompt") == "Tell me your name.", (
+                "the snapshot described the start stage rather than the one "
+                "its own current_stage names"
+            )
+            assert snapshot.stage_metadata.get("can_skip") is True
+
+
+# ---------------------------------------------------------------------------
+# 27-30. What the snapshot's copies actually isolate
+# ---------------------------------------------------------------------------
+#
+# The snapshot is documented read-only, and its payloads were copied one
+# level deep. ``dict(stage)`` gives the caller its own top-level mapping
+# and leaves every nested container inside it pointing at the FSM's live
+# stage config -- so writing through ``snapshot.stage_metadata["schema"]``
+# reconfigured the running wizard for every later turn, silently.
+#
+# ``WizardFSM.stages`` documents exactly this boundary and tells a caller
+# who intends to edit a stage it read to copy that stage itself. The
+# snapshot is such a caller. The FSM's own accessors are unchanged: they
+# still hand out the live dict, deliberately and on the per-turn path.
+#
+# ``data`` has the same exposure against wizard state rather than against
+# stage config, and reaches a tool through ``to_tool_view()``.
+#
+# ``history`` is a list of strings, where a shallow copy is already a
+# full one, and ``stages`` and ``tasks`` are built fresh by their
+# producers -- so those three are left as they are.
+
+
+def _nested_schema_config() -> dict[str, Any]:
+    """The snapshot fixture, whose subflow stage declares a nested schema."""
+    return _snapshot_config()
+
+
+def _nested_data_config() -> dict[str, Any]:
+    """A flow collecting an **object**-typed field.
+
+    ``data`` only nests when a stage declares a field that nests, so the
+    aliasing this fixture exists to observe is unreachable from the
+    string-typed fixtures the rest of the file uses.
+    """
+    builder = WizardConfigBuilder("nested-collected-data")
+    builder.stage(
+        "intro",
+        is_start=True,
+        prompt="Describe yourself.",
+        response_template="INTRO",
+        confirm_first_render=False,
+    )
+    builder.field("profile", field_type="object", required=True)
+    builder.transition("wrap", condition="has('profile')")
+    builder.stage("wrap", is_end=True, prompt="All done.", response_template="WRAP")
+    return builder.build()
+
+
+@pytest.mark.asyncio
+async def test_the_live_snapshot_does_not_alias_nested_stage_config() -> None:
+    """A write through the snapshot must not reconfigure the wizard."""
+    async with await BotTestHarness.create(
+        wizard_config=_nested_schema_config(),
+        main_responses=["r"] * 10,
+        extraction_results=[[{"greeting": "hi"}], [{"name": "Alice"}], [], []],
+    ) as harness:
+        await harness.chat("hi")
+        await harness.chat("my name is Alice")
+        assert harness.wizard_stage == "sub_start", "the subflow was not pushed"
+
+        snapshot = _snapshot_inside_the_subflow(harness)
+        assert "properties" in snapshot.stage_metadata["schema"], (
+            "precondition: this stage's config nests"
+        )
+        snapshot.stage_metadata["schema"]["properties"]["injected"] = {"type": "string"}
+
+        again = _snapshot_inside_the_subflow(harness)
+        assert "injected" not in again.stage_metadata["schema"]["properties"], (
+            "writing through the snapshot's stage metadata reached the FSM's "
+            "live stage config and changed the schema for every later turn"
+        )
+
+
+@pytest.mark.asyncio
+async def test_the_live_snapshot_does_not_alias_nested_collected_data() -> None:
+    """Green before the change, and worth pinning for the reason it is.
+
+    This route was never exposed: ``_get_wizard_state`` already
+    ``copy.deepcopy``s ``data`` on the way out of the metadata, so the
+    dict this constructor shallow-copies is a per-call transient rather
+    than persisted state. The sibling constructor reads ``fsm_state``
+    directly and had no such upstream copy, which is why only one of the
+    two needed changing.
+
+    Pinned so that weakening the upstream copy is caught here rather
+    than by a consumer.
+    """
+    async with await BotTestHarness.create(
+        wizard_config=_nested_data_config(),
+        main_responses=["r"] * 8,
+        extraction_results=[[{"profile": {"city": "Boston"}}], []],
+    ) as harness:
+        await harness.chat("hi")
+        manager = harness.bot.get_conversation_manager(harness.context.conversation_id)
+        strategy = _strategy(harness)
+
+        snapshot = strategy.get_state_snapshot(manager)
+        assert isinstance(snapshot.data.get("profile"), dict), (
+            "precondition: a collected value nests"
+        )
+        snapshot.data["profile"]["injected"] = True
+
+        again = strategy.get_state_snapshot(manager)
+        assert "injected" not in again.data["profile"], (
+            "writing through the snapshot's data reached persisted wizard state"
+        )
+
+
+@pytest.mark.asyncio
+async def test_the_static_snapshot_does_not_alias_nested_collected_data() -> None:
+    """The sibling constructor, which copied ``data`` one level deep too.
+
+    An existing test covers the top level -- appending to ``history`` and
+    adding a key to ``data``. Neither reaches a nested value.
+    """
+    async with await BotTestHarness.create(
+        wizard_config=_nested_data_config(),
+        main_responses=["r"] * 8,
+        extraction_results=[[{"profile": {"city": "Boston"}}], []],
+    ) as harness:
+        await harness.chat("hi")
+        manager = harness.bot.get_conversation_manager(harness.context.conversation_id)
+
+        snapshot = WizardReasoning.snapshot_from_metadata(manager.metadata)
+        assert snapshot is not None
+        assert isinstance(snapshot.data.get("profile"), dict), "precondition"
+        snapshot.data["profile"]["injected"] = True
+
+        persisted = manager.metadata["wizard"]["fsm_state"]
+        assert "injected" not in persisted["data"]["profile"], (
+            "writing into a nested collected value rewrote persisted state"
+        )
+
+
+def test_the_tool_view_does_not_alias_nested_payloads() -> None:
+    """The conversion hands a tool payloads it can write to freely.
+
+    A pure unit: the conversion is a method on the dataclass, and the
+    hazard is a property of the copy rather than of how the snapshot was
+    built.
+    """
+    from dataknobs_bots.reasoning.observability import WizardStateSnapshot
+
+    snapshot = WizardStateSnapshot(
+        current_stage="gather",
+        data={"profile": {"city": "Boston"}},
+        stage_metadata={"schema": {"properties": {"name": {"type": "string"}}}},
+    )
+
+    view = snapshot.to_tool_view()
+    view.collected_data["profile"]["city"] = "tampered"
+    view.stage_metadata["schema"]["properties"]["injected"] = {}
+
+    assert snapshot.data["profile"]["city"] == "Boston"
+    assert "injected" not in snapshot.stage_metadata["schema"]["properties"]
+
+
+# ---------------------------------------------------------------------------
+# 31-33. The fields the copies had not reached
+# ---------------------------------------------------------------------------
+#
+# The section above copies ``data``, ``history`` and ``stage_metadata``.
+# Three payloads reachable from the same read-only object still handed out
+# the live thing:
+#
+# * ``suggestions`` -- taken from the normalizer with no copy at all;
+# * ``stages`` -- outer list copied, so every roadmap entry was shared; and
+# * ``transitions[i].data_snapshot`` -- bound by reference in
+#   ``TransitionRecord.from_dict``, which exposed **both** constructors,
+#   the live one included, since ``_get_wizard_state`` restores through
+#   the same classmethod.
+#
+# The first two are fixed on ``normalize_wizard_state`` and the third on
+# ``TransitionRecord.from_dict``, because those are where the alias is
+# created rather than where it happened to be noticed.
+
+
+def _suggested_config() -> dict[str, Any]:
+    """A flow whose stages declare quick replies.
+
+    ``suggestions`` is empty unless a stage asks for it, and an empty list
+    aliases just as thoroughly as a full one -- but a test that cannot show
+    a value surviving is not showing much.
+    """
+    builder = WizardConfigBuilder("suggested")
+    builder.stage(
+        "intro",
+        is_start=True,
+        prompt="Pick one.",
+        response_template="INTRO",
+        confirm_first_render=False,
+        suggestions=["yes", "no"],
+    )
+    builder.field("choice", field_type="string", required=True)
+    builder.transition("wrap", condition="has('choice')")
+    builder.stage(
+        "wrap",
+        is_end=True,
+        prompt="All done.",
+        response_template="WRAP",
+        suggestions=["again"],
+    )
+    return builder.build()
+
+
+@pytest.mark.asyncio
+async def test_the_static_snapshot_does_not_alias_the_suggestions_it_read() -> None:
+    """``suggestions=normalized["suggestions"]`` was the persisted list.
+
+    Not a shallow copy -- no copy.  A consumer appending a quick reply to
+    a snapshot the type documents as read-only appended it to conversation
+    metadata, where the next turn would read it back.
+    """
+    async with await BotTestHarness.create(
+        wizard_config=_suggested_config(),
+        main_responses=["r"] * 8,
+        extraction_results=[[{"choice": "yes"}], []],
+    ) as harness:
+        await harness.chat("hi")
+        manager = harness.bot.get_conversation_manager(harness.context.conversation_id)
+        persisted = manager.metadata["wizard"]
+        assert persisted.get("suggestions"), "precondition: the stage declares some"
+
+        snapshot = WizardReasoning.snapshot_from_metadata(manager.metadata)
+        assert snapshot is not None
+        before = list(persisted["suggestions"])
+
+        snapshot.suggestions.append("injected")
+
+        assert persisted["suggestions"] == before, (
+            "appending to the snapshot's quick replies rewrote persisted state"
+        )
+
+
+@pytest.mark.asyncio
+async def test_the_static_snapshot_does_not_alias_a_roadmap_entry() -> None:
+    """``list(...)`` copied the roadmap but not the stages in it.
+
+    Each entry is a ``dict`` living in ``manager.metadata``, so marking a
+    stage complete through the snapshot marked it complete for the wizard.
+    """
+    async with await BotTestHarness.create(
+        wizard_config=_suggested_config(),
+        main_responses=["r"] * 8,
+        extraction_results=[[{"choice": "yes"}], []],
+    ) as harness:
+        await harness.chat("hi")
+        manager = harness.bot.get_conversation_manager(harness.context.conversation_id)
+        persisted = manager.metadata["wizard"]
+        assert persisted.get("stages"), "precondition: the roadmap was derived"
+
+        snapshot = WizardReasoning.snapshot_from_metadata(manager.metadata)
+        assert snapshot is not None
+        before = persisted["stages"][0]["status"]
+
+        snapshot.stages[0]["status"] = "tampered"
+
+        assert persisted["stages"][0]["status"] == before, (
+            "writing into the snapshot's roadmap rewrote persisted state"
+        )
+
+
+@pytest.mark.asyncio
+async def test_neither_snapshot_aliases_a_transition_data_snapshot() -> None:
+    """The one exposure both constructors shared.
+
+    ``transitions`` looked like a list of value records, and the record
+    *is* one -- but ``data_snapshot`` on it is a dict, and ``from_dict``
+    bound it straight from the serialized transition inside
+    ``manager.metadata``.  The live route restores through the same
+    classmethod, so ``list(wizard_state.transitions)`` handed the same
+    dict out again.
+    """
+    async with await BotTestHarness.create(
+        wizard_config=_nested_data_config(),
+        main_responses=["r"] * 8,
+        extraction_results=[[{"profile": {"city": "Boston"}}], []],
+    ) as harness:
+        await harness.chat("hi")
+        manager = harness.bot.get_conversation_manager(harness.context.conversation_id)
+        persisted = manager.metadata["wizard"]["fsm_state"]
+        recorded = [
+            t for t in persisted.get("transitions", []) if isinstance(t.get("data_snapshot"), dict)
+        ]
+        assert recorded, "precondition: a transition recorded a data snapshot"
+
+        static = WizardReasoning.snapshot_from_metadata(manager.metadata)
+        assert static is not None
+        live = _strategy(harness).get_state_snapshot(manager)
+
+        for snapshot, route in ((static, "static"), (live, "live")):
+            carried = [
+                record for record in snapshot.transitions if isinstance(record.data_snapshot, dict)
+            ]
+            assert carried, f"precondition: the {route} snapshot carried one"
+            for record in carried:
+                assert record.data_snapshot is not None
+                record.data_snapshot["injected"] = True
+
+        for stored in recorded:
+            assert "injected" not in stored["data_snapshot"], (
+                "writing into a transition's recorded data rewrote persisted state"
+            )
