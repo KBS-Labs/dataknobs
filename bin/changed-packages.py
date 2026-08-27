@@ -195,9 +195,16 @@ _WORKSPACE_ONLY_QUALITY_INPUTS = [
 # Deliberately NOT added to _WORKSPACE_ONLY_QUALITY_INPUTS, though they are
 # workspace-only in blast radius. That list is also what change detection
 # matches, and map_files_to_packages tests it *before* DOCS_PATTERNS and stops
-# at the first hit — so filing them there would classify a docs edit as a
-# workspace-guard change and stop setting docs_changed, which is what makes the
-# gate re-run the very checks this scope exists to keep honest.
+# at the first hit — so filing them there would stop setting docs_changed,
+# which is what makes the gate re-run the very checks this scope exists to keep
+# honest.
+#
+# Note what the hazard is and is not. A docs edit *is* a workspace-guard change
+# and the mapping now says so: the guards under tests/ read every document.
+# What must not happen is that becoming the *only* thing it says, because the
+# two facts have different populations — a changelog re-runs the documentation
+# checks and is read by no guard. Setting both flags in the DOCS_PATTERNS
+# branch keeps them independent; moving the entry would collapse them.
 #
 # Two file entries rather than ".dataknobs/", which also holds notes and an
 # example workflow that feed no check.
@@ -295,6 +302,40 @@ def strip_release_noise(content: bytes) -> bytes:
 #: for transclusion into the site in a way a changelog is not, and the entry
 #: that would make that safe is a docs-scope one, not this.
 _PACKAGE_DOC_FILES = frozenset({"CHANGELOG.md"})
+
+#: Package documentation that a test in that package's own suite reads, mapped
+#: to the package whose result it decides.
+#:
+#: Almost no package document is one of these. 138 of the 142 are read only by
+#: the workspace guards — which check every document's imports, configuration
+#: keys, tool names and fenced samples against the code — and by the three
+#: documentation checks the gate records. None of that is a package's suite, so
+#: mapping a document to its package scheduled that whole suite, and its
+#: dependents, for a prose edit that could not move any of their results. A link
+#: repair touching two packages' docs ran two full test suites and no guard that
+#: reads a link.
+#:
+#: The four below are the exception and they are a real one: each is read by a
+#: test *in* the package, comparing a published table against the code it
+#: describes, so the document genuinely decides whether that suite passes. They
+#: keep scheduling their package, and package-hashes.py folds them into that
+#: package's hash for the same reason — a verdict recorded before an edit to one
+#: must not validate after it.
+#:
+#: Declared rather than detected because the two cases are indistinguishable
+#: from a path. What keeps the list honest is
+#: ``test_every_package_document_a_package_suite_reads_is_declared``, which finds
+#: them structurally — a ``Path(__file__)`` expression divided by ``"docs"`` —
+#: and fails on a fifth. A naive search for the string is not available: 192
+#: lines under ``packages/*/tests`` mention ``"docs"``, and all but these name a
+#: knowledge source or a RAG adapter.
+PACKAGE_TEST_DOC_INPUTS: dict[str, str] = {
+    "packages/bots/docs/multi-tenant.md": "bots",
+    "packages/bots/docs/behavior-packs.md": "bots",
+    "packages/common/docs/guides/packs.md": "common",
+    "packages/data/docs/batch-processing-guide.md": "data",
+}
+
 
 # Paths whose change means the gate should re-run the documentation checks.
 # Matched by prefix, so a full path names exactly one file.
@@ -511,14 +552,32 @@ def map_files_to_packages(files: list[str]) -> tuple[set[str], bool, bool, bool]
             workspace_changed = True
             continue
 
-        # Check for docs changes
+        # Documentation. Two flags, because two different things read it and
+        # they disagree about a changelog: docs_changed re-runs the three
+        # recorded documentation checks, while workspace_changed schedules the
+        # guards under tests/ — four of which read every document in the
+        # repository and check its imports, configuration keys, tool names and
+        # fenced samples against the code. Only the second was missing, and its
+        # absence is what let a documentation-only change classify as "none"
+        # and switch off the very guards that would have read the edited file.
         if any(filepath.startswith(pattern) for pattern in DOCS_PATTERNS):
             docs_changed = True
+            workspace_changed = True
             continue
 
-        # Check for package-specific docs
+        # Package documentation. It belongs to no package's suite unless a test
+        # in that suite reads it — see PACKAGE_TEST_DOC_INPUTS, which is the
+        # whole of the exception and is checked against the tree rather than
+        # trusted. Without the `continue` every package document mapped to its
+        # package below, which ran that suite and its dependents for a prose
+        # edit while running none of the four workspace guards that read it.
         if "/docs/" in filepath and filepath.startswith("packages/"):
             docs_changed = True
+            workspace_changed = True
+            owner = PACKAGE_TEST_DOC_INPUTS.get(filepath)
+            if owner is not None:
+                changed_packages.add(owner)
+            continue
 
         # Package-root documentation, which the mapping below would otherwise
         # read as a change to the package itself — scheduling its whole suite
@@ -548,6 +607,14 @@ def classify_test_scope(packages: list[str], workspace_changed: bool) -> str:
     to an empty list exactly like a no-op diff does. Naming the two cases
     apart is what lets the gate skip the per-package suites without also
     skipping the suite the change edited.
+
+    Documentation reaches the same answer through the same flag, and the
+    mapping above is where it is set: four guards under ``tests/`` read every
+    document in the repository, so a document is a workspace-guard input in
+    exactly the way ``tests/`` and ``bin/`` are. It is *also* an input to the
+    three recorded documentation checks, which is a separate fact carried by a
+    separate flag — the two questions have different answers for a changelog,
+    which re-runs the documentation checks and is read by no guard.
     """
     if packages:
         return "packages"

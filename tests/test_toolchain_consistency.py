@@ -25,6 +25,7 @@ file is worth writing.
 
 from __future__ import annotations
 
+import ast
 import configparser
 import json
 import re
@@ -305,6 +306,178 @@ def test_an_unhashed_test_input_still_schedules_its_package() -> None:
         )
         assert _scopes.plan_for_files([path])["test_scope"] == "packages", (
             f"{path} feeds a test result — it must still schedule its package"
+        )
+
+
+def _documents_a_package_suite_reads() -> dict[str, str]:
+    """Every package document read by a test in that package's own suite.
+
+    Found rather than listed, and found structurally: a ``Path(__file__)``
+    expression divided by ``"docs"``. The naive search — a ``"docs"`` string
+    literal anywhere under ``packages/*/tests`` — returns 192 hits here, almost
+    all of them a knowledge source or a RAG adapter that happens to be named
+    ``docs``, so a guard built on it would be re-tuned rather than read.
+
+    Returns ``{document path: the package whose suite reads it}``.
+    """
+    found: dict[str, str] = {}
+    for source in sorted(ROOT.glob("packages/*/tests/**/*.py")):
+        text = source.read_text(encoding="utf-8")
+        if "__file__" not in text:
+            continue
+        package = source.relative_to(ROOT).parts[1]
+        tree = ast.parse(text)
+
+        # Only the outermost link of a `a / "b" / "c"` chain. Every prefix of
+        # one is itself a division node, so walking them all reconstructs
+        # `packages/bots/docs` alongside the document beneath it — a directory
+        # that is not a reader, reported as a reader whose file is missing.
+        inner = {
+            id(node.left)
+            for node in ast.walk(tree)
+            if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div)
+        }
+
+        for node in ast.walk(tree):
+            if not (isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div)):
+                continue
+            if id(node) in inner:
+                continue
+            segment = ast.get_source_segment(text, node) or ""
+            if "__file__" not in segment:
+                continue
+            parts = _divided_constants(node)
+            if "docs" not in parts:
+                continue
+            # Everything from "docs" onward names the document; whatever
+            # precedes it is the expression that walked up to the package
+            # root, and the assertion below is what checks it arrived there.
+            tail = parts[parts.index("docs") :]
+            document = f"packages/{package}/{'/'.join(tail)}"
+            assert (ROOT / document).is_file(), (
+                f"{_rel(source)}:{node.lineno} reads a package document this "
+                f"guard reconstructs as {document}, which does not exist. "
+                "Either the document is missing — in which case the test that "
+                "reads it is failing — or it is reached by an expression the "
+                "reconstruction above does not model, and dropping it silently "
+                "is how a reader stops being declared while still deciding a "
+                "suite's result."
+            )
+            found[document] = package
+    return found
+
+
+def _divided_constants(node: ast.BinOp) -> list[str]:
+    """The string constants of a ``a / "b" / "c"`` chain, in order."""
+    parts: list[str] = []
+    stack: list[ast.expr] = [node]
+    while stack:
+        current = stack.pop()
+        if isinstance(current, ast.BinOp) and isinstance(current.op, ast.Div):
+            stack.extend([current.right, current.left])
+        elif isinstance(current, ast.Constant) and isinstance(current.value, str):
+            parts.append(current.value)
+    return parts
+
+
+def test_every_package_document_a_package_suite_reads_is_declared() -> None:
+    """The list that decides scheduling is checked against the tree, not trusted.
+
+    A package document belongs to no package's suite by default: 138 of the
+    142 here are read only by the workspace guards, and scheduling their
+    package for one is what ran two full suites for a link repair. The other
+    four are read by a test *in* that package, so they do decide whether it
+    passes, and they have to keep scheduling and dirtying it.
+
+    Which of the two a document is cannot be inferred from its path, so it is
+    declared. This is the guard that stops the declaration from being a list
+    somebody remembered to update: a fifth such test fails here on arrival,
+    naming itself, rather than being scheduled by nothing until it goes stale.
+    """
+    declared = _scopes.PACKAGE_TEST_DOC_INPUTS
+    found = _documents_a_package_suite_reads()
+
+    assert found == declared, (
+        "the declaration and the tree disagree about which package documents "
+        "feed a package suite.\n"
+        f"  read but undeclared: {sorted(set(found) - set(declared))}\n"
+        f"  declared but unread: {sorted(set(declared) - set(found))}\n"
+        "An undeclared one is scheduled by nothing and hashed by nothing, so "
+        "editing it can neither run the test that reads it nor invalidate that "
+        "test's recorded verdict."
+    )
+    assert found, (
+        "no package suite reads a package document, so this guard is now "
+        "asserting that two empty sets agree. If that is genuinely the end "
+        "state, delete the declaration and the branch that reads it rather "
+        "than leaving a guard that cannot distinguish anything."
+    )
+
+
+def test_a_documentation_change_schedules_the_guards_that_read_it() -> None:
+    """Documentation feeds the workspace guards, so it must schedule them.
+
+    Four guards under ``tests/`` read every document in the repository — 370
+    of them, the site tree and the package tree alike — and check the imports,
+    the configuration keys, the tool catalogue and the fenced samples they
+    contain against the code. None of that ran on a documentation change:
+    ``docs/`` mapped to no package, an empty package set classified as
+    ``none``, and the gate reads ``none`` as "skip the tests". The guards that
+    would have read the edited file were the ones switched off.
+
+    The package tree failed the same way for a different reason and did not
+    look like it: a package document mapped to *its package*, so the gate ran
+    that package's whole suite and its dependents — while still running none
+    of the four guards that actually read the file.
+    """
+    site = _scopes.plan_for_files(["docs/packages/bots/guides/tools.md"])
+    assert site["docs_changed"] is True
+    assert site["test_scope"] == "workspace", (
+        "a site-tree edit must run the workspace guards that read it; "
+        f"got {site['test_scope']!r}, which the gate reads as 'skip'"
+    )
+
+    # A package document read by no package suite: the workspace guards read
+    # it, and nothing else does.
+    package_doc = _scopes.plan_for_files(["packages/bots/docs/api.md"])
+    assert package_doc["packages"] == [], (
+        "a package document that no package test reads belongs to no suite — "
+        f"scheduling one runs a whole package for a prose edit, got {package_doc['packages']}"
+    )
+    assert package_doc["test_scope"] == "workspace"
+
+    # And the declared exception, which does decide whether its suite passes.
+    for document, package in _scopes.PACKAGE_TEST_DOC_INPUTS.items():
+        plan = _scopes.plan_for_files([document])
+        assert package in plan["packages"], (
+            f"{document} is read by a test in {package} — it must still "
+            f"schedule that suite, got {plan['packages']}"
+        )
+        assert plan["docs_changed"] is True, (
+            f"{document} is still documentation, so the documentation checks "
+            "must still re-run for it"
+        )
+
+
+def test_every_package_document_a_package_suite_reads_is_in_that_package_hash() -> None:
+    """Scheduling alone is not enough — the recorded verdict has to move too.
+
+    The two mechanisms answer different questions and both have to say yes.
+    Change detection decides what *this* run tests; the package hash decides
+    whether a *stored* ``pass`` still describes the tree. A document that
+    schedules its suite but enters no hash lets an artifact recorded before
+    the edit validate after it, which is the whole defect the hashes exist to
+    catch — and ``_HASH_PATTERNS`` reaches ``**/*.py`` and ``pyproject.toml``,
+    so no package document was in any package's hash by default.
+    """
+    hashes = load_bin_module("package-hashes")
+
+    for document, package in _scopes.PACKAGE_TEST_DOC_INPUTS.items():
+        covered = [_rel(p) for p in hashes.package_hash_files(package)]
+        assert document in covered, (
+            f"{document} decides whether the {package} suite passes but is in "
+            f"no hash scope, so a {package} verdict recorded before an edit to "
+            "it still validates after one"
         )
 
 

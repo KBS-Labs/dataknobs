@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-08-27T03:56:47Z",
+  "timestamp": "2026-08-27T04:28:11Z",
   "python_version": "Python 3.12.12",
   "uv_version": "uv 0.12.5 (Homebrew 2026-08-14 aarch64-apple-darwin)",
   "os": "Darwin",
   "os_version": "24.6.0",
-  "git_branch": "sbk/docs-link-repairs",
-  "git_commit": "f75219d826e041b1b30cda34a3d4ff1d6a29e811",
+  "git_branch": "main",
+  "git_commit": "8fc2bb017f544e9389ecd6cb4dc8b0d776df59e5",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }
