@@ -63,7 +63,7 @@ def _manifest(**entry: Any) -> dict[str, Any]:
 
 
 # --------------------------------------------------------------------------
-# Link canonicalization (the core comparison primitive)
+# the same-document classes  (symlink + transclude: one text, two paths)
 # --------------------------------------------------------------------------
 
 

@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-08-27T05:55:05Z",
+  "timestamp": "2026-08-27T06:13:50Z",
   "python_version": "Python 3.12.12",
   "uv_version": "uv 0.12.5 (Homebrew 2026-08-14 aarch64-apple-darwin)",
   "os": "Darwin",
   "os_version": "24.6.0",
-  "git_branch": "sbk/docs-mirror-retire-machinery",
-  "git_commit": "b468cbe725ebad12e6afe73e5bc5a09e579b3d42",
+  "git_branch": "sbk/docs-mirror-docstring-canonicaliser",
+  "git_commit": "0723d601edcf5a488f700d77b8299c0f2aadb1cc",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }
