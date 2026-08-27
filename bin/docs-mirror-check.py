@@ -205,8 +205,8 @@ def _iter_lines(text: str) -> Iterator[tuple[str, bool]]:
 def link_targets(text: str) -> list[str]:
     """Every relative ``.md`` link target in the prose of ``text``, in order.
 
-    Fenced blocks and inline code spans contribute nothing, via the same two
-    primitives the canonicaliser uses. Skipped as well: anything with a URL
+    Fenced blocks and inline code spans contribute nothing, via ``_iter_lines``
+    and ``_protected_spans``. Skipped as well: anything with a URL
     scheme or a leading ``/`` (not resolved against a doc tree at all) and any
     target with no ``.md`` file part (a same-page ``#anchor``, an image, a
     ``.py``). What is left is exactly the population that has to resolve inside
