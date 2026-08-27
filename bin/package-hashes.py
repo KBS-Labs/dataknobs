@@ -99,6 +99,7 @@ ALL_PACKAGES: list[str] = _changed_packages.ALL_PACKAGES
 get_transitive_dependents = _changed_packages.get_transitive_dependents
 WORKSPACE_QUALITY_INPUTS: dict[str, list[str]] = _changed_packages.WORKSPACE_QUALITY_INPUTS
 GLOBAL_SCOPES: frozenset[str] = _changed_packages.GLOBAL_SCOPES
+PACKAGE_TEST_DOC_INPUTS: dict[str, str] = _changed_packages.PACKAGE_TEST_DOC_INPUTS
 strip_release_noise = _changed_packages.strip_release_noise
 
 
@@ -133,19 +134,48 @@ def _hash_files(files: list[Path], base: Path) -> str:
     return hasher.hexdigest()
 
 
+def package_hash_files(package_name: str) -> list[Path]:
+    """Every file one package's hash is computed over.
+
+    Split out from compute_package_hash so a guard can ask "is this file
+    covered?" through the same rule the hash uses, rather than restating it —
+    the treatment scope_entry_files already gets on the workspace side, and for
+    the same reason: a restatement answers about a rule the hasher does not
+    follow.
+    """
+    pkg_dir = _PACKAGES_DIR / package_name
+    if not pkg_dir.is_dir():
+        return []
+
+    found: list[Path] = []
+    for subdir, glob_pattern in _HASH_PATTERNS:
+        target = pkg_dir / subdir if subdir != "." else pkg_dir
+        if target.exists():
+            found.extend(target.glob(glob_pattern))
+
+    # The documents a test in this package reads. _HASH_PATTERNS reaches the
+    # .py files under src/ and tests/ and pyproject.toml, so a document was in
+    # no package's hash at all — and these four decide whether their package's
+    # suite passes. Left out, a verdict recorded before an edit to one still
+    # validates after it, which is the staleness the hashes exist to catch.
+    # Only the declared ones: folding in packages/*/docs wholesale would dirty
+    # a package for a prose edit no test reads, which is the over-scheduling
+    # this scope was narrowed to avoid.
+    found.extend(
+        _ROOT / document
+        for document, owner in PACKAGE_TEST_DOC_INPUTS.items()
+        if owner == package_name and (_ROOT / document).is_file()
+    )
+    return found
+
+
 def compute_package_hash(package_name: str) -> str:
     """Compute a deterministic SHA-256 hash of a package's quality-relevant files."""
     pkg_dir = _PACKAGES_DIR / package_name
     if not pkg_dir.is_dir():
         return hashlib.sha256(b"missing").hexdigest()
 
-    all_files: list[Path] = []
-    for subdir, glob_pattern in _HASH_PATTERNS:
-        target = pkg_dir / subdir if subdir != "." else pkg_dir
-        if target.exists():
-            all_files.extend(target.glob(glob_pattern))
-
-    return _hash_files(all_files, pkg_dir)
+    return _hash_files(package_hash_files(package_name), pkg_dir)
 
 
 def scope_entry_files(entry: str) -> list[Path]:
