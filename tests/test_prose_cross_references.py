@@ -84,6 +84,12 @@ ALLOWED_UNRESOLVED = {
         "to say why comparing two configs to each other could not catch a search-"
         "path entry both of them omitted, and what replaces it"
     ),
+    "test_run_returns_one_on_drift": (
+        "retired with the `mirror` class, whose hand-authored site copy was the "
+        "only thing that could drift; the docstring on its successor names it to "
+        "say that end-to-end drift is no longer expressible and what replaced it "
+        "-- a transclude site page pasted over with a hand copy"
+    ),
 }
 
 #: Floors under the scan. Real figures when written: 34 files, 18 distinct

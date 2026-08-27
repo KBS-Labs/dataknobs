@@ -232,8 +232,11 @@ there is a bug, not something to work around.
 
 ### A documentation check fails on a doc you did not touch
 
-The mirror guard reports every unclassified or drifted pair in the package it is
-checking, not only the ones in your diff. Run it locally for the full list:
+The mirror guard reports every failure in the package it is checking, not only
+the ones in your diff — an unclassified doc, a transclude replaced by a hand
+copy, a link that does not resolve. Each error names its own remedy; there is no
+blanket fix and no `--fix` flag, since a classified pair is one text at two
+paths rather than two copies to reconcile. Run it locally for the full list:
 
 ```bash
 python3 bin/docs-mirror-check.py

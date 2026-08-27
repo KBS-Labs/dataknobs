@@ -12,7 +12,11 @@ sibling doc reads identically from either.
 Historically nothing enforced that the two agree, so pages drifted silently
 until the rendered site taught a fictional API. This guard closes that gap.
 
-Every pair is classified in ``.dataknobs/docs-mirror-manifest.json``:
+Every pair is classified in ``.dataknobs/docs-mirror-manifest.json``. An entry
+key this guard does not know is refused rather than skipped -- see
+:func:`check_known_classes`, and the ``mirror`` note at the end of this
+docstring for why that refusal was worth adding the day the class went away:
+
 
   ``symlink``     Site page is a symlink to the package source; drift is
                   structurally impossible. The guard verifies the site path is
@@ -20,10 +24,6 @@ Every pair is classified in ``.dataknobs/docs-mirror-manifest.json``:
   ``transclude``  Site page is a pymdownx ``--8<--`` include of the package
                   source; drift is structurally impossible. The guard only
                   verifies the include still points at the source.
-  ``mirror``      Hand-authored copy: byte-identical except intra-doc ``.md``
-                  link filenames (canonicalized here) plus any declared
-                  per-pair line exceptions. The content-guarded invariant --
-                  drift fails the check.
   ``diverge``     Intentional content divergence (structural landing page,
                   faithful condensation, independent elaboration). Recorded,
                   not content-checked; both files must exist. May additionally
@@ -94,12 +94,23 @@ Opting a package in requires classifying everything already nested in it,
 which is per-package work -- hence the flag, so packages are reconciled one
 at a time rather than holding the guarantee hostage to one sweeping change.
 
+There was a sixth class, ``mirror``: a hand-authored site copy held
+byte-identical to its package source by a content comparison, with a
+canonicaliser for link filenames and a ``line_exceptions`` list for the lines
+that genuinely had to read differently in each tree. It existed for exactly one
+reason -- it was the only class holding two real files, so it was the only one
+able to carry a per-tree link text. Once every such link became an absolute
+site URL there was nothing left for it to express, and a class that guarantees
+by *comparison* what two other classes guarantee by *construction* is strictly
+the weaker way to say the same thing. Its twelve pairs are ``transclude`` now,
+and with it went the canonicaliser, the exception machinery and ``--fix``,
+whose only writer regenerated a ``mirror`` page.
+
 Modes:
 
   ``--check`` (default)  Exit 1 on any drift / unclassified / missing file.
-  ``--fix``              Regenerate ``mirror`` site files from their package
-                         source (canonicalize link filenames + apply declared
-                         line exceptions) so ``--check`` passes by construction.
+                         The only mode; it is accepted for compatibility with
+                         callers that pass it and does nothing on its own.
   ``--package <name>``   Restrict to one package in the manifest (default: all).
 
 Standard library only -- runs under the CI runner's system ``python3`` with no
@@ -109,7 +120,6 @@ Standard library only -- runs under the CI runner's system ``python3`` with no
 from __future__ import annotations
 
 import argparse
-import difflib
 import json
 import re
 import sys
@@ -136,33 +146,16 @@ def green(t: str) -> str:
     return _c("0;32", t)
 
 
-def yellow(t: str) -> str:
-    return _c("1;33", t)
-
-
 def cyan(t: str) -> str:
     return _c("0;36", t)
 
 
-# A markdown inline-link target we should canonicalize: a bare local ``.md``
-# filename (no path separator, no URL scheme, optional ``#anchor``), inside the
-# ``](target)`` position, with an optional ``"title"`` suffix left untouched.
+# A markdown inline-link target, in the ``](target)`` position, with an optional
+# ``"title"`` suffix left untouched. This used to serve two readers -- a
+# canonicaliser that rewrote a target and a resolver that checks one -- and the
+# canonicaliser retired with the `mirror` class, so `link_targets` is now its
+# only caller.
 _LINK_RE = re.compile(r"\]\((?P<target>[^)\s]+)(?P<rest>[^)]*)\)")
-
-
-def _canon_target(target: str) -> str:
-    """Canonicalize one link target to the site filename convention.
-
-    A bare local ``.md`` file (``FOO_BAR.md`` / ``FOO_BAR.md#anchor``) becomes
-    ``foo-bar.md`` / ``foo-bar.md#anchor``. Anything with a ``/``, a URL scheme,
-    or no ``.md`` file part is returned unchanged (relative paths, external URLs
-    and same-page anchors are identical across both trees already).
-    """
-    file_part, sep, anchor = target.partition("#")
-    if "/" in file_part or ":" in file_part or not file_part.endswith(".md"):
-        return target
-    canon = file_part.lower().replace("_", "-")
-    return canon + sep + anchor
 
 
 # A fenced-code-block delimiter: first non-space content is a run of 3+ backticks
@@ -178,9 +171,11 @@ _CODE_SPAN_RE = re.compile(r"(`+).*?\1")
 def _protected_spans(line: str) -> list[tuple[int, int]]:
     """Character ranges of ``line`` holding literal example text.
 
-    Link syntax inside an inline ``code span`` is a sample, not a link. Both
-    things this module does with links -- rewriting them and resolving them --
-    have to agree about that, so the rule is defined once here.
+    Link syntax inside an inline ``code span`` is a sample, not a link. The
+    rule is defined once here because it once had two callers that had to agree
+    about it; only the resolver is left, and the definition stays separate
+    because what counts as literal text is a property of markdown rather than
+    of resolution.
     """
     return [(m.start(), m.end()) for m in _CODE_SPAN_RE.finditer(line)]
 
@@ -190,9 +185,8 @@ def _iter_lines(text: str) -> Iterator[tuple[str, bool]]:
 
     ``literal`` is True for a fence delimiter and for everything between an
     opening and closing run: that content is a code sample, so a ``](target)``
-    in it is neither a link to rewrite nor a link to resolve. Same rationale as
-    :func:`_protected_spans`, one line-scope up, and defined once for the same
-    reason.
+    in it is not a link to resolve. Same rationale as :func:`_protected_spans`,
+    one line-scope up.
     """
     fence: str | None = None
     for ln in text.splitlines():
@@ -206,23 +200,6 @@ def _iter_lines(text: str) -> Iterator[tuple[str, bool]]:
             yield ln, True
             continue
         yield ln, fence is not None
-
-
-def canonicalize_line(line: str) -> str:
-    """Rewrite intra-doc ``.md`` link targets to site form, outside code spans."""
-    protected = _protected_spans(line)
-
-    def repl(m: re.Match[str]) -> str:
-        if any(start <= m.start() < end for start, end in protected):
-            return m.group(0)
-        return f"]({_canon_target(m.group('target'))}{m.group('rest')})"
-
-    return _LINK_RE.sub(repl, line)
-
-
-def canonicalize_text(text: str) -> list[str]:
-    """Canonicalize link targets line-by-line, skipping fenced code blocks."""
-    return [ln if literal else canonicalize_line(ln) for ln, literal in _iter_lines(text)]
 
 
 def link_targets(text: str) -> list[str]:
@@ -282,92 +259,6 @@ class Result:
         return not self.errors
 
 
-def _exception_map(pair: dict) -> dict[str, str]:
-    """Map canonicalized package line -> canonicalized site line for a pair."""
-    out: dict[str, str] = {}
-    for ex in pair.get("line_exceptions", []):
-        out[canonicalize_line(ex["package"])] = canonicalize_line(ex["site"])
-    return out
-
-
-def _apply_line_exceptions(lines: list[str], exmap: dict[str, str]) -> tuple[list[str], list[str]]:
-    """Apply canonicalized package->site line substitutions to ``lines``.
-
-    ``line_exceptions`` match by exact (canonicalized) line *content*, not by
-    position, so a substitution is only well-defined when its package line occurs
-    exactly once in the source. If the same line text recurs, substituting every
-    occurrence would silently rewrite unintended lines, so such a key is reported
-    as ambiguous and left un-substituted rather than applied. Returns the
-    substituted lines and the sorted list of ambiguous package keys.
-    """
-    if not exmap:
-        return lines, []
-    counts: dict[str, int] = {}
-    for ln in lines:
-        if ln in exmap:
-            counts[ln] = counts.get(ln, 0) + 1
-    ambiguous = sorted(key for key, count in counts.items() if count > 1)
-    ambiguous_set = set(ambiguous)
-    out = [exmap[ln] if ln in exmap and ln not in ambiguous_set else ln for ln in lines]
-    return out, ambiguous
-
-
-def check_mirror(pair: dict, pkg_dir: Path, site_dir: Path, res: Result) -> None:
-    pkg_path = pkg_dir / pair["package"]
-    site_path = site_dir / pair["site"]
-    if not pkg_path.exists():
-        res.fail(f"mirror: package source missing: {pkg_path.relative_to(ROOT)}")
-        return
-    if not site_path.exists():
-        res.fail(f"mirror: site mirror missing: {site_path.relative_to(ROOT)}")
-        return
-
-    if site_path.is_symlink():
-        res.fail(
-            f"mirror: {site_path.relative_to(ROOT)} is classified as a hand-authored "
-            f"mirror but is a symlink. Reclassify it as `symlink` in "
-            f"{MANIFEST.relative_to(ROOT)}."
-        )
-        return
-
-    exmap = _exception_map(pair)
-    pkg_lines, ambiguous = _apply_line_exceptions(canonicalize_text(_read(pkg_path)), exmap)
-    if ambiguous:
-        rel_pkg = pkg_path.relative_to(ROOT)
-        for key in ambiguous:
-            res.fail(
-                f"mirror: ambiguous line_exception for {rel_pkg}: the package line "
-                f"{key!r} occurs more than once, so a content-matched exception would "
-                f"rewrite every occurrence. Make the surrounding line unique, or drop "
-                f"the exception, in {MANIFEST.relative_to(ROOT)}."
-            )
-        return
-    site_lines = canonicalize_text(_read(site_path))
-
-    if pkg_lines == site_lines:
-        return
-
-    rel_pkg = pkg_path.relative_to(ROOT)
-    rel_site = site_path.relative_to(ROOT)
-    diff = "\n".join(
-        difflib.unified_diff(
-            pkg_lines,
-            site_lines,
-            fromfile=f"{rel_pkg} (canonicalized)",
-            tofile=f"{rel_site}",
-            lineterm="",
-        )
-    )
-    res.fail(
-        f"mirror drift: {rel_pkg} <-> {rel_site}\n"
-        f"  The site mirror must equal the package source modulo intra-doc\n"
-        f"  link filenames and declared line_exceptions. Reconcile the two\n"
-        f"  (or run `bin/docs-mirror-check.py --fix`), or, if the divergence\n"
-        f"  is intentional, reclassify the pair in {MANIFEST.relative_to(ROOT)}.\n"
-        + "\n".join("  " + ln for ln in diff.splitlines())
-    )
-
-
 def check_symlink(pair: dict, pkg_dir: Path, site_dir: Path, res: Result) -> None:
     pkg_path = pkg_dir / pair["package"]
     site_path = site_dir / pair["site"]
@@ -412,8 +303,10 @@ def check_transclude(pair: dict, pkg_dir: Path, site_dir: Path, res: Result) -> 
         res.fail(
             f"transclude: {site_path.relative_to(ROOT)} is classified as a "
             f'transclusion but contains no `--8<-- "..."` include line. If it '
-            f"is now a hand-authored copy, reclassify it as `mirror` or "
-            f"`diverge` in {MANIFEST.relative_to(ROOT)}."
+            f"is now a hand-authored copy, restore the include -- a hand copy "
+            f"has no classification here, and `diverge` is for two genuinely "
+            f"different documents, not a drifted copy of one. See "
+            f"{MANIFEST.relative_to(ROOT)}."
         )
     else:
         res.fail(
@@ -439,9 +332,8 @@ def check_shared_sections(pair: dict, pkg_dir: Path, site_dir: Path, res: Result
     Two docs may be different documents overall yet still need one block to
     stay identical. Copying that block by hand puts it back outside every
     guarantee this guard exists to provide -- and because the pair as a whole
-    is genuinely divergent, neither ``mirror`` nor whole-file ``transclude``
-    can express it, which is how such a block ends up unclassified and
-    unverified.
+    is genuinely divergent, a whole-file ``transclude`` cannot express it,
+    which is how such a block ends up unclassified and unverified.
 
     ``shared_sections`` closes that: the block lives once in the package
     source between pymdownx section markers, and the site page pulls it in
@@ -594,14 +486,18 @@ def check_unpaired(entry: dict, pkg_dir: Path, site_dir: Path, res: Result) -> N
         return found
 
     paired: set[str] = set()
-    for kind in ("symlink", "mirror", "transclude", "diverge"):
+    for kind in _PAIRED_CLASSES:
         for pair in entry.get(kind, []):
             paired.add(pair["site"])
             paired.add(pair["package"])
 
-    for cls, names, own_dir, other_dir, other_side in (
-        ("package_only", entry.get("package_only", []), pkg_dir, site_dir, "site"),
-        ("site_only", entry.get("site_only", []), site_dir, pkg_dir, "package"),
+    for cls, names, own_dir, other_dir, other_side in zip(
+        _UNPAIRED_CLASSES,
+        (entry.get("package_only", []), entry.get("site_only", [])),
+        (pkg_dir, site_dir),
+        (site_dir, pkg_dir),
+        ("site", "package"),
+        strict=True,
     ):
         counterparts = _counterparts(other_dir)
         for name in names:
@@ -628,18 +524,43 @@ def check_unpaired(entry: dict, pkg_dir: Path, site_dir: Path, res: Result) -> N
                 f"{cls}: '{name}' is classified as unpaired, but the {other_side} "
                 f"tree has {', '.join(hits)}. {cls} carries no per-class check, so "
                 f"this pair is currently verified by nothing. Classify it "
-                f"(symlink / transclude / mirror), or record the divergence with "
+                f"(symlink / transclude), or record the divergence with "
                 f"`diverge` and a reason if the two are genuinely different documents."
             )
 
 
-#: Classes whose two sides are the *same* document -- one file served at two
-#: paths (``symlink``, ``transclude``) or two content-locked copies of it
-#: (``mirror``). ``diverge`` is deliberately absent: it records two genuinely
-#: different documents that happen to be counterparts, so requiring them to
-#: share a name would contradict the classification. Two pairs differ today
-#: and both are correct.
-_SAME_DOCUMENT_CLASSES = ("symlink", "transclude", "mirror")
+#: Classes whose two sides are the *same* document. Both survivors are one
+#: file served at two paths, so name parity looks briefly redundant -- it is
+#: not. A ``transclude`` site page is a real file whose *content* names the
+#: source, and nothing about writing ``--8<-- "packages/x/docs/a.md"`` into
+#: ``docs/packages/x/b.md`` prevents it; the include would resolve and the two
+#: paths would disagree. This is the check that says so.
+#:
+#: ``diverge`` is deliberately absent: it records two genuinely different
+#: documents that happen to be counterparts, so requiring them to share a name
+#: would contradict the classification. Two pairs differ today and both are
+#: correct.
+_SAME_DOCUMENT_CLASSES = ("symlink", "transclude")
+
+#: Every class that pairs two paths. ``_SAME_DOCUMENT_CLASSES`` is the subset
+#: whose two paths carry one text; ``diverge`` is the rest, and the distinction
+#: is physics rather than taste -- see :func:`_served_docs`.
+_PAIRED_CLASSES = (*_SAME_DOCUMENT_CLASSES, "diverge")
+
+#: Classes naming one path, with nothing in the other tree.
+_UNPAIRED_CLASSES = ("package_only", "site_only")
+
+#: Keys in a package entry that are not classes.
+_ENTRY_META = ("package_dir", "site_dir", "recursive")
+
+#: Retired classes, named so the refusal can say what happened rather than
+#: only that the key is unknown. ``mirror`` held a hand-authored site copy
+#: byte-identical to its source; every one of its pairs is a ``transclude``
+#: now, which guarantees by construction what it guaranteed by comparison.
+_RETIRED_CLASSES = {
+    "mirror": "retired -- use `transclude` (or `symlink`); one text, two paths, "
+    "so there is nothing left to compare",
+}
 
 #: A conforming doc filename: lower case, digits, hyphens and dots only.
 _LOWER_HYPHEN_RE = re.compile(r"^[a-z0-9][a-z0-9.-]*\.md$")
@@ -724,16 +645,15 @@ def _served_docs(entry: dict, pkg_dir: Path, site_dir: Path) -> Iterator[tuple[P
     site page's location. The remaining classes hold two independent files, each
     served only from its own tree.
     """
-    for kind in ("symlink", "transclude"):
+    for kind in _SAME_DOCUMENT_CLASSES:
         for pair in entry.get(kind, []):
             yield (
                 pkg_dir / pair["package"],
                 [(pkg_dir / pair["package"]).parent, (site_dir / pair["site"]).parent],
             )
-    for kind in ("mirror", "diverge"):
-        for pair in entry.get(kind, []):
-            yield pkg_dir / pair["package"], [(pkg_dir / pair["package"]).parent]
-            yield site_dir / pair["site"], [(site_dir / pair["site"]).parent]
+    for pair in entry.get("diverge", []):
+        yield pkg_dir / pair["package"], [(pkg_dir / pair["package"]).parent]
+        yield site_dir / pair["site"], [(site_dir / pair["site"]).parent]
     for name in entry.get("package_only", []):
         yield pkg_dir / name, [(pkg_dir / name).parent]
     for name in entry.get("site_only", []):
@@ -810,6 +730,53 @@ def check_link_resolution(entry: dict, pkg_dir: Path, site_dir: Path, res: Resul
                 )
 
 
+def check_known_classes(entry: dict, res: Result) -> None:
+    """Every key in a package entry is one this guard acts on.
+
+    Nothing checked this, and the omission was structural rather than an
+    oversight: the class names were enumerated at five call sites, so an
+    unrecognised key simply never matched any of them. A pair recorded under
+    ``symlnk``, or under ``mirror`` after that class was retired, was opted out
+    of every invariant here.
+
+    How loudly that failed depended on where the files sat, which is the worst
+    property a silence can have. A *top-level* doc nobody classified fails
+    :func:`check_completeness` -- the right verdict, arrived at for the wrong
+    reason, and reported as "unclassified" to someone looking at a manifest
+    entry that plainly classifies it. A *nested* doc in a non-recursive package
+    is not in the completeness set at all, so the same mistake is silent and
+    the package reports clean.
+
+    Retired names get their own message. "unknown key" is true of ``mirror``
+    and unhelpful: whoever wrote it was following a convention that used to be
+    correct, and the thing they need to know is what replaced it.
+
+    A leading underscore means commentary and is exempt, which is not a
+    concession -- it is the convention the manifest already runs on, and this
+    check found it rather than being written around it. ``_note`` and
+    ``_schema`` sit at the top level, and ``structures`` and ``utils`` each
+    carry a per-package ``_note`` explaining why the package is all
+    ``site_only``. JSON has no comments; a reserved prefix is how a document
+    like this one carries its own reasoning, and a guard that refused it would
+    be telling authors to delete the explanation.
+    """
+    known = {*_PAIRED_CLASSES, *_UNPAIRED_CLASSES, *_ENTRY_META}
+    for key in entry:
+        if key in known or key.startswith("_"):
+            continue
+        if key in _RETIRED_CLASSES:
+            res.fail(
+                f"manifest: '{key}' is {_RETIRED_CLASSES[key]}. Its entries are "
+                f"classified by nothing, so both files are verified by nothing."
+            )
+        else:
+            res.fail(
+                f"manifest: unknown key '{key}'. Entries under it are classified "
+                f"by nothing and silently unverified. Known: "
+                f"{', '.join(sorted(known))}."
+            )
+
+
 def check_completeness(entry: dict, pkg_dir: Path, site_dir: Path, res: Result) -> None:
     """Every *.md in both trees must be classified exactly once.
 
@@ -874,7 +841,7 @@ def check_completeness(entry: dict, pkg_dir: Path, site_dir: Path, res: Result) 
             return
         _add(store, name, bucket, side)
 
-    for kind in ("symlink", "mirror", "transclude", "diverge"):
+    for kind in _PAIRED_CLASSES:
         for pair in entry.get(kind, []):
             _add_in_scope(pkg_classified, pair["package"], kind, "package")
             _add_in_scope(site_classified, pair["site"], kind, "site")
@@ -895,13 +862,13 @@ def check_completeness(entry: dict, pkg_dir: Path, site_dir: Path, res: Result) 
         res.fail(
             f"unclassified package doc: {(pkg_dir / name).relative_to(ROOT)} — "
             f"add it to {MANIFEST.relative_to(ROOT)} (symlink / transclude / "
-            f"mirror / diverge / package_only)."
+            f"diverge / package_only)."
         )
     for name in sorted(site_on_disk - set(site_classified)):
         res.fail(
             f"unclassified site doc: {(site_dir / name).relative_to(ROOT)} — "
             f"add it to {MANIFEST.relative_to(ROOT)} (symlink / transclude / "
-            f"mirror / diverge / site_only)."
+            f"diverge / site_only)."
         )
     for name in sorted(set(pkg_classified) - pkg_on_disk):
         res.fail(
@@ -915,30 +882,7 @@ def check_completeness(entry: dict, pkg_dir: Path, site_dir: Path, res: Result) 
         )
 
 
-def fix_mirror(pair: dict, pkg_dir: Path, site_dir: Path) -> bool:
-    """Regenerate a mirror site file from its package source. Returns True if changed."""
-    pkg_path = pkg_dir / pair["package"]
-    site_path = site_dir / pair["site"]
-    if not pkg_path.exists():
-        return False
-    exmap = _exception_map(pair)
-    text = _read(pkg_path)
-    lines, ambiguous = _apply_line_exceptions(canonicalize_text(text), exmap)
-    if ambiguous:
-        # An ambiguous exception cannot be applied safely — regenerating would
-        # rewrite every occurrence of the recurring line. Leave the file as-is
-        # for `--check` to report rather than silently corrupt it.
-        return False
-    regenerated = "\n".join(lines)
-    if text.endswith("\n"):
-        regenerated += "\n"
-    if site_path.exists() and _read(site_path) == regenerated:
-        return False
-    site_path.write_text(regenerated, encoding="utf-8")
-    return True
-
-
-def run(manifest: dict, only: str | None, fix: bool) -> int:
+def run(manifest: dict, only: str | None) -> int:
     packages = manifest["packages"]
     names = [only] if only else sorted(packages)
     overall = Result()
@@ -952,18 +896,8 @@ def run(manifest: dict, only: str | None, fix: bool) -> int:
         site_dir = ROOT / entry["site_dir"]
         print(cyan(f"Doc-mirror check: {name}  ({entry['package_dir']} <-> {entry['site_dir']})"))
 
-        if fix:
-            changed = []
-            for pair in entry.get("mirror", []):
-                if fix_mirror(pair, pkg_dir, site_dir):
-                    changed.append(pair["site"])
-            if changed:
-                print(yellow(f"  regenerated {len(changed)} mirror page(s): " + ", ".join(changed)))
-            else:
-                print(green("  mirror pages already in sync"))
-            continue
-
         res = Result()
+        check_known_classes(entry, res)
         check_completeness(entry, pkg_dir, site_dir, res)
         check_unpaired(entry, pkg_dir, site_dir, res)
         check_name_parity(entry, res)
@@ -971,8 +905,6 @@ def run(manifest: dict, only: str | None, fix: bool) -> int:
         check_link_resolution(entry, pkg_dir, site_dir, res)
         for pair in entry.get("symlink", []):
             check_symlink(pair, pkg_dir, site_dir, res)
-        for pair in entry.get("mirror", []):
-            check_mirror(pair, pkg_dir, site_dir, res)
         for pair in entry.get("transclude", []):
             check_transclude(pair, pkg_dir, site_dir, res)
         for pair in entry.get("diverge", []):
@@ -982,7 +914,7 @@ def run(manifest: dict, only: str | None, fix: bool) -> int:
         # differ. On the other classes it would be silently ignored -- and a
         # declaration that is quietly ignored reads as a guarantee while
         # providing none, which is worse than not offering the key at all.
-        for kind in ("symlink", "mirror", "transclude"):
+        for kind in ("symlink", "transclude"):
             for pair in entry.get(kind, []):
                 if pair.get("shared_sections"):
                     res.fail(
@@ -994,7 +926,6 @@ def run(manifest: dict, only: str | None, fix: bool) -> int:
         if res.ok:
             n = (
                 len(entry.get("symlink", []))
-                + len(entry.get("mirror", []))
                 + len(entry.get("transclude", []))
                 + len(entry.get("diverge", []))
             )
@@ -1004,32 +935,26 @@ def run(manifest: dict, only: str | None, fix: bool) -> int:
                 print(red("  ✗ " + err.replace("\n", "\n    ")))
             overall.errors.extend(res.errors)
 
-    if fix:
-        return 0
-
     print()
     if overall.ok:
         print(green("✓ Documentation mirrors are in sync"))
         return 0
     print(red(f"✗ Documentation mirror check failed ({len(overall.errors)} issue(s))"))
-    print(cyan("  Each error above names the remedy for its own kind; this line used to"))
-    print(cyan("  prescribe one for all of them, which stopped being true when an"))
-    print(cyan("  unresolvable link became a failure -- `--fix` cannot repair a link."))
-    print(cyan("  For mirror drift specifically: reconcile the copy, run"))
-    print(
-        cyan(
-            f"  `bin/docs-mirror-check.py --fix`, or reclassify the pair in "
-            f"{MANIFEST.relative_to(ROOT)}."
-        )
-    )
+    print(cyan("  Each error above names the remedy for its own kind. There is no"))
+    print(cyan("  blanket one, and there is no `--fix`: the flag regenerated a `mirror`"))
+    print(cyan("  page from its source, and that class is gone. What is left cannot be"))
+    print(cyan("  repaired by a rewrite -- a link resolves or it does not, a symlink"))
+    print(cyan("  points at its source or it does not, and a doc is classified in"))
+    print(cyan(f"  {MANIFEST.relative_to(ROOT)} or it is not."))
     return 1
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Enforce the package<->site doc-mirror invariant.")
-    parser.add_argument("--check", action="store_true", help="Check for drift (default).")
     parser.add_argument(
-        "--fix", action="store_true", help="Regenerate mirror site files from source."
+        "--check",
+        action="store_true",
+        help="Check for drift. The only mode; accepted so existing callers keep working.",
     )
     parser.add_argument("--package", metavar="NAME", help="Restrict to one manifest package.")
     args = parser.parse_args(argv)
@@ -1038,7 +963,7 @@ def main(argv: list[str] | None = None) -> int:
         print(red(f"✗ manifest not found: {MANIFEST}"), file=sys.stderr)
         return 2
     manifest = json.loads(_read(MANIFEST))
-    return run(manifest, only=args.package, fix=args.fix)
+    return run(manifest, only=args.package)
 
 
 if __name__ == "__main__":

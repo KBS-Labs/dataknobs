@@ -47,7 +47,7 @@ it for as long as the guard had existed.
 | Check | What fails |
 |---|---|
 | **doc spelling** | a package doc whose filename is not lower-hyphen. `README.md` is the one exemption — GitHub renders it as a directory index, and `readme.md` on a case-sensitive host does not get that treatment. |
-| **name parity** | a `symlink` / `transclude` / `mirror` pair spelled differently on its two sides. `diverge` is exempt: that class records two genuinely *different* documents, so requiring a shared name would contradict it. |
+| **name parity** | a `symlink` / `transclude` pair spelled differently on its two sides. `diverge` is exempt: that class records two genuinely *different* documents, so requiring a shared name would contradict it. |
 
 The site tree is covered through the pair rather than directly, so a
 genuinely site-only page may keep a name taken from the module it
@@ -162,11 +162,30 @@ When updating documentation for any package:
 
    | Class | Use when |
    |---|---|
-   | `transclude` | Site page is a `--8<--` include of the package source (**preferred for new docs** — drift is structurally impossible) |
-   | `symlink` | Site page symlinks the source; bare sibling-filename links in it read the same from either tree |
-   | `mirror` | Hand-authored copy, content-guarded; `--fix` regenerates it |
+   | `transclude` | Site page is a `--8<--` include of the package source, **and nothing else** — no heading of its own. The default for a new pair |
+   | `symlink` | Site page symlinks the source. Same guarantee; use it where a symlink is what is already there |
    | `diverge` | Intentional divergence; recorded, not content-checked. Add `shared_sections` for any block that must still stay identical |
    | `package_only` / `site_only` | Genuinely unpaired — **not** a fallback for a pair you did not want to classify |
+
+   **Do not put a title above the include.** The source's own H1 renders as
+   the page title; a second one above it renders a duplicate `<h1>`. That
+   was true of 24 of the 31 transclude pages and of none of the other 7,
+   with no exception in either direction, so the bare form is not a style
+   preference — it is the one that renders correctly.
+
+   **There was a sixth class, `mirror`,** and it is worth knowing why it is
+   gone rather than finding its name in an old commit. It held a
+   hand-authored site copy kept byte-identical to its package source by a
+   content comparison, with a `line_exceptions` list for the lines that had
+   to read differently in each tree. That list was its whole reason to
+   exist: it was the only class holding two real files, so it was the only
+   one that could carry a per-tree link text. Once every such link became
+   an absolute site URL there was nothing left to express, and a class that
+   guarantees *by comparison* what two others guarantee *by construction*
+   is the weaker way to say the same thing. A key the guard does not know —
+   `mirror` today, a typo any day — is now refused rather than skipped,
+   because an entry under an unrecognised key classified nothing and left
+   both files silently unverified.
 
    **Any** entry may point at a subdirectory on either side (a package
    source under `guides/`, or a site page under `guides/` as every bots
@@ -190,9 +209,8 @@ When updating documentation for any package:
    nested path now, which is the cheap way to cover one nested doc
    without reconciling the package's whole tree.
 
-   **Two documents that differ overall but share one block.** Neither
-   `mirror` (whole file must match) nor `transclude` (whole file is an
-   include) can express this, so the block gets hand-copied into both
+   **Two documents that differ overall but share one block.** A whole-file
+   `transclude` cannot express this, so the block gets hand-copied into both
    sides and is verified by nothing. Use `diverge` with `shared_sections`:
    wrap the block in the package source with pymdownx section markers
    inside HTML comments, so they stay invisible when the doc is read on

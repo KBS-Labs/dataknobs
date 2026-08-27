@@ -2,8 +2,8 @@
 
 Each test exercises a specific failure mode the guard must catch (drift,
 symlink/transclude replacement, unclassified docs, manifest references to
-missing files, ambiguous line exceptions) plus the clean-tree pass and the
-``--fix`` idempotence the checker promises. Everything runs against a sandbox
+missing files, a retired or misspelled class key) plus the clean-tree pass.
+Everything runs against a sandbox
 tree under ``tmp_path`` with the module's ``ROOT``/``MANIFEST`` globals patched
 to that sandbox, so no test touches the repo's real manifest or docs.
 """
@@ -64,141 +64,6 @@ def _manifest(**entry: Any) -> dict[str, Any]:
 
 # --------------------------------------------------------------------------
 # Link canonicalization (the core comparison primitive)
-# --------------------------------------------------------------------------
-
-
-def test_canonicalize_line_rewrites_bare_md_link(mirror_mod: ModuleType) -> None:
-    assert mirror_mod.canonicalize_line("see [X](FOO_BAR.md)") == "see [X](foo-bar.md)"
-
-
-def test_canonicalize_line_preserves_anchor(mirror_mod: ModuleType) -> None:
-    got = mirror_mod.canonicalize_line("[X](FOO_BAR.md#the-section)")
-    assert got == "[X](foo-bar.md#the-section)"
-
-
-def test_canonicalize_line_leaves_paths_urls_and_anchors(mirror_mod: ModuleType) -> None:
-    for target in ("sub/FOO.md", "https://x.test/FOO.md", "#same-page", "FOO.txt"):
-        line = f"[X]({target})"
-        assert mirror_mod.canonicalize_line(line) == line
-
-
-def test_fenced_code_block_link_is_not_rewritten(mirror_mod: ModuleType) -> None:
-    """Finding 3: a link-like token inside a ``` fence is literal example text."""
-    text = "\n".join(
-        [
-            "prose [A](FIRST_ONE.md)",
-            "```markdown",
-            "example [B](SECOND_ONE.md)",
-            "```",
-            "more [C](THIRD_ONE.md)",
-        ]
-    )
-    out = mirror_mod.canonicalize_text(text)
-    assert out[0] == "prose [A](first-one.md)"  # prose rewritten
-    assert out[2] == "example [B](SECOND_ONE.md)"  # fenced content untouched
-    assert out[4] == "more [C](third-one.md)"  # fence closed, prose rewritten again
-
-
-def test_tilde_fence_and_length_tracked(mirror_mod: ModuleType) -> None:
-    text = "\n".join(["~~~", "[B](INSIDE_TILDE.md)", "~~~", "[C](OUTSIDE.md)"])
-    out = mirror_mod.canonicalize_text(text)
-    assert out[1] == "[B](INSIDE_TILDE.md)"
-    assert out[3] == "[C](outside.md)"
-
-
-def test_inline_code_span_link_is_not_rewritten(mirror_mod: ModuleType) -> None:
-    """Finding 3: a link-like token inside an inline `code span` is literal."""
-    line = "real [A](REAL_ONE.md) but code `[B](CODE_ONE.md)` stays"
-    got = mirror_mod.canonicalize_line(line)
-    assert "[A](real-one.md)" in got
-    assert "`[B](CODE_ONE.md)`" in got
-
-
-# --------------------------------------------------------------------------
-# mirror: drift detection + clean pass
-# --------------------------------------------------------------------------
-
-
-def test_clean_mirror_passes(tree: _Tree) -> None:
-    mod, pkg, site = tree
-    _w(pkg / "API_REFERENCE.md", "# API\n\nsee [G](OTHER_DOC.md)\n")
-    _w(site / "api-reference.md", "# API\n\nsee [G](other-doc.md)\n")
-    res = mod.Result()
-    mod.check_mirror({"package": "API_REFERENCE.md", "site": "api-reference.md"}, pkg, site, res)
-    assert res.ok
-
-
-def test_mirror_drift_is_detected(tree: _Tree) -> None:
-    mod, pkg, site = tree
-    _w(pkg / "API_REFERENCE.md", "# API\n\nthe source truth\n")
-    _w(site / "api-reference.md", "# API\n\na hand-edited divergence\n")
-    res = mod.Result()
-    mod.check_mirror({"package": "API_REFERENCE.md", "site": "api-reference.md"}, pkg, site, res)
-    assert not res.ok
-    assert any("mirror drift" in e for e in res.errors)
-
-
-def test_mirror_with_fenced_link_example_stays_in_sync(tree: _Tree) -> None:
-    """A fenced literal link is uncanonicalized on both sides, so they match."""
-    mod, pkg, site = tree
-    body = "# API\n\n```md\n[x](FOO_BAR.md)\n```\nprose [y](REAL_DOC.md)\n"
-    _w(pkg / "API_REFERENCE.md", body)
-    _w(site / "api-reference.md", body.replace("REAL_DOC.md", "real-doc.md"))
-    res = mod.Result()
-    mod.check_mirror({"package": "API_REFERENCE.md", "site": "api-reference.md"}, pkg, site, res)
-    assert res.ok, res.errors
-
-
-def test_mirror_flagged_when_site_is_symlink(tree: _Tree) -> None:
-    mod, pkg, site = tree
-    _w(pkg / "API_REFERENCE.md", "# API\n")
-    (site / "api-reference.md").symlink_to(pkg / "API_REFERENCE.md")
-    res = mod.Result()
-    mod.check_mirror({"package": "API_REFERENCE.md", "site": "api-reference.md"}, pkg, site, res)
-    assert not res.ok
-    assert any("is a symlink" in e for e in res.errors)
-
-
-# --------------------------------------------------------------------------
-# line_exceptions (Finding 4)
-# --------------------------------------------------------------------------
-
-
-def test_unique_line_exception_is_applied(tree: _Tree) -> None:
-    mod, pkg, site = tree
-    _w(pkg / "API_REFERENCE.md", "# API\n\nsee [G](BATCH_GUIDE.md) here\n")
-    _w(site / "api-reference.md", "# API\n\nsee [G](migration.md) here\n")
-    pair = {
-        "package": "API_REFERENCE.md",
-        "site": "api-reference.md",
-        "line_exceptions": [
-            {"package": "see [G](BATCH_GUIDE.md) here", "site": "see [G](migration.md) here"}
-        ],
-    }
-    res = mod.Result()
-    mod.check_mirror(pair, pkg, site, res)
-    assert res.ok, res.errors
-
-
-def test_ambiguous_line_exception_is_detected(tree: _Tree) -> None:
-    """Finding 4: a recurring package line makes the content-match ambiguous."""
-    mod, pkg, site = tree
-    line = "see [G](BATCH_GUIDE.md) here"
-    _w(pkg / "API_REFERENCE.md", f"# API\n\n{line}\n\n{line}\n")
-    _w(site / "api-reference.md", "# API\n\nsee [G](migration.md) here\n\nx\n")
-    pair = {
-        "package": "API_REFERENCE.md",
-        "site": "api-reference.md",
-        "line_exceptions": [{"package": line, "site": "see [G](migration.md) here"}],
-    }
-    res = mod.Result()
-    mod.check_mirror(pair, pkg, site, res)
-    assert not res.ok
-    assert any("ambiguous line_exception" in e for e in res.errors)
-
-
-# --------------------------------------------------------------------------
-# symlink / transclude replacement
 # --------------------------------------------------------------------------
 
 
@@ -433,7 +298,7 @@ def test_double_classification_is_detected(tree: _Tree) -> None:
     _w(pkg / "X.md", "# x\n")
     _w(site / "x.md", "# x\n")
     entry = {
-        "mirror": [{"package": "X.md", "site": "x.md"}],
+        "transclude": [{"package": "X.md", "site": "x.md"}],
         "package_only": ["X.md"],
     }
     res = mod.Result()
@@ -443,79 +308,119 @@ def test_double_classification_is_detected(tree: _Tree) -> None:
 
 
 # --------------------------------------------------------------------------
-# --fix regeneration + idempotence
-# --------------------------------------------------------------------------
-
-
-def test_fix_regenerates_drifted_mirror_and_is_idempotent(tree: _Tree) -> None:
-    mod, pkg, site = tree
-    _w(pkg / "API_REFERENCE.md", "# API\n\nsee [G](OTHER_DOC.md)\n")
-    _w(site / "api-reference.md", "# STALE\n")
-    pair = {"package": "API_REFERENCE.md", "site": "api-reference.md"}
-
-    assert mod.fix_mirror(pair, pkg, site) is True  # first run rewrites
-    assert (site / "api-reference.md").read_text() == "# API\n\nsee [G](other-doc.md)\n"
-    assert mod.fix_mirror(pair, pkg, site) is False  # second run is a no-op
-
-    res = mod.Result()
-    mod.check_mirror(pair, pkg, site, res)
-    assert res.ok, res.errors
-
-
-def test_fix_skips_ambiguous_exception_without_corrupting(tree: _Tree) -> None:
-    """Finding 4: --fix must not rewrite every occurrence of a recurring line."""
-    mod, pkg, site = tree
-    line = "see [G](BATCH_GUIDE.md) here"
-    original = f"# API\n\n{line}\n\n{line}\n"
-    _w(pkg / "API_REFERENCE.md", original)
-    _w(site / "api-reference.md", "# STALE\n")
-    pair = {
-        "package": "API_REFERENCE.md",
-        "site": "api-reference.md",
-        "line_exceptions": [{"package": line, "site": "see [G](migration.md) here"}],
-    }
-    assert mod.fix_mirror(pair, pkg, site) is False  # refuses the ambiguous rewrite
-    assert (site / "api-reference.md").read_text() == "# STALE\n"  # left untouched
-
-
-# --------------------------------------------------------------------------
-# run() end-to-end
+# End-to-end through run()
 # --------------------------------------------------------------------------
 
 
 def test_run_returns_zero_on_clean_tree(tree: _Tree) -> None:
     """Clean now includes every relative link resolving, so the fixture links.
 
-    Two earlier versions of this fixture are worth recording, because each was
-    clean under the rule of its day and is a failure under the next one.
+    Three earlier versions of this fixture are worth recording, because each
+    was clean under the rule of its day and is a failure under the next one.
     ``API_REFERENCE.md`` exercised the canonicaliser through the mirror
     comparison, and stopped being clean when ``run`` began requiring
     lower-hyphen package docs. It became ``OTHER_DOC.md`` against
     ``other-doc.md`` -- the same fold moved into the link text -- which was
     clean only while an unresolvable link was reported rather than failed. It
-    is one spelling now, present in both trees, and the fold it was testing
-    belongs to the unit tests above.
+    was then one spelling present in both trees as two hand-authored copies,
+    which was clean only while ``mirror`` existed to classify them.
+
+    It is a ``transclude`` now, which is the point: the site page is not a copy
+    to keep in agreement, it is the same text at a second path. The sandbox
+    still needs the site file on disk, because ``check_completeness`` reads the
+    directory rather than the manifest -- but what it contains is an include,
+    and nothing compares it to anything.
     """
     mod, pkg, site = tree
     _w(pkg / "api-reference.md", "# API\n\nsee [G](other-doc.md)\n")
-    _w(site / "api-reference.md", "# API\n\nsee [G](other-doc.md)\n")
+    _w(site / "api-reference.md", '--8<-- "packages/demo/docs/api-reference.md"\n')
     _w(pkg / "other-doc.md", "# O\n")
-    _w(site / "other-doc.md", "# O\n")
+    _w(site / "other-doc.md", '--8<-- "packages/demo/docs/other-doc.md"\n')
     manifest = _manifest(
-        mirror=[
+        transclude=[
             {"package": "api-reference.md", "site": "api-reference.md"},
             {"package": "other-doc.md", "site": "other-doc.md"},
         ]
     )
-    assert mod.run(manifest, only=None, fix=False) == 0
+    assert mod.run(manifest, only=None) == 0
 
 
-def test_run_returns_one_on_drift(tree: _Tree) -> None:
+def test_a_retired_class_key_is_rejected_rather_than_ignored(tree: _Tree) -> None:
+    """An entry key the guard does not know is refused, not skipped.
+
+    Reproduce-first for the ``mirror`` retirement, and deliberately general
+    beyond it: the manifest had no key validation at all. The class names were
+    enumerated at five call sites and anything else simply never matched, so a
+    ``mirror`` entry written after the class was retired read as no
+    classification at all.
+
+    The fixture is nested on purpose, because that is where the omission is
+    *silent* rather than merely misreported. A top-level doc nobody classified
+    fails the completeness pass -- the right verdict for the wrong reason. A
+    nested one in a non-recursive package is not part of the completeness set,
+    so a retired entry there leaves both files verified by nothing and the
+    package reporting clean.
+    """
+    mod, pkg, site = tree
+    (pkg / "nested").mkdir()
+    (site / "nested").mkdir()
+    _w(pkg / "nested" / "old.md", "# Old\n")
+    _w(site / "nested" / "old.md", "# Old\n")
+    manifest = _manifest(mirror=[{"package": "nested/old.md", "site": "nested/old.md"}])
+    assert mod.run(manifest, only=None) == 1
+
+
+def test_an_underscore_key_is_commentary_and_is_exempt(tree: _Tree) -> None:
+    """The manifest's own comment convention, which the check found the hard way.
+
+    JSON has no comments, so ``_note`` and ``_schema`` at the top level are how
+    the manifest carries its reasoning -- and ``structures`` and ``utils`` each
+    carry a per-package ``_note`` saying why the package is entirely
+    ``site_only``. The first run of :func:`check_known_classes` against the real
+    tree refused both of those. Exempting the prefix is not a hole in the rule;
+    refusing it would have been an instruction to delete the explanation.
+    """
+    mod, pkg, site = tree
+    _w(pkg / "guide.md", "# G\n")
+    _w(site / "guide.md", '--8<-- "packages/demo/docs/guide.md"\n')
+    manifest = _manifest(
+        _note="why this package looks the way it does",
+        transclude=[{"package": "guide.md", "site": "guide.md"}],
+    )
+    assert mod.run(manifest, only=None) == 0
+
+
+def test_a_misspelled_class_key_is_rejected(tree: _Tree) -> None:
+    """The same refusal, for the typo that was always possible.
+
+    ``symlnk`` never matched any of the five enumerations either, so a pair
+    recorded under it was opted out of every invariant while the manifest
+    looked complete. Nested for the reason the test above gives.
+    """
+    mod, pkg, site = tree
+    (pkg / "nested").mkdir()
+    (site / "nested").mkdir()
+    _w(pkg / "nested" / "guide.md", "# G\n")
+    _w(site / "nested" / "guide.md", "# G\n")
+    manifest = _manifest(symlnk=[{"package": "nested/guide.md", "site": "nested/guide.md"}])
+    assert mod.run(manifest, only=None) == 1
+
+
+def test_run_returns_one_when_a_transclude_became_a_hand_copy(tree: _Tree) -> None:
+    """The end-to-end failure that replaced end-to-end drift.
+
+    This was ``test_run_returns_one_on_drift``, and drift is not expressible
+    any more: a ``transclude`` pair is one text at two paths, so there is no
+    second copy to diverge. What *is* still possible is someone pasting the
+    source's content over the include -- recreating the hand copy the retired
+    class used to legitimise -- and that is the failure this asserts, through
+    ``run`` rather than through ``check_transclude`` alone.
+    """
     mod, pkg, site = tree
     _w(pkg / "api-reference.md", "# API\n\ntruth\n")
-    _w(site / "api-reference.md", "# API\n\ndrifted\n")
-    manifest = _manifest(mirror=[{"package": "api-reference.md", "site": "api-reference.md"}])
-    assert mod.run(manifest, only=None, fix=False) == 1
+    _w(site / "api-reference.md", "# API\n\ntruth\n")
+    manifest = _manifest(transclude=[{"package": "api-reference.md", "site": "api-reference.md"}])
+    assert mod.run(manifest, only=None) == 1
 
 
 def test_run_fails_on_a_link_no_rename_can_reach(
@@ -532,7 +437,7 @@ def test_run_fails_on_a_link_no_rename_can_reach(
     mod, pkg, _site = tree
     _w(pkg / "guide.md", "# G\n\nsee [X](../elsewhere/nothing.md)\n")
     manifest = _manifest(package_only=["guide.md"])
-    assert mod.run(manifest, only=None, fix=False) != 0
+    assert mod.run(manifest, only=None) != 0
     out = capsys.readouterr().out
     assert "link resolution" in out
     assert "../elsewhere/nothing.md" in out
@@ -576,7 +481,9 @@ def test_paired_doc_spelled_two_ways_is_detected(tree: _Tree) -> None:
     _w(pkg / "user-guide.md", "# G\n")
     _w(site / "userguide.md", "# G\n")
     res = mod.Result()
-    mod.check_name_parity({"mirror": [{"package": "user-guide.md", "site": "userguide.md"}]}, res)
+    mod.check_name_parity(
+        {"transclude": [{"package": "user-guide.md", "site": "userguide.md"}]}, res
+    )
     assert not res.ok
     assert any("name parity" in e for e in res.errors)
 
