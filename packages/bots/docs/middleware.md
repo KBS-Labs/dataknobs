@@ -831,4 +831,4 @@ For the two built-in flavors prefer the wrappers — they supply the correct
 
 - [configuration.md](configuration.md) - Full configuration reference
 - [user-guide.md](user-guide.md) - Getting started tutorials
-- [api.md](api.md) - API reference
+- [API Reference](https://kbs-labs.github.io/dataknobs/packages/bots/api/reference/) - Every class and function

@@ -871,8 +871,8 @@ Total: ~500-2000ms
 
 ## See Also
 
-- [API Reference](../api/reference.md) - Complete API documentation
+- [API Reference](https://kbs-labs.github.io/dataknobs/packages/bots/api/reference/) - Complete API documentation
 - [Configuration Reference](configuration.md) - Configuration options
 - [User Guide](user-guide.md) - Usage tutorials
 - [Tools Development](tools.md) - Creating custom tools
-- [Examples](../examples/index.md) - Working examples
+- [Examples](https://kbs-labs.github.io/dataknobs/packages/bots/examples/) - Working examples

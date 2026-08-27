@@ -66,15 +66,48 @@ Relative `.md` links are resolved case-**sensitively**, because
 when only `CONFIGURATION.md` is on disk. That is how 31 of the 89 stayed
 invisible on the machines they were written on.
 
-A link broken by *spelling* — the document is in that directory under
-another name — **fails the guard**. A link whose target is absent under
-any spelling is **printed and counted, not failed**: the trees nest some
-documents differently, some targets exist only in the site tree
-(generated API reference, site-native examples), and no rename reaches
-either. What such a link should become instead — an absolute site URL, a
-prose mention, a repaired path — is an open question per kind. The guard
-prints the live list on every run rather than recording it anywhere, so
-it cannot go stale, and it reaching zero is what retires the report.
+**Every relative `.md` link must resolve, and the guard fails when one
+does not.** Two shapes, one verdict, different remedies — which is why
+the messages differ:
+
+| Shape | What it means | Remedy the message names |
+|---|---|---|
+| **spelling** | the document is in that directory under another name | rename the file, or correct the link |
+| **absent under any spelling** | the trees nest it differently, or it is site-native, or it is gone | absolute site URL, publish the target, or name it in prose |
+
+The second half was **printed and counted rather than failed** while the
+question it posed was open: what may a package doc link to, when no
+relative path can reach the target from both trees? A cross-package link
+cannot — the package tree carries a `/docs/` segment the site tree does
+not, so `../../bots/docs/x.md` and `../../bots/x.md` cannot both be
+right. Aligning the nesting was priced at 58 published URLs to fix one
+link, and rejected on that number.
+
+So the answer is per shape, and **none of it is declared anywhere**:
+
+- **Absolute site URL** — `https://kbs-labs.github.io/dataknobs/packages/<pkg>/<page>/`.
+  The default for a cross-package target, a site-native one, or a
+  one-file pair whose two directories disagree. Derive it from the
+  **site file's path on disk**, not from the nav: `use_directory_urls`
+  defaults to true, so `docs/packages/bots/guides/tools.md` is
+  `/packages/bots/guides/tools/` — the `guides/` segment is part of the
+  URL. The cost is real and accepted: `--strict` no longer validates the
+  target, and `mkdocs serve` sends a local preview to production.
+- **Publish the target** into the package tree and symlink the site page,
+  when the target is package documentation that happens to live only on
+  the site. Root-cause fix, changes no URL — but check the target's *own*
+  onward links first, or the move trades two findings for two more.
+- **Name it in prose, without a link** — `wizard-subflows.md` carries the
+  precedent and its reason in an HTML comment.
+- **Repair the relative path**, when the document is served from one tree
+  only (`package_only`, `site_only`) or the pair is two independent files
+  (`diverge`). No cross-tree constraint exists there; such a link is
+  simply wrong.
+
+Nothing records which was chosen, and nothing needs to: an absolute URL
+is not a relative `.md` link and a prose mention is not a link at all, so
+all of them are invisible to the guard by construction rather than by
+allowlist. That is what keeps the standing cost of this rule at zero.
 
 ## Update Requirements
 

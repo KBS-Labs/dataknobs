@@ -328,6 +328,6 @@ uv run pytest tests/test_json_chunker.py -v
 
 ## Related
 
-- [Markdown Chunking](markdown-chunking.md) - Chunking markdown documents
+- [Markdown Chunking](../markdown/markdown-chunking.md) - Chunking markdown documents
 - [Ingestion Module](../ingestion/ingestion.md) - Directory processing
-- [Quality Filtering](quality-filtering.md) - Filtering low-quality chunks
+- [Quality Filtering](../markdown/quality-filtering.md) - Filtering low-quality chunks

@@ -97,7 +97,7 @@ thread for its lifetime. When a synchronous component makes repeated calls,
 
 ## sync → async: driving a blocking iterator from async
 
-The counterpart, [`aiter_sync_in_thread`](api.md), drives a *lazy,
+The counterpart, [`aiter_sync_in_thread`](https://kbs-labs.github.io/dataknobs/packages/common/api/), drives a *lazy,
 blocking* synchronous iterator on a worker thread and hands items to an
 async consumer across a bounded queue — so the iterator's setup and every
 step happen off the event loop, memory stays bounded (backpressure), and

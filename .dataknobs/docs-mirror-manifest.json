@@ -369,10 +369,8 @@
           "site": "knowledge/multi-tenant.md"
         }
       ],
-      "package_only": [
-        "api.md"
-      ],
       "site_only": [
+        "api/reference.md",
         "guides/environment-aware.md",
         "index.md",
         "quickstart.md"

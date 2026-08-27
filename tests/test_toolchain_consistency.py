@@ -439,7 +439,7 @@ def test_a_documentation_change_schedules_the_guards_that_read_it() -> None:
 
     # A package document read by no package suite: the workspace guards read
     # it, and nothing else does.
-    package_doc = _scopes.plan_for_files(["packages/bots/docs/api.md"])
+    package_doc = _scopes.plan_for_files(["packages/bots/docs/architecture.md"])
     assert package_doc["packages"] == [], (
         "a package document that no package test reads belongs to no suite — "
         f"scheduling one runs a whole package for a prose edit, got {package_doc['packages']}"

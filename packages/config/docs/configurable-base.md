@@ -89,5 +89,5 @@ w = Widget(WidgetConfig(name="x", size=4))
 print(w.config.name)
 ```
 
-See [Structured Configuration](../common/structured-config.md) for the
+See [Structured Configuration](https://kbs-labs.github.io/dataknobs/packages/common/structured-config/) for the
 full API reference.

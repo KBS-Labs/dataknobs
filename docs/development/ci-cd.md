@@ -111,10 +111,13 @@ came to be broken while the rendered site stayed clean. Relative `.md` links are
 resolved case-**sensitively**, because `Path.exists()` is not: on macOS it
 answers *yes* for `configuration.md` when only `CONFIGURATION.md` is present.
 
-A link broken by spelling fails the check. A link whose target is absent under
-any spelling is printed and counted instead — the two trees nest some documents
-differently and some targets are site-native, so no rename reaches those. The
-guard prints that list on every run rather than recording it anywhere.
+Every relative `.md` link must resolve in every tree its document is served
+from, and the check fails when one does not. A link broken by spelling names the
+rename that fixes it; a link whose target is absent under any spelling names the
+three remedies instead — an absolute site URL, publishing the target into the
+package tree, or a prose mention — because the two trees nest some documents
+differently and some targets are site-native, so no relative path reaches those
+from both. See `.claude/rules/dual-docs.md` for which remedy fits which case.
 
 ### Documentation Version Check
 

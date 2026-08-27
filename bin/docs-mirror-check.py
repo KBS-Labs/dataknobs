@@ -59,9 +59,16 @@ Beyond the per-class invariant, three properties hold across every doc:
   that is new, or unpaired, and so invisible to the rule above.
 
   **Links resolve.** Every relative ``.md`` link resolves -- case-sensitively --
-  in every tree its document is served from. A link broken by *spelling* fails.
-  One whose target is absent under any spelling is counted and printed instead:
-  the two trees nest some documents differently, so no rename reaches those.
+  in every tree its document is served from, and one that does not fails. Two
+  shapes, one verdict, different remedies: a link broken by *spelling* names
+  the rename that fixes it, while one whose target is absent under any spelling
+  names the three that do -- an absolute site URL, publishing the target into
+  the package tree, or a prose mention. The second shape was counted and
+  printed rather than failed while the question it posed was open, because the
+  two trees nest some documents differently and no relative path reaches such a
+  target from both. None of the three remedies is declared anywhere: an
+  absolute URL is not a relative ``.md`` link and a prose mention is not a link
+  at all, so all three are invisible here by construction.
 
 Completeness: every ``*.md`` **in scope** MUST be classified. An unclassified
 file (or a manifest entry with no file on disk) fails the check -- that is
@@ -733,33 +740,31 @@ def _served_docs(entry: dict, pkg_dir: Path, site_dir: Path) -> Iterator[tuple[P
         yield site_dir / name, [(site_dir / name).parent]
 
 
-def check_link_resolution(
-    entry: dict,
-    pkg_dir: Path,
-    site_dir: Path,
-    res: Result,
-    unresolved: list[tuple[str, str, str]],
-) -> None:
+def check_link_resolution(entry: dict, pkg_dir: Path, site_dir: Path, res: Result) -> None:
     """A relative ``.md`` link resolves in every tree its document is served from.
 
-    Two populations, and only one of them can be failed today.
+    One rule, and it took two passes to get here. Both populations below fail;
+    they differ only in the remedy their message names, because the remedies are
+    genuinely different and a single message could name neither.
 
     **Spelling.** The target is absent from that directory but a file differing
     from it only in case or underscores is present. The document is right there
     under the other name, so either the link or the file is misspelled and a
-    rename fixes it. This fails.
+    rename fixes it.
 
-    **Everything else.** The target is absent under any spelling. No rename
-    reaches these: the two trees nest the same document differently
+    **Everything else.** The target is absent under any spelling, so no rename
+    reaches it: the two trees nest the same document differently
     (``packages/<pkg>/docs/`` against ``docs/packages/<pkg>/guides/``), or the
-    target exists only in the site tree (generated API reference, site-native
-    examples), or it exists nowhere at all. Making them resolve is a decision
-    about what a package doc may link to -- per kind, plausibly differently --
-    not a naming question, so they are counted and printed instead.
+    target is site-native, or it is gone. This half was counted and printed
+    rather than failed while it was still a question -- what may a package doc
+    link to, when a relative path cannot answer? -- and it is failed now that
+    the answer exists: link the published page by its absolute site URL, publish
+    the target into the package tree, or name it in prose without a link.
 
-    The count is derived on every run rather than recorded anywhere, so it
-    cannot rot the way a docstring figure or a ceiling file would; and its
-    reaching zero is exactly what retires the informational branch.
+    Nothing has to declare which of those was chosen. An absolute URL is not a
+    relative ``.md`` link and a prose mention is not a link at all, so all three
+    remedies are invisible to this check by construction rather than by
+    allowlist -- which is what keeps the standing maintenance cost at zero.
     """
     seen: set[tuple[str, str, str]] = set()
     for src, dirs in _served_docs(entry, pkg_dir, site_dir):
@@ -787,7 +792,15 @@ def check_link_resolution(
                 seen.add(key)
                 fold = _fold_sibling(path)
                 if fold is None:
-                    unresolved.append(key)
+                    res.fail(
+                        f"link resolution: {rel_src} links to '{target}', which does "
+                        f"not exist in {key[2]} under any spelling. The document is "
+                        f"served from that directory, so the link has to resolve "
+                        f"there: link the published page by its absolute site URL "
+                        f"(https://kbs-labs.github.io/dataknobs/...), publish the "
+                        f"target into the package tree, or name it in prose without "
+                        f"a link."
+                    )
                     continue
                 res.fail(
                     f"link spelling: {rel_src} links to '{target}', which does not "
@@ -925,54 +938,10 @@ def fix_mirror(pair: dict, pkg_dir: Path, site_dir: Path) -> bool:
     return True
 
 
-def _report_unresolved(unresolved: list[tuple[str, str, str]]) -> None:
-    """Print the links that do not resolve and cannot be fixed by a rename.
-
-    Not a failure, and the message has to say why without sounding like one.
-    Every entry here has a target that is absent from that directory under any
-    spelling -- a misspelled link fails :func:`check_link_resolution` instead --
-    so what is left is the consequence of the two trees nesting the same
-    document differently, of a target that exists only in the site tree, or of a
-    target that exists nowhere. None of those is answerable by naming.
-
-    One line per (document, target). A document served at two paths is resolved
-    from both, so a link missing from each would otherwise be listed twice, and
-    the count in brackets says so instead. Repeats *within* a page are already
-    gone by here -- :func:`check_link_resolution` keys on the directory it
-    looked in, so the page that carries the same link to generated API
-    reference twenty-two times contributes one entry, which is right: it is one
-    decision to make, not twenty-two.
-    """
-    by_target: dict[tuple[str, str], int] = {}
-    for src, target, _base in unresolved:
-        by_target[(src, target)] = by_target.get((src, target), 0) + 1
-    print()
-    print(
-        yellow(
-            f"i {len(by_target)} relative .md link(s) do not resolve in a tree their "
-            f"document is served from:"
-        )
-    )
-    for (src, target), count in sorted(by_target.items()):
-        times = f"  (x{count})" if count > 1 else ""
-        print(yellow(f"    {src} -> {target}{times}"))
-    print(
-        cyan(
-            "  None of these is a spelling mismatch -- that fails the check instead.\n"
-            "  Each target is absent from that directory under any spelling, so no rename\n"
-            "  reaches it: the two trees nest the same document differently\n"
-            "  (packages/<pkg>/docs/ vs docs/packages/<pkg>/guides/), or the target is\n"
-            "  site-native, or it exists nowhere. Making these resolve is a decision about\n"
-            "  what a package doc may link to. Reported, not failed."
-        )
-    )
-
-
 def run(manifest: dict, only: str | None, fix: bool) -> int:
     packages = manifest["packages"]
     names = [only] if only else sorted(packages)
     overall = Result()
-    unresolved: list[tuple[str, str, str]] = []
 
     for name in names:
         if name not in packages:
@@ -999,7 +968,7 @@ def run(manifest: dict, only: str | None, fix: bool) -> int:
         check_unpaired(entry, pkg_dir, site_dir, res)
         check_name_parity(entry, res)
         check_doc_spelling(pkg_dir, res)
-        check_link_resolution(entry, pkg_dir, site_dir, res, unresolved)
+        check_link_resolution(entry, pkg_dir, site_dir, res)
         for pair in entry.get("symlink", []):
             check_symlink(pair, pkg_dir, site_dir, res)
         for pair in entry.get("mirror", []):
@@ -1038,16 +1007,21 @@ def run(manifest: dict, only: str | None, fix: bool) -> int:
     if fix:
         return 0
 
-    if unresolved:
-        _report_unresolved(unresolved)
-
     print()
     if overall.ok:
         print(green("✓ Documentation mirrors are in sync"))
         return 0
     print(red(f"✗ Documentation mirror check failed ({len(overall.errors)} issue(s))"))
-    print(cyan("  Reconcile the mirror, run `bin/docs-mirror-check.py --fix`, or"))
-    print(cyan(f"  reclassify the pair in {MANIFEST.relative_to(ROOT)}."))
+    print(cyan("  Each error above names the remedy for its own kind; this line used to"))
+    print(cyan("  prescribe one for all of them, which stopped being true when an"))
+    print(cyan("  unresolvable link became a failure -- `--fix` cannot repair a link."))
+    print(cyan("  For mirror drift specifically: reconcile the copy, run"))
+    print(
+        cyan(
+            f"  `bin/docs-mirror-check.py --fix`, or reclassify the pair in "
+            f"{MANIFEST.relative_to(ROOT)}."
+        )
+    )
     return 1
 
 
