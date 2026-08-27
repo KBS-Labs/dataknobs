@@ -13,6 +13,7 @@ from types import TracebackType
 from typing import TYPE_CHECKING, Any, Protocol, Self, TypeVar, cast, runtime_checkable
 
 from dataknobs_common.bounded_cache import BoundedLRUCache
+from dataknobs_common.copying import copy_structure
 from dataknobs_common.exceptions import (
     ConfigurationError,
     DottedPathError,
@@ -98,6 +99,11 @@ def normalize_wizard_state(wizard_meta: dict[str, Any]) -> dict[str, Any]:
     Handles both old nested format (fsm_state.current_stage) and
     new flat format (current_stage directly).
 
+    The returned dict is the caller's own.  Its containers are copied out
+    of ``wizard_meta`` rather than read from it, so writing into the result
+    -- or into anything nested inside it -- cannot reach the metadata it
+    was built from.
+
     Args:
         wizard_meta: Raw wizard metadata from manager or storage
 
@@ -117,6 +123,7 @@ def normalize_wizard_state(wizard_meta: dict[str, Any]) -> dict[str, Any]:
         or fsm_state.get("current_stage")
     )
 
+    seen: dict[int, Any] = {}
     result: dict[str, Any] = {
         "current_stage": current_stage,
         # No fallback into ``fsm_state``: that dict is ``WizardState.to_dict()``
@@ -128,12 +135,28 @@ def normalize_wizard_state(wizard_meta: dict[str, Any]) -> dict[str, Any]:
         "total_stages": wizard_meta.get("total_stages", 0),
         "progress": wizard_meta.get("progress", 0.0),
         "completed": wizard_meta.get("completed", False),
-        "data": wizard_meta.get("data") or fsm_state.get("data", {}),
+        # Copied, not read out.  Every container here used to be the
+        # object living in ``wizard_meta`` -- which on the fast path is
+        # ``manager.metadata["wizard"]``, live persisted state -- so both
+        # consumers of this reader handed a caller a write-through view of
+        # a conversation.  ``DynaBot.get_wizard_state()`` returns this dict
+        # as a public API, and ``WizardReasoning.snapshot_from_metadata``
+        # builds a snapshot its own type documents as read-only; neither
+        # was.  One memo across the four, so a subtree the source shares
+        # between them is still shared in the result.
+        #
+        # ``copy_structure`` rather than ``dict``/``list``: ``data`` nests
+        # whenever a stage collects an object-typed field, and ``stages``
+        # is a list of dicts, so a shallow copy stops exactly where the
+        # hazard starts.  Leaves pass through, so this costs a walk of the
+        # structure rather than a duplicate of everything in it, and
+        # neither consumer is on the per-turn path.
+        "data": copy_structure(wizard_meta.get("data") or fsm_state.get("data", {}), seen),
         "can_skip": wizard_meta.get("can_skip", False),
         "can_go_back": wizard_meta.get("can_go_back", True),
-        "suggestions": wizard_meta.get("suggestions", []),
-        "history": wizard_meta.get("history") or fsm_state.get("history", []),
-        "stages": wizard_meta.get("stages", []),
+        "suggestions": copy_structure(wizard_meta.get("suggestions", []), seen),
+        "history": copy_structure(wizard_meta.get("history") or fsm_state.get("history", []), seen),
+        "stages": copy_structure(wizard_meta.get("stages", []), seen),
     }
 
     # Subflow context: present when wizard is executing a subflow.

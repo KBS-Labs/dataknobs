@@ -215,6 +215,51 @@ class TestTransitionRecord:
         assert record.subflow_push is None
         assert record.subflow_depth == 0
 
+    def test_from_dict_does_not_alias_the_snapshot_it_read(self) -> None:
+        """``cls(**data)`` bound ``data_snapshot`` by reference.
+
+        Every caller of this deserializes a dict it does not own -- three
+        of the four read straight out of ``manager.metadata``.  A record
+        restored from one held the *persisted* dict, so a consumer reading
+        ``snapshot.transitions[i].data_snapshot`` and writing into it
+        rewrote conversation state that had already been saved.
+
+        The record is the boundary: nothing mutates ``data_snapshot`` after
+        construction -- every writer passes a fresh ``state.data.copy()`` --
+        so copying on the way in costs one restore and closes all four
+        call sites at once.
+        """
+        source: dict[str, Any] = {
+            "from_stage": "welcome",
+            "to_stage": "configure",
+            "timestamp": 1234567890.0,
+            "trigger": "user_input",
+            "data_snapshot": {"profile": {"city": "Boston"}},
+        }
+
+        record = TransitionRecord.from_dict(source)
+
+        assert record.data_snapshot is not None
+        assert record.data_snapshot is not source["data_snapshot"]
+        assert record.data_snapshot["profile"] is not source["data_snapshot"]["profile"], (
+            "a nested value is where a shallow copy stops"
+        )
+
+        record.data_snapshot["profile"]["city"] = "tampered"
+        assert source["data_snapshot"]["profile"]["city"] == "Boston"
+
+    def test_from_dict_leaves_an_absent_snapshot_absent(self) -> None:
+        """Copying must not invent a snapshot where the source had none."""
+        base: dict[str, Any] = {
+            "from_stage": "a",
+            "to_stage": "b",
+            "timestamp": 1.0,
+            "trigger": "auto",
+        }
+
+        assert TransitionRecord.from_dict(dict(base)).data_snapshot is None
+        assert TransitionRecord.from_dict({**base, "data_snapshot": None}).data_snapshot is None
+
 
 class TestCreateTransitionRecord:
     """Tests for the create_transition_record factory function."""
@@ -1392,6 +1437,48 @@ class TestWizardStateSnapshot:
         """
         restored = WizardStateSnapshot.from_dict({"current_stage": "gather"})
         assert restored.stage_metadata == {}
+
+    def test_snapshot_from_dict_does_not_alias_the_dict_it_read(self) -> None:
+        """The third constructor of a type documented as read-only.
+
+        ``get_state_snapshot`` and ``snapshot_from_metadata`` both copy
+        their payloads; this one bound every container straight out of the
+        source dict, so a snapshot restored from persisted JSON shared its
+        ``data``, ``stage_metadata``, ``suggestions`` and ``stages`` with
+        whatever the caller had loaded -- and a write through the snapshot
+        reached it.
+
+        The claim the type makes is about the object, so it has to hold
+        however the object was built.
+        """
+        source: dict[str, Any] = {
+            "current_stage": "gather",
+            "data": {"profile": {"city": "Boston"}},
+            "history": ["welcome"],
+            "tasks": [{"id": "collect_name", "status": "completed"}],
+            "available_task_ids": ["collect_description"],
+            "suggestions": ["yes", "no"],
+            "stages": [{"name": "gather", "label": "Gather", "status": "current"}],
+            "stage_metadata": {"schema": {"properties": {"name": {}}}},
+        }
+
+        restored = WizardStateSnapshot.from_dict(source)
+
+        restored.data["profile"]["city"] = "tampered"
+        restored.history.append("injected")
+        restored.tasks[0]["status"] = "tampered"
+        restored.available_task_ids.append("injected")
+        restored.suggestions.append("injected")
+        restored.stages[0]["status"] = "tampered"
+        restored.stage_metadata["schema"]["properties"]["injected"] = {}
+
+        assert source["data"]["profile"]["city"] == "Boston"
+        assert source["history"] == ["welcome"]
+        assert source["tasks"][0]["status"] == "completed"
+        assert source["available_task_ids"] == ["collect_description"]
+        assert source["suggestions"] == ["yes", "no"]
+        assert source["stages"][0]["status"] == "current"
+        assert "injected" not in source["stage_metadata"]["schema"]["properties"]
 
 
 class TestSnapshotToToolView:

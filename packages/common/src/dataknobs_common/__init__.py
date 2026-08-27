@@ -106,6 +106,7 @@ from dataknobs_common.config_loading import (
     load_yaml_or_json,
     parse_yaml_or_json,
 )
+from dataknobs_common.copying import copy_structure
 from dataknobs_common.discriminator import (
     AsyncCallableDiscriminator,
     AsyncChainedDiscriminator,
@@ -407,6 +408,8 @@ __all__ = [
     "InProcessLock",
     # Advisory single-file lock — a separate primitive, not a backend
     "FileLock",
+    # Structural copying — between dict() and copy.deepcopy()
+    "copy_structure",
     # Metadata helpers
     "enforce_immutable_keys",
     # Pack composition

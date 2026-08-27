@@ -437,3 +437,110 @@ class TestCanonicalSchema:
         assert isinstance(result["can_go_back"], bool)
         assert isinstance(result["suggestions"], list)
         assert isinstance(result["history"], list)
+
+
+class TestTheNormalizerDoesNotHandOutWhatItRead:
+    """The normalized dict is a hand-out, and it aliased its source.
+
+    ``normalize_wizard_state`` reads ``data``, ``history``, ``suggestions``
+    and ``stages`` straight off ``wizard_meta`` and puts the *same objects*
+    in its result.  On the fast path ``wizard_meta`` is
+    ``manager.metadata["wizard"]`` -- live, persisted conversation state --
+    so a caller writing into the dict this returns rewrites it.
+
+    Both consumers are exposed: ``DynaBot.get_wizard_state()``, which is
+    public and documented as returning a state dict, and
+    ``WizardReasoning.snapshot_from_metadata``, which feeds a snapshot the
+    type documents as read-only.  Copying here is what makes both true,
+    which is why the fix is on the reader rather than on either caller.
+    """
+
+    def test_the_normalized_containers_are_not_the_source_objects(self) -> None:
+        """A pure unit on the reader itself."""
+        wizard_meta: dict[str, Any] = {
+            "current_stage": "gather",
+            "data": {"profile": {"city": "Boston"}},
+            "history": ["welcome"],
+            "suggestions": ["yes", "no"],
+            "stages": [{"name": "gather", "label": "Gather", "status": "current"}],
+        }
+
+        result = normalize_wizard_state(wizard_meta)
+
+        assert result["data"] is not wizard_meta["data"]
+        assert result["history"] is not wizard_meta["history"]
+        assert result["suggestions"] is not wizard_meta["suggestions"]
+        assert result["stages"] is not wizard_meta["stages"]
+        assert result["stages"][0] is not wizard_meta["stages"][0], (
+            "the roadmap entries are dicts; copying only the outer list "
+            "leaves each entry pointing at the source"
+        )
+        assert result["data"]["profile"] is not wizard_meta["data"]["profile"], (
+            "a nested collected value is where a shallow copy stops"
+        )
+
+    def test_writing_through_the_normalized_dict_does_not_reach_the_source(
+        self,
+    ) -> None:
+        """Identity is the mechanism; this is the effect."""
+        wizard_meta: dict[str, Any] = {
+            "current_stage": "gather",
+            "data": {"profile": {"city": "Boston"}},
+            "history": ["welcome"],
+            "suggestions": ["yes"],
+            "stages": [{"name": "gather", "label": "Gather", "status": "current"}],
+        }
+
+        result = normalize_wizard_state(wizard_meta)
+        result["data"]["profile"]["city"] = "tampered"
+        result["history"].append("injected")
+        result["suggestions"].append("injected")
+        result["stages"][0]["status"] = "tampered"
+
+        assert wizard_meta["data"]["profile"]["city"] == "Boston"
+        assert wizard_meta["history"] == ["welcome"]
+        assert wizard_meta["suggestions"] == ["yes"]
+        assert wizard_meta["stages"][0]["status"] == "current"
+
+    @pytest.mark.asyncio
+    async def test_the_public_state_does_not_alias_persisted_metadata(self) -> None:
+        """The consumer that made this a public-surface defect.
+
+        ``get_wizard_state`` reads the in-memory manager first, so what it
+        normalized was the live metadata dict itself -- not a copy loaded
+        from storage.
+        """
+        config = (
+            WizardConfigBuilder("alias-test")
+            .stage("gather", is_start=True, prompt="Tell me your name and topic.")
+            .field("name", field_type="string", required=True)
+            .field("topic", field_type="string", required=True)
+            .transition("done", "data.get('name') and data.get('topic')")
+            .stage("done", is_end=True, prompt="All done!")
+            .build()
+        )
+
+        async with await BotTestHarness.create(
+            wizard_config=config,
+            main_responses=["Got it!"],
+            extraction_results=[[{"name": "Alice", "topic": "math"}]],
+        ) as harness:
+            await harness.chat("My name is Alice and I like math")
+            conversation_id = harness.context.conversation_id
+            manager = harness.bot.get_conversation_manager(conversation_id)
+
+            state = await harness.bot.get_wizard_state(conversation_id)
+            assert state is not None
+            state["data"]["injected"] = True
+            if state["stages"]:
+                state["stages"][0]["status"] = "tampered"
+
+            wizard_meta = manager.metadata["wizard"]
+            persisted_data = wizard_meta.get("data") or wizard_meta["fsm_state"]["data"]
+            assert "injected" not in persisted_data, (
+                "writing into the public state dict rewrote persisted wizard state"
+            )
+            if wizard_meta.get("stages"):
+                assert wizard_meta["stages"][0]["status"] != "tampered", (
+                    "writing into the public roadmap rewrote persisted wizard state"
+                )

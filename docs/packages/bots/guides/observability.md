@@ -247,6 +247,21 @@ query = TransitionHistoryQuery(
 
 `WizardStateSnapshot` provides a complete read-only view of wizard state, useful for UI rendering and debugging:
 
+**Read-only means owned, not merely conventional.** Every container a
+snapshot exposes is copied out of the wizard rather than read from it, and
+the copies are structural — nested values are copied too. Writing into
+`snapshot.data`, `snapshot.stage_metadata`, `snapshot.suggestions`,
+`snapshot.stages` or `snapshot.transitions[i].data_snapshot` changes nothing
+outside the snapshot. That is a property of the object, so it holds however
+the snapshot was built: `get_state_snapshot()`, `snapshot_from_metadata()`
+and `from_dict()` all produce one you can write into freely.
+
+The wizard's own accessors are the opposite and deliberately so —
+`WizardFSM.stages`, `current_metadata` and `stage_metadata_for()` hand back
+the live stage dict, on the per-turn path. Copy a stage you intend to edit,
+as `stages` documents.
+
+
 ```python
 from dataknobs_bots.reasoning.observability import WizardStateSnapshot
 
@@ -360,6 +375,13 @@ An empty dict therefore means either "this snapshot came off the metadata
 route" or "the stage declares nothing", and the two are deliberately not
 distinguished.
 
+The snapshot's copy of it is structural, not shallow, so adjusting a nested
+section of the stage config you read here does not reconfigure the running
+wizard. Reading the same stage through `WizardFSM.stages`,
+`current_metadata` or `stage_metadata_for()` does hand you the live dict —
+those are on the per-turn path and unchanged. Copy a stage you intend to
+edit, as `stages` documents.
+
 ### Handing a Snapshot to a Tool
 
 `to_tool_view()` converts a snapshot into the `ToolWizardState` a
@@ -374,7 +396,8 @@ context = ToolExecutionContext(wizard_state=snapshot.to_tool_view())
 
 The conversion runs in this direction only — a snapshot carries transitions,
 task tracking and progress that the tool view has no room for — and its
-payloads are **copies**, so writes to the view do not reach the snapshot. See
+payloads are **copied in depth**, so neither a write to the view nor a write
+into something nested inside it reaches the snapshot or the wizard. See
 [Tool Execution Context](../../llm/guides/tool-context.md) for what a tool may
 and may not do with the result.
 

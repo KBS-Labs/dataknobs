@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Changed
+
+- **`EnvironmentConfig` copies its hand-outs through
+  `dataknobs_common.copy_structure`.** The private `_copy_structure` helper
+  that did this is now a public utility in `dataknobs-common`, because a
+  second package needed the same copy. Behaviour here is unchanged except
+  that the shared version also keeps its memo's sources alive — a latent
+  defect the call sites in this module never triggered, since the structures
+  they copy stay referenced for the duration.
+
 ## v0.7.0 - 2026-08-26
 
 ### Fixed
