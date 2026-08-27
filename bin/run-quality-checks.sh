@@ -1938,11 +1938,11 @@ else
         fi
 
         if [ "$DOCS_MIRROR_STATUS" -ne 0 ] && [ -f "$OUTPUT_DIR/docs-mirror.log" ]; then
-            echo -e "  ${CYAN}Documentation Mirror Drift:${NC}"
-            echo "    View mirror differences:"
+            echo -e "  ${CYAN}Documentation Mirror Check:${NC}"
+            echo "    Read the failures — each names its own remedy:"
             echo "      cat $OUTPUT_DIR/docs-mirror.log"
-            echo "    To fix:"
-            echo "      bin/docs-mirror-check.py --fix   # or reclassify in .dataknobs/docs-mirror-manifest.json"
+            echo "    There is no --fix. It regenerated a hand-authored \`mirror\` page,"
+            echo "    and that class is gone; a classified pair is one text at two paths."
             echo ""
         fi
 

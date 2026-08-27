@@ -49,21 +49,25 @@ jobs:
               issue_number: context.issue.number,
               owner: owner,
               repo: repo,
-              body: `## ❌ Documentation Mirror Drift
+              body: `## ❌ Documentation Mirror Check Failed
 
-          The package-local docs (\`packages/<pkg>/docs/\`) and the mkdocs site docs
-          (\`docs/packages/<pkg>/\`) are out of sync, or a doc is unclassified.
+          A package doc and its mkdocs site counterpart disagree, a doc is
+          unclassified, or a relative link does not resolve in a tree its document
+          is served from.
 
           Run the check locally to see the exact issue:
           \`\`\`bash
-          python3 bin/docs-mirror-check.py --check
+          python3 bin/docs-mirror-check.py
           \`\`\`
 
-          **Common fixes:**
-          - A hand-authored **mirror** drifted → reconcile it, or run
-            \`python3 bin/docs-mirror-check.py --fix\` to regenerate the site page from its package source.
+          Every error names its own remedy. The common ones:
           - A **new doc** is unclassified → add it to \`.dataknobs/docs-mirror-manifest.json\`
-            under the right bucket (symlink / transclude / mirror / diverge / package_only / site_only).
+            under the right class (symlink / transclude / diverge / package_only / site_only).
+          - A **transclude** site page was replaced by a hand copy → restore the
+            \`--8<--\` include. A classified pair is one text at two paths; there is
+            no second copy to reconcile, and no \`--fix\` to regenerate one.
+          - A **link** does not resolve → link the published page by its absolute
+            site URL, publish the target into the package tree, or name it in prose.
           - The divergence is **intentional** → reclassify the pair as \`diverge\` in the manifest.`
             })
           }

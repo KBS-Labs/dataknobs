@@ -27,5 +27,5 @@ library = get_extraction_prompt_library()
 template = library.get_system_prompt("extraction.default")
 ```
 
-See also: [dataknobs-bots Prompt Key Reference](../../bots/docs/prompt-reference.md)
+See also: [dataknobs-bots Prompt Key Reference](https://kbs-labs.github.io/dataknobs/packages/bots/guides/prompt-reference/)
 for the full catalog including wizard, review, grounded, and focus prompts.

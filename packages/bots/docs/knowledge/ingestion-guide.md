@@ -467,9 +467,9 @@ excludes, per-pattern chunking, streaming JSON apply in every case.
 ## Related
 
 - [IngestOrchestrator](orchestrator.md) — event-driven subscriber API
-- [DocumentSource](../../../xization/docs/ingestion/document-source.md) —
+- [DocumentSource](https://kbs-labs.github.io/dataknobs/packages/xization/ingestion/document-source/) —
   async protocol underlying the unified pipeline
-- [DirectoryProcessor](../../../xization/docs/ingestion/directory-processor.md)
+- [DirectoryProcessor](https://kbs-labs.github.io/dataknobs/packages/xization/ingestion/directory-processor/)
   — async-primary processor
-- [RAG Ingestion (historical reference)](../rag-ingestion.md) —
+- [RAG Ingestion and Hybrid Search](https://kbs-labs.github.io/dataknobs/packages/bots/guides/rag-ingestion/) —
   `load_from_directory`, hybrid search, progress callbacks

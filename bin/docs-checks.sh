@@ -138,6 +138,6 @@ if [ "$OVERALL" -eq 0 ]; then
 else
     echo -e "${RED}✗ One or more documentation checks failed${NC}"
     echo -e "${CYAN}  Fixes: mkdocs errors -> bin/dk docs; version drift -> bin/docs-update-versions.sh;${NC}"
-    echo -e "${CYAN}         mirror drift -> bin/docs-mirror-check.py --fix${NC}"
+    echo -e "${CYAN}         mirror-check failures -> each error names its own remedy${NC}"
 fi
 exit "$OVERALL"
