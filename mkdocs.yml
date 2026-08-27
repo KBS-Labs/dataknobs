@@ -6,6 +6,18 @@ repo_url: https://github.com/kbs-labs/dataknobs
 repo_name: dataknobs
 edit_uri: edit/main/docs/
 
+# Link validation
+#
+# mkdocs 1.6 defaults `links.anchors` to INFO, so a `#heading-anchor` that no
+# longer exists is silently ignored -- including by `--strict`, which only
+# promotes WARNING. Raising both to `warn` means `--strict` fails the build on
+# a dead anchor or an unrecognized link, the same way it already fails on a
+# missing page.
+validation:
+  links:
+    anchors: warn
+    unrecognized_links: warn
+
 # Theme configuration
 theme:
   name: material

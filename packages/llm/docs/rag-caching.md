@@ -530,4 +530,4 @@ Mitigation strategies:
 
 - [user-guide.md](user-guide.md) - General conversation management
 - [best-practices.md](best-practices.md) - RAG configuration best practices
-- [Prompt Builder Documentation](../src/dataknobs_llm/prompts/builders/README.md) - RAG configuration details
+- [Prompt builder RAG configuration](user-guide.md#rag-configuration) - Wiring resource adapters into a prompt builder

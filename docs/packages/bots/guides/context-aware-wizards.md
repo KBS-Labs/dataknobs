@@ -991,7 +991,7 @@ Derivations can also chain: rule A→B fires, then rule B→C fires in the same 
 
 ### Transform Summary
 
-The derivation system provides 22 transforms across 6 categories:
+The derivation system provides 21 built-in transforms across 6 categories, plus a pluggable `custom` hook:
 
 | Category | Transforms | Count |
 |----------|-----------|-------|
