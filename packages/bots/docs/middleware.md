@@ -721,6 +721,7 @@ one-shot generator is fine.
 | `build_middleware` | `Middleware` | Bot-turn lifecycle hooks (`on_turn_start` / `after_turn` / ...) |
 | `build_conversation_middleware` | `ConversationMiddleware` | LLM-call wraps (`process_request` / `process_response`) |
 | `resolve_middleware_from_spec` | either | One spec at a time — see [Resolving a single spec](#resolving-a-single-spec) |
+| `resolve_middleware_class` | nothing | Validates a spec and returns its class — see [Checking a spec without building it](#checking-a-spec-without-building-it) |
 
 Both wrappers delegate to `resolve_middleware_from_spec`, so there is
 exactly one resolution body and the two flavors cannot drift.
@@ -801,6 +802,53 @@ for spec in specs:
 
 For the two built-in flavors prefer the wrappers — they supply the correct
 `expected_base` and the `label` that appears in error messages.
+
+### Checking a spec without building it
+
+`resolve_middleware_class` is `resolve_middleware_from_spec` with the
+constructor call removed. It hands back the class and its params, and
+applies the same rules at the same points — because it is the same code,
+so a caller that checks with one and installs with the other cannot
+disagree with itself about which specs are installable:
+
+```python
+from dataknobs_bots import resolve_middleware_class
+from dataknobs_bots.middleware import Middleware
+
+for spec in specs:
+    resolved = resolve_middleware_class(spec, Middleware, label="middleware")
+    if resolved is None:
+        record_missing_integration(spec["class"])   # optional: true, unresolved
+        continue
+    cls, params = resolved
+```
+
+This is what a **config linter** wants — something answering "would this
+config build?" across a tree of declarations, in a process that is not
+building a bot and has no business running one `__init__` per middleware
+per config. An initializer may open a file, read an env var, or connect to
+something.
+
+A clean answer means *this spec is installable*, not *this bot will start*:
+
+| Failure | `resolve_middleware_class` | `resolve_middleware_from_spec` |
+|---|---|---|
+| no `class` key | raises (skips under `optional`) | same |
+| path does not import | raises (skips under `optional`) | same |
+| class is not a subclass of the base | **always raises** | same |
+| constructor rejects `params` | **not detected** | raises (skips under `optional`) |
+| constructor raises | **not detected** | raises (skips under `optional`) |
+
+The last two rows are inherent: detecting either one means running the
+constructor, which is the thing the caller is avoiding. `params` comes back
+rather than being dropped so a caller can apply its own cheaper checks to
+it — a required key, a value's type — still without a ctor.
+
+> **Not constructing is not the same as not executing.** Resolving a dotted
+> path imports its module, and import runs module-level code. The
+> trusted-configuration rule above applies here with *more* force than it
+> does to the builders, not less: a linter is exactly the kind of tool that
+> gets pointed at a directory of configs somebody else wrote.
 
 ---
 

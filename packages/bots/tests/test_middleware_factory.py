@@ -17,6 +17,7 @@ from __future__ import annotations
 import logging
 import subprocess
 import sys
+from collections.abc import Iterator
 
 import pytest
 from dataknobs_common.imports import dotted_path
@@ -25,11 +26,16 @@ from dataknobs_bots.bot.base import DynaBot
 from dataknobs_bots.middleware import (
     build_conversation_middleware,
     build_middleware,
+    resolve_middleware_class,
     resolve_middleware_from_spec,
 )
 from dataknobs_bots.middleware.base import Middleware
 from dataknobs_bots.middleware.logging import LoggingMiddleware
-from dataknobs_common.exceptions import ConfigurationError
+from dataknobs_common.exceptions import (
+    ConfigurationError,
+    DottedPathError,
+    DottedPathReason,
+)
 from dataknobs_llm.conversations import (
     ConversationMiddleware,
     HistoryRedactionMiddleware,
@@ -255,6 +261,160 @@ def test_a_shape_mismatch_raises_even_behind_a_valid_spec() -> None:
 
 
 # ---------------------------------------------------------------------------
+# The check half — every rule above, with no constructor run
+# ---------------------------------------------------------------------------
+
+_CONSTRUCTED: list[str] = []
+
+
+class ConstructionRecordingMiddleware(Middleware):
+    """A real ``Middleware`` whose constructor is observable.
+
+    Not a mock, and not decoration: "constructed nothing" cannot be
+    asserted from the absence of an error, because a check that built an
+    instance and threw it away would pass that assertion while doing the
+    exact thing the caller is avoiding. The side effect is the only way to
+    tell the two apart from outside.
+    """
+
+    def __init__(self, tag: str = "untagged") -> None:
+        _CONSTRUCTED.append(tag)
+        self.tag = tag
+
+
+_RECORDING_CLASS = dotted_path(ConstructionRecordingMiddleware)
+
+
+@pytest.fixture
+def constructed() -> Iterator[list[str]]:
+    """The tags of every ``ConstructionRecordingMiddleware`` built so far."""
+    _CONSTRUCTED.clear()
+    yield _CONSTRUCTED
+    _CONSTRUCTED.clear()
+
+
+def test_the_check_half_runs_no_constructor(constructed: list[str]) -> None:
+    """The item's whole point: same spec, class back, ctor unrun.
+
+    Both calls are made on one spec so the difference between them is the
+    construction and nothing else.
+    """
+    spec = {"class": _RECORDING_CLASS, "params": {"tag": "checked"}}
+
+    resolved = resolve_middleware_class(spec, Middleware, label="middleware")
+
+    assert resolved is not None
+    cls, params = resolved
+    assert cls is ConstructionRecordingMiddleware
+    assert dict(params) == {"tag": "checked"}
+    assert constructed == []
+
+    built = resolve_middleware_from_spec(spec, Middleware, label="middleware")
+
+    assert isinstance(built, ConstructionRecordingMiddleware)
+    assert constructed == ["checked"]
+
+
+@pytest.mark.parametrize(
+    ("class_path", "expected_base", "label"),
+    [
+        (_CONVERSATION_MIDDLEWARE_CLASS, Middleware, "middleware"),
+        (_BOT_MIDDLEWARE_CLASS, ConversationMiddleware, "conversation_middleware"),
+    ],
+)
+def test_the_check_half_rejects_a_wrong_rail_class_even_when_optional(
+    class_path: str, expected_base: type, label: str
+) -> None:
+    """``optional`` covers resolution failure, never a misplaced spec.
+
+    The one semantic the split had to carry across unchanged: a checker
+    that skipped a shape mismatch under ``optional`` would accept configs
+    the builder rejects, which is the divergence the shared body exists to
+    prevent.
+    """
+    with pytest.raises(ConfigurationError, match="must subclass"):
+        resolve_middleware_class(
+            {"class": class_path, "optional": True}, expected_base, label=label
+        )
+
+
+def test_the_check_half_skips_where_the_build_half_skips(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """An unresolvable path: ``None`` under ``optional``, raise without it.
+
+    Same point, same exception, same lifted ``reason`` and ``label`` — a
+    caller that checks with one and builds with the other cannot disagree
+    about which specs are installable.
+    """
+    spec = {"class": "nonexistent.module.NoSuchClass"}
+
+    with pytest.raises(DottedPathError) as excinfo:
+        resolve_middleware_class(spec, Middleware, label="middleware")
+
+    assert excinfo.value.ref == "nonexistent.module.NoSuchClass"
+    assert excinfo.value.reason == DottedPathReason.MODULE_NOT_FOUND
+    assert excinfo.value.context["label"] == "middleware"
+
+    with caplog.at_level(logging.WARNING, logger=_FACTORY_LOGGER):
+        skipped = resolve_middleware_class(
+            {**spec, "optional": True}, Middleware, label="middleware"
+        )
+
+    assert skipped is None
+    assert "Skipping optional" in caplog.text
+    assert any(record.name == _FACTORY_LOGGER for record in caplog.records)
+
+
+def test_the_check_half_reports_a_spec_with_no_class_key() -> None:
+    """The ``KeyError`` clause moved with the rest, ``optional`` included."""
+    with pytest.raises(ConfigurationError, match="no 'class' key"):
+        resolve_middleware_class({}, Middleware, label="middleware")
+
+    assert resolve_middleware_class({"optional": True}, Middleware, label="middleware") is None
+
+
+def test_a_spec_the_ctor_rejects_passes_the_check_and_fails_the_build() -> None:
+    """What a check cannot catch, pinned as a test rather than a docstring.
+
+    ``resolve_middleware_class`` is strictly weaker than the build path,
+    and inherently so: detecting that a constructor rejects its ``params``
+    means running it. A linter built on this answers "is this spec
+    installable?", never "will this bot start?" — and the asymmetry is
+    tested so the next reader meets it as behavior rather than as a claim.
+    """
+    spec = {"class": _BOT_MIDDLEWARE_CLASS, "params": {"no_such_param": True}}
+
+    resolved = resolve_middleware_class(spec, Middleware, label="middleware")
+
+    assert resolved is not None
+    assert resolved[0] is LoggingMiddleware
+
+    with pytest.raises(ConfigurationError, match="Failed to instantiate"):
+        resolve_middleware_from_spec(spec, Middleware, label="middleware")
+
+
+def test_the_build_half_routes_through_the_check_half() -> None:
+    """Identity, not equivalence — one resolution body, not two.
+
+    A re-inlined copy of the resolve clauses inside
+    ``resolve_middleware_from_spec`` would satisfy every behavioral test
+    above while reintroducing the drift the split exists to remove, so the
+    delegation is asserted directly.
+
+    Read off the compiled code object rather than the source text, so a
+    docstring that *mentions* ``resolve_class`` (the build half's does,
+    cross-referencing where the rules now live) cannot fail this.
+    """
+    from dataknobs_bots.middleware import factory
+
+    called = factory.resolve_middleware_from_spec.__code__.co_names
+
+    assert "resolve_middleware_class" in called
+    assert "resolve_class" not in called
+
+
+# ---------------------------------------------------------------------------
 # Delegation — the private aliases still route here
 # ---------------------------------------------------------------------------
 
@@ -334,13 +494,17 @@ async def test_the_bot_builds_its_configured_lists_through_the_factory() -> None
 
 
 def test_exported_from_the_top_level_package() -> None:
-    """All three reach ``dataknobs_bots`` itself, not just the subpackage.
+    """All four reach ``dataknobs_bots`` itself, not just the subpackage.
 
     A consumer assembling middleware declaratively should not have to know
     which subpackage the factories live in — the same accessibility the
     ``Middleware`` base class already has. Identity-checked so a future
     re-binding (a wrapper, a shim) is a deliberate choice rather than an
     accident.
+
+    The check half is held to the same reach as the build half: a caller
+    that lints with one and installs with the other should import them
+    from the same place, or the pairing is something it has to discover.
     """
     import dataknobs_bots
     from dataknobs_bots.middleware import factory
@@ -348,11 +512,13 @@ def test_exported_from_the_top_level_package() -> None:
     assert dataknobs_bots.build_middleware is factory.build_middleware
     assert dataknobs_bots.build_conversation_middleware is factory.build_conversation_middleware
     assert dataknobs_bots.resolve_middleware_from_spec is factory.resolve_middleware_from_spec
+    assert dataknobs_bots.resolve_middleware_class is factory.resolve_middleware_class
 
     for name in (
         "build_middleware",
         "build_conversation_middleware",
         "resolve_middleware_from_spec",
+        "resolve_middleware_class",
     ):
         assert name in dataknobs_bots.__all__, f"{name} missing from __all__"
 

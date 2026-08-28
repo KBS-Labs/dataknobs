@@ -57,6 +57,7 @@ from .middleware import (
     Middleware,
     build_conversation_middleware,
     build_middleware,
+    resolve_middleware_class,
     resolve_middleware_from_spec,
 )
 from .reasoning import (
@@ -183,6 +184,7 @@ __all__ = [
     "register_memory_backend",
     "register_source_backend",
     "register_strategy",
+    "resolve_middleware_class",
     "resolve_middleware_from_spec",
     "verify_stage_synthesizers",
 ]

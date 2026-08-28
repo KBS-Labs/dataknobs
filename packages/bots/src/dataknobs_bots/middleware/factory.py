@@ -32,6 +32,13 @@ declaratively hands the result straight to
 Both delegate to :func:`resolve_middleware_from_spec`, so there is exactly
 one resolution body and the two flavors cannot drift.
 
+That body splits in two, and the halves are separately callable:
+:func:`resolve_middleware_class` validates a spec and hands back the class,
+running no constructor; :func:`resolve_middleware_from_spec` is that plus
+the construction. A config linter — something answering "would this
+config build?" without building anything — wants the first, and gets the
+same rules the builders apply because it is the same code.
+
 .. warning::
 
    **Middleware specs are trusted configuration.** A spec's ``class`` is a
@@ -69,45 +76,60 @@ logger = logging.getLogger(__name__)
 __all__ = [
     "build_conversation_middleware",
     "build_middleware",
+    "resolve_middleware_class",
     "resolve_middleware_from_spec",
 ]
 
 
-def resolve_middleware_from_spec(
+def resolve_middleware_class(
     config: Mapping[str, Any],
     expected_base: type,
     *,
     label: str,
-) -> Any | None:
-    """Resolve a middleware spec to an instance, validating its class shape.
+) -> tuple[type, Mapping[str, Any]] | None:
+    """Resolve a middleware spec to its CLASS and params, constructing nothing.
 
-    Shared resolution body behind :func:`build_middleware` (bot-turn
-    :class:`~dataknobs_bots.middleware.Middleware`) and
-    :func:`build_conversation_middleware` (LLM-call
-    :class:`~dataknobs_llm.conversations.ConversationMiddleware`). The two
-    flavors are wired to different layers but share this construction
-    shape (``class`` + ``params`` + ``optional``).
+    The check half of :func:`resolve_middleware_from_spec`, which is this
+    function plus one ``cls(**params)``. Every rule below is therefore the
+    same rule the build path applies, at the same point, because it is the
+    same code — a caller that validates specs with this and installs them
+    with the builders cannot disagree with itself about which specs are
+    installable.
 
-    Call this directly only for a middleware family neither wrapper
-    covers; for the two built-in flavors prefer the wrappers, which supply
-    the correct ``expected_base`` and ``label``.
+    Written for a config **linter**: something that answers "would this
+    config build?" over a tree of declarations, in a process that is not
+    building a bot. Constructing there would run one ``__init__`` per
+    middleware per config, and an initializer may open a file, read an env
+    var or connect to something.
 
-    The class-shape check uses ``issubclass`` BEFORE instantiation so a
-    wrong-shape spec never runs its ctor (avoiding network reads / file
-    opens / log writes a misplaced spec's initializer might trigger).
-    Type-mismatch errors raise unconditionally — ``optional: true`` covers
-    transient resolution failures (module / class / params), NOT a class
-    listed under the wrong field. A misplaced spec (a turn-lifecycle
-    ``Middleware`` listed under ``conversation_middleware:``, or vice
-    versa) is a programmer error in the config layout, and the only safe
-    response is to surface it at config-load.
+    What it catches — a missing ``class`` key, a path that does not import,
+    a class that is not a subclass of ``expected_base``. What only
+    construction can catch — a constructor that rejects ``params``, and a
+    constructor that raises. So a clean answer here means "this spec is
+    installable", NOT "this bot will start". The two are different
+    guarantees and no amount of static checking closes the gap: detecting
+    either one means running the constructor, which is the thing the
+    caller is avoiding.
+
+    ``params`` comes back rather than being dropped so a caller can apply
+    its own cheaper checks to it — a required key, a value's type — still
+    without a ctor. It is a copy; adjusting it does not touch the config.
+
+    .. warning::
+
+       **Not constructing is not the same as not executing.** Resolving a
+       dotted path imports its module, and import runs module-level code.
+       The module docstring's trusted-configuration rule applies here with
+       *more* force than to the builders, not less: a linter is exactly
+       the kind of tool that gets pointed at a directory of configs
+       somebody else wrote.
 
     Args:
         config: Middleware configuration mapping with:
             - class: Dotted import path to middleware class
             - params: Optional constructor parameters
-            - optional: If True, log warning and skip on resolution
-              failure (missing module / class / bad params) instead of
+            - optional: If True, log warning and return ``None`` on
+              resolution failure (missing module / class) instead of
               raising (default: False). Does NOT apply to class-shape
               mismatches — those always raise.
         expected_base: Class the resolved middleware must subclass
@@ -117,14 +139,25 @@ def resolve_middleware_from_spec(
             (e.g. ``"middleware"``, ``"conversation_middleware"``).
 
     Returns:
-        Instantiated middleware, or ``None`` if resolution fails
-        (NOT a class-shape mismatch) and ``optional: true`` was set.
+        ``(class, params)``, or ``None`` if resolution fails (NOT a
+        class-shape mismatch) and ``optional: true`` was set.
 
     Raises:
-        ConfigurationError: If the class cannot be resolved or
-            instantiation fails, unless ``optional: true``; OR if the
-            resolved class is not a subclass of ``expected_base``
-            (always raises, regardless of ``optional``).
+        ConfigurationError: If the class cannot be resolved, unless
+            ``optional: true``; OR if the resolved class is not a subclass
+            of ``expected_base`` (always raises, regardless of
+            ``optional``).
+
+    Example:
+        ```python
+        from dataknobs_bots import Middleware, resolve_middleware_class
+
+        for spec in config.get("middleware", []):
+            resolved = resolve_middleware_class(spec, Middleware, label="middleware")
+            if resolved is None:
+                continue  # optional: true, and it did not resolve
+            cls, params = resolved
+        ```
     """
     optional = config.get("optional", False)
     class_path = config.get("class", "<missing>")
@@ -172,8 +205,73 @@ def resolve_middleware_from_spec(
             f"(LLM-call wraps)."
         ) from e
 
+    return middleware_class, dict(config.get("params", {}))
+
+
+def resolve_middleware_from_spec(
+    config: Mapping[str, Any],
+    expected_base: type,
+    *,
+    label: str,
+) -> Any | None:
+    """Resolve a middleware spec to an instance, validating its class shape.
+
+    Shared resolution body behind :func:`build_middleware` (bot-turn
+    :class:`~dataknobs_bots.middleware.Middleware`) and
+    :func:`build_conversation_middleware` (LLM-call
+    :class:`~dataknobs_llm.conversations.ConversationMiddleware`). The two
+    flavors are wired to different layers but share this construction
+    shape (``class`` + ``params`` + ``optional``).
+
+    Call this directly only for a middleware family neither wrapper
+    covers; for the two built-in flavors prefer the wrappers, which supply
+    the correct ``expected_base`` and ``label``.
+
+    This is :func:`resolve_middleware_class` plus the constructor call, and
+    delegates rather than restating it — so the class-shape check still
+    runs via ``issubclass`` BEFORE instantiation (a wrong-shape spec never
+    runs its ctor), and ``optional: true`` still covers transient
+    resolution failures but never a class listed under the wrong field.
+    See that function for both rules in full; what this one adds on top is
+    the construction, and the third failure mode it brings with it.
+
+    Args:
+        config: Middleware configuration mapping with:
+            - class: Dotted import path to middleware class
+            - params: Optional constructor parameters
+            - optional: If True, log warning and skip on resolution
+              failure (missing module / class / bad params) instead of
+              raising (default: False). Does NOT apply to class-shape
+              mismatches — those always raise.
+        expected_base: Class the resolved middleware must subclass
+            (``Middleware`` for bot turn-lifecycle hooks,
+            ``ConversationMiddleware`` for LLM-call wraps).
+        label: Human-readable label used in error / log messages
+            (e.g. ``"middleware"``, ``"conversation_middleware"``).
+
+    Returns:
+        Instantiated middleware, or ``None`` if resolution fails
+        (NOT a class-shape mismatch) and ``optional: true`` was set.
+
+    Raises:
+        ConfigurationError: If the class cannot be resolved or
+            instantiation fails, unless ``optional: true``; OR if the
+            resolved class is not a subclass of ``expected_base``
+            (always raises, regardless of ``optional``).
+    """
+    resolved = resolve_middleware_class(config, expected_base, label=label)
+    if resolved is None:
+        return None
+    middleware_class, params = resolved
+
+    # Re-read for this half's own failure mode: the resolve clauses and their
+    # `optional` handling live in the callee now, and construction is a third
+    # way to fail that the callee cannot reach.
+    optional = config.get("optional", False)
+    class_path = config.get("class", "<missing>")
+
     try:
-        return middleware_class(**dict(config.get("params", {})))
+        return middleware_class(**params)
     except Exception as e:
         # Instantiation failure (bad params, ctor raised) — covered by
         # ``optional``.

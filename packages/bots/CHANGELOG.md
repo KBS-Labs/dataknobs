@@ -110,6 +110,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   snapshots serialised by an earlier version still load — but a consumer
   asserting an exact key set on a serialised snapshot will see one more.
 
+- **`resolve_middleware_class` — validate a middleware spec without running its
+  constructor.** `resolve_middleware_from_spec` is now that function plus one
+  `cls(**params)`, and delegates to it rather than restating it, so a caller
+  that checks specs with one and installs them with the other applies the same
+  rules at the same points: the missing-`class` error, the dotted-path lift
+  carrying `reason` and `label`, the `issubclass` check that raises regardless
+  of `optional`, and the `optional`-covered skip that returns `None`. Exported
+  from `dataknobs_bots`, `dataknobs_bots.middleware` and the factory module,
+  wherever the build half already is.
+
+  It returns `(class, params)` — the params as a copy, so a caller can apply
+  its own cheaper checks to them without a constructor. Nothing about the
+  existing entry points changes; the two builders and the bot's private aliases
+  are untouched.
+
+  **The check is strictly weaker than the build, and inherently so.** A
+  constructor that rejects its `params`, or that raises, is undetectable
+  without running it — which is what the caller is avoiding. A clean answer
+  means *this spec is installable*, not *this bot will start*.
+
+  **Not constructing is not the same as not executing.** Resolving a dotted
+  path imports its module, and import runs module-level code, so the
+  trusted-configuration rule that governs the builders governs this with more
+  force rather than less: a config linter is exactly the tool that gets pointed
+  at a directory of configs somebody else wrote.
+
 ### Changed
 
 - **`DynaBotConfigSchema.validate` applies the `$resource` marker rule to the
