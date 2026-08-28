@@ -310,7 +310,7 @@ Transitions are stored separately and attached to their source stage at build ti
 | `transform` | `str \| list[str] \| None` | Transform function name(s) |
 | `priority` | `int \| None` | Evaluation priority |
 | `derive` | `dict \| None` | Data derivation rules |
-| `metadata` | `dict \| None` | Custom metadata |
+| `metadata` | `dict \| None` | Custom metadata copied onto the compiled arc — see [Naming an arc](#naming-an-arc) |
 
 ### Intent Detection
 
@@ -567,5 +567,59 @@ Key points:
 | `transform` | `str \| list[str] \| None` | `None` | Transform function name(s) |
 | `priority` | `int \| None` | `None` | Evaluation priority |
 | `derive` | `dict \| None` | `None` | Data derivation rules |
-| `metadata` | `dict \| None` | `None` | Custom metadata |
+| `metadata` | `dict \| None` | `None` | Custom metadata copied onto the compiled arc. A `name` key names the arc explicitly — see [Naming an arc](#naming-an-arc) |
 | `subflow` | `dict \| None` | `None` | Subflow configuration |
+
+### Naming an arc
+
+A stage may declare several transitions to the *same* target — different
+conditions, one destination. The compiled FSM arc carries a name so that
+downstream readers can tell them apart: it is what the step reports as
+`StepResult.transition`, what the wizard's DEBUG step log names, and what
+a `TransitionRecord` persists as `transition_name`.
+
+Unless you name it yourself, the name is derived as
+`"<source>-><target>#<index>"`, where the index is the transition's
+position in its stage's `transitions` list. That extends the FSM's own
+`"<source>-><target>"` form for an unnamed arc, so the prefix stays
+greppable and only the discriminator is new.
+
+To name one explicitly, put a `name` in the transition's `metadata`:
+
+```yaml
+transitions:
+  - target: done
+    condition: "data.get('route') == 'fast'"
+    metadata:
+      name: fast_path
+  - target: done
+    condition: "data.get('route') == 'slow'"
+```
+
+```python
+builder.add_transition(
+    "gather", "done",
+    condition="data.get('route') == 'fast'",
+    metadata={"name": "fast_path"},
+)
+```
+
+An explicit name wins over the derived one, and applies to both the arc
+and the stage metadata that describes it, so the two cannot disagree.
+
+**Keep explicit names unique within a stage.** The name is the only
+discriminator between sibling arcs, so two transitions answering to one
+string are exactly as unidentifiable as two anonymous ones — the step
+log, a record's `condition_evaluated` and `transition_name`, and the
+FSM's own `arc_name` selector all resolve an arc by this string. The
+loader warns at load time when two transitions in a stage compile to the
+same name, and the readers record nothing rather than naming whichever
+came first. The derived form carries the index and cannot collide.
+
+The derived index is a **position, not an identity**: reorder a stage's
+transitions, or insert one above an existing one, and the same route
+compiles to a different name from then on. Records written earlier keep
+the name they were written with — each carries its own
+`condition_evaluated`, so it stays internally consistent, but
+correlating an old name against the current config does not survive the
+edit. An explicit `name` is how you get one that does.

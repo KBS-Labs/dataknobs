@@ -544,3 +544,165 @@ class TestTheNormalizerDoesNotHandOutWhatItRead:
                 assert wizard_meta["stages"][0]["status"] != "tampered", (
                     "writing into the public roadmap rewrote persisted wizard state"
                 )
+
+
+class TestGetWizardTransitions:
+    """Tests for DynaBot.get_wizard_transitions().
+
+    ``get_wizard_state`` returns the *normalized* state, whose canonical
+    schema carries the stage, the data and the history but not the
+    transition records — so ``condition_evaluated`` and
+    ``transition_name``, the fields that say which of a stage's routes
+    fired, had no supported reader and were reachable only by walking
+    ``metadata["wizard"]["fsm_state"]["transitions"]`` by hand.
+    """
+
+    @pytest.fixture
+    def storage(self) -> DataknobsConversationStorage:
+        return DataknobsConversationStorage(AsyncMemoryDatabase())
+
+    @pytest.fixture
+    def bot(self, storage: DataknobsConversationStorage) -> DynaBot:
+        provider = EchoProvider({"provider": "echo", "model": "test"})
+        library = ConfigPromptLibrary(
+            {
+                "system": {"assistant": {"template": "You are a bot."}},
+            }
+        )
+        builder = AsyncPromptBuilder(library=library)
+        return DynaBot(
+            llm=provider,
+            prompt_builder=builder,
+            conversation_storage=storage,
+        )
+
+    @staticmethod
+    def _wizard_metadata(*records: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "wizard": {
+                "current_stage": "done",
+                "fsm_state": {"transitions": list(records)},
+            }
+        }
+
+    @staticmethod
+    def _record(**overrides: Any) -> dict[str, Any]:
+        record = {
+            "from_stage": "gather",
+            "to_stage": "done",
+            "timestamp": 1000.0,
+            "trigger": "user_input",
+            "transition_name": "gather->done#1",
+            "condition_evaluated": "data.get('route') == 'b'",
+        }
+        record.update(overrides)
+        return record
+
+    async def test_unknown_conversation_reports_nothing(self, bot: DynaBot) -> None:
+        assert await bot.get_wizard_transitions("unknown-conv-id") == []
+
+    async def test_a_conversation_without_a_wizard_reports_nothing(self, bot: DynaBot) -> None:
+        manager = SimpleNamespace(metadata={"other": "data"})
+        bot._conversation_managers["conv-plain"] = manager  # type: ignore[assignment]
+        assert await bot.get_wizard_transitions("conv-plain") == []
+
+    async def test_records_are_read_from_the_cache(self, bot: DynaBot) -> None:
+        manager = SimpleNamespace(metadata=self._wizard_metadata(self._record()))
+        bot._conversation_managers["conv-cached"] = manager  # type: ignore[assignment]
+
+        records = await bot.get_wizard_transitions("conv-cached")
+
+        assert len(records) == 1
+        assert records[0].transition_name == "gather->done#1"
+        assert records[0].condition_evaluated == "data.get('route') == 'b'"
+
+    async def test_fallback_to_storage_when_not_cached(
+        self,
+        bot: DynaBot,
+        storage: DataknobsConversationStorage,
+    ) -> None:
+        """An evicted conversation answers from what was persisted.
+
+        Reading the cache alone reported "no transitions" for a
+        conversation that had plenty — indistinguishable, to the caller,
+        from a wizard that had not moved.
+        """
+        root_node = ConversationNode(
+            message=LLMMessage(role="system", content="Wizard bot"),
+            node_id="",
+        )
+        state = ConversationState(
+            conversation_id="conv-evicted",
+            message_tree=Tree(root_node),
+            metadata=self._wizard_metadata(self._record(transition_name="gather->done#0")),
+        )
+        await storage.save_conversation(state)
+
+        records = await bot.get_wizard_transitions("conv-evicted")
+
+        assert len(records) == 1
+        assert records[0].transition_name == "gather->done#0"
+
+    async def test_cache_takes_precedence_over_storage(
+        self,
+        bot: DynaBot,
+        storage: DataknobsConversationStorage,
+    ) -> None:
+        root_node = ConversationNode(
+            message=LLMMessage(role="system", content="Wizard bot"),
+            node_id="",
+        )
+        state = ConversationState(
+            conversation_id="conv-both-t",
+            message_tree=Tree(root_node),
+            metadata=self._wizard_metadata(self._record(transition_name="stale")),
+        )
+        await storage.save_conversation(state)
+
+        manager = SimpleNamespace(
+            metadata=self._wizard_metadata(self._record(transition_name="fresh"))
+        )
+        bot._conversation_managers["conv-both-t"] = manager  # type: ignore[assignment]
+
+        records = await bot.get_wizard_transitions("conv-both-t")
+
+        assert [r.transition_name for r in records] == ["fresh"]
+
+    async def test_records_do_not_write_through_to_conversation_state(self, bot: DynaBot) -> None:
+        """The records are a report, not a handle on persisted state."""
+        metadata = self._wizard_metadata(self._record(data_snapshot={"route": "b"}))
+        manager = SimpleNamespace(metadata=metadata)
+        bot._conversation_managers["conv-copy"] = manager  # type: ignore[assignment]
+
+        records = await bot.get_wizard_transitions("conv-copy")
+        assert records[0].data_snapshot is not None
+        records[0].data_snapshot["route"] = "tampered"
+
+        assert metadata["wizard"]["fsm_state"]["transitions"][0]["data_snapshot"] == {"route": "b"}
+
+    async def test_the_harness_reads_through_this_surface(self) -> None:
+        """``BotTestHarness.get_transitions`` delegates rather than re-deriving.
+
+        A test asserting on transitions therefore exercises the shipped
+        reader, not a second copy of it that can drift from it.
+        """
+        config = (
+            WizardConfigBuilder("delegation")
+            .stage("gather", is_start=True, prompt="Name?")
+            .field("name", field_type="string", required=True)
+            .transition("done", "data.get('name')")
+            .stage("done", is_end=True, prompt="Done.")
+            .build()
+        )
+        async with await BotTestHarness.create(
+            wizard_config=config,
+            main_responses=["Done."],
+            extraction_results=[[{"name": "Alice"}]],
+        ) as harness:
+            await harness.chat("I am Alice")
+
+            from_harness = await harness.get_transitions()
+            from_bot = await harness.bot.get_wizard_transitions(harness.context.conversation_id)
+
+            assert [r.to_dict() for r in from_harness] == [r.to_dict() for r in from_bot]
+            assert from_harness, "no transitions were recorded"

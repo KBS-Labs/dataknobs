@@ -4108,7 +4108,9 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
 
         # Record transition if stage changed
         if to_stage != from_stage:
-            condition_expr = active_fsm.get_transition_condition(from_stage, to_stage)
+            condition_expr = active_fsm.get_transition_condition(
+                from_stage, to_stage, arc_name=step_result.transition
+            )
             transition = create_transition_record(
                 from_stage=from_stage,
                 to_stage=to_stage,
@@ -4119,6 +4121,7 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
                 condition_evaluated=condition_expr,
                 condition_result=True if condition_expr else None,
                 subflow_depth=state.subflow_depth,
+                transition_name=step_result.transition,
             )
             state.transitions.append(transition)
             state.stage_entry_time = time.time()

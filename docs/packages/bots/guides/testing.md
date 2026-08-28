@@ -80,6 +80,7 @@ async with await BotTestHarness.create(
 | `harness.wizard_stage` | `str \| None` | Current wizard stage after last turn |
 | `harness.wizard_data` | `dict` | Wizard state data after last turn |
 | `harness.wizard_state` | `dict \| None` | Full normalized wizard state |
+| `await harness.get_transitions()` | `list[TransitionRecord]` | Transition records persisted so far — `wizard_state` is the *normalized* state and does not carry them. Delegates to `DynaBot.get_wizard_transitions()`, the same reader a production consumer uses |
 | `harness.last_response` | `str` | Bot response from last turn |
 | `harness.turn_count` | `int` | Number of turns executed |
 | `harness.bot` | `DynaBot` | The underlying bot (for advanced assertions) |
@@ -159,7 +160,7 @@ config = (WizardConfigBuilder("quiz-wizard")
 |--------|-------------|
 | `.stage(name, *, is_start, is_end, prompt, mode, extraction_scope, auto_advance, skip_extraction, re_extract_on_entry)` | Add a stage |
 | `.field(name, *, field_type, required, description, enum, default, x_extraction)` | Add a field to the current stage |
-| `.transition(target, condition, priority)` | Add a transition from the current stage |
+| `.transition(target, condition, priority, *, derive, metadata, subflow_network, return_stage, data_mapping, result_mapping)` | Add a transition from the current stage. `metadata={"name": ...}` names the compiled arc, which is what `StepResult.transition` and `TransitionRecord.transition_name` then report |
 | `.settings(**kwargs)` | Set wizard-level settings |
 | `.build()` | Validate and return the config dict |
 

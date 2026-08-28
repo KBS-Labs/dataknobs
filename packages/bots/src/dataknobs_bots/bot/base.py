@@ -54,6 +54,7 @@ if TYPE_CHECKING:
 
     from ..prompts.resolver import PromptResolver
     from ..reasoning.base import ProcessResult
+    from ..reasoning.observability import TransitionRecord
 
 logger = logging.getLogger(__name__)
 
@@ -3348,6 +3349,69 @@ class DynaBot(StructuredConfigConsumer[DynaBotConfig]):
                 return self._normalize_wizard_state(wizard_meta)
 
         return None
+
+    async def get_wizard_transitions(self, conversation_id: str) -> list[TransitionRecord]:
+        """Every transition the wizard has recorded for a conversation.
+
+        :meth:`get_wizard_state` cannot answer this.  It returns the
+        *normalized* state, whose canonical schema carries the stage, the
+        collected data and the visited history — but not the transition
+        records, which is where ``condition_evaluated`` and
+        ``transition_name`` live.  Those are what say *which* of a
+        stage's routes carried the wizard forward, so a consumer reading
+        them had no supported route to the thing the records exist to
+        report and had to reach into
+        ``manager.metadata["wizard"]["fsm_state"]["transitions"]`` by
+        hand.
+
+        Same two-path lookup as :meth:`get_wizard_state` — the in-memory
+        manager first, then persisted storage — so an evicted
+        conversation answers from what was saved rather than answering
+        empty.
+
+        Args:
+            conversation_id: Conversation identifier
+
+        Returns:
+            The recorded transitions, oldest first.  Empty when the
+            conversation is unknown or is not running a wizard — both are
+            "nothing to report", and neither is distinguishable from a
+            wizard that has not moved yet.
+
+        Example:
+            ```python
+            for record in await bot.get_wizard_transitions("conv-123"):
+                print(record.from_stage, "->", record.to_stage,
+                      "via", record.transition_name,
+                      "on", record.condition_evaluated)
+            ```
+        """
+        # Local import: ``..reasoning`` imports this module, so a
+        # top-level one would close a cycle.  Same pattern as every other
+        # reasoning import in this file.
+        from ..reasoning.wizard import WizardReasoning
+
+        # Parsed by the wizard's own reader rather than re-deserialized
+        # here.  Three other call sites already build this list, and a
+        # fourth hand-rolled copy is how one of them ends up not knowing
+        # about a field the others gained.
+        def _records(metadata: dict[str, Any]) -> list[TransitionRecord] | None:
+            snapshot = WizardReasoning.snapshot_from_metadata(metadata)
+            return None if snapshot is None else snapshot.transitions
+
+        manager = self._conversation_managers.get(conversation_id)
+        if manager and manager.metadata:
+            records = _records(manager.metadata)
+            if records is not None:
+                return records
+
+        state = await self.conversation_storage.load_conversation(conversation_id)
+        if state and state.metadata:
+            records = _records(state.metadata)
+            if records is not None:
+                return records
+
+        return []
 
     def _normalize_wizard_state(self, wizard_meta: dict[str, Any]) -> dict[str, Any]:
         """Normalize wizard metadata to canonical structure.

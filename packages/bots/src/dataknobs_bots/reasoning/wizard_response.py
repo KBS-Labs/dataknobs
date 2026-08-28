@@ -892,7 +892,9 @@ class WizardResponder:
             if new_stage_name == old_stage_name:
                 break
 
-            condition_expr = active_fsm.get_transition_condition(old_stage_name, new_stage_name)
+            condition_expr = active_fsm.get_transition_condition(
+                old_stage_name, new_stage_name, arc_name=auto_step_result.transition
+            )
             transition = create_transition_record(
                 from_stage=old_stage_name,
                 to_stage=new_stage_name,
@@ -902,6 +904,7 @@ class WizardResponder:
                 condition_evaluated=condition_expr,
                 condition_result=True if condition_expr else None,
                 subflow_depth=wizard_state.subflow_depth,
+                transition_name=auto_step_result.transition,
             )
             wizard_state.transitions.append(transition)
 

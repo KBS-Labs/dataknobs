@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import logging
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any
 
@@ -38,6 +38,7 @@ from .wizard_fsm import WizardFSM
 __all__ = [
     "StageSynthesizer",
     "WizardConfigLoader",
+    "arc_identity",
     "load_wizard_config",
     "register_stage_synthesizer",
     "unregister_stage_synthesizer",
@@ -48,6 +49,66 @@ logger = logging.getLogger(__name__)
 
 # Sentinel target for subflow transitions
 SUBFLOW_TARGET = "_subflow"
+
+
+def arc_identity(source_stage: str, transition: Mapping[str, Any], idx: int) -> tuple[str, str]:
+    """The FSM target and the arc name one wizard transition compiles to.
+
+    Three places in this loader need the same answer -- the arc itself,
+    the condition function registered for it, and the stage metadata that
+    describes it afterwards -- and each used to derive it, one of them
+    under a comment instructing its reader to keep it in step with
+    another.  A derivation that has to be mirrored has already escaped the
+    place it belongs, and the mirror fails silently: a registered
+    condition whose name drifts from the arc's ``FunctionReference`` is
+    simply never found.
+
+    Two rules, stated here and nowhere else:
+
+    * A **subflow** transition compiles to a self-loop.  The FSM stays on
+      ``source_stage`` and the push is decided before the step
+      (``SubflowManager.should_push``), so the arc's target is the source
+      stage, not the ``_subflow`` sentinel.
+    * The name is ``"<source>-><target>#<idx>"``.  That extends rather
+      than replaces what :attr:`dataknobs_fsm.core.network.Arc.name`
+      generates for an unnamed arc (``"<source>-><target>"``), so a reader
+      who knows the old form reads the prefix unchanged.  The index is the
+      discriminator the old form lacks: two transitions may declare the
+      same target, and without it nothing downstream -- a log line, a
+      persisted transition record, an FSM trace -- can say which of them
+      fired.
+
+    An author-supplied ``metadata: {name: ...}`` on the transition wins,
+    which is not a new rule: :meth:`WizardConfigLoader._translate_transition`
+    already copies transition metadata onto the arc, so such a name
+    reaches ``Arc.name`` today.  What is new is that the precedence is
+    resolved once, so the arc and the metadata describing it cannot
+    disagree about what the arc is called.
+
+    Args:
+        source_stage: Name of the stage the transition leaves.
+        transition: One entry of that stage's ``transitions`` list.
+        idx: Its position in that list.
+
+    Returns:
+        ``(actual_target, arc_name)`` -- the state the compiled arc points
+        at, and the name it carries.
+    """
+    # ``or``, not a ``get`` default: the default fires only on an absent
+    # key, so an explicit ``target: null`` yielded the name
+    # ``"<source>->None#<idx>"`` -- which reads as a stage called "None".
+    # Unreachable through the loader, where _translate_transition raises
+    # on a falsy target first, but this function is exported and a
+    # consumer calling it directly gets the stated default either way.
+    target = transition.get("target") or "unknown"
+    actual_target: str = source_stage if target == SUBFLOW_TARGET else target
+
+    metadata = transition.get("metadata")
+    authored = metadata.get("name") if isinstance(metadata, Mapping) else None
+    if isinstance(authored, str) and authored:
+        return actual_target, authored
+
+    return actual_target, f"{source_stage}->{actual_target}#{idx}"
 
 
 def _default_transform_context_factory(fn_ctx: Any) -> Any:
@@ -473,6 +534,8 @@ class WizardConfigLoader:
         7. ``auto_advance: true`` on an end stage, which is never acted on
         8. ``settings:`` on a config being loaded as a subflow, which is
            never read
+        9. Two transitions in one stage compiling to the same arc name,
+           which leaves the arc that fired unidentifiable
 
         All issues are logged as warnings, not errors — the config will
         still load. That is the whole contract of this method, and it is
@@ -613,6 +676,46 @@ class WizardConfigLoader:
                     "stage is meant to continue.",
                     stage_name,
                 )
+
+            # 9. Two transitions compiling to one arc name.  The derived
+            #    form carries the index and cannot collide, so this only
+            #    fires on an authored `metadata: {name: ...}` repeated
+            #    within a stage -- the shape a copy-pasted transition
+            #    block produces.  It is worth a warning because the name
+            #    is the *only* discriminator between sibling arcs:
+            #    `StepResult.transition` reports it, a transition record
+            #    persists it as `transition_name`, and the FSM's own
+            #    `arc_name` selector filters on it and then takes the
+            #    first survivor.  Duplicated, it identifies nothing --
+            #    which is the guess this naming exists to remove, wearing
+            #    the fix's vocabulary.  Reported, not refused, because
+            #    every other check here reports: the config still loads,
+            #    and the readers downstream now record nothing rather
+            #    than a wrong answer.
+            by_name: dict[str, int] = {}
+            for idx, transition in enumerate(stage.get("transitions", [])):
+                if not isinstance(transition, dict):
+                    continue
+                _target, arc_name = arc_identity(stage_name, transition, idx)
+                first = by_name.get(arc_name)
+                if first is not None:
+                    logger.warning(
+                        "Stage '%s': transitions %d and %d both compile to "
+                        "the arc name '%s', so nothing downstream can say "
+                        "which of them fired -- the step log, the "
+                        "transition record's 'condition_evaluated' and "
+                        "'transition_name', and the FSM's own 'arc_name' "
+                        "selector all identify an arc by this string. "
+                        "Give them distinct 'metadata: {name: ...}' "
+                        "values, or drop the key and let the loader "
+                        "derive '<source>-><target>#<index>'.",
+                        stage_name,
+                        first,
+                        idx,
+                        arc_name,
+                    )
+                else:
+                    by_name[arc_name] = idx
 
         # 8. settings: on a config being loaded as a subflow.  Every
         #    setting is hoisted once, off the top-level flow, into the
@@ -777,7 +880,7 @@ class WizardConfigLoader:
         # For subflow transitions, the FSM stays at the current stage
         # The actual subflow handling happens in WizardReasoning
         is_subflow_transition = target == SUBFLOW_TARGET
-        actual_target = source_stage if is_subflow_transition else target
+        actual_target, arc_name = arc_identity(source_stage, transition, idx)
 
         # Build condition function reference if specified.
         # The function was already pre-registered by
@@ -839,8 +942,13 @@ class WizardConfigLoader:
                     name=raw_transform,
                 )
 
-        # Build arc metadata, including subflow config if present
+        # Build arc metadata, including subflow config if present.
+        # ``name`` is what makes the compiled arc identifiable: the FSM
+        # reads it back through ``Arc.name`` and reports it as
+        # ``StepResult.transition``, which is the only handle a caller has
+        # for telling two arcs to the same target apart.
         arc_metadata = dict(transition.get("metadata", {}))
+        arc_metadata["name"] = arc_name
         if is_subflow_transition:
             subflow_config = transition.get("subflow", {})
             arc_metadata["is_subflow_transition"] = True
@@ -878,9 +986,24 @@ class WizardConfigLoader:
         for stage in wizard_config.get("stages", []):
             # Extract transition conditions for observability
             transitions = []
-            for transition in stage.get("transitions", []):
+            for idx, transition in enumerate(stage.get("transitions", [])):
+                # ``name`` is the arc name the same transition compiles to,
+                # so a caller holding a StepResult.transition can find the
+                # entry describing the arc that actually fired rather than
+                # the first one declaring the same target.
+                actual_target, arc_name = arc_identity(stage["name"], transition, idx)
                 trans_meta: dict[str, Any] = {
+                    "name": arc_name,
                     "target": transition.get("target"),
+                    # The state the compiled arc actually points at, which
+                    # is the source stage for a subflow transition whose
+                    # declared ``target`` is the ``_subflow`` sentinel.
+                    # Recorded rather than re-derived: a reader matching a
+                    # move against the transitions that could have caused
+                    # it compares against this, and deriving the self-loop
+                    # rule a second time is the mirroring ``arc_identity``
+                    # exists to end.
+                    "arc_target": actual_target,
                     "condition": transition.get("condition"),
                     "priority": transition.get("priority"),
                     "derive": transition.get("derive"),
@@ -1002,15 +1125,10 @@ class WizardConfigLoader:
                     continue
 
                 condition_code = transition["condition"]
-                target = transition.get("target", "unknown")
-                # For subflow transitions the FSM arc target is the
-                # source stage (self-loop), not the raw "_subflow"
-                # sentinel.  Mirror _translate_transition's logic so
-                # the registered name matches the FunctionReference.
-                if target == SUBFLOW_TARGET:
-                    actual_target = stage["name"]
-                else:
-                    actual_target = target
+                # Same target derivation _translate_transition uses, from
+                # the same helper, so the registered name and the arc's
+                # FunctionReference cannot drift apart.
+                actual_target, _arc_name = arc_identity(stage["name"], transition, idx)
                 func_name = f"condition_{stage['name']}_{actual_target}_{idx}"
 
                 # The static half of safe_eval, run once here instead of

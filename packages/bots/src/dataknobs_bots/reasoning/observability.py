@@ -15,8 +15,10 @@ types from dataknobs_fsm. Key differences from FSM types:
 Conversion utilities are provided to convert between wizard and FSM types.
 """
 
+import logging
 import time
 from dataclasses import asdict, dataclass, field
+from dataclasses import fields as dataclass_fields
 from typing import Any, Literal
 
 from dataknobs_common.copying import copy_structure
@@ -27,6 +29,8 @@ from dataknobs_fsm.observability import (
     ExecutionTracker,
 )
 from dataknobs_llm.tools.context import ToolWizardState
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -47,6 +51,11 @@ class TransitionRecord:
         condition_evaluated: The condition expression that was evaluated (if any)
         condition_result: Result of the condition evaluation (True/False)
         error: Error message if transition failed
+        transition_name: Name of the arc that fired, as reported by
+            ``StepResult.transition``. Two transitions may declare the
+            same target, so this is what distinguishes them -- and what
+            makes ``condition_evaluated`` checkable rather than merely
+            plausible.
 
     Example:
         ```python
@@ -66,7 +75,12 @@ class TransitionRecord:
     from_stage: str
     to_stage: str
     timestamp: float
-    trigger: str  # "user_input", "navigation_back", "navigation_skip", "restart", "auto"
+    # "user_input", "auto_advance", "navigation_back", "navigation_skip",
+    # "amendment", "restart", "api_restart", "auto_restart",
+    # "subflow_push", "subflow_pop", "subflow_unwind".  Open rather than
+    # an enum: a consumer recording its own transitions names its own
+    # triggers, and TransitionStats counts whatever it is given.
+    trigger: str
     duration_in_stage_ms: float = 0.0
     data_snapshot: dict[str, Any] | None = None
     user_input: str | None = None
@@ -77,6 +91,11 @@ class TransitionRecord:
     subflow_push: str | None = None  # Network name if this transition pushes a subflow
     subflow_pop: str | None = None  # Network name if this transition pops a subflow
     subflow_depth: int = 0  # Depth after this transition (0 = main flow)
+    # Appended, not placed beside ``trigger`` where ExecutionRecord keeps
+    # its equivalent: every field from ``duration_in_stage_ms`` down is
+    # defaulted, so inserting one would silently reinterpret any
+    # positional construction of this record.
+    transition_name: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         """Convert record to dictionary.
@@ -105,13 +124,31 @@ class TransitionRecord:
         unchanged, so a transition that recorded nothing still carries
         nothing.
 
+        Keys this class does not declare are **dropped**, not passed on.
+        These records are persisted into conversation metadata and read
+        back by whatever build is running at the time, so a record
+        written after a field is added would otherwise raise
+        ``TypeError`` on any build predating it -- a downgrade, or a
+        rolling deploy where two versions read the same store. The
+        forward direction was already safe, because every field below
+        ``trigger`` is defaulted; this makes the backward direction safe
+        too. Dropped keys are logged at DEBUG so a misspelled one is
+        findable rather than merely silent.
+
         Args:
             data: Dictionary containing record fields
 
         Returns:
             TransitionRecord instance
         """
-        fields = dict(data)
+        known = {f.name for f in dataclass_fields(cls)}
+        fields = {k: v for k, v in data.items() if k in known}
+        unknown = set(data) - known
+        if unknown:
+            logger.debug(
+                "TransitionRecord.from_dict: ignoring unrecognized key(s) %s",
+                ", ".join(sorted(unknown)),
+            )
         if "data_snapshot" in fields:
             fields["data_snapshot"] = copy_structure(fields["data_snapshot"])
         return cls(**fields)
@@ -853,6 +890,7 @@ def create_transition_record(
     subflow_push: str | None = None,
     subflow_pop: str | None = None,
     subflow_depth: int = 0,
+    transition_name: str | None = None,
 ) -> TransitionRecord:
     """Factory function to create a transition record.
 
@@ -871,6 +909,8 @@ def create_transition_record(
         subflow_push: Network name if this transition pushes a subflow
         subflow_pop: Network name if this transition pops a subflow
         subflow_depth: Depth after this transition (0 = main flow)
+        transition_name: Name of the arc that fired
+            (``StepResult.transition``)
 
     Returns:
         TransitionRecord with current timestamp
@@ -889,6 +929,7 @@ def create_transition_record(
         subflow_push=subflow_push,
         subflow_pop=subflow_pop,
         subflow_depth=subflow_depth,
+        transition_name=transition_name,
     )
 
 
@@ -919,7 +960,7 @@ def transition_record_to_execution_record(
         to_state=record.to_stage,
         timestamp=record.timestamp,
         trigger=record.trigger,
-        transition_name=None,  # Wizard doesn't track transition names
+        transition_name=record.transition_name,
         duration_in_state_ms=record.duration_in_stage_ms,
         data_before=None,
         data_after=record.data_snapshot,
@@ -959,6 +1000,7 @@ def execution_record_to_transition_record(
         condition_evaluated=record.condition_evaluated,
         condition_result=record.condition_result,
         error=record.error,
+        transition_name=record.transition_name,
     )
 
 

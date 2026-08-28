@@ -17,6 +17,27 @@ from .wizard_skip import SKIP_DEFAULT_OVERWRITE, SkipDefaults
 
 logger = logging.getLogger(__name__)
 
+
+def _describe_condition(condition: Any) -> str:
+    """How a declared transition condition reads in a step log.
+
+    ``None`` is the absence of a ``condition:`` key, and is what
+    *unconditional* means.  An empty string is a different thing:
+    :meth:`WizardConfigLoader._translate_transition` builds a
+    ``FunctionReference`` for any *present* ``condition`` key, so
+    ``condition: ""`` compiles to an arc that can never fire rather than
+    one that always does.  Reporting both as "unconditional" described a
+    dead arc as an open one -- and the shape that did it, ``or``, is the
+    same falsy-versus-absent conflation that a ``get`` default made in
+    the other direction here.
+    """
+    if condition is None:
+        return "unconditional"
+    if isinstance(condition, str) and not condition.strip():
+        return "empty (never fires)"
+    return str(condition)
+
+
 #: A stage field's declared type, taken from the default its accessor
 #: passes to :meth:`WizardFSM._stage_field`.
 _T = TypeVar("_T")
@@ -60,7 +81,20 @@ class WizardFSM:
 
         Args:
             fsm: AdvancedFSM instance to wrap
-            stage_metadata: Dict mapping stage names to their metadata
+            stage_metadata: Dict mapping stage names to their metadata.
+                Normally built by
+                :meth:`~dataknobs_bots.reasoning.wizard_loader.WizardConfigLoader._extract_metadata`.
+                A hand-built mapping should give each entry of a stage's
+                ``transitions`` list a ``name`` and an ``arc_target``
+                matching what
+                :func:`~dataknobs_bots.reasoning.wizard_loader.arc_identity`
+                derives for the compiled arc: ``name`` is how a move is
+                matched back to the transition that caused it, so without
+                it :meth:`get_transition_condition` reports ``None`` for
+                any target two transitions lead to, and ``arc_target``
+                is what makes a subflow transition's self-loop match.
+                Both are optional -- a stage whose targets are each
+                reached by one transition answers correctly without them.
             settings: Wizard-level settings dict (optional)
             subflow_registry: Dict mapping subflow names to WizardFSM
                 instances. Subflows passed here are **owned** by this FSM —
@@ -395,28 +429,113 @@ class WizardFSM:
         """
         return self._stage_field(stage, "suggestions", [])
 
-    def get_transition_condition(self, from_stage: str, to_stage: str) -> str | None:
+    def _matched_transition(
+        self, from_stage: str, to_stage: str, arc_name: str | None
+    ) -> tuple[dict[str, Any] | None, int]:
+        """Which declared transition describes the arc that fired.
+
+        Two callers ask this -- the DEBUG step log and
+        :meth:`get_transition_condition` -- and both used to scan the
+        stage's transitions for the first one declaring ``to_stage``.
+        That answer is right only when a single arc leads there; when two
+        do, it names the first regardless of which fired, and it does so
+        with no indication that it guessed.
+
+        ``arc_name`` is the discriminator, carried on the arc by
+        :func:`~dataknobs_bots.reasoning.wizard_loader.arc_identity` and
+        reported back as ``StepResult.transition``.  Matching on it is
+        exact.  When it identifies nothing -- a caller that has no step
+        result, or metadata built before the arc was named -- the target
+        scan is still correct for a target only one arc leads to, so that
+        case keeps its answer; an ambiguous one returns no entry rather
+        than a guess.
+
+        A name identifies an arc only while it is unique.  The derived
+        form carries the transition's index and so cannot collide, but an
+        authored ``metadata: {name: ...}`` can be repeated, and two arcs
+        answering to one string are exactly as unidentifiable as the
+        anonymous arcs this naming replaced.  So a name matching more
+        than one candidate is treated as the ambiguous case, not as a
+        match -- and the scan is confined to the transitions that lead to
+        ``to_stage``, so a name reused on a route to somewhere else
+        cannot answer here at all.
+
+        Args:
+            from_stage: Stage the step started from.
+            to_stage: Stage it ended on.
+            arc_name: ``StepResult.transition``, when the caller has one.
+
+        Returns:
+            ``(entry, candidates)`` -- the matched transition metadata or
+            ``None``, and how many declared transitions lead to
+            ``to_stage``.  The count is what a caller reports when the
+            entry is ``None``.
+        """
+        stage_meta = self._stage_metadata.get(from_stage, {})
+        transitions = stage_meta.get("transitions", [])
+        # ``arc_target`` is what the compiled arc points at; ``target`` is
+        # what the author declared, and the two differ for a subflow
+        # transition, whose ``_subflow`` sentinel compiles to a self-loop.
+        # Metadata built by hand rather than by the loader carries only
+        # the latter, hence the fallback.
+        candidates = [t for t in transitions if t.get("arc_target", t.get("target")) == to_stage]
+
+        if arc_name:
+            # Matched among the candidates, not across every transition
+            # the stage declares: a name is unique only by construction,
+            # and an authored one repeated on a transition to some *other*
+            # target would otherwise answer for a move it did not cause.
+            named = [t for t in candidates if t.get("name") == arc_name]
+            if len(named) == 1:
+                return named[0], len(candidates)
+            if named:
+                # One name, two arcs -- an authored ``metadata: {name:
+                # ...}`` duplicated within the stage, which
+                # ``WizardConfigLoader._validate_config`` reports at load.
+                # The discriminator does not discriminate, so this is the
+                # ambiguous case however exact the match looked.
+                return None, len(candidates)
+            # A name that matches no candidate identifies nothing here --
+            # metadata predating arc names, or a caller's own string. The
+            # target scan below is still right for an unambiguous target.
+
+        if len(candidates) == 1:
+            return candidates[0], 1
+
+        return None, len(candidates)
+
+    def get_transition_condition(
+        self, from_stage: str, to_stage: str, *, arc_name: str | None = None
+    ) -> str | None:
         """Get the condition expression for a transition.
+
+        Pass ``arc_name`` -- ``StepResult.transition`` from the step that
+        made this move -- whenever it is in hand.  Without it, a stage
+        with two transitions to ``to_stage`` cannot say which one fired,
+        and this returns ``None``: the value is recorded as a transition
+        record's ``condition_evaluated``, where a wrong expression is
+        worse than an absent one, and the record is persisted rather than
+        merely logged.  A target only one transition leads to is
+        unambiguous and answers the same either way.
 
         Args:
             from_stage: Source stage name
             to_stage: Target stage name
+            arc_name: Name of the arc that fired, when known
 
         Returns:
-            Condition expression string, or None if no condition
+            Condition expression string, or None if no condition is
+            declared or the arc cannot be identified
         """
-        stage_meta = self._stage_metadata.get(from_stage, {})
-        transitions = stage_meta.get("transitions", [])
+        transition, _candidates = self._matched_transition(from_stage, to_stage, arc_name)
+        if transition is None:
+            return None
 
-        for transition in transitions:
-            if transition.get("target") == to_stage:
-                condition = transition.get("condition")
-                # Feeds a transition record's ``condition_evaluated`` and
-                # nothing else. A non-string would be read back as the
-                # expression that fired; "nothing recorded" is honest.
-                return condition if isinstance(condition, str) else None
-
-        return None
+        condition = transition.get("condition")
+        # Feeds a transition record's ``condition_evaluated`` and
+        # nothing else. A non-string would be read back as the
+        # expression that fired; "nothing recorded" is honest.
+        return condition if isinstance(condition, str) else None
 
     def can_skip(self, stage: str | None = None) -> bool:
         """Check if stage can be skipped.
@@ -643,6 +762,15 @@ class WizardFSM:
         also keeps a regular arc back to its own stage off the
         "none matched" line.
 
+        The same report also has to name *which* arc moved the wizard,
+        and that is the other thing the step reports.  Scanning for the
+        first transition declaring ``after_stage`` answers correctly only
+        while one arc leads there; a stage offering two routes to the
+        same target is the case the answer is wanted for, and the scan
+        names the first of them whichever fired.  So the arc name is
+        matched instead, and when it identifies nothing the line says how
+        many arcs it could have been rather than picking one.
+
         Args:
             before_stage: Stage the step started from.
             after_stage: Stage the step ended on.
@@ -652,16 +780,24 @@ class WizardFSM:
         transitions = stage_meta.get("transitions", [])
 
         if before_stage != after_stage:
-            for trans in transitions:
-                if trans.get("target") == after_stage:
-                    condition = trans.get("condition", "unconditional")
-                    logger.debug(
-                        "WizardFSM transition: '%s' -> '%s' via condition: %s",
-                        before_stage,
-                        after_stage,
-                        condition,
-                    )
-                    break
+            matched, candidates = self._matched_transition(before_stage, after_stage, transition)
+            if matched is not None:
+                logger.debug(
+                    "WizardFSM transition: '%s' -> '%s' via condition: %s",
+                    before_stage,
+                    after_stage,
+                    _describe_condition(matched.get("condition")),
+                )
+            elif candidates:
+                logger.debug(
+                    "WizardFSM transition: '%s' -> '%s' via one of %d arcs; "
+                    "step reports transition '%s', which matches none of them "
+                    "by name",
+                    before_stage,
+                    after_stage,
+                    candidates,
+                    transition,
+                )
             return
 
         if not transitions:
@@ -686,12 +822,10 @@ class WizardFSM:
             )
 
         for trans in transitions:
-            target = trans.get("target", "?")
-            condition = trans.get("condition", "unconditional")
             logger.debug(
                 "  - target='%s', condition='%s'",
-                target,
-                condition,
+                trans.get("target") or "?",
+                _describe_condition(trans.get("condition")),
             )
 
     def step(self, data: dict[str, Any]) -> StepResult:
@@ -1001,7 +1135,9 @@ def create_wizard_fsm(
 
     Args:
         fsm_config: FSM configuration dict
-        stage_metadata: Stage metadata dict
+        stage_metadata: Stage metadata dict. See :class:`WizardFSM` for
+            the ``name`` / ``arc_target`` keys a hand-built transitions
+            list should carry so that sibling arcs stay distinguishable.
         custom_functions: Optional custom functions to register
         settings: Wizard-level settings dict (optional)
         subflow_registry: Dict mapping subflow names to WizardFSM instances

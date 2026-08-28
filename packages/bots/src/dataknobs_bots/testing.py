@@ -58,7 +58,7 @@ import logging
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Self
+from typing import TYPE_CHECKING, Any, Self
 
 from dataknobs_llm import EchoProvider, LLMMessage
 from dataknobs_llm.llm.base import AsyncLLMProvider, LLMResponse
@@ -70,6 +70,10 @@ from dataknobs_llm.testing import (
 
 from .knowledge.base import KnowledgeBase
 from .reasoning.base import ReasoningManagerProtocol, ReasoningStrategy
+from .reasoning.observability import TransitionRecord
+
+if TYPE_CHECKING:
+    from .bot.base import DynaBot
 
 logger = logging.getLogger(__name__)
 
@@ -340,6 +344,7 @@ class WizardConfigBuilder:
         priority: int | None = None,
         *,
         derive: dict[str, Any] | None = None,
+        metadata: dict[str, Any] | None = None,
         subflow_network: str | None = None,
         return_stage: str | None = None,
         data_mapping: dict[str, str] | None = None,
@@ -361,6 +366,11 @@ class WizardConfigBuilder:
             derive: Data derivation rules applied before this stage's
                 transition conditions are evaluated. Keys already present
                 in the wizard state are left alone.
+            metadata: Arc metadata copied onto the compiled FSM arc. A
+                ``name`` key here names the arc explicitly, overriding the
+                ``"<source>-><target>#<idx>"`` the loader would otherwise
+                derive, and is what ``StepResult.transition`` then
+                reports.
             subflow_network: Name of the subflow network to push.
                 When set, this becomes a subflow transition with
                 ``target="_subflow"``.
@@ -400,6 +410,8 @@ class WizardConfigBuilder:
             t["priority"] = priority
         if derive is not None:
             t["derive"] = derive
+        if metadata is not None:
+            t["metadata"] = metadata
         transitions.append(t)
         return self
 
@@ -756,7 +768,13 @@ class BotTestHarness:
         extractor: ConfigurableExtractor | None,
         context: Any,
     ) -> None:
-        self._bot = bot
+        # Annotated even though the parameter is ``Any``: ``create``
+        # always builds a real bot, and typing the attribute is what lets
+        # the accessors below report the bot's own return types rather
+        # than propagating ``Any`` into every caller's assertions. The
+        # parameter stays permissive because a stub is a legitimate thing
+        # to hand a harness.
+        self._bot: DynaBot = bot
         self._provider = provider
         self._extractor = extractor
         self._context = context
@@ -1077,6 +1095,27 @@ class BotTestHarness:
     def wizard_state(self) -> dict[str, Any] | None:
         """Full wizard state from the last turn."""
         return self._last_result.wizard_state if self._last_result else None
+
+    async def get_transitions(self) -> list[TransitionRecord]:
+        """Transition records the wizard has persisted for this conversation.
+
+        ``wizard_state`` cannot answer this: it is the *normalized* state
+        (:func:`~dataknobs_bots.bot.base.normalize_wizard_state`), which
+        carries the stage, the collected data and the visited history but
+        not the transition records — so ``condition_evaluated`` and
+        ``transition_name``, which say *which* of a stage's routes fired,
+        are reachable only through this.
+
+        Delegates to :meth:`~dataknobs_bots.bot.base.DynaBot.get_wizard_transitions`,
+        which is the same surface a production consumer uses and which
+        falls back to persisted storage for a conversation the in-memory
+        cache has evicted.  A test asserting on transitions is therefore
+        exercising the shipped reader, not a second copy of it.
+
+        Returns an empty list when the conversation is unknown or the bot
+        is not running a wizard.
+        """
+        return await self._bot.get_wizard_transitions(self._context.conversation_id)
 
     @property
     def last_response(self) -> str:
