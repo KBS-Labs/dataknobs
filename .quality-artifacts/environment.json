@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-08-28T16:22:12Z",
+  "timestamp": "2026-08-28T17:13:01Z",
   "python_version": "Python 3.12.12",
   "uv_version": "uv 0.12.5 (Homebrew 2026-08-14 aarch64-apple-darwin)",
   "os": "Darwin",
   "os_version": "24.6.0",
-  "git_branch": "sbk/marker-walk-whole-config",
-  "git_commit": "dd848a75ecedafb3d260bac56b5f3cd2f0fcdfb8",
+  "git_branch": "main",
+  "git_commit": "71e99c72966799102578cd016b889421b4ccdd13",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }
