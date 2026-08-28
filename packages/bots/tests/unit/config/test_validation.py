@@ -411,6 +411,90 @@ class TestMarkerRuleDepth:
         assert len([e for e in result.errors if "$requred" in e]) == 1
 
 
+class TestMarkerRuleBreadth:
+    """The rule applies to the whole config file, not to its ``bot`` section.
+
+    Its sibling above covers depth. This covers breadth, and the two are the
+    same argument: a ``$resource`` block under a key no schema is registered
+    for is a block nothing else looks at. That was true of a key beside
+    ``bot`` for as long as it was true of a key beneath one.
+
+    The path a finding names is the same question asked from the other end.
+    Walking the file rather than one section of it is what makes a finding
+    say ``bot.knowledge_base.vector_store`` -- the path built by the walk is
+    the path the reader has open, with no prefix to supply by hand.
+    """
+
+    def test_a_section_beside_bot_is_checked(self) -> None:
+        """The narrowing's blind spot: a sibling of ``bot``, at any depth."""
+        schema = DynaBotConfigSchema()
+        validator = ConfigValidator(schema=schema)
+        config: dict[str, Any] = {
+            "bot": {
+                "llm": {"provider": "ollama"},
+                "conversation_storage": {"backend": "memory"},
+            },
+            "domain": {
+                "some_ref": {"$resource": "whatever", "$requred": True},
+            },
+        }
+
+        result = validator.validate(config)
+
+        assert result.valid is False
+        assert any("$requred" in e for e in result.errors)
+        assert any("domain.some_ref" in e for e in result.errors)
+
+    def test_a_finding_names_the_path_the_reader_has_open(self) -> None:
+        """``knowledge_base.vector_store`` locates nothing in a wrapped file."""
+        schema = DynaBotConfigSchema()
+        validator = ConfigValidator(schema=schema)
+        config: dict[str, Any] = {
+            "bot": {
+                "llm": {"provider": "ollama"},
+                "conversation_storage": {"backend": "memory"},
+                "knowledge_base": {
+                    "vector_store": {
+                        "$resource": "vectors",
+                        "type": "vector_stores",
+                        "$requred": True,
+                    }
+                },
+            }
+        }
+
+        result = validator.validate(config)
+
+        assert result.valid is False
+        assert any("'bot.knowledge_base.vector_store'" in e for e in result.errors)
+
+    def test_an_unwrapped_config_is_not_given_a_bot_prefix(self) -> None:
+        """Green before this change -- it is the guard on a hardcoded prefix.
+
+        ``path="bot"`` on the narrowed call would have fixed the wrapped
+        shape by asserting a key this config does not have.
+        """
+        schema = DynaBotConfigSchema()
+        validator = ConfigValidator(schema=schema)
+        config: dict[str, Any] = {
+            "llm": {"provider": "ollama"},
+            "conversation_storage": {"backend": "memory"},
+            "knowledge_base": {
+                "vector_store": {
+                    "$resource": "vectors",
+                    "type": "vector_stores",
+                    "$requred": True,
+                }
+            },
+        }
+
+        result = validator.validate(config)
+
+        assert result.valid is False
+        assert any("'knowledge_base.vector_store'" in e for e in result.errors)
+        assert not any("bot." in e for e in result.errors)
+
+
 class TestMarkerRuleOnASubtree:
     """``validate_component`` reports the same rule, rooted at the component.
 
