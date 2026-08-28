@@ -606,3 +606,20 @@ builder.add_transition(
 
 An explicit name wins over the derived one, and applies to both the arc
 and the stage metadata that describes it, so the two cannot disagree.
+
+**Keep explicit names unique within a stage.** The name is the only
+discriminator between sibling arcs, so two transitions answering to one
+string are exactly as unidentifiable as two anonymous ones — the step
+log, a record's `condition_evaluated` and `transition_name`, and the
+FSM's own `arc_name` selector all resolve an arc by this string. The
+loader warns at load time when two transitions in a stage compile to the
+same name, and the readers record nothing rather than naming whichever
+came first. The derived form carries the index and cannot collide.
+
+The derived index is a **position, not an identity**: reorder a stage's
+transitions, or insert one above an existing one, and the same route
+compiles to a different name from then on. Records written earlier keep
+the name they were written with — each carries its own
+`condition_evaluated`, so it stays internally consistent, but
+correlating an old name against the current config does not survive the
+edit. An explicit `name` is how you get one that does.

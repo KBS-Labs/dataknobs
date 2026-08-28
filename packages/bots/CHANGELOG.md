@@ -42,10 +42,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   consumer correlating its own config against `StepResult.transition` need not
   re-derive the rule.
 
-- **`BotTestHarness.transitions`** returns the transition records persisted for
-  the harness's conversation. `wizard_state` is the *normalized* state and does
-  not carry them, so asserting on a transition previously meant reaching into
-  the bot's conversation-manager cache.
+  **A name identifies an arc only while it is unique.** The derived form carries
+  the index and cannot collide; an authored `metadata: {name: ...}` can be
+  repeated, and two arcs answering to one string are as unidentifiable as the
+  anonymous arcs this replaces. The loader reports a collision at load time,
+  naming both transition indices, and the readers treat a duplicated name as the
+  ambiguous case — recording nothing rather than the first sibling's condition.
+  A name is also matched only among the transitions leading to the stage
+  actually reached, so one reused on a route elsewhere cannot answer for a move
+  it did not cause.
+
+  **The derived index is a position, not an identity.** Reordering a stage's
+  transitions, or inserting one above an existing one, changes the name the same
+  route compiles to from then on. Records written earlier keep the name they
+  were written with and their own `condition_evaluated`, so each stays
+  internally consistent; correlating an old name against an edited config does
+  not survive. An explicit `name` is how to get one that does.
+
+- **`DynaBot.get_wizard_transitions(conversation_id)`** returns the transition
+  records recorded for a conversation. `get_wizard_state()` returns the
+  *normalized* state, whose canonical schema carries the stage, the collected
+  data and the history but not the records — so `condition_evaluated` and
+  `transition_name`, the fields that say which route carried the wizard
+  forward, had no supported reader. Same two-path lookup as `get_wizard_state`:
+  the in-memory manager first, then persisted storage, so an evicted
+  conversation answers from what was saved.
+
+- **`BotTestHarness.get_transitions()`** returns the same records for the
+  harness's conversation, delegating to `DynaBot.get_wizard_transitions()` so a
+  test asserting on transitions exercises the shipped reader.
 
 - **`WizardConfigBuilder.transition(..., metadata=...)`** (the testing builder)
   passes arc metadata through, so a test can name an arc without falling back to
@@ -107,7 +132,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   to the target instead of naming one of them. It also renders an unconditional
   transition as `unconditional` rather than `None`: the stage metadata always
   carries a `condition` key, so the `.get()` default the line was written with
-  could never fire.
+  could never fire. A *declared but empty* condition reads as
+  `empty (never fires)` rather than being folded in with the unconditional case
+  — the loader builds a condition function for any present `condition` key, so
+  `condition: ""` compiles to an arc that can never fire rather than one that
+  always does.
+
+- **`TransitionRecord.from_dict` no longer raises on a key it does not
+  recognise.** These records are persisted into conversation metadata and read
+  back by whichever build is running, so a record written after a field is added
+  raised `TypeError` on any build predating it — a downgrade, or a rolling
+  deploy where two versions read one store. The forward direction was already
+  safe; unknown keys are now dropped, and logged at DEBUG so a misspelled one
+  stays findable.
+
+- **Stage metadata records an arc's compiled target** as `arc_target`, beside
+  the `target` the author declared. The two differ for a subflow transition,
+  whose `_subflow` sentinel compiles to a self-loop, and re-deriving that rule
+  at each reader is the mirroring `arc_identity` exists to end.
 
 - **A subflow arc's target was derived in two places.** `_translate_transition`
   and `_register_inline_conditions` each computed the self-loop rule, the second

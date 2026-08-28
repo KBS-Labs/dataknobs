@@ -169,10 +169,23 @@ print(f"Duration: {record.duration_in_stage_ms}ms")
 | Trigger | Description |
 |---------|-------------|
 | `user_input` | User message triggered the transition |
+| `auto_advance` | The auto-advance loop moved on without a further message |
 | `navigation_back` | User navigated backward |
 | `navigation_skip` | User skipped the stage |
+| `amendment` | User amended an earlier answer, returning to that stage |
 | `restart` | Wizard was restarted |
-| `auto` | Automatic transition (e.g., condition-based) |
+| `api_restart` | Restarted through the navigation API |
+| `auto_restart` | Restarted automatically on completion |
+| `subflow_push` | A subflow was entered |
+| `subflow_pop` | A subflow completed and returned to its parent |
+| `subflow_unwind` | Subflows were abandoned rather than completed |
+
+!!! note "`TransitionStats.restart_count` counts only `restart`"
+
+    The three restart triggers are recorded distinctly but not
+    aggregated: `restart_count` matches the bare `restart` value alone,
+    so a flow restarted through the API or automatically is absent from
+    that figure. Query the records themselves when you need the total.
 
 #### Which arc fired
 
@@ -211,6 +224,31 @@ transitions:
 condition on the arc that fired rather than the first one declaring that
 target. When a caller cannot supply the name and more than one
 transition leads to the target, it records nothing rather than guessing.
+
+The derived index is a **position, not an identity**. Reorder a stage's
+transitions, or insert one above an existing one, and the same route
+compiles to a different name from then on — records written earlier keep
+the name they were written with. Each record carries its own
+`condition_evaluated`, so an individual record stays internally
+consistent; what does not survive a config edit is correlating an old
+record's name against the current config. Give an arc a
+`metadata: {name: ...}` when you need a name that outlives reordering —
+and keep those unique within a stage, since two transitions answering to
+one name are exactly as unidentifiable as two anonymous ones. The loader
+warns when they collide.
+
+Read the records back through `DynaBot.get_wizard_transitions()`:
+
+```python
+for record in await bot.get_wizard_transitions("conv-123"):
+    print(record.from_stage, "->", record.to_stage,
+          "via", record.transition_name,
+          "on", record.condition_evaluated)
+```
+
+`get_wizard_state()` cannot answer this — it returns the normalized
+state, which carries the stage, the data and the history, but not the
+transition records.
 
 ### TransitionTracker
 

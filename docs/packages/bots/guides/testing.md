@@ -80,7 +80,7 @@ async with await BotTestHarness.create(
 | `harness.wizard_stage` | `str \| None` | Current wizard stage after last turn |
 | `harness.wizard_data` | `dict` | Wizard state data after last turn |
 | `harness.wizard_state` | `dict \| None` | Full normalized wizard state |
-| `harness.transitions` | `list[TransitionRecord]` | Transition records persisted so far — `wizard_state` is the *normalized* state and does not carry them |
+| `await harness.get_transitions()` | `list[TransitionRecord]` | Transition records persisted so far — `wizard_state` is the *normalized* state and does not carry them. Delegates to `DynaBot.get_wizard_transitions()`, the same reader a production consumer uses |
 | `harness.last_response` | `str` | Bot response from last turn |
 | `harness.turn_count` | `int` | Number of turns executed |
 | `harness.bot` | `DynaBot` | The underlying bot (for advanced assertions) |

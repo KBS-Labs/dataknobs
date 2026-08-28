@@ -15,8 +15,10 @@ types from dataknobs_fsm. Key differences from FSM types:
 Conversion utilities are provided to convert between wizard and FSM types.
 """
 
+import logging
 import time
 from dataclasses import asdict, dataclass, field
+from dataclasses import fields as dataclass_fields
 from typing import Any, Literal
 
 from dataknobs_common.copying import copy_structure
@@ -27,6 +29,8 @@ from dataknobs_fsm.observability import (
     ExecutionTracker,
 )
 from dataknobs_llm.tools.context import ToolWizardState
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -71,7 +75,12 @@ class TransitionRecord:
     from_stage: str
     to_stage: str
     timestamp: float
-    trigger: str  # "user_input", "navigation_back", "navigation_skip", "restart", "auto"
+    # "user_input", "auto_advance", "navigation_back", "navigation_skip",
+    # "amendment", "restart", "api_restart", "auto_restart",
+    # "subflow_push", "subflow_pop", "subflow_unwind".  Open rather than
+    # an enum: a consumer recording its own transitions names its own
+    # triggers, and TransitionStats counts whatever it is given.
+    trigger: str
     duration_in_stage_ms: float = 0.0
     data_snapshot: dict[str, Any] | None = None
     user_input: str | None = None
@@ -115,13 +124,31 @@ class TransitionRecord:
         unchanged, so a transition that recorded nothing still carries
         nothing.
 
+        Keys this class does not declare are **dropped**, not passed on.
+        These records are persisted into conversation metadata and read
+        back by whatever build is running at the time, so a record
+        written after a field is added would otherwise raise
+        ``TypeError`` on any build predating it -- a downgrade, or a
+        rolling deploy where two versions read the same store. The
+        forward direction was already safe, because every field below
+        ``trigger`` is defaulted; this makes the backward direction safe
+        too. Dropped keys are logged at DEBUG so a misspelled one is
+        findable rather than merely silent.
+
         Args:
             data: Dictionary containing record fields
 
         Returns:
             TransitionRecord instance
         """
-        fields = dict(data)
+        known = {f.name for f in dataclass_fields(cls)}
+        fields = {k: v for k, v in data.items() if k in known}
+        unknown = set(data) - known
+        if unknown:
+            logger.debug(
+                "TransitionRecord.from_dict: ignoring unrecognized key(s) %s",
+                ", ".join(sorted(unknown)),
+            )
         if "data_snapshot" in fields:
             fields["data_snapshot"] = copy_structure(fields["data_snapshot"])
         return cls(**fields)

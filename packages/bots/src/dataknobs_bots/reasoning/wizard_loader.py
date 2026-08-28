@@ -94,7 +94,13 @@ def arc_identity(source_stage: str, transition: Mapping[str, Any], idx: int) -> 
         ``(actual_target, arc_name)`` -- the state the compiled arc points
         at, and the name it carries.
     """
-    target = transition.get("target", "unknown")
+    # ``or``, not a ``get`` default: the default fires only on an absent
+    # key, so an explicit ``target: null`` yielded the name
+    # ``"<source>->None#<idx>"`` -- which reads as a stage called "None".
+    # Unreachable through the loader, where _translate_transition raises
+    # on a falsy target first, but this function is exported and a
+    # consumer calling it directly gets the stated default either way.
+    target = transition.get("target") or "unknown"
     actual_target: str = source_stage if target == SUBFLOW_TARGET else target
 
     metadata = transition.get("metadata")
@@ -528,6 +534,8 @@ class WizardConfigLoader:
         7. ``auto_advance: true`` on an end stage, which is never acted on
         8. ``settings:`` on a config being loaded as a subflow, which is
            never read
+        9. Two transitions in one stage compiling to the same arc name,
+           which leaves the arc that fired unidentifiable
 
         All issues are logged as warnings, not errors — the config will
         still load. That is the whole contract of this method, and it is
@@ -668,6 +676,46 @@ class WizardConfigLoader:
                     "stage is meant to continue.",
                     stage_name,
                 )
+
+            # 9. Two transitions compiling to one arc name.  The derived
+            #    form carries the index and cannot collide, so this only
+            #    fires on an authored `metadata: {name: ...}` repeated
+            #    within a stage -- the shape a copy-pasted transition
+            #    block produces.  It is worth a warning because the name
+            #    is the *only* discriminator between sibling arcs:
+            #    `StepResult.transition` reports it, a transition record
+            #    persists it as `transition_name`, and the FSM's own
+            #    `arc_name` selector filters on it and then takes the
+            #    first survivor.  Duplicated, it identifies nothing --
+            #    which is the guess this naming exists to remove, wearing
+            #    the fix's vocabulary.  Reported, not refused, because
+            #    every other check here reports: the config still loads,
+            #    and the readers downstream now record nothing rather
+            #    than a wrong answer.
+            by_name: dict[str, int] = {}
+            for idx, transition in enumerate(stage.get("transitions", [])):
+                if not isinstance(transition, dict):
+                    continue
+                _target, arc_name = arc_identity(stage_name, transition, idx)
+                first = by_name.get(arc_name)
+                if first is not None:
+                    logger.warning(
+                        "Stage '%s': transitions %d and %d both compile to "
+                        "the arc name '%s', so nothing downstream can say "
+                        "which of them fired -- the step log, the "
+                        "transition record's 'condition_evaluated' and "
+                        "'transition_name', and the FSM's own 'arc_name' "
+                        "selector all identify an arc by this string. "
+                        "Give them distinct 'metadata: {name: ...}' "
+                        "values, or drop the key and let the loader "
+                        "derive '<source>-><target>#<index>'.",
+                        stage_name,
+                        first,
+                        idx,
+                        arc_name,
+                    )
+                else:
+                    by_name[arc_name] = idx
 
         # 8. settings: on a config being loaded as a subflow.  Every
         #    setting is hoisted once, off the top-level flow, into the
@@ -943,10 +991,19 @@ class WizardConfigLoader:
                 # so a caller holding a StepResult.transition can find the
                 # entry describing the arc that actually fired rather than
                 # the first one declaring the same target.
-                _actual_target, arc_name = arc_identity(stage["name"], transition, idx)
+                actual_target, arc_name = arc_identity(stage["name"], transition, idx)
                 trans_meta: dict[str, Any] = {
                     "name": arc_name,
                     "target": transition.get("target"),
+                    # The state the compiled arc actually points at, which
+                    # is the source stage for a subflow transition whose
+                    # declared ``target`` is the ``_subflow`` sentinel.
+                    # Recorded rather than re-derived: a reader matching a
+                    # move against the transitions that could have caused
+                    # it compares against this, and deriving the self-loop
+                    # rule a second time is the mirroring ``arc_identity``
+                    # exists to end.
+                    "arc_target": actual_target,
                     "condition": transition.get("condition"),
                     "priority": transition.get("priority"),
                     "derive": transition.get("derive"),
