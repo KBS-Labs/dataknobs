@@ -649,6 +649,7 @@ one-shot generator is fine.
 | `build_middleware` | `Middleware` | Bot-turn lifecycle hooks (`on_turn_start` / `after_turn` / ...) |
 | `build_conversation_middleware` | `ConversationMiddleware` | LLM-call wraps (`process_request` / `process_response`) |
 | `resolve_middleware_from_spec` | either | One spec at a time — see [Resolving a single spec](#resolving-a-single-spec) |
+| `resolve_middleware_class` | nothing | Validates a spec and returns its class — see [Checking a spec without building it](#checking-a-spec-without-building-it) |
 
 Both wrappers delegate to `resolve_middleware_from_spec`, so there is
 exactly one resolution body and the two flavors cannot drift.
@@ -729,6 +730,8 @@ for spec in specs:
 
 For the two built-in flavors prefer the wrappers — they supply the correct
 `expected_base` and the `label` that appears in error messages.
+
+--8<-- "packages/bots/docs/middleware.md:checking-a-spec-without-building-it"
 
 ## Best Practices
 
