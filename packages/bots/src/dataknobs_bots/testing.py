@@ -70,6 +70,7 @@ from dataknobs_llm.testing import (
 
 from .knowledge.base import KnowledgeBase
 from .reasoning.base import ReasoningManagerProtocol, ReasoningStrategy
+from .reasoning.observability import TransitionRecord
 
 logger = logging.getLogger(__name__)
 
@@ -340,6 +341,7 @@ class WizardConfigBuilder:
         priority: int | None = None,
         *,
         derive: dict[str, Any] | None = None,
+        metadata: dict[str, Any] | None = None,
         subflow_network: str | None = None,
         return_stage: str | None = None,
         data_mapping: dict[str, str] | None = None,
@@ -361,6 +363,11 @@ class WizardConfigBuilder:
             derive: Data derivation rules applied before this stage's
                 transition conditions are evaluated. Keys already present
                 in the wizard state are left alone.
+            metadata: Arc metadata copied onto the compiled FSM arc. A
+                ``name`` key here names the arc explicitly, overriding the
+                ``"<source>-><target>#<idx>"`` the loader would otherwise
+                derive, and is what ``StepResult.transition`` then
+                reports.
             subflow_network: Name of the subflow network to push.
                 When set, this becomes a subflow transition with
                 ``target="_subflow"``.
@@ -400,6 +407,8 @@ class WizardConfigBuilder:
             t["priority"] = priority
         if derive is not None:
             t["derive"] = derive
+        if metadata is not None:
+            t["metadata"] = metadata
         transitions.append(t)
         return self
 
@@ -1077,6 +1086,30 @@ class BotTestHarness:
     def wizard_state(self) -> dict[str, Any] | None:
         """Full wizard state from the last turn."""
         return self._last_result.wizard_state if self._last_result else None
+
+    @property
+    def transitions(self) -> list[TransitionRecord]:
+        """Transition records the wizard has persisted for this conversation.
+
+        ``wizard_state`` cannot answer this: it is the *normalized* state
+        (:func:`~dataknobs_bots.bot.base.normalize_wizard_state`), which
+        carries the stage, the collected data and the visited history but
+        not the transition records.  Those live in the raw
+        ``fsm_state["transitions"]`` under the conversation's metadata,
+        which this reads through the bot's public
+        ``get_conversation_manager`` rather than the ``_conversation_managers``
+        cache.
+
+        Returns an empty list when no conversation manager exists yet, or
+        when the bot is not running a wizard.
+        """
+        manager = self._bot.get_conversation_manager(
+            self._context.conversation_id,
+        )
+        if manager is None or not manager.metadata:
+            return []
+        fsm_state = manager.metadata.get("wizard", {}).get("fsm_state", {})
+        return [TransitionRecord.from_dict(t) for t in fsm_state.get("transitions", [])]
 
     @property
     def last_response(self) -> str:

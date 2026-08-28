@@ -9,6 +9,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Wizard arcs carry a name, and a transition record says which one fired.**
+  A stage may declare several transitions to the same target — different
+  conditions, one destination. The compiled FSM arcs were anonymous, so
+  `Arc.name` fell back to `"<source>-><target>"` and both siblings reported the
+  same string. The loader now names every arc it compiles:
+  `"<source>-><target>#<index>"`, or the `name` an author sets in the
+  transition's `metadata`, which takes precedence and already reached `Arc.name`
+  before this.
+
+  The derived form extends the FSM's own fallback rather than replacing it, so a
+  reader who knows the old string still reads the prefix and only the
+  discriminator is new. It is reported as `StepResult.transition`, recorded in
+  the stage metadata beside `target` and `condition`, and persisted on
+  `TransitionRecord` as a new **`transition_name`** field — which
+  `transition_record_to_execution_record` now carries into `ExecutionRecord`,
+  where the field has always existed with nothing to put in it, and
+  `execution_record_to_transition_record` carries back.
+
+  The field is defaulted and appended, so a record persisted by an earlier
+  version restores with `transition_name=None`. A consumer asserting an exact
+  key set on a serialised record will see one more.
+
+  **The reported string changes for wizard arcs.** Anything keyed on the old
+  endpoint-derived form — an FSM trace filter, an `arc_name` selector passed to
+  `execute_step_*` — now sees `"<source>-><target>#<index>"` for an arc compiled
+  from a wizard transition. That string was never unique between siblings, which
+  is the defect below; the prefix is unchanged, so a match on it still works.
+
+  `dataknobs_bots.reasoning.wizard_loader.arc_identity(source_stage, transition,
+  idx)` is exported as the single derivation of an arc's target and name, so a
+  consumer correlating its own config against `StepResult.transition` need not
+  re-derive the rule.
+
+- **`BotTestHarness.transitions`** returns the transition records persisted for
+  the harness's conversation. `wizard_state` is the *normalized* state and does
+  not carry them, so asserting on a transition previously meant reaching into
+  the bot's conversation-manager cache.
+
+- **`WizardConfigBuilder.transition(..., metadata=...)`** (the testing builder)
+  passes arc metadata through, so a test can name an arc without falling back to
+  an inline config dict.
+
 - **`WizardStateSnapshot` carries the current stage's configuration, and
   converts to the state a tool is handed.** The snapshot gains
   `stage_metadata` — the declared config of `current_stage`: prompt, schema,
@@ -44,6 +86,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   asserting an exact key set on a serialised snapshot will see one more.
 
 ### Fixed
+
+- **The wizard no longer reports the wrong arc when two transitions share a
+  target.** Both readers of a completed step — the DEBUG step log and
+  `WizardFSM.get_transition_condition`, whose answer is *persisted* as a
+  transition record's `condition_evaluated` — scanned the stage's declared
+  transitions for the first one naming the target it landed on. With two arcs to
+  one target that names the first whichever fired, and nothing in the output
+  indicated a guess had been made. Both now match on the arc name the step
+  reports, through one shared matcher rather than two identical scans.
+
+  `get_transition_condition` gains a keyword-only **`arc_name`**. Without it, a
+  target reached by more than one transition now returns `None` — the value is
+  persisted, where a plausible-but-wrong expression is worse than an absent one,
+  and the method's own comment already argued that "nothing recorded" is the
+  honest answer when the value cannot be trusted. A target reached by a single
+  transition answers exactly as before.
+
+  When the arc cannot be identified, the DEBUG line now says how many arcs lead
+  to the target instead of naming one of them. It also renders an unconditional
+  transition as `unconditional` rather than `None`: the stage metadata always
+  carries a `condition` key, so the `.get()` default the line was written with
+  could never fire.
+
+- **A subflow arc's target was derived in two places.** `_translate_transition`
+  and `_register_inline_conditions` each computed the self-loop rule, the second
+  under a comment instructing its reader to keep it in step with the first. A
+  drift between them would have silently unregistered a condition function — the
+  arc's `FunctionReference` simply would not resolve. Both now call
+  `arc_identity`.
 
 - **A snapshot's payloads are copied in depth, so writing through one cannot
   reach what it was taken from.** `WizardStateSnapshot` is documented

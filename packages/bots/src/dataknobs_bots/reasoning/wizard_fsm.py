@@ -395,28 +395,84 @@ class WizardFSM:
         """
         return self._stage_field(stage, "suggestions", [])
 
-    def get_transition_condition(self, from_stage: str, to_stage: str) -> str | None:
+    def _matched_transition(
+        self, from_stage: str, to_stage: str, arc_name: str | None
+    ) -> tuple[dict[str, Any] | None, int]:
+        """Which declared transition describes the arc that fired.
+
+        Two callers ask this -- the DEBUG step log and
+        :meth:`get_transition_condition` -- and both used to scan the
+        stage's transitions for the first one declaring ``to_stage``.
+        That answer is right only when a single arc leads there; when two
+        do, it names the first regardless of which fired, and it does so
+        with no indication that it guessed.
+
+        ``arc_name`` is the discriminator, carried on the arc by
+        :func:`~dataknobs_bots.reasoning.wizard_loader.arc_identity` and
+        reported back as ``StepResult.transition``.  Matching on it is
+        exact.  When it identifies nothing -- a caller that has no step
+        result, or metadata built before the arc was named -- the target
+        scan is still correct for a target only one arc leads to, so that
+        case keeps its answer; an ambiguous one returns no entry rather
+        than a guess.
+
+        Args:
+            from_stage: Stage the step started from.
+            to_stage: Stage it ended on.
+            arc_name: ``StepResult.transition``, when the caller has one.
+
+        Returns:
+            ``(entry, candidates)`` -- the matched transition metadata or
+            ``None``, and how many declared transitions lead to
+            ``to_stage``.  The count is what a caller reports when the
+            entry is ``None``.
+        """
+        stage_meta = self._stage_metadata.get(from_stage, {})
+        transitions = stage_meta.get("transitions", [])
+        candidates = [t for t in transitions if t.get("target") == to_stage]
+
+        if arc_name:
+            for transition in transitions:
+                if transition.get("name") == arc_name:
+                    return transition, len(candidates)
+
+        if len(candidates) == 1:
+            return candidates[0], 1
+
+        return None, len(candidates)
+
+    def get_transition_condition(
+        self, from_stage: str, to_stage: str, *, arc_name: str | None = None
+    ) -> str | None:
         """Get the condition expression for a transition.
+
+        Pass ``arc_name`` -- ``StepResult.transition`` from the step that
+        made this move -- whenever it is in hand.  Without it, a stage
+        with two transitions to ``to_stage`` cannot say which one fired,
+        and this returns ``None``: the value is recorded as a transition
+        record's ``condition_evaluated``, where a wrong expression is
+        worse than an absent one, and the record is persisted rather than
+        merely logged.  A target only one transition leads to is
+        unambiguous and answers the same either way.
 
         Args:
             from_stage: Source stage name
             to_stage: Target stage name
+            arc_name: Name of the arc that fired, when known
 
         Returns:
-            Condition expression string, or None if no condition
+            Condition expression string, or None if no condition is
+            declared or the arc cannot be identified
         """
-        stage_meta = self._stage_metadata.get(from_stage, {})
-        transitions = stage_meta.get("transitions", [])
+        transition, _candidates = self._matched_transition(from_stage, to_stage, arc_name)
+        if transition is None:
+            return None
 
-        for transition in transitions:
-            if transition.get("target") == to_stage:
-                condition = transition.get("condition")
-                # Feeds a transition record's ``condition_evaluated`` and
-                # nothing else. A non-string would be read back as the
-                # expression that fired; "nothing recorded" is honest.
-                return condition if isinstance(condition, str) else None
-
-        return None
+        condition = transition.get("condition")
+        # Feeds a transition record's ``condition_evaluated`` and
+        # nothing else. A non-string would be read back as the
+        # expression that fired; "nothing recorded" is honest.
+        return condition if isinstance(condition, str) else None
 
     def can_skip(self, stage: str | None = None) -> bool:
         """Check if stage can be skipped.
@@ -643,6 +699,15 @@ class WizardFSM:
         also keeps a regular arc back to its own stage off the
         "none matched" line.
 
+        The same report also has to name *which* arc moved the wizard,
+        and that is the other thing the step reports.  Scanning for the
+        first transition declaring ``after_stage`` answers correctly only
+        while one arc leads there; a stage offering two routes to the
+        same target is the case the answer is wanted for, and the scan
+        names the first of them whichever fired.  So the arc name is
+        matched instead, and when it identifies nothing the line says how
+        many arcs it could have been rather than picking one.
+
         Args:
             before_stage: Stage the step started from.
             after_stage: Stage the step ended on.
@@ -652,16 +717,28 @@ class WizardFSM:
         transitions = stage_meta.get("transitions", [])
 
         if before_stage != after_stage:
-            for trans in transitions:
-                if trans.get("target") == after_stage:
-                    condition = trans.get("condition", "unconditional")
-                    logger.debug(
-                        "WizardFSM transition: '%s' -> '%s' via condition: %s",
-                        before_stage,
-                        after_stage,
-                        condition,
-                    )
-                    break
+            matched, candidates = self._matched_transition(before_stage, after_stage, transition)
+            if matched is not None:
+                logger.debug(
+                    "WizardFSM transition: '%s' -> '%s' via condition: %s",
+                    before_stage,
+                    after_stage,
+                    # ``or``, not a ``get`` default: _extract_metadata
+                    # always writes the key, so an unconditional
+                    # transition arrives as an explicit None and a
+                    # default can never fire.
+                    matched.get("condition") or "unconditional",
+                )
+            elif candidates:
+                logger.debug(
+                    "WizardFSM transition: '%s' -> '%s' via one of %d arcs; "
+                    "step reports transition '%s', which matches none of them "
+                    "by name",
+                    before_stage,
+                    after_stage,
+                    candidates,
+                    transition,
+                )
             return
 
         if not transitions:
@@ -686,12 +763,10 @@ class WizardFSM:
             )
 
         for trans in transitions:
-            target = trans.get("target", "?")
-            condition = trans.get("condition", "unconditional")
             logger.debug(
                 "  - target='%s', condition='%s'",
-                target,
-                condition,
+                trans.get("target") or "?",
+                trans.get("condition") or "unconditional",
             )
 
     def step(self, data: dict[str, Any]) -> StepResult:

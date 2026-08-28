@@ -1677,6 +1677,7 @@ class TestConversionUtilities:
             condition_evaluated="data.get('key')",
             condition_result=True,
             error=None,
+            transition_name="welcome->configure#0",
         )
 
         # Convert to FSM and back
@@ -1691,6 +1692,10 @@ class TestConversionUtilities:
         assert restored.data_snapshot == original.data_snapshot
         assert restored.condition_evaluated == original.condition_evaluated
         assert restored.condition_result == original.condition_result
+        # ExecutionRecord has always had a field for this; until the
+        # wizard named its arcs there was nothing to put in it.
+        assert restored.transition_name == original.transition_name
+        assert execution.transition_name == original.transition_name
         # user_input is lost in round-trip (FSM doesn't have it)
         assert restored.user_input is None
 

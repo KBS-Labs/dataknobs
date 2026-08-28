@@ -174,6 +174,44 @@ print(f"Duration: {record.duration_in_stage_ms}ms")
 | `restart` | Wizard was restarted |
 | `auto` | Automatic transition (e.g., condition-based) |
 
+#### Which arc fired
+
+A stage may declare several transitions to the *same* target — different
+conditions, one destination. `transition_name` is what tells them apart:
+it is the name of the arc the FSM actually took, the same string the
+step reports as `StepResult.transition`.
+
+```python
+record = create_transition_record(
+    from_stage="gather",
+    to_stage="done",
+    trigger="user_input",
+    condition_evaluated="data.get('route') == 'b'",
+    condition_result=True,
+    transition_name="gather->done#1",
+)
+```
+
+Unless a transition names itself, the loader derives the name as
+`"<source>-><target>#<index>"`, where the index is the transition's
+position in the stage's `transitions` list. That extends the FSM's own
+`"<source>-><target>"` form for an unnamed arc, so the prefix stays
+greppable. To name an arc yourself, set it in the transition's arc
+metadata:
+
+```yaml
+transitions:
+  - target: done
+    condition: "data.get('route') == 'b'"
+    metadata:
+      name: fast_path
+```
+
+`condition_evaluated` is resolved from the same name, so it reports the
+condition on the arc that fired rather than the first one declaring that
+target. When a caller cannot supply the name and more than one
+transition leads to the target, it records nothing rather than guessing.
+
 ### TransitionTracker
 
 `TransitionTracker` maintains a bounded history of transitions with query and statistics capabilities:

@@ -47,6 +47,11 @@ class TransitionRecord:
         condition_evaluated: The condition expression that was evaluated (if any)
         condition_result: Result of the condition evaluation (True/False)
         error: Error message if transition failed
+        transition_name: Name of the arc that fired, as reported by
+            ``StepResult.transition``. Two transitions may declare the
+            same target, so this is what distinguishes them -- and what
+            makes ``condition_evaluated`` checkable rather than merely
+            plausible.
 
     Example:
         ```python
@@ -77,6 +82,11 @@ class TransitionRecord:
     subflow_push: str | None = None  # Network name if this transition pushes a subflow
     subflow_pop: str | None = None  # Network name if this transition pops a subflow
     subflow_depth: int = 0  # Depth after this transition (0 = main flow)
+    # Appended, not placed beside ``trigger`` where ExecutionRecord keeps
+    # its equivalent: every field from ``duration_in_stage_ms`` down is
+    # defaulted, so inserting one would silently reinterpret any
+    # positional construction of this record.
+    transition_name: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         """Convert record to dictionary.
@@ -853,6 +863,7 @@ def create_transition_record(
     subflow_push: str | None = None,
     subflow_pop: str | None = None,
     subflow_depth: int = 0,
+    transition_name: str | None = None,
 ) -> TransitionRecord:
     """Factory function to create a transition record.
 
@@ -871,6 +882,8 @@ def create_transition_record(
         subflow_push: Network name if this transition pushes a subflow
         subflow_pop: Network name if this transition pops a subflow
         subflow_depth: Depth after this transition (0 = main flow)
+        transition_name: Name of the arc that fired
+            (``StepResult.transition``)
 
     Returns:
         TransitionRecord with current timestamp
@@ -889,6 +902,7 @@ def create_transition_record(
         subflow_push=subflow_push,
         subflow_pop=subflow_pop,
         subflow_depth=subflow_depth,
+        transition_name=transition_name,
     )
 
 
@@ -919,7 +933,7 @@ def transition_record_to_execution_record(
         to_state=record.to_stage,
         timestamp=record.timestamp,
         trigger=record.trigger,
-        transition_name=None,  # Wizard doesn't track transition names
+        transition_name=record.transition_name,
         duration_in_state_ms=record.duration_in_stage_ms,
         data_before=None,
         data_after=record.data_snapshot,
@@ -959,6 +973,7 @@ def execution_record_to_transition_record(
         condition_evaluated=record.condition_evaluated,
         condition_result=record.condition_result,
         error=record.error,
+        transition_name=record.transition_name,
     )
 
 

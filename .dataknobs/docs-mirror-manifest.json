@@ -343,6 +343,7 @@
       "site_only": [
         "api/reference.md",
         "guides/environment-aware.md",
+        "guides/observability.md",
         "index.md",
         "quickstart.md"
       ],
