@@ -1,5 +1,5 @@
 {
-  "timestamp": "2026-08-28T17:13:01Z",
+  "timestamp": "2026-08-28T17:56:44Z",
   "overall_status": "PASS",
   "run_mode": "pr",
   "environment": "host",
@@ -24,9 +24,9 @@
   "workspace_hashes": {
     "toolchain": "5e08837aacf98c40de40f090d87973f00a7da9b1f2a6dff870ea01d3df063476",
     "workspace_tests": "0bafc5c435c0b7a6685a8000fa7c3ec71fd8da859d1c1c3176129db9a76f7e68",
-    "docs": "ec44912e0690ee407e8f19e8b68337f1b7fff8a5483a1b139e9cdeedeb6f065f"
+    "docs": "ff1a81cb7034969a6f75c4b3a2a3b4ca94f86a1e1079d4651a1456a51976dde5"
   },
-  "total_seconds": 152,
+  "total_seconds": 153,
   "checks": {
     "workflow_lint": {
       "status": "pass",
@@ -38,7 +38,7 @@
       "status": "pass",
       "exit_code": 0,
       "tool": "lint-shell.sh",
-      "duration_seconds": 5
+      "duration_seconds": 4
     },
     "contract": {
       "status": "pass",
@@ -58,14 +58,14 @@
       "exit_code": 0,
       "skipped": false,
       "tool": "mkdocs",
-      "duration_seconds": 24
+      "duration_seconds": 25
     },
     "documentation_versions": {
       "status": "pass",
       "exit_code": 0,
       "skipped": false,
       "tool": "docs-update-versions.sh",
-      "duration_seconds": 1
+      "duration_seconds": 0
     },
     "documentation_mirrors": {
       "status": "pass",
@@ -78,8 +78,8 @@
       "status": "pass",
       "exit_code": 0,
       "skipped": false,
-      "duration_seconds": 80,
-      "workspace_guards_seconds": 58
+      "duration_seconds": 81,
+      "workspace_guards_seconds": 59
     },
     "integration_tests": {
       "status": "pass",
