@@ -366,7 +366,10 @@
         {
           "package": "middleware.md",
           "site": "guides/middleware.md",
-          "reason": "Long-drifted hand-authored copies (~15 hunks) that nonetheless document the same subsystem and are edited together. Recorded as a pair so both files are existence-checked and the relationship is visible; reconciling the content is its own task."
+          "reason": "Long-drifted hand-authored copies (~15 hunks) that nonetheless document the same subsystem and are edited together. Recorded as a pair so both files are existence-checked and the relationship is visible; reconciling the content is its own task. The check-without-constructing section is the part that must not drift -- it states which failures resolve_middleware_class does and does not detect, and a copy that drifts would tell a linter author the wrong answer -- so it is transcluded rather than copied; see shared_sections.",
+          "shared_sections": [
+            "checking-a-spec-without-building-it"
+          ]
         },
         {
           "package": "multi-tenant.md",

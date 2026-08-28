@@ -803,6 +803,7 @@ for spec in specs:
 For the two built-in flavors prefer the wrappers — they supply the correct
 `expected_base` and the `label` that appears in error messages.
 
+<!-- --8<-- [start:checking-a-spec-without-building-it] -->
 ### Checking a spec without building it
 
 `resolve_middleware_class` is `resolve_middleware_from_spec` with the
@@ -849,6 +850,7 @@ it — a required key, a value's type — still without a ctor.
 > trusted-configuration rule above applies here with *more* force than it
 > does to the builders, not less: a linter is exactly the kind of tool that
 > gets pointed at a directory of configs somebody else wrote.
+<!-- --8<-- [end:checking-a-spec-without-building-it] -->
 
 ---
 
