@@ -188,13 +188,21 @@ class DynaBotConfigSchema:
         """
         bot = config.get("bot", config)
 
-        # Once, over the whole tree, before the per-component loop -- because
+        # Once, over the whole file, before the per-component loop -- because
         # the marker rule is a property of the config format rather than of any
         # schema, and the loop below reaches neither the depth it applies at nor
         # the sections it applies to. The loop visits registered components
         # only, so a `$resource` block under any other key is a block nothing
-        # would otherwise look at.
-        result = marker_violations_result(bot)
+        # would otherwise look at, and `bot` is such a key's sibling as often as
+        # it is its parent.
+        #
+        # `config` rather than `bot`, which also gives a finding the path the
+        # reader has open: the walk enters through the `bot` key, so it builds
+        # `bot.knowledge_base.vector_store` structurally. There is no `path=` to
+        # pass here and none that would be right -- a config with no top-level
+        # `bot` is its own root, and a hardcoded prefix would name a key it does
+        # not have.
+        result = marker_violations_result(config)
 
         for name, comp in self._components.items():
             if comp.required and name not in bot:

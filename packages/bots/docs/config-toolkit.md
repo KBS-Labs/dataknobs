@@ -157,19 +157,26 @@ not an inline default. A stranded `$required` or `$requires` on a block with no
 `$resource` is the same defect from the other side: it says the selector key
 itself is the misspelled one.
 
-Validation enforces that rule **at every depth**, on every section, whether or
-not a schema is registered for it — `$requred: true` reads as *not required*,
-and catching it at config-lint time is the difference between one confusing
-message and a factory called with a keyword argument it did not expect.
+Validation enforces that rule **at every depth, over the whole file**, on every
+section, whether or not a schema is registered for it — `$requred: true` reads
+as *not required*, and catching it at config-lint time is the difference between
+one confusing message and a factory called with a keyword argument it did not
+expect. A section beside `bot:` is covered for the same reason a section beneath
+it is: nothing else looks at either one.
+
+A finding's path is rooted at the file, so it names the key the reader has open
+— `bot.knowledge_base.vector_store` in a `bot:`-wrapped config, and
+`knowledge_base.vector_store` in one written without the wrapper.
 
 ```python
 result = validator.validate(config)
 # -> valid=False, errors=[
 #      "Unknown marker key(s) ['$requred'] in the $resource reference for
-#       'vectors' at config path 'knowledge_base.vector_store'. ..."
+#       'vectors' at config path 'bot.knowledge_base.vector_store'. ..."
 #    ]
 
-# Or on one section, rooted so the path locates something:
+# Or on one section, rooted at the component so the path still locates
+# something:
 result = validator.validate_component("knowledge_base", section)
 ```
 

@@ -110,6 +110,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   snapshots serialised by an earlier version still load — but a consumer
   asserting an exact key set on a serialised snapshot will see one more.
 
+### Changed
+
+- **`DynaBotConfigSchema.validate` applies the `$resource` marker rule to the
+  whole config file, not to its `bot:` section.** The rule is a property of the
+  config format rather than of any schema, and the component loop beside it
+  visits registered names only — so a reference block under any other key is one
+  nothing else looks at. That was already the argument for checking below the
+  top level; it holds identically for a section *beside* `bot:` as for one
+  beneath it, and the check stopped at the `bot:` boundary anyway.
+
+  **A config that lints clean today can now report a finding.** Everything newly
+  reported already failed at resolution with the same sentence — a `$requred`
+  under a top-level `domain:` or `educational:` raised `ConfigurationError` when
+  the bot was built. What moves is who finds out and when: an authoring-time
+  verdict instead of a deploy-time crash. Nothing that shipped was silently
+  degraded.
+
+  The surface is bounded to the rule's two halves, so a `$`-prefixed key is not
+  enough on its own: an unknown marker is reported only inside a block that
+  carries `$resource`, and a stranded marker only for the literal keys
+  `$requires` and `$required`. JSON Schema's `$ref`, `$defs`, `$schema` and `$id`
+  are invisible to both, so a stage's `schema:` block is unaffected.
+
+  **A finding now names the path the reader has open.** It is rooted at the file
+  rather than inside `bot:`, so it reads `bot.knowledge_base.vector_store` where
+  it used to read `knowledge_base.vector_store` — a path locating nothing in a
+  wrapped config. This falls out of walking the file: a config written without
+  the `bot:` wrapper is its own root and keeps unprefixed paths.
+  `validate_component` is unchanged, still rooted at the component it was handed.
+
 ### Fixed
 
 - **The wizard no longer reports the wrong arc when two transitions share a
