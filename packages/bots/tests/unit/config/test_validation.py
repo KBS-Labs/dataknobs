@@ -494,6 +494,39 @@ class TestMarkerRuleBreadth:
         assert any("'knowledge_base.vector_store'" in e for e in result.errors)
         assert not any("bot." in e for e in result.errors)
 
+    def test_a_clean_sibling_section_is_left_alone(self) -> None:
+        """Widening a check asks what it now reports, not only what it catches.
+
+        Every shape below sits in a section the walk reaches for the first
+        time, and none of them is a violation. The reference half needs a
+        ``$resource`` in the block to fire at all, and the orphan half is
+        closed to two literal keys -- so a JSON Schema's ``$ref`` is
+        invisible to both, and a correctly spelled reference stays correct
+        wherever in the file it is written.
+        """
+        schema = DynaBotConfigSchema()
+        validator = ConfigValidator(schema=schema)
+        config: dict[str, Any] = {
+            "bot": {
+                "llm": {"provider": "ollama"},
+                "conversation_storage": {"backend": "memory"},
+            },
+            "domain": {
+                "id": "acme",
+                "store": {
+                    "$resource": "vectors",
+                    "type": "vector_stores",
+                    "$required": True,
+                },
+                "answer_schema": {"$schema": "...", "$ref": "#/$defs/answer"},
+            },
+        }
+
+        result = validator.validate(config)
+
+        assert result.valid is True
+        assert not any("$" in m for m in result.errors + result.warnings)
+
 
 class TestMarkerRuleOnASubtree:
     """``validate_component`` reports the same rule, rooted at the component.

@@ -122,9 +122,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   **A config that lints clean today can now report a finding.** Everything newly
   reported already failed at resolution with the same sentence — a `$requred`
-  under a top-level `domain:` or `tools:` raised `ConfigurationError` when the
-  bot was built. What moves is who finds out and when: an authoring-time verdict
-  instead of a deploy-time crash. Nothing that shipped was silently degraded.
+  under a top-level `domain:` or `educational:` raised `ConfigurationError` when
+  the bot was built. What moves is who finds out and when: an authoring-time
+  verdict instead of a deploy-time crash. Nothing that shipped was silently
+  degraded.
 
   The surface is bounded to the rule's two halves, so a `$`-prefixed key is not
   enough on its own: an unknown marker is reported only inside a block that
