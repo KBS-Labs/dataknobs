@@ -169,6 +169,10 @@
         {
           "package": "user-state.md",
           "site": "user-state.md"
+        },
+        {
+          "package": "vector-staleness.md",
+          "site": "vector-staleness.md"
         }
       ],
       "diverge": [

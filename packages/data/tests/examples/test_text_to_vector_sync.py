@@ -417,22 +417,24 @@ class TestSyncExample:
 
         out = capsys.readouterr().out
         assert "changed source fields: ['title', 'content']" in out
-        assert "sync_record -> success=True, updated=['embedding']" in out
+        assert "sync_on_update -> True" in out
 
     @pytest.mark.asyncio
-    async def test_sync_on_update_is_inert_for_this_configuration(self, capsys):
-        """Pin the defect the example step 7 documents.
+    async def test_sync_record_skips_a_record_already_brought_up_to_date(self, capsys):
+        """Step 7's second call has nothing to do, and says so.
 
-        `sync_on_update` detects change through the field mapping built from
-        the database schema, and `text_fields=` -- the constructor argument
-        this example uses -- never registers anything there. So it returns
-        False on a record whose title and content both just changed.
+        This replaces `test_sync_on_update_is_inert_for_this_configuration`,
+        which pinned today's wrong answer (`sync_on_update -> False`) so that
+        the example would stop agreeing with the library the moment the library
+        was fixed. It fired, as designed, and the step-7 commentary it guarded
+        was rewritten in the same change.
 
-        This asserts today's wrong answer deliberately, so the example stops
-        agreeing with the library the moment the library is fixed. When
-        `sync_on_update` learns about `text_fields`, this test fails, and the
-        step-7 commentary it guards has to be rewritten in the same change.
+        What is worth pinning now is the other half of that fix: `sync_record`
+        skips a vector field whose stored digest still matches its source text,
+        so calling it on a record `sync_on_update` just re-embedded costs
+        nothing. Before the fix this printed `updated=['embedding']` -- a second
+        embedding of text that had not changed since the first.
         """
         await run_sync_example(mock_generate_embedding)
 
-        assert "sync_on_update -> False" in capsys.readouterr().out
+        assert "sync_record -> success=True, updated=[]" in capsys.readouterr().out

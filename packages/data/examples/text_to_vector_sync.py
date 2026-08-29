@@ -222,19 +222,17 @@ async def main(embedding_fn: EmbeddingFn = generate_embedding):
         print(f"  changed source fields: {changed_fields}")
 
         # `sync_on_update` is the change-tracking entry point -- give it the old
-        # and new data and it re-embeds only what actually changed. It reports
-        # False here, and the reason is worth knowing rather than working
-        # around silently: it detects changes through the field mapping built
-        # from the *database schema*, and a synchronizer configured the way this
-        # one is -- with the `text_fields=` constructor argument -- never
-        # registers anything there. So it finds no changed source field and
-        # returns without embedding, whatever the text did.
+        # and new data and it re-embeds only what actually changed. Both source
+        # fields did, so it does the work and reports True.
         synced = await sync.synchronizer.sync_on_update(first_id, old_data, dict(first_record.data))
         print(f"  sync_on_update -> {synced}")
 
-        # `sync_record` reads `text_fields` directly, so it is the entry point
-        # that works for this configuration. Note it re-embeds unconditionally
-        # here -- `force` changes nothing on this path.
+        # `sync_record` is the whole-record entry point, and it is not
+        # unconditional: it skips any vector field whose stored digest still
+        # matches the text the record would produce now. The line above just
+        # brought this record up to date, so there is nothing left to do and it
+        # reports no updated fields. `force=True` is how you ask for an
+        # embedding regardless -- after a model change, say.
         success, updated = await sync.synchronizer.sync_record(first_id)
         print(f"  sync_record -> success={success}, updated={updated}")
 

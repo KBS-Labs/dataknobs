@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import logging
 from collections import defaultdict
 from dataclasses import dataclass, field
@@ -14,11 +13,19 @@ import numpy as np
 
 from ..fields import VectorField
 from ..records import Record
+from .content import (
+    CONTENT_HASH_KEY,
+    DEFAULT_FIELD_SEPARATOR,
+    assemble_source_text,
+    compute_content_hash,
+    content_hash_metadata,
+    recompute_content_hash,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Coroutine
 
-    from ..database import Database
+    from ..database import AsyncDatabase
 
 logger = logging.getLogger(__name__)
 
@@ -93,7 +100,7 @@ class VectorTextSynchronizer:
 
     def __init__(
         self,
-        database: Database,
+        database: AsyncDatabase,
         embedding_fn: Callable[[str], np.ndarray]
         | Callable[[str], Coroutine[Any, Any, np.ndarray]],
         text_fields: list[str] | str | None = None,
@@ -152,21 +159,46 @@ class VectorTextSynchronizer:
         self._initialize_field_mappings()
 
     def _initialize_field_mappings(self) -> None:
-        """Initialize mappings between vector fields and source fields."""
+        """Register every vector field this synchronizer maintains.
+
+        Two sources declare them, and both are registered here: the database
+        schema, and the ``text_fields=`` argument of the simplified API. Only
+        the schema was ever swept, which is why ``sync_on_update`` did nothing
+        on the simplified path — the mapping it consults to learn which vector
+        fields a source field feeds was empty, so it returned before doing any
+        work. Registering both is also what lets ``sync_record`` maintain every
+        field in one loop rather than one loop per source of truth.
+        """
         # Use schema if available
         for field_name, field_schema in self.database.schema.fields.items():
             if field_schema.is_vector_field():
+                source = field_schema.get_source_field()
                 self._vector_fields[field_name] = {
                     "dimensions": field_schema.get_dimensions() or 384,
-                    "source_field": field_schema.get_source_field(),
+                    "source_field": source,
+                    "source_fields": [source] if source else [],
+                    "field_separator": DEFAULT_FIELD_SEPARATOR,
                 }
-                source = field_schema.get_source_field()
                 if source:
                     self._source_fields[source].append(field_name)
 
+        # The simplified API names its own source fields and separator, which
+        # override whatever the schema said about the same vector field.
+        if self.text_fields:
+            existing = self._vector_fields.get(self.vector_field, {})
+            self._vector_fields[self.vector_field] = {
+                **existing,
+                "source_field": self.text_fields[0] if len(self.text_fields) == 1 else None,
+                "source_fields": list(self.text_fields),
+                "field_separator": self.field_separator,
+            }
+            for source in self.text_fields:
+                if self.vector_field not in self._source_fields[source]:
+                    self._source_fields[source].append(self.vector_field)
+
     def _compute_content_hash(self, content: str) -> str:
         """Compute a hash of the content for change detection."""
-        return hashlib.md5(content.encode()).hexdigest()
+        return compute_content_hash(content)
 
     def _has_current_vector(self, record: Record, vector_field: str) -> bool:
         """Check if a record has a current vector for the given field.
@@ -213,23 +245,28 @@ class VectorTextSynchronizer:
                 if stored_version != self.model_version:
                     return False
 
-        # Check content hash if source field exists
-        field_info = self._vector_fields.get(vector_field)
-        if field_info and field_info.get("source_field"):
-            source_content = record.get_value(field_info["source_field"], "")
-            if source_content:
-                # For VectorField objects, we don't check content hash
-                # as they're considered immutable once created
-                if isinstance(field_obj, VectorField):
-                    # VectorField with matching version is considered current
-                    return True
+        # Compare the digest this class stored against the text the record
+        # would produce now. The digest was previously written and never read:
+        # a VectorField was treated as immutable once created, so an edited
+        # source field left a stale vector in place and reported it current.
+        if isinstance(field_obj, VectorField):
+            stored_hash = (field_obj.metadata or {}).get(CONTENT_HASH_KEY)
+            if stored_hash is None:
+                # Nothing to compare against. Hand-built fields and records
+                # written before this class stored a digest are current, which
+                # is what they were before the comparison existed — the new
+                # behaviour is confined to fields this class can judge.
+                return True
 
-                # For plain values, check the content hash field
-                hash_field = f"{vector_field}_content_hash"
-                stored_hash = record.get_value(hash_field)
-                current_hash = self._compute_content_hash(str(source_content))
-                if stored_hash != current_hash:
-                    return False
+            field_info = self._vector_fields.get(vector_field) or {}
+            current_hash = recompute_content_hash(
+                record,
+                field_obj.metadata,
+                fallback_source_fields=field_info.get("source_fields") or [],
+                fallback_separator=field_info.get("field_separator", DEFAULT_FIELD_SEPARATOR),
+            )
+            if current_hash is not None and stored_hash != current_hash:
+                return False
 
         return True
 
@@ -298,10 +335,12 @@ class VectorTextSynchronizer:
             Tuple of (success, list of updated fields)
         """
         # Get record if ID provided
+        record_id: str | None
         if isinstance(record_or_id, str):
-            record = await self.database.read(record_or_id)
-            if not record:
+            read_record = await self.database.read(record_or_id)
+            if not read_record:
                 return False, []
+            record = read_record
             record_id = record_or_id
         else:
             record = record_or_id
@@ -310,67 +349,58 @@ class VectorTextSynchronizer:
         updated_fields = []
         failed_fields = []
 
-        # If text_fields are specified, use them for the default vector field
-        if self.text_fields:
-            text_parts = []
-            for field in self.text_fields:
-                value = record.get_value(field)
-                if value:
-                    text_parts.append(str(value))
-
-            if text_parts:
-                text = self.field_separator.join(text_parts)
-                embedding = await self._embed_text(text)
-                if embedding is not None:
-                    from ..fields import VectorField
-
-                    # Compute content hash for change tracking
-                    content_hash = self._compute_content_hash(text)
-                    vector_field_obj = VectorField(
-                        value=embedding,
-                        name=self.vector_field,
-                        source_field=self.text_fields[0] if len(self.text_fields) == 1 else None,
-                        model_name=self.model_name,
-                        model_version=self.model_version,
-                        metadata={"content_hash": content_hash},
-                    )
-                    record.fields[self.vector_field] = vector_field_obj
-                    updated_fields.append(self.vector_field)
-                else:
-                    # Embedding generation failed
-                    failed_fields.append(self.vector_field)
-
-        # Also process vector fields defined in schema with source fields
+        # One loop over every registered vector field, whichever source of
+        # truth declared it. The simplified `text_fields=` path used to be a
+        # second branch above this one, and being separate is how it drifted:
+        # it never consulted `_needs_update`, so it re-embedded unchanged
+        # records on every sweep while the schema path skipped them.
         for vector_field_name, field_info in self._vector_fields.items():
-            source_field = field_info.get("source_field")
-            if source_field and (force or self._needs_update(record, vector_field_name)):
-                source_value = record.get_value(source_field)
-                if source_value:
-                    source_text = str(source_value)
-                    embedding = await self._embed_text(source_text)
-                    if embedding is not None:
-                        from ..fields import VectorField
+            source_fields = field_info.get("source_fields") or []
+            if not source_fields:
+                continue
+            if not (force or self._needs_update(record, vector_field_name)):
+                continue
 
-                        # Compute content hash for change tracking
-                        content_hash = self._compute_content_hash(source_text)
-                        vector_field_obj = VectorField(
-                            value=embedding,
-                            name=vector_field_name,
-                            source_field=source_field,
-                            model_name=self.model_name,
-                            model_version=self.model_version,
-                            metadata={"content_hash": content_hash},
-                        )
-                        record.fields[vector_field_name] = vector_field_obj
-                        updated_fields.append(vector_field_name)
-                    else:
-                        # Embedding generation failed
-                        failed_fields.append(vector_field_name)
+            separator = field_info.get("field_separator", DEFAULT_FIELD_SEPARATOR)
+            text = assemble_source_text(record, source_fields, separator)
+            if not text:
+                continue
+
+            embedding = await self._embed_text(text)
+            if embedding is None:
+                failed_fields.append(vector_field_name)
+                continue
+
+            record.fields[vector_field_name] = VectorField(
+                value=embedding,
+                name=vector_field_name,
+                source_field=source_fields[0] if len(source_fields) == 1 else None,
+                model_name=self.model_name,
+                model_version=self.model_version,
+                # Digest the string that was just embedded, and describe how it
+                # was assembled so a reader can reproduce it without being
+                # configured the same way. See `.content`.
+                metadata=content_hash_metadata(
+                    source_fields, separator, compute_content_hash(text)
+                ),
+            )
+            updated_fields.append(vector_field_name)
 
         # Save to database if any fields were updated
         if updated_fields:
             # Use storage_id if available, otherwise fall back to record.id
             update_id = record.storage_id if record.has_storage_id() else record_id
+            if update_id is None:
+                # No id to write under: the record was never stored. The
+                # vectors are on the record the caller holds, so they are still
+                # reported, but nothing was persisted and saying otherwise is
+                # how this stayed invisible — `update(None, record)` does not
+                # raise, it drops the write.
+                logger.warning(
+                    "Computed vector fields %s but did not persist them: record has no storage id",
+                    updated_fields,
+                )
+                return False, updated_fields
             await self.database.update(update_id, record)
 
         # Return success=False if there were failures and no successes
@@ -544,11 +574,6 @@ class VectorTextSynchronizer:
                 if metadata_value is not None:
                     update_data[metadata_field] = metadata_value
 
-                hash_field = f"{field}_content_hash"
-                hash_value = record.get_value(hash_field)
-                if hash_value is not None:
-                    update_data[hash_field] = hash_value
-
             # Get the existing record and update it
             existing_record = await self.database.read(record_id)
             if existing_record:
@@ -573,7 +598,7 @@ class VectorTextSynchronizer:
 
         _success, updated_fields = await self.sync_record(record)
 
-        if updated_fields:
+        if updated_fields and record.id is not None:
             # Update the record with vector data
             await self.database.update(record.id, record)
             return True
@@ -583,7 +608,7 @@ class VectorTextSynchronizer:
     @classmethod
     def from_config(
         cls,
-        database: Database,
+        database: AsyncDatabase,
         embedding_fn: Callable[[str], np.ndarray]
         | Callable[[str], Coroutine[Any, Any, np.ndarray]],
         config: SyncConfig,

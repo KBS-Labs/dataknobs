@@ -5,6 +5,16 @@ for working with vector embeddings and semantic search.
 """
 
 from ..fields import VectorField
+from .content import (
+    CONTENT_HASH_KEY,
+    DEFAULT_FIELD_SEPARATOR,
+    FIELD_SEPARATOR_KEY,
+    SOURCE_FIELDS_KEY,
+    assemble_source_text,
+    compute_content_hash,
+    content_hash_metadata,
+    recompute_content_hash,
+)
 from .exceptions import (
     VectorBackendError,
     VectorDimensionError,
@@ -72,6 +82,15 @@ __all__ = [
     # Synchronization
     "VectorTextSynchronizer",
     "ChangeTracker",
+    # Staleness — how source fields become the text a vector was built from
+    "CONTENT_HASH_KEY",
+    "DEFAULT_FIELD_SEPARATOR",
+    "FIELD_SEPARATOR_KEY",
+    "SOURCE_FIELDS_KEY",
+    "assemble_source_text",
+    "compute_content_hash",
+    "content_hash_metadata",
+    "recompute_content_hash",
     # Migration
     "VectorMigration",
     "IncrementalVectorizer",

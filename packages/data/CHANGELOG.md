@@ -7,6 +7,57 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Fixed
+
+- **`VectorTextSynchronizer`'s change tracking works, in both of its
+  configurations.** It computed a `content_hash` for every vector it wrote and
+  never read it back, so no configuration of the class both re-embedded stale
+  text and skipped current text — each half was broken on the side the other
+  worked. A synchronizer built with `text_fields=` re-embedded every record on
+  every sweep and `sync_on_update` returned `False` however much the text had
+  changed, because only the database schema was ever consulted for the field
+  mapping that entry point walks. A synchronizer built from the schema had the
+  opposite pair: `sync_on_update` worked, while `sync_all()` reported
+  `updated=0` over a corpus of stale vectors, because a `VectorField` was
+  treated as immutable once created. Both sources now register their fields
+  together and `sync_record` maintains all of them in one pass, so every entry
+  point sees every field and re-embeds on exactly one condition — the text
+  differs from the text that produced the stored vector.
+
+  `sync_all()` on the `text_fields=` path therefore stops re-embedding
+  unchanged records, which is a cost reduction and a behaviour change for
+  anyone who relied on it as an unconditional sweep. `force=True` is the
+  explicit way to ask for that.
+
+- **`ChangeTracker` and `VectorTextSynchronizer` cannot disagree about what
+  text a vector was built from.** They assembled the embedder's input
+  separately — identical loops, one joining on the configured
+  `field_separator` and the other on a hardcoded space — so a corpus synced
+  with any other separator was reported outdated on every record, permanently,
+  including records that had just been synced and never edited. The assembly
+  now lives once in `dataknobs_data.vector.content`, and a vector's metadata
+  records the fields and separator it was built from, so a reader reproduces
+  the text from the record rather than from its own configuration. No stored
+  digest is invalidated and nothing re-embeds on upgrade. See
+  [When a vector is stale](docs/vector-staleness.md).
+
+- **`sync_record` no longer reports success for a write it did not make.**
+  Handed a record with no id, it computed the vectors and called
+  `database.update(None, record)`, which drops the write rather than raising —
+  so the caller was told the vector was persisted while the database stayed
+  empty. It now returns `success=False`, still naming the fields it set on the
+  in-memory record, and logs the reason. `sync_on_create` returns `False` in
+  the same case.
+
+### Removed
+
+- **The `{vector_field}_content_hash` record-field comparison.** Nothing in the
+  library ever wrote that sibling field, so in production it compared `None`
+  against a fresh digest and called every record stale; the only writers were
+  two test fixtures, which is what made a dead branch look covered. The digest
+  a `VectorField` carries in its own metadata is now the only staleness
+  comparison there is.
+
 ## v0.10.0 - 2026-08-26
 
 ### Fixed
