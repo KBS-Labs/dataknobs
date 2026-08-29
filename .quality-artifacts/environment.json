@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-08-28T17:56:44Z",
+  "timestamp": "2026-08-29T22:13:52Z",
   "python_version": "Python 3.12.12",
   "uv_version": "uv 0.12.5 (Homebrew 2026-08-14 aarch64-apple-darwin)",
   "os": "Darwin",
   "os_version": "24.6.0",
-  "git_branch": "sbk/middleware-check-half",
-  "git_commit": "17df7293317ec2678c7872209391dd2cff2106f5",
+  "git_branch": "sbk/embedder-input-assembled-once",
+  "git_commit": "2ab84bb2bd4e19291c55a4d5c998c16a06227ff4",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }
