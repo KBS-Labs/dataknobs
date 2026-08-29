@@ -28,6 +28,12 @@ from dataknobs_data.query import Query
 from dataknobs_data.records import Record
 from dataknobs_data.schema import DatabaseSchema, FieldSchema
 from dataknobs_data.testing import text_embedding
+from dataknobs_data.vector.content import (
+    CONTENT_HASH_KEY,
+    FIELD_SEPARATOR_KEY,
+    SOURCE_FIELDS_KEY,
+    compute_content_hash,
+)
 from dataknobs_data.vector.sync import VectorTextSynchronizer
 from dataknobs_data.vector.tracker import ChangeTracker
 
@@ -380,21 +386,404 @@ class TestTrackerAgreesWithSynchronizer:
         no stored hash and re-embeds nothing.
 
         Nothing else in the suite would notice if that claim were false.
+
+        The digest here is the *correct* one for the old defaults, and the
+        assertion is that nothing is outdated. An earlier version of this cell
+        seeded a deliberately wrong digest and asserted the record *was*
+        outdated, which any fallback producing any text at all satisfies --- a
+        wrong field list, a wrong separator, an empty string. It could not
+        distinguish the claim from a near-miss, which is the one job it had.
         """
-        legacy_digest = "d41d8cd98f00b204e9800998ecf8427e"
         record = Record(data={"title": "Doc 1", "content": "Content 1"})
         record.fields["embedding"] = VectorField(
             value=text_embedding("Doc 1 Content 1"),
             name="embedding",
-            metadata={"content_hash": legacy_digest},
+            metadata={CONTENT_HASH_KEY: compute_content_hash("Doc 1 Content 1")},
         )
         record_id = await plain_db.create(record)
 
         tracker = ChangeTracker(database=plain_db, tracked_fields=["title", "content"])
-        outdated = await tracker.get_outdated_records()
 
-        # The stored digest is deliberately not the digest of "Doc 1 Content 1",
-        # so today's space-joined comparison reports it stale. What is being
-        # pinned is that the comparison still happens against the old defaults
-        # rather than being skipped for want of the new metadata keys.
-        assert [r.id for r in outdated] == [record_id]
+        assert await tracker.get_outdated_records() == [], (
+            "a record digested under the old defaults must survive the upgrade"
+        )
+
+        # ...and the comparison is still live, not skipped for want of the new
+        # keys: edit the record and it must go stale.
+        stored = await plain_db.read(record_id)
+        stored.set_value("content", EDITED_CONTENT)
+        await plain_db.update(record_id, stored)
+
+        assert [r.id for r in await tracker.get_outdated_records()] == [record_id]
+
+
+class TestTheWriterAsksAboutItsOwnConfiguration:
+    """The half of the contract that is *not* "read it off the record".
+
+    A reader reproduces the assembly the record describes, because it has no
+    standing to impose its own. A writer must do the opposite: it maintains
+    the field, so its configuration is the authority and the record's account
+    of itself is history. Collapsing the two questions into one function reads
+    as a simplification and is a defect --- it makes the writer's own
+    configuration unchangeable.
+    """
+
+    @pytest.mark.asyncio
+    async def test_a_changed_separator_takes_effect_on_the_next_sweep(self, plain_db):
+        """Re-point the separator and the corpus must be rebuilt under it.
+
+        Fails against a writer that recomputes from the record's stored
+        description: every record keeps matching the assembly it was written
+        under, so the sweep meant to apply the new separator reports nothing
+        to do. Silently, and permanently --- there is no later sweep that
+        would notice, and no error anywhere.
+        """
+        embedder = CountingEmbedder()
+        original = VectorTextSynchronizer(
+            database=plain_db,
+            embedding_fn=embedder,
+            text_fields=["title", "content"],
+            field_separator=" ",
+        )
+        await plain_db.create(Record(data={"title": "Doc 1", "content": "Content 1"}))
+        await original.sync_all()
+        assert embedder.calls == ["Doc 1 Content 1"]
+
+        rebuilt = VectorTextSynchronizer(
+            database=plain_db,
+            embedding_fn=embedder,
+            text_fields=["title", "content"],
+            field_separator="\n",
+        )
+
+        assert (await rebuilt.sync_all())["updated"] == 1, (
+            "a changed field_separator must re-embed the corpus"
+        )
+        assert "Doc 1\nContent 1" in embedder.calls
+
+    @pytest.mark.asyncio
+    async def test_a_changed_text_fields_takes_effect_on_the_next_sweep(self, plain_db):
+        """The same statement for the field list rather than the separator."""
+        embedder = CountingEmbedder()
+        narrow = VectorTextSynchronizer(
+            database=plain_db,
+            embedding_fn=embedder,
+            text_fields=["content"],
+        )
+        await plain_db.create(Record(data={"title": "Doc 1", "content": "Content 1"}))
+        await narrow.sync_all()
+
+        widened = VectorTextSynchronizer(
+            database=plain_db,
+            embedding_fn=embedder,
+            text_fields=["title", "content"],
+        )
+
+        assert (await widened.sync_all())["updated"] == 1
+        assert "Doc 1 Content 1" in embedder.calls
+
+
+class TestALegacyCorpusHeals:
+    """A record digested before the assembly was described must become
+    self-describing without being re-embedded.
+
+    Otherwise the upgrade is one-way and the two halves deadlock: a tracker
+    falls back to a space and reports the whole corpus outdated, while the
+    synchronizer correctly finds every record current and so never rewrites
+    one. Each half is right and the corpus stays stuck forever.
+    """
+
+    @staticmethod
+    async def _legacy_record(db, separator: str) -> str:
+        """A record carrying a digest and no account of how it was produced."""
+        text = separator.join(["Doc 1", "Content 1"])
+        record = Record(data={"title": "Doc 1", "content": "Content 1"})
+        record.fields["embedding"] = VectorField(
+            value=text_embedding(text),
+            name="embedding",
+            metadata={CONTENT_HASH_KEY: compute_content_hash(text)},
+        )
+        return await db.create(record)
+
+    @pytest.mark.asyncio
+    async def test_a_sweep_describes_the_assembly_without_re_embedding(self, plain_db):
+        record_id = await self._legacy_record(plain_db, "\n")
+
+        embedder = CountingEmbedder()
+        sync = VectorTextSynchronizer(
+            database=plain_db,
+            embedding_fn=embedder,
+            text_fields=["title", "content"],
+            field_separator="\n",
+        )
+
+        assert (await sync.sync_all())["updated"] == 0, "the record is current; do not re-embed it"
+        assert embedder.count == 0, "describing an assembly costs no embedding"
+
+        stored = await plain_db.read(record_id)
+        metadata = stored.fields["embedding"].metadata
+        assert metadata[SOURCE_FIELDS_KEY] == ["title", "content"]
+        assert metadata[FIELD_SEPARATOR_KEY] == "\n"
+
+    @pytest.mark.asyncio
+    async def test_the_tracker_agrees_once_the_sweep_has_described_it(self, plain_db):
+        """The deadlock, stated end to end.
+
+        Fails against a tree where the synchronizer never writes the
+        description: the tracker falls back to a space, disagrees with the
+        digest, and reports a freshly-swept unedited record outdated.
+        """
+        await self._legacy_record(plain_db, "\n")
+
+        sync = VectorTextSynchronizer(
+            database=plain_db,
+            embedding_fn=CountingEmbedder(),
+            text_fields=["title", "content"],
+            field_separator="\n",
+        )
+        await sync.sync_all()
+
+        tracker = ChangeTracker(database=plain_db, tracked_fields=["title", "content"])
+        assert await tracker.get_outdated_records() == []
+
+    @pytest.mark.asyncio
+    async def test_describing_an_assembly_does_not_make_a_stale_record_look_fresh(self, plain_db):
+        """The companion. A description is only written for a record the
+        synchronizer has already judged current under its own configuration,
+        so an edited legacy record must still be re-embedded rather than
+        relabelled.
+        """
+        record_id = await self._legacy_record(plain_db, "\n")
+        stored = await plain_db.read(record_id)
+        stored.set_value("content", EDITED_CONTENT)
+        await plain_db.update(record_id, stored)
+
+        embedder = CountingEmbedder()
+        sync = VectorTextSynchronizer(
+            database=plain_db,
+            embedding_fn=embedder,
+            text_fields=["title", "content"],
+            field_separator="\n",
+        )
+
+        assert (await sync.sync_all())["updated"] == 1
+        assert f"Doc 1\n{EDITED_CONTENT}" in embedder.calls
+
+
+class TestSyncOnUpdateDoesNotDestroyTheRecord:
+    """`new_data` is what changed, not necessarily the whole record."""
+
+    @pytest.mark.asyncio
+    async def test_fields_the_caller_did_not_mention_survive(self, plain_db):
+        """Fails by dropping `title` and `author` entirely.
+
+        `sync_record` persists the record it is handed, whole. Handing it one
+        built out of `new_data` alone replaces the stored record with the
+        changed fields plus the vector --- and an `(old_data, new_data)`
+        signature is an invitation to pass exactly that.
+
+        This path only became reachable when `text_fields=` started
+        registering into `_source_fields`; before that it returned early, which
+        is why the loss had never been seen.
+        """
+        embedder = CountingEmbedder()
+        sync = VectorTextSynchronizer(
+            database=plain_db,
+            embedding_fn=embedder,
+            text_fields=["content"],
+        )
+        record_id = await plain_db.create(
+            Record(data={"title": "Keep me", "content": ORIGINAL_CONTENT, "author": "Ada"})
+        )
+        await sync.sync_record(await plain_db.read(record_id))
+
+        did_sync = await sync.sync_on_update(
+            record_id,
+            {"content": ORIGINAL_CONTENT},
+            {"content": EDITED_CONTENT},
+        )
+
+        assert did_sync is True
+        stored = await plain_db.read(record_id)
+        assert stored.get_value("content") == EDITED_CONTENT
+        assert stored.get_value("title") == "Keep me", "an unmentioned field was destroyed"
+        assert stored.get_value("author") == "Ada", "an unmentioned field was destroyed"
+
+    @pytest.mark.asyncio
+    async def test_only_the_vector_fields_the_change_feeds_are_re_embedded(self, plain_db):
+        """`force=True` covers the fields whose sources changed, not all of them.
+
+        `fields_to_update` was computed, used as an early-out and then
+        discarded, so an edit to one source re-embedded every registered
+        vector field --- including ones the edit cannot have affected.
+        """
+        embedder = CountingEmbedder()
+        sync = VectorTextSynchronizer(
+            database=plain_db,
+            embedding_fn=embedder,
+            text_fields=["content"],
+        )
+        # A second vector field, fed by a source the edit does not touch.
+        sync._vector_fields["summary_embedding"] = {
+            "source_fields": ["summary"],
+            "field_separator": " ",
+        }
+        sync._source_fields["summary"].append("summary_embedding")
+
+        record_id = await plain_db.create(
+            Record(data={"content": ORIGINAL_CONTENT, "summary": "A summary"})
+        )
+        await sync.sync_record(await plain_db.read(record_id))
+        embedder.calls.clear()
+
+        await sync.sync_on_update(
+            record_id,
+            {"content": ORIGINAL_CONTENT, "summary": "A summary"},
+            {"content": EDITED_CONTENT, "summary": "A summary"},
+        )
+
+        assert embedder.calls == [EDITED_CONTENT], (
+            f"re-embedded a field the change cannot affect: {embedder.calls}"
+        )
+
+
+class TestAWriteThatDidNotLandIsNotSuccess:
+    """The `None` id was one case of a larger one: the write did not happen.
+
+    `AsyncDatabase.update` reports whether it found anything to write, and
+    every call site in this package discarded that. Guarding only the `None`
+    id fixes the symptom that was measured and leaves the one beside it.
+    """
+
+    @pytest.mark.asyncio
+    async def test_sync_record_reports_failure_when_no_record_is_stored_under_the_id(
+        self, plain_db
+    ):
+        """`Record` falls back to an `id` data field, so a record can carry an
+        id without ever having been written. `update` then returns `False` and
+        the caller used to be told its vector was persisted.
+        """
+        embedder = CountingEmbedder()
+        sync = VectorTextSynchronizer(
+            database=plain_db,
+            embedding_fn=embedder,
+            text_fields=["content"],
+        )
+
+        never_stored = Record(data={"id": "no-such-record", "content": ORIGINAL_CONTENT})
+        assert never_stored.id == "no-such-record"
+
+        success, updated = await sync.sync_record(never_stored)
+
+        assert updated == ["embedding"]
+        assert success is False, "reported a write that the database refused"
+        assert await plain_db.search(Query()) == []
+
+    @pytest.mark.asyncio
+    async def test_sync_on_create_reports_failure_when_the_write_does_not_land(self, plain_db):
+        embedder = CountingEmbedder()
+        sync = VectorTextSynchronizer(
+            database=plain_db,
+            embedding_fn=embedder,
+            text_fields=["content"],
+        )
+
+        never_stored = Record(data={"id": "no-such-record", "content": ORIGINAL_CONTENT})
+
+        assert await sync.sync_on_create(never_stored) is False
+        assert await plain_db.search(Query()) == []
+
+
+class TestACorruptDescriptionFallsBack:
+    """The assembly description crosses a persistence trust boundary.
+
+    It comes back from whatever store wrote it, and is not guaranteed to be
+    the shape that was written.
+    """
+
+    @pytest.mark.asyncio
+    async def test_a_string_where_the_field_list_belongs_does_not_silence_the_check(self, plain_db):
+        """Fails by reporting an edited record current.
+
+        A bare string iterates as characters, so every lookup misses, the
+        assembled text is empty, and the digest comes back `None` --- which
+        the tracker reads as "nothing to compare" and skips. A corrupt
+        description silently switched staleness detection off.
+        """
+        record = Record(data={"title": "Doc 1", "content": "Content 1"})
+        record.fields["embedding"] = VectorField(
+            value=text_embedding("Doc 1 Content 1"),
+            name="embedding",
+            metadata={
+                CONTENT_HASH_KEY: compute_content_hash("Doc 1 Content 1"),
+                SOURCE_FIELDS_KEY: "content",  # a string, not a list of names
+            },
+        )
+        record_id = await plain_db.create(record)
+
+        stored = await plain_db.read(record_id)
+        stored.set_value("content", EDITED_CONTENT)
+        await plain_db.update(record_id, stored)
+
+        tracker = ChangeTracker(database=plain_db, tracked_fields=["title", "content"])
+
+        assert [r.id for r in await tracker.get_outdated_records()] == [record_id]
+
+    @pytest.mark.asyncio
+    async def test_a_non_string_separator_does_not_raise(self, plain_db):
+        """`separator.join(...)` on a non-string raises `TypeError`, which
+        `sync_all` does not catch --- one corrupt record would abort the sweep
+        for every record behind it.
+        """
+        record = Record(data={"title": "Doc 1", "content": "Content 1"})
+        record.fields["embedding"] = VectorField(
+            value=text_embedding("Doc 1 Content 1"),
+            name="embedding",
+            metadata={
+                CONTENT_HASH_KEY: compute_content_hash("Doc 1 Content 1"),
+                SOURCE_FIELDS_KEY: ["title", "content"],
+                FIELD_SEPARATOR_KEY: 0,  # not a separator
+            },
+        )
+        await plain_db.create(record)
+
+        tracker = ChangeTracker(database=plain_db, tracked_fields=["title", "content"])
+
+        assert await tracker.get_outdated_records() == []
+
+
+class TestTheOverrideReplacesTheSchemaRatherThanAddingToIt:
+    """`text_fields=` overrides what the schema said about the same vector
+    field, so a source the schema named and `text_fields` does not no longer
+    feeds it.
+    """
+
+    @pytest.mark.asyncio
+    async def test_a_replaced_schema_source_no_longer_triggers_a_re_embed(self, schema_db):
+        """Fails by re-embedding on an edit to a field the vector is not
+        derived from --- and the re-embed produces byte-identical text, so
+        nothing downstream can notice the work was pointless.
+        """
+        embedder = CountingEmbedder()
+        sync = VectorTextSynchronizer(
+            database=schema_db,
+            embedding_fn=embedder,
+            text_fields=["title"],
+        )
+
+        assert sync._source_fields.get("content", []) == [], (
+            "the schema's source survived an override that replaced it"
+        )
+
+        record_id = await schema_db.create(Record(data={"title": "Doc 1", "content": "Content 1"}))
+        await sync.sync_record(await schema_db.read(record_id))
+        before = embedder.count
+
+        did_sync = await sync.sync_on_update(
+            record_id,
+            {"title": "Doc 1", "content": "Content 1"},
+            {"title": "Doc 1", "content": EDITED_CONTENT},
+        )
+
+        assert did_sync is False
+        assert embedder.count == before

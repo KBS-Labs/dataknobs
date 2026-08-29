@@ -15,12 +15,13 @@ from ..query import Query
 from ..records import Record
 from ..schema import FieldSchema
 from .sync import SyncConfig, VectorTextSynchronizer
+from .content import assemble_source_text
 from .types import VectorMetadata
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Coroutine
 
-    from ..database import Database
+    from ..database import AsyncDatabase
 
 logger = logging.getLogger(__name__)
 
@@ -127,10 +128,11 @@ class VectorMigration:
 
     def __init__(
         self,
-        source_db: Database,
-        target_db: Database | None = None,
+        source_db: AsyncDatabase,
+        target_db: AsyncDatabase | None = None,
         embedding_fn: Callable[[str], np.ndarray]
-        | Callable[[str], Coroutine[Any, Any, np.ndarray]] = None,
+        | Callable[[str], Coroutine[Any, Any, np.ndarray]]
+        | None = None,
         text_fields: list[str] | None = None,
         vector_field: str = "embedding",
         field_separator: str = " ",
@@ -210,21 +212,16 @@ class VectorMigration:
 
                 for record in batch:
                     try:
-                        # Concatenate text fields
-                        text_parts = []
-                        for field in self.text_fields:
-                            value = record.get_value(field)
-                            if value:
-                                text_parts.append(str(value))
+                        text = assemble_source_text(record, self.text_fields, self.field_separator)
 
-                        if text_parts:
-                            text = self.field_separator.join(text_parts)
+                        if text and self.embedding_fn is not None:
+                            embedding_fn = self.embedding_fn
 
                             # Generate embedding
-                            if asyncio.iscoroutinefunction(self.embedding_fn):
-                                embedding = await self.embedding_fn(text)
+                            if asyncio.iscoroutinefunction(embedding_fn):
+                                embedding = await embedding_fn(text)
                             else:
-                                embedding = await asyncio.to_thread(self.embedding_fn, text)
+                                embedding = await asyncio.to_thread(embedding_fn, text)
 
                             # Create VectorField
                             from ..fields import VectorField
@@ -291,8 +288,9 @@ class VectorMigration:
         Returns:
             Migration status
         """
-        if not self.embedding_fn:
+        if self.embedding_fn is None:
             raise ValueError("Embedding function required for adding vectors")
+        embedding_fn = self.embedding_fn
 
         status = MigrationStatus(start_time=datetime.now(UTC))
 
@@ -323,11 +321,11 @@ class VectorMigration:
             async def embedding_wrapper(text: str) -> np.ndarray:
                 nonlocal last_embedding_exception
                 try:
-                    if asyncio.iscoroutinefunction(self.embedding_fn):
-                        result = await self.embedding_fn(text)
+                    if asyncio.iscoroutinefunction(embedding_fn):
+                        result = await embedding_fn(text)
                     else:
-                        result = await asyncio.to_thread(self.embedding_fn, text)
-                    return result
+                        result = await asyncio.to_thread(embedding_fn, text)
+                    return np.asarray(result)
                 except Exception as e:
                     last_embedding_exception = e
                     raise
@@ -349,8 +347,11 @@ class VectorMigration:
                 tasks = []
                 for record in batch:
                     # Store original data for rollback
-                    if self.config.enable_rollback:
-                        # Store original field values for rollback
+                    if self.config.enable_rollback and record.id is not None:
+                        # Store original field values for rollback. A record
+                        # with no id cannot be written back, so recording one
+                        # would only produce a rollback that silently does
+                        # nothing.
                         self._rollback_data[record.id] = {
                             field_name: record.get_value(field_name)
                             for field_name in record.fields.keys()
@@ -436,11 +437,15 @@ class VectorMigration:
 
     async def _get_embedding(self, text: str) -> np.ndarray | None:
         """Get embedding for text."""
+        if self.embedding_fn is None:
+            logger.error("No embedding function configured")
+            return None
+        embedding_fn = self.embedding_fn
         try:
-            if asyncio.iscoroutinefunction(self.embedding_fn):
-                result = await self.embedding_fn(text)
+            if asyncio.iscoroutinefunction(embedding_fn):
+                result = await embedding_fn(text)
             else:
-                result = await asyncio.to_thread(self.embedding_fn, text)
+                result = await asyncio.to_thread(embedding_fn, text)
 
             if isinstance(result, np.ndarray):
                 return result
@@ -468,9 +473,17 @@ class VectorMigration:
             # Sync vectors
             success, updated_fields = await synchronizer.sync_record(record, force=True)
 
-            if success and updated_fields:
+            if success and updated_fields and record.id is not None:
                 # Update record in target database
-                await self.target_db.update(record.id, record)
+                if not await self.target_db.update(record.id, record):
+                    status.failed_records += 1
+                    status.errors.append(
+                        {
+                            "record_id": record.id,
+                            "error": "no record stored under that id in the target database",
+                        }
+                    )
+                    return False
                 status.migrated_records += 1
                 return True
             else:
@@ -505,8 +518,20 @@ class VectorMigration:
 
         for record in records:
             try:
+                if record.id is None:
+                    continue
                 # Get updated record
                 migrated = await self.target_db.read(record.id)
+                if migrated is None:
+                    # Nothing arrived in the target, which is a verification
+                    # failure rather than something to read fields off of.
+                    status.errors.append(
+                        {
+                            "record_id": record.id,
+                            "error": "record is absent from the target database",
+                        }
+                    )
+                    continue
 
                 # Check vector fields
                 all_present = True
@@ -628,8 +653,8 @@ class VectorMigration:
     @classmethod
     def from_config(
         cls,
-        source_db: Database,
-        target_db: Database | None,
+        source_db: AsyncDatabase,
+        target_db: AsyncDatabase | None,
         embedding_fn: Callable[[str], np.ndarray]
         | Callable[[str], Coroutine[Any, Any, np.ndarray]],
         config: MigrationConfig,
@@ -700,7 +725,7 @@ class IncrementalVectorizer:
 
     def __init__(
         self,
-        database: Database,
+        database: AsyncDatabase,
         embedding_fn: Callable[[str], np.ndarray]
         | Callable[[str], Coroutine[Any, Any, np.ndarray]],
         text_fields: list[str] | str | None = None,  # Support multiple fields
@@ -715,7 +740,7 @@ class IncrementalVectorizer:
         """Initialize the incremental vectorizer with simplified parameters.
 
         Args:
-            database: Database to vectorize
+            database: The database to vectorize
             embedding_fn: Function to generate embeddings
             text_fields: Text field names to concatenate for embeddings
             vector_field: Name of the vector field to create
@@ -798,17 +823,14 @@ class IncrementalVectorizer:
     async def _process_record(self, record: Record) -> None:
         """Process a single record to add vectors."""
         try:
-            # Get source text from multiple fields
-            text_parts = []
-            for field in self.text_fields:
-                value = record.get_value(field)
-                if value:
-                    text_parts.append(str(value))
+            # The same assembly the synchronizer and the tracker use. This was
+            # a third independent copy of the loop, identical in every respect
+            # including the rule that drops falsy values -- which is precisely
+            # the kind of agreement that holds until it quietly does not.
+            source_text = assemble_source_text(record, self.text_fields, self.field_separator)
 
-            if not text_parts:
+            if not source_text:
                 return
-
-            source_text = self.field_separator.join(text_parts)
 
             # Check if vector already exists
             vector_data = record.get_value(self.vector_field)
@@ -836,7 +858,12 @@ class IncrementalVectorizer:
             if self.model_name:
                 metadata = VectorMetadata(
                     dimensions=len(embedding),
-                    source_field=self.field_separator.join(self.text_fields),
+                    # A list of field names, comma-joined -- which is how the
+                    # only reader of this key parses it. Joining them on
+                    # `field_separator` mixed a content separator into a field
+                    # list, so on any non-default separator the names came back
+                    # as one unsplittable string.
+                    source_field=",".join(self.text_fields),
                     model_name=self.model_name,
                     model_version=self.model_version,
                     updated_at=datetime.now(UTC).isoformat(),
@@ -846,7 +873,13 @@ class IncrementalVectorizer:
             # Update the record with the new vector data
             for key, value in update_data.items():
                 record.set_value(key, value)
-            await self.database.update(record.id, record)
+            if record.id is None:
+                logger.warning("Vectorized a record with no id; nothing was persisted")
+                return
+            if not await self.database.update(record.id, record):
+                logger.warning(
+                    "Vectorized record %s but no record is stored under that id", record.id
+                )
 
         except Exception as e:
             logger.error(f"Failed to process record {record.id}: {e}")
@@ -868,17 +901,49 @@ class IncrementalVectorizer:
 
         logger.info(f"Started incremental vectorization with {self.max_workers} workers")
 
+    async def _load_pending_records(self) -> list[Record]:
+        """Fetch a batch of records that still need a vector.
+
+        `AsyncDatabase` has no `filter`, and neither does any backend --- this
+        was a mongo-shaped dict passed to a method that does not exist, so the
+        call raised `AttributeError` into the caller's `except Exception` and
+        the queue was never loaded. Nothing said so, because the class
+        annotated its database with a class name that does not exist either.
+
+        The "at least one non-empty text field" half of the original filter is
+        not expressed here: it is not a conjunction, and `_process_record`
+        already returns without embedding when the assembled text is empty. So
+        the query fetches a few records that are then skipped, rather than
+        excluding them up front.
+        """
+        from ..query import Filter, Operator, Query
+
+        return await self.database.search(
+            Query(
+                filters=[Filter(self.vector_field, Operator.NOT_EXISTS)],
+                limit_value=self.batch_size,
+            )
+        )
+
     async def _load_queue(self) -> None:
-        """Load records into processing queue."""
+        """Load records into processing queue.
+
+        The loop waits for the queue to drain before fetching again. Without
+        that it re-queries the instant it has enqueued a batch, gets back the
+        records the workers have not written yet, and enqueues them a second
+        time --- a busy loop that grows the queue faster than the workers can
+        empty it and never terminates.
+
+        That was invisible while the fetch itself was broken: this loop always
+        raised into its own `except` and enqueued nothing, so nothing ever
+        exercised the path after it.
+        """
         while not self._shutdown_event.is_set():
             try:
-                # Get records without vectors that have at least one text field
-                filter_query = {
-                    self.vector_field: {"$exists": False},
-                    "$or": [{field: {"$exists": True, "$ne": ""}} for field in self.text_fields],
-                }
+                if not await self._wait_for_queue_to_drain():
+                    break
 
-                records = await self.database.filter(filter_query, limit=self.batch_size)
+                records = await self._load_pending_records()
 
                 if not records:
                     # No more records to process
@@ -893,6 +958,23 @@ class IncrementalVectorizer:
             except Exception as e:
                 logger.error(f"Failed to load queue: {e}")
                 await asyncio.sleep(10)
+
+    async def _wait_for_queue_to_drain(self, poll_interval: float = 0.05) -> bool:
+        """Block until the workers have taken everything already queued.
+
+        A record can still be in flight when this returns --- taken from the
+        queue but not yet written back --- so the next query may hand it back.
+        `_process_record` returns without embedding when a vector is already
+        present, so the duplicate costs a read and nothing else.
+
+        Returns:
+            False if shutdown was requested while waiting.
+        """
+        while self._queue.qsize() > 0:
+            if self._shutdown_event.is_set():
+                return False
+            await asyncio.sleep(poll_interval)
+        return not self._shutdown_event.is_set()
 
     async def stop(self, timeout: float = 30.0) -> None:
         """Stop incremental vectorization.
@@ -1084,7 +1166,9 @@ class IncrementalVectorizer:
 
             # Wait for limited processing
             while self._stats["processed"] < (limit or float("inf")):
-                if self._queue.empty() and self._processing_task.done():
+                if self._queue.empty() and (
+                    self._processing_task is None or self._processing_task.done()
+                ):
                     break
                 await asyncio.sleep(0.1)
 

@@ -16,18 +16,40 @@ from ..records import Record
 from .content import (
     CONTENT_HASH_KEY,
     DEFAULT_FIELD_SEPARATOR,
+    FIELD_SEPARATOR_KEY,
+    SOURCE_FIELDS_KEY,
     assemble_source_text,
     compute_content_hash,
     content_hash_metadata,
-    recompute_content_hash,
+    current_content_hash,
+    describes_its_assembly,
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Coroutine
+    from collections.abc import Callable, Collection, Coroutine
 
     from ..database import AsyncDatabase
 
 logger = logging.getLogger(__name__)
+
+
+def _stored_model_version(metadata: dict[str, Any]) -> str | None:
+    """Read a model version out of a ``{field}_metadata`` sidecar.
+
+    ``VectorMetadata.to_dict`` nests it as ``{"model": {"version": ...}}``,
+    which is the shape ``IncrementalVectorizer`` writes. The flat
+    ``model_version`` key was the only one read here and nothing writes it, so
+    every record vectorized that way reported a version mismatch and was
+    re-embedded on every sweep. Both shapes are accepted; the nested one is
+    the one that exists.
+    """
+    model = metadata.get("model")
+    if isinstance(model, dict):
+        version = model.get("version")
+        if version is not None:
+            return str(version)
+    version = metadata.get("model_version")
+    return str(version) if version is not None else None
 
 
 @dataclass
@@ -192,6 +214,16 @@ class VectorTextSynchronizer:
                 "source_fields": list(self.text_fields),
                 "field_separator": self.field_separator,
             }
+            # The override replaces the schema's account of this vector field,
+            # so a source the schema named and `text_fields` does not no longer
+            # feeds it. A stale entry left here makes `sync_on_update` re-embed
+            # on an edit to a field the vector is not derived from -- and the
+            # re-embed produces byte-identical text, so nothing downstream can
+            # notice the work was pointless.
+            for source, vector_fields in self._source_fields.items():
+                if source not in self.text_fields and self.vector_field in vector_fields:
+                    vector_fields.remove(self.vector_field)
+
             for source in self.text_fields:
                 if self.vector_field not in self._source_fields[source]:
                     self._source_fields[source].append(self.vector_field)
@@ -241,8 +273,7 @@ class VectorTextSynchronizer:
                 metadata = record.get_value(metadata_field)
                 if not metadata or not isinstance(metadata, dict):
                     return False
-                stored_version = metadata.get("model_version")
-                if stored_version != self.model_version:
+                if _stored_model_version(metadata) != self.model_version:
                     return False
 
         # Compare the digest this class stored against the text the record
@@ -258,12 +289,18 @@ class VectorTextSynchronizer:
                 # behaviour is confined to fields this class can judge.
                 return True
 
+            # This class's own configuration, not the record's account of
+            # itself. A synchronizer that deferred to the record could never
+            # notice its own `text_fields` or `field_separator` changing: every
+            # record would keep matching the assembly it was written under, so
+            # the sweep meant to apply the new configuration would report
+            # nothing to do and the change would never take effect. Reading the
+            # record back is the *reader's* question -- see `.content`.
             field_info = self._vector_fields.get(vector_field) or {}
-            current_hash = recompute_content_hash(
+            current_hash = current_content_hash(
                 record,
-                field_obj.metadata,
-                fallback_source_fields=field_info.get("source_fields") or [],
-                fallback_separator=field_info.get("field_separator", DEFAULT_FIELD_SEPARATOR),
+                field_info.get("source_fields") or [],
+                field_info.get("field_separator", DEFAULT_FIELD_SEPARATOR),
             )
             if current_hash is not None and stored_hash != current_hash:
                 return False
@@ -281,6 +318,53 @@ class VectorTextSynchronizer:
             True if the vector needs updating, False otherwise
         """
         return not self._has_current_vector(record, vector_field)
+
+    def _describe_assembly(
+        self,
+        record: Record,
+        vector_field: str,
+        source_fields: list[str],
+        separator: str,
+    ) -> bool:
+        """Record how a current vector's text is assembled, if it does not say.
+
+        Called only for a field this synchronizer has just judged current under
+        its own configuration, which is what makes the description true rather
+        than a guess about the past: this class maintains the field, and will
+        re-embed it under exactly this assembly from here on. A reader that
+        repeats the description therefore gets the string this class would feed
+        the embedder, which is the whole contract.
+
+        Without this, the upgrade is one-way. A corpus digested on a
+        non-default separator before descriptions existed reads as entirely
+        outdated to a `ChangeTracker` -- which falls back to a space -- while
+        this class correctly finds every record current and so never rewrites
+        one. The two halves are each right and the corpus stays stuck.
+
+        Returns:
+            True if a description was added, meaning the record needs writing.
+        """
+        field_obj = record.fields.get(vector_field)
+        if not isinstance(field_obj, VectorField):
+            return False
+
+        metadata = field_obj.metadata
+        if not metadata or metadata.get(CONTENT_HASH_KEY) is None:
+            # Nothing this class wrote, so nothing it can describe.
+            return False
+        if describes_its_assembly(metadata):
+            return False
+
+        metadata[SOURCE_FIELDS_KEY] = list(source_fields)
+        metadata[FIELD_SEPARATOR_KEY] = separator
+        logger.debug(
+            "Described the assembly of %s on record %s: %s joined on %r",
+            vector_field,
+            record.id,
+            source_fields,
+            separator,
+        )
+        return True
 
     async def _embed_text(self, text: str) -> np.ndarray | None:
         """Generate embedding for text with error handling.
@@ -323,16 +407,29 @@ class VectorTextSynchronizer:
         return None
 
     async def sync_record(
-        self, record_or_id: Record | str, force: bool = False
+        self,
+        record_or_id: Record | str,
+        force: bool = False,
+        fields: Collection[str] | None = None,
     ) -> tuple[bool, list[str]]:
         """Synchronize vectors for a single record.
+
+        The record is persisted whole, so the record handed in must be
+        complete. Passing one built out of a partial update replaces the
+        stored record with those fields alone.
 
         Args:
             record_or_id: The record or record ID to synchronize
             force: Force update even if vectors appear current
+            fields: Restrict the work to these vector fields. ``None`` means
+                every registered field. A caller that knows which vector
+                fields a change can possibly have affected passes them here
+                rather than forcing a re-embed of the ones it did not touch.
 
         Returns:
-            Tuple of (success, list of updated fields)
+            Tuple of (success, list of re-embedded fields). ``success`` is
+            ``False`` when the record could not be written, whatever was
+            computed onto the copy the caller holds.
         """
         # Get record if ID provided
         record_id: str | None
@@ -348,6 +445,7 @@ class VectorTextSynchronizer:
 
         updated_fields = []
         failed_fields = []
+        described_fields = []
 
         # One loop over every registered vector field, whichever source of
         # truth declared it. The simplified `text_fields=` path used to be a
@@ -355,13 +453,26 @@ class VectorTextSynchronizer:
         # it never consulted `_needs_update`, so it re-embedded unchanged
         # records on every sweep while the schema path skipped them.
         for vector_field_name, field_info in self._vector_fields.items():
+            if fields is not None and vector_field_name not in fields:
+                continue
             source_fields = field_info.get("source_fields") or []
             if not source_fields:
                 continue
+            separator = field_info.get("field_separator", DEFAULT_FIELD_SEPARATOR)
+
             if not (force or self._needs_update(record, vector_field_name)):
+                # Current -- but possibly not self-describing. A record written
+                # before the assembly was recorded carries a digest and no
+                # account of how it was produced, so a reader falls back to its
+                # own configuration and disagrees with this class on any
+                # non-default separator. Permanently: nothing re-embeds a
+                # record that is current, so the description would never be
+                # written and the corpus could not heal. Writing it costs no
+                # embedding.
+                if self._describe_assembly(record, vector_field_name, source_fields, separator):
+                    described_fields.append(vector_field_name)
                 continue
 
-            separator = field_info.get("field_separator", DEFAULT_FIELD_SEPARATOR)
             text = assemble_source_text(record, source_fields, separator)
             if not text:
                 continue
@@ -386,8 +497,8 @@ class VectorTextSynchronizer:
             )
             updated_fields.append(vector_field_name)
 
-        # Save to database if any fields were updated
-        if updated_fields:
+        # Save to database if anything on the record changed
+        if updated_fields or described_fields:
             # Use storage_id if available, otherwise fall back to record.id
             update_id = record.storage_id if record.has_storage_id() else record_id
             if update_id is None:
@@ -401,7 +512,19 @@ class VectorTextSynchronizer:
                     updated_fields,
                 )
                 return False, updated_fields
-            await self.database.update(update_id, record)
+            # `update` reports whether it found anything to write. Discarding
+            # that is the same defect as passing `None` for the id, one layer
+            # further in: a record whose id was never stored -- `Record(data=
+            # {"id": "x"})` carries `id` without having been written -- is
+            # reported synced against a database that has no such row.
+            if not await self.database.update(update_id, record):
+                logger.warning(
+                    "Computed vector fields %s but did not persist them: "
+                    "no record stored under id %s",
+                    updated_fields,
+                    update_id,
+                )
+                return False, updated_fields
 
         # Return success=False if there were failures and no successes
         success = len(failed_fields) == 0 or len(updated_fields) > 0
@@ -492,13 +615,17 @@ class VectorTextSynchronizer:
                         success, updated_fields = await self.sync_record(record, force)
                         status.processed_records += 1
 
-                        if updated_fields:
+                        # `success` first, matching `sync_all`. Counting a
+                        # record as updated because fields were computed says
+                        # nothing about whether they were stored -- which is
+                        # exactly what `success` is now reporting.
+                        if not success:
+                            status.failed_records += 1
+                        elif updated_fields:
                             # sync_record already updates the database
                             status.updated_records += 1
-                        elif success:
-                            status.skipped_records += 1
                         else:
-                            status.failed_records += 1
+                            status.skipped_records += 1
 
                     except Exception as e:
                         status.failed_records += 1
@@ -532,13 +659,18 @@ class VectorTextSynchronizer:
     ) -> bool:
         """Handle record updates and sync vectors if needed.
 
+        ``new_data`` is what changed, not necessarily the whole record: an
+        ``(old_data, new_data)`` signature invites a caller to pass only the
+        fields it touched, and doing so must not cost it the rest of the
+        record.
+
         Args:
             record_id: ID of the updated record
             old_data: Previous data
-            new_data: New data
+            new_data: New data, whole or partial
 
         Returns:
-            True if sync was performed, False otherwise
+            True if vectors were re-embedded and stored, False otherwise
         """
         if not self.config.auto_update_on_text_change:
             return False
@@ -555,34 +687,28 @@ class VectorTextSynchronizer:
         if not fields_to_update:
             return False
 
-        # Create record and sync
-        record = Record(id=record_id, data=new_data)
-        _success, updated_fields = await self.sync_record(record, force=True)
+        # Apply the change to the *stored* record. `sync_record` persists the
+        # record it is handed, whole, so handing it one built out of `new_data`
+        # alone replaced the stored record with just the changed fields --
+        # silently dropping every field the caller did not mention, and the
+        # record's own metadata with them. This path only became reachable when
+        # `text_fields=` started registering into `_source_fields`; before that
+        # it returned above, which is why the loss had never been seen.
+        stored = await self.database.read(record_id)
+        if stored is not None:
+            record = stored
+            for key, value in new_data.items():
+                record.set_value(key, value)
+        else:
+            record = Record(id=record_id, data=new_data)
 
-        if updated_fields:
-            # Update only the vector fields
-            update_data = {
-                field: record.get_value(field)
-                for field in updated_fields
-                if record.get_value(field) is not None
-            }
-
-            # Include metadata fields
-            for field in updated_fields:
-                metadata_field = f"{field}_metadata"
-                metadata_value = record.get_value(metadata_field)
-                if metadata_value is not None:
-                    update_data[metadata_field] = metadata_value
-
-            # Get the existing record and update it
-            existing_record = await self.database.read(record_id)
-            if existing_record:
-                for key, value in update_data.items():
-                    existing_record.set_value(key, value)
-                await self.database.update(record_id, existing_record)
-            return True
-
-        return False
+        # Only the vector fields the changed sources actually feed. `force`
+        # skips the staleness check for those, having just established
+        # staleness directly; it is not a licence to re-embed the others.
+        success, updated_fields = await self.sync_record(
+            record, force=True, fields=fields_to_update
+        )
+        return success and bool(updated_fields)
 
     async def sync_on_create(self, record: Record) -> bool:
         """Handle record creation and sync vectors if needed.
@@ -591,19 +717,18 @@ class VectorTextSynchronizer:
             record: The newly created record
 
         Returns:
-            True if sync was performed, False otherwise
+            True if vectors were re-embedded and stored, False otherwise
         """
         if not self.config.auto_embed_on_create:
             return False
 
-        _success, updated_fields = await self.sync_record(record)
-
-        if updated_fields and record.id is not None:
-            # Update the record with vector data
-            await self.database.update(record.id, record)
-            return True
-
-        return False
+        # `sync_record` has already persisted whatever it computed, and already
+        # reports whether that write landed. Writing again here was a second
+        # identical round trip, and re-deriving the answer from `record.id`
+        # duplicated -- less completely -- a judgement `success` already
+        # carries.
+        success, updated_fields = await self.sync_record(record)
+        return success and bool(updated_fields)
 
     @classmethod
     def from_config(

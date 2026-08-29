@@ -6,6 +6,15 @@ from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Any, Protocol
 
 from ..fields import FieldType
+from .content import (
+    CONTENT_HASH_KEY,
+    DEFAULT_FIELD_SEPARATOR,
+    assemble_source_text,
+    compute_content_hash,
+    content_hash_metadata,
+    current_content_hash,
+    stored_assembly,
+)
 from .hybrid import (
     FusionStrategy,
     HybridSearchConfig,
@@ -294,7 +303,7 @@ class VectorOperationsMixin(ABC):
 
         # If using NATIVE strategy but backend doesn't support it, fall back to RRF
         if config.fusion_strategy == FusionStrategy.NATIVE:
-            if not await self._supports_native_hybrid():  # type: ignore[attr-defined]
+            if not await self._supports_native_hybrid():
                 config = HybridSearchConfig(
                     text_weight=config.text_weight,
                     vector_weight=config.vector_weight,
@@ -478,6 +487,7 @@ class VectorSyncMixin:
         vector_field: str = "embedding",
         embedding_fn: Callable[[list[str]], np.ndarray] | None = None,
         force: bool = False,
+        field_separator: str = DEFAULT_FIELD_SEPARATOR,
     ) -> int:
         """Synchronize vector embeddings with text content.
 
@@ -487,6 +497,8 @@ class VectorSyncMixin:
             vector_field: Vector field to update
             embedding_fn: Embedding function
             force: Force re-generation even if vectors exist
+            field_separator: What to join ``text_fields`` on. Was hardcoded to
+                a space, which is the value it still defaults to.
 
         Returns:
             Number of records updated
@@ -500,20 +512,12 @@ class VectorSyncMixin:
             needs_update = force or vector_field not in record.fields
 
             if not needs_update:
-                # Check if source fields changed
-                vector_meta = record.fields[vector_field].metadata
-                source_fields = vector_meta.get("source_field", "").split(",")
-                needs_update = set(source_fields) != set(text_fields)
+                needs_update = self._text_vector_is_stale(
+                    record, vector_field, text_fields, field_separator
+                )
 
             if needs_update:
-                # Concatenate text fields
-                text_content = " ".join(
-                    [
-                        str(record.get_value(field))
-                        for field in text_fields
-                        if record.get_value(field)
-                    ]
-                )
+                text_content = assemble_source_text(record, text_fields, field_separator)
 
                 # Generate embedding
                 if text_content:
@@ -522,14 +526,62 @@ class VectorSyncMixin:
                     result = embedding_fn([text_content])
                     # Handle both sync and async embedding functions
                     if hasattr(result, "__await__"):
-                        embeddings = await result  # type: ignore[misc]
+                        embeddings = await result
                     else:
                         embeddings = result
                     record.fields[vector_field] = VectorField(
                         name=vector_field,
                         value=embeddings[0],
                         source_field=",".join(text_fields),
+                        # Without this the field is unjudgeable: a
+                        # `VectorTextSynchronizer` sweeping the same corpus
+                        # finds no digest and treats it as current forever.
+                        metadata=content_hash_metadata(
+                            text_fields,
+                            field_separator,
+                            compute_content_hash(text_content),
+                        ),
                     )
                     updated += 1
 
         return updated
+
+    @staticmethod
+    def _text_vector_is_stale(
+        record: Record,
+        vector_field: str,
+        text_fields: list[str],
+        field_separator: str,
+    ) -> bool:
+        """Whether an existing vector no longer matches the text it names.
+
+        This used to compare the *set of source fields* and nothing else, so a
+        vector went on being reported current after its text was edited --- the
+        same omission `_has_current_vector` carried, in a second class. The
+        digest closes it; the field-set comparison stays because a re-pointed
+        `text_fields` changes what the vector means even when the digest
+        cannot be read.
+        """
+        metadata = getattr(record.fields[vector_field], "metadata", None) or {}
+
+        stored_fields, _stored_separator = stored_assembly(metadata)
+        if stored_fields is None:
+            # Records written before the assembly was described name their
+            # sources in `source_field`, comma-joined --- and that key is
+            # `None`, not absent, for a field built without one, so the old
+            # `.get("source_field", "").split(",")` raised AttributeError
+            # rather than defaulting.
+            legacy = metadata.get("source_field")
+            stored_fields = legacy.split(",") if isinstance(legacy, str) and legacy else []
+
+        if set(stored_fields) != set(text_fields):
+            return True
+
+        stored_hash = metadata.get(CONTENT_HASH_KEY)
+        if stored_hash is None:
+            # Nothing to compare against; inventing a comparison would report
+            # every hand-built field stale on the first sweep.
+            return False
+
+        current = current_content_hash(record, text_fields, field_separator)
+        return current is not None and current != stored_hash

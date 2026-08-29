@@ -336,7 +336,16 @@ class ChangeTracker:
                         outdated.append(record)
                         continue
                     try:
-                        await self.database.update(record.id, record)
+                        if not await self.database.update(record.id, record):
+                            # Nothing stored under that id, so the digest was
+                            # not persisted and the next sweep would arrive
+                            # here again. Report it rather than looping.
+                            logger.warning(
+                                "Could not initialize content hash: no record stored under id %s",
+                                record.id,
+                            )
+                            outdated.append(record)
+                            continue
                         logger.debug("Auto-initialized content hash for record %s", record.id)
                     except (OSError, ValueError, RuntimeError) as e:
                         logger.warning(
@@ -543,8 +552,14 @@ class ChangeTracker:
 
                         # Update the record in the database
                         try:
-                            await self.database.update(record.id, record)
-                            logger.debug("Initialized content hash for record %s", record.id)
+                            if await self.database.update(record.id, record):
+                                logger.debug("Initialized content hash for record %s", record.id)
+                            else:
+                                logger.warning(
+                                    "Could not initialize content hash: "
+                                    "no record stored under id %s",
+                                    record.id,
+                                )
                         except (OSError, ValueError, RuntimeError) as e:
                             logger.warning(
                                 "Failed to initialize content hash for record %s: %s",

@@ -36,6 +36,7 @@ from .elasticsearch_mixins import (
     ElasticsearchVectorSupport,
     es_version_token,
     parse_es_version_token,
+    vector_tracking_metadata,
 )
 from .elasticsearch_query import build_bool_query, build_complex_es_query
 
@@ -223,13 +224,9 @@ class AsyncElasticsearchDatabase(
                 if field_name in record.fields:
                     field = record.fields[field_name]
                     if hasattr(field, "source_field"):
-                        record.metadata["vector_fields"][field_name] = {
-                            "type": "vector",
-                            "dimensions": self.vector_fields[field_name],
-                            "source_field": field.source_field,
-                            "model": getattr(field, "model_name", None),
-                            "model_version": getattr(field, "model_version", None),
-                        }
+                        record.metadata["vector_fields"][field_name] = vector_tracking_metadata(
+                            field, self.vector_fields[field_name]
+                        )
 
         doc = self._record_to_document(record)
         if id:

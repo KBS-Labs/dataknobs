@@ -5,6 +5,12 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, cast
 
 from ..fields import VectorField
+from .content import (
+    DEFAULT_FIELD_SEPARATOR,
+    assemble_source_text,
+    compute_content_hash,
+    content_hash_metadata,
+)
 
 if TYPE_CHECKING:
     import numpy as np
@@ -28,6 +34,7 @@ class BulkEmbedMixin:
         batch_size: int = 100,
         model_name: str | None = None,
         model_version: str | None = None,
+        field_separator: str = DEFAULT_FIELD_SEPARATOR,
     ) -> list[str]:
         """Embed text fields and store vectors with records.
 
@@ -39,6 +46,8 @@ class BulkEmbedMixin:
             batch_size: Number of records to process at once
             model_name: Name of the embedding model
             model_version: Version of the embedding model
+            field_separator: What to join multiple text fields on. Was
+                hardcoded to a space, which is the value it still defaults to.
 
         Returns:
             List of record IDs that were processed
@@ -61,17 +70,11 @@ class BulkEmbedMixin:
         for i in range(0, len(records), batch_size):
             batch = records[i : i + batch_size]
 
-            # Extract text from records
-            texts = []
-            for record in batch:
-                # Combine text from all specified fields
-                text_parts = []
-                for field_name in text_fields:
-                    if field_name in record.fields:
-                        field_value = record.fields[field_name].value
-                        if field_value:
-                            text_parts.append(str(field_value))
-                texts.append(" ".join(text_parts))
+            # Extract text from records, the same way every other class in
+            # this package extracts it. These were two more copies of the loop,
+            # hardcoded to a space where the rest of the package had made the
+            # separator configurable.
+            texts = [assemble_source_text(record, text_fields, field_separator) for record in batch]
 
             # Generate embeddings
             if texts:
@@ -98,6 +101,14 @@ class BulkEmbedMixin:
                             source_field=source_field_str,
                             model_name=model_name,
                             model_version=model_version,
+                            # Without a digest the field cannot be judged
+                            # stale by anything, so a synchronizer sweeping
+                            # the same corpus treats it as current forever.
+                            metadata=content_hash_metadata(
+                                text_fields,
+                                field_separator,
+                                compute_content_hash(texts[j]),
+                            ),
                         )
 
                         # Update vector dimensions tracking if available
@@ -135,6 +146,7 @@ class AsyncBulkEmbedMixin:
         batch_size: int = 100,
         model_name: str | None = None,
         model_version: str | None = None,
+        field_separator: str = DEFAULT_FIELD_SEPARATOR,
     ) -> list[str]:
         """Embed text fields and store vectors with records.
 
@@ -146,6 +158,8 @@ class AsyncBulkEmbedMixin:
             batch_size: Number of records to process at once
             model_name: Name of the embedding model
             model_version: Version of the embedding model
+            field_separator: What to join multiple text fields on. Was
+                hardcoded to a space, which is the value it still defaults to.
 
         Returns:
             List of record IDs that were processed
@@ -173,17 +187,11 @@ class AsyncBulkEmbedMixin:
         for i in range(0, len(records), batch_size):
             batch = records[i : i + batch_size]
 
-            # Extract text from records
-            texts = []
-            for record in batch:
-                # Combine text from all specified fields
-                text_parts = []
-                for field_name in text_fields:
-                    if field_name in record.fields:
-                        field_value = record.fields[field_name].value
-                        if field_value:
-                            text_parts.append(str(field_value))
-                texts.append(" ".join(text_parts))
+            # Extract text from records, the same way every other class in
+            # this package extracts it. These were two more copies of the loop,
+            # hardcoded to a space where the rest of the package had made the
+            # separator configurable.
+            texts = [assemble_source_text(record, text_fields, field_separator) for record in batch]
 
             # Generate embeddings
             if texts:
@@ -213,6 +221,14 @@ class AsyncBulkEmbedMixin:
                             source_field=source_field_str,
                             model_name=model_name,
                             model_version=model_version,
+                            # Without a digest the field cannot be judged
+                            # stale by anything, so a synchronizer sweeping
+                            # the same corpus treats it as current forever.
+                            metadata=content_hash_metadata(
+                                text_fields,
+                                field_separator,
+                                compute_content_hash(texts[j]),
+                            ),
                         )
 
                         # Update vector dimensions tracking if available

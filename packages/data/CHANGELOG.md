@@ -38,16 +38,84 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   now lives once in `dataknobs_data.vector.content`, and a vector's metadata
   records the fields and separator it was built from, so a reader reproduces
   the text from the record rather than from its own configuration. No stored
-  digest is invalidated and nothing re-embeds on upgrade. See
-  [When a vector is stale](docs/vector-staleness.md).
+  digest is invalidated and nothing re-embeds on upgrade: a record written
+  before the description existed is judged against the reader's own defaults,
+  which is what it was digested under, and the first sweep that finds it
+  current writes the description so that readers agree about it thereafter.
+  See [When a vector is stale](docs/vector-staleness.md).
+
+  The synchronizer decides from **its own** configuration, not from the
+  record's description of itself — the description is for classes that did not
+  write the vector. Reading it back on the writing side would make a
+  synchronizer's own `text_fields` and `field_separator` unchangeable: every
+  record would keep matching the assembly it was written under, so the sweep
+  meant to apply a new configuration would report nothing to do.
 
 - **`sync_record` no longer reports success for a write it did not make.**
   Handed a record with no id, it computed the vectors and called
   `database.update(None, record)`, which drops the write rather than raising —
   so the caller was told the vector was persisted while the database stayed
-  empty. It now returns `success=False`, still naming the fields it set on the
-  in-memory record, and logs the reason. `sync_on_create` returns `False` in
-  the same case.
+  empty. `AsyncDatabase.update` also *reports* whether it found a record to
+  write, and every call site in the package discarded that, so the same false
+  success came back for a record carrying an id nothing is stored under —
+  `Record(data={"id": ...})` mints one without the record ever having been
+  written. Both now return `success=False`, still naming the fields set on the
+  in-memory record, and log the reason. `sync_on_create` and `sync_on_update`
+  report the same way.
+
+- **`sync_on_update` no longer destroys the fields a caller did not mention.**
+  It built a record out of `new_data` and let `sync_record` persist it, and
+  `sync_record` writes the record whole — so passing the changed fields alone,
+  which an `(old_data, new_data)` signature invites, replaced the stored record
+  with just those fields plus the vector. It now applies the change to the
+  stored record. The path became reachable only once `text_fields=` registered
+  its own field mapping, which is why the loss had not been seen.
+
+  It also re-embedded *every* registered vector field, having computed which
+  ones the change could affect and then discarded that. It now re-embeds only
+  those, via a new `fields=` argument to `sync_record`.
+
+- **`text_fields=` replaces what the schema said about the same vector field
+  rather than adding to it.** A source the schema named and `text_fields` did
+  not went on being registered as feeding that vector, so editing it triggered
+  a re-embed that produced byte-identical text.
+
+- **Elasticsearch preserves a vector field's metadata.** Both backends built an
+  identical five-key tracking entry that omitted it, so the staleness digest
+  was written by the synchronizer and dropped on the way to the index. It came
+  back absent, which reads as "current" — meaning a corpus on Elasticsearch
+  could never be re-embedded after its first sweep. The two copies are now one
+  `vector_tracking_metadata` helper, and the read path restores what it stores.
+
+- **The other four copies of the text assembly.** `VectorSyncMixin`,
+  `BulkEmbedMixin`, `AsyncBulkEmbedMixin` and `IncrementalVectorizer` each
+  rebuilt the embedder's input independently; three of them on a hardcoded
+  space. All four now call `assemble_source_text`, and the three that had no
+  separator argument gained one defaulting to the space they hardcoded. The
+  first three now also record a digest, without which the fields they write
+  are unjudgeable by anything and count as current forever.
+
+  `VectorSyncMixin.sync_vectors_with_text` additionally decided staleness by
+  comparing the *set of source fields* and nothing else, so an edit to the text
+  was invisible to it; and it raised `AttributeError` on any vector field
+  built without an explicit `source_field`, because that key is present-and-
+  `None` rather than absent.
+
+- **The model version of a plain-value vector is read from where it is
+  written.** `_has_current_vector` asked a `{field}_metadata` sidecar for a flat
+  `model_version` key, while `VectorMetadata.to_dict` — the only thing that
+  writes that sidecar — nests it under `model`. Every record vectorized by
+  `IncrementalVectorizer` therefore reported a version mismatch and was
+  re-embedded on every sweep.
+
+### Known limitation
+
+- **The file backend's flat formats cannot detect staleness.** `csv`, `tsv` and
+  `parquet` have no column for a field's metadata, so a vector read back from
+  one is a plain value carrying no digest — and with nothing to compare, an
+  edited record is never re-embedded. Measured: one edit, one `sync_all()`,
+  `updated=1` on `json` and `updated=0` on `csv`. Use `force=True` on those
+  formats, or a backend that preserves field metadata.
 
 ### Removed
 

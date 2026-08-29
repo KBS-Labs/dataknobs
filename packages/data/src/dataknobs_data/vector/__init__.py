@@ -13,7 +13,10 @@ from .content import (
     assemble_source_text,
     compute_content_hash,
     content_hash_metadata,
+    current_content_hash,
+    describes_its_assembly,
     recompute_content_hash,
+    stored_assembly,
 )
 from .exceptions import (
     VectorBackendError,
@@ -90,7 +93,10 @@ __all__ = [
     "assemble_source_text",
     "compute_content_hash",
     "content_hash_metadata",
+    "current_content_hash",
+    "describes_its_assembly",
     "recompute_content_hash",
+    "stored_assembly",
     # Migration
     "VectorMigration",
     "IncrementalVectorizer",

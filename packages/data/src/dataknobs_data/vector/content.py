@@ -25,17 +25,43 @@ Records written before that description existed carry no such keys. Callers
 pass their own configuration as the fallback, which is what those records were
 digested under, so no stored hash is invalidated and nothing re-embeds on
 upgrade.
+
+Two questions, two functions
+----------------------------
+
+The description above is right for a *reader* and wrong for a *writer*, and
+collapsing them into one function is a defect rather than a simplification:
+
+============================  ==================================  ==================
+Class                         Question                            Authority
+============================  ==================================  ==================
+:class:`ChangeTracker`        "has the source changed since this   the **record**
+                              was embedded?"
+:class:`VectorTextSynchronizer` "would I produce a different       **its own**
+                              string now?"                         configuration
+============================  ==================================  ==================
+
+A synchronizer that deferred to the record could never notice its own
+configuration changing: re-point ``text_fields`` or change ``field_separator``
+and every record would keep matching the assembly it was written under, so
+``sync_all()`` would report nothing to do and the new configuration would never
+take effect. :func:`current_content_hash` is the writer's question and consults
+no metadata; :func:`recompute_content_hash` is the reader's and prefers what
+the record carries.
 """
 
 from __future__ import annotations
 
 import hashlib
+import logging
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
     from ..records import Record
+
+logger = logging.getLogger(__name__)
 
 #: What both classes joined on before either could say so.
 DEFAULT_FIELD_SEPARATOR = " "
@@ -108,6 +134,102 @@ def content_hash_metadata(
     }
 
 
+def stored_assembly(
+    metadata: dict[str, Any] | None,
+) -> tuple[list[str] | None, str | None]:
+    """Read whatever assembly description a record carries.
+
+    The two halves are independent: a record may name its fields without
+    naming its separator, and the caller falls back per key rather than
+    discarding a description because half of it is missing.
+
+    This crosses a persistence trust boundary — the values come back from
+    whatever store wrote them and are not guaranteed to be the shapes that
+    were written. A half that is not usable is reported as absent, which puts
+    the caller in the same position as for a record written before
+    descriptions existed: it falls back to its own configuration.
+
+    Args:
+        metadata: The vector field's metadata, if any.
+
+    Returns:
+        ``(source_fields, separator)``, either of which is ``None`` when the
+        record does not usably say.
+    """
+    if not metadata:
+        return None, None
+
+    source_fields: list[str] | None = None
+    stored_fields = metadata.get(SOURCE_FIELDS_KEY)
+    if stored_fields:
+        if isinstance(stored_fields, (list, tuple)) and all(
+            isinstance(name, str) for name in stored_fields
+        ):
+            source_fields = list(stored_fields)
+        else:
+            logger.warning(
+                "Ignoring stored %s: expected a list of field names, got %r",
+                SOURCE_FIELDS_KEY,
+                stored_fields,
+            )
+
+    # An empty string is a legitimate separator, so absence is the only thing
+    # that may fall back -- absence being the key missing, not a falsy value.
+    separator: str | None = None
+    stored_separator = metadata.get(FIELD_SEPARATOR_KEY)
+    if stored_separator is not None:
+        if isinstance(stored_separator, str):
+            separator = stored_separator
+        else:
+            logger.warning(
+                "Ignoring stored %s: expected a string, got %r",
+                FIELD_SEPARATOR_KEY,
+                stored_separator,
+            )
+
+    return source_fields, separator
+
+
+def describes_its_assembly(metadata: dict[str, Any] | None) -> bool:
+    """Whether a reader can reproduce this vector's text without being told.
+
+    Both halves have to be present: field names alone leave a reader guessing
+    the separator, which is the disagreement this description exists to end.
+    """
+    source_fields, separator = stored_assembly(metadata)
+    return source_fields is not None and separator is not None
+
+
+def current_content_hash(
+    record: Record,
+    source_fields: Sequence[str],
+    separator: str = DEFAULT_FIELD_SEPARATOR,
+) -> str | None:
+    """Digest the text *this* configuration would feed the embedder now.
+
+    The writer's question. It consults no stored metadata, because a class
+    that maintains a vector field is the authority on how that field is
+    assembled — deferring to the record would make the class's own
+    configuration unchangeable, its every edit invisible to the sweep that
+    is supposed to apply it.
+
+    Args:
+        record: The record to read current source values from.
+        source_fields: The fields this caller assembles, in order.
+        separator: What this caller joins them on.
+
+    Returns:
+        The digest of the current text, or ``None`` when there is no text to
+        digest — no source fields to read, or none of them holding a value.
+    """
+    if not source_fields:
+        return None
+    text = assemble_source_text(record, source_fields, separator)
+    if not text:
+        return None
+    return compute_content_hash(text)
+
+
 def recompute_content_hash(
     record: Record,
     metadata: dict[str, Any] | None,
@@ -116,9 +238,14 @@ def recompute_content_hash(
 ) -> str | None:
     """Reproduce a stored digest from the record's current values.
 
-    Reads the assembly description out of ``metadata`` where it is present,
-    and falls back to the caller's own configuration where it is not — which
-    is the case for every record written before that description was stored.
+    The reader's question, for a class that did not write the vector and so
+    has no standing to impose its own assembly on it. Reads the description
+    out of ``metadata`` where it is present, and falls back to the caller's
+    own configuration where it is not — which is the case for every record
+    written before that description was stored.
+
+    A writer deciding whether to re-embed wants :func:`current_content_hash`
+    instead; see the module docstring for why the two cannot share an answer.
 
     Args:
         record: The record to read current source values from.
@@ -131,19 +258,9 @@ def recompute_content_hash(
         The digest of the current text, or ``None`` when there is no text to
         digest — no source fields to read, or none of them holding a value.
     """
-    metadata = metadata or {}
+    stored_fields, stored_separator = stored_assembly(metadata)
 
-    source_fields = metadata.get(SOURCE_FIELDS_KEY) or fallback_source_fields
-    if not source_fields:
-        return None
+    source_fields = stored_fields if stored_fields is not None else list(fallback_source_fields)
+    separator = stored_separator if stored_separator is not None else fallback_separator
 
-    # An empty string is a legitimate separator, so absence is the only
-    # thing that may fall back.
-    separator = metadata.get(FIELD_SEPARATOR_KEY)
-    if separator is None:
-        separator = fallback_separator
-
-    text = assemble_source_text(record, source_fields, separator)
-    if not text:
-        return None
-    return compute_content_hash(text)
+    return current_content_hash(record, source_fields, separator)
