@@ -9,6 +9,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`is_async_callable` — "will calling this produce an awaitable?", answered
+  for objects too.** `inspect.iscoroutinefunction` answers for *functions* and
+  reports a callable **object** whose `__call__` is an `async def` as
+  synchronous. That shape is not exotic; it is how anything stateful is
+  written — an embedder holding a model handle, a client holding a session, a
+  callback holding a counter — and every caller that branches on the answer
+  then does the synchronous thing to something asynchronous. Calling an async
+  callable without awaiting it raises nothing: it returns a coroutine object,
+  which is truthy, non-`None`, and quietly discarded.
+
+  Declared as a `TypeGuard`, so it narrows in the `True` branch and is a
+  drop-in for `asyncio.iscoroutinefunction` at a call site that awaits inside
+  it. Non-callables answer `False` rather than raising, because callers ask
+  about arbitrary configured values.
+
+  Two shapes the obvious implementation gets wrong are handled: a
+  `functools.partial` **around a callable object** (`partial.__call__` is a C
+  dispatcher, so asking it about the wrapped object answers about the wrong
+  object — binding arguments onto a stateful embedder is an ordinary thing to
+  do, and this is just the two supported shapes composed), and a **class**,
+  which is callable and returns an instance rather than an awaitable however
+  its `__call__` is declared.
+
 - **`copy_structure` — the copy between `dict()` and `copy.deepcopy()`.** It
   rebuilds nested dicts and lists and passes every other value through
   unchanged, so mutating the result never reaches the source while the leaf
@@ -38,6 +61,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a source freed between two calls sharing one memo could have its id reused
   and the memo would answer for an unrelated object. It now holds a reference
   to every source it has seen, as `copy.deepcopy` does for the same reason.
+
+### Fixed
+
+- **`CallbackRegistry.fire` refuses an async callback that is an object.** The
+  guard asked `inspect.iscoroutinefunction`, so a callback whose `__call__` is
+  an `async def` was classified as synchronous and *called* instead of
+  refused — producing a coroutine that was dropped on the floor. No exception,
+  no callback, no trace. It now asks `is_async_callable`, and raises the same
+  `TypeError` it always raised for an `async def` function. `fire_async` was
+  never affected: it has always judged the result with `inspect.isawaitable`.
 
 ## v3.1.0 - 2026-08-26
 

@@ -19,8 +19,8 @@ from ..exceptions import DuplicateRecordError
 from ..query import is_storage_key_field
 from ..query_logic import ComplexQuery
 from ..streaming import AsyncStreamingMixin, StreamConfig, StreamingMixin, StreamResult
-from ..vector import VectorOperationsMixin
-from ..vector.bulk_embed_mixin import BulkEmbedMixin
+from ..vector import AsyncVectorOperationsMixin, SyncVectorOperationsMixin
+from ..vector.bulk_embed_mixin import AsyncBulkEmbedMixin, BulkEmbedMixin
 from ..vector.python_vector_search import PythonVectorSearchMixin
 from .config import MemoryDatabaseConfig
 from .sqlite_mixins import SQLiteVectorSupport
@@ -29,19 +29,22 @@ from .vector_config_mixin import VectorConfigMixin
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Iterator
 
+    import numpy as np
+
     from ..query import Query
     from ..records import Record
+    from ..vector.types import DistanceMetric, VectorSearchResult
 
 
-class AsyncMemoryDatabase(  # type: ignore[misc]
+class AsyncMemoryDatabase(
     StructuredConfigConsumer[MemoryDatabaseConfig],
     AsyncDatabase,
     AsyncStreamingMixin,
     VectorConfigMixin,  # Parse vector config
     SQLiteVectorSupport,  # Provides _compute_similarity
     PythonVectorSearchMixin,  # Provides python_vector_search_async
-    BulkEmbedMixin,  # Bulk embedding operations
-    VectorOperationsMixin,  # Standard vector interface
+    AsyncBulkEmbedMixin,  # Bulk embedding operations (async: awaits exists/update/create)
+    AsyncVectorOperationsMixin,  # Standard vector interface
 ):
     """Async in-memory database implementation."""
 
@@ -332,13 +335,13 @@ class AsyncMemoryDatabase(  # type: ignore[misc]
 
     async def vector_search(
         self,
-        query_vector,
+        query_vector: np.ndarray | list[float],
         vector_field: str = "embedding",
         k: int = 10,
-        filter=None,
-        metric=None,
-        **kwargs,
-    ):
+        filter: Query | None = None,
+        metric: DistanceMetric | str | None = None,
+        **kwargs: Any,
+    ) -> list[VectorSearchResult]:
         """Perform vector similarity search using Python calculations."""
         return await self.python_vector_search_async(
             query_vector=query_vector,
@@ -350,7 +353,7 @@ class AsyncMemoryDatabase(  # type: ignore[misc]
         )
 
 
-class SyncMemoryDatabase(  # type: ignore[misc]
+class SyncMemoryDatabase(
     StructuredConfigConsumer[MemoryDatabaseConfig],
     SyncDatabase,
     StreamingMixin,
@@ -358,7 +361,7 @@ class SyncMemoryDatabase(  # type: ignore[misc]
     SQLiteVectorSupport,
     PythonVectorSearchMixin,
     BulkEmbedMixin,
-    VectorOperationsMixin,
+    SyncVectorOperationsMixin,
 ):
     """Synchronous in-memory database implementation."""
 
@@ -422,10 +425,17 @@ class SyncMemoryDatabase(  # type: ignore[misc]
             return None if version is None else str(version)
 
     def read(self, id: str) -> Record | None:
-        """Read a record from memory."""
+        """Read a record from memory.
+
+        Routed through ``_prepare_record_from_storage``, as the async twin
+        always was. This backend deliberately stores a copy without the id
+        embedded in it (see ``create_batch``), so a bare ``copy()`` here handed
+        back a record with ``id`` of ``None`` -- and ``read``, edit,
+        ``update(record.id, record)`` is the round trip every caller performs.
+        """
         with self._lock:
             record = self._storage.get(id)
-            return record.copy(deep=True) if record else None
+            return self._prepare_record_from_storage(record, id)
 
     def update(self, id: str, record: Record, *, expected_version: str | None = None) -> bool:
         """Update a record in memory."""
@@ -585,12 +595,16 @@ class SyncMemoryDatabase(  # type: ignore[misc]
             return ids
 
     def read_batch(self, ids: list[str]) -> list[Record | None]:
-        """Read multiple records efficiently."""
+        """Read multiple records efficiently.
+
+        Same restoration as :meth:`read` -- a batch read is not a weaker
+        contract than a single one.
+        """
         with self._lock:
             results = []
             for id in ids:
                 record = self._storage.get(id)
-                results.append(record.copy(deep=True) if record else None)
+                results.append(self._prepare_record_from_storage(record, id))
             return results
 
     def delete_batch(self, ids: list[str]) -> list[bool]:
@@ -638,13 +652,13 @@ class SyncMemoryDatabase(  # type: ignore[misc]
 
     def vector_search(
         self,
-        query_vector,
+        query_vector: np.ndarray | list[float],
         vector_field: str = "embedding",
         k: int = 10,
-        filter=None,
-        metric=None,
-        **kwargs,
-    ):
+        filter: Query | None = None,
+        metric: DistanceMetric | str | None = None,
+        **kwargs: Any,
+    ) -> list[VectorSearchResult]:
         """Perform vector similarity search using Python calculations."""
         return self.python_vector_search_sync(
             query_vector=query_vector,

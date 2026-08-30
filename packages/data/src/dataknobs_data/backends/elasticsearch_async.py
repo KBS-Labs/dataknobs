@@ -24,7 +24,7 @@ from ..streaming import (
     async_run_stream_write,
     resolve_conflict_write,
 )
-from ..vector.mixins import VectorOperationsMixin
+from ..vector.mixins import AsyncVectorOperationsMixin
 from ..vector.types import DistanceMetric, VectorSearchResult
 from .config import AsyncElasticsearchDatabaseConfig
 from .elasticsearch_mixins import (
@@ -36,6 +36,7 @@ from .elasticsearch_mixins import (
     ElasticsearchVectorSupport,
     es_version_token,
     parse_es_version_token,
+    vector_tracking_metadata,
 )
 from .elasticsearch_query import build_bool_query, build_complex_es_query
 
@@ -56,7 +57,7 @@ _client_manager = ConnectionPoolManager()
 class AsyncElasticsearchDatabase(
     StructuredConfigConsumer[AsyncElasticsearchDatabaseConfig],
     AsyncDatabase,
-    VectorOperationsMixin,
+    AsyncVectorOperationsMixin,
     ElasticsearchBaseConfig,
     ElasticsearchIndexManager,
     ElasticsearchVectorSupport,
@@ -87,7 +88,7 @@ class AsyncElasticsearchDatabase(
         """
         cfg = self.config
 
-        # Vector support (async ES uses VectorOperationsMixin, not the
+        # Vector support (async ES uses AsyncVectorOperationsMixin, not the
         # VectorConfigMixin; it discovers vector fields lazily at write time).
         self.vector_fields: dict[str, int] = {}
         self.vector_enabled = False
@@ -223,13 +224,9 @@ class AsyncElasticsearchDatabase(
                 if field_name in record.fields:
                     field = record.fields[field_name]
                     if hasattr(field, "source_field"):
-                        record.metadata["vector_fields"][field_name] = {
-                            "type": "vector",
-                            "dimensions": self.vector_fields[field_name],
-                            "source_field": field.source_field,
-                            "model": getattr(field, "model_name", None),
-                            "model_version": getattr(field, "model_version", None),
-                        }
+                        record.metadata["vector_fields"][field_name] = vector_tracking_metadata(
+                            field, self.vector_fields[field_name]
+                        )
 
         doc = self._record_to_document(record)
         if id:
@@ -1020,9 +1017,9 @@ class AsyncElasticsearchDatabase(
         # If not using native strategy, fall back to parent implementation
         if config.fusion_strategy != FusionStrategy.NATIVE:
             # Import parent class to call its implementation
-            from ..vector.mixins import VectorOperationsMixin
+            from ..vector.mixins import AsyncVectorOperationsMixin
 
-            return await VectorOperationsMixin.hybrid_search(
+            return await AsyncVectorOperationsMixin.hybrid_search(
                 self,
                 query_text=query_text,
                 query_vector=query_vector,
@@ -1088,9 +1085,9 @@ class AsyncElasticsearchDatabase(
         except Exception as e:
             # Fall back to client-side fusion if native RRF not available
             logger.warning(f"Native RRF not available ({e}), falling back to client-side fusion")
-            from ..vector.mixins import VectorOperationsMixin
+            from ..vector.mixins import AsyncVectorOperationsMixin
 
-            return await VectorOperationsMixin.hybrid_search(
+            return await AsyncVectorOperationsMixin.hybrid_search(
                 self,
                 query_text=query_text,
                 query_vector=query_vector,

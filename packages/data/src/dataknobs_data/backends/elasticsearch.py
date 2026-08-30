@@ -28,6 +28,7 @@ from .elasticsearch_mixins import (
     ElasticsearchVectorSupport,
     es_version_token,
     parse_es_version_token,
+    vector_tracking_metadata,
 )
 from .elasticsearch_query import build_bool_query, build_complex_es_query
 from .vector_config_mixin import VectorConfigMixin
@@ -168,13 +169,9 @@ class SyncElasticsearchDatabase(
                 if field_name in record_copy.fields:
                     field = record_copy.fields[field_name]
                     if hasattr(field, "source_field"):
-                        record_copy.metadata["vector_fields"][field_name] = {
-                            "type": "vector",
-                            "dimensions": self.vector_fields[field_name],
-                            "source_field": field.source_field,
-                            "model": getattr(field, "model_name", None),
-                            "model_version": getattr(field, "model_version", None),
-                        }
+                        record_copy.metadata["vector_fields"][field_name] = (
+                            vector_tracking_metadata(field, self.vector_fields[field_name])
+                        )
 
         doc = self._record_to_document(record_copy)
         if id:
@@ -863,7 +860,7 @@ class SyncElasticsearchDatabase(
     def vector_search(
         self,
         query_vector: np.ndarray | list[float],
-        field_name: str = "embedding",
+        vector_field: str = "embedding",
         k: int = 10,
         metric: DistanceMetric = DistanceMetric.COSINE,
         filter: Query | None = None,
@@ -900,7 +897,9 @@ class SyncElasticsearchDatabase(
         # Build KNN query
         query = build_knn_query(
             query_vector=query_vector,
-            field_name=field_name,
+            # `build_knn_query` spells it `field_name`; this method's own
+            # parameter is `vector_field`, as the whole backend family's is.
+            field_name=vector_field,
             k=k,
             filter_query=filter_query,
         )
@@ -942,7 +941,7 @@ class SyncElasticsearchDatabase(
                 VectorSearchResult(
                     record=record,
                     score=score,
-                    vector_field=field_name,
+                    vector_field=vector_field,
                     metadata={
                         "index": self.index_name,
                         "metric": metric.value,

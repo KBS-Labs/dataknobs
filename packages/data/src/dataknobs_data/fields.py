@@ -109,7 +109,7 @@ class Field:
     type: FieldType | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         """Auto-detect type if not provided."""
         if self.type is None:
             self.type = self._detect_type(self.value)
@@ -369,8 +369,10 @@ class VectorField(Field):
                 f"expected {dimensions}, got {actual_dims}"
             )
 
-        # Store vector metadata
-        vector_metadata = metadata or {}
+        # Store vector metadata. Copied, not adopted: the update below would
+        # otherwise write three keys into the caller's dict, which is now a
+        # dict callers build with `content_hash_metadata` and may reuse.
+        vector_metadata = dict(metadata) if metadata else {}
         vector_metadata.update(
             {
                 "dimensions": dimensions,
@@ -468,8 +470,8 @@ class VectorField(Field):
         import numpy as np
 
         if isinstance(self.value, np.ndarray):
-            return self.value.tolist()
-        return list(self.value)
+            return [float(v) for v in self.value.tolist()]
+        return [float(v) for v in self.value]
 
     def cosine_similarity(self, other: VectorField | np.ndarray | list[float]) -> float:
         """Compute cosine similarity with another vector."""
@@ -510,7 +512,9 @@ class VectorField(Field):
         return {
             "name": self.name,
             "value": self.to_list(),
-            "type": self.type.value,
+            # Always set: `VectorField` passes `FieldType.VECTOR` to `Field`,
+            # and `__post_init__` detects one for anything that does not.
+            "type": self.type.value if self.type else None,
             "metadata": self.metadata,
             "dimensions": self.dimensions,
         }

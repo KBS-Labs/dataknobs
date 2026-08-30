@@ -74,6 +74,76 @@ class SortOrder(Enum):
     DESC = "desc"
 
 
+# The one spelling neither the enum values nor the normalization below can
+# reach. Every other alias the fluent path ever accepted --- ``IN``, ``LIKE``,
+# ``NOT IN``, ``STARTS_WITH``, ``BETWEEN`` --- is an enum value in a different
+# case or with a space for the underscore, so it is derived rather than listed.
+# That is the whole point: the private table this replaces was a hand-written
+# second copy of the vocabulary, and it had already drifted --- ``not_like``
+# was missing from it, so ``filter("name", "not_like", "A%")`` meant
+# ``name = "A%"``.
+_OPERATOR_ALIASES: dict[str, Operator] = {"==": Operator.EQ}
+
+
+def coerce_operator(operator: str | Operator) -> Operator:
+    """The one reading of a filter operator, whatever spelling it arrives in.
+
+    Accepts an :class:`Operator`, any operator's own value (``"!="``,
+    ``"not_like"``), and case/space variants of those (``"IN"``,
+    ``"NOT BETWEEN"``), plus ``"=="`` for equality.
+
+    Args:
+        operator: The operator, as an enum member or a string spelling.
+
+    Returns:
+        The :class:`Operator` the spelling names.
+
+    Raises:
+        ValueError: If the spelling names no operator. It used to name
+            :attr:`Operator.EQ` --- silently, so a typo inverted a query
+            rather than failing it, and no return value, log line or
+            exception let the caller find out.
+    """
+    if isinstance(operator, Operator):
+        return operator
+    if isinstance(operator, str):
+        if operator in _OPERATOR_ALIASES:
+            return _OPERATOR_ALIASES[operator]
+        for candidate in (operator, operator.strip().lower().replace(" ", "_")):
+            try:
+                return Operator(candidate)
+            except ValueError:
+                continue
+    known = ", ".join(sorted({member.value for member in Operator} | set(_OPERATOR_ALIASES)))
+    raise ValueError(f"Unknown query operator {operator!r}; expected one of: {known}")
+
+
+def coerce_sort_order(order: str | SortOrder) -> SortOrder:
+    """The one reading of a sort order, whatever spelling it arrives in.
+
+    Args:
+        order: The order, as an enum member or a string spelling
+            (case-insensitive).
+
+    Returns:
+        The :class:`SortOrder` the spelling names.
+
+    Raises:
+        ValueError: If the spelling names no order. It used to name
+            :attr:`SortOrder.DESC` --- every string but ``"asc"`` did, so
+            ``sort_by("score", "ascending")`` sorted descending.
+    """
+    if isinstance(order, SortOrder):
+        return order
+    if isinstance(order, str):
+        try:
+            return SortOrder(order.strip().lower())
+        except ValueError:
+            pass
+    known = ", ".join(member.value for member in SortOrder)
+    raise ValueError(f"Unknown sort order {order!r}; expected one of: {known}")
+
+
 RESERVED_KEY_FIELD = "id"
 """The single query/sort field name routed to a record's storage key.
 
@@ -145,9 +215,14 @@ class Filter:
             return False
 
         if self.operator == Operator.EQ:
-            return record_value == self.value
+            # `bool(...)`, because ``==`` between two values of unknown type is
+            # not required to answer with one --- a numpy array answers with an
+            # array. The signature has always promised a bool, and a caller
+            # that does `if f.matches(v)` was going to raise on the array
+            # anyway; this raises at the comparison instead of one frame later.
+            return bool(record_value == self.value)
         elif self.operator == Operator.NEQ:
-            return record_value != self.value
+            return bool(record_value != self.value)
         elif self.operator == Operator.GT:
             return self._compare_values(record_value, self.value, lambda a, b: a > b)
         elif self.operator == Operator.GTE:
@@ -207,7 +282,7 @@ class Filter:
             # This should never be reached as all operators are handled above
             raise ValueError(f"Unknown operator: {self.operator}")
 
-    def _compare_values(self, a: Any, b: Any, comparator) -> bool:
+    def _compare_values(self, a: Any, b: Any, comparator: Callable[[Any, Any], bool]) -> bool:
         """Compare two values with type awareness.
 
         Handles special cases:
@@ -256,7 +331,9 @@ class Filter:
     def from_dict(cls, data: dict[str, Any]) -> Filter:
         """Create filter from dictionary representation."""
         return cls(
-            field=data["field"], operator=Operator(data["operator"]), value=data.get("value")
+            field=data["field"],
+            operator=coerce_operator(data["operator"]),
+            value=data.get("value"),
         )
 
 
@@ -274,7 +351,7 @@ class SortSpec:
     @classmethod
     def from_dict(cls, data: dict[str, str]) -> SortSpec:
         """Create sort spec from dictionary representation."""
-        return cls(field=data["field"], order=SortOrder(data.get("order", "asc")))
+        return cls(field=data["field"], order=coerce_sort_order(data.get("order", "asc")))
 
 
 @dataclass
@@ -439,40 +516,19 @@ class Query:
 
         Args:
             field: The field name to filter on
-            operator: The operator (string or Operator enum)
+            operator: The operator, as an :class:`Operator` or any spelling
+                :func:`coerce_operator` accepts
             value: The value to compare against
 
         Returns:
             Self for method chaining
-        """
-        if isinstance(operator, str):
-            op_map = {
-                "=": Operator.EQ,
-                "==": Operator.EQ,
-                "!=": Operator.NEQ,
-                ">": Operator.GT,
-                ">=": Operator.GTE,
-                "<": Operator.LT,
-                "<=": Operator.LTE,
-                "in": Operator.IN,
-                "IN": Operator.IN,
-                "not_in": Operator.NOT_IN,
-                "NOT IN": Operator.NOT_IN,
-                "like": Operator.LIKE,
-                "LIKE": Operator.LIKE,
-                "regex": Operator.REGEX,
-                "starts_with": Operator.STARTS_WITH,
-                "STARTS_WITH": Operator.STARTS_WITH,
-                "exists": Operator.EXISTS,
-                "not_exists": Operator.NOT_EXISTS,
-                "between": Operator.BETWEEN,
-                "BETWEEN": Operator.BETWEEN,
-                "not_between": Operator.NOT_BETWEEN,
-                "NOT BETWEEN": Operator.NOT_BETWEEN,
-            }
-            operator = op_map.get(operator, Operator.EQ)
 
-        self.filters.append(Filter(field=field, operator=operator, value=value))
+        Raises:
+            ValueError: If ``operator`` names no operator. It used to mean
+                equality instead, so a typo returned the wrong rows rather
+                than failing.
+        """
+        self.filters.append(Filter(field=field, operator=coerce_operator(operator), value=value))
         return self
 
     def sort_by(self, field: str, order: str | SortOrder = "asc") -> Query:
@@ -480,15 +536,18 @@ class Query:
 
         Args:
             field: The field name to sort by
-            order: The sort order ("asc", "desc", or SortOrder enum)
+            order: The sort order ("asc", "desc", case-insensitive, or a
+                :class:`SortOrder`)
 
         Returns:
             Self for method chaining
-        """
-        if isinstance(order, str):
-            order = SortOrder.ASC if order.lower() == "asc" else SortOrder.DESC
 
-        self.sort_specs.append(SortSpec(field=field, order=order))
+        Raises:
+            ValueError: If ``order`` names no order. Every string but
+                ``"asc"`` used to mean descending, so ``"ascending"`` sorted
+                the wrong way.
+        """
+        self.sort_specs.append(SortSpec(field=field, order=coerce_sort_order(order)))
         return self
 
     def sort(self, field: str, order: str | SortOrder = "asc") -> Query:
@@ -700,7 +759,7 @@ class Query:
 
     def to_dict(self) -> dict[str, Any]:
         """Convert query to dictionary representation."""
-        result = {
+        result: dict[str, Any] = {
             "filters": [f.to_dict() for f in self.filters],
             "sort": [s.to_dict() for s in self.sort_specs],
         }
@@ -782,7 +841,7 @@ class Query:
                     or_conditions.append(and_cond)
 
         # Create the OR condition group
-        or_group = None
+        or_group: Condition | None = None
         if or_conditions:
             if len(or_conditions) == 1:
                 or_group = or_conditions[0]
@@ -792,14 +851,20 @@ class Query:
         # Combine with existing filters (if any) using AND
         if self.filters:
             # Create AND condition for existing filters
+            existing: Condition
             if len(self.filters) == 1:
                 existing = FilterCondition(self.filters[0])
             else:
-                existing = LogicCondition(operator=LogicOperator.AND)
+                # Built through its own name, because appending to
+                # `.conditions` is a LogicCondition capability and the
+                # variable that leaves this block is a Condition.
+                group = LogicCondition(operator=LogicOperator.AND)
                 for f in self.filters:
-                    existing.conditions.append(FilterCondition(f))
+                    group.conditions.append(FilterCondition(f))
+                existing = group
 
             # Combine existing AND new OR group with AND
+            root_condition: Condition | None
             if or_group:
                 root_condition = LogicCondition(
                     operator=LogicOperator.AND, conditions=[existing, or_group]

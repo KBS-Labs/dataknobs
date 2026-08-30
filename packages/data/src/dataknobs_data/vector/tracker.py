@@ -9,10 +9,12 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
+from .content import CONTENT_HASH_KEY, recompute_content_hash
+
 if TYPE_CHECKING:
     from collections.abc import Callable, Coroutine
 
-    from ..database import Database
+    from ..database import AsyncDatabase
     from ..records import Record
 
 logger = logging.getLogger(__name__)
@@ -61,7 +63,7 @@ class ChangeTracker:
 
     def __init__(
         self,
-        database: Database,
+        database: AsyncDatabase,
         tracked_fields: list[str] | None = None,
         vector_field: str = "embedding",
         max_queue_size: int = 10000,
@@ -288,11 +290,16 @@ class ChangeTracker:
     async def get_outdated_records(self) -> list[Record]:
         """Get records with outdated vector fields.
 
+        The comparison is this class's own; the text it compares is not. A
+        vector's staleness is decided by the string its embedder was fed, and
+        only the class that fed it knows how that string was assembled — so the
+        assembly is read back out of the vector's metadata rather than rebuilt
+        from this tracker's configuration. Rebuilding it is what made a corpus
+        synced on any non-default separator report as permanently outdated.
+
         Returns:
             List of records that need vector updates
         """
-        import hashlib
-
         from ..query import Query
 
         # Get all records
@@ -309,51 +316,50 @@ class ChangeTracker:
             # by comparing content hashes
             vector_field = record.fields.get(self.vector_field)
             if vector_field and hasattr(vector_field, "metadata"):
-                stored_hash = vector_field.metadata.get("content_hash")
+                current_hash = recompute_content_hash(
+                    record, vector_field.metadata, self.tracked_fields
+                )
+                if current_hash is None:
+                    continue
+
+                stored_hash = vector_field.metadata.get(CONTENT_HASH_KEY)
 
                 # If no content hash is stored, auto-generate it and consider record up-to-date
                 if stored_hash is None:
-                    # Calculate and store content hash
-                    content_parts = []
-                    for field_name in self.tracked_fields:
-                        field_value = record.get_value(field_name)
-                        if field_value:
-                            content_parts.append(str(field_value))
+                    vector_field.metadata[CONTENT_HASH_KEY] = current_hash
 
-                    if content_parts:
-                        current_content = " ".join(content_parts)
-                        content_hash = hashlib.md5(current_content.encode()).hexdigest()
-
-                        # Update the vector field metadata
-                        vector_field.metadata["content_hash"] = content_hash
-
-                        # Update the record in the database
-                        try:
-                            await self.database.update(record.id, record)
-                            logger.debug(f"Auto-initialized content hash for record {record.id}")
-                        except Exception as e:
-                            logger.warning(
-                                f"Failed to auto-initialize content hash for record {record.id}: {e}"
-                            )
-                            # If we can't update, consider it outdated for safety
-                            outdated.append(record)
-                    continue
-
-                # Compute current content hash from tracked fields
-                content_parts = []
-                for field_name in self.tracked_fields:
-                    field_value = record.get_value(field_name)
-                    if field_value:
-                        content_parts.append(str(field_value))
-
-                if content_parts:
-                    current_content = " ".join(content_parts)
-                    current_hash = hashlib.md5(current_content.encode()).hexdigest()
-
-                    # If hashes don't match, the record is outdated
-                    if stored_hash != current_hash:
+                    # Update the record in the database. A record with no id
+                    # cannot be written back -- `update(None, record)` drops
+                    # the write rather than raising -- so treat that the same
+                    # as a failed write.
+                    if record.id is None:
                         outdated.append(record)
                         continue
+                    try:
+                        if not await self.database.update(record.id, record):
+                            # Nothing stored under that id, so the digest was
+                            # not persisted and the next sweep would arrive
+                            # here again. Report it rather than looping.
+                            logger.warning(
+                                "Could not initialize content hash: no record stored under id %s",
+                                record.id,
+                            )
+                            outdated.append(record)
+                            continue
+                        logger.debug("Auto-initialized content hash for record %s", record.id)
+                    except (OSError, ValueError, RuntimeError) as e:
+                        logger.warning(
+                            "Failed to auto-initialize content hash for record %s: %s",
+                            record.id,
+                            e,
+                        )
+                        # If we can't update, consider it outdated for safety
+                        outdated.append(record)
+                    continue
+
+                # If hashes don't match, the record is outdated
+                if stored_hash != current_hash:
+                    outdated.append(record)
 
         return outdated
 
@@ -403,7 +409,7 @@ class ChangeTracker:
             Number of tasks processed
         """
         processed = 0
-        batch = []
+        batch: list[UpdateTask] = []
 
         # Get batch of tasks
         while self._update_queue and len(batch) < self.batch_size:
@@ -525,8 +531,6 @@ class ChangeTracker:
         if not self.tracked_fields:
             return
 
-        import hashlib
-
         from ..query import Query
 
         # Get all records
@@ -536,28 +540,29 @@ class ChangeTracker:
             # Check if record has vector field but no content hash
             vector_field = record.fields.get(self.vector_field)
             if vector_field and hasattr(vector_field, "metadata"):
-                stored_hash = vector_field.metadata.get("content_hash")
+                stored_hash = vector_field.metadata.get(CONTENT_HASH_KEY)
 
                 if stored_hash is None:
-                    # Calculate and store content hash
-                    content_parts = []
-                    for field_name in self.tracked_fields:
-                        field_value = record.get_value(field_name)
-                        if field_value:
-                            content_parts.append(str(field_value))
-
-                    if content_parts:
-                        current_content = " ".join(content_parts)
-                        content_hash = hashlib.md5(current_content.encode()).hexdigest()
-
+                    content_hash = recompute_content_hash(
+                        record, vector_field.metadata, self.tracked_fields
+                    )
+                    if content_hash is not None and record.id is not None:
                         # Update the vector field metadata
-                        vector_field.metadata["content_hash"] = content_hash
+                        vector_field.metadata[CONTENT_HASH_KEY] = content_hash
 
                         # Update the record in the database
                         try:
-                            await self.database.update(record.id, record)
-                            logger.debug(f"Initialized content hash for record {record.id}")
-                        except Exception as e:
+                            if await self.database.update(record.id, record):
+                                logger.debug("Initialized content hash for record %s", record.id)
+                            else:
+                                logger.warning(
+                                    "Could not initialize content hash: "
+                                    "no record stored under id %s",
+                                    record.id,
+                                )
+                        except (OSError, ValueError, RuntimeError) as e:
                             logger.warning(
-                                f"Failed to initialize content hash for record {record.id}: {e}"
+                                "Failed to initialize content hash for record %s: %s",
+                                record.id,
+                                e,
                             )

@@ -25,7 +25,12 @@ uv pip install dataknobs-data
 
 ## Quick Start
 
-### Using VectorOperationsMixin
+### Using the vector-operations mixins
+
+There are two, and a backend mixes in the one for its lane:
+`AsyncVectorOperationsMixin` for an `AsyncDatabase` (awaited, as below) and
+`SyncVectorOperationsMixin` for a `SyncDatabase` (called directly, no
+`await`). `VectorOperationsMixin` remains as a name for the async one.
 
 ```python
 from dataknobs_data.vector.hybrid import HybridSearchConfig, FusionStrategy
@@ -211,7 +216,7 @@ def weighted_score_fusion(
     """Combine results using weighted score sum."""
 ```
 
-### VectorOperationsMixin.hybrid_search
+### AsyncVectorOperationsMixin.hybrid_search
 
 ```python
 async def hybrid_search(
@@ -284,7 +289,8 @@ results = await backend.hybrid_search(
 For backends without native hybrid search:
 
 ```python
-# Any VectorOperationsMixin backend
+# Any backend mixing in AsyncVectorOperationsMixin; drop the `await` on
+# a SyncDatabase, which mixes in SyncVectorOperationsMixin instead.
 results = await backend.hybrid_search(
     query_text="search query",
     query_vector=embedding,

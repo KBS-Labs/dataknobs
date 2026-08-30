@@ -7,6 +7,369 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Added
+
+- **`SyncVectorOperationsMixin` and `AsyncVectorOperationsMixin`** — one
+  vector-operations mixin per lane, in `dataknobs_data.vector`.
+  `VectorOperationsMixin` remains as a name for the async one, so an existing
+  async backend that mixes it in is unaffected. Every backend now mixes in the
+  lane it belongs to; see **Fixed** for what the single async mixin did on the
+  sync side.
+
+- **`coerce_operator` and `coerce_sort_order`** in `dataknobs_data`, the one
+  reading of a filter operator or a sort order whatever spelling it arrives
+  in. Exported because a backend or a consumer building a `Filter` by hand
+  needs the same reading the fluent builder gets.
+
+### Changed
+
+- **An unrecognized operator or sort-order string now raises `ValueError`.**
+  `Query.filter` mapped an unknown operator to equality and `Query.sort_by`
+  mapped an unknown order to descending, neither raising, so a typo returned
+  the wrong rows rather than failing — no exception, no log line, and no
+  return value to check. Source-breaking for a caller passing a spelling that
+  names no operator; that caller was getting the wrong answer. Every spelling
+  that worked before still works, and more do: an operator's own value, that
+  value in any case with spaces for underscores (`"NOT BETWEEN"`), and `"=="`.
+
+- **`vector_search` names its field parameter `vector_field` on every
+  backend.** Four of the twelve implementations called it `field_name` —
+  `SyncSQLiteDatabase`, `SyncElasticsearchDatabase` and both Postgres classes,
+  with `AsyncSQLiteDatabase` disagreeing with its own sync sibling. Every
+  shipped example and every doc uses `vector_field=`, so the spelling this
+  package documents already raised `TypeError` on those four: through a direct
+  call, and through `hybrid_search`, which passes it by keyword. Both Postgres
+  classes also made it a required positional where the other ten default it; it
+  now defaults to `"embedding"` throughout. Source-breaking for a caller passing
+  `field_name=`, a spelling that appears in no documentation and no example.
+
+- **The vector-operations mixins take everything after `query_vector` by
+  keyword in `vector_search`.** The implementations do not agree on positional
+  order — most spell it `(..., k, filter, metric)` where the declaration says
+  `(..., k, metric, filter)` — so a fourth positional argument already meant
+  the metric on some backends and the filter on others. No concrete signature
+  changes and no runtime behaviour changes; what changes is that a call
+  written against the abstract declaration can no longer be written in the one
+  form that was never portable.
+
+- **`SyncDatabase.config` and `AsyncDatabase.config` are read-only
+  properties** rather than writeable attributes. This completes the migration
+  to typed configuration ("replacing dict-as-`self.config`"): every backend in
+  the package already exposes a typed `DatabaseConfig` through
+  `StructuredConfigConsumer`, and a writeable attribute on one base against a
+  read-only property on the other is a combination no class can have — so a
+  type checker held every migrated backend impossible and stopped checking
+  from the construction branch onward, which is the branch all of them run.
+  Reading `db.config` is unchanged; assigning to it now raises.
+
+- **`IncrementalVectorizer.run_batch` takes a `timeout`,** `limit` counts
+  records *attempted* rather than records that succeeded — a budget of
+  successes cannot be met by a corpus that fails to embed — and both the
+  budget and the returned `VectorizationResult` are measured from the call
+  rather than from the vectorizer's lifetime totals. `_stats` is never reset, so
+  a limit compared against it directly was a budget the *instance* had already
+  spent: the natural consumer shape, a loop of successive batches over one
+  corpus, stopped doing work after the first call while still returning a
+  plausible-looking total. See **Fixed**.
+
+- **`VectorizationResult` carries `skipped`**, and `processed` counts only
+  records for which a vector was written. A record the pipeline completes
+  without writing — empty assembled text, an embedding function that returned
+  `None`, a record already carrying a vector, or nothing stored under its id —
+  was counted as processed, so the result claimed more work than the database
+  could show. Distinct from `failed`, which counts records that raised. The new
+  field is defaulted, so a positional construction is unaffected, and
+  `get_stats()` reports the same three outcomes.
+
+- **`QueryBuilder.where` reads the operator vocabulary `Query.filter` reads.**
+  It built `Operator(operator)` directly, which accepts only an exact member
+  value, so `where("x", "==", 1)` raised where the identical
+  `filter("x", "==", 1)` succeeded — a third copy of the disagreement the
+  shared coercion was introduced to remove. Every alias the fluent builder
+  derives now works here too, and an unknown spelling raises the same message.
+
+- **`update_vector` reports whether the write landed.** It returned
+  `self.update(...) is not None`, and every backend's `update` returns `bool`,
+  so `False is not None` answered `True` for an update that did not happen.
+  Latent on the async lane; newly reachable on the five sync backends, whose
+  inherited copy raised before the split.
+
+- **`IncrementalVectorizer.wait_for_completion(check_interval=...)` is now
+  `wait_for_completion(timeout=None) -> bool`.** The old parameter set how
+  often to poll a condition that no longer needs polling, and the method could
+  not report failure — a stalled worker hung the caller forever. Source-breaking
+  for a caller that passed `check_interval=`; the fix it is part of is in
+  **Fixed** below.
+
+### Fixed
+
+- **`IncrementalVectorizer.run_batch` can return.** Its only exit was a
+  `break` that could never be taken: the break required
+  `self._processing_task.done()`, and that task is the queue loader, whose
+  loop idles rather than returning when the source drains and exits only on
+  the shutdown `run_batch` sets *after* the loop. So `run_batch()` — the
+  no-argument form — never returned, because `None or float("inf")` is
+  infinity; `run_batch(0)` never returned, for the same reason through `or`;
+  and `run_batch(n)` never returned whenever fewer than `n` records succeeded.
+  It now waits on the same conditions `wait_for_completion` does, plus the
+  record budget, and stops the vectorizer on every exit including an
+  exception.
+
+- **`IncrementalVectorizer` terminates on a record it declines to write.**
+  `_load_pending_records` deliberately over-fetches — its docstring says so —
+  and `_process_record` then completes some of what it fetches without writing a
+  vector. Such a record still matches the loader's `NOT_EXISTS(vector_field)`
+  query, so it was re-queried, re-queued and re-embedded on every pass: the
+  "source drained" condition was never reached and every caller racing it waited
+  forever. One record with an empty `content` was enough to hang `run_batch()`
+  and `wait_for_completion()` on their `timeout=None` defaults over an otherwise
+  healthy corpus. Workers now report the outcome directly rather than having the
+  loader re-derive it from the query, since the worker is the only thing that
+  knows why.
+
+- **`IncrementalVectorizer._until_shutdown` does not call a failure a win.** An
+  awaitable that raised landed in `asyncio.wait`'s `done` set exactly as a
+  completion does, so the race reported that the work had finished — and the
+  cleanup gathered with `return_exceptions=True`, retrieving and discarding the
+  exception without even a "never retrieved" warning. It now propagates. Latent:
+  no condition this class currently races can raise. It is documented as a
+  general racer, and this is the reading of `done` that stays right when one
+  can.
+
+- **A sync backend's inherited vector methods run.** One
+  `VectorOperationsMixin` declared every method `async` and was mixed into
+  sync backends as readily as async ones — five of the seven sync backends
+  carry a vector surface, and all five got the async mixin — so
+  `update_vector`, `delete_from_index` and `hybrid_search` called
+  `await self.read(...)` / `await self.delete(...)` / `await self.search(...)`
+  on a synchronous database and raised `TypeError: object NoneType can't be
+  used in 'await' expression`. The mixin is now one per lane and each backend
+  mixes in its own; a sweep over all fourteen backends holds every method of
+  the vector surface to the lane its class is in.
+
+- **`Operator.NOT_LIKE` is reachable from `Query.filter`.** The fluent
+  builder carried a private table of operator spellings — a hand-written
+  second copy of the vocabulary — and `not_like` was missing from it, so
+  `filter("name", "not_like", "A%")` meant `name = "A%"`. Both paths now share
+  one coercion, so an operator the enum has is reachable by its own value by
+  construction rather than by remembering to add it twice.
+
+- **A shipped example and two documented ones asked for the wrong thing.**
+  `examples/hybrid_search.py` filtered with `"contains"`, which named no
+  operator and therefore meant equality — its "text search" matched only
+  records whose content equalled the query exactly. The user guide had the
+  same `"contains"`, and the migration tutorial partitioned with a `"%"`
+  operator that does not exist and a callable value that is compared rather
+  than called, then wrote through a `target_db.insert` that is not a method.
+
+- **`VectorTextSynchronizer`'s change tracking works, in both of its
+  configurations.** It computed a `content_hash` for every vector it wrote and
+  never read it back, so no configuration of the class both re-embedded stale
+  text and skipped current text — each half was broken on the side the other
+  worked. A synchronizer built with `text_fields=` re-embedded every record on
+  every sweep and `sync_on_update` returned `False` however much the text had
+  changed, because only the database schema was ever consulted for the field
+  mapping that entry point walks. A synchronizer built from the schema had the
+  opposite pair: `sync_on_update` worked, while `sync_all()` reported
+  `updated=0` over a corpus of stale vectors, because a `VectorField` was
+  treated as immutable once created. Both sources now register their fields
+  together and `sync_record` maintains all of them in one pass, so every entry
+  point sees every field and re-embeds on exactly one condition — the text
+  differs from the text that produced the stored vector.
+
+  `sync_all()` on the `text_fields=` path therefore stops re-embedding
+  unchanged records, which is a cost reduction and a behaviour change for
+  anyone who relied on it as an unconditional sweep. `force=True` is the
+  explicit way to ask for that.
+
+- **`ChangeTracker` and `VectorTextSynchronizer` cannot disagree about what
+  text a vector was built from.** They assembled the embedder's input
+  separately — identical loops, one joining on the configured
+  `field_separator` and the other on a hardcoded space — so a corpus synced
+  with any other separator was reported outdated on every record, permanently,
+  including records that had just been synced and never edited. The assembly
+  now lives once in `dataknobs_data.vector.content`, and a vector's metadata
+  records the fields and separator it was built from, so a reader reproduces
+  the text from the record rather than from its own configuration. No stored
+  digest is invalidated and nothing re-embeds on upgrade: a record written
+  before the description existed is judged against the reader's own defaults,
+  which is what it was digested under, and the first sweep that finds it
+  current writes the description so that readers agree about it thereafter.
+  See [When a vector is stale](docs/vector-staleness.md).
+
+  The synchronizer decides from **its own** configuration, not from the
+  record's description of itself — the description is for classes that did not
+  write the vector. Reading it back on the writing side would make a
+  synchronizer's own `text_fields` and `field_separator` unchangeable: every
+  record would keep matching the assembly it was written under, so the sweep
+  meant to apply a new configuration would report nothing to do.
+
+- **`sync_record` no longer reports success for a write it did not make.**
+  Handed a record with no id, it computed the vectors and called
+  `database.update(None, record)`, which drops the write rather than raising —
+  so the caller was told the vector was persisted while the database stayed
+  empty. `AsyncDatabase.update` also *reports* whether it found a record to
+  write, and every call site in the package discarded that, so the same false
+  success came back for a record carrying an id nothing is stored under —
+  `Record(data={"id": ...})` mints one without the record ever having been
+  written. Both now return `success=False`, still naming the fields set on the
+  in-memory record, and log the reason. `sync_on_create` and `sync_on_update`
+  report the same way.
+
+- **`sync_on_update` no longer destroys the fields a caller did not mention.**
+  It built a record out of `new_data` and let `sync_record` persist it, and
+  `sync_record` writes the record whole — so passing the changed fields alone,
+  which an `(old_data, new_data)` signature invites, replaced the stored record
+  with just those fields plus the vector. It now applies the change to the
+  stored record. The path became reachable only once `text_fields=` registered
+  its own field mapping, which is why the loss had not been seen.
+
+  It also re-embedded *every* registered vector field, having computed which
+  ones the change could affect and then discarded that. It now re-embeds only
+  those, via a new `fields=` argument to `sync_record`.
+
+- **`text_fields=` replaces what the schema said about the same vector field
+  rather than adding to it.** A source the schema named and `text_fields` did
+  not went on being registered as feeding that vector, so editing it triggered
+  a re-embed that produced byte-identical text.
+
+- **Elasticsearch preserves a vector field's metadata.** Both backends built an
+  identical five-key tracking entry that omitted it, so the staleness digest
+  was written by the synchronizer and dropped on the way to the index. It came
+  back absent, which reads as "current" — meaning a corpus on Elasticsearch
+  could never be re-embedded after its first sweep. The two copies are now one
+  `vector_tracking_metadata` helper, and the read path restores what it stores.
+
+- **The other four copies of the text assembly.** `VectorSyncMixin`,
+  `BulkEmbedMixin`, `AsyncBulkEmbedMixin` and `IncrementalVectorizer` each
+  rebuilt the embedder's input independently; three of them on a hardcoded
+  space. All four now call `assemble_source_text`, and the three that had no
+  separator argument gained one defaulting to the space they hardcoded. The
+  first three now also record a digest, without which the fields they write
+  are unjudgeable by anything and count as current forever.
+
+  `VectorSyncMixin.sync_vectors_with_text` additionally decided staleness by
+  comparing the *set of source fields* and nothing else, so an edit to the text
+  was invisible to it; and it raised `AttributeError` on any vector field
+  built without an explicit `source_field`, because that key is present-and-
+  `None` rather than absent.
+
+- **The model version of a plain-value vector is read from where it is
+  written.** `_has_current_vector` asked a `{field}_metadata` sidecar for a flat
+  `model_version` key, while `VectorMetadata.to_dict` — the only thing that
+  writes that sidecar — nests it under `model`. Every record vectorized by
+  `IncrementalVectorizer` therefore reported a version mismatch and was
+  re-embedded on every sweep.
+
+- **The file backend's flat formats keep a field's metadata.** `CSVFormat` and
+  `ParquetFormat` each reduced a serialized field to its bare `value`, dropping
+  `type` and `metadata`, so a `VectorField` went in and a plain `Field` holding
+  a list of numbers came back. With no digest to compare, an edited record was
+  never re-embedded and the sweep reported success — measured on one corpus and
+  one edit, `updated=1` on `json` against `updated=0` on `csv`. The reduction is
+  now conditional and lives in one place rather than in each format's own copy:
+  a field whose whole content is a scalar still becomes a bare cell, which is
+  what makes a CSV readable in a spreadsheet, and a field carrying more is
+  written as its full JSON dict, which `Record.from_dict` reconstructs exactly.
+
+- **`bulk_embed_and_store` on an async backend stores the records.**
+  `AsyncBulkEmbedMixin` existed and was mixed into nothing: `AsyncMemoryDatabase`,
+  `AsyncFileDatabase`, `AsyncS3Database` and `AsyncSQLiteDatabase` all inherited
+  the **sync** `BulkEmbedMixin`, whose `self.exists` / `self.update` /
+  `self.create` calls were then made without `await`. A coroutine object is
+  truthy, so the `exists` branch was taken for a record that did not exist, the
+  `update` coroutine never ran, and the `create` coroutine was appended to the
+  result list in place of an id. Measured on `AsyncMemoryDatabase`: the call
+  returned `['coroutine', 'coroutine']` and the database held zero records, with
+  no exception raised anywhere. The two mixins were near-copies differing only
+  in their `await`s, which is why nothing looked wrong at the import site;
+  everything that is not the awaiting is now shared between them.
+
+- **An `embedding_fn` may be a callable object.** Seven sites asked
+  `asyncio.iscoroutinefunction`, which answers for *functions* and reports an
+  object with an `async def __call__` as synchronous — and an embedder holds a
+  model handle, so that is the natural way to write one. Misclassified, it was
+  handed to `asyncio.to_thread`, which called it in a worker thread and returned
+  the **coroutine**. `VectorTextSynchronizer` at least logged an unexpected type
+  and stored nothing; `IncrementalVectorizer` wrote the coroutine object into
+  the record as the vector value and persisted it. The branch now lives once, in
+  `dataknobs_data.vector.embedding_fn`, over `is_async_callable`.
+  `IncrementalVectorizer`'s `progress_callback` is classified the same way, and
+  its annotation now admits the async callback its body has always awaited.
+
+- **A record read back carries the id it was read under.**
+  `SyncMemoryDatabase.read` and `read_batch` returned a bare `copy()` instead of
+  routing through `Database._prepare_record_from_storage`, as every other read
+  path in the package does. That backend deliberately stores the record without
+  the id embedded in it, so the id came back `None` — and `read`, edit,
+  `update(record.id, record)` is the round trip every caller performs. A caller
+  that falls back to `create()` when there is no id, as `bulk_embed_and_store`
+  does, wrote a **duplicate** of the record it meant to replace. The file
+  backends' `read_batch` had the same bare copy; it happened to return the id
+  because that backend serializes it into the payload, so the guarantee held by
+  accident of the storage format and now holds by construction.
+
+- **`IncrementalVectorizer.wait_for_completion` waits for the work.** It polled
+  `self._queue.qsize()` and returned as soon as that was zero, which two states
+  satisfy and neither means done: nothing has been enqueued *yet* — `start()`
+  creates the loader as a task, so a call made straight afterwards returns
+  before its first query, measured at zero of twelve records vectorized — and
+  everything is in flight, since `qsize()` drops the moment a worker takes a
+  record rather than when it has written it. The workers now call `task_done()`
+  and the waiter `join()`, plus the half a queue cannot express: whether the
+  loader's last query found anything left. It takes a `timeout` and returns
+  `bool`, replacing a `check_interval` that could not fail; a waiter is also
+  released by `stop()` rather than left behind.
+
+  The queue loader waits on the same `join()`, so a record taken but not yet
+  written is no longer re-queried and embedded twice, and its idle and
+  error-retry delays are constructor arguments (`idle_interval`,
+  `error_retry_interval`) rather than a hardcoded 60 and 10 seconds. Every wait
+  in the class races the work against shutdown instead of polling for it, so
+  stopping is immediate rather than one poll interval away.
+
+- **A record with no fields can be read back.**
+  `Database._prepare_record_from_storage` — the shared helper every read path
+  routes through — decided "was anything stored?" with `if record:`, and
+  `Record` defines `__len__`, so a record holding no fields is falsy. It was
+  stored successfully and read back as `None`, on every backend at once.
+  `exists()` said `True` and `read()` said `None` for the same id, which a
+  caller can only read as "create it again", so one lost record becomes two.
+  Now `is not None`.
+
+- **A `ComplexQuery` is answered by the file and S3 backends.** Both `search`
+  declarations in the abstract base accept `Query | ComplexQuery`, and the base
+  carries the `_search_with_complex_query` fallback that makes the second half
+  true; eleven of the fourteen backend implementations dispatch to it on their
+  first line. The file and S3 pairs instead narrowed their own signature to
+  `Query`, which kept nothing out — it only meant the body went on to read
+  `query.filters`, an attribute `ComplexQuery` does not have, so a boolean
+  query raised `AttributeError` on exactly those four backends.
+
+- **A JSON file whose top level is not a mapping reads as an empty store.**
+  `JSONFormat.load` already answered `{}` for a missing file, an empty one,
+  whitespace, and content that does not parse; content that *parses* into
+  something else fell through all four and was returned as the record store, so
+  `read`, `all` and `exists` all raised `AttributeError` on it. It now answers
+  `{}` like its neighbours, and logs that it is discarding the file.
+
+- **`AsyncDatabase.stream_read` is declared as what its implementations are.**
+  The abstract method was an `async def` returning `AsyncIterator[Record]` — a
+  coroutine *returning* an iterator, which would be consumed as
+  `async for r in await db.stream_read()`. All seven implementations are async
+  generators and no call site in the workspace awaits it — every one consumes
+  it directly — so the declaration was the thing that was wrong, and it
+  reported every implementation as an incompatible override.
+
+### Removed
+
+- **The `{vector_field}_content_hash` record-field comparison.** Nothing in the
+  library ever wrote that sibling field, so in production it compared `None`
+  against a fresh digest and called every record stale; the only writers were
+  two test fixtures, which is what made a dead branch look covered. The digest
+  a `VectorField` carries in its own metadata is now the only staleness
+  comparison there is.
+
 ## v0.10.0 - 2026-08-26
 
 ### Fixed

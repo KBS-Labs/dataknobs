@@ -134,6 +134,7 @@ nav:
         - packages/data/grounded-sources.md
         - packages/data/vector-timestamps.md
         - packages/data/vector-filter-semantics.md
+        - packages/data/vector-staleness.md
       - Configuration:
         - packages/data/factory-pattern.md
         - packages/data/configuration.md

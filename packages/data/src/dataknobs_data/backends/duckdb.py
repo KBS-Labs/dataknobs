@@ -42,7 +42,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-class AsyncDuckDBDatabase(  # type: ignore[misc]
+class AsyncDuckDBDatabase(
     StructuredConfigConsumer[AsyncDuckDBDatabaseConfig],
     AsyncDatabase,
 ):
@@ -829,7 +829,7 @@ class AsyncDuckDBDatabase(  # type: ignore[misc]
         )
 
 
-class SyncDuckDBDatabase(  # type: ignore[misc]
+class SyncDuckDBDatabase(
     StructuredConfigConsumer[SyncDuckDBDatabaseConfig],
     SyncDatabase,
 ):

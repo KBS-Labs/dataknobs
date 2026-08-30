@@ -15,6 +15,7 @@ from dataknobs_data.database import SyncDatabase, version_conflict_error
 from dataknobs_data.exceptions import DuplicateRecordError
 from dataknobs_data.pooling.s3 import create_boto3_s3_client, is_s3_conditional_conflict
 from dataknobs_data.query import Query, is_storage_key_field
+from dataknobs_data.query_logic import ComplexQuery
 from dataknobs_data.records import Record
 from dataknobs_data.streaming import (
     StreamConfig,
@@ -23,7 +24,7 @@ from dataknobs_data.streaming import (
     run_stream_write,
 )
 
-from ..vector import VectorOperationsMixin
+from ..vector import SyncVectorOperationsMixin
 from ..vector.bulk_embed_mixin import BulkEmbedMixin
 from ..vector.python_vector_search import PythonVectorSearchMixin
 from .config import SyncS3DatabaseConfig
@@ -34,18 +35,22 @@ if TYPE_CHECKING:
     from collections.abc import Iterator
     from typing import ClassVar
 
+    import numpy as np
+
+    from ..vector.types import DistanceMetric, VectorSearchResult
+
 
 logger = logging.getLogger(__name__)
 
 
-class SyncS3Database(  # type: ignore[misc]
+class SyncS3Database(
     StructuredConfigConsumer[SyncS3DatabaseConfig],
     SyncDatabase,
     VectorConfigMixin,
     SQLiteVectorSupport,
     PythonVectorSearchMixin,
     BulkEmbedMixin,
-    VectorOperationsMixin,
+    SyncVectorOperationsMixin,
 ):
     """S3-based database backend with proper connection management.
 
@@ -69,8 +74,13 @@ class SyncS3Database(  # type: ignore[misc]
         """
         cfg = self.config
 
-        # Connection state
-        self.s3_client = None
+        # Connection state. Annotated, because a bare ``= None`` makes the
+        # attribute's type ``None`` to a type checker: every ``self.s3_client
+        # .get_object(...)`` then reads as an attribute error on ``None`` and
+        # the bodies around them are written off as unreachable, so the whole
+        # of this class's S3 access went unchecked. ``Any`` is what
+        # ``create_boto3_s3_client`` returns --- boto3 ships no stubs.
+        self.s3_client: Any = None
         self._connected = False
 
         # Cache for performance
@@ -139,7 +149,7 @@ class SyncS3Database(  # type: ignore[misc]
         """Close the S3 connection."""
         if self.s3_client:
             # S3 client doesn't need explicit closing, but clear cache
-            self._index_cache = {}  # type: ignore[unreachable]
+            self._index_cache = {}
             self._connected = False
             logger.info(f"Closed S3 connection to bucket={self.bucket}")
 
@@ -152,7 +162,7 @@ class SyncS3Database(  # type: ignore[misc]
         if not self._connected or not self.s3_client:
             raise RuntimeError("S3 not connected. Call connect() first.")
 
-    def _ensure_bucket_exists(self):
+    def _ensure_bucket_exists(self) -> None:
         """Ensure the S3 bucket exists, create if necessary."""
         try:
             self.s3_client.head_bucket(Bucket=self.bucket)
@@ -274,7 +284,8 @@ class SyncS3Database(  # type: ignore[misc]
             if e.response["Error"]["Code"] in ("404", "NoSuchKey"):
                 return None
             raise
-        return response.get("ETag")
+        etag = response.get("ETag")
+        return None if etag is None else str(etag)
 
     def update(self, id: str, record: Record, *, expected_version: str | None = None) -> bool:
         """Update an existing record in S3.
@@ -429,11 +440,17 @@ class SyncS3Database(  # type: ignore[misc]
                 return False
             raise
 
-    def search(self, query: Query) -> list[Record]:
+    def search(self, query: Query | ComplexQuery) -> list[Record]:
         """Search for records matching the query.
 
-        Note: S3 doesn't support complex queries, so we need to list and filter.
+        Note: S3 has no server-side query, so this lists and filters. A
+        ``ComplexQuery`` goes to the base class's in-memory fallback, which is
+        the same strategy one step up; the narrowed signature this replaces
+        meant the body read ``query.filters`` on a type that has none.
         """
+        if isinstance(query, ComplexQuery):
+            return self._search_with_complex_query(query)
+
         self._check_connection()
 
         # List all objects with the prefix. Collect (id, record) tuples and
@@ -599,13 +616,13 @@ class SyncS3Database(  # type: ignore[misc]
 
     def vector_search(
         self,
-        query_vector,
+        query_vector: np.ndarray | list[float],
         vector_field: str = "embedding",
         k: int = 10,
-        filter=None,
-        metric=None,
-        **kwargs,
-    ):
+        filter: Query | None = None,
+        metric: DistanceMetric | str | None = None,
+        **kwargs: Any,
+    ) -> list[VectorSearchResult]:
         """Perform vector similarity search using Python calculations.
 
         WARNING: This implementation downloads all records from S3 to perform

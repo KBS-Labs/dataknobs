@@ -16,6 +16,7 @@ from ..exceptions import DuplicateRecordError
 from ..pooling import ConnectionPoolManager
 from ..pooling.s3 import S3PoolConfig, is_s3_conditional_conflict, validate_s3_session
 from ..query import Query, is_storage_key_field
+from ..query_logic import ComplexQuery
 from ..records import Record
 from ..streaming import (
     StreamConfig,
@@ -23,8 +24,8 @@ from ..streaming import (
     async_run_stream_write,
     resolve_conflict_write,
 )
-from ..vector import VectorOperationsMixin
-from ..vector.bulk_embed_mixin import BulkEmbedMixin
+from ..vector import AsyncVectorOperationsMixin
+from ..vector.bulk_embed_mixin import AsyncBulkEmbedMixin
 from ..vector.python_vector_search import PythonVectorSearchMixin
 from .config import AsyncS3DatabaseConfig
 from .sqlite_mixins import SQLiteVectorSupport
@@ -34,21 +35,28 @@ if TYPE_CHECKING:
     from collections.abc import AsyncIterator
     from typing import ClassVar
 
+    import numpy as np
+
+    from ..vector.types import DistanceMetric, VectorSearchResult
+
 
 logger = logging.getLogger(__name__)
 
-# Global pool manager for S3 sessions
-_session_manager = ConnectionPoolManager()
+# Global pool manager for S3 sessions. `Any` is the pool type because that is
+# what `create_aioboto3_session` returns and what `aioboto3.*` resolves to under
+# this package's `ignore_missing_imports` override -- naming `aioboto3.Session`
+# instead would add an import and check exactly as much.
+_session_manager: ConnectionPoolManager[Any] = ConnectionPoolManager()
 
 
-class AsyncS3Database(  # type: ignore[misc]
+class AsyncS3Database(
     StructuredConfigConsumer[AsyncS3DatabaseConfig],
     AsyncDatabase,
     VectorConfigMixin,
     SQLiteVectorSupport,
     PythonVectorSearchMixin,
-    BulkEmbedMixin,
-    VectorOperationsMixin,
+    AsyncBulkEmbedMixin,
+    AsyncVectorOperationsMixin,
 ):
     """Native async S3 database backend with aioboto3 and session pooling.
 
@@ -84,7 +92,10 @@ class AsyncS3Database(  # type: ignore[misc]
         # Lets callers/tests inspect region resolution without reaching
         # into ``_pool_config``.
         self.region = self._pool_config.region_name
-        self._session = None
+        # Same `Any` as the pool manager above: without the annotation this
+        # infers as `None`, and every `self._session.client(...)` in the file
+        # is then an attribute error on `None`.
+        self._session: Any = None
         self._connected = False
 
         # Initialize vector support
@@ -223,13 +234,19 @@ class AsyncS3Database(  # type: ignore[misc]
                 body = await response["Body"].read()
                 obj = json.loads(body)
 
-                record = self._s3_object_to_record(obj)
-                # Use centralized method to prepare record
-                record = self._prepare_record_from_storage(record, id)
+                # `_prepare_record_from_storage` is typed for the read paths
+                # that hand it whatever the store returned, so it answers
+                # `Record | None`. Here the input is `_s3_object_to_record`,
+                # which never returns `None` -- narrowed rather than asserted,
+                # so a future change to either one is a type error and not a
+                # crash on the next line.
+                prepared = self._prepare_record_from_storage(self._s3_object_to_record(obj), id)
+                if prepared is None:
+                    return None
                 # Ensure ID is in metadata
-                record.metadata["id"] = id
+                prepared.metadata["id"] = id
 
-                return record
+                return prepared
         except Exception:
             return None
 
@@ -256,7 +273,10 @@ class AsyncS3Database(  # type: ignore[misc]
             if e.response["Error"]["Code"] in ("404", "NoSuchKey"):
                 return None
             raise
-        return response.get("ETag")
+        # aioboto3 is untyped, so the response is `Any`; the ETag is a string
+        # or absent. Same coercion the memory backend applies to its version.
+        etag = response.get("ETag")
+        return None if etag is None else str(etag)
 
     async def update(self, id: str, record: Record, *, expected_version: str | None = None) -> bool:
         """Update an existing record in S3.
@@ -432,8 +452,17 @@ class AsyncS3Database(  # type: ignore[misc]
 
         return id
 
-    async def search(self, query: Query) -> list[Record]:
-        """Search for records matching the query."""
+    async def search(self, query: Query | ComplexQuery) -> list[Record]:
+        """Search for records matching the query.
+
+        A ``ComplexQuery`` goes to the base class's in-memory fallback. The
+        narrowed signature this replaces did not keep one out -- the abstract
+        base accepts the union -- it only meant the body read ``query.filters``
+        on a type that has none.
+        """
+        if isinstance(query, ComplexQuery):
+            return await self._search_with_complex_query(query)
+
         self._check_connection()
 
         # S3 doesn't support complex queries, so we need to list and filter.
@@ -668,13 +697,13 @@ class AsyncS3Database(  # type: ignore[misc]
 
     async def vector_search(
         self,
-        query_vector,
+        query_vector: np.ndarray | list[float],
         vector_field: str = "embedding",
         k: int = 10,
-        filter=None,
-        metric=None,
-        **kwargs,
-    ):
+        filter: Query | None = None,
+        metric: DistanceMetric | str | None = None,
+        **kwargs: Any,
+    ) -> list[VectorSearchResult]:
         """Perform vector similarity search using Python calculations.
 
         WARNING: This implementation downloads all records from S3 to perform

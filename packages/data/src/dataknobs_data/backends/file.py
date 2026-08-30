@@ -7,6 +7,7 @@ import contextlib
 import csv
 import gzip
 import json
+import logging
 import os
 import tempfile
 import threading
@@ -28,6 +29,7 @@ from ..database import (
 )
 from ..exceptions import DuplicateRecordError
 from ..query import Query, is_storage_key_field
+from ..query_logic import ComplexQuery
 from ..records import Record
 from ..streaming import (
     AsyncStreamingMixin,
@@ -37,8 +39,8 @@ from ..streaming import (
     resolve_conflict_write,
     run_stream_write,
 )
-from ..vector import VectorOperationsMixin
-from ..vector.bulk_embed_mixin import BulkEmbedMixin
+from ..vector import AsyncVectorOperationsMixin, SyncVectorOperationsMixin
+from ..vector.bulk_embed_mixin import AsyncBulkEmbedMixin, BulkEmbedMixin
 from ..vector.python_vector_search import PythonVectorSearchMixin
 from .config import FileDatabaseConfig
 from .sqlite_mixins import SQLiteVectorSupport
@@ -47,6 +49,13 @@ from .vector_config_mixin import VectorConfigMixin
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Iterator
     from typing import ClassVar
+
+    import numpy as np
+
+    from ..vector.types import DistanceMetric, VectorSearchResult
+
+
+logger = logging.getLogger(__name__)
 
 
 class FileFormat:
@@ -58,9 +67,92 @@ class FileFormat:
         raise NotImplementedError
 
     @staticmethod
-    def save(filepath: str, data: dict[str, dict[str, Any]]):
+    def save(filepath: str, data: dict[str, dict[str, Any]]) -> None:
         """Save data to file."""
         raise NotImplementedError
+
+
+# --------------------------------------------------------------------------- #
+# Flat-format field fidelity
+#
+# ``JSONFormat`` writes the serialized record whole, so nothing about a field is
+# lost. A flat table has one cell per field and nowhere to put a field's ``type``
+# or ``metadata``, so ``CSVFormat`` and ``ParquetFormat`` each reduced a field to
+# its bare ``value`` --- separately, in their own copy of the loop.
+#
+# The loss was silent and it mattered. A ``VectorField`` went in and a plain
+# ``Field`` holding a list of numbers came back, carrying no ``content_hash`` ---
+# and a vector with no digest is one ``VectorTextSynchronizer`` cannot judge, so
+# it treats it as current. On these formats an edited record was therefore never
+# re-embedded, and the sweep reported success. Measured, same corpus and edit:
+# ``json`` updated 1, ``csv`` updated 0.
+#
+# The rule below is the reduction, in one place. A field whose whole content is
+# a scalar still reduces to a bare cell --- that is what makes a CSV readable in
+# a spreadsheet, which is the reason to ask for one. A field carrying more is
+# written as its full JSON dict, which ``Record.from_dict`` reconstructs exactly.
+# --------------------------------------------------------------------------- #
+
+#: Field types a bare cell reconstructs on its own. A vector does not appear
+#: here even when its metadata is empty: the type is what makes it a
+#: ``VectorField`` rather than a list of numbers.
+_SCALAR_CELL_TYPES = frozenset({None, "string", "text", "integer", "float", "boolean"})
+
+
+def flatten_field_for_row(field_data: Any) -> Any:
+    """Reduce one serialized field to a single cell, losslessly.
+
+    Args:
+        field_data: One entry of a serialized record's ``fields`` map: either a
+            full field dict (``{"name", "value", "type", "metadata", ...}``) or
+            an already-bare value.
+
+    Returns:
+        The bare value where that carries the whole field, and a JSON string of
+        the entire field dict where it does not.
+    """
+    if not isinstance(field_data, dict) or "value" not in field_data:
+        # Already bare. A structured value still needs encoding to sit in a cell.
+        if isinstance(field_data, (dict, list)):
+            return json.dumps(field_data)
+        return field_data
+
+    value = field_data.get("value")
+    reducible = (
+        (isinstance(value, (str, int, float, bool)) or value is None)
+        and field_data.get("type") in _SCALAR_CELL_TYPES
+        and not field_data.get("metadata")
+    )
+
+    if reducible:
+        return value
+    return json.dumps(field_data)
+
+
+def restore_field_from_cell(value: Any) -> Any:
+    """Undo :func:`flatten_field_for_row` for one cell.
+
+    A cell holding a JSON object or array is parsed back; anything else is the
+    value itself. ``Record.from_dict`` then rebuilds a full field dict into the
+    right ``Field`` subclass and leaves a bare value as a plain ``Field``.
+
+    A string that merely *looks* like JSON is parsed too. That is long-standing
+    behaviour of this format rather than something introduced here --- a flat
+    file has no type column, so the shape of the text is the only signal there
+    is.
+    """
+    if not isinstance(value, str):
+        return value
+    text = value.strip()
+    if not (
+        (text.startswith("{") and text.endswith("}"))
+        or (text.startswith("[") and text.endswith("]"))
+    ):
+        return value
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        return value
 
 
 class JSONFormat(FileFormat):
@@ -98,12 +190,24 @@ class JSONFormat(FileFormat):
                         return {}
                     data = json.loads(content)
 
+            if not isinstance(data, dict):
+                # Well-formed JSON that is not a mapping of records. The two
+                # branches above already answer "unusable content" with an
+                # empty store; without this the value reaches callers as one
+                # and they fail on `.items()` instead -- `read`, `all` and
+                # `exists` all raise `AttributeError` on a JSON list today.
+                logger.warning(
+                    "Ignoring %s: its top level is %s, not a mapping of records",
+                    filepath,
+                    type(data).__name__,
+                )
+                return {}
             return data
         except json.JSONDecodeError:
             return {}
 
     @staticmethod
-    def save(filepath: str, data: dict[str, dict[str, Any]]):
+    def save(filepath: str, data: dict[str, dict[str, Any]]) -> None:
         """Save data to JSON file."""
         if filepath.endswith(".gz"):
             with gzip.open(filepath, "wt", encoding="utf-8") as f:
@@ -134,22 +238,9 @@ class CSVFormat(FileFormat):
                     for row in reader:
                         if "__id__" in row:
                             record_id = row.pop("__id__")
-                            # Try to deserialize JSON strings back to objects
-                            fields = {}
-                            for key, value in row.items():
-                                if value and isinstance(value, str):
-                                    # Try to parse as JSON if it looks like JSON
-                                    if (value.startswith("{") and value.endswith("}")) or (
-                                        value.startswith("[") and value.endswith("]")
-                                    ):
-                                        try:
-                                            fields[key] = json.loads(value)
-                                        except json.JSONDecodeError:
-                                            fields[key] = value
-                                    else:
-                                        fields[key] = value
-                                else:
-                                    fields[key] = value
+                            fields = {
+                                key: restore_field_from_cell(value) for key, value in row.items()
+                            }
                             data[record_id] = {"fields": fields}
             else:
                 with open(filepath, encoding="utf-8") as f:
@@ -157,22 +248,9 @@ class CSVFormat(FileFormat):
                     for row in reader:
                         if "__id__" in row:
                             record_id = row.pop("__id__")
-                            # Try to deserialize JSON strings back to objects
-                            fields = {}
-                            for key, value in row.items():
-                                if value and isinstance(value, str):
-                                    # Try to parse as JSON if it looks like JSON
-                                    if (value.startswith("{") and value.endswith("}")) or (
-                                        value.startswith("[") and value.endswith("]")
-                                    ):
-                                        try:
-                                            fields[key] = json.loads(value)
-                                        except json.JSONDecodeError:
-                                            fields[key] = value
-                                    else:
-                                        fields[key] = value
-                                else:
-                                    fields[key] = value
+                            fields = {
+                                key: restore_field_from_cell(value) for key, value in row.items()
+                            }
                             data[record_id] = {"fields": fields}
         except (OSError, csv.Error):
             return {}
@@ -180,7 +258,7 @@ class CSVFormat(FileFormat):
         return data
 
     @staticmethod
-    def save(filepath: str, data: dict[str, dict[str, Any]]):
+    def save(filepath: str, data: dict[str, dict[str, Any]]) -> None:
         """Save data to CSV file."""
         if not data:
             if filepath.endswith(".gz"):
@@ -199,17 +277,7 @@ class CSVFormat(FileFormat):
                 # Flatten field values for CSV format
                 flat_fields = {}
                 for field_name, field_data in record_data["fields"].items():
-                    # Handle both full field dicts and simple values
-                    if isinstance(field_data, dict) and "value" in field_data:
-                        value = field_data["value"]
-                    else:
-                        value = field_data
-
-                    # Serialize complex types as JSON strings
-                    if isinstance(value, (dict, list)):
-                        flat_fields[field_name] = json.dumps(value)
-                    else:
-                        flat_fields[field_name] = value
+                    flat_fields[field_name] = flatten_field_for_row(field_data)
                     all_fields.add(field_name)
                 flattened_data[record_id] = flat_fields
 
@@ -255,8 +323,8 @@ class ParquetFormat(FileFormat):
                 else:
                     record_id = str(idx)
 
-                # Remove NaN values
-                fields = {k: v for k, v in row_dict.items() if pd.notna(v)}
+                # Remove NaN values, then undo the reduction `save` applied.
+                fields = {k: restore_field_from_cell(v) for k, v in row_dict.items() if pd.notna(v)}
                 data[record_id] = {"fields": fields}
 
             return data
@@ -264,7 +332,7 @@ class ParquetFormat(FileFormat):
             raise ImportError("Parquet support requires pandas and pyarrow packages") from e
 
     @staticmethod
-    def save(filepath: str, data: dict[str, dict[str, Any]]):
+    def save(filepath: str, data: dict[str, dict[str, Any]]) -> None:
         """Save data to Parquet file."""
         try:
             import pandas as pd
@@ -277,13 +345,12 @@ class ParquetFormat(FileFormat):
                 for record_id, record_data in data.items():
                     row = {"__id__": record_id}
                     if "fields" in record_data:
-                        # Flatten field values for Parquet format
+                        # The same reduction CSV applies, from the same helper.
+                        # It also makes every cell a scalar or a string, which
+                        # is what lets `load` below use `pd.notna` -- that call
+                        # raises on a list-valued cell.
                         for field_name, field_data in record_data["fields"].items():
-                            # Handle both full field dicts and simple values
-                            if isinstance(field_data, dict) and "value" in field_data:
-                                row[field_name] = field_data["value"]
-                            else:
-                                row[field_name] = field_data
+                            row[field_name] = flatten_field_for_row(field_data)
                     rows.append(row)
 
                 df = pd.DataFrame(rows)
@@ -427,15 +494,15 @@ def _save_file_data(
         raise
 
 
-class AsyncFileDatabase(  # type: ignore[misc]
+class AsyncFileDatabase(
     StructuredConfigConsumer[FileDatabaseConfig],
     AsyncDatabase,
     AsyncStreamingMixin,
     VectorConfigMixin,
     SQLiteVectorSupport,
     PythonVectorSearchMixin,
-    BulkEmbedMixin,
-    VectorOperationsMixin,
+    AsyncBulkEmbedMixin,
+    AsyncVectorOperationsMixin,
 ):
     """Async file-based database implementation.
 
@@ -509,7 +576,7 @@ class AsyncFileDatabase(  # type: ignore[misc]
             _load_file_data, self.handler, self.filepath, self._file_lock
         )
 
-    async def _save_data(self, data: dict[str, Record]):
+    async def _save_data(self, data: dict[str, Record]) -> None:
         """Save all data to file atomically.
 
         Offloads the ``mkstemp`` + ``FileLock`` acquire + write + atomic
@@ -619,8 +686,18 @@ class AsyncFileDatabase(  # type: ignore[misc]
             await self._save_data(data)
             return id
 
-    async def search(self, query: Query) -> list[Record]:
-        """Search for records matching the query."""
+    async def search(self, query: Query | ComplexQuery) -> list[Record]:
+        """Search for records matching the query.
+
+        A ``ComplexQuery`` goes to the base class's in-memory fallback, as it
+        does on every other backend. Narrowing this signature to ``Query`` did
+        not stop one arriving -- both `search` declarations in the abstract
+        base accept the union -- it only meant the body read ``query.filters``
+        on a type that has no such attribute.
+        """
+        if isinstance(query, ComplexQuery):
+            return await self._search_with_complex_query(query)
+
         async with self._lock:
             data = await self._load_data()
             results = []
@@ -705,13 +782,19 @@ class AsyncFileDatabase(  # type: ignore[misc]
             return ids
 
     async def read_batch(self, ids: list[str]) -> list[Record | None]:
-        """Read multiple records efficiently."""
+        """Read multiple records efficiently.
+
+        Routed through ``_prepare_record_from_storage`` as :meth:`read` is. The
+        bare copy this replaced happened to return the id anyway, because this
+        backend serializes it into the payload -- so the guarantee held by
+        accident of the storage format rather than by construction.
+        """
         async with self._lock:
             data = await self._load_data()
             results = []
             for record_id in ids:
                 record = data.get(record_id)
-                results.append(record.copy(deep=True) if record else None)
+                results.append(self._prepare_record_from_storage(record, record_id))
             return results
 
     async def delete_batch(self, ids: list[str], *, _tx: Any = None) -> list[bool]:
@@ -766,13 +849,13 @@ class AsyncFileDatabase(  # type: ignore[misc]
 
     async def vector_search(
         self,
-        query_vector,
+        query_vector: np.ndarray | list[float],
         vector_field: str = "embedding",
         k: int = 10,
-        filter=None,
-        metric=None,
-        **kwargs,
-    ):
+        filter: Query | None = None,
+        metric: DistanceMetric | str | None = None,
+        **kwargs: Any,
+    ) -> list[VectorSearchResult]:
         """Perform vector similarity search using Python calculations.
 
         Note: This implementation reads all records from disk to perform
@@ -803,7 +886,7 @@ class AsyncFileDatabase(  # type: ignore[misc]
                 )
 
 
-class SyncFileDatabase(  # type: ignore[misc]
+class SyncFileDatabase(
     StructuredConfigConsumer[FileDatabaseConfig],
     SyncDatabase,
     StreamingMixin,
@@ -811,7 +894,7 @@ class SyncFileDatabase(  # type: ignore[misc]
     SQLiteVectorSupport,
     PythonVectorSearchMixin,
     BulkEmbedMixin,
-    VectorOperationsMixin,
+    SyncVectorOperationsMixin,
 ):
     """Synchronous file-based database implementation.
 
@@ -881,7 +964,7 @@ class SyncFileDatabase(  # type: ignore[misc]
         """
         return _load_file_data(self.handler, self.filepath, self._file_lock)
 
-    def _save_data(self, data: dict[str, Record]):
+    def _save_data(self, data: dict[str, Record]) -> None:
         """Save all data to file atomically.
 
         Delegates to the shared synchronous :func:`_save_file_data` — the
@@ -983,8 +1066,14 @@ class SyncFileDatabase(  # type: ignore[misc]
             self._save_data(data)
             return id
 
-    def search(self, query: Query) -> list[Record]:
-        """Search for records matching the query."""
+    def search(self, query: Query | ComplexQuery) -> list[Record]:
+        """Search for records matching the query.
+
+        Same dispatch as the async twin above, for the same reason.
+        """
+        if isinstance(query, ComplexQuery):
+            return self._search_with_complex_query(query)
+
         with self._lock:
             data = self._load_data()
             results = []
@@ -1071,13 +1160,17 @@ class SyncFileDatabase(  # type: ignore[misc]
             return ids
 
     def read_batch(self, ids: list[str]) -> list[Record | None]:
-        """Read multiple records efficiently."""
+        """Read multiple records efficiently.
+
+        Same restoration as :meth:`read`; see the async twin for why the bare
+        copy it replaces was passing by accident.
+        """
         with self._lock:
             data = self._load_data()
             results = []
             for record_id in ids:
                 record = data.get(record_id)
-                results.append(record.copy(deep=True) if record else None)
+                results.append(self._prepare_record_from_storage(record, record_id))
             return results
 
     def delete_batch(self, ids: list[str]) -> list[bool]:
@@ -1147,13 +1240,13 @@ class SyncFileDatabase(  # type: ignore[misc]
 
     def vector_search(
         self,
-        query_vector,
+        query_vector: np.ndarray | list[float],
         vector_field: str = "embedding",
         k: int = 10,
-        filter=None,
-        metric=None,
-        **kwargs,
-    ):
+        filter: Query | None = None,
+        metric: DistanceMetric | str | None = None,
+        **kwargs: Any,
+    ) -> list[VectorSearchResult]:
         """Perform vector similarity search using Python calculations.
 
         Note: This implementation reads all records from disk to perform

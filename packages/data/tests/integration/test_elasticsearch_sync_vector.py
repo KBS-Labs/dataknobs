@@ -43,7 +43,7 @@ def test_sync_vector_search(elasticsearch_test_index):
 
         # Search for similar vectors
         results = db.vector_search(
-            query_vector=vec1, field_name="embedding", k=3, metric=DistanceMetric.COSINE
+            query_vector=vec1, vector_field="embedding", k=3, metric=DistanceMetric.COSINE
         )
 
         assert len(results) > 0

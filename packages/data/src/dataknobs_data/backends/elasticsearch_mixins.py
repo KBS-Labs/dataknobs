@@ -126,7 +126,7 @@ class ElasticsearchIndexManager:
 class ElasticsearchVectorSupport:
     """Mixin for vector field detection and tracking."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         """Initialize vector support tracking."""
         self.vector_fields: dict[str, int] = {}  # field_name -> dimensions
         self.vector_enabled = False
@@ -216,6 +216,35 @@ class ElasticsearchErrorHandler:
             raise error
 
 
+def vector_tracking_metadata(field: Any, dimensions: int) -> dict[str, Any]:
+    """What a vector field needs stored beside its value to come back whole.
+
+    Elasticsearch keeps only the vector's numbers in ``data``; everything else
+    about the field is carried in the record's ``metadata`` under
+    ``vector_fields``. Both backends built this dict inline and identically,
+    and both omitted ``metadata`` --- so the content digest and the assembly
+    description that decide staleness were written by the synchronizer and
+    silently dropped on the way to the index. A field that comes back without
+    a digest is treated as current, so on Elasticsearch a corpus could never
+    be re-embedded after the first sweep.
+
+    Args:
+        field: The vector field being stored.
+        dimensions: Declared dimensions for this field on the index.
+
+    Returns:
+        The tracking entry for ``record.metadata["vector_fields"][name]``.
+    """
+    return {
+        "type": "vector",
+        "dimensions": dimensions,
+        "source_field": field.source_field,
+        "model": getattr(field, "model_name", None),
+        "model_version": getattr(field, "model_version", None),
+        "metadata": dict(getattr(field, "metadata", None) or {}),
+    }
+
+
 class ElasticsearchRecordSerializer:
     """Mixin for record serialization with vector field handling."""
 
@@ -243,7 +272,7 @@ class ElasticsearchRecordSerializer:
                 data_dict[field_name] = field_obj.value
 
         # Create the document
-        doc = {
+        doc: dict[str, Any] = {
             "data": data_dict,
             "metadata": record.metadata,
         }
@@ -279,7 +308,7 @@ class ElasticsearchRecordSerializer:
         metadata = source.get("metadata", {})
 
         # Create fields
-        fields = {}
+        fields: dict[str, Field] = {}
         for field_name, value in data.items():
             # Check if this is a vector field based on metadata
             field_meta = metadata.get("vector_fields", {}).get(field_name, {})
@@ -299,6 +328,11 @@ class ElasticsearchRecordSerializer:
                     source_field=field_meta.get("source_field"),
                     model_name=field_meta.get("model"),
                     model_version=field_meta.get("model_version"),
+                    # Restoring this is what lets a staleness digest survive
+                    # the round trip. `VectorField.__init__` re-derives
+                    # dimensions, source_field and model over the top, so
+                    # handing back the whole stored dict is safe.
+                    metadata=field_meta.get("metadata"),
                 )
             else:
                 # Regular field - infer type from value

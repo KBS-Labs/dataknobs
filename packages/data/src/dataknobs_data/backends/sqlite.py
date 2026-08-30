@@ -18,7 +18,7 @@ from ..query import Query
 from ..query_logic import ComplexQuery
 from ..records import Record
 from ..vector.bulk_embed_mixin import BulkEmbedMixin
-from ..vector.mixins import VectorOperationsMixin
+from ..vector.mixins import SyncVectorOperationsMixin
 from ..vector.python_vector_search import PythonVectorSearchMixin
 from .config import SyncSQLiteDatabaseConfig
 from .sql_base import (
@@ -41,13 +41,13 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-class SyncSQLiteDatabase(  # type: ignore[misc]
+class SyncSQLiteDatabase(
     StructuredConfigConsumer[SyncSQLiteDatabaseConfig],
     SyncDatabase,
     VectorConfigMixin,
     PythonVectorSearchMixin,  # Provides python_vector_search_sync
-    BulkEmbedMixin,  # Must come before VectorOperationsMixin to override bulk_embed_and_store
-    VectorOperationsMixin,
+    BulkEmbedMixin,  # Must come before SyncVectorOperationsMixin to override bulk_embed_and_store
+    SyncVectorOperationsMixin,
     SQLiteVectorSupport,
     SQLRecordSerializer,  # Use the standard SQL serializer
 ):
@@ -679,7 +679,7 @@ class SyncSQLiteDatabase(  # type: ignore[misc]
     def vector_search(
         self,
         query_vector: np.ndarray,
-        field_name: str = "embedding",
+        vector_field: str = "embedding",
         k: int = 10,
         filter: Query | None = None,
         metric: DistanceMetric | None = None,
@@ -691,7 +691,7 @@ class SyncSQLiteDatabase(  # type: ignore[misc]
 
         Args:
             query_vector: Query vector
-            field_name: Name of the vector field to search
+            vector_field: Name of the vector field to search
             k: Number of results to return
             filter: Optional filter conditions
             metric: Distance metric (uses instance default if not specified)
@@ -705,7 +705,7 @@ class SyncSQLiteDatabase(  # type: ignore[misc]
         # Delegate to the mixin's implementation
         return self.python_vector_search_sync(
             query_vector=query_vector,
-            vector_field=field_name,
+            vector_field=vector_field,
             k=k,
             filter=filter,
             metric=metric,

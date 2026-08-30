@@ -17,7 +17,7 @@ import threading
 import uuid
 from abc import ABC, abstractmethod
 from contextlib import asynccontextmanager
-from typing import TYPE_CHECKING, Any, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar, Self
 
 from dataknobs_common import (
     Capability,
@@ -36,6 +36,7 @@ from .transactions import VALID_TRANSACTION_POLICIES, BufferedTransaction
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Callable, Container, Iterable, Iterator
+    from types import TracebackType
 
     from .query_logic import ComplexQuery
     from .records import Record
@@ -87,6 +88,20 @@ _shadowed_id_state = {"warned": False}
 _shadowed_id_lock = threading.Lock()
 
 
+def _shadowed_id_warned() -> bool:
+    """Whether the one-time signal has already fired.
+
+    A function rather than the bare subscript every caller would otherwise
+    write. A type checker narrows ``_shadowed_id_state["warned"]`` to
+    ``Literal[False]`` after the first check and does not widen it again
+    across a lock acquisition --- so the double-checked re-read below read as
+    unreachable, and every statement under it went unchecked. A call is not
+    narrowable, which is the property a value another thread may change
+    between two reads needs.
+    """
+    return _shadowed_id_state["warned"]
+
+
 def _reset_shadowed_id_warning_state() -> None:
     """Reset the one-time shadowed-storage-key signal latch.
 
@@ -112,13 +127,13 @@ def _maybe_warn_shadowed_id(record: Any) -> None:
     check-then-set transition is guarded by :data:`_shadowed_id_lock`
     (double-checked so the already-latched steady state stays lock-free).
     """
-    if _shadowed_id_state["warned"]:
+    if _shadowed_id_warned():
         return
     has_field = getattr(record, "has_field", None)
     if has_field is None or not has_field(RESERVED_KEY_FIELD):
         return
     with _shadowed_id_lock:
-        if _shadowed_id_state["warned"]:
+        if _shadowed_id_warned():
             return
         _shadowed_id_state["warned"] = True
     level = (
@@ -195,7 +210,7 @@ def _wrap_write(name: str, fn: Callable[..., Any]) -> Callable[..., Any]:
 
         @functools.wraps(fn)
         async def async_wrapper(self: Any, *args: Any, **kwargs: Any) -> Any:
-            if not _shadowed_id_state["warned"]:
+            if not _shadowed_id_warned():
                 for record in _iter_write_records(name, args, kwargs):
                     _maybe_warn_shadowed_id(record)
             return await fn(self, *args, **kwargs)
@@ -205,7 +220,7 @@ def _wrap_write(name: str, fn: Callable[..., Any]) -> Callable[..., Any]:
 
     @functools.wraps(fn)
     def wrapper(self: Any, *args: Any, **kwargs: Any) -> Any:
-        if not _shadowed_id_state["warned"]:
+        if not _shadowed_id_warned():
             for record in _iter_write_records(name, args, kwargs):
                 _maybe_warn_shadowed_id(record)
         return fn(self, *args, **kwargs)
@@ -476,7 +491,13 @@ class RecordStorageMixin:
         Returns:
             Record with storage_id set, or None if record was None
         """
-        if record:
+        # `is not None`, not truthiness: `Record.__len__` counts fields, so a
+        # record with none is falsy, and `if record` answered "nothing was
+        # stored" for one that was. Every read path routes through here, so
+        # that made an empty record unreadable on every backend at once ---
+        # `exists()` said `True` and `read()` said `None`, which a caller can
+        # only read as "create it again".
+        if record is not None:
             record_copy = record.copy(deep=True)
             # Ensure storage_id is set
             if not record_copy.has_storage_id():
@@ -584,6 +605,10 @@ class AsyncDatabase(RecordStorageMixin, CapabilityMixin, ABC):
             db = AsyncDatabase(config={"path": "data.db"}, schema=schema)
             ```
         """
+        # Set before either branch, so the ``config`` property below never
+        # raises for an object that ran a constructor.
+        self._legacy_config: dict[str, Any] = {}
+
         if isinstance(self, StructuredConfigConsumer):
             # Unified construction (backends migrated to
             # StructuredConfigConsumer): the mixin has already set the
@@ -607,9 +632,38 @@ class AsyncDatabase(RecordStorageMixin, CapabilityMixin, ABC):
             # Remove schema from config so backends don't see it
             config = {k: v for k, v in config.items() if k != "schema"}
 
-        self.config = config
+        self._legacy_config = config
         self.schema = schema or DatabaseSchema()
         self._initialize()
+
+    @property
+    def config(self) -> Any:
+        """The construction parameters, as the constructing path left them.
+
+        A read-only property rather than the plain attribute it used to be.
+        :class:`StructuredConfigConsumer` --- which every backend in this tree
+        now also inherits --- declares ``config`` a read-only property of its
+        own, and a writeable attribute on one base against a property on the
+        other is a combination no class can have. So a type checker held every
+        migrated backend impossible and stopped checking from the ``isinstance``
+        branch onward: the branch all of them run. Two properties can coexist,
+        and the branch is checked again.
+
+        This completes what the migration to typed configuration set out to do
+        --- "replacing dict-as-``self.config``" --- rather than reversing it.
+        For a migrated backend the mixin's property wins the MRO and this one
+        is never consulted; it answers only for a backend constructed the
+        legacy way, which in this tree means one written by a consumer.
+
+        ``Any``, and not ``dict[str, Any]``, because the return type here is a
+        claim about what ``AsyncDatabase.config`` holds across every subclass
+        --- and for all fourteen in this tree it holds a typed
+        ``DatabaseConfig``, not a dict. Declaring the dict would type-check a
+        consumer's ``db.config["path"]`` and then fail at runtime on all of
+        them. The narrow type belongs on :attr:`_legacy_config`, which is the
+        thing that really is one.
+        """
+        return self._legacy_config
 
     @staticmethod
     def _extract_schema_from_config(schema_config: Any) -> DatabaseSchema | None:
@@ -646,7 +700,7 @@ class AsyncDatabase(RecordStorageMixin, CapabilityMixin, ABC):
         """
         self.schema.add_field(field_schema)
 
-    def with_schema(self, **field_definitions) -> AsyncDatabase:
+    def with_schema(self, **field_definitions: Any) -> AsyncDatabase:
         """Set schema using field definitions.
 
         Returns self for chaining.
@@ -1158,22 +1212,37 @@ class AsyncDatabase(RecordStorageMixin, CapabilityMixin, ABC):
         """Disconnect from the database (alias for close)."""
         await self.close()
 
-    async def __aenter__(self):
+    async def __aenter__(self) -> Self:
         """Async context manager entry."""
         await self.connect()
         return self
 
-    async def __aexit__(self, exc_type, exc_val, exc_tb):
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: TracebackType | None,
+    ) -> None:
         """Async context manager exit."""
         await self.close()
 
     @abstractmethod
-    async def stream_read(
+    def stream_read(
         self, query: Query | None = None, config: StreamConfig | None = None
     ) -> AsyncIterator[Record]:
         """Stream records from database.
 
         Yields records one at a time, fetching in batches internally.
+
+        Declared without ``async``, matching the sync sibling below. Every
+        implementation is an ``async def`` **generator**, whose type is
+        ``AsyncIterator[Record]``; an ``async def`` here instead declares a
+        *coroutine returning* one, which is a different thing and one no caller
+        wants --- consuming it would read ``async for r in await db.stream_read()``,
+        and no call site in the workspace reads that: every one of them consumes
+        it directly, as ``async for r in db.stream_read(...)``. So the
+        declaration was wrong rather than the seven implementations, and it
+        reported each of them as an incompatible override.
 
         Args:
             query: Optional query to filter records
@@ -1343,6 +1412,10 @@ class SyncDatabase(RecordStorageMixin, CapabilityMixin, ABC):
             db = SyncDatabase(config={"path": "data.db"}, schema=schema)
             ```
         """
+        # Set before either branch, so the ``config`` property below never
+        # raises for an object that ran a constructor.
+        self._legacy_config: dict[str, Any] = {}
+
         if isinstance(self, StructuredConfigConsumer):
             # Unified construction (backends migrated to
             # StructuredConfigConsumer): the mixin has already set the
@@ -1366,9 +1439,38 @@ class SyncDatabase(RecordStorageMixin, CapabilityMixin, ABC):
             # Remove schema from config so backends don't see it
             config = {k: v for k, v in config.items() if k != "schema"}
 
-        self.config = config
+        self._legacy_config = config
         self.schema = schema or DatabaseSchema()
         self._initialize()
+
+    @property
+    def config(self) -> Any:
+        """The construction parameters, as the constructing path left them.
+
+        A read-only property rather than the plain attribute it used to be.
+        :class:`StructuredConfigConsumer` --- which every backend in this tree
+        now also inherits --- declares ``config`` a read-only property of its
+        own, and a writeable attribute on one base against a property on the
+        other is a combination no class can have. So a type checker held every
+        migrated backend impossible and stopped checking from the ``isinstance``
+        branch onward: the branch all of them run. Two properties can coexist,
+        and the branch is checked again.
+
+        This completes what the migration to typed configuration set out to do
+        --- "replacing dict-as-``self.config``" --- rather than reversing it.
+        For a migrated backend the mixin's property wins the MRO and this one
+        is never consulted; it answers only for a backend constructed the
+        legacy way, which in this tree means one written by a consumer.
+
+        ``Any``, and not ``dict[str, Any]``, because the return type here is a
+        claim about what ``SyncDatabase.config`` holds across every subclass
+        --- and for all fourteen in this tree it holds a typed
+        ``DatabaseConfig``, not a dict. Declaring the dict would type-check a
+        consumer's ``db.config["path"]`` and then fail at runtime on all of
+        them. The narrow type belongs on :attr:`_legacy_config`, which is the
+        thing that really is one.
+        """
+        return self._legacy_config
 
     def _initialize(self) -> None:
         """Initialize the database backend. Override in subclasses if needed."""
@@ -1390,7 +1492,7 @@ class SyncDatabase(RecordStorageMixin, CapabilityMixin, ABC):
         """
         self.schema.add_field(field_schema)
 
-    def with_schema(self, **field_definitions) -> SyncDatabase:
+    def with_schema(self, **field_definitions: Any) -> SyncDatabase:
         """Set schema using field definitions.
 
         Returns self for chaining.
@@ -1813,12 +1915,17 @@ class SyncDatabase(RecordStorageMixin, CapabilityMixin, ABC):
         """Disconnect from the database (alias for close)."""
         self.close()
 
-    def __enter__(self):
+    def __enter__(self) -> Self:
         """Context manager entry."""
         self.connect()
         return self
 
-    def __exit__(self, exc_type, exc_val, exc_tb):
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: TracebackType | None,
+    ) -> None:
         """Context manager exit."""
         self.close()
 

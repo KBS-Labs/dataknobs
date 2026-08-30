@@ -1,38 +1,47 @@
 {
-  "timestamp": "2026-08-28T17:56:44Z",
+  "timestamp": "2026-08-30T03:02:36Z",
   "overall_status": "PASS",
   "run_mode": "pr",
   "environment": "host",
-  "packages": "bots",
+  "packages": "bots common config data fsm legacy llm structures utils xization",
   "tested_packages": [
-    "bots"
+    "bots",
+    "common",
+    "config",
+    "data",
+    "fsm",
+    "legacy",
+    "llm",
+    "structures",
+    "utils",
+    "xization"
   ],
   "coverage_percent": null,
   "package_hashes": {
     "bots": "182512cb58493c876775b6c3687c2ecd32d95de548042d23684b7acc861026c9",
-    "common": "a76386e6b04b51e12cb14ab614cf9e48ef07077459c7641b1c404ffd03f36034",
+    "common": "1f2dfaa0cc2644ce0e12bb0b1b701da7a5eefdce911ba4bf0676588bd299a88b",
     "config": "30895cfb558b0a798c73cfa923da7e75ec76b3c3eacea9bc68861e28fe146347",
-    "data": "f6009c5bf72b0741d0a9bd2e4b9cf18dc7ce1765f207bfc1ebb349ef104f4c30",
+    "data": "3607c5599b24c44a376befdc61a74dd237075a0d32b6c2d403248f23ca97d63c",
     "fsm": "4652a128da264d046eb29e05a6b4e955e5df5cba2991a2e1076176a39013ded6",
     "legacy": "f626b387e3b4dc7f7de016a1e6f67f1a6df33b685b55c1226762d4abb338d217",
-    "llm": "97db79a6047f38382975d2cb4560c88af0994d82e1234e7f7bb4c8adfaf93018",
+    "llm": "1055092b589e8d7eee590ed5bede571c480e91b329a6d6e8f983af039fbb154b",
     "structures": "73fcd3ad3753d60eab53a1c4ecc7b6665862e9325920eb5daebdca42c1673af3",
     "utils": "bc4890e2fe6ea8859a63e9a105fdb125cc07d6df881b978560d4e8edc9c104a7",
     "xization": "cfcd8ffc9a197bc7765e37dfa5ca33397d7c518dbfa2e8e49f9dc7b3c2ea84a2",
     "_algorithm_version": 3
   },
   "workspace_hashes": {
-    "toolchain": "5e08837aacf98c40de40f090d87973f00a7da9b1f2a6dff870ea01d3df063476",
-    "workspace_tests": "0bafc5c435c0b7a6685a8000fa7c3ec71fd8da859d1c1c3176129db9a76f7e68",
-    "docs": "ff1a81cb7034969a6f75c4b3a2a3b4ca94f86a1e1079d4651a1456a51976dde5"
+    "toolchain": "eb96eff3f8ef90513249126b997a10b02357581b03d780f7ea90c17fdbe085cc",
+    "workspace_tests": "a0a4d260b94c1ae599e04900ce83a22dc33d32fcbb737f23c909cbd9de50a4d7",
+    "docs": "250265caded9df651ae9c5882fd9dc6e82721035243fb92f226af490b16fcc36"
   },
-  "total_seconds": 153,
+  "total_seconds": 342,
   "checks": {
     "workflow_lint": {
       "status": "pass",
       "exit_code": 0,
       "tool": "lint-workflows.sh",
-      "duration_seconds": 0
+      "duration_seconds": 1
     },
     "shell_lint": {
       "status": "pass",
@@ -51,7 +60,7 @@
       "exit_code": 0,
       "skipped": false,
       "tool": "validate.sh",
-      "duration_seconds": 28
+      "duration_seconds": 80
     },
     "documentation": {
       "status": "pass",
@@ -78,14 +87,14 @@
       "status": "pass",
       "exit_code": 0,
       "skipped": false,
-      "duration_seconds": 81,
-      "workspace_guards_seconds": 59
+      "duration_seconds": 122,
+      "workspace_guards_seconds": 60
     },
     "integration_tests": {
       "status": "pass",
       "exit_code": 0,
       "skipped": false,
-      "duration_seconds": 10
+      "duration_seconds": 104
     }
   }
 }

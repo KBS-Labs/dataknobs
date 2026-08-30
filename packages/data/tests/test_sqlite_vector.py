@@ -90,7 +90,7 @@ class TestSQLiteVectorSupport:
         query_vec = vectors[0] + rng.standard_normal(8) * 0.01  # Slightly perturbed first vector
         query_vec = query_vec / np.linalg.norm(query_vec)
 
-        results = db.vector_search(query_vector=query_vec, field_name="embedding", k=3)
+        results = db.vector_search(query_vector=query_vec, vector_field="embedding", k=3)
 
         assert len(results) <= 3
         assert results[0].score > 0.9  # Should be very similar to first vector
@@ -130,7 +130,7 @@ class TestSQLiteVectorSupport:
         filter_query = Query(filters=[Filter(field="category", operator=Operator.EQ, value="A")])
 
         results = db.vector_search(
-            query_vector=query_vec, field_name="embedding", k=10, filter=filter_query
+            query_vector=query_vec, vector_field="embedding", k=10, filter=filter_query
         )
 
         # Should only return category A records
@@ -235,7 +235,7 @@ class TestSQLiteVectorSupport:
 
         # Search should only return the record with a vector
         query_vec = rng.standard_normal(4, dtype=np.float32)
-        results = db.vector_search(query_vector=query_vec, field_name="embedding", k=10)
+        results = db.vector_search(query_vector=query_vec, vector_field="embedding", k=10)
 
         # Should not include the record without a vector field
         result_ids = [r.record.id for r in results]

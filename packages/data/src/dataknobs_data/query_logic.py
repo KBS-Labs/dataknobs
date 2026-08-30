@@ -7,12 +7,12 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import TYPE_CHECKING, Any
 
-from .query import Filter, Operator, VectorQuery, is_storage_key_field
+from .query import Filter, Operator, VectorQuery, coerce_operator, is_storage_key_field
 
 if TYPE_CHECKING:
     import numpy as np
 
-    from .query import Query
+    from .query import Query, SortSpec
     from .vector.types import DistanceMetric
 
 
@@ -54,6 +54,7 @@ class FilterCondition(Condition):
         """Check if a record matches this filter."""
         from .records import Record
 
+        value: Any
         if isinstance(record, Record):
             # The reserved storage-key field routes to the record's storage key,
             # never a ``data`` field named ``id`` (which it would shadow). This
@@ -148,18 +149,22 @@ def condition_from_dict(data: dict[str, Any]) -> Condition:
 class QueryBuilder:
     """Builder for complex queries with boolean logic."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         """Initialize empty query builder."""
-        self.root_condition = None
-        self.sort_specs = []
-        self.limit_value = None
-        self.offset_value = None
-        self.fields = None
-        self.vector_query = None
+        self.root_condition: Condition | None = None
+        self.sort_specs: list[SortSpec] = []
+        self.limit_value: int | None = None
+        self.offset_value: int | None = None
+        self.fields: list[str] | None = None
+        self.vector_query: VectorQuery | None = None
 
     def where(self, field: str, operator: str | Operator, value: Any = None) -> QueryBuilder:
         """Add a filter condition (defaults to AND with existing conditions)."""
-        op = Operator(operator) if isinstance(operator, str) else operator
+        # The same reading of a spelling that ``Query.filter`` gets. A second
+        # construction here was a third copy of the vocabulary: ``Operator(...)``
+        # accepts only an exact member value, so ``where("x", "==", 1)`` raised
+        # where the identical ``filter("x", "==", 1)`` succeeded.
+        op = coerce_operator(operator)
         filter_cond = FilterCondition(Filter(field, op, value))
 
         if self.root_condition is None:
@@ -413,7 +418,7 @@ class ComplexQuery:
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary representation."""
-        result = {}
+        result: dict[str, Any] = {}
 
         if self.condition:
             result["condition"] = self.condition.to_dict()

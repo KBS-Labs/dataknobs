@@ -182,7 +182,18 @@ class TestVectorTextSynchronizer:
 
     @pytest.mark.asyncio
     async def test_has_current_vector(self, memory_database, simple_embedding_fn):
-        """Test vector currency checking with real data."""
+        """Test vector currency checking with real data.
+
+        This covers the plain-value branch: a bare list where a `VectorField`
+        would be, whose model version lives in a sibling `{field}_metadata`
+        record field. The fixtures used to also write a sibling
+        `{field}_content_hash`, which made a dead comparison look exercised --
+        nothing in the library ever wrote that field, so in production it
+        compared `None` against a fresh digest and called every record stale.
+        The branch is gone and so are the keys; the digest a `VectorField`
+        carries in its own metadata is the one comparison there is, and
+        `test_vector_sync_staleness.py` covers it.
+        """
         sync = VectorTextSynchronizer(
             database=memory_database,
             embedding_fn=simple_embedding_fn,
@@ -196,16 +207,13 @@ class TestVectorTextSynchronizer:
         # No vector present
         assert sync._has_current_vector(record, "embedding") is False
 
-        # Add vector manually with proper content hash
+        # Add vector manually
         embedding = simple_embedding_fn("test content")
-        content_hash = sync._compute_content_hash("test content")
-        # Create a new record with the embedding and content hash
         updated_record = Record(
             id=record_id,
             data={
                 "content": "test content",
                 "embedding": embedding.tolist(),
-                "embedding_content_hash": content_hash,
             },
         )
         await memory_database.update(record_id, updated_record)
@@ -231,7 +239,6 @@ class TestVectorTextSynchronizer:
                     "content": "test content",
                     "embedding": embedding.tolist(),
                     "embedding_metadata": metadata,
-                    "embedding_content_hash": content_hash,  # content_hash already computed above
                 },
             ),
         )

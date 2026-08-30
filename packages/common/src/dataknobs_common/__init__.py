@@ -62,6 +62,7 @@ from dataknobs_common.callbacks import (
     PriorityOrdering,
     RecordingCallbackRegistry,
     StageOrdering,
+    is_async_callable,
 )
 from dataknobs_common.async_iter import (
     aiter_sync_in_thread,
@@ -352,6 +353,7 @@ __all__ = [
     "PriorityOrdering",
     "RecordingCallbackRegistry",
     "StageOrdering",
+    "is_async_callable",
     # Async iteration
     "aiter_sync_in_thread",
     # Async->sync bridge

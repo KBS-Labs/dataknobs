@@ -5,6 +5,19 @@ for working with vector embeddings and semantic search.
 """
 
 from ..fields import VectorField
+from .content import (
+    CONTENT_HASH_KEY,
+    DEFAULT_FIELD_SEPARATOR,
+    FIELD_SEPARATOR_KEY,
+    SOURCE_FIELDS_KEY,
+    assemble_source_text,
+    compute_content_hash,
+    content_hash_metadata,
+    current_content_hash,
+    describes_its_assembly,
+    recompute_content_hash,
+    stored_assembly,
+)
 from .exceptions import (
     VectorBackendError,
     VectorDimensionError,
@@ -15,7 +28,13 @@ from .exceptions import (
     VectorValidationError,
 )
 from .migration import IncrementalVectorizer, VectorMigration
-from .mixins import VectorCapable, VectorOperationsMixin, VectorSyncMixin
+from .mixins import (
+    AsyncVectorOperationsMixin,
+    SyncVectorOperationsMixin,
+    VectorCapable,
+    VectorOperationsMixin,
+    VectorSyncMixin,
+)
 from .operations import (
     batch_compute_distances,
     chunk_vectors,
@@ -58,6 +77,8 @@ __all__ = [
     "reciprocal_rank_fusion",
     "weighted_score_fusion",
     # Mixins
+    "AsyncVectorOperationsMixin",
+    "SyncVectorOperationsMixin",
     "VectorCapable",
     "VectorOperationsMixin",
     "VectorSyncMixin",
@@ -72,6 +93,18 @@ __all__ = [
     # Synchronization
     "VectorTextSynchronizer",
     "ChangeTracker",
+    # Staleness — how source fields become the text a vector was built from
+    "CONTENT_HASH_KEY",
+    "DEFAULT_FIELD_SEPARATOR",
+    "FIELD_SEPARATOR_KEY",
+    "SOURCE_FIELDS_KEY",
+    "assemble_source_text",
+    "compute_content_hash",
+    "content_hash_metadata",
+    "current_content_hash",
+    "describes_its_assembly",
+    "recompute_content_hash",
+    "stored_assembly",
     # Migration
     "VectorMigration",
     "IncrementalVectorizer",

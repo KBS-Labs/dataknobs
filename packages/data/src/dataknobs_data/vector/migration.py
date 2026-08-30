@@ -10,17 +10,21 @@ from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
+from dataknobs_common.callbacks import is_async_callable
+
 from ..fields import FieldType
 from ..query import Query
 from ..records import Record
 from ..schema import FieldSchema
 from .sync import SyncConfig, VectorTextSynchronizer
+from .content import assemble_source_text
+from .embedding_fn import call_embedding_fn
 from .types import VectorMetadata
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Coroutine
+    from collections.abc import Awaitable, Callable, Coroutine
 
-    from ..database import Database
+    from ..database import AsyncDatabase
 
 logger = logging.getLogger(__name__)
 
@@ -127,10 +131,11 @@ class VectorMigration:
 
     def __init__(
         self,
-        source_db: Database,
-        target_db: Database | None = None,
+        source_db: AsyncDatabase,
+        target_db: AsyncDatabase | None = None,
         embedding_fn: Callable[[str], np.ndarray]
-        | Callable[[str], Coroutine[Any, Any, np.ndarray]] = None,
+        | Callable[[str], Coroutine[Any, Any, np.ndarray]]
+        | None = None,
         text_fields: list[str] | None = None,
         vector_field: str = "embedding",
         field_separator: str = " ",
@@ -210,21 +215,13 @@ class VectorMigration:
 
                 for record in batch:
                     try:
-                        # Concatenate text fields
-                        text_parts = []
-                        for field in self.text_fields:
-                            value = record.get_value(field)
-                            if value:
-                                text_parts.append(str(value))
+                        text = assemble_source_text(record, self.text_fields, self.field_separator)
 
-                        if text_parts:
-                            text = self.field_separator.join(text_parts)
+                        if text and self.embedding_fn is not None:
+                            embedding_fn = self.embedding_fn
 
                             # Generate embedding
-                            if asyncio.iscoroutinefunction(self.embedding_fn):
-                                embedding = await self.embedding_fn(text)
-                            else:
-                                embedding = await asyncio.to_thread(self.embedding_fn, text)
+                            embedding = await call_embedding_fn(embedding_fn, text)
 
                             # Create VectorField
                             from ..fields import VectorField
@@ -291,8 +288,9 @@ class VectorMigration:
         Returns:
             Migration status
         """
-        if not self.embedding_fn:
+        if self.embedding_fn is None:
             raise ValueError("Embedding function required for adding vectors")
+        embedding_fn = self.embedding_fn
 
         status = MigrationStatus(start_time=datetime.now(UTC))
 
@@ -323,11 +321,8 @@ class VectorMigration:
             async def embedding_wrapper(text: str) -> np.ndarray:
                 nonlocal last_embedding_exception
                 try:
-                    if asyncio.iscoroutinefunction(self.embedding_fn):
-                        result = await self.embedding_fn(text)
-                    else:
-                        result = await asyncio.to_thread(self.embedding_fn, text)
-                    return result
+                    result = await call_embedding_fn(embedding_fn, text)
+                    return np.asarray(result)
                 except Exception as e:
                     last_embedding_exception = e
                     raise
@@ -349,8 +344,11 @@ class VectorMigration:
                 tasks = []
                 for record in batch:
                     # Store original data for rollback
-                    if self.config.enable_rollback:
-                        # Store original field values for rollback
+                    if self.config.enable_rollback and record.id is not None:
+                        # Store original field values for rollback. A record
+                        # with no id cannot be written back, so recording one
+                        # would only produce a rollback that silently does
+                        # nothing.
                         self._rollback_data[record.id] = {
                             field_name: record.get_value(field_name)
                             for field_name in record.fields.keys()
@@ -436,11 +434,12 @@ class VectorMigration:
 
     async def _get_embedding(self, text: str) -> np.ndarray | None:
         """Get embedding for text."""
+        if self.embedding_fn is None:
+            logger.error("No embedding function configured")
+            return None
+        embedding_fn = self.embedding_fn
         try:
-            if asyncio.iscoroutinefunction(self.embedding_fn):
-                result = await self.embedding_fn(text)
-            else:
-                result = await asyncio.to_thread(self.embedding_fn, text)
+            result = await call_embedding_fn(embedding_fn, text)
 
             if isinstance(result, np.ndarray):
                 return result
@@ -468,9 +467,17 @@ class VectorMigration:
             # Sync vectors
             success, updated_fields = await synchronizer.sync_record(record, force=True)
 
-            if success and updated_fields:
+            if success and updated_fields and record.id is not None:
                 # Update record in target database
-                await self.target_db.update(record.id, record)
+                if not await self.target_db.update(record.id, record):
+                    status.failed_records += 1
+                    status.errors.append(
+                        {
+                            "record_id": record.id,
+                            "error": "no record stored under that id in the target database",
+                        }
+                    )
+                    return False
                 status.migrated_records += 1
                 return True
             else:
@@ -505,8 +512,20 @@ class VectorMigration:
 
         for record in records:
             try:
+                if record.id is None:
+                    continue
                 # Get updated record
                 migrated = await self.target_db.read(record.id)
+                if migrated is None:
+                    # Nothing arrived in the target, which is a verification
+                    # failure rather than something to read fields off of.
+                    status.errors.append(
+                        {
+                            "record_id": record.id,
+                            "error": "record is absent from the target database",
+                        }
+                    )
+                    continue
 
                 # Check vector fields
                 all_present = True
@@ -628,8 +647,8 @@ class VectorMigration:
     @classmethod
     def from_config(
         cls,
-        source_db: Database,
-        target_db: Database | None,
+        source_db: AsyncDatabase,
+        target_db: AsyncDatabase | None,
         embedding_fn: Callable[[str], np.ndarray]
         | Callable[[str], Coroutine[Any, Any, np.ndarray]],
         config: MigrationConfig,
@@ -700,7 +719,7 @@ class IncrementalVectorizer:
 
     def __init__(
         self,
-        database: Database,
+        database: AsyncDatabase,
         embedding_fn: Callable[[str], np.ndarray]
         | Callable[[str], Coroutine[Any, Any, np.ndarray]],
         text_fields: list[str] | str | None = None,  # Support multiple fields
@@ -711,11 +730,13 @@ class IncrementalVectorizer:
         max_workers: int = 4,
         model_name: str | None = None,
         model_version: str | None = None,
+        idle_interval: float = 60.0,
+        error_retry_interval: float = 10.0,
     ):
         """Initialize the incremental vectorizer with simplified parameters.
 
         Args:
-            database: Database to vectorize
+            database: The database to vectorize
             embedding_fn: Function to generate embeddings
             text_fields: Text field names to concatenate for embeddings
             vector_field: Name of the vector field to create
@@ -725,6 +746,11 @@ class IncrementalVectorizer:
             max_workers: Maximum concurrent workers
             model_name: Name of the embedding model
             model_version: Version of the embedding model
+            idle_interval: Seconds to wait before re-querying once the source
+                has nothing left to vectorize. Shutdown interrupts it, so a
+                long interval costs nothing at stop time.
+            error_retry_interval: Seconds to wait after a failed load before
+                retrying. Also interrupted by shutdown.
         """
         self.database = database
         self.embedding_fn = embedding_fn
@@ -745,15 +771,34 @@ class IncrementalVectorizer:
         self.max_workers = max_workers
         self.model_name = model_name
         self.model_version = model_version
+        self.idle_interval = idle_interval
+        self.error_retry_interval = error_retry_interval
 
         # Processing state
         self._queue: asyncio.Queue[Record] = asyncio.Queue()
         self._processing_task: asyncio.Task | None = None
         self._workers: list[asyncio.Task] = []
         self._shutdown_event = asyncio.Event()
+        # Set by the loader when a query finds nothing left to vectorize, and
+        # cleared when one finds something. The queue cannot answer this: an
+        # empty queue means the loader has not enqueued *yet* just as readily
+        # as it means there is nothing left to enqueue, and those are the two
+        # states `wait_for_completion` has to tell apart.
+        self._source_drained = asyncio.Event()
+        # Pulsed by a worker each time a record leaves its hands, so a waiter
+        # counting records can wait for the next one instead of polling for
+        # it. Cleared and re-awaited by the waiter, which is why it is an
+        # Event rather than a counter.
+        self._record_finished = asyncio.Event()
+        # Ids a worker completed without writing a vector. Such a record still
+        # matches the loader's `NOT_EXISTS(vector_field)` query, so without
+        # this "the query returned nothing" and "there is nothing left to do"
+        # are different questions --- and only the second one ends a drain.
+        self._declined: set[str] = set()
         self._stats = {
             "processed": 0,
             "failed": 0,
+            "skipped": 0,
             "queued": 0,
         }
         self._last_checkpoint: str | None = None
@@ -778,52 +823,70 @@ class IncrementalVectorizer:
         logger.info(f"Worker {worker_id} started")
 
         while not self._shutdown_event.is_set():
+            # Get record from queue with timeout
             try:
-                # Get record from queue with timeout
-                try:
-                    record = await asyncio.wait_for(self._queue.get(), timeout=1.0)
-                except TimeoutError:
-                    continue
+                record = await asyncio.wait_for(self._queue.get(), timeout=1.0)
+            except TimeoutError:
+                continue
 
-                # Process record
-                await self._process_record(record)
-                self._stats["processed"] += 1
-
+            try:
+                if await self._process_record(record):
+                    self._stats["processed"] += 1
+                else:
+                    # Completed without writing a vector. Remembered by id so
+                    # the loader stops re-fetching it: the record still matches
+                    # its `NOT_EXISTS(vector_field)` query and will until
+                    # something changes about the record itself.
+                    self._stats["skipped"] += 1
+                    if record.id is not None:
+                        self._declined.add(record.id)
             except Exception as e:
                 logger.error(f"Worker {worker_id} error: {e}")
                 self._stats["failed"] += 1
+            finally:
+                # Exactly one `task_done` per `get`, whatever the outcome. This
+                # is what makes the record's whole lifetime -- queued, taken,
+                # embedded, written -- visible to a waiter, where `qsize()`
+                # went back to zero the moment it was taken.
+                self._queue.task_done()
+                # ...and the pulse a *counting* waiter needs, which `join()`
+                # cannot give it: `join()` answers "all of it", not "one more".
+                self._record_finished.set()
 
         logger.info(f"Worker {worker_id} stopped")
 
-    async def _process_record(self, record: Record) -> None:
-        """Process a single record to add vectors."""
+    async def _process_record(self, record: Record) -> bool:
+        """Vectorize one record, reporting whether a vector was written.
+
+        ``False`` is not a failure --- it is the pipeline declining a record
+        it completed. There are four ways that happens: the assembled text is
+        empty, the record already carries a vector, the embedding function
+        returned ``None``, or nothing is stored under the record's id (or it
+        has none). What they share is that the record still matches the
+        loader's ``NOT_EXISTS(vector_field)`` query afterwards, so a caller
+        that cannot tell this outcome from a write re-fetches it forever.
+        """
         try:
-            # Get source text from multiple fields
-            text_parts = []
-            for field in self.text_fields:
-                value = record.get_value(field)
-                if value:
-                    text_parts.append(str(value))
+            # The same assembly the synchronizer and the tracker use. This was
+            # a third independent copy of the loop, identical in every respect
+            # including the rule that drops falsy values -- which is precisely
+            # the kind of agreement that holds until it quietly does not.
+            source_text = assemble_source_text(record, self.text_fields, self.field_separator)
 
-            if not text_parts:
-                return
-
-            source_text = self.field_separator.join(text_parts)
+            if not source_text:
+                return False
 
             # Check if vector already exists
             vector_data = record.get_value(self.vector_field)
             if vector_data is not None:
                 if vector_data and isinstance(vector_data, (list, np.ndarray)):
-                    return
+                    return False
 
             # Generate embedding
-            if asyncio.iscoroutinefunction(self.embedding_fn):
-                embedding = await self.embedding_fn(str(source_text))
-            else:
-                embedding = await asyncio.to_thread(self.embedding_fn, str(source_text))
+            embedding = await call_embedding_fn(self.embedding_fn, str(source_text))
 
             if embedding is None:
-                return
+                return False
 
             # Update record
             update_data = {
@@ -836,7 +899,12 @@ class IncrementalVectorizer:
             if self.model_name:
                 metadata = VectorMetadata(
                     dimensions=len(embedding),
-                    source_field=self.field_separator.join(self.text_fields),
+                    # A list of field names, comma-joined -- which is how the
+                    # only reader of this key parses it. Joining them on
+                    # `field_separator` mixed a content separator into a field
+                    # list, so on any non-default separator the names came back
+                    # as one unsplittable string.
+                    source_field=",".join(self.text_fields),
                     model_name=self.model_name,
                     model_version=self.model_version,
                     updated_at=datetime.now(UTC).isoformat(),
@@ -846,7 +914,15 @@ class IncrementalVectorizer:
             # Update the record with the new vector data
             for key, value in update_data.items():
                 record.set_value(key, value)
-            await self.database.update(record.id, record)
+            if record.id is None:
+                logger.warning("Vectorized a record with no id; nothing was persisted")
+                return False
+            if not await self.database.update(record.id, record):
+                logger.warning(
+                    "Vectorized record %s but no record is stored under that id", record.id
+                )
+                return False
+            return True
 
         except Exception as e:
             logger.error(f"Failed to process record {record.id}: {e}")
@@ -859,6 +935,10 @@ class IncrementalVectorizer:
             return
 
         self._shutdown_event.clear()
+        # A restart begins with the source unproven, exactly as a first start
+        # does; leaving a previous run's verdict standing would let the first
+        # `wait_for_completion` of the new run return on it.
+        self._source_drained.clear()
 
         # Start workers
         self._workers = [asyncio.create_task(self._worker(i)) for i in range(self.max_workers)]
@@ -868,31 +948,198 @@ class IncrementalVectorizer:
 
         logger.info(f"Started incremental vectorization with {self.max_workers} workers")
 
+    async def _load_pending_records(self) -> list[Record]:
+        """Fetch a batch of records that still need a vector.
+
+        `AsyncDatabase` has no `filter`, and neither does any backend --- this
+        was a mongo-shaped dict passed to a method that does not exist, so the
+        call raised `AttributeError` into the caller's `except Exception` and
+        the queue was never loaded. Nothing said so, because the class
+        annotated its database with a class name that does not exist either.
+
+        The "at least one non-empty text field" half of the original filter is
+        not expressed here: it is not a conjunction, and `_process_record`
+        already returns without embedding when the assembled text is empty. So
+        the query fetches a few records that are then skipped, rather than
+        excluding them up front.
+        """
+        from ..query import Filter, Operator, Query
+
+        return await self.database.search(
+            Query(
+                filters=[Filter(self.vector_field, Operator.NOT_EXISTS)],
+                limit_value=self.batch_size,
+            )
+        )
+
     async def _load_queue(self) -> None:
-        """Load records into processing queue."""
+        """Load records into processing queue.
+
+        The loop waits for the batch it queued to be *finished* before fetching
+        again. Without that it re-queries the instant it has enqueued, gets
+        back the records the workers have not written yet, and enqueues them a
+        second time --- a busy loop that grows the queue faster than the
+        workers can empty it and never terminates.
+
+        Waiting for the queue to merely *empty* is not enough either: a record
+        taken but not yet written is gone from the queue and still absent from
+        the database, so the next query returns it and it is embedded twice.
+        `Queue.join()` is the distinction, and it is why the workers call
+        `task_done()`.
+
+        None of this was reachable while the fetch itself was broken: the loop
+        raised into its own `except` on every pass and enqueued nothing.
+        """
         while not self._shutdown_event.is_set():
             try:
-                # Get records without vectors that have at least one text field
-                filter_query = {
-                    self.vector_field: {"$exists": False},
-                    "$or": [{field: {"$exists": True, "$ne": ""}} for field in self.text_fields],
-                }
+                if not await self._until_shutdown(self._queue.join()):
+                    break
 
-                records = await self.database.filter(filter_query, limit=self.batch_size)
+                records = await self._load_pending_records()
+                fresh = self._forget_what_the_pipeline_declined(records)
 
-                if not records:
-                    # No more records to process
-                    await asyncio.sleep(60)  # Check again in a minute
+                if not fresh:
+                    # Nothing left to vectorize. Say so -- it is the half of
+                    # "done" the queue cannot express -- then idle until there
+                    # might be, or until shutdown, whichever comes first.
+                    self._source_drained.set()
+                    await self._until_shutdown(asyncio.sleep(self.idle_interval))
                     continue
 
-                # Add to queue
-                for record in records:
+                self._source_drained.clear()
+                for record in fresh:
                     await self._queue.put(record)
                     self._stats["queued"] += 1
 
             except Exception as e:
                 logger.error(f"Failed to load queue: {e}")
-                await asyncio.sleep(10)
+                await self._until_shutdown(asyncio.sleep(self.error_retry_interval))
+
+    def _forget_what_the_pipeline_declined(self, records: list[Record]) -> list[Record]:
+        """The records of this page a worker has not already declined.
+
+        `_load_pending_records` deliberately over-fetches --- its docstring
+        says so --- and the pipeline completes some of what it fetches
+        *without writing a vector*. Such a record still matches
+        `NOT_EXISTS(vector_field)`, so the loader fetched it again on the next
+        pass and every pass after that: `_source_drained` was never set, and
+        every caller racing it --- `run_batch()` and `wait_for_completion()`
+        on their `timeout=None` defaults --- waited forever on a corpus
+        containing one record with no text.
+
+        The workers report the outcome directly rather than having the loader
+        re-derive it from the query, because the worker is the only thing that
+        knows *why*. A record with no id cannot be remembered by one, so it is
+        dropped here instead; `_process_record` refuses to persist it anyway.
+
+        Bounded by the number of records the pipeline declines rather than by
+        the size of the corpus: a record that is written stops matching.
+        """
+        fresh = []
+        for record in records:
+            if record.id is None:
+                logger.warning("Skipping a record with no id; it cannot be persisted")
+                continue
+            if record.id not in self._declined:
+                fresh.append(record)
+        return fresh
+
+    async def _until_shutdown(self, *awaitables: Any, timeout: float | None = None) -> bool:
+        """Await the first of ``awaitables``, abandoning them all on shutdown.
+
+        Every wait in this class is a race between the things being waited for
+        and the instruction to stop. Polling a flag instead makes the shutdown
+        latency the poll interval and the code an `ASYNC110` busy-wait; racing
+        makes the latency zero and lets each caller see which won.
+
+        It takes a *set* of awaitables because "done" has more than one form:
+        a batch is finished when the source drains, and equally when the
+        caller's record budget is spent. Each caller names the conditions that
+        end its own wait; the shutdown and the timeout are added to every race
+        here, so no caller can forget either.
+
+        Args:
+            awaitables: The work, delay, join or condition to wait for. Every
+                one is cancelled as soon as the race is decided, so each must
+                be safe to abandon.
+            timeout: Seconds to wait before giving up on all of them, or
+                ``None`` to wait as long as it takes.
+
+        Returns:
+            ``True`` if one of ``awaitables`` finished first, ``False`` on
+            shutdown or on the timeout.
+
+        Raises:
+            Whatever an awaitable raised. A raise lands in ``done`` exactly as
+            a completion does, so counting it as "the work finished" would
+            report success for a wait that failed --- and the cleanup below
+            gathers with ``return_exceptions=True``, which would retrieve and
+            discard the exception without even a "never retrieved" warning.
+            None of the conditions this class currently races can raise; the
+            method is a general racer, and this is the reading of ``done``
+            that stays right when one can.
+        """
+        work = [asyncio.ensure_future(awaitable) for awaitable in awaitables]
+        shutdown = asyncio.ensure_future(self._shutdown_event.wait())
+        try:
+            done, _ = await asyncio.wait(
+                {*work, shutdown}, timeout=timeout, return_when=asyncio.FIRST_COMPLETED
+            )
+            finished = [task for task in work if task in done]
+            for task in finished:
+                error = None if task.cancelled() else task.exception()
+                if error is not None:
+                    raise error
+            return bool(finished)
+        finally:
+            for task in (*work, shutdown):
+                task.cancel()
+            await asyncio.gather(*work, shutdown, return_exceptions=True)
+
+    async def _until_idle(self) -> None:
+        """Return once there is nothing queued and nothing left to queue.
+
+        Those are the two halves of "done", and the queue can express only
+        one: ``join()`` says every record put on it has been taken *and*
+        finished, and ``_source_drained`` says the loader's last query found
+        nothing. Without the second, a wait entered immediately after
+        ``start()`` returns at once --- the loader is a task that has not run
+        yet, and the queue it is about to fill is empty.
+        """
+        while True:
+            await self._queue.join()
+            if self._source_drained.is_set():
+                return
+            # The loader has more to enqueue. Wait for its verdict rather than
+            # re-checking on a timer.
+            await self._source_drained.wait()
+
+    def _attempted(self) -> int:
+        """Records this vectorizer has finished with, successfully or not.
+
+        Attempted, not vectorized: a worker bumps ``failed`` rather than
+        ``processed`` when a record raises, so a budget counting only
+        successes is one a corpus that cannot be embedded never meets.
+        """
+        return self._stats["processed"] + self._stats["failed"] + self._stats["skipped"]
+
+    async def _until_counted(self, target: int) -> None:
+        """Return once the attempted count reaches ``target``.
+
+        ``target`` is an absolute count rather than a quantity, because
+        ``_stats`` is the vectorizer's lifetime tally and is never reset ---
+        so a caller wanting "``n`` more from here" passes
+        ``self._attempted() + n`` and gets a budget measured from its own
+        starting point rather than from the instance's.
+        """
+        while self._attempted() < target:
+            # Cleared before the re-check, so a worker finishing in between
+            # leaves the event set and the wait below returns at once rather
+            # than missing the pulse.
+            self._record_finished.clear()
+            if self._attempted() >= target:
+                return
+            await self._record_finished.wait()
 
     async def stop(self, timeout: float = 30.0) -> None:
         """Stop incremental vectorization.
@@ -928,7 +1175,10 @@ class IncrementalVectorizer:
 
     async def run(
         self,
-        progress_callback: Callable[[int, int, list], None] | None = None,
+        # The body has always awaited an async callback; the annotation said it
+        # would not, which is the kind of disagreement only a type checker with
+        # something to narrow ever reports.
+        progress_callback: Callable[[int, int, list], Awaitable[None] | None] | None = None,
         max_workers: int | None = None,
     ) -> dict[str, Any]:
         """Run the complete vectorization.
@@ -978,7 +1228,11 @@ class IncrementalVectorizer:
                     failed += 1
 
                 if progress_callback:
-                    if asyncio.iscoroutinefunction(progress_callback):
+                    # Same classification question as the embedding function,
+                    # so the same predicate answers it -- a callable object
+                    # with an async ``__call__`` is the natural shape for a
+                    # progress reporter that accumulates.
+                    if is_async_callable(progress_callback):
                         await progress_callback(processed, total, batch)
                     else:
                         progress_callback(processed, total, batch)
@@ -1036,16 +1290,31 @@ class IncrementalVectorizer:
             "is_running": bool(self._processing_task and not self._processing_task.done()),
         }
 
-    async def wait_for_completion(self, check_interval: float = 5.0) -> None:
-        """Wait for all queued records to be processed.
+    async def wait_for_completion(self, timeout: float | None = None) -> bool:
+        """Block until there is nothing left to vectorize.
+
+        "Nothing left" is the two conditions :meth:`_until_idle` waits for,
+        and the queue can express only one of them --- `qsize()` drops to zero
+        the moment a worker *takes* a record, which is before it has embedded
+        or written it, and an empty queue means "not started yet" as readily
+        as it means "finished". Measured on a corpus of twelve pending
+        records: the implementation that read `qsize()` returned with zero of
+        them vectorized.
 
         Args:
-            check_interval: Seconds between queue checks
-        """
-        while self._queue.qsize() > 0:
-            await asyncio.sleep(check_interval)
+            timeout: Seconds to wait, or ``None`` to wait indefinitely. The
+                previous signature took a poll interval and had no timeout at
+                all, so a stalled worker hung the caller forever.
 
-        logger.info("All queued records processed")
+        Returns:
+            ``True`` if everything is vectorized; ``False`` on timeout or if
+            :meth:`stop` was called while waiting. A waiter is never left
+            behind by a shutdown.
+        """
+        completed = await self._until_shutdown(self._until_idle(), timeout=timeout)
+        if completed:
+            logger.info("All queued records processed")
+        return completed
 
     async def run_with_checkpoint(self, resume_from: str | None = None) -> VectorizationResult:
         """Run the complete vectorization with checkpoint support.
@@ -1062,41 +1331,80 @@ class IncrementalVectorizer:
         return VectorizationResult(
             processed=self._stats["processed"],
             failed=self._stats["failed"],
+            skipped=self._stats["skipped"],
             checkpoint=self._last_checkpoint,
         )
 
-    async def run_batch(self, limit: int | None = None) -> VectorizationResult:
-        """Process a limited number of records.
+    async def run_batch(
+        self, limit: int | None = None, timeout: float | None = None
+    ) -> VectorizationResult:
+        """Process the pending records, or at most ``limit`` of them.
+
+        The wait ends on whichever comes first: the source draining, the
+        record budget being spent, a :meth:`stop` from elsewhere, or
+        ``timeout``. The vectorizer is left stopped on every one of those
+        paths, including an exception.
+
+        This used to poll ``self._queue.empty()`` for a break that could never
+        be taken --- the other half of the condition was
+        ``self._processing_task.done()``, and that task is the loader, whose
+        loop idles rather than returning when the source drains and exits only
+        on the shutdown this method sets *after* the loop. So ``run_batch()``
+        with no argument never returned (``None or float("inf")``), nor did
+        ``run_batch(0)`` (the same, through ``or``), nor ``run_batch(n)``
+        whenever fewer than ``n`` records succeeded.
 
         Args:
-            limit: Maximum number of records to process
+            limit: Maximum number of records to *attempt* on this call, or
+                ``None`` for all of them. A record that raises counts against
+                the budget; a budget of successes could not be met by a corpus
+                that fails. The budget is measured from this call rather than
+                from the vectorizer's lifetime totals, so successive batches
+                over one corpus each do a batch's worth of work.
+            timeout: Seconds to wait before giving up, or ``None`` to wait as
+                long as it takes. It bounds the shutdown too --- returning
+                after the full graceful-stop budget would break the promise
+                the timeout made.
 
         Returns:
-            Vectorization result with statistics
+            The work *this call* did, not the vectorizer's running totals.
         """
-        # Temporarily modify batch size if limit provided
         original_batch_size = self.batch_size
-        if limit:
+        already_attempted = self._attempted()
+        processed_before = self._stats["processed"]
+        failed_before = self._stats["failed"]
+        skipped_before = self._stats["skipped"]
+        # `is not None`, not truthiness: `limit=0` is a request for no work,
+        # and `if limit` read it as "no limit given".
+        if limit is not None and limit > 0:
             self.batch_size = min(self.batch_size, limit)
 
         try:
             await self.start()
 
-            # Wait for limited processing
-            while self._stats["processed"] < (limit or float("inf")):
-                if self._queue.empty() and self._processing_task.done():
-                    break
-                await asyncio.sleep(0.1)
-
-            await self.stop()
-
-            return VectorizationResult(
-                processed=self._stats["processed"],
-                failed=self._stats["failed"],
-                checkpoint=self._last_checkpoint,
-            )
+            done_when = [self._until_idle()]
+            if limit is not None:
+                done_when.append(self._until_counted(already_attempted + limit))
+            await self._until_shutdown(*done_when, timeout=timeout)
         finally:
+            # Restored before the stop rather than after it: `stop()` gathers
+            # the workers without `return_exceptions`, so it can raise --- and
+            # a raise here would both replace the body's exception and leave
+            # the instance clamped to this call's `limit` for good.
             self.batch_size = original_batch_size
+            if timeout is None:
+                await self.stop()
+            else:
+                await self.stop(timeout=timeout)
+
+        # Read after the stop, so a record a worker finished during the
+        # graceful shutdown is counted rather than dropped from the total.
+        return VectorizationResult(
+            processed=self._stats["processed"] - processed_before,
+            failed=self._stats["failed"] - failed_before,
+            skipped=self._stats["skipped"] - skipped_before,
+            checkpoint=self._last_checkpoint,
+        )
 
     @property
     def progress(self) -> VectorizationProgress:
@@ -1122,6 +1430,12 @@ class VectorizationResult:
 
     processed: int
     failed: int
+    #: Records the pipeline completed without writing a vector --- an empty
+    #: assembled text, an embedding function that returned ``None``, a record
+    #: already carrying a vector, or nothing stored under its id. Distinct
+    #: from ``failed``, which counts records that raised. Defaulted, so a
+    #: caller constructing one positionally is unaffected.
+    skipped: int = 0
     checkpoint: str | None = None
 
 

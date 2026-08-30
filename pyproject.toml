@@ -569,14 +569,19 @@ dummy-variable-rgx = "^(_+|(_+[a-zA-Z0-9_]*[a-zA-Z0-9]+?))$"
 # (flake8-bandit) is not in `select`, so `S101` cannot fire. Measured: the tree
 # reports the same count with the line and without it. `"*.ipynb" = [...]` waived
 # rules in notebooks, and the repository tracks no notebook.
-# ASYNC false positives — verified cheap one-shot stats / poll loops, not hot-loop
-# blocking I/O. These paths are repo-relative because this is now the only ruff
-# config: the per-package sections these used to be mirrored into are gone, so
-# there is one place to add the next one. See .claude/rules/async-transport.md.
-"packages/data/src/dataknobs_data/vector/migration.py" = ["ASYNC110"]  # queue-drain poll; asyncio.sleep does not block the loop (style lint, not an I/O defect). Idiomatic Queue.join()/task_done() migration tracked separately
+# ASYNC false positives — verified cheap one-shot stats, not hot-loop blocking
+# I/O. These paths are repo-relative because this is now the only ruff config:
+# the per-package sections these used to be mirrored into are gone, so there is
+# one place to add the next one. See .claude/rules/async-transport.md.
+#
+# A third entry stood here: vector/migration.py for ASYNC110, waived at 8309ef37
+# for a "cheap 5s queue-drain poll" whose message named the idiomatic
+# Queue.join()/task_done() migration as tracked separately. That migration has
+# landed, the poll loops are gone, and the file lints clean without the waiver —
+# so it is removed rather than left standing over code it no longer describes.
 "packages/bots/src/dataknobs_bots/knowledge/service.py" = ["ASYNC240"]  # one-time ingest-setup path resolution (cwd + existence checks); setup-time, not a per-record hot path
 "packages/fsm/src/dataknobs_fsm/io/adapters.py" = ["ASYNC240", "SIM115"]  # ASYNC240: cheap one-shot path stat at validate()-time; setup-time, not a hot-loop call. SIM115: handle stored on self.file_handle by open(), released by the paired close()
-# ASYNC over test suites — a different argument from the three lines above, and a
+# ASYNC over test suites — a different argument from the two lines above, and a
 # weaker one, so it is kept separate rather than folded into them. Those are false
 # positives: the call is cheap and one-shot. These are true positives that starve
 # nothing, because the loop is built for one test by pytest-asyncio (default test
