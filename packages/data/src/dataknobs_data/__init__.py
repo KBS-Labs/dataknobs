@@ -132,6 +132,8 @@ from .query import (
     Query,
     SortOrder,
     SortSpec,
+    coerce_operator,
+    coerce_sort_order,
     is_storage_key_field,
 )
 from .query_logic import (
@@ -190,6 +192,8 @@ __all__ = [
     "SortOrder",
     "SortSpec",
     "RESERVED_KEY_FIELD",
+    "coerce_operator",
+    "coerce_sort_order",
     "is_storage_key_field",
     # Allocation
     "DEFAULT_MAX_ATTEMPTS",

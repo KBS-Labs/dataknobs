@@ -28,17 +28,25 @@ class TestQueryOperatorMapping:
         assert query.filters[0].value == "C%"
 
     def test_mixed_case_operators(self):
-        """Test mixed case operator strings default to EQ."""
+        """Test mixed case operator strings resolve, and unknown ones raise.
+
+        This test used to assert the opposite of both halves --- that
+        ``"Unknown"`` and ``"In"`` each "default to EQ". That default was
+        the defect: a spelling nobody recognised produced an equality
+        filter and returned the wrong rows, with no exception, no log line
+        and no return value to check. Rewritten rather than deleted so the
+        behaviour it pinned is on the record as having been deliberate to
+        change.
+        """
         query = Query()
 
-        # Unknown operator should default to EQ
-        query.filter("field", "Unknown", "value")
-        assert query.filters[0].operator == Operator.EQ
+        # Mixed case now resolves rather than falling through to EQ.
+        query.filter("field", "In", "value")
+        assert query.filters[0].operator == Operator.IN
 
-        # Mixed case not in mapping defaults to EQ
-        query.clear_filters()
-        query.filter("field", "In", "value")  # lowercase 'n'
-        assert query.filters[0].operator == Operator.EQ
+        # A spelling that names no operator is refused.
+        with pytest.raises(ValueError, match="Unknown query operator"):
+            Query().filter("field", "Unknown", "value")
 
     def test_all_operator_mappings(self):
         """Comprehensive test of all operator mappings."""

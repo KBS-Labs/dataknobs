@@ -51,7 +51,10 @@ class HybridSearchDemo:
     async def text_search(self, query: str, limit: int = 5) -> List[SearchResult]:
         """Perform traditional text search."""
         # Simple text matching (in real apps, use full-text search)
-        results = await self.db.search(Query().filter("content", "contains", query).limit(limit))
+        # `like` with wildcards, not `contains`: there is no `contains`
+        # operator, and the fluent builder used to read an unknown spelling as
+        # equality --- so this asked for content *equal to* the query string.
+        results = await self.db.search(Query().filter("content", "like", f"%{query}%").limit(limit))
 
         return [
             SearchResult(

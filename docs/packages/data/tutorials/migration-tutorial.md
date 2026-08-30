@@ -320,29 +320,24 @@ For better performance with large datasets, use parallel processing:
 from concurrent.futures import ThreadPoolExecutor
 from dataknobs_data import Query
 
-def migrate_partition(partition_id, total_partitions):
-    """Migrate a partition of data"""
-    # Create query for this partition
-    query = Query().filter("id", "%", lambda x: x % total_partitions == partition_id)
-    
-    # Get records for this partition
-    records = source_db.search(query)
-    
-    # Transform and insert
+def migrate_partition(records):
+    """Transform and write one partition of records"""
     transformed = transformer.transform_many(records)
     for record in transformed:
-        target_db.insert(record)
-    
+        target_db.create(record)
+
     return len(transformed)
 
-# Parallel migration with 4 threads
+# Read once, then split in Python. `Query` has no modulo operator and filter
+# values are compared, not called, so the partitioning cannot be pushed down
+# to the source; what parallelizes here is the transform and the write.
 num_partitions = 4
+all_records = source_db.search(Query())
+partitions = [all_records[i::num_partitions] for i in range(num_partitions)]
+
 with ThreadPoolExecutor(max_workers=num_partitions) as executor:
-    futures = [
-        executor.submit(migrate_partition, i, num_partitions)
-        for i in range(num_partitions)
-    ]
-    
+    futures = [executor.submit(migrate_partition, part) for part in partitions]
+
     total_migrated = sum(f.result() for f in futures)
     print(f"Parallel migration complete: {total_migrated} records")
 ```

@@ -7,7 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Added
+
+- **`coerce_operator` and `coerce_sort_order`** in `dataknobs_data`, the one
+  reading of a filter operator or a sort order whatever spelling it arrives
+  in. Exported because a backend or a consumer building a `Filter` by hand
+  needs the same reading the fluent builder gets.
+
 ### Changed
+
+- **An unrecognized operator or sort-order string now raises `ValueError`.**
+  `Query.filter` mapped an unknown operator to equality and `Query.sort_by`
+  mapped an unknown order to descending, neither raising, so a typo returned
+  the wrong rows rather than failing — no exception, no log line, and no
+  return value to check. Source-breaking for a caller passing a spelling that
+  names no operator; that caller was getting the wrong answer. Every spelling
+  that worked before still works, and more do: an operator's own value, that
+  value in any case with spaces for underscores (`"NOT BETWEEN"`), and `"=="`.
 
 - **`IncrementalVectorizer.wait_for_completion(check_interval=...)` is now
   `wait_for_completion(timeout=None) -> bool`.** The old parameter set how
@@ -17,6 +33,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   **Fixed** below.
 
 ### Fixed
+
+- **`Operator.NOT_LIKE` is reachable from `Query.filter`.** The fluent
+  builder carried a private table of operator spellings — a hand-written
+  second copy of the vocabulary — and `not_like` was missing from it, so
+  `filter("name", "not_like", "A%")` meant `name = "A%"`. Both paths now share
+  one coercion, so an operator the enum has is reachable by its own value by
+  construction rather than by remembering to add it twice.
+
+- **A shipped example and two documented ones asked for the wrong thing.**
+  `examples/hybrid_search.py` filtered with `"contains"`, which named no
+  operator and therefore meant equality — its "text search" matched only
+  records whose content equalled the query exactly. The user guide had the
+  same `"contains"`, and the migration tutorial partitioned with a `"%"`
+  operator that does not exist and a callable value that is compared rather
+  than called, then wrote through a `target_db.insert` that is not a method.
 
 - **`VectorTextSynchronizer`'s change tracking works, in both of its
   configurations.** It computed a `content_hash` for every vector it wrote and

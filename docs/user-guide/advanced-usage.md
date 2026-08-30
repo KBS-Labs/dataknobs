@@ -72,7 +72,7 @@ storage.create(record)
 search.create(record)
 
 # Query with same interface
-results = search.search(Query().filter("content", "contains", "data"))
+results = search.search(Query().filter("content", "like", "%data%"))
 ```
 
 ### Async High-Performance Operations
