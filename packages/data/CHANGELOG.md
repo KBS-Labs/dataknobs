@@ -81,6 +81,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   field is defaulted, so a positional construction is unaffected, and
   `get_stats()` reports the same three outcomes.
 
+- **`QueryBuilder.where` reads the operator vocabulary `Query.filter` reads.**
+  It built `Operator(operator)` directly, which accepts only an exact member
+  value, so `where("x", "==", 1)` raised where the identical
+  `filter("x", "==", 1)` succeeded — a third copy of the disagreement the
+  shared coercion was introduced to remove. Every alias the fluent builder
+  derives now works here too, and an unknown spelling raises the same message.
+
 - **`update_vector` reports whether the write landed.** It returned
   `self.update(...) is not None`, and every backend's `update` returns `bool`,
   so `False is not None` answered `True` for an update that did not happen.

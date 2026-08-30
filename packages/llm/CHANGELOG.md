@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`list_conversations` and `search_conversations` refuse a `sort_order` they
+  cannot honour**, and take a `SortOrder` as readily as a string. Both declared
+  the parameter as a bare `str` and forwarded it to the query layer, which used
+  to read every spelling it did not recognise as descending — so `"descending"`,
+  `"DESCENDING"` and `"newest"` all produced the intended order by accident and
+  agreed with the `"desc"` default. That layer is now strict, which would have
+  surfaced here as a `StorageError` raised from inside the broad `except` around
+  each body: a fault in the caller's own argument, reported as a storage
+  failure it can do nothing about. The order is now read at the boundary, before
+  that `except`, so the caller gets the `ValueError` and a message naming the
+  spellings that work. `list_conversations` reads it even when no `sort_by` is
+  given, where an unusable spelling previously passed unmentioned.
+
 - **The `WizardStateSnapshot` deprecation names its versions.** 0.8.0 announced
   the alias as resolving "for one minor version", which names neither the
   release that started the clock nor the one that stops it — a caller could not

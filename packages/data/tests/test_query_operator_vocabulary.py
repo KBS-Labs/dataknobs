@@ -27,6 +27,7 @@ from dataknobs_data.query import (
     coerce_operator,
     coerce_sort_order,
 )
+from dataknobs_data.query_logic import QueryBuilder
 
 
 class TestAnOperatorTheEnumHasIsReachableFromTheFluentPath:
@@ -61,6 +62,48 @@ class TestAnOperatorTheEnumHasIsReachableFromTheFluentPath:
         deserialized = Filter.from_dict({"field": "field", "operator": member.value, "value": "x"})
 
         assert fluent.operator is deserialized.operator is member
+
+
+class TestTheQueryBuilderReadsTheSameVocabulary:
+    """``QueryBuilder.where`` was the third construction of an operator.
+
+    It built ``Operator(operator)`` directly, which accepts only an exact
+    member value --- so every alias the fluent builder derives by
+    normalisation raised there instead, for the same argument, in the same
+    package. That two paths disagreed is the whole reason this coercion
+    exists rather than a second table; a third path had to join them.
+    """
+
+    @pytest.mark.parametrize("member", list(Operator), ids=lambda m: m.name)
+    def test_every_member_is_reachable(self, member: Operator) -> None:
+        builder = QueryBuilder().where("field", member.value, "x")
+
+        assert builder.root_condition.filter.operator is member  # type: ignore[union-attr]
+
+    @pytest.mark.parametrize(
+        ("spelling", "expected"),
+        [
+            ("==", Operator.EQ),
+            ("IN", Operator.IN),
+            ("NOT IN", Operator.NOT_IN),
+            ("NOT BETWEEN", Operator.NOT_BETWEEN),
+            ("STARTS_WITH", Operator.STARTS_WITH),
+        ],
+    )
+    def test_the_aliases_the_fluent_path_takes(self, spelling: str, expected: Operator) -> None:
+        builder = QueryBuilder().where("field", spelling, "x")
+
+        assert builder.root_condition.filter.operator is expected  # type: ignore[union-attr]
+
+    def test_it_agrees_with_query_filter(self) -> None:
+        fluent = Query().filter("f", "==", 1).filters[0]
+        built = QueryBuilder().where("f", "==", 1).root_condition
+
+        assert built.filter.operator is fluent.operator  # type: ignore[union-attr]
+
+    def test_an_unknown_spelling_is_refused_here_too(self) -> None:
+        with pytest.raises(ValueError, match="operator"):
+            QueryBuilder().where("colour", "contains", "blue")
 
 
 class TestAnUnknownSpellingIsRefused:

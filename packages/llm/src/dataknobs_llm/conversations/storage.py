@@ -138,10 +138,29 @@ from dataknobs_llm.exceptions import StorageError, SchemaVersionError
 
 if TYPE_CHECKING:  # pragma: no cover - annotation-only, no runtime import
     from dataknobs_data import AsyncDatabase
+    from dataknobs_data.query import SortOrder
     from dataknobs_llm.tools.context import ToolWizardState
 
 # Current schema version - increment when making schema changes
 SCHEMA_VERSION = "1.1.0"
+
+
+def _read_sort_order(sort_order: "SortOrder | str") -> "SortOrder":
+    """The query layer's own reading of a sort order.
+
+    Kept here rather than inlined at the two call sites so both accept the
+    same spellings, and imported lazily because `dataknobs_data` is optional
+    for this module --- every other use of it is a guarded, method-local
+    import too.
+    """
+    try:
+        from dataknobs_data.query import coerce_sort_order
+    except ImportError:
+        raise StorageError(
+            "dataknobs_data package not available. Install it to use DataknobsConversationStorage."
+        ) from None
+    return coerce_sort_order(sort_order)
+
 
 logger = logging.getLogger(__name__)
 
@@ -781,7 +800,7 @@ class ConversationStorage(ABC):
         limit: int = 100,
         offset: int = 0,
         sort_by: str | None = None,
-        sort_order: str = "desc",
+        sort_order: "SortOrder | str" = "desc",
     ) -> List[ConversationState]:
         """List conversations with optional filtering and sorting.
 
@@ -790,7 +809,11 @@ class ConversationStorage(ABC):
             limit: Maximum number of results
             offset: Offset for pagination
             sort_by: Field name to sort by (e.g. "updated_at", "created_at")
-            sort_order: Sort direction, "asc" or "desc" (default: "desc")
+            sort_order: Sort direction --- ``"asc"``, ``"desc"``, either in
+                any case, or a :class:`~dataknobs_data.query.SortOrder`.
+                Any other spelling raises ``ValueError``; it used to mean
+                descending, because the query layer read every string it
+                did not recognise that way.
 
         Returns:
             List of conversation states
@@ -828,7 +851,7 @@ class ConversationStorage(ABC):
         limit: int = 100,
         offset: int = 0,
         sort_by: str = "updated_at",
-        sort_order: str = "desc",
+        sort_order: "SortOrder | str" = "desc",
     ) -> List[ConversationState]:
         """Search conversations with content, time range, and metadata filters.
 
@@ -843,7 +866,9 @@ class ConversationStorage(ABC):
             limit: Maximum number of results.
             offset: Number of results to skip (for pagination).
             sort_by: Field name to sort by (default: "updated_at").
-            sort_order: Sort direction, "asc" or "desc" (default: "desc").
+            sort_order: Sort direction --- ``"asc"``, ``"desc"``, either in
+                any case, or a :class:`~dataknobs_data.query.SortOrder`.
+                Any other spelling raises ``ValueError``.
 
         Returns:
             List of matching conversation states.
@@ -1188,9 +1213,17 @@ class DataknobsConversationStorage(ConversationStorage):
         limit: int = 100,
         offset: int = 0,
         sort_by: str | None = None,
-        sort_order: str = "desc",
+        sort_order: "SortOrder | str" = "desc",
     ) -> List[ConversationState]:
         """List conversations from backend."""
+        # Read before the `try`, and unconditionally: a spelling this method
+        # cannot honour is the caller's error, and laundering it through the
+        # broad `except Exception` below would report it as a storage failure
+        # the caller can do nothing about. Unconditionally, because the sort
+        # itself is guarded by `if sort_by` --- so an invalid order used to
+        # pass silently whenever no field was named, which reads to a caller
+        # as acceptance.
+        order = _read_sort_order(sort_order)
         try:
             # Import Query for filtering
             try:
@@ -1211,7 +1244,7 @@ class DataknobsConversationStorage(ConversationStorage):
                     query.filter(f"metadata.{key}", "=", value)
 
             if sort_by:
-                query.sort_by(sort_by, sort_order)
+                query.sort_by(sort_by, order)
 
             # Search with query
             results = await self.backend.search(query)
@@ -1261,9 +1294,12 @@ class DataknobsConversationStorage(ConversationStorage):
         limit: int = 100,
         offset: int = 0,
         sort_by: str = "updated_at",
-        sort_order: str = "desc",
+        sort_order: "SortOrder | str" = "desc",
     ) -> List[ConversationState]:
         """Search conversations with content, time range, and metadata filters."""
+        # Before the `try`, for the same reason as `list_conversations`: the
+        # fault is in the argument, not in the storage.
+        order = _read_sort_order(sort_order)
         try:
             try:
                 from dataknobs_data.query import Query
@@ -1290,7 +1326,7 @@ class DataknobsConversationStorage(ConversationStorage):
                 for key, value in filter_metadata.items():
                     query.filter(f"metadata.{key}", "=", value)
 
-            query.sort_by(sort_by, sort_order)
+            query.sort_by(sort_by, order)
 
             results = await self.backend.search(query)
             states = [self._record_to_state(record) for record in results]
