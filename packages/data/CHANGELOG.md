@@ -25,6 +25,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   that worked before still works, and more do: an operator's own value, that
   value in any case with spaces for underscores (`"NOT BETWEEN"`), and `"=="`.
 
+- **`IncrementalVectorizer.run_batch` takes a `timeout`,** and `limit` counts
+  records *attempted* rather than records that succeeded — a budget of
+  successes cannot be met by a corpus that fails to embed. See **Fixed**.
+
 - **`IncrementalVectorizer.wait_for_completion(check_interval=...)` is now
   `wait_for_completion(timeout=None) -> bool`.** The old parameter set how
   often to poll a condition that no longer needs polling, and the method could
@@ -33,6 +37,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   **Fixed** below.
 
 ### Fixed
+
+- **`IncrementalVectorizer.run_batch` can return.** Its only exit was a
+  `break` that could never be taken: the break required
+  `self._processing_task.done()`, and that task is the queue loader, whose
+  loop idles rather than returning when the source drains and exits only on
+  the shutdown `run_batch` sets *after* the loop. So `run_batch()` — the
+  no-argument form — never returned, because `None or float("inf")` is
+  infinity; `run_batch(0)` never returned, for the same reason through `or`;
+  and `run_batch(n)` never returned whenever fewer than `n` records succeeded.
+  It now waits on the same conditions `wait_for_completion` does, plus the
+  record budget, and stops the vectorizer on every exit including an
+  exception.
 
 - **`Operator.NOT_LIKE` is reachable from `Query.filter`.** The fluent
   builder carried a private table of operator spellings — a hand-written

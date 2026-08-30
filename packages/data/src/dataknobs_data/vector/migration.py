@@ -785,6 +785,11 @@ class IncrementalVectorizer:
         # as it means there is nothing left to enqueue, and those are the two
         # states `wait_for_completion` has to tell apart.
         self._source_drained = asyncio.Event()
+        # Pulsed by a worker each time a record leaves its hands, so a waiter
+        # counting records can wait for the next one instead of polling for
+        # it. Cleared and re-awaited by the waiter, which is why it is an
+        # Event rather than a counter.
+        self._record_finished = asyncio.Event()
         self._stats = {
             "processed": 0,
             "failed": 0,
@@ -830,6 +835,9 @@ class IncrementalVectorizer:
                 # embedded, written -- visible to a waiter, where `qsize()`
                 # went back to zero the moment it was taken.
                 self._queue.task_done()
+                # ...and the pulse a *counting* waiter needs, which `join()`
+                # cannot give it: `join()` answers "all of it", not "one more".
+                self._record_finished.set()
 
         logger.info(f"Worker {worker_id} stopped")
 
@@ -981,30 +989,76 @@ class IncrementalVectorizer:
                 logger.error(f"Failed to load queue: {e}")
                 await self._until_shutdown(asyncio.sleep(self.error_retry_interval))
 
-    async def _until_shutdown(self, awaitable: Any) -> bool:
-        """Await ``awaitable``, abandoning it if shutdown is requested first.
+    async def _until_shutdown(self, *awaitables: Any, timeout: float | None = None) -> bool:
+        """Await the first of ``awaitables``, abandoning them all on shutdown.
 
-        Every wait in this class is a race between the thing being waited for
+        Every wait in this class is a race between the things being waited for
         and the instruction to stop. Polling a flag instead makes the shutdown
         latency the poll interval and the code an `ASYNC110` busy-wait; racing
-        the two makes the latency zero and lets each caller see which won.
+        makes the latency zero and lets each caller see which won.
+
+        It takes a *set* of awaitables because "done" has more than one form:
+        a batch is finished when the source drains, and equally when the
+        caller's record budget is spent. Each caller names the conditions that
+        end its own wait; the shutdown and the timeout are added to every race
+        here, so no caller can forget either.
 
         Args:
-            awaitable: The work, delay or join to wait for. It is cancelled if
-                shutdown wins, so it must be safe to abandon.
+            awaitables: The work, delay, join or condition to wait for. Every
+                one is cancelled as soon as the race is decided, so each must
+                be safe to abandon.
+            timeout: Seconds to wait before giving up on all of them, or
+                ``None`` to wait as long as it takes.
 
         Returns:
-            ``True`` if the awaitable finished first, ``False`` on shutdown.
+            ``True`` if one of ``awaitables`` finished first, ``False`` on
+            shutdown or on the timeout.
         """
-        work = asyncio.ensure_future(awaitable)
+        work = [asyncio.ensure_future(awaitable) for awaitable in awaitables]
         shutdown = asyncio.ensure_future(self._shutdown_event.wait())
         try:
-            done, _ = await asyncio.wait({work, shutdown}, return_when=asyncio.FIRST_COMPLETED)
-            return work in done
+            done, _ = await asyncio.wait(
+                {*work, shutdown}, timeout=timeout, return_when=asyncio.FIRST_COMPLETED
+            )
+            return any(task in done for task in work)
         finally:
-            for task in (work, shutdown):
+            for task in (*work, shutdown):
                 task.cancel()
-            await asyncio.gather(work, shutdown, return_exceptions=True)
+            await asyncio.gather(*work, shutdown, return_exceptions=True)
+
+    async def _until_idle(self) -> None:
+        """Return once there is nothing queued and nothing left to queue.
+
+        Those are the two halves of "done", and the queue can express only
+        one: ``join()`` says every record put on it has been taken *and*
+        finished, and ``_source_drained`` says the loader's last query found
+        nothing. Without the second, a wait entered immediately after
+        ``start()`` returns at once --- the loader is a task that has not run
+        yet, and the queue it is about to fill is empty.
+        """
+        while True:
+            await self._queue.join()
+            if self._source_drained.is_set():
+                return
+            # The loader has more to enqueue. Wait for its verdict rather than
+            # re-checking on a timer.
+            await self._source_drained.wait()
+
+    async def _until_counted(self, target: int) -> None:
+        """Return once ``target`` records have been *attempted*.
+
+        Attempted, not vectorized: a worker bumps ``failed`` rather than
+        ``processed`` when a record raises, so a waiter counting only
+        successes never finishes on a corpus that cannot be embedded.
+        """
+        while self._stats["processed"] + self._stats["failed"] < target:
+            # Cleared before the re-check, so a worker finishing in between
+            # leaves the event set and the wait below returns at once rather
+            # than missing the pulse.
+            self._record_finished.clear()
+            if self._stats["processed"] + self._stats["failed"] >= target:
+                return
+            await self._record_finished.wait()
 
     async def stop(self, timeout: float = 30.0) -> None:
         """Stop incremental vectorization.
@@ -1158,18 +1212,13 @@ class IncrementalVectorizer:
     async def wait_for_completion(self, timeout: float | None = None) -> bool:
         """Block until there is nothing left to vectorize.
 
-        "Nothing left" is two conditions, and the queue can only express one
-        of them:
-
-        * **The queue is joined** --- every record put on it has been taken
-          *and* finished. `qsize()` drops to zero the moment a worker takes a
-          record, which is before it has embedded or written it.
-        * **The source is drained** --- the loader's last query found no
-          pending records. Without this, a call made immediately after
-          `start()` returns at once, because the loader is a task that has not
-          run yet and the queue it will fill is empty. Measured on a corpus of
-          twelve pending records: the previous implementation returned with
-          zero of them vectorized.
+        "Nothing left" is the two conditions :meth:`_until_idle` waits for,
+        and the queue can express only one of them --- `qsize()` drops to zero
+        the moment a worker *takes* a record, which is before it has embedded
+        or written it, and an empty queue means "not started yet" as readily
+        as it means "finished". Measured on a corpus of twelve pending
+        records: the implementation that read `qsize()` returned with zero of
+        them vectorized.
 
         Args:
             timeout: Seconds to wait, or ``None`` to wait indefinitely. The
@@ -1181,30 +1230,10 @@ class IncrementalVectorizer:
             :meth:`stop` was called while waiting. A waiter is never left
             behind by a shutdown.
         """
-
-        async def _idle() -> None:
-            while True:
-                await self._queue.join()
-                if self._source_drained.is_set():
-                    return
-                # The loader has more to enqueue. Wait for its verdict rather
-                # than re-checking on a timer.
-                await self._source_drained.wait()
-
-        idle = asyncio.ensure_future(_idle())
-        shutdown = asyncio.ensure_future(self._shutdown_event.wait())
-        try:
-            done, _ = await asyncio.wait(
-                {idle, shutdown}, timeout=timeout, return_when=asyncio.FIRST_COMPLETED
-            )
-            if idle in done:
-                logger.info("All queued records processed")
-                return True
-            return False
-        finally:
-            for task in (idle, shutdown):
-                task.cancel()
-            await asyncio.gather(idle, shutdown, return_exceptions=True)
+        completed = await self._until_shutdown(self._until_idle(), timeout=timeout)
+        if completed:
+            logger.info("All queued records processed")
+        return completed
 
     async def run_with_checkpoint(self, resume_from: str | None = None) -> VectorizationResult:
         """Run the complete vectorization with checkpoint support.
@@ -1224,40 +1253,64 @@ class IncrementalVectorizer:
             checkpoint=self._last_checkpoint,
         )
 
-    async def run_batch(self, limit: int | None = None) -> VectorizationResult:
-        """Process a limited number of records.
+    async def run_batch(
+        self, limit: int | None = None, timeout: float | None = None
+    ) -> VectorizationResult:
+        """Process the pending records, or at most ``limit`` of them.
+
+        The wait ends on whichever comes first: the source draining, the
+        record budget being spent, a :meth:`stop` from elsewhere, or
+        ``timeout``. The vectorizer is left stopped on every one of those
+        paths, including an exception.
+
+        This used to poll ``self._queue.empty()`` for a break that could never
+        be taken --- the other half of the condition was
+        ``self._processing_task.done()``, and that task is the loader, whose
+        loop idles rather than returning when the source drains and exits only
+        on the shutdown this method sets *after* the loop. So ``run_batch()``
+        with no argument never returned (``None or float("inf")``), nor did
+        ``run_batch(0)`` (the same, through ``or``), nor ``run_batch(n)``
+        whenever fewer than ``n`` records succeeded.
 
         Args:
-            limit: Maximum number of records to process
+            limit: Maximum number of records to *attempt*, or ``None`` for all
+                of them. A record that raises counts against the budget; a
+                budget of successes could not be met by a corpus that fails.
+            timeout: Seconds to wait before giving up, or ``None`` to wait as
+                long as it takes. It bounds the shutdown too --- returning
+                after the full graceful-stop budget would break the promise
+                the timeout made.
 
         Returns:
             Vectorization result with statistics
         """
-        # Temporarily modify batch size if limit provided
         original_batch_size = self.batch_size
-        if limit:
+        # `is not None`, not truthiness: `limit=0` is a request for no work,
+        # and `if limit` read it as "no limit given".
+        if limit is not None and limit > 0:
             self.batch_size = min(self.batch_size, limit)
 
         try:
             await self.start()
 
-            # Wait for limited processing
-            while self._stats["processed"] < (limit or float("inf")):
-                if self._queue.empty() and (
-                    self._processing_task is None or self._processing_task.done()
-                ):
-                    break
-                await asyncio.sleep(0.1)
-
-            await self.stop()
-
-            return VectorizationResult(
-                processed=self._stats["processed"],
-                failed=self._stats["failed"],
-                checkpoint=self._last_checkpoint,
-            )
+            done_when = [self._until_idle()]
+            if limit is not None:
+                done_when.append(self._until_counted(limit))
+            await self._until_shutdown(*done_when, timeout=timeout)
         finally:
+            if timeout is None:
+                await self.stop()
+            else:
+                await self.stop(timeout=timeout)
             self.batch_size = original_batch_size
+
+        # Read after the stop, so a record a worker finished during the
+        # graceful shutdown is counted rather than dropped from the total.
+        return VectorizationResult(
+            processed=self._stats["processed"],
+            failed=self._stats["failed"],
+            checkpoint=self._last_checkpoint,
+        )
 
     @property
     def progress(self) -> VectorizationProgress:
