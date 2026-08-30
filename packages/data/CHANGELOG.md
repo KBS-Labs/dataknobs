@@ -62,9 +62,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   from the construction branch onward, which is the branch all of them run.
   Reading `db.config` is unchanged; assigning to it now raises.
 
-- **`IncrementalVectorizer.run_batch` takes a `timeout`,** and `limit` counts
+- **`IncrementalVectorizer.run_batch` takes a `timeout`,** `limit` counts
   records *attempted* rather than records that succeeded — a budget of
-  successes cannot be met by a corpus that fails to embed. See **Fixed**.
+  successes cannot be met by a corpus that fails to embed — and both the
+  budget and the returned `VectorizationResult` are measured from the call
+  rather than from the vectorizer's lifetime totals. `_stats` is never reset, so
+  a limit compared against it directly was a budget the *instance* had already
+  spent: the natural consumer shape, a loop of successive batches over one
+  corpus, stopped doing work after the first call while still returning a
+  plausible-looking total. See **Fixed**.
+
+- **`VectorizationResult` carries `skipped`**, and `processed` counts only
+  records for which a vector was written. A record the pipeline completes
+  without writing — empty assembled text, an embedding function that returned
+  `None`, a record already carrying a vector, or nothing stored under its id —
+  was counted as processed, so the result claimed more work than the database
+  could show. Distinct from `failed`, which counts records that raised. The new
+  field is defaulted, so a positional construction is unaffected, and
+  `get_stats()` reports the same three outcomes.
+
 - **`update_vector` reports whether the write landed.** It returned
   `self.update(...) is not None`, and every backend's `update` returns `bool`,
   so `False is not None` answered `True` for an update that did not happen.
@@ -91,6 +107,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   It now waits on the same conditions `wait_for_completion` does, plus the
   record budget, and stops the vectorizer on every exit including an
   exception.
+
+- **`IncrementalVectorizer` terminates on a record it declines to write.**
+  `_load_pending_records` deliberately over-fetches — its docstring says so —
+  and `_process_record` then completes some of what it fetches without writing a
+  vector. Such a record still matches the loader's `NOT_EXISTS(vector_field)`
+  query, so it was re-queried, re-queued and re-embedded on every pass: the
+  "source drained" condition was never reached and every caller racing it waited
+  forever. One record with an empty `content` was enough to hang `run_batch()`
+  and `wait_for_completion()` on their `timeout=None` defaults over an otherwise
+  healthy corpus. Workers now report the outcome directly rather than having the
+  loader re-derive it from the query, since the worker is the only thing that
+  knows why.
+
+- **`IncrementalVectorizer._until_shutdown` does not call a failure a win.** An
+  awaitable that raised landed in `asyncio.wait`'s `done` set exactly as a
+  completion does, so the race reported that the work had finished — and the
+  cleanup gathered with `return_exceptions=True`, retrieving and discarding the
+  exception without even a "never retrieved" warning. It now propagates. Latent:
+  no condition this class currently races can raise. It is documented as a
+  general racer, and this is the reading of `done` that stays right when one
+  can.
 
 - **A sync backend's inherited vector methods run.** One
   `VectorOperationsMixin` declared every method `async` and was mixed into

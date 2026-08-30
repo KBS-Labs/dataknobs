@@ -790,9 +790,15 @@ class IncrementalVectorizer:
         # it. Cleared and re-awaited by the waiter, which is why it is an
         # Event rather than a counter.
         self._record_finished = asyncio.Event()
+        # Ids a worker completed without writing a vector. Such a record still
+        # matches the loader's `NOT_EXISTS(vector_field)` query, so without
+        # this "the query returned nothing" and "there is nothing left to do"
+        # are different questions --- and only the second one ends a drain.
+        self._declined: set[str] = set()
         self._stats = {
             "processed": 0,
             "failed": 0,
+            "skipped": 0,
             "queued": 0,
         }
         self._last_checkpoint: str | None = None
@@ -824,8 +830,16 @@ class IncrementalVectorizer:
                 continue
 
             try:
-                await self._process_record(record)
-                self._stats["processed"] += 1
+                if await self._process_record(record):
+                    self._stats["processed"] += 1
+                else:
+                    # Completed without writing a vector. Remembered by id so
+                    # the loader stops re-fetching it: the record still matches
+                    # its `NOT_EXISTS(vector_field)` query and will until
+                    # something changes about the record itself.
+                    self._stats["skipped"] += 1
+                    if record.id is not None:
+                        self._declined.add(record.id)
             except Exception as e:
                 logger.error(f"Worker {worker_id} error: {e}")
                 self._stats["failed"] += 1
@@ -841,8 +855,17 @@ class IncrementalVectorizer:
 
         logger.info(f"Worker {worker_id} stopped")
 
-    async def _process_record(self, record: Record) -> None:
-        """Process a single record to add vectors."""
+    async def _process_record(self, record: Record) -> bool:
+        """Vectorize one record, reporting whether a vector was written.
+
+        ``False`` is not a failure --- it is the pipeline declining a record
+        it completed. There are four ways that happens: the assembled text is
+        empty, the record already carries a vector, the embedding function
+        returned ``None``, or nothing is stored under the record's id (or it
+        has none). What they share is that the record still matches the
+        loader's ``NOT_EXISTS(vector_field)`` query afterwards, so a caller
+        that cannot tell this outcome from a write re-fetches it forever.
+        """
         try:
             # The same assembly the synchronizer and the tracker use. This was
             # a third independent copy of the loop, identical in every respect
@@ -851,19 +874,19 @@ class IncrementalVectorizer:
             source_text = assemble_source_text(record, self.text_fields, self.field_separator)
 
             if not source_text:
-                return
+                return False
 
             # Check if vector already exists
             vector_data = record.get_value(self.vector_field)
             if vector_data is not None:
                 if vector_data and isinstance(vector_data, (list, np.ndarray)):
-                    return
+                    return False
 
             # Generate embedding
             embedding = await call_embedding_fn(self.embedding_fn, str(source_text))
 
             if embedding is None:
-                return
+                return False
 
             # Update record
             update_data = {
@@ -893,11 +916,13 @@ class IncrementalVectorizer:
                 record.set_value(key, value)
             if record.id is None:
                 logger.warning("Vectorized a record with no id; nothing was persisted")
-                return
+                return False
             if not await self.database.update(record.id, record):
                 logger.warning(
                     "Vectorized record %s but no record is stored under that id", record.id
                 )
+                return False
+            return True
 
         except Exception as e:
             logger.error(f"Failed to process record {record.id}: {e}")
@@ -971,8 +996,9 @@ class IncrementalVectorizer:
                     break
 
                 records = await self._load_pending_records()
+                fresh = self._forget_what_the_pipeline_declined(records)
 
-                if not records:
+                if not fresh:
                     # Nothing left to vectorize. Say so -- it is the half of
                     # "done" the queue cannot express -- then idle until there
                     # might be, or until shutdown, whichever comes first.
@@ -981,13 +1007,42 @@ class IncrementalVectorizer:
                     continue
 
                 self._source_drained.clear()
-                for record in records:
+                for record in fresh:
                     await self._queue.put(record)
                     self._stats["queued"] += 1
 
             except Exception as e:
                 logger.error(f"Failed to load queue: {e}")
                 await self._until_shutdown(asyncio.sleep(self.error_retry_interval))
+
+    def _forget_what_the_pipeline_declined(self, records: list[Record]) -> list[Record]:
+        """The records of this page a worker has not already declined.
+
+        `_load_pending_records` deliberately over-fetches --- its docstring
+        says so --- and the pipeline completes some of what it fetches
+        *without writing a vector*. Such a record still matches
+        `NOT_EXISTS(vector_field)`, so the loader fetched it again on the next
+        pass and every pass after that: `_source_drained` was never set, and
+        every caller racing it --- `run_batch()` and `wait_for_completion()`
+        on their `timeout=None` defaults --- waited forever on a corpus
+        containing one record with no text.
+
+        The workers report the outcome directly rather than having the loader
+        re-derive it from the query, because the worker is the only thing that
+        knows *why*. A record with no id cannot be remembered by one, so it is
+        dropped here instead; `_process_record` refuses to persist it anyway.
+
+        Bounded by the number of records the pipeline declines rather than by
+        the size of the corpus: a record that is written stops matching.
+        """
+        fresh = []
+        for record in records:
+            if record.id is None:
+                logger.warning("Skipping a record with no id; it cannot be persisted")
+                continue
+            if record.id not in self._declined:
+                fresh.append(record)
+        return fresh
 
     async def _until_shutdown(self, *awaitables: Any, timeout: float | None = None) -> bool:
         """Await the first of ``awaitables``, abandoning them all on shutdown.
@@ -1013,6 +1068,16 @@ class IncrementalVectorizer:
         Returns:
             ``True`` if one of ``awaitables`` finished first, ``False`` on
             shutdown or on the timeout.
+
+        Raises:
+            Whatever an awaitable raised. A raise lands in ``done`` exactly as
+            a completion does, so counting it as "the work finished" would
+            report success for a wait that failed --- and the cleanup below
+            gathers with ``return_exceptions=True``, which would retrieve and
+            discard the exception without even a "never retrieved" warning.
+            None of the conditions this class currently races can raise; the
+            method is a general racer, and this is the reading of ``done``
+            that stays right when one can.
         """
         work = [asyncio.ensure_future(awaitable) for awaitable in awaitables]
         shutdown = asyncio.ensure_future(self._shutdown_event.wait())
@@ -1020,7 +1085,12 @@ class IncrementalVectorizer:
             done, _ = await asyncio.wait(
                 {*work, shutdown}, timeout=timeout, return_when=asyncio.FIRST_COMPLETED
             )
-            return any(task in done for task in work)
+            finished = [task for task in work if task in done]
+            for task in finished:
+                error = None if task.cancelled() else task.exception()
+                if error is not None:
+                    raise error
+            return bool(finished)
         finally:
             for task in (*work, shutdown):
                 task.cancel()
@@ -1044,19 +1114,30 @@ class IncrementalVectorizer:
             # re-checking on a timer.
             await self._source_drained.wait()
 
-    async def _until_counted(self, target: int) -> None:
-        """Return once ``target`` records have been *attempted*.
+    def _attempted(self) -> int:
+        """Records this vectorizer has finished with, successfully or not.
 
         Attempted, not vectorized: a worker bumps ``failed`` rather than
-        ``processed`` when a record raises, so a waiter counting only
-        successes never finishes on a corpus that cannot be embedded.
+        ``processed`` when a record raises, so a budget counting only
+        successes is one a corpus that cannot be embedded never meets.
         """
-        while self._stats["processed"] + self._stats["failed"] < target:
+        return self._stats["processed"] + self._stats["failed"] + self._stats["skipped"]
+
+    async def _until_counted(self, target: int) -> None:
+        """Return once the attempted count reaches ``target``.
+
+        ``target`` is an absolute count rather than a quantity, because
+        ``_stats`` is the vectorizer's lifetime tally and is never reset ---
+        so a caller wanting "``n`` more from here" passes
+        ``self._attempted() + n`` and gets a budget measured from its own
+        starting point rather than from the instance's.
+        """
+        while self._attempted() < target:
             # Cleared before the re-check, so a worker finishing in between
             # leaves the event set and the wait below returns at once rather
             # than missing the pulse.
             self._record_finished.clear()
-            if self._stats["processed"] + self._stats["failed"] >= target:
+            if self._attempted() >= target:
                 return
             await self._record_finished.wait()
 
@@ -1250,6 +1331,7 @@ class IncrementalVectorizer:
         return VectorizationResult(
             processed=self._stats["processed"],
             failed=self._stats["failed"],
+            skipped=self._stats["skipped"],
             checkpoint=self._last_checkpoint,
         )
 
@@ -1273,18 +1355,25 @@ class IncrementalVectorizer:
         whenever fewer than ``n`` records succeeded.
 
         Args:
-            limit: Maximum number of records to *attempt*, or ``None`` for all
-                of them. A record that raises counts against the budget; a
-                budget of successes could not be met by a corpus that fails.
+            limit: Maximum number of records to *attempt* on this call, or
+                ``None`` for all of them. A record that raises counts against
+                the budget; a budget of successes could not be met by a corpus
+                that fails. The budget is measured from this call rather than
+                from the vectorizer's lifetime totals, so successive batches
+                over one corpus each do a batch's worth of work.
             timeout: Seconds to wait before giving up, or ``None`` to wait as
                 long as it takes. It bounds the shutdown too --- returning
                 after the full graceful-stop budget would break the promise
                 the timeout made.
 
         Returns:
-            Vectorization result with statistics
+            The work *this call* did, not the vectorizer's running totals.
         """
         original_batch_size = self.batch_size
+        already_attempted = self._attempted()
+        processed_before = self._stats["processed"]
+        failed_before = self._stats["failed"]
+        skipped_before = self._stats["skipped"]
         # `is not None`, not truthiness: `limit=0` is a request for no work,
         # and `if limit` read it as "no limit given".
         if limit is not None and limit > 0:
@@ -1295,20 +1384,25 @@ class IncrementalVectorizer:
 
             done_when = [self._until_idle()]
             if limit is not None:
-                done_when.append(self._until_counted(limit))
+                done_when.append(self._until_counted(already_attempted + limit))
             await self._until_shutdown(*done_when, timeout=timeout)
         finally:
+            # Restored before the stop rather than after it: `stop()` gathers
+            # the workers without `return_exceptions`, so it can raise --- and
+            # a raise here would both replace the body's exception and leave
+            # the instance clamped to this call's `limit` for good.
+            self.batch_size = original_batch_size
             if timeout is None:
                 await self.stop()
             else:
                 await self.stop(timeout=timeout)
-            self.batch_size = original_batch_size
 
         # Read after the stop, so a record a worker finished during the
         # graceful shutdown is counted rather than dropped from the total.
         return VectorizationResult(
-            processed=self._stats["processed"],
-            failed=self._stats["failed"],
+            processed=self._stats["processed"] - processed_before,
+            failed=self._stats["failed"] - failed_before,
+            skipped=self._stats["skipped"] - skipped_before,
             checkpoint=self._last_checkpoint,
         )
 
@@ -1336,6 +1430,12 @@ class VectorizationResult:
 
     processed: int
     failed: int
+    #: Records the pipeline completed without writing a vector --- an empty
+    #: assembled text, an embedding function that returned ``None``, a record
+    #: already carrying a vector, or nothing stored under its id. Distinct
+    #: from ``failed``, which counts records that raised. Defaulted, so a
+    #: caller constructing one positionally is unaffected.
+    skipped: int = 0
     checkpoint: str | None = None
 
 
