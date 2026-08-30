@@ -121,7 +121,9 @@ results = await pg_backend.hybrid_search(
 
 ### Client-Side Fallback
 
-Any VectorOperationsMixin backend automatically uses client-side fusion when native isn't available.
+Any backend mixing in `AsyncVectorOperationsMixin` (or, on a `SyncDatabase`,
+`SyncVectorOperationsMixin`) automatically uses client-side fusion when native
+isn't available. The two lanes differ only in the `await`.
 
 ## API Reference
 
@@ -139,7 +141,7 @@ class HybridSearchResult:
     metadata: dict[str, Any]    # Additional metadata
 ```
 
-### VectorOperationsMixin.hybrid_search
+### AsyncVectorOperationsMixin.hybrid_search
 
 ```python
 async def hybrid_search(

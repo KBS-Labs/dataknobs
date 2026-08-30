@@ -24,7 +24,7 @@ from ..streaming import (
     async_run_stream_write,
     resolve_conflict_write,
 )
-from ..vector import VectorOperationsMixin
+from ..vector import AsyncVectorOperationsMixin
 from ..vector.bulk_embed_mixin import AsyncBulkEmbedMixin
 from ..vector.python_vector_search import PythonVectorSearchMixin
 from .config import AsyncS3DatabaseConfig
@@ -49,14 +49,14 @@ logger = logging.getLogger(__name__)
 _session_manager: ConnectionPoolManager[Any] = ConnectionPoolManager()
 
 
-class AsyncS3Database(  # type: ignore[misc]
+class AsyncS3Database(
     StructuredConfigConsumer[AsyncS3DatabaseConfig],
     AsyncDatabase,
     VectorConfigMixin,
     SQLiteVectorSupport,
     PythonVectorSearchMixin,
     AsyncBulkEmbedMixin,
-    VectorOperationsMixin,
+    AsyncVectorOperationsMixin,
 ):
     """Native async S3 database backend with aioboto3 and session pooling.
 

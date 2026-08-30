@@ -15,7 +15,7 @@ from ..database import AsyncDatabase, enforce_content_version
 from ..exceptions import DuplicateRecordError
 from ..query import Query
 from ..query_logic import ComplexQuery
-from ..vector import VectorOperationsMixin
+from ..vector import AsyncVectorOperationsMixin
 from ..vector.bulk_embed_mixin import AsyncBulkEmbedMixin
 from ..vector.python_vector_search import PythonVectorSearchMixin
 from .config import AsyncSQLiteDatabaseConfig
@@ -38,14 +38,14 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-class AsyncSQLiteDatabase(  # type: ignore[misc]
+class AsyncSQLiteDatabase(
     StructuredConfigConsumer[AsyncSQLiteDatabaseConfig],
     AsyncDatabase,
     VectorConfigMixin,
     SQLiteVectorSupport,
     PythonVectorSearchMixin,  # Provides python_vector_search_async
-    AsyncBulkEmbedMixin,  # Must come before VectorOperationsMixin to override bulk_embed_and_store
-    VectorOperationsMixin,
+    AsyncBulkEmbedMixin,  # Must come before AsyncVectorOperationsMixin to override bulk_embed_and_store
+    AsyncVectorOperationsMixin,
 ):
     """Asynchronous SQLite database backend using aiosqlite.
 

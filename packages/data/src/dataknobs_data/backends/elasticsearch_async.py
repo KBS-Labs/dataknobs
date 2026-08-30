@@ -24,7 +24,7 @@ from ..streaming import (
     async_run_stream_write,
     resolve_conflict_write,
 )
-from ..vector.mixins import VectorOperationsMixin
+from ..vector.mixins import AsyncVectorOperationsMixin
 from ..vector.types import DistanceMetric, VectorSearchResult
 from .config import AsyncElasticsearchDatabaseConfig
 from .elasticsearch_mixins import (
@@ -57,7 +57,7 @@ _client_manager = ConnectionPoolManager()
 class AsyncElasticsearchDatabase(
     StructuredConfigConsumer[AsyncElasticsearchDatabaseConfig],
     AsyncDatabase,
-    VectorOperationsMixin,
+    AsyncVectorOperationsMixin,
     ElasticsearchBaseConfig,
     ElasticsearchIndexManager,
     ElasticsearchVectorSupport,
@@ -88,7 +88,7 @@ class AsyncElasticsearchDatabase(
         """
         cfg = self.config
 
-        # Vector support (async ES uses VectorOperationsMixin, not the
+        # Vector support (async ES uses AsyncVectorOperationsMixin, not the
         # VectorConfigMixin; it discovers vector fields lazily at write time).
         self.vector_fields: dict[str, int] = {}
         self.vector_enabled = False
@@ -1017,9 +1017,9 @@ class AsyncElasticsearchDatabase(
         # If not using native strategy, fall back to parent implementation
         if config.fusion_strategy != FusionStrategy.NATIVE:
             # Import parent class to call its implementation
-            from ..vector.mixins import VectorOperationsMixin
+            from ..vector.mixins import AsyncVectorOperationsMixin
 
-            return await VectorOperationsMixin.hybrid_search(
+            return await AsyncVectorOperationsMixin.hybrid_search(
                 self,
                 query_text=query_text,
                 query_vector=query_vector,
@@ -1085,9 +1085,9 @@ class AsyncElasticsearchDatabase(
         except Exception as e:
             # Fall back to client-side fusion if native RRF not available
             logger.warning(f"Native RRF not available ({e}), falling back to client-side fusion")
-            from ..vector.mixins import VectorOperationsMixin
+            from ..vector.mixins import AsyncVectorOperationsMixin
 
-            return await VectorOperationsMixin.hybrid_search(
+            return await AsyncVectorOperationsMixin.hybrid_search(
                 self,
                 query_text=query_text,
                 query_vector=query_vector,

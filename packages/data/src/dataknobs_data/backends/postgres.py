@@ -27,7 +27,7 @@ from ..streaming import (
     resolve_conflict_write,
     run_stream_write,
 )
-from ..vector.mixins import VectorOperationsMixin
+from ..vector.mixins import AsyncVectorOperationsMixin, SyncVectorOperationsMixin
 from .config import PostgresDatabaseConfig
 from .postgres_mixins import (
     PostgresBaseConfig,
@@ -102,7 +102,7 @@ def _ssl_to_sslmode(ssl: Any) -> str | None:
 class SyncPostgresDatabase(
     StructuredConfigConsumer[PostgresDatabaseConfig],
     SyncDatabase,
-    VectorOperationsMixin,
+    SyncVectorOperationsMixin,
     SQLRecordSerializer,
     PostgresBaseConfig,
     PostgresTableManager,
@@ -1128,7 +1128,7 @@ _pool_manager = ConnectionPoolManager[asyncpg.Pool]()
 class AsyncPostgresDatabase(
     StructuredConfigConsumer[PostgresDatabaseConfig],
     AsyncDatabase,
-    VectorOperationsMixin,
+    AsyncVectorOperationsMixin,
     PostgresBaseConfig,
     PostgresTableManager,
     PostgresVectorSupport,
@@ -2549,9 +2549,9 @@ class AsyncPostgresDatabase(
         # For NATIVE strategy with pgvector, we can do a combined query
         # For other strategies, use the parent implementation
         if config.fusion_strategy not in (FusionStrategy.NATIVE, FusionStrategy.RRF):
-            from ..vector.mixins import VectorOperationsMixin
+            from ..vector.mixins import AsyncVectorOperationsMixin
 
-            return await VectorOperationsMixin.hybrid_search(
+            return await AsyncVectorOperationsMixin.hybrid_search(
                 self,
                 query_text=query_text,
                 query_vector=query_vector,
@@ -2648,9 +2648,9 @@ class AsyncPostgresDatabase(
             logger.warning(
                 f"Native PostgreSQL hybrid search failed ({e}), falling back to client-side"
             )
-            from ..vector.mixins import VectorOperationsMixin
+            from ..vector.mixins import AsyncVectorOperationsMixin
 
-            return await VectorOperationsMixin.hybrid_search(
+            return await AsyncVectorOperationsMixin.hybrid_search(
                 self,
                 query_text=query_text,
                 query_vector=query_vector,
@@ -2790,9 +2790,9 @@ class AsyncPostgresDatabase(
         except Exception as e:
             # Fall back to LIKE-based search if full-text search fails
             logger.warning(f"PostgreSQL full-text search failed ({e}), falling back to LIKE")
-            from ..vector.mixins import VectorOperationsMixin
+            from ..vector.mixins import AsyncVectorOperationsMixin
 
-            return await VectorOperationsMixin._text_search_for_hybrid(
+            return await AsyncVectorOperationsMixin._text_search_for_hybrid(
                 self,
                 query_text=query_text,
                 text_fields=text_fields,

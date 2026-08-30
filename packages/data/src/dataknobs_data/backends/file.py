@@ -39,7 +39,7 @@ from ..streaming import (
     resolve_conflict_write,
     run_stream_write,
 )
-from ..vector import VectorOperationsMixin
+from ..vector import AsyncVectorOperationsMixin, SyncVectorOperationsMixin
 from ..vector.bulk_embed_mixin import AsyncBulkEmbedMixin, BulkEmbedMixin
 from ..vector.python_vector_search import PythonVectorSearchMixin
 from .config import FileDatabaseConfig
@@ -494,7 +494,7 @@ def _save_file_data(
         raise
 
 
-class AsyncFileDatabase(  # type: ignore[misc]
+class AsyncFileDatabase(
     StructuredConfigConsumer[FileDatabaseConfig],
     AsyncDatabase,
     AsyncStreamingMixin,
@@ -502,7 +502,7 @@ class AsyncFileDatabase(  # type: ignore[misc]
     SQLiteVectorSupport,
     PythonVectorSearchMixin,
     AsyncBulkEmbedMixin,
-    VectorOperationsMixin,
+    AsyncVectorOperationsMixin,
 ):
     """Async file-based database implementation.
 
@@ -886,7 +886,7 @@ class AsyncFileDatabase(  # type: ignore[misc]
                 )
 
 
-class SyncFileDatabase(  # type: ignore[misc]
+class SyncFileDatabase(
     StructuredConfigConsumer[FileDatabaseConfig],
     SyncDatabase,
     StreamingMixin,
@@ -894,7 +894,7 @@ class SyncFileDatabase(  # type: ignore[misc]
     SQLiteVectorSupport,
     PythonVectorSearchMixin,
     BulkEmbedMixin,
-    VectorOperationsMixin,
+    SyncVectorOperationsMixin,
 ):
     """Synchronous file-based database implementation.
 

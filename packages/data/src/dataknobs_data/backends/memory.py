@@ -19,7 +19,7 @@ from ..exceptions import DuplicateRecordError
 from ..query import is_storage_key_field
 from ..query_logic import ComplexQuery
 from ..streaming import AsyncStreamingMixin, StreamConfig, StreamingMixin, StreamResult
-from ..vector import VectorOperationsMixin
+from ..vector import AsyncVectorOperationsMixin, SyncVectorOperationsMixin
 from ..vector.bulk_embed_mixin import AsyncBulkEmbedMixin, BulkEmbedMixin
 from ..vector.python_vector_search import PythonVectorSearchMixin
 from .config import MemoryDatabaseConfig
@@ -36,7 +36,7 @@ if TYPE_CHECKING:
     from ..vector.types import DistanceMetric, VectorSearchResult
 
 
-class AsyncMemoryDatabase(  # type: ignore[misc]
+class AsyncMemoryDatabase(
     StructuredConfigConsumer[MemoryDatabaseConfig],
     AsyncDatabase,
     AsyncStreamingMixin,
@@ -44,7 +44,7 @@ class AsyncMemoryDatabase(  # type: ignore[misc]
     SQLiteVectorSupport,  # Provides _compute_similarity
     PythonVectorSearchMixin,  # Provides python_vector_search_async
     AsyncBulkEmbedMixin,  # Bulk embedding operations (async: awaits exists/update/create)
-    VectorOperationsMixin,  # Standard vector interface
+    AsyncVectorOperationsMixin,  # Standard vector interface
 ):
     """Async in-memory database implementation."""
 
@@ -353,7 +353,7 @@ class AsyncMemoryDatabase(  # type: ignore[misc]
         )
 
 
-class SyncMemoryDatabase(  # type: ignore[misc]
+class SyncMemoryDatabase(
     StructuredConfigConsumer[MemoryDatabaseConfig],
     SyncDatabase,
     StreamingMixin,
@@ -361,7 +361,7 @@ class SyncMemoryDatabase(  # type: ignore[misc]
     SQLiteVectorSupport,
     PythonVectorSearchMixin,
     BulkEmbedMixin,
-    VectorOperationsMixin,
+    SyncVectorOperationsMixin,
 ):
     """Synchronous in-memory database implementation."""
 

@@ -18,7 +18,7 @@ from ..query import Query
 from ..query_logic import ComplexQuery
 from ..records import Record
 from ..vector.bulk_embed_mixin import BulkEmbedMixin
-from ..vector.mixins import VectorOperationsMixin
+from ..vector.mixins import SyncVectorOperationsMixin
 from ..vector.python_vector_search import PythonVectorSearchMixin
 from .config import SyncSQLiteDatabaseConfig
 from .sql_base import (
@@ -41,13 +41,13 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-class SyncSQLiteDatabase(  # type: ignore[misc]
+class SyncSQLiteDatabase(
     StructuredConfigConsumer[SyncSQLiteDatabaseConfig],
     SyncDatabase,
     VectorConfigMixin,
     PythonVectorSearchMixin,  # Provides python_vector_search_sync
-    BulkEmbedMixin,  # Must come before VectorOperationsMixin to override bulk_embed_and_store
-    VectorOperationsMixin,
+    BulkEmbedMixin,  # Must come before SyncVectorOperationsMixin to override bulk_embed_and_store
+    SyncVectorOperationsMixin,
     SQLiteVectorSupport,
     SQLRecordSerializer,  # Use the standard SQL serializer
 ):

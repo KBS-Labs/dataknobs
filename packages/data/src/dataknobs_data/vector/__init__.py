@@ -28,7 +28,13 @@ from .exceptions import (
     VectorValidationError,
 )
 from .migration import IncrementalVectorizer, VectorMigration
-from .mixins import VectorCapable, VectorOperationsMixin, VectorSyncMixin
+from .mixins import (
+    AsyncVectorOperationsMixin,
+    SyncVectorOperationsMixin,
+    VectorCapable,
+    VectorOperationsMixin,
+    VectorSyncMixin,
+)
 from .operations import (
     batch_compute_distances,
     chunk_vectors,
@@ -71,6 +77,8 @@ __all__ = [
     "reciprocal_rank_fusion",
     "weighted_score_fusion",
     # Mixins
+    "AsyncVectorOperationsMixin",
+    "SyncVectorOperationsMixin",
     "VectorCapable",
     "VectorOperationsMixin",
     "VectorSyncMixin",

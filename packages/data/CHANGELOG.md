@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`SyncVectorOperationsMixin` and `AsyncVectorOperationsMixin`** — one
+  vector-operations mixin per lane, in `dataknobs_data.vector`.
+  `VectorOperationsMixin` remains as a name for the async one, so an existing
+  async backend that mixes it in is unaffected. Every backend now mixes in the
+  lane it belongs to; see **Fixed** for what the single async mixin did on the
+  sync side.
+
 - **`coerce_operator` and `coerce_sort_order`** in `dataknobs_data`, the one
   reading of a filter operator or a sort order whatever spelling it arrives
   in. Exported because a backend or a consumer building a `Filter` by hand
@@ -24,6 +31,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   names no operator; that caller was getting the wrong answer. Every spelling
   that worked before still works, and more do: an operator's own value, that
   value in any case with spaces for underscores (`"NOT BETWEEN"`), and `"=="`.
+
+- **The vector-operations mixins take everything after `query_vector` by
+  keyword in `vector_search`.** The implementations do not agree on positional
+  order — most spell it `(..., k, filter, metric)` where the declaration says
+  `(..., k, metric, filter)` — so a fourth positional argument already meant
+  the metric on some backends and the filter on others. No concrete signature
+  changes and no runtime behaviour changes; what changes is that a call
+  written against the abstract declaration can no longer be written in the one
+  form that was never portable.
+
+- **`SyncDatabase.config` and `AsyncDatabase.config` are read-only
+  properties** rather than writeable attributes. This completes the migration
+  to typed configuration ("replacing dict-as-`self.config`"): every backend in
+  the package already exposes a typed `DatabaseConfig` through
+  `StructuredConfigConsumer`, and a writeable attribute on one base against a
+  read-only property on the other is a combination no class can have — so a
+  type checker held every migrated backend impossible and stopped checking
+  from the construction branch onward, which is the branch all of them run.
+  Reading `db.config` is unchanged; assigning to it now raises.
 
 - **`IncrementalVectorizer.run_batch` takes a `timeout`,** and `limit` counts
   records *attempted* rather than records that succeeded — a budget of
@@ -49,6 +75,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   It now waits on the same conditions `wait_for_completion` does, plus the
   record budget, and stops the vectorizer on every exit including an
   exception.
+
+- **A sync backend's inherited vector methods run.** One
+  `VectorOperationsMixin` declared every method `async` and was mixed into
+  sync backends as readily as async ones — five of the seven sync backends
+  carry a vector surface, and all five got the async mixin — so
+  `update_vector`, `delete_from_index` and `hybrid_search` called
+  `await self.read(...)` / `await self.delete(...)` / `await self.search(...)`
+  on a synchronous database and raised `TypeError: object NoneType can't be
+  used in 'await' expression`. The mixin is now one per lane and each backend
+  mixes in its own; a sweep over all fourteen backends holds every method of
+  the vector surface to the lane its class is in.
 
 - **`Operator.NOT_LIKE` is reachable from `Query.filter`.** The fluent
   builder carried a private table of operator spellings — a hand-written
