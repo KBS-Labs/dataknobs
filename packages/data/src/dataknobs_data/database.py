@@ -17,7 +17,7 @@ import threading
 import uuid
 from abc import ABC, abstractmethod
 from contextlib import asynccontextmanager
-from typing import TYPE_CHECKING, Any, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar, Self
 
 from dataknobs_common import (
     Capability,
@@ -36,6 +36,7 @@ from .transactions import VALID_TRANSACTION_POLICIES, BufferedTransaction
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Callable, Container, Iterable, Iterator
+    from types import TracebackType
 
     from .query_logic import ComplexQuery
     from .records import Record
@@ -646,7 +647,7 @@ class AsyncDatabase(RecordStorageMixin, CapabilityMixin, ABC):
         """
         self.schema.add_field(field_schema)
 
-    def with_schema(self, **field_definitions) -> AsyncDatabase:
+    def with_schema(self, **field_definitions: Any) -> AsyncDatabase:
         """Set schema using field definitions.
 
         Returns self for chaining.
@@ -1158,22 +1159,37 @@ class AsyncDatabase(RecordStorageMixin, CapabilityMixin, ABC):
         """Disconnect from the database (alias for close)."""
         await self.close()
 
-    async def __aenter__(self):
+    async def __aenter__(self) -> Self:
         """Async context manager entry."""
         await self.connect()
         return self
 
-    async def __aexit__(self, exc_type, exc_val, exc_tb):
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: TracebackType | None,
+    ) -> None:
         """Async context manager exit."""
         await self.close()
 
     @abstractmethod
-    async def stream_read(
+    def stream_read(
         self, query: Query | None = None, config: StreamConfig | None = None
     ) -> AsyncIterator[Record]:
         """Stream records from database.
 
         Yields records one at a time, fetching in batches internally.
+
+        Declared without ``async``, matching the sync sibling below. Every
+        implementation is an ``async def`` **generator**, whose type is
+        ``AsyncIterator[Record]``; an ``async def`` here instead declares a
+        *coroutine returning* one, which is a different thing and one no caller
+        wants --- consuming it would read ``async for r in await db.stream_read()``,
+        and no call site in the workspace reads that: every one of them consumes
+        it directly, as ``async for r in db.stream_read(...)``. So the
+        declaration was wrong rather than the seven implementations, and it
+        reported each of them as an incompatible override.
 
         Args:
             query: Optional query to filter records
@@ -1390,7 +1406,7 @@ class SyncDatabase(RecordStorageMixin, CapabilityMixin, ABC):
         """
         self.schema.add_field(field_schema)
 
-    def with_schema(self, **field_definitions) -> SyncDatabase:
+    def with_schema(self, **field_definitions: Any) -> SyncDatabase:
         """Set schema using field definitions.
 
         Returns self for chaining.
@@ -1813,12 +1829,17 @@ class SyncDatabase(RecordStorageMixin, CapabilityMixin, ABC):
         """Disconnect from the database (alias for close)."""
         self.close()
 
-    def __enter__(self):
+    def __enter__(self) -> Self:
         """Context manager entry."""
         self.connect()
         return self
 
-    def __exit__(self, exc_type, exc_val, exc_tb):
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: TracebackType | None,
+    ) -> None:
         """Context manager exit."""
         self.close()
 

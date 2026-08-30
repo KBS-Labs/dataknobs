@@ -57,11 +57,11 @@ from __future__ import annotations
 import asyncio
 import inspect
 import logging
-from collections.abc import Callable, Iterable
+from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import dataclass
 from enum import Enum
 from functools import cmp_to_key
-from typing import Any, Generic, Protocol, TypeVar, runtime_checkable
+from typing import Any, Generic, Protocol, TypeGuard, TypeVar, runtime_checkable
 
 from dataknobs_common.events import Event, EventBus, EventType
 from dataknobs_common.exceptions import DataknobsError
@@ -75,6 +75,7 @@ __all__ = [
     "CompositeOrdering",
     "ErrorPolicy",
     "FIFOOrdering",
+    "is_async_callable",
     "PriorityOrdering",
     "RecordingCallbackRegistry",
     "StageOrdering",
@@ -83,6 +84,55 @@ __all__ = [
 logger = logging.getLogger(__name__)
 
 CallbackT = TypeVar("CallbackT", bound=Callable[..., Any])
+
+
+# --------------------------------------------------------------------- #
+# Callable shape
+# --------------------------------------------------------------------- #
+
+
+def is_async_callable(candidate: Any) -> TypeGuard[Callable[..., Awaitable[Any]]]:
+    """Whether calling ``candidate`` produces an awaitable.
+
+    :func:`inspect.iscoroutinefunction` answers this for *functions* and gets
+    it wrong for a callable **object** whose ``__call__`` is an ``async def``
+    — which is how anything stateful is written: an embedder holding a model
+    handle, a client holding a session, a callback holding a counter. It
+    reports such an object as sync, and every caller that branches on the
+    answer then does the sync thing to something async.
+
+    That failure is silent by construction. Calling an async callable without
+    awaiting it raises nothing; it returns a coroutine object, which is truthy,
+    non-``None``, and quietly discarded — or, worse, stored. So the check has
+    to be made once, correctly, rather than spelled out at each branch.
+
+    ``fire_async`` below has always had the robust form of this judgement
+    (:func:`inspect.isawaitable` on the *result*). This is the same judgement
+    made **before** the call, which is what a guard needs and what a caller
+    choosing between ``await fn(...)`` and ``asyncio.to_thread(fn, ...)``
+    needs.
+
+    Args:
+        candidate: Any value. Non-callables answer ``False`` rather than
+            raising, because callers ask about arbitrary configured values.
+
+    Returns:
+        ``True`` if calling ``candidate`` returns an awaitable. Declared as a
+        :class:`~typing.TypeGuard` so the type checker narrows in the ``True``
+        branch, as it does for :func:`asyncio.iscoroutinefunction` --- without
+        that this is not a drop-in replacement, and every call site that awaits
+        inside the branch would need a cast instead.
+    """
+    # Covers plain ``async def``, bound async methods, and (since 3.8) a
+    # ``functools.partial`` wrapping any of them.
+    if inspect.iscoroutinefunction(candidate):
+        return True
+    if not callable(candidate):
+        return False
+    # A callable object: the coroutine-ness lives on its ``__call__``, which
+    # ``callable()`` has just established exists. The check above already
+    # settled every non-object callable, so a ``False`` from here is genuine.
+    return inspect.iscoroutinefunction(candidate.__call__)
 
 
 # --------------------------------------------------------------------- #
@@ -467,7 +517,7 @@ class CallbackRegistry(Generic[CallbackT]):
            fan-out paths in async-heavy environments.
         """
         entries = self._sorted_entries(topic)
-        async_entries = [e for e in entries if inspect.iscoroutinefunction(e.callback)]
+        async_entries = [e for e in entries if is_async_callable(e.callback)]
         if async_entries:
             raise TypeError(
                 f"Cannot fire() topic {topic!r}: "

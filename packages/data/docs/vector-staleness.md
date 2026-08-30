@@ -122,30 +122,31 @@ nothing to compare against, and inventing a comparison would report every such
 field stale on the first sweep.
 
 That default assumes the digest survives storage, and whether it does is a
-property of the backend. The rule: a backend that stores a field as a whole
-object round-trips the digest; one that stores a bare column value does not.
+property of the backend.
 
 | Backend | Vector field metadata | |
 |---|---|---|
 | memory, file (`json`), sqlite | round-trips | measured |
-| file (`csv`, `tsv`, `parquet`) | **not preserved** | measured |
+| file (`csv`, `tsv`) | round-trips | measured |
+| file (`parquet`) | round-trips | shares the flat-format path; `pyarrow` is an optional extra, so a default test run does not measure it |
 | elasticsearch | round-trips, for vector fields declared on the index | |
 
-!!! warning "Flat file formats cannot detect staleness"
+### How a flat format carries it
 
-    A flat table has no column for a field's metadata, so those formats keep
-    a vector's numbers and nothing else. A vector read back from one is a
-    plain value rather than a `VectorField` and carries no digest — and with
-    no digest to compare, an edited record is **never re-embedded**. Measured
-    on the same corpus, one edit, one sweep:
+A flat table has one cell per field and nowhere to put that field's `type` or
+`metadata`, so `csv`, `tsv` and `parquet` used to reduce a field to its bare
+`value`. A `VectorField` went in and a plain `Field` holding a list of numbers
+came back — carrying no digest, and so judged current forever. That was silent,
+and it is fixed: the reduction is now conditional.
 
-    | Format | `sync_all()` after an edit |
-    |---|---|
-    | `json` | `updated=1`, one embedding |
-    | `csv` | `updated=0`, no embeddings |
+| The field | The cell |
+|---|---|
+| a plain scalar value, no metadata | the bare value |
+| anything more — a vector, or any field carrying metadata | the whole field dict, as JSON |
 
-    This is silent. Use `force=True` on those formats, or a backend that
-    preserves field metadata, if the corpus is edited after it is embedded.
+So a CSV of ordinary records still opens in a spreadsheet as ordinary columns,
+which is the reason to ask for one, and a vector column holds a JSON object that
+`Record.from_dict` reconstructs into the same `VectorField` that was written.
 
 `ChangeTracker.get_outdated_records` backfills the digest for a field that has
 none rather than queueing it: it computes what the digest would be now, stores

@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Changed
+
+- **`IncrementalVectorizer.wait_for_completion(check_interval=...)` is now
+  `wait_for_completion(timeout=None) -> bool`.** The old parameter set how
+  often to poll a condition that no longer needs polling, and the method could
+  not report failure — a stalled worker hung the caller forever. Source-breaking
+  for a caller that passed `check_interval=`; the fix it is part of is in
+  **Fixed** below.
+
 ### Fixed
 
 - **`VectorTextSynchronizer`'s change tracking works, in both of its
@@ -108,14 +117,80 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `IncrementalVectorizer` therefore reported a version mismatch and was
   re-embedded on every sweep.
 
-### Known limitation
+- **The file backend's flat formats keep a field's metadata.** `CSVFormat` and
+  `ParquetFormat` each reduced a serialized field to its bare `value`, dropping
+  `type` and `metadata`, so a `VectorField` went in and a plain `Field` holding
+  a list of numbers came back. With no digest to compare, an edited record was
+  never re-embedded and the sweep reported success — measured on one corpus and
+  one edit, `updated=1` on `json` against `updated=0` on `csv`. The reduction is
+  now conditional and lives in one place rather than in each format's own copy:
+  a field whose whole content is a scalar still becomes a bare cell, which is
+  what makes a CSV readable in a spreadsheet, and a field carrying more is
+  written as its full JSON dict, which `Record.from_dict` reconstructs exactly.
 
-- **The file backend's flat formats cannot detect staleness.** `csv`, `tsv` and
-  `parquet` have no column for a field's metadata, so a vector read back from
-  one is a plain value carrying no digest — and with nothing to compare, an
-  edited record is never re-embedded. Measured: one edit, one `sync_all()`,
-  `updated=1` on `json` and `updated=0` on `csv`. Use `force=True` on those
-  formats, or a backend that preserves field metadata.
+- **`bulk_embed_and_store` on an async backend stores the records.**
+  `AsyncBulkEmbedMixin` existed and was mixed into nothing: `AsyncMemoryDatabase`,
+  `AsyncFileDatabase`, `AsyncS3Database` and `AsyncSQLiteDatabase` all inherited
+  the **sync** `BulkEmbedMixin`, whose `self.exists` / `self.update` /
+  `self.create` calls were then made without `await`. A coroutine object is
+  truthy, so the `exists` branch was taken for a record that did not exist, the
+  `update` coroutine never ran, and the `create` coroutine was appended to the
+  result list in place of an id. Measured on `AsyncMemoryDatabase`: the call
+  returned `['coroutine', 'coroutine']` and the database held zero records, with
+  no exception raised anywhere. The two mixins were near-copies differing only
+  in their `await`s, which is why nothing looked wrong at the import site;
+  everything that is not the awaiting is now shared between them.
+
+- **An `embedding_fn` may be a callable object.** Seven sites asked
+  `asyncio.iscoroutinefunction`, which answers for *functions* and reports an
+  object with an `async def __call__` as synchronous — and an embedder holds a
+  model handle, so that is the natural way to write one. Misclassified, it was
+  handed to `asyncio.to_thread`, which called it in a worker thread and returned
+  the **coroutine**. `VectorTextSynchronizer` at least logged an unexpected type
+  and stored nothing; `IncrementalVectorizer` wrote the coroutine object into
+  the record as the vector value and persisted it. The branch now lives once, in
+  `dataknobs_data.vector.embedding_fn`, over `is_async_callable`.
+  `IncrementalVectorizer`'s `progress_callback` is classified the same way, and
+  its annotation now admits the async callback its body has always awaited.
+
+- **A record read back carries the id it was read under.**
+  `SyncMemoryDatabase.read` and `read_batch` returned a bare `copy()` instead of
+  routing through `Database._prepare_record_from_storage`, as every other read
+  path in the package does. That backend deliberately stores the record without
+  the id embedded in it, so the id came back `None` — and `read`, edit,
+  `update(record.id, record)` is the round trip every caller performs. A caller
+  that falls back to `create()` when there is no id, as `bulk_embed_and_store`
+  does, wrote a **duplicate** of the record it meant to replace. The file
+  backends' `read_batch` had the same bare copy; it happened to return the id
+  because that backend serializes it into the payload, so the guarantee held by
+  accident of the storage format and now holds by construction.
+
+- **`IncrementalVectorizer.wait_for_completion` waits for the work.** It polled
+  `self._queue.qsize()` and returned as soon as that was zero, which two states
+  satisfy and neither means done: nothing has been enqueued *yet* — `start()`
+  creates the loader as a task, so a call made straight afterwards returns
+  before its first query, measured at zero of twelve records vectorized — and
+  everything is in flight, since `qsize()` drops the moment a worker takes a
+  record rather than when it has written it. The workers now call `task_done()`
+  and the waiter `join()`, plus the half a queue cannot express: whether the
+  loader's last query found anything left. It takes a `timeout` and returns
+  `bool`, replacing a `check_interval` that could not fail; a waiter is also
+  released by `stop()` rather than left behind.
+
+  The queue loader waits on the same `join()`, so a record taken but not yet
+  written is no longer re-queried and embedded twice, and its idle and
+  error-retry delays are constructor arguments (`idle_interval`,
+  `error_retry_interval`) rather than a hardcoded 60 and 10 seconds. Every wait
+  in the class races the work against shutdown instead of polling for it, so
+  stopping is immediate rather than one poll interval away.
+
+- **`AsyncDatabase.stream_read` is declared as what its implementations are.**
+  The abstract method was an `async def` returning `AsyncIterator[Record]` — a
+  coroutine *returning* an iterator, which would be consumed as
+  `async for r in await db.stream_read()`. All seven implementations are async
+  generators and no call site in the workspace awaits it — every one consumes
+  it directly — so the declaration was the thing that was wrong, and it
+  reported every implementation as an incompatible override.
 
 ### Removed
 

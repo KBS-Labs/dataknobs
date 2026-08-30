@@ -16,7 +16,7 @@ from ..exceptions import DuplicateRecordError
 from ..query import Query
 from ..query_logic import ComplexQuery
 from ..vector import VectorOperationsMixin
-from ..vector.bulk_embed_mixin import BulkEmbedMixin
+from ..vector.bulk_embed_mixin import AsyncBulkEmbedMixin
 from ..vector.python_vector_search import PythonVectorSearchMixin
 from .config import AsyncSQLiteDatabaseConfig
 from .sql_base import (
@@ -44,7 +44,7 @@ class AsyncSQLiteDatabase(  # type: ignore[misc]
     VectorConfigMixin,
     SQLiteVectorSupport,
     PythonVectorSearchMixin,  # Provides python_vector_search_async
-    BulkEmbedMixin,  # Must come before VectorOperationsMixin to override bulk_embed_and_store
+    AsyncBulkEmbedMixin,  # Must come before VectorOperationsMixin to override bulk_embed_and_store
     VectorOperationsMixin,
 ):
     """Asynchronous SQLite database backend using aiosqlite.

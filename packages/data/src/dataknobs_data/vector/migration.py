@@ -10,16 +10,19 @@ from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
+from dataknobs_common.callbacks import is_async_callable
+
 from ..fields import FieldType
 from ..query import Query
 from ..records import Record
 from ..schema import FieldSchema
 from .sync import SyncConfig, VectorTextSynchronizer
 from .content import assemble_source_text
+from .embedding_fn import call_embedding_fn
 from .types import VectorMetadata
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Coroutine
+    from collections.abc import Awaitable, Callable, Coroutine
 
     from ..database import AsyncDatabase
 
@@ -218,10 +221,7 @@ class VectorMigration:
                             embedding_fn = self.embedding_fn
 
                             # Generate embedding
-                            if asyncio.iscoroutinefunction(embedding_fn):
-                                embedding = await embedding_fn(text)
-                            else:
-                                embedding = await asyncio.to_thread(embedding_fn, text)
+                            embedding = await call_embedding_fn(embedding_fn, text)
 
                             # Create VectorField
                             from ..fields import VectorField
@@ -321,10 +321,7 @@ class VectorMigration:
             async def embedding_wrapper(text: str) -> np.ndarray:
                 nonlocal last_embedding_exception
                 try:
-                    if asyncio.iscoroutinefunction(embedding_fn):
-                        result = await embedding_fn(text)
-                    else:
-                        result = await asyncio.to_thread(embedding_fn, text)
+                    result = await call_embedding_fn(embedding_fn, text)
                     return np.asarray(result)
                 except Exception as e:
                     last_embedding_exception = e
@@ -442,10 +439,7 @@ class VectorMigration:
             return None
         embedding_fn = self.embedding_fn
         try:
-            if asyncio.iscoroutinefunction(embedding_fn):
-                result = await embedding_fn(text)
-            else:
-                result = await asyncio.to_thread(embedding_fn, text)
+            result = await call_embedding_fn(embedding_fn, text)
 
             if isinstance(result, np.ndarray):
                 return result
@@ -736,6 +730,8 @@ class IncrementalVectorizer:
         max_workers: int = 4,
         model_name: str | None = None,
         model_version: str | None = None,
+        idle_interval: float = 60.0,
+        error_retry_interval: float = 10.0,
     ):
         """Initialize the incremental vectorizer with simplified parameters.
 
@@ -750,6 +746,11 @@ class IncrementalVectorizer:
             max_workers: Maximum concurrent workers
             model_name: Name of the embedding model
             model_version: Version of the embedding model
+            idle_interval: Seconds to wait before re-querying once the source
+                has nothing left to vectorize. Shutdown interrupts it, so a
+                long interval costs nothing at stop time.
+            error_retry_interval: Seconds to wait after a failed load before
+                retrying. Also interrupted by shutdown.
         """
         self.database = database
         self.embedding_fn = embedding_fn
@@ -770,12 +771,20 @@ class IncrementalVectorizer:
         self.max_workers = max_workers
         self.model_name = model_name
         self.model_version = model_version
+        self.idle_interval = idle_interval
+        self.error_retry_interval = error_retry_interval
 
         # Processing state
         self._queue: asyncio.Queue[Record] = asyncio.Queue()
         self._processing_task: asyncio.Task | None = None
         self._workers: list[asyncio.Task] = []
         self._shutdown_event = asyncio.Event()
+        # Set by the loader when a query finds nothing left to vectorize, and
+        # cleared when one finds something. The queue cannot answer this: an
+        # empty queue means the loader has not enqueued *yet* just as readily
+        # as it means there is nothing left to enqueue, and those are the two
+        # states `wait_for_completion` has to tell apart.
+        self._source_drained = asyncio.Event()
         self._stats = {
             "processed": 0,
             "failed": 0,
@@ -803,20 +812,24 @@ class IncrementalVectorizer:
         logger.info(f"Worker {worker_id} started")
 
         while not self._shutdown_event.is_set():
+            # Get record from queue with timeout
             try:
-                # Get record from queue with timeout
-                try:
-                    record = await asyncio.wait_for(self._queue.get(), timeout=1.0)
-                except TimeoutError:
-                    continue
+                record = await asyncio.wait_for(self._queue.get(), timeout=1.0)
+            except TimeoutError:
+                continue
 
-                # Process record
+            try:
                 await self._process_record(record)
                 self._stats["processed"] += 1
-
             except Exception as e:
                 logger.error(f"Worker {worker_id} error: {e}")
                 self._stats["failed"] += 1
+            finally:
+                # Exactly one `task_done` per `get`, whatever the outcome. This
+                # is what makes the record's whole lifetime -- queued, taken,
+                # embedded, written -- visible to a waiter, where `qsize()`
+                # went back to zero the moment it was taken.
+                self._queue.task_done()
 
         logger.info(f"Worker {worker_id} stopped")
 
@@ -839,10 +852,7 @@ class IncrementalVectorizer:
                     return
 
             # Generate embedding
-            if asyncio.iscoroutinefunction(self.embedding_fn):
-                embedding = await self.embedding_fn(str(source_text))
-            else:
-                embedding = await asyncio.to_thread(self.embedding_fn, str(source_text))
+            embedding = await call_embedding_fn(self.embedding_fn, str(source_text))
 
             if embedding is None:
                 return
@@ -892,6 +902,10 @@ class IncrementalVectorizer:
             return
 
         self._shutdown_event.clear()
+        # A restart begins with the source unproven, exactly as a first start
+        # does; leaving a previous run's verdict standing would let the first
+        # `wait_for_completion` of the new run return on it.
+        self._source_drained.clear()
 
         # Start workers
         self._workers = [asyncio.create_task(self._worker(i)) for i in range(self.max_workers)]
@@ -928,53 +942,69 @@ class IncrementalVectorizer:
     async def _load_queue(self) -> None:
         """Load records into processing queue.
 
-        The loop waits for the queue to drain before fetching again. Without
-        that it re-queries the instant it has enqueued a batch, gets back the
-        records the workers have not written yet, and enqueues them a second
-        time --- a busy loop that grows the queue faster than the workers can
-        empty it and never terminates.
+        The loop waits for the batch it queued to be *finished* before fetching
+        again. Without that it re-queries the instant it has enqueued, gets
+        back the records the workers have not written yet, and enqueues them a
+        second time --- a busy loop that grows the queue faster than the
+        workers can empty it and never terminates.
 
-        That was invisible while the fetch itself was broken: this loop always
-        raised into its own `except` and enqueued nothing, so nothing ever
-        exercised the path after it.
+        Waiting for the queue to merely *empty* is not enough either: a record
+        taken but not yet written is gone from the queue and still absent from
+        the database, so the next query returns it and it is embedded twice.
+        `Queue.join()` is the distinction, and it is why the workers call
+        `task_done()`.
+
+        None of this was reachable while the fetch itself was broken: the loop
+        raised into its own `except` on every pass and enqueued nothing.
         """
         while not self._shutdown_event.is_set():
             try:
-                if not await self._wait_for_queue_to_drain():
+                if not await self._until_shutdown(self._queue.join()):
                     break
 
                 records = await self._load_pending_records()
 
                 if not records:
-                    # No more records to process
-                    await asyncio.sleep(60)  # Check again in a minute
+                    # Nothing left to vectorize. Say so -- it is the half of
+                    # "done" the queue cannot express -- then idle until there
+                    # might be, or until shutdown, whichever comes first.
+                    self._source_drained.set()
+                    await self._until_shutdown(asyncio.sleep(self.idle_interval))
                     continue
 
-                # Add to queue
+                self._source_drained.clear()
                 for record in records:
                     await self._queue.put(record)
                     self._stats["queued"] += 1
 
             except Exception as e:
                 logger.error(f"Failed to load queue: {e}")
-                await asyncio.sleep(10)
+                await self._until_shutdown(asyncio.sleep(self.error_retry_interval))
 
-    async def _wait_for_queue_to_drain(self, poll_interval: float = 0.05) -> bool:
-        """Block until the workers have taken everything already queued.
+    async def _until_shutdown(self, awaitable: Any) -> bool:
+        """Await ``awaitable``, abandoning it if shutdown is requested first.
 
-        A record can still be in flight when this returns --- taken from the
-        queue but not yet written back --- so the next query may hand it back.
-        `_process_record` returns without embedding when a vector is already
-        present, so the duplicate costs a read and nothing else.
+        Every wait in this class is a race between the thing being waited for
+        and the instruction to stop. Polling a flag instead makes the shutdown
+        latency the poll interval and the code an `ASYNC110` busy-wait; racing
+        the two makes the latency zero and lets each caller see which won.
+
+        Args:
+            awaitable: The work, delay or join to wait for. It is cancelled if
+                shutdown wins, so it must be safe to abandon.
 
         Returns:
-            False if shutdown was requested while waiting.
+            ``True`` if the awaitable finished first, ``False`` on shutdown.
         """
-        while self._queue.qsize() > 0:
-            if self._shutdown_event.is_set():
-                return False
-            await asyncio.sleep(poll_interval)
-        return not self._shutdown_event.is_set()
+        work = asyncio.ensure_future(awaitable)
+        shutdown = asyncio.ensure_future(self._shutdown_event.wait())
+        try:
+            done, _ = await asyncio.wait({work, shutdown}, return_when=asyncio.FIRST_COMPLETED)
+            return work in done
+        finally:
+            for task in (work, shutdown):
+                task.cancel()
+            await asyncio.gather(work, shutdown, return_exceptions=True)
 
     async def stop(self, timeout: float = 30.0) -> None:
         """Stop incremental vectorization.
@@ -1010,7 +1040,10 @@ class IncrementalVectorizer:
 
     async def run(
         self,
-        progress_callback: Callable[[int, int, list], None] | None = None,
+        # The body has always awaited an async callback; the annotation said it
+        # would not, which is the kind of disagreement only a type checker with
+        # something to narrow ever reports.
+        progress_callback: Callable[[int, int, list], Awaitable[None] | None] | None = None,
         max_workers: int | None = None,
     ) -> dict[str, Any]:
         """Run the complete vectorization.
@@ -1060,7 +1093,11 @@ class IncrementalVectorizer:
                     failed += 1
 
                 if progress_callback:
-                    if asyncio.iscoroutinefunction(progress_callback):
+                    # Same classification question as the embedding function,
+                    # so the same predicate answers it -- a callable object
+                    # with an async ``__call__`` is the natural shape for a
+                    # progress reporter that accumulates.
+                    if is_async_callable(progress_callback):
                         await progress_callback(processed, total, batch)
                     else:
                         progress_callback(processed, total, batch)
@@ -1118,16 +1155,56 @@ class IncrementalVectorizer:
             "is_running": bool(self._processing_task and not self._processing_task.done()),
         }
 
-    async def wait_for_completion(self, check_interval: float = 5.0) -> None:
-        """Wait for all queued records to be processed.
+    async def wait_for_completion(self, timeout: float | None = None) -> bool:
+        """Block until there is nothing left to vectorize.
+
+        "Nothing left" is two conditions, and the queue can only express one
+        of them:
+
+        * **The queue is joined** --- every record put on it has been taken
+          *and* finished. `qsize()` drops to zero the moment a worker takes a
+          record, which is before it has embedded or written it.
+        * **The source is drained** --- the loader's last query found no
+          pending records. Without this, a call made immediately after
+          `start()` returns at once, because the loader is a task that has not
+          run yet and the queue it will fill is empty. Measured on a corpus of
+          twelve pending records: the previous implementation returned with
+          zero of them vectorized.
 
         Args:
-            check_interval: Seconds between queue checks
-        """
-        while self._queue.qsize() > 0:
-            await asyncio.sleep(check_interval)
+            timeout: Seconds to wait, or ``None`` to wait indefinitely. The
+                previous signature took a poll interval and had no timeout at
+                all, so a stalled worker hung the caller forever.
 
-        logger.info("All queued records processed")
+        Returns:
+            ``True`` if everything is vectorized; ``False`` on timeout or if
+            :meth:`stop` was called while waiting. A waiter is never left
+            behind by a shutdown.
+        """
+
+        async def _idle() -> None:
+            while True:
+                await self._queue.join()
+                if self._source_drained.is_set():
+                    return
+                # The loader has more to enqueue. Wait for its verdict rather
+                # than re-checking on a timer.
+                await self._source_drained.wait()
+
+        idle = asyncio.ensure_future(_idle())
+        shutdown = asyncio.ensure_future(self._shutdown_event.wait())
+        try:
+            done, _ = await asyncio.wait(
+                {idle, shutdown}, timeout=timeout, return_when=asyncio.FIRST_COMPLETED
+            )
+            if idle in done:
+                logger.info("All queued records processed")
+                return True
+            return False
+        finally:
+            for task in (idle, shutdown):
+                task.cancel()
+            await asyncio.gather(idle, shutdown, return_exceptions=True)
 
     async def run_with_checkpoint(self, resume_from: str | None = None) -> VectorizationResult:
         """Run the complete vectorization with checkpoint support.

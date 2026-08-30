@@ -575,7 +575,14 @@ class TestIncrementalVectorizer:
 
     @pytest.mark.asyncio
     async def test_wait_for_completion(self, source_database, async_embedding_fn):
-        """Test waiting for queue completion."""
+        """Waiting returns once the corpus is vectorized, not before.
+
+        This asserted only that the queue was empty afterwards, which the old
+        implementation satisfied by returning before the loader had enqueued
+        anything at all. It now asserts the outcome the method promises; see
+        ``test_incremental_vectorizer_completion.py`` for the reproduce cells
+        that pin each way the old one could return early.
+        """
         source_database.schema.add_vector_field(
             "content_embedding", dimensions=384, source_field="content"
         )
@@ -588,19 +595,18 @@ class TestIncrementalVectorizer:
             max_workers=1,
         )
 
-        # Add items to queue
+        # Pre-seed part of the queue, so both routes onto it are covered: these
+        # three by hand, the rest by the loader once it runs.
         records = await source_database.all()
         for record in records[:3]:
             await vectorizer._queue.put(record)
 
-        # Start processing
         await vectorizer.start()
+        try:
+            assert await vectorizer.wait_for_completion(timeout=30.0) is True
+        finally:
+            await vectorizer.stop()
 
-        # Wait for completion
-        await vectorizer.wait_for_completion(check_interval=0.05)
-
-        # Queue should be empty
         assert vectorizer._queue.qsize() == 0
-
-        # Stop
-        await vectorizer.stop()
+        vectorized = [r for r in await source_database.all() if r.get_value("content_embedding")]
+        assert len(vectorized) == len(records)

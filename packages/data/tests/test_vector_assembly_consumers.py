@@ -179,12 +179,13 @@ class TestBulkEmbedAssembly:
     def test_the_separator_is_configurable_and_a_digest_is_recorded(self):
         """Fails on both counts against the unconverted mixin.
 
-        The records come from ``all()`` rather than ``read()`` deliberately:
-        ``SyncMemoryDatabase.read`` returns a record whose ``id`` is ``None``,
-        and ``bulk_embed_and_store`` reads ``record.id`` to decide between
-        update and create --- so feeding it a ``read()`` result makes it store
-        a *duplicate*. That is a defect in its own right and not this one, so
-        this cell routes around it rather than asserting today's behaviour.
+        The records come from ``all()`` rather than ``read()`` for no reason
+        beyond convenience now. It used to be a workaround:
+        ``SyncMemoryDatabase.read`` dropped the id, and ``bulk_embed_and_store``
+        reads ``record.id`` to choose between update and create, so a ``read()``
+        result made it store a *duplicate*. That is fixed at its own layer --- see
+        ``test_read_preserves_storage_id.py``, which pins the contract for every
+        backend rather than for this caller.
         """
         db = SyncMemoryDatabase(config={"vector_enabled": True})
         db.connect()

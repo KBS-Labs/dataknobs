@@ -24,7 +24,7 @@ from ..streaming import (
     resolve_conflict_write,
 )
 from ..vector import VectorOperationsMixin
-from ..vector.bulk_embed_mixin import BulkEmbedMixin
+from ..vector.bulk_embed_mixin import AsyncBulkEmbedMixin
 from ..vector.python_vector_search import PythonVectorSearchMixin
 from .config import AsyncS3DatabaseConfig
 from .sqlite_mixins import SQLiteVectorSupport
@@ -37,8 +37,11 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# Global pool manager for S3 sessions
-_session_manager = ConnectionPoolManager()
+# Global pool manager for S3 sessions. `Any` is the pool type because that is
+# what `create_aioboto3_session` returns and what `aioboto3.*` resolves to under
+# this package's `ignore_missing_imports` override -- naming `aioboto3.Session`
+# instead would add an import and check exactly as much.
+_session_manager: ConnectionPoolManager[Any] = ConnectionPoolManager()
 
 
 class AsyncS3Database(  # type: ignore[misc]
@@ -47,7 +50,7 @@ class AsyncS3Database(  # type: ignore[misc]
     VectorConfigMixin,
     SQLiteVectorSupport,
     PythonVectorSearchMixin,
-    BulkEmbedMixin,
+    AsyncBulkEmbedMixin,
     VectorOperationsMixin,
 ):
     """Native async S3 database backend with aioboto3 and session pooling.
@@ -84,7 +87,10 @@ class AsyncS3Database(  # type: ignore[misc]
         # Lets callers/tests inspect region resolution without reaching
         # into ``_pool_config``.
         self.region = self._pool_config.region_name
-        self._session = None
+        # Same `Any` as the pool manager above: without the annotation this
+        # infers as `None`, and every `self._session.client(...)` in the file
+        # is then an attribute error on `None`.
+        self._session: Any = None
         self._connected = False
 
         # Initialize vector support

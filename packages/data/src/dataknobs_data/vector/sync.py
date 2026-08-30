@@ -13,6 +13,7 @@ import numpy as np
 
 from ..fields import VectorField
 from ..records import Record
+from .embedding_fn import call_embedding_fn
 from .content import (
     CONTENT_HASH_KEY,
     DEFAULT_FIELD_SEPARATOR,
@@ -380,12 +381,9 @@ class VectorTextSynchronizer:
 
         for attempt in range(self.config.max_retries):
             try:
-                if asyncio.iscoroutinefunction(self.embedding_fn):
-                    result = await asyncio.wait_for(
-                        self.embedding_fn(text), timeout=self.config.embedding_timeout
-                    )
-                else:
-                    result = await asyncio.to_thread(self.embedding_fn, text)
+                result = await call_embedding_fn(
+                    self.embedding_fn, text, timeout=self.config.embedding_timeout
+                )
 
                 if isinstance(result, np.ndarray):
                     return result
