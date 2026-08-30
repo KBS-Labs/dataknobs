@@ -63,7 +63,7 @@ class TestFactoryVectorIntegration:
                 assert "embedding" in retrieved.fields
 
                 # Test vector search
-                results = db.vector_search(query_vector=vec, field_name="embedding", k=1)
+                results = db.vector_search(query_vector=vec, vector_field="embedding", k=1)
                 assert len(results) == 1
                 assert results[0].record.id == record_id
 
@@ -179,7 +179,7 @@ class TestFactoryVectorIntegration:
             assert record_id is not None
 
             # Test vector search
-            results = db.vector_search(query_vector=vec, field_name="embedding", k=1)
+            results = db.vector_search(query_vector=vec, vector_field="embedding", k=1)
             assert len(results) == 1
             assert results[0].record.id == record_id
 
@@ -264,7 +264,7 @@ class TestFactoryVectorIntegration:
             time.sleep(1)
 
             # Test vector search
-            results = db.vector_search(query_vector=vec, field_name="embedding", k=1)
+            results = db.vector_search(query_vector=vec, vector_field="embedding", k=1)
             assert len(results) == 1
             assert results[0].record.id == record_id
 

@@ -983,7 +983,7 @@ class SyncPostgresDatabase(
     def vector_search(
         self,
         query_vector: np.ndarray | list[float] | VectorField,
-        field_name: str,
+        vector_field: str = "embedding",
         k: int = 10,
         filter: Query | None = None,
         metric: DistanceMetric | str = "cosine",
@@ -992,7 +992,7 @@ class SyncPostgresDatabase(
 
         Args:
             query_vector: Query vector (numpy array, list, or VectorField)
-            field_name: Name of vector field to search (must be in data JSON)
+            vector_field: Name of vector field to search (must be in data JSON)
             limit: Maximum number of results
             filters: Optional filters to apply
             metric: Distance metric to use (cosine, euclidean, l2, inner_product)
@@ -1025,7 +1025,7 @@ class SyncPostgresDatabase(
 
         # Build the query - vectors are stored in JSON data field
         # Use centralized vector extraction logic
-        vector_expr = self.get_vector_extraction_sql(field_name, dialect="postgres")
+        vector_expr = self.get_vector_extraction_sql(vector_field, dialect="postgres")
 
         # Build the base SQL with pyformat placeholders
         sql = f"""
@@ -1038,7 +1038,7 @@ class SyncPostgresDatabase(
         WHERE data ? %(p1)s  -- Check field exists
         """
 
-        params: list[Any] = [vector_str, field_name]
+        params: list[Any] = [vector_str, vector_field]
 
         # Add filters if provided using the query builder
         if filter:
@@ -1078,7 +1078,9 @@ class SyncPostgresDatabase(
             else:
                 score = -distance  # Default: lower distance = better
 
-            result = VectorSearchResult(record=record, score=float(score), vector_field=field_name)
+            result = VectorSearchResult(
+                record=record, score=float(score), vector_field=vector_field
+            )
             results.append(result)
 
         return results
@@ -1997,7 +1999,7 @@ class AsyncPostgresDatabase(
     async def vector_search(
         self,
         query_vector: np.ndarray | list[float] | VectorField,
-        field_name: str,
+        vector_field: str = "embedding",
         k: int = 10,
         filter: Query | None = None,
         metric: DistanceMetric | str = "cosine",
@@ -2006,7 +2008,7 @@ class AsyncPostgresDatabase(
 
         Args:
             query_vector: Query vector (numpy array, list, or VectorField)
-            field_name: Name of vector field to search
+            vector_field: Name of vector field to search
             limit: Maximum number of results
             filters: Optional filters to apply
             metric: Distance metric to use
@@ -2036,7 +2038,7 @@ class AsyncPostgresDatabase(
             metric_str = str(metric).lower()
         operator = get_vector_operator(metric_str)
 
-        vector_column = f"vector_{field_name}"
+        vector_column = f"vector_{vector_field}"
         q_vector_column = quote_ident(vector_column)
 
         # Build query
@@ -2091,7 +2093,7 @@ class AsyncPostgresDatabase(
             result = VectorSearchResult(
                 record=record,
                 score=score,
-                vector_field=field_name,
+                vector_field=vector_field,
                 metadata={"distance": distance, "metric": metric_str},
             )
             results.append(result)

@@ -679,7 +679,7 @@ class SyncSQLiteDatabase(
     def vector_search(
         self,
         query_vector: np.ndarray,
-        field_name: str = "embedding",
+        vector_field: str = "embedding",
         k: int = 10,
         filter: Query | None = None,
         metric: DistanceMetric | None = None,
@@ -691,7 +691,7 @@ class SyncSQLiteDatabase(
 
         Args:
             query_vector: Query vector
-            field_name: Name of the vector field to search
+            vector_field: Name of the vector field to search
             k: Number of results to return
             filter: Optional filter conditions
             metric: Distance metric (uses instance default if not specified)
@@ -705,7 +705,7 @@ class SyncSQLiteDatabase(
         # Delegate to the mixin's implementation
         return self.python_vector_search_sync(
             query_vector=query_vector,
-            vector_field=field_name,
+            vector_field=vector_field,
             k=k,
             filter=filter,
             metric=metric,

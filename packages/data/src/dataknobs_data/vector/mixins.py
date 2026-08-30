@@ -349,7 +349,10 @@ class SyncVectorOperationsMixin(ABC):
 
         record.fields[vector_field] = vector_field_for(vector_field, vector, metadata)
 
-        return self.update(record_id, record) is not None  # type: ignore[attr-defined]
+        # `bool(...)`, not `is not None`: every backend's `update` returns
+        # `bool`, and `False is not None` is `True` --- so this reported a
+        # successful write for an update that did not happen.
+        return bool(self.update(record_id, record))  # type: ignore[attr-defined]
 
     def delete_from_index(self, record_id: str, vector_field: str = "embedding") -> bool:
         """Remove a record from the vector index.
@@ -593,7 +596,10 @@ class AsyncVectorOperationsMixin(ABC):
 
         record.fields[vector_field] = vector_field_for(vector_field, vector, metadata)
 
-        return await self.update(record_id, record) is not None  # type: ignore[attr-defined]
+        # `bool(...)`, not `is not None`: every backend's `update` returns
+        # `bool`, and `False is not None` is `True` --- so this reported a
+        # successful write for an update that did not happen.
+        return bool(await self.update(record_id, record))  # type: ignore[attr-defined]
 
     async def delete_from_index(self, record_id: str, vector_field: str = "embedding") -> bool:
         """Remove a record from the vector index.

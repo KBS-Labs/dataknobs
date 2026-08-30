@@ -148,7 +148,7 @@ class TestPostgresVectorIntegration:
 
             # Test cosine similarity search
             results = db.vector_search(
-                query_vector=query_vector, field_name="embedding", k=3, metric="cosine"
+                query_vector=query_vector, vector_field="embedding", k=3, metric="cosine"
             )
 
             assert len(results) <= 3
@@ -174,7 +174,7 @@ class TestPostgresVectorIntegration:
             )
             filtered_results = db.vector_search(
                 query_vector=query_vector,
-                field_name="embedding",
+                vector_field="embedding",
                 k=5,
                 filter=filter_query,
                 metric="cosine",
@@ -184,7 +184,7 @@ class TestPostgresVectorIntegration:
 
             # Test Euclidean distance
             euclidean_results = db.vector_search(
-                query_vector=query_vector, field_name="embedding", k=3, metric="euclidean"
+                query_vector=query_vector, vector_field="embedding", k=3, metric="euclidean"
             )
 
             assert len(euclidean_results) <= 3
@@ -320,7 +320,7 @@ class TestAsyncPostgresVectorIntegration:
             # Search for similar vectors
             query = np.array([0.9, 0.1, 0.0, 0.0])
             results = await db.vector_search(
-                query_vector=query, field_name="vector", k=2, metric="cosine"
+                query_vector=query, vector_field="vector", k=2, metric="cosine"
             )
 
             assert len(results) <= 2

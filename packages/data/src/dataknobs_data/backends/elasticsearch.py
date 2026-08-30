@@ -860,7 +860,7 @@ class SyncElasticsearchDatabase(
     def vector_search(
         self,
         query_vector: np.ndarray | list[float],
-        field_name: str = "embedding",
+        vector_field: str = "embedding",
         k: int = 10,
         metric: DistanceMetric = DistanceMetric.COSINE,
         filter: Query | None = None,
@@ -897,7 +897,9 @@ class SyncElasticsearchDatabase(
         # Build KNN query
         query = build_knn_query(
             query_vector=query_vector,
-            field_name=field_name,
+            # `build_knn_query` spells it `field_name`; this method's own
+            # parameter is `vector_field`, as the whole backend family's is.
+            field_name=vector_field,
             k=k,
             filter_query=filter_query,
         )
@@ -939,7 +941,7 @@ class SyncElasticsearchDatabase(
                 VectorSearchResult(
                     record=record,
                     score=score,
-                    vector_field=field_name,
+                    vector_field=vector_field,
                     metadata={
                         "index": self.index_name,
                         "metric": metric.value,

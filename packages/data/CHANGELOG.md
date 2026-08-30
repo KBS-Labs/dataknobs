@@ -32,6 +32,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   that worked before still works, and more do: an operator's own value, that
   value in any case with spaces for underscores (`"NOT BETWEEN"`), and `"=="`.
 
+- **`vector_search` names its field parameter `vector_field` on every
+  backend.** Four of the twelve implementations called it `field_name` —
+  `SyncSQLiteDatabase`, `SyncElasticsearchDatabase` and both Postgres classes,
+  with `AsyncSQLiteDatabase` disagreeing with its own sync sibling. Every
+  shipped example and every doc uses `vector_field=`, so the spelling this
+  package documents already raised `TypeError` on those four: through a direct
+  call, and through `hybrid_search`, which passes it by keyword. Both Postgres
+  classes also made it a required positional where the other ten default it; it
+  now defaults to `"embedding"` throughout. Source-breaking for a caller passing
+  `field_name=`, a spelling that appears in no documentation and no example.
+
 - **The vector-operations mixins take everything after `query_vector` by
   keyword in `vector_search`.** The implementations do not agree on positional
   order — most spell it `(..., k, filter, metric)` where the declaration says
@@ -54,6 +65,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`IncrementalVectorizer.run_batch` takes a `timeout`,** and `limit` counts
   records *attempted* rather than records that succeeded — a budget of
   successes cannot be met by a corpus that fails to embed. See **Fixed**.
+- **`update_vector` reports whether the write landed.** It returned
+  `self.update(...) is not None`, and every backend's `update` returns `bool`,
+  so `False is not None` answered `True` for an update that did not happen.
+  Latent on the async lane; newly reachable on the five sync backends, whose
+  inherited copy raised before the split.
 
 - **`IncrementalVectorizer.wait_for_completion(check_interval=...)` is now
   `wait_for_completion(timeout=None) -> bool`.** The old parameter set how

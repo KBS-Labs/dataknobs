@@ -156,7 +156,7 @@ class TestVectorSearchMixedCaseField:
 
             results = await db.vector_search(
                 query_vector=vec,
-                field_name="MyEmbedding",
+                vector_field="MyEmbedding",
                 k=1,
             )
             assert len(results) == 1
@@ -204,7 +204,7 @@ class TestVectorUpdateMixedCaseField:
 
             results = await db.vector_search(
                 query_vector=vec,
-                field_name="MyEmbedding",
+                vector_field="MyEmbedding",
                 k=1,
             )
             assert len(results) == 1
@@ -240,7 +240,7 @@ class TestVectorUpsertMixedCaseField:
 
             results = await db.vector_search(
                 query_vector=vec,
-                field_name="MyEmbedding",
+                vector_field="MyEmbedding",
                 k=1,
             )
             assert len(results) == 1
@@ -281,7 +281,7 @@ class TestVectorUpsertMixedCaseField:
             # The most-similar result should be the vec2 record
             results = await db.vector_search(
                 query_vector=vec2,
-                field_name="MyEmbedding",
+                vector_field="MyEmbedding",
                 k=1,
             )
             assert len(results) == 1
