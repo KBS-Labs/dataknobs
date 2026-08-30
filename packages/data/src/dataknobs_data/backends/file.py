@@ -7,6 +7,7 @@ import contextlib
 import csv
 import gzip
 import json
+import logging
 import os
 import tempfile
 import threading
@@ -28,6 +29,7 @@ from ..database import (
 )
 from ..exceptions import DuplicateRecordError
 from ..query import Query, is_storage_key_field
+from ..query_logic import ComplexQuery
 from ..records import Record
 from ..streaming import (
     AsyncStreamingMixin,
@@ -48,6 +50,13 @@ if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Iterator
     from typing import ClassVar
 
+    import numpy as np
+
+    from ..vector.types import DistanceMetric, VectorSearchResult
+
+
+logger = logging.getLogger(__name__)
+
 
 class FileFormat:
     """Base class for file format handlers."""
@@ -58,7 +67,7 @@ class FileFormat:
         raise NotImplementedError
 
     @staticmethod
-    def save(filepath: str, data: dict[str, dict[str, Any]]):
+    def save(filepath: str, data: dict[str, dict[str, Any]]) -> None:
         """Save data to file."""
         raise NotImplementedError
 
@@ -181,12 +190,24 @@ class JSONFormat(FileFormat):
                         return {}
                     data = json.loads(content)
 
+            if not isinstance(data, dict):
+                # Well-formed JSON that is not a mapping of records. The two
+                # branches above already answer "unusable content" with an
+                # empty store; without this the value reaches callers as one
+                # and they fail on `.items()` instead -- `read`, `all` and
+                # `exists` all raise `AttributeError` on a JSON list today.
+                logger.warning(
+                    "Ignoring %s: its top level is %s, not a mapping of records",
+                    filepath,
+                    type(data).__name__,
+                )
+                return {}
             return data
         except json.JSONDecodeError:
             return {}
 
     @staticmethod
-    def save(filepath: str, data: dict[str, dict[str, Any]]):
+    def save(filepath: str, data: dict[str, dict[str, Any]]) -> None:
         """Save data to JSON file."""
         if filepath.endswith(".gz"):
             with gzip.open(filepath, "wt", encoding="utf-8") as f:
@@ -237,7 +258,7 @@ class CSVFormat(FileFormat):
         return data
 
     @staticmethod
-    def save(filepath: str, data: dict[str, dict[str, Any]]):
+    def save(filepath: str, data: dict[str, dict[str, Any]]) -> None:
         """Save data to CSV file."""
         if not data:
             if filepath.endswith(".gz"):
@@ -311,7 +332,7 @@ class ParquetFormat(FileFormat):
             raise ImportError("Parquet support requires pandas and pyarrow packages") from e
 
     @staticmethod
-    def save(filepath: str, data: dict[str, dict[str, Any]]):
+    def save(filepath: str, data: dict[str, dict[str, Any]]) -> None:
         """Save data to Parquet file."""
         try:
             import pandas as pd
@@ -555,7 +576,7 @@ class AsyncFileDatabase(  # type: ignore[misc]
             _load_file_data, self.handler, self.filepath, self._file_lock
         )
 
-    async def _save_data(self, data: dict[str, Record]):
+    async def _save_data(self, data: dict[str, Record]) -> None:
         """Save all data to file atomically.
 
         Offloads the ``mkstemp`` + ``FileLock`` acquire + write + atomic
@@ -665,8 +686,18 @@ class AsyncFileDatabase(  # type: ignore[misc]
             await self._save_data(data)
             return id
 
-    async def search(self, query: Query) -> list[Record]:
-        """Search for records matching the query."""
+    async def search(self, query: Query | ComplexQuery) -> list[Record]:
+        """Search for records matching the query.
+
+        A ``ComplexQuery`` goes to the base class's in-memory fallback, as it
+        does on every other backend. Narrowing this signature to ``Query`` did
+        not stop one arriving -- both `search` declarations in the abstract
+        base accept the union -- it only meant the body read ``query.filters``
+        on a type that has no such attribute.
+        """
+        if isinstance(query, ComplexQuery):
+            return await self._search_with_complex_query(query)
+
         async with self._lock:
             data = await self._load_data()
             results = []
@@ -818,13 +849,13 @@ class AsyncFileDatabase(  # type: ignore[misc]
 
     async def vector_search(
         self,
-        query_vector,
+        query_vector: np.ndarray | list[float],
         vector_field: str = "embedding",
         k: int = 10,
-        filter=None,
-        metric=None,
-        **kwargs,
-    ):
+        filter: Query | None = None,
+        metric: DistanceMetric | str | None = None,
+        **kwargs: Any,
+    ) -> list[VectorSearchResult]:
         """Perform vector similarity search using Python calculations.
 
         Note: This implementation reads all records from disk to perform
@@ -933,7 +964,7 @@ class SyncFileDatabase(  # type: ignore[misc]
         """
         return _load_file_data(self.handler, self.filepath, self._file_lock)
 
-    def _save_data(self, data: dict[str, Record]):
+    def _save_data(self, data: dict[str, Record]) -> None:
         """Save all data to file atomically.
 
         Delegates to the shared synchronous :func:`_save_file_data` — the
@@ -1035,8 +1066,14 @@ class SyncFileDatabase(  # type: ignore[misc]
             self._save_data(data)
             return id
 
-    def search(self, query: Query) -> list[Record]:
-        """Search for records matching the query."""
+    def search(self, query: Query | ComplexQuery) -> list[Record]:
+        """Search for records matching the query.
+
+        Same dispatch as the async twin above, for the same reason.
+        """
+        if isinstance(query, ComplexQuery):
+            return self._search_with_complex_query(query)
+
         with self._lock:
             data = self._load_data()
             results = []
@@ -1203,13 +1240,13 @@ class SyncFileDatabase(  # type: ignore[misc]
 
     def vector_search(
         self,
-        query_vector,
+        query_vector: np.ndarray | list[float],
         vector_field: str = "embedding",
         k: int = 10,
-        filter=None,
-        metric=None,
-        **kwargs,
-    ):
+        filter: Query | None = None,
+        metric: DistanceMetric | str | None = None,
+        **kwargs: Any,
+    ) -> list[VectorSearchResult]:
         """Perform vector similarity search using Python calculations.
 
         Note: This implementation reads all records from disk to perform

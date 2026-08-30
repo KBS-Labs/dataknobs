@@ -24,6 +24,7 @@ the call, which is what a guard needs.
 from __future__ import annotations
 
 import functools
+import inspect
 from typing import Any
 
 import pytest
@@ -69,6 +70,11 @@ class TestThePredicate:
             (SyncCallableObject(), False),
             (functools.partial(_async_fn), True),
             (functools.partial(_sync_fn), False),
+            (functools.partial(AsyncCallableObject()), True),
+            (functools.partial(SyncCallableObject()), False),
+            (functools.partial(functools.partial(AsyncCallableObject())), True),
+            (AsyncCallableObject, False),
+            (SyncCallableObject, False),
             (lambda payload: None, False),
         ],
         ids=[
@@ -78,11 +84,49 @@ class TestThePredicate:
             "sync-callable-object",
             "partial-of-async",
             "partial-of-sync",
+            "partial-of-async-object",
+            "partial-of-sync-object",
+            "nested-partial-of-async-object",
+            "the-async-class-itself",
+            "the-sync-class-itself",
             "lambda",
         ],
     )
     def test_classification(self, candidate: Any, expected: bool) -> None:
         assert is_async_callable(candidate) is expected
+
+    def test_a_partial_of_an_async_object_really_does_return_a_coroutine(self) -> None:
+        """The composition of the two shapes this predicate exists for.
+
+        ``iscoroutinefunction`` unwraps a ``partial`` around a function and
+        cannot unwrap one around an object, because ``partial.__call__`` is a C
+        dispatcher rather than the wrapped object's. Each half of that was
+        already covered above and the composition was not, which is how it
+        stayed wrong: it answered ``False`` for a callable that genuinely
+        returns a coroutine. Binding arguments onto a stateful embedder is an
+        ordinary thing to do.
+
+        The assertion runs the call rather than trusting the classification, so
+        the two cannot drift apart.
+        """
+        bound = functools.partial(AsyncCallableObject(), {"payload": 1})
+        coroutine = bound()
+        try:
+            assert inspect.iscoroutine(coroutine)
+            assert is_async_callable(bound) is True
+        finally:
+            coroutine.close()
+
+    def test_a_class_is_not_async_however_its_instances_call(self) -> None:
+        """Calling a class runs ``type.__call__`` and returns an instance.
+
+        Reading ``AsyncCallableObject.__call__`` answers for the *instances*.
+        The class itself is a synchronous factory, and treating it as async
+        would make a caller await an object that is not awaitable --- loud
+        rather than silent, but wrong either way.
+        """
+        assert not inspect.isawaitable(AsyncCallableObject())
+        assert is_async_callable(AsyncCallableObject) is False
 
     def test_a_non_callable_is_not_async(self) -> None:
         """Answering rather than raising: callers ask about arbitrary values."""

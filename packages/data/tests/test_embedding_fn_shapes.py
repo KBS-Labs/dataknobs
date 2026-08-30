@@ -131,9 +131,7 @@ class TestTheSynchronizerAcceptsAnObject:
         assert embedder.calls == 1
         assert result["updated"] == 1, f"sync_all reported {result}"
         stored = (await db.all())[0]
-        assert next(iter(stored.fields["embedding"].value)) == pytest.approx(
-            len("the document")
-        )
+        assert next(iter(stored.fields["embedding"].value)) == pytest.approx(len("the document"))
 
     async def test_an_async_function_still_works(self) -> None:
         """A companion: the shape that already worked."""

@@ -24,6 +24,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   it. Non-callables answer `False` rather than raising, because callers ask
   about arbitrary configured values.
 
+  Two shapes the obvious implementation gets wrong are handled: a
+  `functools.partial` **around a callable object** (`partial.__call__` is a C
+  dispatcher, so asking it about the wrapped object answers about the wrong
+  object — binding arguments onto a stateful embedder is an ordinary thing to
+  do, and this is just the two supported shapes composed), and a **class**,
+  which is callable and returns an instance rather than an awaitable however
+  its `__call__` is declared.
+
 - **`copy_structure` — the copy between `dict()` and `copy.deepcopy()`.** It
   rebuilds nested dicts and lists and passes every other value through
   unchanged, so mutating the result never reaches the source while the leaf

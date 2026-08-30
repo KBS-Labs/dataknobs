@@ -15,6 +15,7 @@ from dataknobs_data.database import SyncDatabase, version_conflict_error
 from dataknobs_data.exceptions import DuplicateRecordError
 from dataknobs_data.pooling.s3 import create_boto3_s3_client, is_s3_conditional_conflict
 from dataknobs_data.query import Query, is_storage_key_field
+from dataknobs_data.query_logic import ComplexQuery
 from dataknobs_data.records import Record
 from dataknobs_data.streaming import (
     StreamConfig,
@@ -429,11 +430,17 @@ class SyncS3Database(  # type: ignore[misc]
                 return False
             raise
 
-    def search(self, query: Query) -> list[Record]:
+    def search(self, query: Query | ComplexQuery) -> list[Record]:
         """Search for records matching the query.
 
-        Note: S3 doesn't support complex queries, so we need to list and filter.
+        Note: S3 has no server-side query, so this lists and filters. A
+        ``ComplexQuery`` goes to the base class's in-memory fallback, which is
+        the same strategy one step up; the narrowed signature this replaces
+        meant the body read ``query.filters`` on a type that has none.
         """
+        if isinstance(query, ComplexQuery):
+            return self._search_with_complex_query(query)
+
         self._check_connection()
 
         # List all objects with the prefix. Collect (id, record) tuples and

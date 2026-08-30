@@ -29,8 +29,11 @@ from .vector_config_mixin import VectorConfigMixin
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Iterator
 
+    import numpy as np
+
     from ..query import Query
     from ..records import Record
+    from ..vector.types import DistanceMetric, VectorSearchResult
 
 
 class AsyncMemoryDatabase(  # type: ignore[misc]
@@ -332,13 +335,13 @@ class AsyncMemoryDatabase(  # type: ignore[misc]
 
     async def vector_search(
         self,
-        query_vector,
+        query_vector: np.ndarray | list[float],
         vector_field: str = "embedding",
         k: int = 10,
-        filter=None,
-        metric=None,
-        **kwargs,
-    ):
+        filter: Query | None = None,
+        metric: DistanceMetric | str | None = None,
+        **kwargs: Any,
+    ) -> list[VectorSearchResult]:
         """Perform vector similarity search using Python calculations."""
         return await self.python_vector_search_async(
             query_vector=query_vector,
@@ -649,13 +652,13 @@ class SyncMemoryDatabase(  # type: ignore[misc]
 
     def vector_search(
         self,
-        query_vector,
+        query_vector: np.ndarray | list[float],
         vector_field: str = "embedding",
         k: int = 10,
-        filter=None,
-        metric=None,
-        **kwargs,
-    ):
+        filter: Query | None = None,
+        metric: DistanceMetric | str | None = None,
+        **kwargs: Any,
+    ) -> list[VectorSearchResult]:
         """Perform vector similarity search using Python calculations."""
         return self.python_vector_search_sync(
             query_vector=query_vector,

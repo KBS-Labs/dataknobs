@@ -16,6 +16,7 @@ from ..exceptions import DuplicateRecordError
 from ..pooling import ConnectionPoolManager
 from ..pooling.s3 import S3PoolConfig, is_s3_conditional_conflict, validate_s3_session
 from ..query import Query, is_storage_key_field
+from ..query_logic import ComplexQuery
 from ..records import Record
 from ..streaming import (
     StreamConfig,
@@ -33,6 +34,10 @@ from .vector_config_mixin import VectorConfigMixin
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
     from typing import ClassVar
+
+    import numpy as np
+
+    from ..vector.types import DistanceMetric, VectorSearchResult
 
 
 logger = logging.getLogger(__name__)
@@ -229,13 +234,19 @@ class AsyncS3Database(  # type: ignore[misc]
                 body = await response["Body"].read()
                 obj = json.loads(body)
 
-                record = self._s3_object_to_record(obj)
-                # Use centralized method to prepare record
-                record = self._prepare_record_from_storage(record, id)
+                # `_prepare_record_from_storage` is typed for the read paths
+                # that hand it whatever the store returned, so it answers
+                # `Record | None`. Here the input is `_s3_object_to_record`,
+                # which never returns `None` -- narrowed rather than asserted,
+                # so a future change to either one is a type error and not a
+                # crash on the next line.
+                prepared = self._prepare_record_from_storage(self._s3_object_to_record(obj), id)
+                if prepared is None:
+                    return None
                 # Ensure ID is in metadata
-                record.metadata["id"] = id
+                prepared.metadata["id"] = id
 
-                return record
+                return prepared
         except Exception:
             return None
 
@@ -262,7 +273,10 @@ class AsyncS3Database(  # type: ignore[misc]
             if e.response["Error"]["Code"] in ("404", "NoSuchKey"):
                 return None
             raise
-        return response.get("ETag")
+        # aioboto3 is untyped, so the response is `Any`; the ETag is a string
+        # or absent. Same coercion the memory backend applies to its version.
+        etag = response.get("ETag")
+        return None if etag is None else str(etag)
 
     async def update(self, id: str, record: Record, *, expected_version: str | None = None) -> bool:
         """Update an existing record in S3.
@@ -438,8 +452,17 @@ class AsyncS3Database(  # type: ignore[misc]
 
         return id
 
-    async def search(self, query: Query) -> list[Record]:
-        """Search for records matching the query."""
+    async def search(self, query: Query | ComplexQuery) -> list[Record]:
+        """Search for records matching the query.
+
+        A ``ComplexQuery`` goes to the base class's in-memory fallback. The
+        narrowed signature this replaces did not keep one out -- the abstract
+        base accepts the union -- it only meant the body read ``query.filters``
+        on a type that has none.
+        """
+        if isinstance(query, ComplexQuery):
+            return await self._search_with_complex_query(query)
+
         self._check_connection()
 
         # S3 doesn't support complex queries, so we need to list and filter.
@@ -674,13 +697,13 @@ class AsyncS3Database(  # type: ignore[misc]
 
     async def vector_search(
         self,
-        query_vector,
+        query_vector: np.ndarray | list[float],
         vector_field: str = "embedding",
         k: int = 10,
-        filter=None,
-        metric=None,
-        **kwargs,
-    ):
+        filter: Query | None = None,
+        metric: DistanceMetric | str | None = None,
+        **kwargs: Any,
+    ) -> list[VectorSearchResult]:
         """Perform vector similarity search using Python calculations.
 
         WARNING: This implementation downloads all records from S3 to perform

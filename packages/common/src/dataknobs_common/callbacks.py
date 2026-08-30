@@ -60,7 +60,7 @@ import logging
 from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import dataclass
 from enum import Enum
-from functools import cmp_to_key
+from functools import cmp_to_key, partial
 from typing import Any, Generic, Protocol, TypeGuard, TypeVar, runtime_checkable
 
 from dataknobs_common.events import Event, EventBus, EventType
@@ -123,15 +123,29 @@ def is_async_callable(candidate: Any) -> TypeGuard[Callable[..., Awaitable[Any]]
         that this is not a drop-in replacement, and every call site that awaits
         inside the branch would need a cast instead.
     """
-    # Covers plain ``async def``, bound async methods, and (since 3.8) a
-    # ``functools.partial`` wrapping any of them.
+    # `iscoroutinefunction` unwraps a `partial` around a *function*, and cannot
+    # unwrap one around an object: `partial.__call__` is a C dispatcher, so
+    # asking it about the wrapped object's `__call__` answers about the wrong
+    # object. Binding arguments onto a stateful embedder is an ordinary thing
+    # to do, so this is the two supported shapes composed rather than an exotic
+    # one. Unwrapping first makes the composition answer what each half does.
+    while isinstance(candidate, partial):
+        candidate = candidate.func
+
+    # Covers plain ``async def`` and bound async methods.
     if inspect.iscoroutinefunction(candidate):
         return True
     if not callable(candidate):
         return False
+    # A class is callable, and calling it runs ``type.__call__`` --- which
+    # returns an instance, never an awaitable, however ``__call__`` on that
+    # instance is declared. Reading the class's own ``__call__`` below would
+    # answer for the instances rather than for the class.
+    if isinstance(candidate, type):
+        return False
     # A callable object: the coroutine-ness lives on its ``__call__``, which
-    # ``callable()`` has just established exists. The check above already
-    # settled every non-object callable, so a ``False`` from here is genuine.
+    # ``callable()`` has just established exists. The checks above already
+    # settled every other callable, so a ``False`` from here is genuine.
     return inspect.iscoroutinefunction(candidate.__call__)
 
 

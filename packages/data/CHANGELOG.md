@@ -184,6 +184,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   in the class races the work against shutdown instead of polling for it, so
   stopping is immediate rather than one poll interval away.
 
+- **A record with no fields can be read back.**
+  `Database._prepare_record_from_storage` — the shared helper every read path
+  routes through — decided "was anything stored?" with `if record:`, and
+  `Record` defines `__len__`, so a record holding no fields is falsy. It was
+  stored successfully and read back as `None`, on every backend at once.
+  `exists()` said `True` and `read()` said `None` for the same id, which a
+  caller can only read as "create it again", so one lost record becomes two.
+  Now `is not None`.
+
+- **A `ComplexQuery` is answered by the file and S3 backends.** Both `search`
+  declarations in the abstract base accept `Query | ComplexQuery`, and the base
+  carries the `_search_with_complex_query` fallback that makes the second half
+  true; eleven of the fourteen backend implementations dispatch to it on their
+  first line. The file and S3 pairs instead narrowed their own signature to
+  `Query`, which kept nothing out — it only meant the body went on to read
+  `query.filters`, an attribute `ComplexQuery` does not have, so a boolean
+  query raised `AttributeError` on exactly those four backends.
+
+- **A JSON file whose top level is not a mapping reads as an empty store.**
+  `JSONFormat.load` already answered `{}` for a missing file, an empty one,
+  whitespace, and content that does not parse; content that *parses* into
+  something else fell through all four and was returned as the record store, so
+  `read`, `all` and `exists` all raised `AttributeError` on it. It now answers
+  `{}` like its neighbours, and logs that it is discarding the file.
+
 - **`AsyncDatabase.stream_read` is declared as what its implementations are.**
   The abstract method was an `async def` returning `AsyncIterator[Record]` — a
   coroutine *returning* an iterator, which would be consumed as

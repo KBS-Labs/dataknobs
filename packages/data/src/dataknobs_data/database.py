@@ -477,7 +477,13 @@ class RecordStorageMixin:
         Returns:
             Record with storage_id set, or None if record was None
         """
-        if record:
+        # `is not None`, not truthiness: `Record.__len__` counts fields, so a
+        # record with none is falsy, and `if record` answered "nothing was
+        # stored" for one that was. Every read path routes through here, so
+        # that made an empty record unreadable on every backend at once ---
+        # `exists()` said `True` and `read()` said `None`, which a caller can
+        # only read as "create it again".
+        if record is not None:
             record_copy = record.copy(deep=True)
             # Ensure storage_id is set
             if not record_copy.has_storage_id():
