@@ -13,7 +13,7 @@ import numpy as np
 
 from ..fields import VectorField
 from ..records import Record
-from .embedding_fn import call_embedding_fn
+from .embedding import TextEmbedder, default_model_name, embed_text, require_embedding_source
 from .content import (
     CONTENT_HASH_KEY,
     DEFAULT_FIELD_SEPARATOR,
@@ -150,7 +150,8 @@ class VectorTextSynchronizer:
         self,
         database: AsyncDatabase,
         embedding_fn: Callable[[str], np.ndarray]
-        | Callable[[str], Coroutine[Any, Any, np.ndarray]],
+        | Callable[[str], Coroutine[Any, Any, np.ndarray]]
+        | None = None,
         text_fields: list[str] | str | None = None,
         vector_field: str = "embedding",
         field_separator: str = " ",
@@ -159,22 +160,40 @@ class VectorTextSynchronizer:
         model_name: str | None = None,
         model_version: str | None = None,
         config: SyncConfig | None = None,
+        *,
+        embedder: TextEmbedder | None = None,
     ):
         """Initialize the synchronizer with simplified API.
 
         Args:
             database: The database to synchronize
-            embedding_fn: Function to generate embeddings from text
+            embedding_fn: Function to generate embeddings from text. Optional
+                since *embedder* arrived; exactly one of the two is required.
             text_fields: Fields to concatenate for embedding (if None, uses all text fields)
             vector_field: Name of the vector field to store embeddings
             field_separator: Separator for concatenating text fields
             auto_sync: Whether to auto-sync on create/update
             batch_size: Batch size for bulk operations
-            model_name: Name of the embedding model
+            model_name: Name of the embedding model. Defaults to
+                ``embedder.model_id`` when an *embedder* is given, which is
+                what makes this class both the writer and the reader of one
+                key --- see :meth:`_has_current_vector`.
             model_version: Version of the embedding model
             config: Advanced configuration object (overrides other params)
+            embedder: A :class:`~dataknobs_data.vector.TextEmbedder`. Async by
+                declaration, so nothing about it has to be classified before
+                it is called.
+
+        Raises:
+            ValueError: Neither *embedding_fn* nor *embedder* was given, or
+                both were. Checked here rather than at the first embed, so a
+                misconfigured synchronizer fails where it is built rather than
+                part-way through a sweep.
         """
+        require_embedding_source(embedder, embedding_fn)
+
         self.database = database
+        self.embedder = embedder
         self.embedding_fn = embedding_fn
         self.embedding_function = embedding_fn  # Alias for compatibility
 
@@ -187,7 +206,12 @@ class VectorTextSynchronizer:
         self.field_separator = field_separator
         self.auto_sync = auto_sync
         self.batch_size = batch_size
-        self.model_name = model_name
+        # The embedder names itself, so a caller passing one does not also
+        # have to keep `model_name` in step by hand --- which is the class of
+        # error `model_id` exists to close, and this class is where the key is
+        # read back. An explicit `model_name=` still wins: a caller who said
+        # what they meant is not overridden.
+        self.model_name = default_model_name(model_name, embedder)
         self.model_version = model_version
 
         # Use config if provided, otherwise create from params
@@ -427,8 +451,11 @@ class VectorTextSynchronizer:
 
         for attempt in range(self.config.max_retries):
             try:
-                result = await call_embedding_fn(
-                    self.embedding_fn, text, timeout=self.config.embedding_timeout
+                result = await embed_text(
+                    text,
+                    embedder=self.embedder,
+                    embedding_fn=self.embedding_fn,
+                    timeout=self.config.embedding_timeout,
                 )
 
                 if isinstance(result, np.ndarray):
@@ -779,35 +806,49 @@ class VectorTextSynchronizer:
         cls,
         database: AsyncDatabase,
         embedding_fn: Callable[[str], np.ndarray]
-        | Callable[[str], Coroutine[Any, Any, np.ndarray]],
-        config: SyncConfig,
+        | Callable[[str], Coroutine[Any, Any, np.ndarray]]
+        | None = None,
+        config: SyncConfig | None = None,
         text_fields: list[str] | None = None,
         vector_field: str = "embedding",
         model_name: str | None = None,
         model_version: str | None = None,
+        *,
+        embedder: TextEmbedder | None = None,
     ) -> VectorTextSynchronizer:
         """Create synchronizer from a config object for advanced use cases.
 
         Args:
             database: The database to synchronize
-            embedding_fn: Function to generate embeddings from text
-            config: Synchronization configuration
+            embedding_fn: Function to generate embeddings from text. Optional
+                since *embedder* arrived; exactly one of the two is required.
+            config: Synchronization configuration. Optional so that
+                ``embedder=`` may be passed by keyword without also restating
+                a config; the constructor's default is used when omitted.
             text_fields: Text field names (optional)
             vector_field: Name of the vector field
-            model_name: Name of the embedding model
+            model_name: Name of the embedding model, defaulted from
+                *embedder* when one is given
             model_version: Version of the embedding model
+            embedder: A :class:`~dataknobs_data.vector.TextEmbedder`
 
         Returns:
             Configured VectorTextSynchronizer instance
+
+        Raises:
+            ValueError: Neither *embedding_fn* nor *embedder* was given, or
+                both were.
         """
+        resolved = config or SyncConfig()
         return cls(
             database=database,
             embedding_fn=embedding_fn,
             text_fields=text_fields,
             vector_field=vector_field,
-            auto_sync=config.auto_embed_on_create,
-            batch_size=config.batch_size,
+            auto_sync=resolved.auto_embed_on_create,
+            batch_size=resolved.batch_size,
             model_name=model_name,
             model_version=model_version,
-            config=config,
+            config=resolved,
+            embedder=embedder,
         )

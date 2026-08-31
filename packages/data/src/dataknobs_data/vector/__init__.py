@@ -25,6 +25,7 @@ from .embedding import (
     VectorCache,
     embed_text,
     embed_texts,
+    default_model_name,
     embedding_cache_key,
     require_embedding_source,
 )
@@ -85,6 +86,7 @@ __all__ = [
     "call_embedding_fn_batch",
     "embed_text",
     "embed_texts",
+    "default_model_name",
     "embedding_cache_key",
     "require_embedding_source",
     # Types

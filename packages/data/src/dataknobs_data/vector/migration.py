@@ -18,7 +18,12 @@ from ..records import Record
 from ..schema import FieldSchema
 from .sync import SyncConfig, VectorTextSynchronizer
 from .content import assemble_source_text
-from .embedding_fn import call_embedding_fn
+from .embedding import (
+    TextEmbedder,
+    default_model_name,
+    embed_text,
+    require_embedding_source,
+)
 from .types import VectorMetadata
 
 if TYPE_CHECKING:
@@ -145,13 +150,18 @@ class VectorMigration:
         model_name: str | None = None,
         model_version: str | None = None,
         config: MigrationConfig | None = None,
+        *,
+        embedder: TextEmbedder | None = None,
     ):
         """Initialize the migration manager with simplified API.
 
         Args:
             source_db: Source database to migrate from
             target_db: Target database (None to migrate in-place)
-            embedding_fn: Function to generate embeddings
+            embedding_fn: Function to generate embeddings. Optional, as
+                *embedder* is --- a migration that only adds the schema field
+                needs neither, so the demand for a source is made where a
+                vector is actually produced.
             text_fields: Fields to concatenate for embedding
             vector_field: Name of the vector field to create
             field_separator: Separator for concatenating text fields
@@ -161,9 +171,17 @@ class VectorMigration:
             model_name: Name of the embedding model
             model_version: Version of the embedding model
             config: Advanced configuration (overrides other params)
+            embedder: A :class:`~dataknobs_data.vector.TextEmbedder`, in place
+                of *embedding_fn*
+
+        Raises:
+            ValueError: Both *embedding_fn* and *embedder* were given.
         """
+        require_embedding_source(embedder, embedding_fn, allow_neither=True)
+
         self.source_db = source_db
         self.target_db = target_db or source_db
+        self.embedder = embedder
         self.embedding_fn = embedding_fn
         self.embedding_function = embedding_fn  # Alias for compatibility
         self.text_fields = text_fields or []
@@ -172,7 +190,7 @@ class VectorMigration:
         self.batch_size = batch_size
         self.max_retries = max_retries
         self.retry_delay = retry_delay
-        self.model_name = model_name
+        self.model_name = default_model_name(model_name, embedder)
         self.model_version = model_version
 
         # Use config if provided, otherwise create from params
@@ -217,11 +235,9 @@ class VectorMigration:
                     try:
                         text = assemble_source_text(record, self.text_fields, self.field_separator)
 
-                        if text and self.embedding_fn is not None:
-                            embedding_fn = self.embedding_fn
-
+                        if text and self.has_embedding_source:
                             # Generate embedding
-                            embedding = await call_embedding_fn(embedding_fn, text)
+                            embedding = await self._embed_one(text)
 
                             # Create VectorField
                             from ..fields import VectorField
@@ -272,6 +288,28 @@ class VectorMigration:
         # Since run() is synchronous, just return current status
         return self.status
 
+    @property
+    def has_embedding_source(self) -> bool:
+        """Whether this migration was given anything that can produce vectors.
+
+        Construction permits neither source, because adding the schema field
+        is a useful migration on its own. So the demand is made here, at the
+        three places that actually embed --- each of which used to ask
+        ``self.embedding_fn is not None`` and would otherwise now have to ask
+        about two attributes instead of one.
+        """
+        return self.embedder is not None or self.embedding_fn is not None
+
+    async def _embed_one(self, text: str) -> Any:
+        """One vector, from whichever source was configured.
+
+        Three sites in this class embed a single text, and each carried its
+        own dispatch call. Routing them through one method is what keeps a
+        later change --- a retry policy, a timeout, a batch --- from being
+        applied to two of the three.
+        """
+        return await embed_text(text, embedder=self.embedder, embedding_fn=self.embedding_fn)
+
     async def add_vectors_to_existing(
         self,
         vector_fields: dict[str, str],  # vector_field -> source_field mapping
@@ -288,9 +326,11 @@ class VectorMigration:
         Returns:
             Migration status
         """
-        if self.embedding_fn is None:
-            raise ValueError("Embedding function required for adding vectors")
-        embedding_fn = self.embedding_fn
+        if not self.has_embedding_source:
+            raise ValueError(
+                "an embedding source is required for adding vectors: pass "
+                "`embedder=` or `embedding_fn=` when building the migration"
+            )
 
         status = MigrationStatus(start_time=datetime.now(UTC))
 
@@ -321,7 +361,7 @@ class VectorMigration:
             async def embedding_wrapper(text: str) -> np.ndarray:
                 nonlocal last_embedding_exception
                 try:
-                    result = await call_embedding_fn(embedding_fn, text)
+                    result = await self._embed_one(text)
                     return np.asarray(result)
                 except Exception as e:
                     last_embedding_exception = e
@@ -434,12 +474,11 @@ class VectorMigration:
 
     async def _get_embedding(self, text: str) -> np.ndarray | None:
         """Get embedding for text."""
-        if self.embedding_fn is None:
-            logger.error("No embedding function configured")
+        if not self.has_embedding_source:
+            logger.error("No embedding source configured")
             return None
-        embedding_fn = self.embedding_fn
         try:
-            result = await call_embedding_fn(embedding_fn, text)
+            result = await self._embed_one(text)
 
             if isinstance(result, np.ndarray):
                 return result
@@ -650,32 +689,44 @@ class VectorMigration:
         source_db: AsyncDatabase,
         target_db: AsyncDatabase | None,
         embedding_fn: Callable[[str], np.ndarray]
-        | Callable[[str], Coroutine[Any, Any, np.ndarray]],
-        config: MigrationConfig,
+        | Callable[[str], Coroutine[Any, Any, np.ndarray]]
+        | None = None,
+        config: MigrationConfig | None = None,
         text_fields: list[str] | None = None,
         vector_field: str = "embedding",
         model_name: str | None = None,
         model_version: str | None = None,
+        *,
+        embedder: TextEmbedder | None = None,
     ) -> VectorMigration:
         """Create migration from a config object for advanced use cases.
 
         Args:
             source_db: Source database
             target_db: Target database (None for in-place)
-            embedding_fn: Function to generate embeddings
-            config: Migration configuration
+            embedding_fn: Function to generate embeddings, in place of
+                *embedder*
+            config: Migration configuration. Optional so that ``embedder=``
+                may be passed by keyword without also restating a config.
             text_fields: Text field names (optional)
             vector_field: Name of the vector field
-            model_name: Name of the embedding model
+            model_name: Name of the embedding model, defaulted from *embedder*
+                when one is given
             model_version: Version of the embedding model
+            embedder: A :class:`~dataknobs_data.vector.TextEmbedder`
 
         Returns:
             Configured VectorMigration instance
+
+        Raises:
+            ValueError: Both *embedding_fn* and *embedder* were given.
         """
+        config = config or MigrationConfig()
         return cls(
             source_db=source_db,
             target_db=target_db,
             embedding_fn=embedding_fn,
+            embedder=embedder,
             text_fields=text_fields,
             vector_field=vector_field,
             batch_size=config.batch_size,
@@ -721,7 +772,8 @@ class IncrementalVectorizer:
         self,
         database: AsyncDatabase,
         embedding_fn: Callable[[str], np.ndarray]
-        | Callable[[str], Coroutine[Any, Any, np.ndarray]],
+        | Callable[[str], Coroutine[Any, Any, np.ndarray]]
+        | None = None,
         text_fields: list[str] | str | None = None,  # Support multiple fields
         vector_field: str = "embedding",  # Sensible default
         field_separator: str = " ",
@@ -732,12 +784,15 @@ class IncrementalVectorizer:
         model_version: str | None = None,
         idle_interval: float = 60.0,
         error_retry_interval: float = 10.0,
+        *,
+        embedder: TextEmbedder | None = None,
     ):
         """Initialize the incremental vectorizer with simplified parameters.
 
         Args:
             database: The database to vectorize
-            embedding_fn: Function to generate embeddings
+            embedding_fn: Function to generate embeddings. Optional since
+                *embedder* arrived; exactly one of the two is required.
             text_fields: Text field names to concatenate for embeddings
             vector_field: Name of the vector field to create
             field_separator: Separator for concatenating multiple text fields
@@ -751,8 +806,19 @@ class IncrementalVectorizer:
                 long interval costs nothing at stop time.
             error_retry_interval: Seconds to wait after a failed load before
                 retrying. Also interrupted by shutdown.
+            embedder: A :class:`~dataknobs_data.vector.TextEmbedder`, in place
+                of *embedding_fn*
+
+        Raises:
+            ValueError: Neither *embedding_fn* nor *embedder* was given, or
+                both were. Unlike :class:`VectorMigration`, this class exists
+                only to embed, so having no source is a construction error
+                rather than a supported mode.
         """
+        require_embedding_source(embedder, embedding_fn)
+
         self.database = database
+        self.embedder = embedder
         self.embedding_fn = embedding_fn
         self.embedding_function = embedding_fn  # Alias for compatibility
 
@@ -769,7 +835,7 @@ class IncrementalVectorizer:
         self.batch_size = batch_size
         self.checkpoint_interval = checkpoint_interval
         self.max_workers = max_workers
-        self.model_name = model_name
+        self.model_name = default_model_name(model_name, embedder)
         self.model_version = model_version
         self.idle_interval = idle_interval
         self.error_retry_interval = error_retry_interval
@@ -883,7 +949,9 @@ class IncrementalVectorizer:
                     return False
 
             # Generate embedding
-            embedding = await call_embedding_fn(self.embedding_fn, str(source_text))
+            embedding = await embed_text(
+                str(source_text), embedder=self.embedder, embedding_fn=self.embedding_fn
+            )
 
             if embedding is None:
                 return False

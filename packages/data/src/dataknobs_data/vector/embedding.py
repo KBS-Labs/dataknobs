@@ -75,6 +75,7 @@ __all__ = [
     "SyncTextEmbedder",
     "TextEmbedder",
     "VectorCache",
+    "default_model_name",
     "embed_text",
     "embed_texts",
     "embedding_cache_key",
@@ -255,6 +256,8 @@ class CachedEmbedder:
 def require_embedding_source(
     embedder: TextEmbedder | None,
     embedding_fn: Callable[..., Any] | None,
+    *,
+    allow_neither: bool = False,
 ) -> None:
     """Check that exactly one embedding source was supplied.
 
@@ -264,19 +267,58 @@ def require_embedding_source(
     front, so that "you gave me no embedder" is still raised for an empty
     input rather than turning into a silent empty result.
 
+    Args:
+        embedder: The typed source, if the caller gave one.
+        embedding_fn: The callable source, if the caller gave one.
+        allow_neither: Permit *no* source. For a constructor whose object is
+            useful without embedding at all --- a migration that only adds a
+            schema field, a dedup checker with semantic matching switched off
+            --- where the demand for a source belongs at the embedding call
+            rather than at construction. The *conflict* is still refused,
+            because two sources are a mistake wherever they are supplied.
+
     Raises:
-        ValueError: Neither was supplied, or both were. Both is refused rather
-            than resolved by precedence: silently preferring one leaves a
-            caller believing vectors came from a source that never ran, which
-            is the class of error :attr:`TextEmbedder.model_id` exists to close.
+        ValueError: Both were supplied; or neither was and *allow_neither* is
+            false. Both is refused rather than resolved by precedence:
+            silently preferring one leaves a caller believing vectors came
+            from a source that never ran, which is the class of error
+            :attr:`TextEmbedder.model_id` exists to close.
     """
     if embedder is not None and embedding_fn is not None:
         raise ValueError(
             "pass either `embedder` or `embedding_fn`, not both — with both "
             "supplied, one of them silently does not run"
         )
-    if embedder is None and embedding_fn is None:
+    if embedder is None and embedding_fn is None and not allow_neither:
         raise ValueError("an embedder is required: pass `embedder=` or `embedding_fn=`")
+
+
+def default_model_name(model_name: str | None, embedder: TextEmbedder | None) -> str | None:
+    """The staleness key to store: what the caller said, else what the embedder is.
+
+    Every site taking both an ``embedder`` and a ``model_name`` owes the same
+    two lines, and they are here rather than at each site for the reason the
+    parameter exists at all. ``model_name`` and the embedding source were
+    independent, so nothing stopped a caller naming one model while embedding
+    with another --- and the name is what a later reader compares. Defaulting
+    it from the thing that produced the vector is what closes that, and a rule
+    written once cannot be applied at four sites and forgotten at a fifth.
+
+    An explicit *model_name* wins. A caller who said what they meant is not
+    overridden, including one deliberately recording a name that differs from
+    the embedder's own.
+
+    Args:
+        model_name: What the caller passed, if anything.
+        embedder: The embedder in use, if the caller passed one.
+
+    Returns:
+        *model_name* when it is not ``None``; otherwise ``embedder.model_id``,
+        or ``None`` when there is no embedder to ask.
+    """
+    if model_name is not None:
+        return model_name
+    return embedder.model_id if embedder is not None else None
 
 
 async def embed_texts(

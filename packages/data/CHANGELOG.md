@@ -41,6 +41,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   it, kept in step deliberately: the version check diverged across those two
   lanes once already.
 
+- **`embedder=` on the four long-running embedding paths** —
+  `VectorTextSynchronizer`, `VectorMigration`, `IncrementalVectorizer` and
+  `DedupChecker` (plus the two `from_config` classmethods). These were the
+  classes the adoption pass left behind, and they are the ones where an
+  embedder helps most: each embeds a corpus over time rather than a request at
+  a time, so a caller holding one had to unwrap it into a callable and throw
+  away the identity that travels with it.
+
+  `VectorTextSynchronizer` is the case that closes a loop rather than adding a
+  convenience. It *writes* `model_name` and it *reads* it back in
+  `_has_current_vector`, so before this a caller with an embedder had to name
+  the model twice — once by passing `embed`, once by passing `model_name=` —
+  with nothing checking the two agreed. Passing `embedder=` names it once.
+
+  Two behaviours worth knowing. `VectorTextSynchronizer` and
+  `IncrementalVectorizer` now **raise at construction** when given neither
+  source or both: they exist only to embed, and finding that out on the first
+  record means failing after a query, a batch and a partial write.
+  `VectorMigration` and `DedupChecker` permit **neither**, because adding a
+  schema field and exact-hash matching are useful without embedding at all;
+  they still refuse *both*, and demand a source where a vector is produced.
+
+- **`default_model_name`** (`dataknobs_data.vector`) — "what the caller said,
+  else what the embedder is", which four sites now share instead of each
+  writing the same two lines. `require_embedding_source` gains
+  `allow_neither=` for the two classes above whose embedding is optional; the
+  conflict is still refused there, since two sources are a mistake wherever
+  they are supplied.
+
 - **`call_embedding_fn_batch`** (`dataknobs_data.vector`) — the batch sibling of
   `call_embedding_fn`, over a shared resolver both now use. See **Fixed** below
   for the two defects that shared resolver closes.

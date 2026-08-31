@@ -142,9 +142,35 @@ ids = await store.bulk_embed_and_store(texts, embedder=embedder)
 count = await db.sync_vectors_with_text(records, ["title", "body"], embedder=embedder)
 ```
 
+The long-running paths take it too — a sweep, a migration, a background
+vectorizer, a dedup pass:
+
+```python
+sync = VectorTextSynchronizer(database=db, text_fields=["body"], embedder=embedder)
+vectorizer = IncrementalVectorizer(database=db, text_fields="body", embedder=embedder)
+migration = VectorMigration(source_db=db, text_fields=["body"], embedder=embedder)
+checker = DedupChecker(db=db, config=DedupConfig(semantic_check=True),
+                       vector_store=store, embedder=embedder)
+```
+
+`VectorTextSynchronizer` is the one where this closes a loop rather than saving
+a line. It writes `model_name` and reads it back, so passing an embedder is what
+makes those two the same fact — before, a caller with an embedder named the
+model twice, once by passing `embed` and once by passing `model_name=`, with
+nothing checking that the two agreed.
+
 Pass **one** of `embedder` and `embedding_fn`. Passing neither raises; so does
 passing both — resolving that by precedence would mean one of the two silently
 does not run, and the caller cannot tell which.
+
+Two of the classes above permit **neither**, and that is deliberate rather than
+inconsistent. `VectorMigration` can add the schema field without embedding, and
+`DedupChecker` does exact-hash matching with no semantic pass at all, so
+demanding a source at construction would refuse a supported use; they raise
+where a vector is actually produced. `VectorTextSynchronizer` and
+`IncrementalVectorizer` exist only to embed, so they raise at construction —
+finding out on the first record means failing after a query, a batch and a
+partial write.
 
 The callable path is unchanged and is not deprecated. An untyped
 `embedding_fn` still has to be classified before it is called, and
