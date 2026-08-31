@@ -123,6 +123,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   in. Exported because a backend or a consumer building a `Filter` by hand
   needs the same reading the fluent builder gets.
 
+### Deprecated
+
+- **`ConnectionPool` and `ConnectionPoolConfig`** in
+  `dataknobs_data.vector.optimizations`, in favour of
+  `dataknobs_data.pooling.ConnectionPoolManager`. Constructing one now emits a
+  `DeprecationWarning`. No backend has ever used it, and it is broken in ways
+  not worth repairing in place: `acquire` awaits the caller's `factory` while
+  holding a `threading.Lock`, so two coroutines acquiring concurrently from an
+  empty pool deadlock the **entire event loop** — and no `asyncio.timeout` or
+  `wait_for` can rescue that, because the loop thread is the thing blocked, so
+  the timer callback never runs. The tests here never caught it because their
+  factories return without ever suspending, which a factory that opens a
+  socket does not.
+
+  Four of the five `ConnectionPoolConfig` fields are read nowhere, and each now
+  says so on itself rather than reading as a knob: `connection_timeout` is
+  ignored by a wait loop that hardcodes 100 polls of 0.1s, `idle_timeout` and
+  `recycle_timeout` describe a liveness check `acquire` does not perform, and
+  `min_connections` describes pre-warming it does not do. The fields stay,
+  because removing one from a published dataclass breaks any caller passing it
+  by keyword.
+
+  `ConnectionPoolManager` holds one `asyncio.Lock` per event loop and is what
+  the Postgres, async-S3 and async-Elasticsearch backends actually use. It
+  pools *pools* rather than individual connections, delegating connection
+  liveness to the driver that owns it — which is why it never needed the check
+  the deprecated class left as a comment.
+
 ### Changed
 
 - **Every `TextEmbedder` implementation now asserts its conformance where a

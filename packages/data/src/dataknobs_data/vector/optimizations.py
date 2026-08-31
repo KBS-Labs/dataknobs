@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import warnings
 from collections import deque
 from dataclasses import dataclass
 from threading import Lock
@@ -21,6 +22,15 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+_CONNECTION_POOL_DEPRECATION = (
+    "ConnectionPool is deprecated and will be removed in a future version. "
+    "It deadlocks the event loop when two coroutines acquire concurrently, "
+    "and four of its five configuration fields are read nowhere. Use "
+    "dataknobs_data.pooling.ConnectionPoolManager instead, which holds one "
+    "asyncio.Lock per event loop and is the pooling the database backends use."
+)
+
+
 @dataclass
 class BatchConfig:
     """Configuration for batch operations."""
@@ -35,12 +45,38 @@ class BatchConfig:
 
 @dataclass
 class ConnectionPoolConfig:
-    """Configuration for connection pooling."""
+    """Configuration for connection pooling.
 
+    .. deprecated::
+        Configures :class:`ConnectionPool`, which is deprecated. See that
+        class for the replacement.
+
+    **Only ``max_connections`` is read.** The other four were declared
+    alongside the class and never wired to anything, so setting them
+    changes no behaviour. They are annotated individually rather than
+    removed, because removing a field from a published dataclass breaks
+    any caller that passes it by keyword -- and a field that silently does
+    nothing is worse than one that says so.
+    """
+
+    #: Never read. The pool does not pre-warm; the first connection is
+    #: created on the first :meth:`ConnectionPool.acquire`.
     min_connections: int = 1
+
+    #: The one field that is honoured: the ceiling on live connections.
     max_connections: int = 10
+
+    #: Never read. :meth:`ConnectionPool.acquire` hardcodes its wait at
+    #: 100 polls of 0.1s, so it gives up after ~10s whatever this says.
     connection_timeout: float = 30.0
+
+    #: Never read. Would be the idle-expiry half of the liveness check
+    #: :meth:`ConnectionPool.acquire` does not perform -- and could not be
+    #: implemented without also changing :meth:`ConnectionPool.release`,
+    #: which records no timestamp to compare against.
     idle_timeout: float = 300.0
+
+    #: Never read. Would be the maximum-age half of the same check.
     recycle_timeout: float = 3600.0
 
 
@@ -322,7 +358,36 @@ class VectorOptimizer:
 
 
 class ConnectionPool:
-    """Manages a pool of connections for vector stores."""
+    """Manages a pool of connections for vector stores.
+
+    .. deprecated::
+        Use :class:`dataknobs_data.pooling.ConnectionPoolManager` instead.
+
+        No backend has ever used this class, and it is broken in ways not
+        worth repairing in place:
+
+        * :meth:`acquire` awaits the caller's ``factory`` while holding a
+          :class:`threading.Lock`. Two coroutines acquiring concurrently
+          from an empty pool deadlock the **entire event loop**, and no
+          ``asyncio.timeout`` or ``wait_for`` can rescue it -- the loop
+          thread is the thing blocked, so the timer callback never runs.
+          It is invisible to the tests in this repository only because
+          their factories return without ever suspending.
+        * A connection is handed back out with no liveness check of any
+          kind. See :meth:`acquire`.
+        * Four of the five :class:`ConnectionPoolConfig` fields are read
+          nowhere. See that class for which, and for what each would have
+          meant.
+
+        The replacement gets the locking right -- one
+        :class:`asyncio.Lock` per event loop -- and is what
+        :mod:`~dataknobs_data.backends.postgres`,
+        :mod:`~dataknobs_data.backends.s3_async` and
+        :mod:`~dataknobs_data.backends.elasticsearch_async` actually use.
+        It pools *pools* rather than individual connections, delegating
+        connection liveness to the driver that owns it, which is why it
+        never needed the check this class left unwritten.
+    """
 
     def __init__(self, factory: Callable, config: ConnectionPoolConfig | None = None):
         """Initialize the connection pool.
@@ -330,7 +395,12 @@ class ConnectionPool:
         Args:
             factory: Function to create new connections
             config: Pool configuration
+
+        Warns:
+            DeprecationWarning: Always. See the class docstring.
         """
+        warnings.warn(_CONNECTION_POOL_DEPRECATION, DeprecationWarning, stacklevel=2)
+
         self.factory = factory
         self.config = config or ConnectionPoolConfig()
         self.available: deque = deque()
@@ -340,6 +410,9 @@ class ConnectionPool:
 
     async def acquire(self) -> Any:
         """Acquire a connection from the pool.
+
+        A pooled connection is returned **without any liveness check**, so
+        a caller can be handed one the far end has already closed.
 
         Returns:
             A connection object
@@ -351,11 +424,22 @@ class ConnectionPool:
             # Try to get an available connection
             while self.available:
                 conn = self.available.popleft()
-                # TODO: Check if connection is still valid
+                # Not checked, and not going to be. A liveness check has to
+                # close what it rejects; closing is `await`; and this block
+                # holds a threading.Lock, so the await could not go here
+                # without first rewriting the locking -- which is the thing
+                # this class is deprecated rather than repaired for.
+                # `idle_timeout` and `recycle_timeout` name the policy such
+                # a check would implement.
                 self.in_use.add(conn)
                 return conn
 
-            # Create new connection if under limit
+            # Create new connection if under limit.
+            #
+            # This await is the deadlock named in the class docstring: it
+            # suspends while holding a threading.Lock, so a second coroutine
+            # reaching the `with` above blocks the loop thread, and the
+            # first can never be resumed to release it.
             if len(self.in_use) < self.config.max_connections:
                 conn = await self.factory()
                 self.in_use.add(conn)

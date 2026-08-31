@@ -179,6 +179,12 @@ class TestConnectionPoolClosesAnObjectsCloseMethod:
     anything callable --- including an object with an ``async def
     __call__``, which is how a closer holding its own state is written. An
     un-awaited close leaks the connection and logs nothing.
+
+    ``ConnectionPool`` is deprecated in favour of
+    :class:`~dataknobs_data.pooling.ConnectionPoolManager`, so these pin
+    surface we still ship rather than surface we recommend. The dispatch
+    defect was real while it lasted, and the class remains importable
+    until its removal, so the fix and its proof stay.
     """
 
     async def test_an_async_callable_close_is_awaited(self) -> None:
