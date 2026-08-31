@@ -123,6 +123,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   in. Exported because a backend or a consumer building a `Filter` by hand
   needs the same reading the fluent builder gets.
 
+### Deprecated
+
+- **`ConnectionPool` and `ConnectionPoolConfig`** in
+  `dataknobs_data.vector.optimizations`, in favour of
+  `dataknobs_data.pooling.ConnectionPoolManager`. Constructing one now emits a
+  `DeprecationWarning`. No backend has ever used it, and it is broken in ways
+  not worth repairing in place: `acquire` awaits the caller's `factory` while
+  holding a `threading.Lock`, so two coroutines acquiring concurrently from an
+  empty pool deadlock the **entire event loop** — and no `asyncio.timeout` or
+  `wait_for` can rescue that, because the loop thread is the thing blocked, so
+  the timer callback never runs. The tests here never caught it because their
+  factories return without ever suspending, which a factory that opens a
+  socket does not.
+
+  Four of the five `ConnectionPoolConfig` fields are read nowhere, and each now
+  says so on itself rather than reading as a knob: `connection_timeout` is
+  ignored by a wait loop that hardcodes 100 polls of 0.1s, `idle_timeout` and
+  `recycle_timeout` describe a liveness check `acquire` does not perform, and
+  `min_connections` describes pre-warming it does not do. The fields stay,
+  because removing one from a published dataclass breaks any caller passing it
+  by keyword.
+
+  `ConnectionPoolManager` holds one `asyncio.Lock` per event loop and is what
+  the Postgres, async-S3 and async-Elasticsearch backends actually use. It
+  pools *pools* rather than individual connections, delegating connection
+  liveness to the driver that owns it — which is why it never needed the check
+  the deprecated class left as a comment.
+
 ### Changed
 
 - **Every `TextEmbedder` implementation now asserts its conformance where a
@@ -256,6 +284,63 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   nothing. See **Fixed** for the digest this consolidation was undertaken for.
 
 ### Fixed
+
+- **Fourteen dispatches called a consumer's callback without deciding whether
+  the result needed awaiting.** An async callable invoked without `await`
+  returns a coroutine: truthy, non-`None`, and either discarded or — where the
+  callback's return value is used — substituted for it. Nothing raises on any
+  of those paths. Two shapes, both present:
+
+    - **Asked the wrong question.** `BatchProcessor.add`,
+      `ChangeTracker.add_update_callback` and `ConnectionPool.close` branched on
+      `asyncio.iscoroutinefunction`, which answers for *functions* and reports a
+      callable object with an `async def __call__` as synchronous — and holding
+      state is the ordinary reason to pass an object. `ChangeTracker` was the
+      worst of the three: its synchronous arm is a thread offload, so the
+      coroutine was dropped on a worker thread while `process_batch` counted the
+      task as done.
+    - **Asked nothing at all**, the commoner spelling by far, and invisible to
+      any check keyed on `iscoroutinefunction`. Progress callbacks on
+      `VectorMigration.run` / `.add_vectors_to_existing` /
+      `.migrate_between_backends`, `VectorTextSynchronizer.sync_all` /
+      `.bulk_sync` and `Migrator.migrate_async` were dropped silently. Three
+      more used the discarded value: `migrate_between_backends`'s `transform_fn`
+      stored the coroutine object as the migrated record,
+      `AsyncDatabase.stream_transform` and `StreamProcessor.async_transform_stream`
+      yielded it to the caller, and `StreamProcessor.async_filter_stream`'s
+      predicate answered `True` unconditionally, because a coroutine is truthy —
+      so that filter silently stopped filtering.
+
+  Every one now goes through `run_callback` (see `dataknobs-common`), and the
+  annotations say so: each of these parameters accepts an `Awaitable` return.
+  `VectorStore.search_similar_records` gains the same widening for its
+  `fetch_records`, which did not fail silently — iterating a coroutine raises —
+  but refused the shape an async database's fetcher actually has.
+
+  A workspace guard, `tests/test_async_callable_adoption.py`, reads the AST of
+  every `async def` in `packages/data/src` and fails on either shape. It
+  replaces a regex census that scanned one subpackage for one token, and so
+  reported green over three unchecked dispatches in a file it was reading.
+
+- **Semantic dedup could not tell "unrelated" from "different vector space".**
+  `DedupChecker.register` held an embedder carrying a `model_id` and recorded
+  none of it, so after a model swap `check()` scored the old vectors against
+  the new ones and answered `recommendation="unique"` with an empty
+  `similar_items` — indistinguishable from genuinely new content. It fails
+  **open**: duplicates are admitted, and an admitted duplicate is silent by
+  construction. `register` now records the model and `check` compares it,
+  naming any disagreement on `DedupResult.mismatched_model_ids` and logging it
+  at `WARNING`. Reporting rather than correcting: the scores are still the only
+  answer available, but a caller can now tell they are meaningless. An absent
+  key reads as *unknown* rather than stale, so neither an existing store nor the
+  identity-less `embedding_fn` lane turns into a warning on upgrade.
+
+  A cheaper detector was measured and rejected: an equal `content_hash` with a
+  low similarity score is self-evident proof of two vector spaces and needs no
+  stored key, but `check` returns on the exact-hash lane before the semantic
+  pass runs, so it can never fire on the near-duplicate that is the real case.
+  `MODEL_NAME_KEY` joins `CONTENT_HASH_KEY` in `vector/content.py`; the key had
+  been spelled as a literal at each of its three sites.
 
 - **Two write paths stored vectors that named no model.** A digest answers
   whether the *text* changed; it cannot answer whether the *model* did, since

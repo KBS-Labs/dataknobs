@@ -28,6 +28,7 @@ import numpy as np
 from dataknobs_data.database import AsyncDatabase
 from dataknobs_data.query import Filter, Operator, Query
 from dataknobs_data.records import Record
+from dataknobs_data.vector.content import MODEL_NAME_KEY
 from dataknobs_data.vector.embedding import (
     TextEmbedder,
     embed_text,
@@ -85,6 +86,12 @@ class DedupResult:
         recommendation: One of ``"unique"``, ``"possible_duplicate"``,
             or ``"exact_duplicate"``.
         content_hash: The computed hash of the checked content.
+        mismatched_model_ids: Model identities found on candidate vectors
+            that differ from the embedder that produced the query vector.
+            Non-empty means the scores this result rests on compared vectors
+            from different spaces, so both ``similar_items`` and
+            ``recommendation`` are unreliable --- in the direction of missing
+            duplicates rather than inventing them.
     """
 
     is_exact_duplicate: bool
@@ -92,6 +99,7 @@ class DedupResult:
     similar_items: list[SimilarItem] = field(default_factory=list)
     recommendation: str = "unique"
     content_hash: str = ""
+    mismatched_model_ids: list[str] = field(default_factory=list)
 
 
 class DedupChecker:
@@ -228,9 +236,10 @@ class DedupChecker:
 
         # Step 2: Semantic similarity (optional)
         similar_items: list[SimilarItem] = []
+        mismatched_model_ids: list[str] = []
         store = self._semantic_store()
         if store is not None:
-            similar_items = await self._find_similar(content, store)
+            similar_items, mismatched_model_ids = await self._find_similar(content, store)
 
         # Step 3: Build recommendation
         recommendation = "unique"
@@ -242,6 +251,7 @@ class DedupChecker:
             similar_items=similar_items,
             recommendation=recommendation,
             content_hash=content_hash,
+            mismatched_model_ids=mismatched_model_ids,
         )
 
     async def register(
@@ -269,10 +279,20 @@ class DedupChecker:
         if store is not None:
             text = self._build_semantic_text(content)
             embedding = await self._embed(text)
+            # The model that produced this vector, so a later `check` can
+            # tell "these texts are unrelated" from "these vectors are in
+            # different spaces". Written only when it is knowable: the
+            # `embedding_fn` lane carries no identity, and the key is then
+            # ABSENT rather than `None` --- the same rule the vector lane
+            # follows, so that a store predating this key reads as unknown
+            # instead of turning every existing vector into a warning.
+            metadata: dict[str, Any] = {"text": text, "content_hash": content_hash}
+            if self._embedder is not None:
+                metadata[MODEL_NAME_KEY] = self._embedder.model_id
             await store.add_vectors(
                 vectors=np.array([embedding], dtype=np.float32),
                 ids=[record_id],
-                metadata=[{"text": text, "content_hash": content_hash}],
+                metadata=[metadata],
             )
 
         logger.debug(
@@ -301,7 +321,9 @@ class DedupChecker:
             return cast("str | None", results[0].get_value("record_id"))
         return None
 
-    async def _find_similar(self, content: dict[str, Any], store: Any) -> list[SimilarItem]:
+    async def _find_similar(
+        self, content: dict[str, Any], store: Any
+    ) -> tuple[list[SimilarItem], list[str]]:
         """Find semantically similar content via vector search.
 
         Args:
@@ -312,7 +334,11 @@ class DedupChecker:
                 store --- or whether one exists at all.
 
         Returns:
-            List of similar items above the configured threshold.
+            The similar items above the configured threshold, and any model
+            identities on the candidates that differ from this checker's own.
+            The second half is returned rather than raised because every
+            candidate is still the best answer available; what changes is that
+            the caller can now tell the answer is untrustworthy.
         """
         text = self._build_semantic_text(content)
         embedding = await self._embed(text)
@@ -322,7 +348,22 @@ class DedupChecker:
         )
 
         similar: list[SimilarItem] = []
+        mismatched: list[str] = []
+        current_model = self._embedder.model_id if self._embedder is not None else None
         for record_id, score, meta in results:
+            # A candidate embedded by another model is not a weak match, it is
+            # a meaningless comparison: the two vectors are in different
+            # spaces. An ABSENT key is unknown, not a mismatch -- vectors
+            # written before this key existed, and every vector from the
+            # `embedding_fn` lane, must not all read as stale.
+            stored_model = meta.get(MODEL_NAME_KEY) if meta else None
+            if (
+                current_model is not None
+                and stored_model is not None
+                and stored_model != current_model
+                and stored_model not in mismatched
+            ):
+                mismatched.append(str(stored_model))
             if score >= self._config.similarity_threshold:
                 similar.append(
                     SimilarItem(
@@ -331,7 +372,17 @@ class DedupChecker:
                         matched_text=meta.get("text", "") if meta else "",
                     )
                 )
-        return similar
+        if mismatched:
+            logger.warning(
+                "Semantic dedup compared vectors from different models: stored %s, "
+                "querying with %s. Similarity scores across an embedding-model change "
+                "are meaningless, and this check fails OPEN -- duplicates are admitted "
+                "as unique. Re-embed the store, or treat `mismatched_model_ids` on the "
+                "result as an error.",
+                ", ".join(sorted(mismatched)),
+                current_model,
+            )
+        return similar, sorted(mismatched)
 
     def _build_semantic_text(self, content: dict[str, Any]) -> str:
         """Build text for semantic embedding from configured fields.

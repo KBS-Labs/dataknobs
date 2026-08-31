@@ -61,7 +61,7 @@ from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import dataclass
 from enum import Enum
 from functools import cmp_to_key, partial
-from typing import Any, Generic, Protocol, TypeGuard, TypeVar, runtime_checkable
+from typing import Any, Generic, Protocol, TypeGuard, TypeVar, cast, runtime_checkable
 
 from dataknobs_common.events import Event, EventBus, EventType
 from dataknobs_common.exceptions import DataknobsError
@@ -78,12 +78,14 @@ __all__ = [
     "is_async_callable",
     "PriorityOrdering",
     "RecordingCallbackRegistry",
+    "run_callback",
     "StageOrdering",
 ]
 
 logger = logging.getLogger(__name__)
 
 CallbackT = TypeVar("CallbackT", bound=Callable[..., Any])
+_T = TypeVar("_T")
 
 
 # --------------------------------------------------------------------- #
@@ -147,6 +149,55 @@ def is_async_callable(candidate: Any) -> TypeGuard[Callable[..., Awaitable[Any]]
     # ``callable()`` has just established exists. The checks above already
     # settled every other callable, so a ``False`` from here is genuine.
     return inspect.iscoroutinefunction(candidate.__call__)
+
+
+async def run_callback(
+    callback: Callable[..., _T | Awaitable[_T]], /, *args: Any, **kwargs: Any
+) -> _T:
+    """Call ``callback`` with *args*, awaiting the result if it is awaitable.
+
+    The counterpart to :func:`is_async_callable`, and the one to reach for
+    unless the sync branch has to do something *other* than call inline. The
+    two answer the same question at different moments, and the moment decides
+    which is usable:
+
+    ============================  ==================================
+    The sync branch...            Use
+    ============================  ==================================
+    calls the callback inline     ``await run_callback(cb, x)``
+    offloads it, or wraps it      ``if is_async_callable(cb): ...``
+    ============================  ==================================
+
+    A caller that offloads has to decide *before* calling --- there is no
+    offloading a call already made --- so it cannot use this and must classify
+    the callable instead. Everyone else can, and should, because judging the
+    **result** is strictly more robust than judging the callable: it catches a
+    plain ``def`` that returns a coroutine, which no amount of inspecting the
+    function ever will.
+
+    Reaching for neither is the defect this exists to retire. Calling a
+    consumer's callback and moving on raises nothing when the consumer's
+    callback is async: the coroutine is truthy, non-``None``, and either
+    discarded or --- where the return value is used --- substituted for it, so
+    a transform yields a coroutine object and a predicate answers ``True``
+    unconditionally.
+
+    Args:
+        callback: Any callable. Positional-only, so a callback taking its own
+            ``callback=`` keyword argument is not shadowed by this signature.
+        *args: Passed through.
+        **kwargs: Passed through.
+
+    Returns:
+        What ``callback`` returned, awaited first if it was awaitable.
+    """
+    result = callback(*args, **kwargs)
+    if inspect.isawaitable(result):
+        # `await` on the narrowed `Awaitable[Any]` widens to `Any`; the
+        # negative branch below needs no cast, because failing the narrowing
+        # leaves `result` as `_T` already.
+        return cast("_T", await result)
+    return result
 
 
 # --------------------------------------------------------------------- #
@@ -563,9 +614,7 @@ class CallbackRegistry(Generic[CallbackT]):
         failures: list[tuple[CallbackEntry[CallbackT], BaseException]] = []
         for entry in entries:
             try:
-                result = entry.callback(payload)
-                if inspect.isawaitable(result):
-                    await result
+                await run_callback(entry.callback, payload)
             except Exception as exc:
                 self._handle_failure(entry, exc, failures)
         if self._error_policy is ErrorPolicy.LOG_AND_RAISE_AT_END and failures:

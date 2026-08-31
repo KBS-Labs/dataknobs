@@ -9,6 +9,8 @@ from typing import Any, cast, TYPE_CHECKING
 
 import pandas as pd
 
+from dataknobs_common.callbacks import is_async_callable
+
 from .converter import ConversionOptions, DataFrameConverter
 
 if TYPE_CHECKING:
@@ -31,7 +33,7 @@ class BatchConfig:
     error_handling: str = "raise"  # "raise", "skip", "log"
     memory_efficient: bool = True
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         """Validate configuration parameters."""
         if self.chunk_size <= 0:
             raise ValueError("chunk_size must be greater than 0")
@@ -91,7 +93,7 @@ class ChunkedProcessor:
             yield df.iloc[start_idx:end_idx]
 
     def read_csv_chunked(
-        self, filepath: str, processor: Callable[[pd.DataFrame], Any], **read_kwargs
+        self, filepath: str, processor: Callable[[pd.DataFrame], Any], **read_kwargs: Any
     ) -> list[Any]:
         """Read CSV file in chunks and process.
 
@@ -126,7 +128,7 @@ class BatchOperations:
         """
         self.database = database
         self.converter = converter or DataFrameConverter()
-        self.is_async = hasattr(database, "create") and asyncio.iscoroutinefunction(database.create)
+        self.is_async = hasattr(database, "create") and is_async_callable(database.create)
 
     def bulk_insert_dataframe(
         self,
@@ -458,7 +460,7 @@ class BatchOperations:
         query: Query,
         filepath: str,
         conversion_options: ConversionOptions | None = None,
-        **to_csv_kwargs,
+        **to_csv_kwargs: Any,
     ) -> None:
         """Export query results to CSV file.
 
@@ -476,7 +478,7 @@ class BatchOperations:
         query: Query,
         filepath: str,
         conversion_options: ConversionOptions | None = None,
-        **to_parquet_kwargs,
+        **to_parquet_kwargs: Any,
     ) -> None:
         """Export query results to Parquet file.
 
