@@ -137,9 +137,9 @@ class VectorCache(Protocol):
     """The part of an embedding cache that :class:`CachedEmbedder` needs.
 
     Deliberately two methods rather than eight. ``dataknobs-llm`` already ships
-    an ``EmbeddingCache`` ABC with a memory and a SQLite backend, and register
-    item-14 put them there *on purpose* --- it declined ``AsyncDatabase`` for
-    the backend, so those classes carry no ``dataknobs-data`` coupling and
+    an ``EmbeddingCache`` ABC with a memory and a SQLite backend, and those live
+    there *on purpose*: the backend was deliberately not built on
+    ``AsyncDatabase``, so the classes carry no ``dataknobs-data`` coupling and
     there is no wrong side of a dependency edge for them to be on. An earlier
     draft of this seam proposed hoisting them here; that was withdrawn.
 

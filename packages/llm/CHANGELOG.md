@@ -7,6 +7,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Added
+
+- **`LLMProviderEmbedder`** and **`create_text_embedder`** (`dataknobs_llm`) —
+  an embedding provider presented as the `TextEmbedder` seam that
+  `dataknobs-data` declares. `dataknobs-data` owns the protocol and this
+  package owns the implementation, because the dependency runs that way and
+  only that way; the adapter satisfies it *structurally* and imports nothing
+  from `dataknobs-data`, which is what keeps the edge one-directional.
+
+  There is no conversion in it. `AsyncLLMProvider.embed` already returns
+  `list[list[float]]` for a list input, which is exactly what the protocol
+  returns, and that absence is the seam's justification rather than an
+  oversight. What the adapter adds is the two things a bare provider cannot
+  answer in the shape a *stored* vector needs: a settled `dimensions`, and a
+  stable `model_id` — `provider:model`, built from the provider's own resolved
+  name so two embedders reaching the same model agree — to write beside the
+  vector as its staleness key.
+
+  `dimensions` is answered from what was declared (the constructor argument,
+  else the provider's configured value) and otherwise from what was observed on
+  the first `embed`. Never by probing, because a probe is a network round trip
+  and this is a property callers read freely. A *declared* width is checked
+  against the first batch rather than trusted: `EchoProvider` sizes its vectors
+  from `options["embedding_dim"]` and ignores `config.dimensions` entirely, so a
+  config asking for 16 yields 768 with nothing raised. Until something declared
+  a width beside `embed`, that had nowhere to surface — downstream it is caught
+  by a vector store rejecting the write, which names the store rather than the
+  embedder that was actually misconfigured.
+
+  A flat vector returned for a list input raises `TypeError` rather than being
+  read as a batch of one-dimensional vectors, and an empty batch returns without
+  calling the provider at all — a contract requirement, since providers
+  disagree about what an empty embed request means and some error on one.
+
+  `create_text_embedder` wraps `create_embedding_provider`, so it accepts the
+  same typed `LLMConfig` or dict forms and forces `mode=embedding`. **No new
+  config type**: an embedder config *is* an `LLMConfig`, so this adds a runtime
+  surface and not a configuration one.
+
 ### Changed
 
 - **`list_conversations` and `search_conversations` refuse a `sort_order` they

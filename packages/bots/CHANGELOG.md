@@ -138,6 +138,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **The `cluster` topic index is built with a `TextEmbedder`.**
+  `ClusterTopicIndex` took an `embed_fn` — one text per call — and now takes an
+  `embedder` satisfying the batch protocol `dataknobs-data` declares. A
+  knowledge base is duck-typed here and exposes a per-text `embed`, so a small
+  adapter presents it as the batch shape rather than the index accommodating
+  both arities, which is the fragmentation that protocol exists to end.
+
+  The embedding calls stay **sequential** rather than gathered: a knowledge
+  base's `embed` is usually a provider call behind a shared client, and firing a
+  whole corpus at it concurrently is a rate-limit decision this adapter has no
+  standing to make. So the observable behaviour of a cluster index is unchanged
+  — same texts, same order, same one-call-at-a-time.
+
+  The adapter also answers `model_id` (`kb:<name>` from the knowledge base's
+  `embedding_model` or `model_name`, else `kb:<class name>`) and `dimensions`
+  (learned from the first batch), because the protocol requires them.
+  `ClusterTopicIndex` calls only `embed` and reads neither, so **no staleness
+  key is stored for cluster vectors** — these exist so the adapter satisfies the
+  protocol, not because clustering gained model tracking.
+
+  This requires the `dataknobs-data` release that introduces `embedder=`; the
+  parameter it replaces is gone there with no deprecation cycle.
+
 - **`DynaBotConfigSchema.validate` applies the `$resource` marker rule to the
   whole config file, not to its `bot:` section.** The rule is a property of the
   config format rather than of any schema, and the component loop beside it

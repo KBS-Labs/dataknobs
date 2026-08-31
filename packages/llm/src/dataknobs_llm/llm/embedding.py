@@ -184,9 +184,9 @@ async def create_text_embedder(
     A wrapper over :func:`create_embedding_provider`, which already accepts a
     typed ``LLMConfig`` or any of the dict forms and already forces
     ``mode=embedding``. There is deliberately **no new config type**: an
-    embedder config *is* an ``LLMConfig``, which is the shape register item-154
-    settled and shipped, so this adds a runtime surface and not a configuration
-    one.
+    embedder config *is* an ``LLMConfig``, the shape embedding providers were
+    already configured by, so this adds a runtime surface and not a
+    configuration one.
 
     Args:
         config: Anything :func:`create_embedding_provider` accepts.
