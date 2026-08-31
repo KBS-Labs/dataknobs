@@ -9,6 +9,54 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`TextEmbedder`** in `dataknobs_data.vector` — the one shape for "turn text
+  into vectors". Batch-only, async-only, returns `list[list[float]]`, and
+  carries `dimensions` and `model_id`. Eight mutually incompatible spellings of
+  that concept were in use across this package, varying on arity, synchrony,
+  return type and whether they were typed at all, and none of them matched what
+  `AsyncLLMProvider.embed` returns — so every consumer wiring a provider to a
+  vector path wrote its own adapter, differently at each of 25 call sites.
+  `dataknobs-llm` ships `LLMProviderEmbedder` and `create_text_embedder`, which
+  satisfy the protocol structurally: the protocol lives here because `data`
+  cannot import `llm`.
+
+- **`embedder=` on the vector write paths.** `VectorStore.bulk_embed_and_store`,
+  both `bulk_embed_and_store` abstracts, `AsyncBulkEmbedMixin`,
+  `VectorSyncMixin.sync_vectors_with_text` and the async Postgres backend all
+  take a keyword-only `embedder` alongside their existing `embedding_fn`.
+  Passing one defaults `model_name` to the embedder's own `model_id`, which is
+  the point: `model_name` and `embedding_fn` were independent parameters, so
+  nothing stopped a caller naming one model while embedding with another — and
+  the name is the staleness key, so the mismatch surfaced only when a later
+  reader trusted it.
+
+- **`CachedEmbedder`** and the narrow `VectorCache` port it takes. The key is
+  `(model_id, text)`; a cache keyed on text alone does not fail loudly after a
+  model swap, it *succeeds* and hands back vectors from a model no longer in
+  use, in a vector space the new one knows nothing about. `dataknobs-llm`'s
+  shipped `MemoryEmbeddingCache` and `SqliteEmbeddingCache` satisfy the port
+  where they already are; nothing moved between packages.
+
+- **`SyncTextEmbedder`** — how a synchronous site reaches an async embedder. It
+  owns one `SyncLoopBridge`, so it is callable from plain sync code and from
+  inside a running loop alike, and exposes `embed` / `embed_one`, which are the
+  shapes `Query.near_text`, `VectorField.from_text` and the three synchronous
+  `bulk_embed_and_store` lanes already declare. Those five signatures are
+  therefore unchanged: they need no `embedder` parameter to reach the seam, and
+  giving the protocol a synchronous twin so that they could would restore the
+  second shape it exists to remove.
+
+- **`embed_texts` / `embed_text` / `require_embedding_source`** — the choice
+  between an embedder and a callable, written once. Passing neither raises, and
+  so does passing both: resolving that by precedence means one of the two
+  silently does not run and the caller cannot tell which.
+
+- **`DeterministicEmbedder`** in `dataknobs_data.testing` — a published
+  `TextEmbedder` for tests, stable across processes, with distinct texts landing
+  near-orthogonal so a *ranking* can be asserted. It does not reuse the existing
+  `text_embedding` helper, which draws every component from `[0, 1)` and is
+  already documented as unusable for that.
+
 - **`SyncVectorOperationsMixin` and `AsyncVectorOperationsMixin`** — one
   vector-operations mixin per lane, in `dataknobs_data.vector`.
   `VectorOperationsMixin` remains as a name for the async one, so an existing
@@ -362,6 +410,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reported every implementation as an incompatible override.
 
 ### Removed
+
+- **The `EmbedFn`, `BatchEmbedFn` and `ClusterEmbedFn` aliases** in
+  `dataknobs_data.sources`, replaced by `TextEmbedder` in one change with no
+  deprecation cycle. **Source-breaking for an external importer of any of the
+  three.** They were three exported names for two types, and `EmbedFn` meant
+  something different depending on where you read it: the batch shape when
+  imported from `dataknobs_data.sources`, the single-text shape by the same
+  spelling inside `cluster_index.py`. A consumer could not tell which they had
+  from the name. Nothing in this workspace imported them from outside
+  `sources/` and no document in either docs tree mentioned them, but
+  `dataknobs-data` is published, so an external importer is the one thing the
+  tree cannot rule out.
+
+  With them go two parameter names. `ClusterTopicIndex.__init__` and
+  `.from_chunks` take `embedder=` where they took `embed_fn=` (still optional —
+  building an index for inspection only remains supported); `.build` takes a
+  single `embedder` positional where it took `batch_embed_fn` *and* a separate
+  `embed_fn`, two parameters for the same concept at two arities that nothing
+  stopped a caller pointing at different models, putting a corpus and the
+  queries searching it into different vector spaces.
+  `EmbeddingClusterer.embed_fn` and `QueryClusterScorer.embed_fn` are
+  `.embedder`, and `inject_embed_fn` is `inject_embedder`.
 
 - **The `{vector_field}_content_hash` record-field comparison.** Nothing in the
   library ever wrote that sibling field, so in production it compared `None`

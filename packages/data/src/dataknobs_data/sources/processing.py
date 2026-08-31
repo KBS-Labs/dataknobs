@@ -27,13 +27,13 @@ Level 2-3 processors (clustering + query-cluster scoring):
 - :class:`TermOverlapClusterer` -- group by shared significant terms.
 - :class:`TfidfClusterer` -- TF-IDF vectors with cosine similarity.
 - :class:`EmbeddingClusterer` -- semantic clustering via injected
-  ``embed_fn`` callable.
+  injected embedder.
 - :class:`QueryClusterScorer` -- score clusters against the user's
   original query and re-order by cluster relevance.
 
 This module is intentionally LLM-free -- it lives in ``dataknobs-data``
 so any project can use it without depending on LLM or bots packages.
-Embedding-based processors accept an ``embed_fn`` callable
+Embedding-based processors accept a ``TextEmbedder``
 injected by the consumer.
 """
 
@@ -43,11 +43,11 @@ import logging
 import math
 import re
 from collections import Counter, defaultdict
-from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any, Protocol, runtime_checkable
 
 from dataknobs_data.sources.base import RetrievalIntent, SourceResult
+from dataknobs_data.vector.embedding import TextEmbedder
 
 logger = logging.getLogger(__name__)
 
@@ -79,7 +79,7 @@ class ResultProcessor(Protocol):
     """Single processing stage in the result pipeline.
 
     Raises :class:`StrategyUnavailable` if it cannot operate in the
-    current context (e.g., embedding strategy with no embed_fn).
+    current context (e.g., embedding strategy with no embedder).
     The pipeline or strategy chain catches this and tries the next
     alternative.
     """
@@ -497,13 +497,14 @@ class QueryRelevanceRanker:
 # Embedding function type
 # ------------------------------------------------------------------
 
-EmbedFn = Callable[[list[str]], Awaitable[list[list[float]]]]
-"""Async callable that embeds a batch of texts into vectors.
-
-Injected by the consumer (e.g. from a VectorKnowledgeSource's
-embedding provider or a dedicated embedding model config).
-Keeps this module free of LLM package dependencies.
-"""
+# ``EmbedFn`` used to be declared here as
+# ``Callable[[list[str]], Awaitable[list[list[float]]]]``. It is now
+# ``TextEmbedder``, which is that shape plus a ``model_id`` --- and which
+# ``cluster_index.py`` spelled with the same name for a *different* arity, so
+# ``from dataknobs_data.sources import EmbedFn`` gave the batch shape while the
+# identical spelling inside ``cluster_index`` gave the single one. This module
+# stays free of LLM package dependencies: the protocol lives in ``data`` and
+# ``dataknobs-llm`` satisfies it structurally.
 
 
 # ------------------------------------------------------------------
@@ -762,22 +763,22 @@ class TfidfClusterer:
 class EmbeddingClusterer:
     """Cluster results by embedding similarity.
 
-    Uses an injected ``embed_fn`` to compute embeddings for result
+    Uses an injected embedder to compute embeddings for result
     content, then clusters using cosine similarity.  Highest quality
     but requires an embedding model.
 
-    Raises :class:`StrategyUnavailable` if no ``embed_fn`` is set.
+    Raises :class:`StrategyUnavailable` if no embedder is set.
 
     Attributes:
         similarity_threshold: Minimum cosine similarity to merge.
         min_cluster_size: Minimum results to form a cluster.
-        embed_fn: Async embedding function, injected at pipeline
+        embedder: Embedder, injected at pipeline
             construction time.
     """
 
     similarity_threshold: float = 0.7
     min_cluster_size: int = 2
-    embed_fn: EmbedFn | None = None
+    embedder: TextEmbedder | None = None
 
     async def process(
         self,
@@ -786,15 +787,15 @@ class EmbeddingClusterer:
         user_message: str,
     ) -> list[SourceResult]:
         """Cluster by embedding cosine similarity."""
-        if self.embed_fn is None:
-            raise StrategyUnavailable("No embed_fn configured")
+        if self.embedder is None:
+            raise StrategyUnavailable("No embedder configured")
 
         if len(results) < self.min_cluster_size:
             return results
 
         # Compute embeddings for all result content
         texts = [r.content for r in results]
-        embeddings = await self.embed_fn(texts)
+        embeddings = await self.embedder.embed(texts)
 
         n = len(results)
         sig_tokens = [_significant_tokens(r.content) for r in results]
@@ -822,7 +823,7 @@ class QueryClusterScorer:
 
     For embedding-based scoring, computes a query embedding and scores
     each cluster's centroid (mean embedding of members) against it.
-    For term-based scoring (when no embed_fn), uses term overlap
+    For term-based scoring (when no embedder), uses term overlap
     between the query and concatenated cluster content.
 
     Annotates ``SourceResult.metadata`` with ``cluster_query_score``
@@ -830,11 +831,11 @@ class QueryClusterScorer:
     Within each cluster, original relevance order is preserved.
 
     Attributes:
-        embed_fn: Optional async embedding function.  When ``None``,
+        embedder: Optional embedder.  When ``None``,
             falls back to term-overlap scoring.
     """
 
-    embed_fn: EmbedFn | None = None
+    embedder: TextEmbedder | None = None
 
     async def process(
         self,
@@ -855,7 +856,7 @@ class QueryClusterScorer:
         # Score each cluster against the query
         cluster_scores: dict[int, float] = {}
 
-        if self.embed_fn is not None:
+        if self.embedder is not None:
             cluster_scores = await self._score_with_embeddings(
                 clusters,
                 user_message,
@@ -893,7 +894,7 @@ class QueryClusterScorer:
         user_message: str,
     ) -> dict[int, float]:
         """Score clusters using embedding cosine similarity."""
-        assert self.embed_fn is not None
+        assert self.embedder is not None
 
         # Collect all texts to embed in one batch
         cluster_texts: dict[int, str] = {}
@@ -902,7 +903,7 @@ class QueryClusterScorer:
             cluster_texts[cid] = combined
 
         texts_to_embed = [user_message] + list(cluster_texts.values())
-        embeddings = await self.embed_fn(texts_to_embed)
+        embeddings = await self.embedder.embed(texts_to_embed)
 
         query_emb = embeddings[0]
         scores: dict[int, float] = {}
@@ -939,12 +940,12 @@ class QueryClusterScorer:
 # ------------------------------------------------------------------
 
 
-def inject_embed_fn(pipeline: ResultPipeline, embed_fn: EmbedFn) -> None:
-    """Inject an embedding function into all embedding-aware processors.
+def inject_embedder(pipeline: ResultPipeline, embedder: TextEmbedder) -> None:
+    """Inject an embedder into all embedding-aware processors.
 
     Walks the pipeline stages (and strategy chains within them) and
-    sets ``embed_fn`` on any :class:`EmbeddingClusterer` or
-    :class:`QueryClusterScorer` that has ``embed_fn`` as an attribute.
+    sets ``embedder`` on any :class:`EmbeddingClusterer` or
+    :class:`QueryClusterScorer` that has ``embedder`` as an attribute.
 
     Call this after :func:`build_pipeline` when an embedding provider
     becomes available (e.g. from a ``VectorKnowledgeSource``).
@@ -952,10 +953,10 @@ def inject_embed_fn(pipeline: ResultPipeline, embed_fn: EmbedFn) -> None:
     for stage in pipeline.stages:
         if isinstance(stage, StrategyChain):
             for strategy in stage.strategies:
-                if hasattr(strategy, "embed_fn"):
-                    strategy.embed_fn = embed_fn  # type: ignore[union-attr]
-        elif hasattr(stage, "embed_fn"):
-            stage.embed_fn = embed_fn  # type: ignore[union-attr]
+                if hasattr(strategy, "embedder"):
+                    strategy.embedder = embedder
+        elif hasattr(stage, "embedder"):
+            stage.embedder = embedder
 
 
 def build_pipeline(config: dict[str, Any] | None) -> ResultPipeline | None:
@@ -1085,11 +1086,11 @@ def _make_clusterer(
             min_cluster_size=min_size,
         )
     if method == "embedding":
-        # embed_fn must be injected separately; raise if not available
+        # The embedder must be injected separately; raise if not available
         return EmbeddingClusterer(
             similarity_threshold=threshold,
             min_cluster_size=min_size,
-            embed_fn=None,  # Consumer must inject
+            embedder=None,  # Consumer must inject
         )
     logger.warning("Unknown cluster method: %s", method)
     return None

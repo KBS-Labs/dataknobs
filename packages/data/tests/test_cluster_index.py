@@ -86,32 +86,48 @@ _EMBEDDINGS = {
 }
 
 
-async def _embed_query_auth(text: str) -> list[float]:
-    """Embed function that returns a vector near cluster A."""
-    return [0.95, 0.05, 0.0, 0.0]
+class _Embedder:
+    """A ``TextEmbedder`` over a per-text rule.
+
+    These tests need *specific* vectors --- a query landing near cluster A,
+    or far from both --- so they cannot use ``DeterministicEmbedder``, whose
+    whole point is that the caller does not choose where a text lands.
+    """
+
+    def __init__(self, rule: Any, *, model_id: str = "test-embedder") -> None:
+        self._rule = rule
+        self._model_id = model_id
+
+    @property
+    def dimensions(self) -> int:
+        return len(self._rule("probe"))
+
+    @property
+    def model_id(self) -> str:
+        return self._model_id
+
+    async def embed(self, texts: Any) -> list[list[float]]:
+        return [list(self._rule(text)) for text in texts]
 
 
-async def _embed_query_db(text: str) -> list[float]:
-    """Embed function that returns a vector near cluster B."""
-    return [0.05, 0.95, 0.0, 0.0]
+def _by_content(text: str) -> list[float]:
+    """The corpus rule: route a text to cluster A, cluster B, or neither."""
+    if "authentication" in text or "security" in text:
+        return _make_similar(_CLUSTER_A_BASE, 0.05)
+    if "database" in text:
+        return _make_similar(_CLUSTER_B_BASE, 0.05)
+    return [0.25, 0.25, 0.25, 0.25]
 
 
-async def _embed_query_neither(text: str) -> list[float]:
-    """Embed function that returns a vector far from both clusters."""
-    return [0.0, 0.0, 1.0, 0.0]
+# Query embedders: every text lands in one place, whatever it says.
+_AUTH_EMBEDDER = _Embedder(lambda _text: [0.95, 0.05, 0.0, 0.0], model_id="auth")
+_DB_EMBEDDER = _Embedder(lambda _text: [0.05, 0.95, 0.0, 0.0], model_id="db")
+_NEITHER_EMBEDDER = _Embedder(lambda _text: [0.0, 0.0, 1.0, 0.0], model_id="neither")
 
-
-async def _embed_batch(texts: list[str]) -> list[list[float]]:
-    """Batch embed function for build() tests."""
-    result = []
-    for text in texts:
-        if "authentication" in text or "security" in text:
-            result.append(_make_similar(_CLUSTER_A_BASE, 0.05))
-        elif "database" in text:
-            result.append(_make_similar(_CLUSTER_B_BASE, 0.05))
-        else:
-            result.append([0.25, 0.25, 0.25, 0.25])
-    return result
+# Corpus embedder, used by ``build()``. One embedder now does the corpus and
+# the query, where ``build`` used to take a batch function and a separate
+# per-text one --- two parameters that could disagree about the model.
+_CORPUS_EMBEDDER = _Embedder(_by_content, model_id="corpus")
 
 
 def _make_vector_fn(
@@ -286,14 +302,14 @@ class TestLazyConstruction:
         assert idx.cluster_info == []
 
     @pytest.mark.asyncio
-    async def test_lazy_no_embed_fn_returns_empty(self) -> None:
+    async def test_lazy_no_embedder_returns_empty(self) -> None:
         idx = ClusterTopicIndex()
         results = await idx.resolve("test query")
         assert results == []
 
     @pytest.mark.asyncio
     async def test_lazy_no_vector_fn_returns_empty(self) -> None:
-        idx = ClusterTopicIndex(embed_fn=_embed_query_auth)
+        idx = ClusterTopicIndex(embedder=_AUTH_EMBEDDER)
         results = await idx.resolve("test query")
         assert results == []
 
@@ -302,7 +318,7 @@ class TestLazyConstruction:
         """Lazy mode fetches seeds and clusters them per query."""
         vector_fn = _make_vector_fn(_CHUNKS, _EMBEDDINGS)
         idx = ClusterTopicIndex(
-            embed_fn=_embed_query_auth,
+            embedder=_AUTH_EMBEDDER,
             vector_query_fn=vector_fn,
             config=ClusterTopicConfig(cluster_threshold=0.5),
         )
@@ -321,11 +337,10 @@ class TestBuildClassMethod:
     """Test the async build() factory."""
 
     @pytest.mark.asyncio
-    async def test_build_from_embed_fn(self) -> None:
+    async def test_build_from_embedder(self) -> None:
         idx = await ClusterTopicIndex.build(
             _CHUNKS,
-            _embed_batch,
-            embed_fn=_embed_query_auth,
+            _CORPUS_EMBEDDER,
             config=ClusterTopicConfig(cluster_threshold=0.5),
         )
         assert len(idx.cluster_info) == 2
@@ -334,8 +349,7 @@ class TestBuildClassMethod:
     async def test_build_empty_chunks(self) -> None:
         idx = await ClusterTopicIndex.build(
             [],
-            _embed_batch,
-            embed_fn=_embed_query_auth,
+            _CORPUS_EMBEDDER,
         )
         assert idx.topics() == []
 
@@ -353,7 +367,7 @@ class TestResolve:
         idx = ClusterTopicIndex.from_chunks(
             _CHUNKS,
             _EMBEDDINGS,
-            embed_fn=_embed_query_auth,
+            embedder=_AUTH_EMBEDDER,
             config=ClusterTopicConfig(cluster_threshold=0.5),
         )
         results = await idx.resolve("authentication security")
@@ -366,7 +380,7 @@ class TestResolve:
         idx = ClusterTopicIndex.from_chunks(
             _CHUNKS,
             _EMBEDDINGS,
-            embed_fn=_embed_query_db,
+            embedder=_DB_EMBEDDER,
             config=ClusterTopicConfig(cluster_threshold=0.5),
         )
         results = await idx.resolve("database optimization")
@@ -379,7 +393,7 @@ class TestResolve:
         idx = ClusterTopicIndex.from_chunks(
             _CHUNKS,
             _EMBEDDINGS,
-            embed_fn=_embed_query_neither,
+            embedder=_NEITHER_EMBEDDER,
             config=ClusterTopicConfig(
                 cluster_threshold=0.5,
                 centroid_score_threshold=0.5,
@@ -389,7 +403,7 @@ class TestResolve:
         assert results == []
 
     @pytest.mark.asyncio
-    async def test_no_embed_fn_returns_empty(self) -> None:
+    async def test_no_embedder_returns_empty(self) -> None:
         idx = ClusterTopicIndex.from_chunks(
             _CHUNKS,
             _EMBEDDINGS,
@@ -403,7 +417,7 @@ class TestResolve:
         idx = ClusterTopicIndex.from_chunks(
             _CHUNKS,
             _EMBEDDINGS,
-            embed_fn=_embed_query_auth,
+            embedder=_AUTH_EMBEDDER,
             config=ClusterTopicConfig(cluster_threshold=0.5),
         )
         results = await idx.resolve("authentication", top_k=2)
@@ -414,7 +428,7 @@ class TestResolve:
         idx = ClusterTopicIndex.from_chunks(
             _CHUNKS,
             _EMBEDDINGS,
-            embed_fn=_embed_query_auth,
+            embedder=_AUTH_EMBEDDER,
             config=ClusterTopicConfig(
                 cluster_threshold=0.5,
                 max_results_per_cluster=1,
@@ -428,7 +442,7 @@ class TestResolve:
         idx = ClusterTopicIndex.from_chunks(
             _CHUNKS,
             _EMBEDDINGS,
-            embed_fn=_embed_query_auth,
+            embedder=_AUTH_EMBEDDER,
             config=ClusterTopicConfig(
                 cluster_threshold=0.5,
                 centroid_score_threshold=0.0,
@@ -439,7 +453,7 @@ class TestResolve:
         assert len(ids) == len(set(ids))
 
     @pytest.mark.asyncio
-    async def test_embed_fn_failure_reaches_the_caller(self) -> None:
+    async def test_embedder_failure_reaches_the_caller(self) -> None:
         """An embedder that raises is reported, not turned into no topics.
 
         This asserted ``== []`` while ``resolve`` absorbed the failure,
@@ -449,13 +463,13 @@ class TestResolve:
         ``test_cluster_index_failure_surfaces.py``.
         """
 
-        async def failing_embed(text: str) -> list[float]:
+        def failing_rule(text: str) -> list[float]:
             raise RuntimeError("embed failed")
 
         idx = ClusterTopicIndex.from_chunks(
             _CHUNKS,
             _EMBEDDINGS,
-            embed_fn=failing_embed,
+            embedder=_Embedder(failing_rule),
             config=ClusterTopicConfig(cluster_threshold=0.5),
         )
         with pytest.raises(RuntimeError, match="embed failed"):
@@ -480,7 +494,7 @@ class TestScopeProfiles:
         idx = ClusterTopicIndex.from_chunks(
             _CHUNKS,
             _EMBEDDINGS,
-            embed_fn=_embed_query_auth,
+            embedder=_AUTH_EMBEDDER,
             config=config,
         )
         intent = RetrievalIntent(
@@ -553,8 +567,7 @@ class TestIntegrationPipeline:
     async def test_build_and_resolve_roundtrip(self) -> None:
         idx = await ClusterTopicIndex.build(
             _CHUNKS,
-            _embed_batch,
-            embed_fn=_embed_query_auth,
+            _CORPUS_EMBEDDER,
             config=ClusterTopicConfig(cluster_threshold=0.5),
         )
         results = await idx.resolve("authentication security")
@@ -567,7 +580,7 @@ class TestIntegrationPipeline:
         idx = ClusterTopicIndex.from_chunks(
             _CHUNKS,
             _EMBEDDINGS,
-            embed_fn=_embed_query_auth,
+            embedder=_AUTH_EMBEDDER,
             config=ClusterTopicConfig(
                 cluster_threshold=0.5,
                 centroid_score_threshold=0.0,

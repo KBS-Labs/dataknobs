@@ -47,6 +47,7 @@ if TYPE_CHECKING:
     import numpy as np
 
     from ..records import Record
+    from ..vector.embedding import TextEmbedder
 
 logger = logging.getLogger(__name__)
 
@@ -886,6 +887,8 @@ class AsyncElasticsearchDatabase(
         batch_size: int = 100,
         model_name: str | None = None,
         model_version: str | None = None,
+        *,
+        embedder: TextEmbedder | None = None,
     ) -> list[str]:
         """Embed text fields and store vectors with records.
 
@@ -897,6 +900,9 @@ class AsyncElasticsearchDatabase(
             batch_size: Number of records to process at once
             model_name: Name of the embedding model
             model_version: Version of the embedding model
+            embedder: A :class:`~dataknobs_data.vector.TextEmbedder`. Declared
+                so this override stays substitutable for the abstract method;
+                the body ignores it exactly as it ignores *embedding_fn*.
 
         Returns:
             List of record IDs that were processed

@@ -27,6 +27,7 @@ from ..streaming import (
     resolve_conflict_write,
     run_stream_write,
 )
+from ..vector.embedding import embed_texts, require_embedding_source
 from ..vector.mixins import AsyncVectorOperationsMixin, SyncVectorOperationsMixin
 from .config import PostgresDatabaseConfig
 from .postgres_mixins import (
@@ -70,6 +71,7 @@ if TYPE_CHECKING:
     from typing import ClassVar
     from ..fields import VectorField
     from ..records import Record
+    from ..vector.embedding import TextEmbedder
     from ..vector.types import VectorSearchResult
 
 logger = logging.getLogger(__name__)
@@ -2129,6 +2131,8 @@ class AsyncPostgresDatabase(
         batch_size: int = 100,
         model_name: str | None = None,
         model_version: str | None = None,
+        *,
+        embedder: TextEmbedder | None = None,
     ) -> list[str]:
         """Embed text fields and store vectors with records.
 
@@ -2141,16 +2145,27 @@ class AsyncPostgresDatabase(
             records: Records to process
             text_field: Field name(s) containing text to embed
             vector_field: Field name to store vectors in
-            embedding_fn: Function to generate embeddings
+            embedding_fn: Function to generate embeddings. Still accepted;
+                prefer *embedder*. Note that this used to be awaited
+                unconditionally, so a synchronous callable raised here while
+                working at every other site; routing through ``embed_texts``
+                classifies it as the rest of the package does.
             batch_size: Number of records to process at once
-            model_name: Name of the embedding model
+            model_name: Name of the embedding model. Defaults to the
+                *embedder*'s ``model_id`` when one is given.
             model_version: Version of the embedding model
+            embedder: A :class:`~dataknobs_data.vector.TextEmbedder`.
 
         Returns:
             List of record IDs that were processed
+
+        Raises:
+            ValueError: Neither *embedding_fn* nor *embedder* was given, or
+                both were.
         """
-        if not embedding_fn:
-            raise ValueError("embedding_fn is required for bulk_embed_and_store")
+        require_embedding_source(embedder, embedding_fn)
+        if model_name is None and embedder is not None:
+            model_name = embedder.model_id
 
         from ..fields import VectorField
 
@@ -2179,7 +2194,7 @@ class AsyncPostgresDatabase(
 
             # Generate embeddings
             if texts:
-                embeddings = await embedding_fn(texts)
+                embeddings = await embed_texts(texts, embedder=embedder, embedding_fn=embedding_fn)
 
                 # Store vectors with records
                 for j, record in enumerate(batch):

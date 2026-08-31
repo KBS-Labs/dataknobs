@@ -5,14 +5,18 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Any
 
+import numpy as np
+
 from ...fields import VectorField
 from ...records import Record
+from ..embedding import embed_texts
 from ..types import VectorSearchResult
 from .common import VectorStoreBase
 
 if TYPE_CHECKING:
-    import numpy as np
     from collections.abc import Callable
+
+    from ..embedding import TextEmbedder
 
 
 class VectorStore(ABC, VectorStoreBase):
@@ -468,22 +472,33 @@ class VectorStore(ABC, VectorStoreBase):
     async def bulk_embed_and_store(
         self,
         texts: list[str],
-        embedding_fn: Callable[[list[str]], np.ndarray],
+        embedding_fn: Callable[[list[str]], np.ndarray] | None = None,
         ids: list[str] | None = None,
         metadata: list[dict[str, Any]] | None = None,
         batch_size: int | None = None,
+        *,
+        embedder: TextEmbedder | None = None,
     ) -> list[str]:
         """Embed texts and store vectors.
 
         Args:
             texts: Texts to embed
-            embedding_fn: Function to generate embeddings
+            embedding_fn: Function to generate embeddings. Positional and
+                still accepted; prefer *embedder*.
             ids: Optional IDs for vectors
             metadata: Optional metadata for each vector
             batch_size: Batch size for embedding
+            embedder: A :class:`~dataknobs_data.vector.TextEmbedder`, which is
+                the typed path: batch, async, and carrying the model identity
+                that makes a stored vector's staleness judgeable. Keyword-only
+                so it cannot be mistaken for *embedding_fn* by position.
 
         Returns:
             List of IDs for added vectors
+
+        Raises:
+            ValueError: Neither *embedding_fn* nor *embedder* was given, or
+                both were.
         """
         batch_size = batch_size or self.batch_size
         all_ids = []
@@ -494,7 +509,18 @@ class VectorStore(ABC, VectorStoreBase):
             batch_metadata = metadata[i : i + batch_size] if metadata else None
 
             # Generate embeddings
-            embeddings = embedding_fn(batch_texts)
+            embeddings = await embed_texts(
+                batch_texts, embedder=embedder, embedding_fn=embedding_fn
+            )
+            if embedder is not None:
+                # `add_vectors` is declared over `np.ndarray`, and a
+                # `TextEmbedder` returns `list[list[float]]` by design (the
+                # shape that needs no conversion at the `llm` boundary). This
+                # is the one conversion that buys that, and it is deliberately
+                # not applied to the `embedding_fn` path: an existing caller's
+                # array reaches `add_vectors` with its own dtype, exactly as
+                # before.
+                embeddings = np.asarray(embeddings, dtype=np.float32)
 
             # Add source text to metadata
             if batch_metadata is None:

@@ -255,21 +255,25 @@ def build_topic_index(
             ClusterTopicIndex,
         )
 
-        embed_fn = _build_embed_fn(kb)
-        config = ClusterTopicConfig.from_dict(topic_index_config)
-        idx = ClusterTopicIndex(
-            embed_fn=embed_fn,
+        embedder = _build_embedder(kb)
+        # Named apart from the heading-tree branch's `config` / `idx`: the two
+        # branches are mutually exclusive and each returns, but sharing the
+        # names gave the second branch the first's inferred types, so every
+        # line here read as a type error against a config it never sees.
+        cluster_config = ClusterTopicConfig.from_dict(topic_index_config)
+        cluster_idx = ClusterTopicIndex(
+            embedder=embedder,
             vector_query_fn=vector_query_fn,
             source_name=source_name,
-            config=config,
+            config=cluster_config,
         )
         logger.info(
             "Built cluster topic index for source '%s' (cluster_threshold=%.2f, top_clusters=%d)",
             source_name,
-            config.cluster_threshold,
-            config.top_clusters,
+            cluster_config.cluster_threshold,
+            cluster_config.top_clusters,
         )
-        return idx
+        return cluster_idx
 
     logger.warning(
         "Unknown topic_index type %r for source '%s', skipping",
@@ -329,18 +333,70 @@ def _build_vector_query_fn(
     return vector_query_fn
 
 
-def _build_embed_fn(kb: Any) -> Any | None:
-    """Build an embed_fn from KB's embedding capability.
+class _KnowledgeBaseEmbedder:
+    """Presents a knowledge base's ``embed`` as a ``TextEmbedder``.
+
+    Knowledge bases are duck-typed here and expose a per-text ``embed``;
+    ``ClusterTopicIndex`` now wants the batch protocol from
+    ``dataknobs_data.vector``. This adapts the one to the other rather than
+    the index accommodating both, which is the fragmentation that protocol
+    exists to end.
+
+    Satisfies ``TextEmbedder`` structurally --- the protocol is not imported
+    for an ``isinstance`` it does not need.
+    """
+
+    def __init__(self, kb: Any) -> None:
+        self._kb = kb
+        self._dimensions: int | None = None
+
+    @property
+    def dimensions(self) -> int:
+        """Learned from the first batch; a KB does not publish a width.
+
+        Raises:
+            ValueError: Nothing has been embedded yet, so the answer is
+                genuinely unknown and guessing it would be worse.
+        """
+        if self._dimensions is None:
+            raise ValueError(
+                "knowledge-base embedder dimensions are unknown until the first embed call"
+            )
+        return self._dimensions
+
+    @property
+    def model_id(self) -> str:
+        """Best identity the KB offers, so stored vectors carry *something*.
+
+        A KB that names its embedding model is asked for that name; one that
+        does not yields a type-based identity, which is stable within a
+        deployment and distinguishes two different KB classes, but cannot
+        distinguish two models behind the same class. That limitation belongs
+        to the knowledge-base surface rather than here.
+        """
+        name = getattr(self._kb, "embedding_model", None) or getattr(self._kb, "model_name", None)
+        return f"kb:{name}" if name else f"kb:{type(self._kb).__name__}"
+
+    async def embed(self, texts: Sequence[str]) -> list[list[float]]:
+        """Embed each text through the KB's per-text ``embed``.
+
+        Sequential rather than gathered: a KB's ``embed`` is usually a
+        provider call behind a shared client, and firing a corpus at it
+        concurrently is a rate-limit decision this adapter has no standing
+        to make.
+        """
+        vectors = [list(await self._kb.embed(text)) for text in texts]
+        if vectors and self._dimensions is None:
+            self._dimensions = len(vectors[0])
+        return vectors
+
+
+def _build_embedder(kb: Any) -> _KnowledgeBaseEmbedder | None:
+    """Build a ``TextEmbedder`` from the KB's embedding capability.
 
     Returns ``None`` if the KB doesn't support embedding.
     """
-    if hasattr(kb, "embed"):
-
-        async def embed_fn(text: str) -> list[float]:
-            return await kb.embed(text)
-
-        return embed_fn
-    return None
+    return _KnowledgeBaseEmbedder(kb) if hasattr(kb, "embed") else None
 
 
 def _build_heading_selection_llm(config: Any) -> Any | None:

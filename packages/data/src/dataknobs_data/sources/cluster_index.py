@@ -20,21 +20,21 @@ from __future__ import annotations
 
 import logging
 from collections import Counter
-from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
+from ..vector.embedding import TextEmbedder
 from .base import RetrievalIntent, SourceResult
 from .processing import agglomerative_cluster, cosine_similarity
 from .topic_index import DEFAULT_HEADING_STOPWORDS
 
 logger = logging.getLogger(__name__)
 
-# Type alias for an async embed function: text -> embedding vector.
-EmbedFn = Callable[[str], Awaitable[list[float]]]
-
-# Type alias for a batch embed function: texts -> list of embedding vectors.
-BatchEmbedFn = Callable[[list[str]], Awaitable[list[list[float]]]]
+# ``EmbedFn`` and ``BatchEmbedFn`` used to be declared here --- the per-text and
+# batch arities of "a thing that turns text into vectors", as two separate type
+# aliases, one of which collided by name with a *third* alias of the same
+# concept in ``processing.py``. Both are now ``TextEmbedder``, which is batch
+# and carries a ``model_id``; the single-text arity is ``embed([t])[0]``.
 
 
 class VectorQueryFn(Protocol):
@@ -214,9 +214,9 @@ class ClusterTopicIndex:
     corpus when all chunks and embeddings are available upfront.
 
     Args:
-        embed_fn: Async function to embed a single text string.
-            Used at resolve time to embed the query for centroid
-            matching.
+        embedder: Embedder used at resolve time for the query and for
+            seed chunks. Optional, because an index built by
+            :meth:`from_chunks` for inspection only never resolves.
         vector_query_fn: Async function for vector-based seeding.
             Accepts ``(query, top_k)`` and returns scored results.
             Required for lazy mode.
@@ -227,14 +227,14 @@ class ClusterTopicIndex:
     def __init__(
         self,
         *,
-        embed_fn: EmbedFn | None = None,
+        embedder: TextEmbedder | None = None,
         vector_query_fn: VectorQueryFn | None = None,
         source_name: str = "knowledge_base",
         config: ClusterTopicConfig | None = None,
     ) -> None:
         self._config = config or ClusterTopicConfig()
         self._source_name = source_name
-        self._embed_fn = embed_fn
+        self._embedder = embedder
         self._vector_query_fn = vector_query_fn
 
         # Eager-mode state: populated by from_chunks(), None in lazy mode
@@ -248,7 +248,7 @@ class ClusterTopicIndex:
         chunks: list[SourceResult],
         embeddings: dict[str, list[float]],
         *,
-        embed_fn: EmbedFn | None = None,
+        embedder: TextEmbedder | None = None,
         vector_query_fn: VectorQueryFn | None = None,
         source_name: str = "knowledge_base",
         config: ClusterTopicConfig | None = None,
@@ -263,7 +263,10 @@ class ClusterTopicIndex:
         Args:
             chunks: Source result chunks.
             embeddings: Pre-computed embeddings keyed by chunk source_id.
-            embed_fn: Async function to embed query text at resolve time.
+            embedder: Embedder for query text at resolve time. Stays
+                optional: building an index for inspection only --- to read
+                its clusters and labels without ever calling ``resolve`` ---
+                is a supported and tested construction.
             vector_query_fn: Unused in eager mode but stored for API
                 consistency.
             source_name: Source name for provenance.
@@ -272,7 +275,7 @@ class ClusterTopicIndex:
                 cluster ID.
         """
         idx = cls(
-            embed_fn=embed_fn,
+            embedder=embedder,
             vector_query_fn=vector_query_fn,
             source_name=source_name,
             config=config,
@@ -304,9 +307,8 @@ class ClusterTopicIndex:
     async def build(
         cls,
         chunks: list[SourceResult],
-        batch_embed_fn: BatchEmbedFn,
+        embedder: TextEmbedder,
         *,
-        embed_fn: EmbedFn | None = None,
         vector_query_fn: VectorQueryFn | None = None,
         source_name: str = "knowledge_base",
         config: ClusterTopicConfig | None = None,
@@ -316,8 +318,12 @@ class ClusterTopicIndex:
 
         Args:
             chunks: Source result chunks.
-            batch_embed_fn: Async function that embeds a batch of texts.
-            embed_fn: Async function to embed a single query at resolve time.
+            embedder: Embeds the corpus now and the query later. One
+                parameter where there were two: ``batch_embed_fn`` and
+                ``embed_fn`` were the same concept at two arities, and
+                nothing stopped a caller passing embedders from different
+                models for the two, which put the corpus and the queries
+                searching it into different vector spaces.
             vector_query_fn: Stored for API consistency.
             source_name: Source name for provenance.
             config: Cluster configuration.
@@ -326,20 +332,20 @@ class ClusterTopicIndex:
         texts = [c.content for c in chunks]
         if not texts:
             return cls(
-                embed_fn=embed_fn,
+                embedder=embedder,
                 vector_query_fn=vector_query_fn,
                 source_name=source_name,
                 config=config,
             )
 
-        all_embeddings = await batch_embed_fn(texts)
+        all_embeddings = await embedder.embed(texts)
         embeddings_map = {
             chunk.source_id: emb for chunk, emb in zip(chunks, all_embeddings, strict=True)
         }
         return cls.from_chunks(
             chunks,
             embeddings_map,
-            embed_fn=embed_fn,
+            embedder=embedder,
             vector_query_fn=vector_query_fn,
             source_name=source_name,
             config=config,
@@ -370,17 +376,17 @@ class ClusterTopicIndex:
         and 4 use the pre-built clusters instead.
 
         Raises:
-            Exception: whatever ``embed_fn`` or ``vector_query_fn``
+            Exception: whatever ``embedder`` or ``vector_query_fn``
                 raises, unchanged. These are not absorbed into an empty
                 result, because a caller reads an empty topic index as a
                 vocabulary gap worth retrying another way -- see the
                 comments at each call site. An index that ran and matched
                 nothing still returns an empty list.
         """
-        if self._embed_fn is None:
+        if self._embedder is None:
             logger.warning(
-                "No embed_fn configured for ClusterTopicIndex on source '%s' "
-                "— cannot resolve queries. Provide embed_fn at construction.",
+                "No embedder configured for ClusterTopicIndex on source '%s' "
+                "— cannot resolve queries. Provide embedder at construction.",
                 self._source_name,
             )
             return []
@@ -401,7 +407,7 @@ class ClusterTopicIndex:
         # vocabulary gap and falls back to plain text retrieval, so
         # absorbing this reroutes the turn and reports the wrong cause for
         # it. The loop already drops a source that raises, with its cause.
-        query_embedding = await self._embed_fn(query)
+        query_embedding = (await self._embedder.embed([query]))[0]
 
         # Pick up the filter slice keyed by our source name and forward
         # it through vector-seed fetching, matching the convention the
@@ -550,7 +556,7 @@ class ClusterTopicIndex:
             return [], [], []
 
         # Get embeddings for seeds — use the seed results' relevance
-        # metadata if available, otherwise embed via embed_fn
+        # metadata if available, otherwise embed via the embedder
         seed_chunks, seed_embeddings = await self._embed_seeds(seed_results)
         if not seed_chunks:
             return [], [], []
@@ -594,9 +600,15 @@ class ClusterTopicIndex:
     ) -> tuple[list[SourceResult], list[list[float]]]:
         """Embed seed chunks for clustering.
 
-        Uses ``embed_fn`` to embed each seed's content.
+        Uses the configured embedder on each seed's content.
+
+        One seed per call rather than one batch, which is deliberate: the
+        ``except`` below drops a single chunk that will not embed and clusters
+        the rest, and a batch call cannot say which text failed. Batching this
+        is a real improvement *and* a real change to that failure semantics,
+        so it is not made here as a side effect of a type change.
         """
-        if self._embed_fn is None:
+        if self._embedder is None:
             return [], []
 
         chunks: list[SourceResult] = []
@@ -604,7 +616,7 @@ class ClusterTopicIndex:
         last_error: Exception | None = None
         for seed in seeds:
             try:
-                emb = await self._embed_fn(seed.content)
+                emb = (await self._embedder.embed([seed.content]))[0]
             except Exception as exc:
                 # One chunk that will not embed is dropped so the rest of
                 # the pool can still cluster, which is what this catch is

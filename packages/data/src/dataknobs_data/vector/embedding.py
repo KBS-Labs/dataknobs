@@ -44,19 +44,32 @@ be classified before it is called, and
 place that happens. An *adopted* site has nothing left to classify --- a
 ``TextEmbedder`` is async by declaration --- which is how the branch stops being
 needed rather than being removed while callers still need it.
+
+:func:`embed_texts` and :func:`embed_text` are where a site chooses between the
+two. They exist so that the choice is written once: twenty-five sites each
+writing their own ``if embedder is not None`` is how the eight shapes above
+arose, and a twenty-sixth site is the failure mode this module is against.
 """
 
 from __future__ import annotations
 
 import hashlib
-from collections.abc import Sequence
-from typing import Protocol, runtime_checkable
+from collections.abc import Callable, Sequence
+from typing import Any, Protocol, Self, cast, runtime_checkable
+
+from dataknobs_common.callbacks import is_async_callable
+
+from .embedding_fn import call_embedding_fn
 
 __all__ = [
     "CachedEmbedder",
+    "SyncTextEmbedder",
     "TextEmbedder",
     "VectorCache",
+    "embed_text",
+    "embed_texts",
     "embedding_cache_key",
+    "require_embedding_source",
 ]
 
 
@@ -223,3 +236,216 @@ class CachedEmbedder:
         await self._cache.put_batch(model, to_embed, fresh)
 
         return [by_text[wanted[i]] if hit is None else hit for i, hit in enumerate(cached)]
+
+
+def require_embedding_source(
+    embedder: TextEmbedder | None,
+    embedding_fn: Callable[..., Any] | None,
+) -> None:
+    """Check that exactly one embedding source was supplied.
+
+    :func:`embed_texts` and :func:`embed_text` apply this themselves, so a
+    site that always reaches one of them does not need it. A site that may
+    *not* reach one --- a bulk loop over a possibly-empty batch --- calls it up
+    front, so that "you gave me no embedder" is still raised for an empty
+    input rather than turning into a silent empty result.
+
+    Raises:
+        ValueError: Neither was supplied, or both were. Both is refused rather
+            than resolved by precedence: silently preferring one leaves a
+            caller believing vectors came from a source that never ran, which
+            is the class of error :attr:`TextEmbedder.model_id` exists to close.
+    """
+    if embedder is not None and embedding_fn is not None:
+        raise ValueError(
+            "pass either `embedder` or `embedding_fn`, not both — with both "
+            "supplied, one of them silently does not run"
+        )
+    if embedder is None and embedding_fn is None:
+        raise ValueError("an embedder is required: pass `embedder=` or `embedding_fn=`")
+
+
+async def embed_texts(
+    texts: Sequence[str],
+    *,
+    embedder: TextEmbedder | None = None,
+    embedding_fn: Callable[..., Any] | None = None,
+) -> Any:
+    """One batch of vectors, from whichever source the caller supplied.
+
+    Every batch site in this package takes both an ``embedder`` and a legacy
+    ``embedding_fn``, and the choice between them is the same three lines
+    everywhere. Written at each site it would be the duplication that produced
+    the eight shapes in the first place, so it is written here.
+
+    Args:
+        texts: The batch to embed. Empty is not an error.
+        embedder: The typed path. Awaited directly --- a
+            :class:`TextEmbedder` is async by declaration, so there is nothing
+            to classify.
+        embedding_fn: The callable path, kept for callers that predate the
+            protocol. Classified and either awaited or called, because an
+            untyped callable's synchrony is not knowable from its annotation.
+
+    Returns:
+        ``list[list[float]]`` on the ``embedder`` path. On the ``embedding_fn``
+        path, **whatever that callable returned, unconverted** --- usually an
+        ``np.ndarray``. The shapes are deliberately not reconciled: normalizing
+        the callable's answer would change what existing callers hand
+        downstream, and this seam is additive. A site wanting one shape from
+        both converts what it gets.
+
+    Raises:
+        ValueError: Neither was supplied, or both were. Both is refused rather
+            than resolved by precedence: silently preferring one leaves a
+            caller believing vectors came from a source that never ran, which
+            is the class of error :attr:`TextEmbedder.model_id` exists to close.
+    """
+    require_embedding_source(embedder, embedding_fn)
+    if embedder is not None:
+        return await embedder.embed(list(texts))
+    # `cast` rather than a second `is None` raise: the guard above already
+    # decided, and restating the check here would be a second place for the
+    # rule to live.
+    result = cast("Callable[..., Any]", embedding_fn)(list(texts))
+    # Classified on the callable, which is right about a callable *object*
+    # whose `__call__` is `async def` --- the shape an embedder holding a model
+    # handle takes. The awaitable re-check then also covers a plain `def` that
+    # returns a coroutine, which the callable test cannot see and which one of
+    # the copies this replaces handled while the other did not.
+    if is_async_callable(embedding_fn) or hasattr(result, "__await__"):
+        return await result
+    return result
+
+
+async def embed_text(
+    text: str,
+    *,
+    embedder: TextEmbedder | None = None,
+    embedding_fn: Callable[..., Any] | None = None,
+    timeout: float | None = None,
+) -> Any:
+    """One vector, from whichever source the caller supplied.
+
+    The per-text counterpart of :func:`embed_texts`, for the sites that embed a
+    single query string rather than a corpus.
+
+    Args:
+        text: The text to embed.
+        embedder: The typed path. Called as a batch of one, since
+            :class:`TextEmbedder` is batch-only.
+        embedding_fn: The callable path, routed through
+            :func:`~dataknobs_data.vector.embedding_fn.call_embedding_fn` so a
+            synchronous callable is offloaded rather than run on the loop.
+        timeout: Seconds to allow an async ``embedding_fn``. Ignored on the
+            ``embedder`` path, where a caller wanting a bound uses
+            :func:`asyncio.timeout` around the call --- adding a second
+            timeout mechanism to the typed path is what the seam is for
+            avoiding.
+
+    Returns:
+        ``list[float]`` on the ``embedder`` path; the callable's own return
+        otherwise. See :func:`embed_texts` on why those are not reconciled.
+
+    Raises:
+        ValueError: Neither was supplied, or both were.
+    """
+    require_embedding_source(embedder, embedding_fn)
+    if embedder is not None:
+        return (await embedder.embed([text]))[0]
+    return await call_embedding_fn(cast("Callable[..., Any]", embedding_fn), text, timeout=timeout)
+
+
+class SyncTextEmbedder:
+    """A :class:`TextEmbedder` reached from synchronous code.
+
+    Five embedding sites in this package are plain ``def`` --- ``Query.near_text``,
+    ``VectorField.from_text``, and the three sync ``bulk_embed_and_store``
+    lanes. None of them can await, so none can take a :class:`TextEmbedder`
+    directly, and giving the protocol a synchronous twin would put the seam
+    back where it started: two shapes for one concept.
+
+    This is the other way round. It holds one
+    :class:`~dataknobs_common.sync_bridge.SyncLoopBridge` --- a private event
+    loop on a daemon thread, so it is callable from plain sync code *and* from
+    inside a running loop without the ``run_until_complete`` deadlock --- and
+    exposes the protocol's two arities as ordinary methods. Those methods are
+    the shape the sync sites already declare, so **no sync signature changes**:
+
+    ```python
+    sync = SyncTextEmbedder(await create_text_embedder(config))
+    try:
+        query.near_text("some text", sync.embed_one)
+        store.bulk_embed_and_store(records, "body", embedding_fn=sync.embed)
+    finally:
+        sync.close()
+    ```
+
+    :meth:`embed_one` and :meth:`embed` are separate methods rather than one
+    arity-polymorphic call, because that polymorphism is what every consumer
+    of :meth:`AsyncLLMProvider.embed` had to narrow for itself and is half of
+    what this module exists to end.
+
+    The bridge costs one daemon thread for the object's lifetime, so build one
+    and keep it rather than one per call. It is a daemon, so it can never block
+    process exit; :meth:`close` is for deterministic teardown, and the class is
+    a context manager for the same reason.
+    """
+
+    def __init__(self, embedder: TextEmbedder, *, timeout: float | None = None) -> None:
+        """Args:
+        embedder: The async embedder to reach.
+        timeout: Seconds to allow each call, giving a synchronous caller an
+            upper bound on a blocking wait it cannot otherwise cancel.
+        """
+        from dataknobs_common.sync_bridge import SyncLoopBridge
+
+        self._embedder = embedder
+        self._timeout = timeout
+        self._bridge = SyncLoopBridge(thread_name="dk-sync-embedder")
+
+    @property
+    def dimensions(self) -> int:
+        """The wrapped embedder's --- a bridge does not reshape."""
+        return self._embedder.dimensions
+
+    @property
+    def model_id(self) -> str:
+        """The wrapped embedder's staleness key, unchanged.
+
+        A vector stored through the bridge must be indistinguishable from one
+        stored without it.
+        """
+        return self._embedder.model_id
+
+    def embed(self, texts: Sequence[str]) -> list[list[float]]:
+        """Blocking :meth:`TextEmbedder.embed`.
+
+        Satisfies ``Callable[[list[str]], list[list[float]]]``, which is what
+        the batch sync sites declare (modulo ``np.ndarray``, which
+        :class:`~dataknobs_data.fields.VectorField` and every backend's
+        ``add_vectors`` accept a list in place of).
+        """
+        return self._bridge.run(self._embedder.embed(list(texts)), timeout=self._timeout)
+
+    def embed_one(self, text: str) -> list[float]:
+        """Blocking single-text embed, for the per-text sync sites.
+
+        Satisfies ``Callable[[str], list[float]]`` --- the shape
+        ``Query.near_text`` and ``VectorField.from_text`` declare.
+        """
+        return self.embed([text])[0]
+
+    def close(self) -> None:
+        """Stop the bridge's loop and join its thread.
+
+        Idempotent. Closes only the bridge --- the wrapped embedder is not
+        this object's to close, since it was handed in already built.
+        """
+        self._bridge.close()
+
+    def __enter__(self) -> Self:
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        self.close()

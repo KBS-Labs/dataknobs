@@ -13,9 +13,7 @@ now visible as the whole of what differs.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, cast
-
-from dataknobs_common.callbacks import is_async_callable
+from typing import TYPE_CHECKING, Any
 
 from ..fields import VectorField
 from .content import (
@@ -24,6 +22,7 @@ from .content import (
     compute_content_hash,
     content_hash_metadata,
 )
+from .embedding import embed_texts, require_embedding_source
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable, Iterator
@@ -31,6 +30,7 @@ if TYPE_CHECKING:
     import numpy as np
 
     from ..records import Record
+    from .embedding import TextEmbedder
 
 
 def resolve_text_fields(text_field: str | list[str]) -> list[str]:
@@ -125,6 +125,18 @@ class BulkEmbedMixin:
     This mixin can be used by any **sync** database backend to provide a
     standard implementation of bulk embedding and storage without circular
     dependencies. Async backends want :class:`AsyncBulkEmbedMixin`.
+
+    It takes no ``embedder``, and that is not an omission. A
+    :class:`~dataknobs_data.vector.TextEmbedder` is async by declaration and
+    this method cannot await one; giving the protocol a synchronous twin so
+    that it could would put back the second shape the protocol exists to
+    remove. A sync caller reaches an embedder from here by wrapping it once::
+
+        with SyncTextEmbedder(embedder) as sync:
+            store.bulk_embed_and_store(records, "body", embedding_fn=sync.embed)
+
+    ``sync.embed`` already satisfies the ``embedding_fn`` parameter below, so
+    the sync lane needs no new parameter to reach the seam.
     """
 
     def bulk_embed_and_store(
@@ -144,7 +156,9 @@ class BulkEmbedMixin:
             records: Records to process
             text_field: Field name(s) containing text to embed
             vector_field: Field name to store vectors in
-            embedding_fn: Function to generate embeddings
+            embedding_fn: Function to generate embeddings. A
+                ``SyncTextEmbedder``'s ``embed`` satisfies this --- see the
+                class docstring for why there is no ``embedder`` parameter.
             batch_size: Number of records to process at once
             model_name: Name of the embedding model
             model_version: Version of the embedding model
@@ -215,6 +229,8 @@ class AsyncBulkEmbedMixin:
         model_name: str | None = None,
         model_version: str | None = None,
         field_separator: str = DEFAULT_FIELD_SEPARATOR,
+        *,
+        embedder: TextEmbedder | None = None,
     ) -> list[str]:
         """Embed text fields and store vectors with records.
 
@@ -222,27 +238,36 @@ class AsyncBulkEmbedMixin:
             records: Records to process
             text_field: Field name(s) containing text to embed
             vector_field: Field name to store vectors in
-            embedding_fn: Function to generate embeddings (can be sync or async)
+            embedding_fn: Function to generate embeddings (can be sync or
+                async). Still accepted; prefer *embedder*.
             batch_size: Number of records to process at once
-            model_name: Name of the embedding model
+            model_name: Name of the embedding model. Defaults to the
+                *embedder*'s own ``model_id`` when one is given, which is the
+                point of the seam: the staleness key written beside a vector
+                comes from the thing that produced it rather than from a
+                parameter the caller keeps in step by hand.
             model_version: Version of the embedding model
             field_separator: What to join multiple text fields on. Was
                 hardcoded to a space, which is the value it still defaults to.
+            embedder: A :class:`~dataknobs_data.vector.TextEmbedder` --- async
+                by declaration, so this lane classifies nothing when it is
+                used.
 
         Returns:
             List of record IDs that were processed
 
         Raises:
-            ValueError: If embedding_fn is not provided
+            ValueError: Neither *embedding_fn* nor *embedder* was given, or
+                both were.
         """
-        if not embedding_fn:
-            raise ValueError("embedding_fn is required for bulk_embed_and_store")
+        # Checked before the loop, not inside it: an empty `records` never
+        # reaches `embed_texts`, and "you gave me no embedder" must still be
+        # an error there rather than a silently empty result.
+        require_embedding_source(embedder, embedding_fn)
 
-        # Batched rather than per-text, so this cannot route through
-        # ``call_embedding_fn``; the classification is the same question and
-        # gets the same answer.
-        is_async_fn = is_async_callable(embedding_fn)
         text_fields = resolve_text_fields(text_field)
+        if model_name is None and embedder is not None:
+            model_name = embedder.model_id
         processed_ids = []
 
         for batch in iter_batches(records, batch_size):
@@ -250,10 +275,7 @@ class AsyncBulkEmbedMixin:
             if not texts:
                 continue
 
-            if is_async_fn:
-                embeddings = await cast("Awaitable[np.ndarray]", embedding_fn(texts))
-            else:
-                embeddings = cast("np.ndarray", embedding_fn(texts))
+            embeddings = await embed_texts(texts, embedder=embedder, embedding_fn=embedding_fn)
 
             for record, vector, text in pair_records_with_vectors(batch, texts, embeddings):
                 attach_vector_field(

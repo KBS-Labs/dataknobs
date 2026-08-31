@@ -15,6 +15,7 @@ from .content import (
     current_content_hash,
     stored_assembly,
 )
+from .embedding import embed_texts, require_embedding_source
 from .hybrid import (
     FusionStrategy,
     HybridSearchConfig,
@@ -29,6 +30,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable
     from ..query import Query
     from ..records import Record
+    from .embedding import TextEmbedder
 
 
 class VectorCapable(Protocol):
@@ -556,6 +558,8 @@ class AsyncVectorOperationsMixin(ABC):
         batch_size: int = 100,
         model_name: str | None = None,
         model_version: str | None = None,
+        *,
+        embedder: TextEmbedder | None = None,
     ) -> list[str]:
         """Embed text fields and store vectors with records.
 
@@ -563,10 +567,15 @@ class AsyncVectorOperationsMixin(ABC):
             records: Records to process
             text_field: Field name(s) containing text to embed
             vector_field: Field name to store vectors in
-            embedding_fn: Function to generate embeddings
+            embedding_fn: Function to generate embeddings. Still accepted;
+                prefer *embedder*.
             batch_size: Number of records to process at once
             model_name: Name of the embedding model
             model_version: Version of the embedding model
+            embedder: A :class:`~dataknobs_data.vector.TextEmbedder`. Carries
+                its own ``model_id``, so an implementation can fill
+                *model_name* from the thing that produced the vectors rather
+                than from a parameter the caller has to keep in step.
 
         Returns:
             List of record IDs that were processed
@@ -764,6 +773,8 @@ class VectorSyncMixin:
         embedding_fn: Callable[[list[str]], np.ndarray] | None = None,
         force: bool = False,
         field_separator: str = DEFAULT_FIELD_SEPARATOR,
+        *,
+        embedder: TextEmbedder | None = None,
     ) -> int:
         """Synchronize vector embeddings with text content.
 
@@ -771,16 +782,21 @@ class VectorSyncMixin:
             records: Records to synchronize
             text_fields: Text fields to generate vectors from
             vector_field: Vector field to update
-            embedding_fn: Embedding function
+            embedding_fn: Embedding function. Still accepted; prefer
+                *embedder*.
             force: Force re-generation even if vectors exist
             field_separator: What to join ``text_fields`` on. Was hardcoded to
                 a space, which is the value it still defaults to.
+            embedder: A :class:`~dataknobs_data.vector.TextEmbedder`.
 
         Returns:
             Number of records updated
+
+        Raises:
+            ValueError: Neither *embedding_fn* nor *embedder* was given, or
+                both were.
         """
-        if not embedding_fn:
-            raise ValueError("Embedding function is required for vector synchronization")
+        require_embedding_source(embedder, embedding_fn)
 
         updated = 0
         for record in records:
@@ -799,12 +815,9 @@ class VectorSyncMixin:
                 if text_content:
                     from ..fields import VectorField
 
-                    result = embedding_fn([text_content])
-                    # Handle both sync and async embedding functions
-                    if hasattr(result, "__await__"):
-                        embeddings = await result
-                    else:
-                        embeddings = result
+                    embeddings = await embed_texts(
+                        [text_content], embedder=embedder, embedding_fn=embedding_fn
+                    )
                     record.fields[vector_field] = VectorField(
                         name=vector_field,
                         value=embeddings[0],

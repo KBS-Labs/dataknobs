@@ -20,9 +20,13 @@ from .content import (
 )
 from .embedding import (
     CachedEmbedder,
+    SyncTextEmbedder,
     TextEmbedder,
     VectorCache,
+    embed_text,
+    embed_texts,
     embedding_cache_key,
+    require_embedding_source,
 )
 from .embedding_fn import call_embedding_fn
 from .exceptions import (
@@ -73,10 +77,14 @@ __all__ = [
     "VectorField",
     # Embedding — the one shape for "turn text into vectors"
     "CachedEmbedder",
+    "SyncTextEmbedder",
     "TextEmbedder",
     "VectorCache",
     "call_embedding_fn",
+    "embed_text",
+    "embed_texts",
     "embedding_cache_key",
+    "require_embedding_source",
     # Types
     "DistanceMetric",
     "VectorConfig",
