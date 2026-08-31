@@ -148,7 +148,17 @@ class LLMProviderEmbedder:
 
         raw: Any = await self._provider.embed(wanted)
 
-        if raw and not isinstance(raw[0], (list, tuple)):
+        # `len(raw)`, not `if raw`: a provider answering with a 2-D
+        # `np.ndarray` makes the truthiness test raise "The truth value of an
+        # array with more than one element is ambiguous" before the shape
+        # question is even asked.
+        #
+        # And `__len__` on the row, not `isinstance(..., (list, tuple))`: the
+        # question is whether the provider returned a batch or one flat
+        # vector, and a row of an ndarray is a batch row that is neither a
+        # list nor a tuple. Testing list-ness accused such a provider of
+        # exactly the mistake it had not made.
+        if len(raw) and not hasattr(raw[0], "__len__"):
             raise TypeError(
                 f"{type(self._provider).__name__}.embed returned a flat vector for a "
                 f"list of {len(wanted)} texts; expected one vector per text"

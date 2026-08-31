@@ -9,7 +9,12 @@ from dataknobs_data import Record
 from dataknobs_data.backends.elasticsearch_async import AsyncElasticsearchDatabase
 from dataknobs_data.fields import VectorField
 from dataknobs_data.query import Filter, Query, Operator
-from dataknobs_data.testing import vector as _vector, vectors as _vectors
+from dataknobs_data.testing import DeterministicEmbedder, vector as _vector, vectors as _vectors
+from dataknobs_data.vector.content import (
+    CONTENT_HASH_KEY,
+    SOURCE_FIELDS_KEY,
+    compute_content_hash,
+)
 from dataknobs_data.vector.types import DistanceMetric
 
 pytestmark = requires_real_elasticsearch
@@ -403,3 +408,98 @@ class TestElasticsearchVectorIntegration:
             assert {r.record.id for r in results} == {"a"}
         finally:
             await db.close()
+
+
+class TestElasticsearchBulkEmbedAndStore:
+    """The fifth async backend's ``bulk_embed_and_store``.
+
+    It was a stub: a ``logger.warning`` and ``return []``, satisfying the
+    abstract method without storing anything. Nothing raised, and the empty
+    list is indistinguishable from "there were no records" --- so a caller
+    embedding a corpus into Elasticsearch got a successful-looking no-op and
+    an empty index. The seam's ``embedder=`` had been extended to it, which
+    made the stub harder to notice rather than easier: a method carrying the
+    typed parameter reads as one that uses it.
+    """
+
+    @pytest.fixture
+    async def vector_test_index(self, elasticsearch_test_index):
+        config = elasticsearch_test_index.copy()
+        config["vector_enabled"] = True
+        return config
+
+    async def test_bulk_embed_and_store_actually_stores(self, vector_test_index):
+        """Records in, records stored, vectors on them."""
+        db = AsyncElasticsearchDatabase(vector_test_index)
+        await db.connect()
+
+        try:
+            records = [
+                Record({"title": "Alpha", "content": "first document"}),
+                Record({"title": "Beta", "content": "second document"}),
+            ]
+
+            ids = await db.bulk_embed_and_store(
+                records,
+                ["title", "content"],
+                vector_field="embedding",
+                embedder=DeterministicEmbedder(dimensions=8, model_id="es-v1"),
+                field_separator=" | ",
+            )
+
+            assert len(ids) == 2, "the stub returned [] here while reporting success"
+
+            await asyncio.sleep(1)
+
+            stored = await db.read(ids[0])
+            assert stored is not None
+            field = stored.fields["embedding"]
+            assert field.value is not None
+            assert len(field.value) == 8
+        finally:
+            await db.disconnect()
+
+    async def test_a_bulk_embedded_vector_carries_a_content_digest(self, vector_test_index):
+        """And it survives the round trip, so a sweep can judge it.
+
+        Elasticsearch keeps a vector field's description in the record's own
+        ``vector_fields`` metadata rather than beside the value, so this is
+        the backend where "the writer recorded a digest" and "storage gave it
+        back" are most clearly two separate claims.
+        """
+        db = AsyncElasticsearchDatabase(vector_test_index)
+        await db.connect()
+
+        try:
+            record = Record({"title": "Doc", "content": "Body"})
+            ids = await db.bulk_embed_and_store(
+                [record],
+                ["title", "content"],
+                vector_field="embedding",
+                embedder=DeterministicEmbedder(dimensions=8, model_id="es-v1"),
+            )
+            await asyncio.sleep(1)
+
+            stored = await db.read(ids[0])
+            assert stored is not None
+            metadata = stored.fields["embedding"].metadata or {}
+
+            assert metadata.get(CONTENT_HASH_KEY) == compute_content_hash("Doc Body")
+            assert metadata.get(SOURCE_FIELDS_KEY) == ["title", "content"]
+        finally:
+            await db.disconnect()
+
+    async def test_no_embedding_source_is_an_error_even_for_no_records(self, vector_test_index):
+        """The refusal the other four backends make before their loop.
+
+        A stub returning ``[]`` answered this with success, which is the
+        shape ``require_embedding_source`` exists to prevent.
+        """
+        db = AsyncElasticsearchDatabase(vector_test_index)
+        await db.connect()
+
+        try:
+            with pytest.raises(ValueError, match="embedder is required"):
+                await db.bulk_embed_and_store([], "content")
+        finally:
+            await db.disconnect()

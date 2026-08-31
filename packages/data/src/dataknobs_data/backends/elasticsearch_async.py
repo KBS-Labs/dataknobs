@@ -24,6 +24,7 @@ from ..streaming import (
     async_run_stream_write,
     resolve_conflict_write,
 )
+from ..vector.bulk_embed_mixin import AsyncBulkEmbedMixin
 from ..vector.mixins import AsyncVectorOperationsMixin
 from ..vector.types import DistanceMetric, VectorSearchResult
 from .config import AsyncElasticsearchDatabaseConfig
@@ -47,7 +48,6 @@ if TYPE_CHECKING:
     import numpy as np
 
     from ..records import Record
-    from ..vector.embedding import TextEmbedder
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +58,10 @@ _client_manager = ConnectionPoolManager()
 class AsyncElasticsearchDatabase(
     StructuredConfigConsumer[AsyncElasticsearchDatabaseConfig],
     AsyncDatabase,
+    # Before `AsyncVectorOperationsMixin`, whose `bulk_embed_and_store` is
+    # abstract: the MRO must reach the implementation first. This is the same
+    # ordering the other five async backends use.
+    AsyncBulkEmbedMixin,
     AsyncVectorOperationsMixin,
     ElasticsearchBaseConfig,
     ElasticsearchIndexManager,
@@ -877,40 +881,6 @@ class AsyncElasticsearchDatabase(
             )
 
         return results
-
-    async def bulk_embed_and_store(
-        self,
-        records: list[Record],
-        text_field: str | list[str],
-        vector_field: str = "embedding",
-        embedding_fn: Any | None = None,
-        batch_size: int = 100,
-        model_name: str | None = None,
-        model_version: str | None = None,
-        *,
-        embedder: TextEmbedder | None = None,
-    ) -> list[str]:
-        """Embed text fields and store vectors with records.
-
-        Args:
-            records: Records to process
-            text_field: Field name(s) containing text to embed
-            vector_field: Field name to store vectors in
-            embedding_fn: Function to generate embeddings
-            batch_size: Number of records to process at once
-            model_name: Name of the embedding model
-            model_version: Version of the embedding model
-            embedder: A :class:`~dataknobs_data.vector.TextEmbedder`. Declared
-                so this override stays substitutable for the abstract method;
-                the body ignores it exactly as it ignores *embedding_fn*.
-
-        Returns:
-            List of record IDs that were processed
-        """
-        # This is a stub implementation
-        # Full implementation would require an actual embedding function
-        logger.warning("bulk_embed_and_store is not fully implemented for Elasticsearch")
-        return []
 
     async def create_vector_index(
         self,

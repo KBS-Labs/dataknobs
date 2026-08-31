@@ -4,10 +4,13 @@ import asyncio
 import importlib
 import logging
 import sys
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
 import pytest
+
+from dataknobs_common.testing import assert_no_leaked_bridge_threads
 
 logger = logging.getLogger(__name__)
 
@@ -21,6 +24,30 @@ if str(src_path) not in sys.path:
 def event_loop_policy() -> asyncio.AbstractEventLoopPolicy:
     """Set the event loop policy for the test session."""
     return asyncio.DefaultEventLoopPolicy()
+
+
+@pytest.fixture(autouse=True)
+def _no_leaked_daemon_threads() -> Iterator[None]:
+    """Fail any test that leaks a dataknobs daemon thread.
+
+    ``common``, ``fsm`` and ``bots`` all installed this and ``data`` did
+    not, from before ``data`` owned a bridge at all. It owns one now:
+    :class:`~dataknobs_data.vector.SyncTextEmbedder` holds a
+    ``SyncLoopBridge`` so the five synchronous embedding sites can reach an
+    async embedder, and a test that builds one and drops it leaks a daemon
+    event-loop thread for the rest of the session.
+
+    The leak is silent where it happens --- a daemon thread never delays
+    exit, the object goes on working, nothing raises. It surfaces instead
+    as *another package's* thread assertions failing depending on test
+    order, which names the wrong culprit entirely. Per-test and
+    delta-based, this names the right one.
+
+    ``with SyncTextEmbedder(...) as sync:`` satisfies it; so does an
+    explicit ``close()``.
+    """
+    with assert_no_leaked_bridge_threads():
+        yield
 
 
 _TEST_INDEX_PREFIXES = ("test_records_", "test_factory_vectors_")

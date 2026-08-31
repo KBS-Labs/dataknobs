@@ -7,7 +7,9 @@ quiet on correctly-closed code and on someone else's pre-existing leak.
 
 from __future__ import annotations
 
+import gc
 import threading
+import warnings
 from collections.abc import Iterator
 
 import pytest
@@ -175,3 +177,89 @@ def test_live_threads_accepts_a_one_shot_iterable() -> None:
         assert created == [_BRIDGE_THREAD]
     finally:
         bridge.close()
+
+
+def test_a_custom_thread_name_is_watched_too() -> None:
+    """A ``thread_name=`` must not be a way out of the guard.
+
+    ``SyncTextEmbedder`` names its bridge ``dk-sync-embedder`` for
+    diagnostics, and exact-name matching against a fixed pair made every
+    thread that class creates invisible here — silently, at every call
+    site. A name is a label, not an opt-out.
+    """
+    leaked: SyncLoopBridge | None = None
+    try:
+        with pytest.raises(AssertionError, match="dk-custom-named-bridge"):
+            with assert_no_leaked_bridge_threads():
+                leaked = SyncLoopBridge(thread_name="dk-custom-named-bridge")
+                leaked.run(_answer())
+    finally:
+        if leaked is not None:
+            leaked.close()
+
+
+def test_a_custom_name_registered_inside_the_block_is_still_watched() -> None:
+    """The default watch set is resolved at exit as well as at entry.
+
+    A bridge whose name this process has never seen before is created
+    *inside* the block. Freezing the watch set on entry would leave that
+    name unwatched for the one block that most needs it — the block that
+    introduced it.
+    """
+    leaked: SyncLoopBridge | None = None
+    try:
+        with pytest.raises(AssertionError, match="dk-first-seen-inside"):
+            with assert_no_leaked_bridge_threads():
+                leaked = SyncLoopBridge(thread_name="dk-first-seen-inside")
+                leaked.run(_answer())
+    finally:
+        if leaked is not None:
+            leaked.close()
+
+
+def test_a_caller_supplied_watch_set_is_still_normalized_once() -> None:
+    """A one-shot iterable must survive being needed at entry and exit."""
+    leaked: SyncLoopBridge | None = None
+    try:
+        with pytest.raises(AssertionError, match=_BRIDGE_THREAD):
+            with assert_no_leaked_bridge_threads(names=(n for n in [_BRIDGE_THREAD])):
+                leaked = SyncLoopBridge()
+                leaked.run(_answer())
+    finally:
+        if leaked is not None:
+            leaked.close()
+
+
+def test_dropping_an_unclosed_bridge_warns() -> None:
+    """The leak is silent by construction; this is what makes it audible.
+
+    A daemon thread cannot block process exit and the owning object goes
+    on working, so nothing about a dropped bridge is observable from the
+    outside. A long-lived server building one per tenant leaks a thread
+    and an event loop's self-pipe descriptors per tenant, and finds out
+    from neither an exception nor a log line.
+    """
+    with pytest.warns(ResourceWarning, match="unclosed SyncLoopBridge"):
+        bridge = SyncLoopBridge(thread_name="dk-warns-on-drop")
+        bridge.run(_answer())
+        thread = bridge._thread
+        del bridge
+        gc.collect()
+
+    thread.join(timeout=5.0)
+    assert not thread.is_alive(), "the finalizer warned but left the thread running"
+
+
+def test_dropping_a_closed_bridge_is_silent() -> None:
+    """Only an *unclosed* bridge is a leak.
+
+    A warning on correct teardown is a warning nobody keeps enabled, and
+    a `ResourceWarning` nobody keeps enabled catches no leaks.
+    """
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", ResourceWarning)
+        bridge = SyncLoopBridge(thread_name="dk-silent-on-close")
+        bridge.run(_answer())
+        bridge.close()
+        del bridge
+        gc.collect()

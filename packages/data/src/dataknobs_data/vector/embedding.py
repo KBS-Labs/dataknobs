@@ -226,13 +226,36 @@ class CachedEmbedder:
         return self._inner.model_id
 
     async def embed(self, texts: Sequence[str]) -> list[list[float]]:
-        """Serve what the cache holds; embed and store only what it does not."""
+        """Serve what the cache holds; embed and store only what it does not.
+
+        Raises:
+            ValueError: The cache answered with a different number of entries
+                than it was asked about. See below on why that is checked
+                here rather than left to fail downstream.
+        """
         wanted = list(texts)
         if not wanted:
             return []
 
         model = self._inner.model_id
         cached = await self._cache.get_batch(model, wanted)
+        # `VectorCache.get_batch` promises a list *parallel to texts*, and
+        # nothing below re-establishes that. A short answer produced a short
+        # result --- misaligned from the dropped position onward, so every
+        # caller pairing the return against its own input list stored the
+        # wrong vector for the wrong text, silently. A long one indexed past
+        # the end of `wanted` and raised `IndexError` from a comprehension
+        # naming neither the cache nor the mismatch.
+        #
+        # `zip(..., strict=True)` already holds the inner embedder to this;
+        # the cache is the other supplier of the same guarantee and had no
+        # equivalent.
+        if len(cached) != len(wanted):
+            raise ValueError(
+                f"{type(self._cache).__name__}.get_batch returned {len(cached)} "
+                f"entries for {len(wanted)} texts; a cache answer must be "
+                f"parallel to the texts it was asked about"
+            )
 
         # Positions rather than texts, because `texts` may repeat: two
         # occurrences of one string are two output slots, and a set of misses
@@ -422,6 +445,12 @@ class SyncTextEmbedder:
     inside a running loop without the ``run_until_complete`` deadlock --- and
     exposes the protocol's two arities as ordinary methods. Those methods are
     the shape the sync sites already declare, so **no sync signature changes**:
+
+    "Callable from inside a running loop" means it does not *deadlock*. It
+    still *blocks*: the calling thread waits on the bridge's result for the
+    whole embedding, so every other task on the caller's loop is stalled for
+    a network round trip. From async code, ``await embedder.embed(...)``
+    directly --- this class is for the five ``def`` sites that cannot.
 
     ```python
     sync = SyncTextEmbedder(await create_text_embedder(config))

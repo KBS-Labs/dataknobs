@@ -70,6 +70,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   not told the wrong schedule. Nothing about what the alias resolves to, or
   when it warns, changes.
 
+### Fixed
+
+- **`LLMProviderEmbedder.embed` refused a provider that answered with a 2-D
+  `np.ndarray`.** The check separating "a batch of vectors" from "one flat
+  vector" tested `isinstance(row, (list, tuple))`, which is false for a row of
+  an ndarray — so a perfectly valid batch was accused of being "a flat vector
+  for a list of N texts", a message that names the one mistake such a provider
+  had not made. The preceding truthiness test never got that far: `if raw` on
+  a 2-D array raises `ValueError: The truth value of an array with more than
+  one element is ambiguous`.
+
+  Latent rather than live: every provider shipped here returns plain lists.
+  The shape is the natural output of a locally hosted model, and
+  `AsyncLLMProvider.embed`'s return type is documented rather than enforced.
+  Classification is now by whether the row has a length, which needs no numpy
+  import in this package, and a genuinely flat answer still raises `TypeError`.
+
 ## v0.8.0 - 2026-08-26
 
 ### Added

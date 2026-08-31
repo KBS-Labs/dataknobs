@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import asyncio
 import threading
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from typing import Any
 
 import numpy as np
@@ -235,14 +235,82 @@ async def test_sync_embedder_runs_from_inside_a_running_loop() -> None:
     already running on the calling thread, which is exactly what happens when
     a sync wrapper is reached from async code. The bridge owns its own loop on
     its own thread, so it cannot deadlock against the caller's.
+
+    Called **directly in the coroutine body**, which is the whole claim. An
+    earlier version of this test reached it through ``asyncio.to_thread``,
+    which moves the call off the loop thread and so tested a case no loop was
+    ever running on --- passing identically against a bridge and against a
+    bare ``run_until_complete`` that the claim says would raise.
     """
     sync = SyncTextEmbedder(DeterministicEmbedder(dimensions=4))
     try:
-        vectors = await asyncio.to_thread(sync.embed, ["alpha"])
+        vectors = sync.embed(["alpha"])
     finally:
         sync.close()
 
     assert len(vectors[0]) == 4
+
+
+async def test_sync_embedder_called_on_a_loop_blocks_that_loop() -> None:
+    """The cost of the line above, which is not free and was not written down.
+
+    "Callable from inside a running loop" means *does not deadlock*. It does
+    not mean *does not block*: the caller's thread sits in the bridge's
+    ``Future.result()`` for the whole embedding, so every other task on the
+    caller's loop is stalled for a network round trip. From inside async
+    code the answer is to ``await`` the embedder directly --- the bridge is
+    for the five synchronous sites that cannot.
+
+    Pinned as a test rather than left to the docstring because it is the
+    kind of claim a later change makes quietly false, and because the
+    docstring is where it was missing.
+    """
+    ticks = 0
+
+    async def ticker() -> None:
+        nonlocal ticks
+        while True:
+            ticks += 1
+            await asyncio.sleep(0)
+
+    task = asyncio.create_task(ticker())
+    await asyncio.sleep(0)
+    assert ticks > 0, "the co-tenant task should be running before the blocking call"
+
+    sync = SyncTextEmbedder(_SlowEmbedder(seconds=0.05))
+    try:
+        before = ticks
+        sync.embed(["alpha"])
+        after = ticks
+    finally:
+        sync.close()
+        task.cancel()
+
+    assert after == before, (
+        "a co-tenant task advanced during the blocking call, so this no "
+        "longer demonstrates the cost the docs now warn about"
+    )
+
+
+class _SlowEmbedder:
+    """An embedder that takes measurable time, without blocking its own loop.
+
+    ``asyncio.sleep`` rather than ``time.sleep``: the point is that the
+    *caller's* loop stalls while the *bridge's* loop is perfectly free, which
+    a blocking sleep would confound.
+    """
+
+    def __init__(self, *, seconds: float, dimensions: int = 4) -> None:
+        self._seconds = seconds
+        self.dimensions = dimensions
+
+    @property
+    def model_id(self) -> str:
+        return "slow"
+
+    async def embed(self, texts: Sequence[str]) -> list[list[float]]:
+        await asyncio.sleep(self._seconds)
+        return [[1.0] * self.dimensions for _ in texts]
 
 
 def test_sync_embedder_forwards_identity_unchanged() -> None:

@@ -59,11 +59,19 @@ call, on the side where numpy is declared.
 
 ### Why it carries its own identity
 
-`bulk_embed_and_store` takes `embedding_fn`, `model_name` and `model_version`
-as three independent parameters, and trusts the caller to keep the name in step
-with the function. The name is the *staleness key* — it is what a later reader
-uses to decide whether a stored vector is still comparable — so a mismatch is
-discovered only by something that trusts it.
+The database method `bulk_embed_and_store(records, text_field, …)` takes
+`embedding_fn`, `model_name` and `model_version` as three independent
+parameters, and trusts the caller to keep the name in step with the function.
+The name is the *staleness key* — it is what a later reader uses to decide
+whether a stored vector is still comparable — so a mismatch is discovered only
+by something that trusts it.
+
+`VectorStore.bulk_embed_and_store(texts, …)` is a different method that shares
+the name: it stores bare vectors rather than records, and takes no
+`model_name` or `model_version` at all. It writes `source_text` into each
+vector's metadata and no model identity, so passing `embedder=` there buys the
+typed dispatch but not a staleness key. Everything below about defaulting the
+key is about the database method.
 
 `model_id` removes that class of error. Pass `embedder=` and `model_name`
 defaults to the identity of the thing that actually produced the vectors:
@@ -105,6 +113,13 @@ There is deliberately **no new config type**: an embedder config *is* an
 `LLMConfig`. `create_text_embedder` wraps `create_embedding_provider`, which
 already accepts a typed config or any of the dict forms and already forces
 `mode=embedding`.
+
+Where the config declares no vector width, pass one — otherwise `dimensions`
+raises until the first `embed` has been observed, which is the section below:
+
+```python
+embedder = await create_text_embedder(config, dimensions=1536)
+```
 
 To adapt a provider you already hold:
 
@@ -172,9 +187,9 @@ where a vector is actually produced. `VectorTextSynchronizer` and
 finding out on the first record means failing after a query, a batch and a
 partial write.
 
-The callable path is unchanged and is not deprecated. An untyped
-`embedding_fn` still has to be classified before it is called, and
-`vector/embedding_fn.py` remains the one place that happens —
+The callable path is not deprecated, and no call site of it has to change. An
+untyped `embedding_fn` still has to be classified before it is called, and
+`vector/embedding_fn.py` is now the one place that happens —
 `call_embedding_fn` for a single text, `call_embedding_fn_batch` for a corpus,
 over one shared resolver. An *adopted* site has nothing left to classify,
 because a `TextEmbedder` is async by declaration.
@@ -244,9 +259,19 @@ at three of the sites. The annotations now say what the code does.
 thread, which makes it callable from plain sync code *and* from inside a
 running loop, without the `asyncio.run` / `run_until_complete` deadlock. That
 costs one daemon thread for the object's lifetime, so build one and keep it
-rather than one per call. The thread is a daemon and can never block process
-exit; `close()` is for deterministic teardown, and it closes only the bridge —
-the wrapped embedder was handed in already built and is not its to close.
+rather than one per call.
+
+**It does not deadlock; it does block.** Called from inside a coroutine, the
+calling thread waits on the bridge's result for the whole embedding, so every
+other task on the caller's loop is stalled for a network round trip — a cost
+no exception reports and no single-request test shows. From async code, await
+the embedder directly; this class is for the five `def` sites that cannot.
+
+`close()` is for deterministic teardown, and it closes only the bridge — the
+wrapped embedder was handed in already built and is not its to close. Dropping
+one without closing it emits a `ResourceWarning` naming the loop thread, and
+the bridge tears itself down; before that it could not, because the live loop
+thread held a reference back to the bridge that kept it permanently alive.
 
 It is **not** a `TextEmbedder`, and this is the one place the protocol's
 runtime check will tell you otherwise. `isinstance(sync, TextEmbedder)` answers

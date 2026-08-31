@@ -133,6 +133,7 @@ from dataknobs_common.testing.threads import (
     DK_DAEMON_THREAD_NAMES,
     DK_SYNC_BRIDGE_THREAD,
     assert_no_leaked_bridge_threads,
+    dk_daemon_thread_names,
     live_dk_daemon_threads,
 )
 
@@ -179,6 +180,7 @@ __all__ = [
     "is_postgres_available",
     "is_redis_available",
     "list_ollama_models",
+    "dk_daemon_thread_names",
     "live_dk_daemon_threads",
     "localstack_endpoint",
     "make_elasticsearch_test_index",

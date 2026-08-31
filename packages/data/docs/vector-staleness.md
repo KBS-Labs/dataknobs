@@ -158,7 +158,7 @@ Whether it does is a property of the backend.
 | memory, file (`json`), sqlite | round-trips | measured |
 | file (`csv`, `tsv`) | round-trips | measured |
 | file (`parquet`) | round-trips | shares the flat-format path; `pyarrow` is an optional extra, so a default test run does not measure it |
-| elasticsearch | round-trips, for vector fields declared on the index | |
+| elasticsearch | round-trips, for vector fields declared on the index | measured, against a live cluster |
 
 ### How a flat format carries it
 

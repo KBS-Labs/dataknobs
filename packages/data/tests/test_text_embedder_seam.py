@@ -250,3 +250,53 @@ def test_cache_key_separates_the_model_from_the_text() -> None:
     """The null byte is what stops ``("ab", "c")`` and ``("a", "bc")`` colliding."""
     assert embedding_cache_key("ab", "c") != embedding_cache_key("a", "bc")
     assert embedding_cache_key("m", "t") == embedding_cache_key("m", "t")
+
+
+class TruncatingCache(RecordingCache):
+    """A ``VectorCache`` that answers with fewer entries than it was asked for.
+
+    The failure a real cache reaches by an ordinary route: a backend that
+    drops a row on a partial read, a paginated store returning one page, a
+    batch size clamped somewhere below the request. Nothing about it looks
+    like an error from the caller's side --- it returns a list, of vectors,
+    in order.
+    """
+
+    async def get_batch(self, model: str, texts: list[str]) -> list[list[float] | None]:
+        answer = await super().get_batch(model, texts)
+        return answer[:-1]
+
+
+class OverlongCache(RecordingCache):
+    """The other direction, which fails just as quietly."""
+
+    async def get_batch(self, model: str, texts: list[str]) -> list[list[float] | None]:
+        answer = await super().get_batch(model, texts)
+        return [*answer, None]
+
+
+async def test_a_short_cache_answer_is_refused_rather_than_returned() -> None:
+    """The cache side owes the same guarantee: one vector per input, in order.
+
+    ``zip(..., strict=True)`` guards the *inner embedder*'s answer, and the
+    cache's went unchecked --- so a cache returning three entries for four
+    texts produced three vectors for four texts. Silently, and misaligned:
+    every caller pairing the result back against its own input list gets the
+    wrong vector for every text after the dropped one, and stores it.
+    """
+    embedder = CachedEmbedder(CountingEmbedder(), TruncatingCache())
+
+    with pytest.raises(ValueError, match="3 entries for 4 texts"):
+        await embedder.embed(["a", "b", "c", "d"])
+
+
+async def test_an_overlong_cache_answer_is_refused_too() -> None:
+    """The other direction, which is not the same check.
+
+    A length guard written only for the short case passes the direction
+    nobody thought about.
+    """
+    embedder = CachedEmbedder(CountingEmbedder(), OverlongCache())
+
+    with pytest.raises(ValueError, match="5 entries for 4 texts"):
+        await embedder.embed(["a", "b", "c", "d"])

@@ -16,6 +16,7 @@ Two claims are load-bearing beyond this file:
 
 from __future__ import annotations
 
+import numpy as np
 import pytest
 
 from dataknobs_data.testing import DeterministicEmbedder
@@ -175,3 +176,62 @@ async def test_a_model_swap_misses_against_the_real_llm_cache() -> None:
         "the second model reused the first model's cache entry — a swap must "
         "miss, not serve vectors from a different vector space"
     )
+
+
+# --------------------------------------------------------------------------
+# What counts as "the provider answered a batch with one flat vector"
+# --------------------------------------------------------------------------
+
+
+class _NdarrayEmbedProvider(EchoProvider):
+    """A real provider whose ``embed`` answers with a 2-D ``np.ndarray``.
+
+    Not a hypothetical shape. ``AsyncLLMProvider.embed`` is documented to
+    return ``list[list[float]]``, and every provider shipped here does --- but
+    the *type* is unenforced, an ndarray is the natural output of a locally
+    hosted model, and the union this repo already names ``BatchVectors``
+    admits it one package over.
+    """
+
+    async def embed(self, texts: str | list[str], **kwargs: object) -> object:
+        vectors = await super().embed(texts, **kwargs)
+        return np.asarray(vectors, dtype=np.float32)
+
+
+class _FlatEmbedProvider(EchoProvider):
+    """A provider that answers a *list* input with a single flat vector.
+
+    The real error the guard exists for: arity-polymorphic ``embed`` taking
+    the string branch for a list input. Left undetected, a batch of one
+    N-dimensional vector is mistaken for N vectors of one dimension.
+    """
+
+    async def embed(self, texts: str | list[str], **kwargs: object) -> object:
+        vectors = await super().embed(["one"], **kwargs)
+        return list(vectors[0])
+
+
+async def test_a_batch_of_ndarray_rows_is_not_mistaken_for_a_flat_vector() -> None:
+    """The guard must classify by *shape*, not by ``list``-ness.
+
+    ``isinstance(raw[0], (list, tuple))`` is ``False`` for a row of a 2-D
+    ndarray, so a perfectly valid batch raised "returned a flat vector for a
+    list of N texts" --- a message that is not merely wrong but actively
+    misdirecting, since it accuses the provider of the one thing it did not
+    do.
+    """
+    embedder = LLMProviderEmbedder(_NdarrayEmbedProvider(LLMConfig(provider="echo", model="m")))
+
+    vectors = await embedder.embed(["alpha", "beta"])
+
+    assert len(vectors) == 2
+    assert all(isinstance(v, list) for v in vectors), "rows must be converted to lists"
+    assert all(isinstance(x, float) for x in vectors[0]), "and their elements to floats"
+
+
+async def test_a_genuinely_flat_answer_still_raises() -> None:
+    """The other direction, which is why the guard is there at all."""
+    embedder = LLMProviderEmbedder(_FlatEmbedProvider(LLMConfig(provider="echo", model="m")))
+
+    with pytest.raises(TypeError, match="flat vector"):
+        await embedder.embed(["alpha", "beta"])

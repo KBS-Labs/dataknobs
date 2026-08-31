@@ -64,6 +64,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **An unclosed `SyncLoopBridge` could not be reclaimed, reported, or
+  collected.** The loop thread's target was a bound method of the bridge, and
+  `Thread` holds its target for as long as the thread runs — so a bridge
+  nobody closes, which runs forever, was referenced by its own live thread and
+  could never be collected. It sat unreachable from any caller and alive in
+  `threading._active`, holding its event loop and that loop's self-pipe
+  descriptors for the life of the process, past the reach of any finalizer
+  that might have said so. The target is now a module-level function taking
+  the loop and the ready event, so a dropped bridge *is* collected: it emits a
+  `ResourceWarning` naming its loop thread and tears itself down. The teardown
+  is skipped during interpreter finalization, where joining a daemon thread
+  would wait on a thread that can no longer answer; the warning is not.
+
+  Nothing about this leak was observable before. The thread is a daemon so it
+  never delayed exit, the object went on working, and nothing raised — a
+  server building one bridge per tenant accumulated both a thread and a pair
+  of descriptors per tenant, silently.
+
+- **A bridge given a `thread_name` was invisible to the leaked-thread guard.**
+  `live_dk_daemon_threads` and `assert_no_leaked_bridge_threads` matched two
+  fixed names, so any bridge constructed with the documented `thread_name=`
+  argument — offered for diagnostics — was watched by nothing. Bridges now
+  register their thread names, exposed as `bridge_thread_names()` and folded
+  into the new `dk_daemon_thread_names()`, which the guard resolves on entry
+  *and* on exit. Resolving it twice is what covers a name first used inside
+  the block, which is the block most likely to have introduced it. A
+  caller-supplied `names` set is still normalized once, so a one-shot iterable
+  still works.
+
+  `DK_DAEMON_THREAD_NAMES` keeps its meaning — the two default names, for
+  scoping an assertion to one of them — and is no longer the whole watch set.
+
 - **`CallbackRegistry.fire` refuses an async callback that is an object.** The
   guard asked `inspect.iscoroutinefunction`, so a callback whose `__call__` is
   an `async def` was classified as synchronous and *called* instead of

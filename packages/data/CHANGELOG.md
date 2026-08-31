@@ -125,6 +125,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`embedding_fn` is optional on `VectorStore.bulk_embed_and_store`.** It was
+  a required positional parameter; it now defaults to `None`, because
+  `embedder=` is the other way of supplying the same thing and exactly one of
+  the two is required. Every existing positional call is unaffected. A call
+  passing neither still fails — but as a `ValueError` naming both parameters,
+  raised before the loop rather than by the loop's first iteration, so an empty
+  `texts` reports it too.
+
+- **Four "embedding function required" messages became one.**
+  `AsyncPostgresDatabase.bulk_embed_and_store`, `AsyncBulkEmbedMixin`,
+  `VectorMigration.add_vectors_to_existing` and
+  `VectorSyncMixin.sync_vectors_with_text` each phrased the same refusal
+  differently — `"embedding_fn is required for bulk_embed_and_store"`,
+  `"Embedding function required for adding vectors"`, `"Embedding function is
+  required for vector synchronization"`. All four now raise
+  `require_embedding_source`'s wording: ``"an embedder is required: pass
+  `embedder=` or `embedding_fn=`"``. Source-breaking only for a caller matching
+  on the old text. The **sync** `BulkEmbedMixin` keeps its original message,
+  deliberately: it takes no `embedder`, so a refusal naming one would send the
+  reader after a parameter that site does not have.
+
+- **`AsyncPostgresDatabase.bulk_embed_and_store` accepts a synchronous
+  `embedding_fn`.** It previously did `await embedding_fn(texts)`, so a plain
+  `def` raised `TypeError` there while working at every sibling site. It now
+  routes through the shared dispatch, which classifies the callable and
+  offloads a synchronous one with `asyncio.to_thread` rather than running it on
+  the event loop.
+
 - **An unrecognized operator or sort-order string now raises `ValueError`.**
   `Query.filter` mapped an unknown operator to equality and `Query.sort_by`
   mapped an unknown order to descending, neither raising, so a typo returned
@@ -215,6 +243,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   nothing. See **Fixed** for the digest this consolidation was undertaken for.
 
 ### Fixed
+
+- **`AsyncElasticsearchDatabase.bulk_embed_and_store` stored nothing and
+  reported success.** It was a stub: a logged warning and `return []`, which
+  satisfied the abstract method without embedding or writing anything. The
+  empty list is indistinguishable from "there were no records", so a caller
+  embedding a corpus into Elasticsearch got a successful-looking no-op and an
+  empty index. It now mixes in `AsyncBulkEmbedMixin` like the other five async
+  backends, so it embeds, writes a content digest, and refuses a call that
+  names no embedding source — verified against a live cluster, including that
+  the digest survives the round trip through Elasticsearch's `vector_fields`
+  metadata.
+
+- **`SyncTextEmbedder` blocks the caller's loop, and now says so.** Both the
+  class docstring and the published page advertised it as callable "from
+  inside a running loop" without the other half: that means it does not
+  *deadlock*, not that it does not *block*. The calling thread waits on the
+  bridge's result for the whole embedding, so every co-tenant task on the
+  caller's loop is stalled for a network round trip. The test that was meant
+  to pin this reached the call through `asyncio.to_thread`, which moves it off
+  the loop — so it passed against a bridge and would have passed equally
+  against the `run_until_complete` the claim says would raise. Both halves are
+  now asserted directly. See the `dataknobs-common` changelog for the bridge's
+  own leak fixes, which this class was the first caller to need.
+
+- **`CachedEmbedder` trusted the cache's batch length.** `VectorCache.get_batch`
+  promises a list parallel to the texts, and nothing re-established that: a
+  cache answering with fewer entries produced fewer vectors, misaligned from
+  the dropped position onward, so a caller pairing the result against its own
+  input stored the wrong vector for the wrong text. A longer answer raised
+  `IndexError` from a comprehension naming neither the cache nor the mismatch.
+  `zip(..., strict=True)` already held the inner embedder to this guarantee;
+  the cache is the other supplier of it and now gets the same treatment.
+
+- **`VectorStore.bulk_embed_and_store` handed an async `embedding_fn` to
+  `add_vectors` un-awaited.** It called the callable directly, so an
+  `async def` produced a coroutine object where an array of vectors belonged.
+  It now routes through `embed_texts`, which also means a *synchronous*
+  callable is offloaded with `asyncio.to_thread` rather than run on the event
+  loop.
 
 - **Three writers left their vectors permanently exempt from staleness.**
   A vector field with no `content_hash` is treated as *current* — deliberately,
