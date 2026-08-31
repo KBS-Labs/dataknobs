@@ -9,6 +9,8 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
+from dataknobs_common.callbacks import is_async_callable
+
 from .content import CONTENT_HASH_KEY, recompute_content_hash
 
 if TYPE_CHECKING:
@@ -426,7 +428,15 @@ class ChangeTracker:
             try:
                 # Call update callbacks
                 for callback in self._update_callbacks:
-                    if asyncio.iscoroutinefunction(callback):
+                    # `is_async_callable`, not `asyncio.iscoroutinefunction`:
+                    # `add_update_callback` takes whatever the caller hands
+                    # it, and the stdlib check reports a callable object with
+                    # an `async def __call__` as synchronous. Such a callback
+                    # then reaches `to_thread`, which invokes it on a worker
+                    # thread and discards the coroutine it returns there --
+                    # so the callback never runs, nothing raises, and
+                    # `processed` below counts the task as done anyway.
+                    if is_async_callable(callback):
                         await callback(task)
                     else:
                         await asyncio.to_thread(callback, task)

@@ -11,6 +11,8 @@ from typing import Any, TYPE_CHECKING
 
 import numpy as np
 
+from dataknobs_common.callbacks import is_async_callable
+
 if TYPE_CHECKING:
     from collections.abc import Callable
     from .types import DistanceMetric
@@ -112,7 +114,13 @@ class BatchProcessor:
         for item, callback in items:
             try:
                 if callback:
-                    if asyncio.iscoroutinefunction(callback):
+                    # `is_async_callable`, not `asyncio.iscoroutinefunction`:
+                    # the callback comes from the caller, so it may be a
+                    # callable object holding state, and the stdlib check
+                    # reports one of those as synchronous. Taking the else
+                    # branch on an async callable discards the coroutine it
+                    # returns and raises nothing.
+                    if is_async_callable(callback):
                         await callback(item)
                     else:
                         callback(item)
@@ -229,7 +237,11 @@ class VectorOptimizer:
         Returns:
             Index configuration
         """
-        config = {"metric": metric}
+        # Annotated rather than inferred: the literal narrows to
+        # `dict[str, DistanceMetric]`, which the heterogeneous entries below
+        # then contradict, though the declared return type already admits
+        # them.
+        config: dict[str, Any] = {"metric": metric}
 
         # Small datasets: use flat index for exact search
         if num_vectors < 10000:
@@ -266,7 +278,7 @@ class VectorOptimizer:
         Returns:
             Optimized search parameters
         """
-        params = {}
+        params: dict[str, Any] = {}
 
         if index_type == "flat":
             # Flat index is always exact
