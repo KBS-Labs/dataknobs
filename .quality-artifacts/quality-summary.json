@@ -1,5 +1,5 @@
 {
-  "timestamp": "2026-08-31T22:13:10Z",
+  "timestamp": "2026-08-31T22:33:47Z",
   "overall_status": "PASS",
   "run_mode": "pr",
   "environment": "host",
@@ -21,7 +21,7 @@
     "bots": "6e688796b38ec5942b733292fbc1a058ef537ac1d24ce4e0e92542a54120f708",
     "common": "e00ef9b8c5f9a6acb85339bb105cf0c9adb2a3c6c74f22f74369d7c7f693a7ed",
     "config": "30895cfb558b0a798c73cfa923da7e75ec76b3c3eacea9bc68861e28fe146347",
-    "data": "6b6f6015e7125705057c419b5dffd0364ac4df015c97336914a5ddcd510decf3",
+    "data": "eb5881cfec4fbd1eeda2faaca4c8c1e8ceddc600c3ddf40a184fbf0ddcc64d73",
     "fsm": "4652a128da264d046eb29e05a6b4e955e5df5cba2991a2e1076176a39013ded6",
     "legacy": "f626b387e3b4dc7f7de016a1e6f67f1a6df33b685b55c1226762d4abb338d217",
     "llm": "e7ae3e094c66d4dae250fa6c512521fcb4cde37db0613991cfacede7ce3970d8",
@@ -81,20 +81,20 @@
       "exit_code": 0,
       "skipped": false,
       "tool": "docs-mirror-check.py",
-      "duration_seconds": 0
+      "duration_seconds": 1
     },
     "unit_tests": {
       "status": "pass",
       "exit_code": 0,
       "skipped": false,
-      "duration_seconds": 121,
+      "duration_seconds": 122,
       "workspace_guards_seconds": 61
     },
     "integration_tests": {
       "status": "pass",
       "exit_code": 0,
       "skipped": false,
-      "duration_seconds": 105
+      "duration_seconds": 104
     }
   }
 }
