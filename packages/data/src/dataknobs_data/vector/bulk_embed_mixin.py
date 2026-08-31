@@ -28,7 +28,6 @@ from .types import BatchVectors
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable, Iterator
 
-
     from ..records import Record
     from .embedding import TextEmbedder
 
@@ -224,10 +223,7 @@ class AsyncBulkEmbedMixin:
         records: list[Record],
         text_field: str | list[str],
         vector_field: str = "embedding",
-        embedding_fn: Callable[
-            [list[str]], BatchVectors | Awaitable[BatchVectors]
-        ]
-        | None = None,
+        embedding_fn: Callable[[list[str]], BatchVectors | Awaitable[BatchVectors]] | None = None,
         batch_size: int = 100,
         model_name: str | None = None,
         model_version: str | None = None,

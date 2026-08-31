@@ -319,9 +319,7 @@ class VectorTextSynchronizer:
             # directly above, which does treat it as one.
             if self.config.track_model_name and self.model_name:
                 metadata = record.get_value(f"{vector_field}_metadata")
-                stored_name = (
-                    _stored_model_name(metadata) if isinstance(metadata, dict) else None
-                )
+                stored_name = _stored_model_name(metadata) if isinstance(metadata, dict) else None
                 if stored_name is not None and stored_name != self.model_name:
                     return False
 

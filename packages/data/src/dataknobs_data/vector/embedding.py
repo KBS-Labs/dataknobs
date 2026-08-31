@@ -47,11 +47,14 @@ name, and re-embedding every such corpus on upgrade answers a question nothing
 asked.
 
 Nothing here deletes the callable path. An untyped ``embedding_fn`` still has to
-be classified before it is called, and
-:func:`~dataknobs_data.vector.embedding_fn.call_embedding_fn` is the one correct
-place that happens. An *adopted* site has nothing left to classify --- a
-``TextEmbedder`` is async by declaration --- which is how the branch stops being
-needed rather than being removed while callers still need it.
+be classified before it is called, and ``vector/embedding_fn.py`` is the one
+correct place that happens --- :func:`~dataknobs_data.vector.embedding_fn.call_embedding_fn`
+for one text and :func:`~dataknobs_data.vector.embedding_fn.call_embedding_fn_batch`
+for a corpus, over a single shared resolver, because a rule written twice is a
+rule that will hold in one place and not the other. An *adopted* site has
+nothing left to classify --- a ``TextEmbedder`` is async by declaration --- which
+is how the branch stops being needed rather than being removed while callers
+still need it.
 
 :func:`embed_texts` and :func:`embed_text` are where a site chooses between the
 two. They exist so that the choice is written once: twenty-five sites each
@@ -65,9 +68,7 @@ import hashlib
 from collections.abc import Callable, Sequence
 from typing import Any, Protocol, Self, cast, runtime_checkable
 
-from dataknobs_common.callbacks import is_async_callable
-
-from .embedding_fn import call_embedding_fn
+from .embedding_fn import call_embedding_fn, call_embedding_fn_batch
 
 __all__ = [
     "CachedEmbedder",
@@ -297,8 +298,11 @@ async def embed_texts(
             :class:`TextEmbedder` is async by declaration, so there is nothing
             to classify.
         embedding_fn: The callable path, kept for callers that predate the
-            protocol. Classified and either awaited or called, because an
-            untyped callable's synchrony is not knowable from its annotation.
+            protocol. Routed through
+            :func:`~dataknobs_data.vector.embedding_fn.call_embedding_fn_batch`,
+            so a synchronous one is offloaded rather than run on the loop and
+            an untyped callable's synchrony --- which is not knowable from its
+            annotation --- is classified in the one place that does that.
 
     Returns:
         ``list[list[float]]`` on the ``embedder`` path. On the ``embedding_fn``
@@ -320,15 +324,7 @@ async def embed_texts(
     # `cast` rather than a second `is None` raise: the guard above already
     # decided, and restating the check here would be a second place for the
     # rule to live.
-    result = cast("Callable[..., Any]", embedding_fn)(list(texts))
-    # Classified on the callable, which is right about a callable *object*
-    # whose `__call__` is `async def` --- the shape an embedder holding a model
-    # handle takes. The awaitable re-check then also covers a plain `def` that
-    # returns a coroutine, which the callable test cannot see and which one of
-    # the copies this replaces handled while the other did not.
-    if is_async_callable(embedding_fn) or hasattr(result, "__await__"):
-        return await result
-    return result
+    return await call_embedding_fn_batch(cast("Callable[..., Any]", embedding_fn), list(texts))
 
 
 async def embed_text(

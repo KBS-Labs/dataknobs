@@ -530,9 +530,7 @@ class TestTheStalenessKeyTheEmbedderDefaults:
             )
 
             vector_field_lane = Record(data={"body": "the source text"})
-            vector_field_lane.fields["embedding"] = VectorField(
-                name="embedding", value=[1.0] * 8
-            )
+            vector_field_lane.fields["embedding"] = VectorField(name="embedding", value=[1.0] * 8)
 
             plain_lane = Record(data={"body": "the source text", "embedding": [1.0] * 8})
             assert not isinstance(plain_lane.fields["embedding"], VectorField), (

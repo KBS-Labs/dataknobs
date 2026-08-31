@@ -41,6 +41,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   it, kept in step deliberately: the version check diverged across those two
   lanes once already.
 
+- **`call_embedding_fn_batch`** (`dataknobs_data.vector`) — the batch sibling of
+  `call_embedding_fn`, over a shared resolver both now use. See **Fixed** below
+  for the two defects that shared resolver closes.
+
 - **`BatchVectors`** (`dataknobs_data.vector`) — `np.ndarray | list[list[float]]`,
   what a batch embedding callable may return. The `embedding_fn` parameters
   previously said `np.ndarray` alone, which understated them: those sites hand
@@ -171,6 +175,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   **Fixed** below.
 
 ### Fixed
+
+- **A synchronous batch `embedding_fn` no longer runs on the event loop.**
+  `call_embedding_fn` offloaded a synchronous callable with
+  `asyncio.to_thread` and documented why — embedding is CPU- or network-bound
+  work, and running it inline stalls every other task on the loop. Every batch
+  dispatch called it inline anyway, so the rule was stated in one half of the
+  module and broken in the other, with the broken half being the one that
+  blocks *longer*: a whole corpus rather than one text. Measured, a co-tenant
+  task made exactly zero progress across a 50 ms batch call.
+
+  Ruff's `ASYNC2xx` family cannot see this — those checks detect known blocking
+  calls like `open` and `time.sleep`, and a caller-supplied callable is neither
+  — so the guard is a test that pins both a blocking-detection and a
+  thread-identity proof.
+
+- **A plain `def` that returns a coroutine now yields a vector, not the
+  coroutine.** `call_embedding_fn` classified the *callable*, which is
+  correct — such a function really is synchronous — and then returned what the
+  worker thread handed back without re-examining it. That is a coroutine
+  object, stored as if it were a vector, with nothing raised: the same garbage
+  value the shared dispatch was built to eliminate, reached by a shape the
+  original fix did not enumerate.
+
+  It was reachable through `call_embedding_fn` and `embed_text` but not through
+  `embed_texts`, which did re-examine its result — so one callable produced a
+  vector through one entry point and a coroutine through the other. Both
+  arities now share one resolver, which classifies the callable *and* resolves
+  an awaitable result, so the two cannot disagree again.
 
 - **`IncrementalVectorizer.run_batch` can return.** Its only exit was a
   `break` that could never be taken: the break required

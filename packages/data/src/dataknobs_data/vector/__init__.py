@@ -28,7 +28,7 @@ from .embedding import (
     embedding_cache_key,
     require_embedding_source,
 )
-from .embedding_fn import call_embedding_fn
+from .embedding_fn import call_embedding_fn, call_embedding_fn_batch
 from .exceptions import (
     VectorBackendError,
     VectorDimensionError,
@@ -82,6 +82,7 @@ __all__ = [
     "TextEmbedder",
     "VectorCache",
     "call_embedding_fn",
+    "call_embedding_fn_batch",
     "embed_text",
     "embed_texts",
     "embedding_cache_key",

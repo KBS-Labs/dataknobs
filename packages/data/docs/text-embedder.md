@@ -148,8 +148,19 @@ does not run, and the caller cannot tell which.
 
 The callable path is unchanged and is not deprecated. An untyped
 `embedding_fn` still has to be classified before it is called, and
-`call_embedding_fn` remains the one place that happens. An *adopted* site has
-nothing left to classify, because a `TextEmbedder` is async by declaration.
+`vector/embedding_fn.py` remains the one place that happens —
+`call_embedding_fn` for a single text, `call_embedding_fn_batch` for a corpus,
+over one shared resolver. An *adopted* site has nothing left to classify,
+because a `TextEmbedder` is async by declaration.
+
+Two things that dispatch guarantees, which matter to anyone still passing a
+callable. A **synchronous** one is offloaded with `asyncio.to_thread` rather
+than run on the event loop, at both arities — embedding is CPU- or
+network-bound, and a corpus embedded inline stalls every other task on the loop
+for its whole duration. And the *result* is re-examined even when the callable
+classified as synchronous, because a plain `def` that returns a coroutine is
+genuinely synchronous and still hands back something that has to be awaited
+before it is a vector.
 
 ### Caching
 
