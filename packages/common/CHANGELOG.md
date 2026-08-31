@@ -32,6 +32,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   which is callable and returns an instance rather than an awaitable however
   its `__call__` is declared.
 
+- **`run_callback` — call a consumer's callback and await it if it turned out
+  to be awaitable.** The counterpart to `is_async_callable`, and the one to
+  reach for unless the synchronous branch has to do something *other* than
+  call inline. The two answer the same question at different moments, and the
+  moment decides which is usable: a caller that *offloads* has to classify
+  before calling, because there is no offloading a call already made;
+  everyone else can judge the **result**, which is strictly more robust —
+  it also catches a plain `def` that returns a coroutine, which no amount of
+  inspecting the callable ever will.
+
+  Extracted rather than invented: `CallbackRegistry.fire_async` had carried
+  this exact three-line judgement inline since it was written, and it now
+  calls the helper. The absence of a shared spelling is why fourteen
+  dispatches in `dataknobs-data` each answered the question independently, and
+  eleven of them answered it wrong or not at all.
+
 - **`copy_structure` — the copy between `dict()` and `copy.deepcopy()`.** It
   rebuilds nested dicts and lists and passes every other value through
   unchanged, so mutating the result never reaches the source while the leaf

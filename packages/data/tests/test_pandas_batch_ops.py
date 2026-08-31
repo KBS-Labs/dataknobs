@@ -11,7 +11,7 @@ from dataknobs_data.pandas.batch_ops import BatchConfig, ChunkedProcessor, Batch
 from dataknobs_data.pandas.converter import DataFrameConverter
 from dataknobs_data.records import Record
 from dataknobs_data.query import Query
-from dataknobs_data.backends.memory import SyncMemoryDatabase
+from dataknobs_data.backends.memory import AsyncMemoryDatabase, SyncMemoryDatabase
 
 
 class TestBatchConfig:
@@ -148,15 +148,42 @@ class TestBatchOperations:
         assert batch_ops.database is db
         assert isinstance(batch_ops.converter, DataFrameConverter)
 
-    @patch("dataknobs_data.pandas.batch_ops.asyncio")
-    def test_init_with_async_database(self, mock_asyncio):
-        """Test initialization with async database."""
-        db = Mock()
-        db.create = Mock()
-        mock_asyncio.iscoroutinefunction.return_value = True
+    def test_init_with_async_database(self):
+        """Test initialization with async database.
 
+        A real ``AsyncMemoryDatabase`` rather than a ``Mock`` with the
+        module's ``asyncio`` patched out. That version stubbed
+        ``iscoroutinefunction`` to return ``True`` and then asserted the
+        result was ``True``, so it passed for any implementation that called
+        *something* named ``iscoroutinefunction`` on that module --- and
+        would have gone on passing had the detection been deleted and
+        replaced with a constant. The real database exercises the real
+        judgement.
+        """
+        db = AsyncMemoryDatabase()
         batch_ops = BatchOperations(db)
+
         assert batch_ops.is_async is True
+
+    def test_init_with_an_async_callable_create(self):
+        """A database whose ``create`` is a callable object still reads async.
+
+        The shape ``asyncio.iscoroutinefunction`` misreads: it answers for
+        functions, and reports an object with an ``async def __call__`` as
+        synchronous. ``BatchOperations`` would then take every synchronous
+        path against an async database.
+        """
+
+        class AsyncCreate:
+            async def __call__(self, record):
+                return record.id
+
+        class Database(AsyncMemoryDatabase):
+            def __init__(self):
+                super().__init__()
+                self.create = AsyncCreate()
+
+        assert BatchOperations(Database()).is_async is True
 
     def test_bulk_insert_dataframe_simple(self):
         """Test simple bulk insert of DataFrame."""
@@ -299,20 +326,25 @@ class TestBatchOperations:
         assert list(df["value"]) == [0, 1, 2, 3, 4]
 
     def test_query_as_dataframe_async(self):
-        """Test querying with async database flag set."""
-        # For simplicity, test that the is_async flag is properly detected
-        db = Mock()
-        db.create = Mock()
+        """Query an async database and get the rows back as a DataFrame.
 
-        # Mock asyncio.iscoroutinefunction to return True
-        with patch("asyncio.iscoroutinefunction", return_value=True):
-            batch_ops = BatchOperations(db)
-            assert batch_ops.is_async is True
+        Previously this asserted only that ``is_async`` was ``True`` when
+        ``asyncio.iscoroutinefunction`` had been patched to return ``True``
+        --- a duplicate of the init test, under a name promising the query
+        path, exercising neither. The async branch of ``query_as_dataframe``
+        (``asyncio.run(...)`` against the database's coroutine) had no
+        coverage at all.
+        """
+        db = AsyncMemoryDatabase()
+        batch_ops = BatchOperations(db)
+        assert batch_ops.is_async is True
 
-        # Mock asyncio.iscoroutinefunction to return False
-        with patch("asyncio.iscoroutinefunction", return_value=False):
-            batch_ops = BatchOperations(db)
-            assert batch_ops.is_async is False
+        df = pd.DataFrame({"name": ["Alice", "Bob"], "age": [25, 30]})
+        batch_ops.bulk_insert_dataframe(df)
+
+        result = batch_ops.query_as_dataframe(Query())
+
+        assert sorted(result["name"]) == ["Alice", "Bob"]
 
     def test_aggregate_with_groupby(self):
         """Test aggregation with group by."""

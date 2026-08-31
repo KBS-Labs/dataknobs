@@ -205,6 +205,12 @@ makes those two the same fact — before, a caller with an embedder named the
 model twice, once by passing `embed` and once by passing `model_name=`, with
 nothing checking that the two agreed.
 
+`DedupChecker` closes the same loop, and only for `embedder=`. `register()`
+records the embedder's `model_id` beside each vector and `check()` compares it,
+reporting a disagreement on `DedupResult.mismatched_model_ids`. An
+`embedding_fn` carries no identity to record, so that lane writes no key and
+gets no comparison — see [Content Deduplication](dedup.md).
+
 `sync_vectors_with_text` closes the same loop for a caller that owns its own
 records. It writes the identity and compares it, so a sweep with a second
 embedder re-embeds rather than reporting a corpus current on the strength of

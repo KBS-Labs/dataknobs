@@ -7,14 +7,17 @@ from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
+from dataknobs_common.callbacks import run_callback
+
 from ...fields import VectorField
 from ...records import Record
+from ..content import MODEL_NAME_KEY
 from ..embedding import default_model_name, embed_texts, require_embedding_source
 from ..types import VectorSearchResult
 from .common import VectorStoreBase
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Awaitable, Callable
 
     from ..embedding import TextEmbedder
 
@@ -389,7 +392,7 @@ class VectorStore(ABC, VectorStoreBase):
 
             # Add model info if present
             if vector_obj.model_name:
-                metadata["model_name"] = vector_obj.model_name
+                metadata[MODEL_NAME_KEY] = vector_obj.model_name
             if vector_obj.model_version:
                 metadata["model_version"] = vector_obj.model_version
 
@@ -410,7 +413,7 @@ class VectorStore(ABC, VectorStoreBase):
         query_vector: np.ndarray,
         k: int = 10,
         filter: dict[str, Any] | None = None,
-        fetch_records: Callable[[list[str]], list[Record]] | None = None,
+        fetch_records: Callable[[list[str]], list[Record] | Awaitable[list[Record]]] | None = None,
     ) -> list[VectorSearchResult]:
         """Search and return results as VectorSearchResult objects.
 
@@ -418,7 +421,9 @@ class VectorStore(ABC, VectorStoreBase):
             query_vector: Query vector
             k: Number of results
             filter: Optional metadata filter
-            fetch_records: Optional function to fetch full records
+            fetch_records: Optional function to fetch full records. May be
+                async --- fetching by id is I/O, so an async database's fetcher
+                is the ordinary shape here.
 
         Returns:
             List of VectorSearchResult objects
@@ -435,7 +440,7 @@ class VectorStore(ABC, VectorStoreBase):
         # Fetch full records if function provided
         records_map = {}
         if fetch_records and record_ids:
-            records = fetch_records(record_ids)
+            records = await run_callback(fetch_records, record_ids)
             records_map = {r.id: r for r in records}
 
         for vector_id, score, metadata in results:
@@ -559,7 +564,7 @@ class VectorStore(ABC, VectorStoreBase):
                 # and so does know better about. Overwriting here would
                 # silently discard the more specific of two answers.
                 if model_name is not None:
-                    batch_metadata[j].setdefault("model_name", model_name)
+                    batch_metadata[j].setdefault(MODEL_NAME_KEY, model_name)
                 if model_version is not None:
                     batch_metadata[j].setdefault("model_version", model_version)
 

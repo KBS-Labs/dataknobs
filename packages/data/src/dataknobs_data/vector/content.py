@@ -69,6 +69,15 @@ DEFAULT_FIELD_SEPARATOR = " "
 #: The digest of the assembled text.
 CONTENT_HASH_KEY = "content_hash"
 
+#: The model that produced the vector. The second key of the staleness
+#: contract: the digest answers whether the TEXT changed, this answers
+#: whether the MODEL did, and a vector is current only if both agree.
+#: Published here rather than spelled at each site because it was spelled
+#: at each site, and a reader reaching for the wrong one gets silence --- a
+#: key nothing wrote reads as absent, which every reader treats as
+#: "unknown, assume current".
+MODEL_NAME_KEY = "model_name"
+
 #: The field names that were assembled, in order.
 SOURCE_FIELDS_KEY = "content_source_fields"
 

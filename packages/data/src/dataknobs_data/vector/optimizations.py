@@ -11,7 +11,7 @@ from typing import Any, TYPE_CHECKING
 
 import numpy as np
 
-from dataknobs_common.callbacks import is_async_callable
+from dataknobs_common.callbacks import run_callback
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -114,16 +114,13 @@ class BatchProcessor:
         for item, callback in items:
             try:
                 if callback:
-                    # `is_async_callable`, not `asyncio.iscoroutinefunction`:
-                    # the callback comes from the caller, so it may be a
-                    # callable object holding state, and the stdlib check
-                    # reports one of those as synchronous. Taking the else
-                    # branch on an async callable discards the coroutine it
-                    # returns and raises nothing.
-                    if is_async_callable(callback):
-                        await callback(item)
-                    else:
-                        callback(item)
+                    # The callback comes from the caller, so it may be a
+                    # callable object holding state -- and calling one of those
+                    # without awaiting it discards the coroutine it returns and
+                    # raises nothing. `run_callback` judges the result, which
+                    # covers that shape and a plain `def` returning a coroutine
+                    # besides.
+                    await run_callback(callback, item)
                 processed += 1
             except Exception as e:
                 logger.error(f"Error processing item: {e}")
@@ -155,8 +152,23 @@ class BatchProcessor:
 
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
-        # Count successful processes
-        processed = sum(r for r in results if isinstance(r, int))
+        # Count successful processes. `return_exceptions=True` means a chunk
+        # that raised arrives here as the exception rather than being raised,
+        # and the `isinstance` filter then drops it from the count -- so the
+        # caller sees a smaller number and no reason for it. Every item in
+        # that chunk is lost: `_process_sequential` re-queues on a per-item
+        # failure, but an exception escaping the loop itself skips that. The
+        # count stays honest; what was missing is any record of why.
+        processed = 0
+        for result in results:
+            if isinstance(result, int):
+                processed += result
+            elif isinstance(result, BaseException):
+                logger.error(
+                    "Batch chunk failed; its items were neither processed nor re-queued: %s",
+                    result,
+                    exc_info=result,
+                )
 
         return processed
 
@@ -388,10 +400,12 @@ class ConnectionPool:
         for conn in all_conns:
             if hasattr(conn, "close"):
                 try:
-                    if asyncio.iscoroutinefunction(conn.close):
-                        await conn.close()
-                    else:
-                        conn.close()
+                    # The connection comes from the caller's `factory`, so its
+                    # `close` is an attribute of a consumer-supplied object and
+                    # may be any callable -- including one whose `__call__` is
+                    # an `async def`. Judging the result covers every shape,
+                    # where judging the callable misses that one.
+                    await run_callback(conn.close)
                 except Exception as e:
                     logger.error(f"Error closing connection: {e}")
 

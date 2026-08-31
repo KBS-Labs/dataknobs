@@ -5,6 +5,8 @@ from __future__ import annotations
 import concurrent.futures
 from typing import TYPE_CHECKING
 
+from dataknobs_common.callbacks import run_callback
+
 from dataknobs_data.query import Query
 from dataknobs_data.streaming import (
     ConflictPolicy,
@@ -19,7 +21,7 @@ from .progress import MigrationProgress
 from .transformer import Transformer
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Iterator
+    from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
     from dataknobs_data.database import AsyncDatabase, SyncDatabase
     from dataknobs_data.records import Record
 
@@ -337,7 +339,7 @@ class Migrator:
         transform: Transformer | Migration | None = None,
         query: Query | None = None,
         config: StreamConfig | None = None,
-        on_progress: Callable[[MigrationProgress], None] | None = None,
+        on_progress: Callable[[MigrationProgress], Awaitable[None] | None] | None = None,
     ) -> MigrationProgress:
         """Async stream-based migration.
 
@@ -362,7 +364,9 @@ class Migrator:
             pass
 
         # Create async streaming pipeline
-        async def transform_stream(records):
+        async def transform_stream(
+            records: AsyncIterator[Record],
+        ) -> AsyncIterator[Record]:
             """Apply transformation to async streaming records."""
             async for record in records:
                 # Count `processed` exactly once per record, at the point its
@@ -417,7 +421,7 @@ class Migrator:
         progress.finish()
 
         if on_progress:
-            on_progress(progress)
+            await run_callback(on_progress, progress)
 
         return progress
 
