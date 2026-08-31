@@ -178,6 +178,65 @@ With semantic checking enabled:
 - `register()` stores both a hash record and an embedding vector
 - `check()` first checks for exact hash match, then searches for semantically similar content above the threshold
 
+Pass **one** of `embedding_fn` and `embedder`. Passing both raises at
+construction; passing **neither** is a supported construction, because
+exact-hash matching needs no embedding source at all.
+
+That last permission has a sharp edge worth stating outright: with
+`semantic_check=True` and a `vector_store` but **no embedding source**,
+`DedupChecker` does not raise. It silently degrades to exact-hash matching —
+`register()` stores no vector and `check()` returns `"unique"` for content the
+semantic pass would have flagged. Nothing distinguishes that from a working
+semantic check finding nothing. If you enable `semantic_check`, supply a source.
+
+### Prefer `embedder=`
+
+`embedder` takes a [`TextEmbedder`](text-embedder.md) — batch, async, and
+carrying its own `model_id`:
+
+```python
+from dataknobs_llm import create_text_embedder
+
+embedder = await create_text_embedder(
+    {"embedding": {"provider": "ollama", "model": "nomic-embed-text"}}
+)
+
+checker = DedupChecker(
+    db=AsyncMemoryDatabase(),
+    config=DedupConfig(hash_fields=["stem"], semantic_check=True),
+    vector_store=vector_store,
+    embedder=embedder,
+)
+```
+
+The callable path above is not deprecated and no existing call site has to
+change.
+
+### Semantic dedup is not invalidated by a model change
+
+**Registered vectors carry no model identity, and `check()` does not compare
+one.** Swap the embedding model and the vectors already in the store sit in a
+different vector space from the ones your queries are now embedded into —
+similarity between them is meaningless, and dedup answers from it anyway.
+
+Measured with two embedders differing only in `model_id`: content registered
+under the first and checked under the second, with the text **byte-identical**,
+scores `0.2221` where the same comparison under the original model scores
+`1.0000`. Against the default `similarity_threshold=0.92` that is below the bar,
+so `check()` returns `recommendation="unique"` and an empty `similar_items` —
+which is exactly what genuinely new content returns. Nothing raises and nothing
+is logged.
+
+The direction matters: this fails **open**. Duplicates are admitted, and an
+admitted duplicate is silent by construction — nobody goes looking for the
+record that was correctly not flagged. Exact-hash matching is unaffected, so
+what degrades is precisely the check you enabled `semantic_check` to get.
+
+Until a model identity is recorded and compared, treat a registered vector
+store as **bound to the model that populated it**: re-register the corpus when
+the embedding model changes, rather than pointing a new model at an existing
+store.
+
 ## Integration with ArtifactCorpus
 
 `DedupChecker` integrates with `ArtifactCorpus` from the `dataknobs-bots` package for collection-level dedup:

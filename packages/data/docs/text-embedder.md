@@ -219,11 +219,19 @@ does not run, and the caller cannot tell which.
 Two of the classes above permit **neither**, and that is deliberate rather than
 inconsistent. `VectorMigration` can add the schema field without embedding, and
 `DedupChecker` does exact-hash matching with no semantic pass at all, so
-demanding a source at construction would refuse a supported use; they raise
-where a vector is actually produced. `VectorTextSynchronizer` and
-`IncrementalVectorizer` exist only to embed, so they raise at construction —
-finding out on the first record means failing after a query, a batch and a
-partial write.
+demanding a source at construction would refuse a supported use.
+`VectorTextSynchronizer` and `IncrementalVectorizer` exist only to embed, so
+they raise at construction — finding out on the first record means failing
+after a query, a batch and a partial write.
+
+What the two permissive classes do *later* differs, and the difference is worth
+knowing before you rely on either. `VectorMigration` raises where a vector is
+actually produced: `add_vectors_to_existing` refuses with "an embedding source
+is required", while `run()` migrates records without vectors, which is the use
+the permission exists for. `DedupChecker` never raises — with
+`semantic_check=True` and no source it silently degrades to exact-hash
+matching, storing no vector and reporting `"unique"`. See
+[Content Deduplication](dedup.md).
 
 The callable path is not deprecated, and no call site of it has to change. An
 untyped `embedding_fn` still has to be classified before it is called, and
