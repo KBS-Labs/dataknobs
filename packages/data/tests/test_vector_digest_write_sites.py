@@ -163,6 +163,16 @@ WRITE_PATHS: dict[str, Callable[[], Awaitable[Record]]] = {
 }
 
 
+# The same paths, minus the one that takes no embedder. `BulkEmbedMixin` has no
+# `embedder` parameter by design --- a `TextEmbedder` is async by declaration
+# and a sync method cannot await one --- so the sync lane reaches the seam
+# through a `SyncTextEmbedder`, which is a callable and names no model. Asking
+# it for an identity it was never handed would test the wrapper, not the writer.
+EMBEDDER_WRITE_PATHS: dict[str, Callable[[], Awaitable[Record]]] = {
+    name: path for name, path in WRITE_PATHS.items() if name != "bulk_embed_and_store-sync"
+}
+
+
 @pytest.mark.asyncio
 class TestEveryWriterDescribesWhatItEmbedded:
     """One assertion, applied to every in-process path that writes a vector."""
@@ -366,6 +376,113 @@ class TestTheConsequenceForAMigratedCorpus:
             await db.close()
 
 
+@pytest.mark.asyncio
+class TestEveryWriterRecordsWhichModelEmbedded:
+    """The digest's other half, with the same failure mode one key over.
+
+    A digest answers "is this the text that produced the vector?". It cannot
+    answer "was it produced by the model now in use?" --- identical text
+    through two models gives one digest and two incompatible vector spaces.
+    ``model_name`` is the key for that, ``TextEmbedder.model_id`` is what
+    supplies it, and a writer handed an embedder and storing no name leaves
+    its output exempt from the *model* half of currency exactly as an absent
+    digest leaves it exempt from the text half.
+    """
+
+    @pytest.mark.parametrize("path", EMBEDDER_WRITE_PATHS.values(), ids=list(EMBEDDER_WRITE_PATHS))
+    async def test_the_embedder_s_own_identity_is_stored(
+        self,
+        path: Callable[[], Awaitable[Record]],
+    ) -> None:
+        """From the embedder, not from a parameter kept in step by hand.
+
+        That is the whole reason ``model_id`` is on the protocol: a caller
+        naming one model while embedding with another writes a key that
+        describes nothing, and the name is what a later reader compares.
+        """
+        record = await path()
+
+        field = record.fields.get("embedding")
+        assert isinstance(field, VectorField)
+        assert field.model_name == "v1"
+
+
+@pytest.mark.asyncio
+class TestTheMixinNoticesAModelSwap:
+    """Writing the identity is half of it; the writer must also read it back.
+
+    ``VectorSyncMixin`` decides for itself what to re-embed, so a name it
+    stores and never compares protects nobody --- the corpus keeps the first
+    model's vectors while every later call embeds queries with the second.
+    """
+
+    async def test_a_second_model_re_embeds(self) -> None:
+        record = _source()
+        host = _TextSyncHost()
+
+        await host.sync_vectors_with_text(
+            [record],
+            TEXT_FIELDS,
+            embedder=DeterministicEmbedder(dimensions=8, model_id="v1"),
+            field_separator=SEPARATOR,
+        )
+        first = list(record.fields["embedding"].value)
+
+        updated = await host.sync_vectors_with_text(
+            [record],
+            TEXT_FIELDS,
+            embedder=DeterministicEmbedder(dimensions=8, model_id="v2"),
+            field_separator=SEPARATOR,
+        )
+
+        assert updated == 1
+        assert list(record.fields["embedding"].value) != first
+        assert record.fields["embedding"].model_name == "v2"
+
+    async def test_the_same_model_twice_re_embeds_nothing(self) -> None:
+        """The over-correction this must not become.
+
+        Text unchanged and model unchanged is the common case of a sweep, and
+        it has to stay free.
+        """
+        record = _source()
+        host = _TextSyncHost()
+
+        await host.sync_vectors_with_text(
+            [record], TEXT_FIELDS, embedder=_embedder(), field_separator=SEPARATOR
+        )
+        updated = await host.sync_vectors_with_text(
+            [record], TEXT_FIELDS, embedder=_embedder(), field_separator=SEPARATOR
+        )
+
+        assert updated == 0
+
+    async def test_a_vector_that_names_no_model_is_left_alone(self) -> None:
+        """The upgrade case, and the reason the comparison is two-sided.
+
+        A vector written before anything recorded a name carries ``None``.
+        Treating that as a mismatch would re-embed every such corpus on the
+        first sweep after upgrading --- which answers a question nobody asked
+        and is the same trade ``content_hash`` already makes.
+        """
+        record = _source()
+        host = _TextSyncHost()
+
+        await host.sync_vectors_with_text(
+            [record],
+            TEXT_FIELDS,
+            embedding_fn=lambda texts: [[0.5] * 8 for _ in texts],
+            field_separator=SEPARATOR,
+        )
+        assert record.fields["embedding"].model_name is None
+
+        updated = await host.sync_vectors_with_text(
+            [record], TEXT_FIELDS, embedder=_embedder(), field_separator=SEPARATOR
+        )
+
+        assert updated == 0
+
+
 # Every place in the package that constructs a `VectorField`, and what makes it
 # exempt from the rule above. Keyed on the enclosing qualified name rather than
 # a line number, so ordinary edits do not touch it.
@@ -373,7 +490,6 @@ VECTOR_FIELD_CONSTRUCTION_SITES = {
     ("vector/bulk_embed_mixin.py", "attach_vector_field"): (
         "writes the digest; the helper every embedding writer now routes through"
     ),
-    ("vector/mixins.py", "VectorSyncMixin.sync_vectors_with_text"): "writes the digest",
     ("vector/sync.py", "VectorTextSynchronizer.sync_record"): "writes the digest",
     ("vector/mixins.py", "vector_field_for"): (
         "`update_vector` takes a caller-supplied vector and metadata, with no "

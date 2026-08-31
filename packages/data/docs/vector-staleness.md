@@ -149,6 +149,36 @@ The sidecar is written whether or not a model was named. The digest is the half
 that does not depend on one, and gating the whole description on `model_name`
 left an unnamed vector undescribed.
 
+### And every writer records which model
+
+A digest answers "is this the text that produced the vector?". It cannot answer
+"was it produced by the model now in use?" — identical text through two models
+gives one digest and two incompatible vector spaces, so a swap is invisible to
+a check that reads only the text.
+
+`model_name` is that second key, and `TextEmbedder.model_id` is what supplies
+it: pass `embedder=` and the name written beside the vector comes from the
+thing that produced it rather than from a parameter a caller keeps in step by
+hand. Where the vectors go decides which spelling:
+
+| Writer | Where the identity lives |
+|---|---|
+| `bulk_embed_and_store` (database) | the `VectorField`'s `model_name` |
+| `VectorSyncMixin.sync_vectors_with_text` | the `VectorField`'s `model_name` |
+| `VectorTextSynchronizer`, `VectorMigration` | the `VectorField`'s `model_name` |
+| `IncrementalVectorizer` | the `{field}_metadata` sidecar |
+| `bulk_embed_and_store` (`VectorStore`) | each vector's metadata, under the key `add_records` uses |
+
+An explicit `model_name=` wins over the embedder's own, so a caller who said
+what they meant is not overridden. `model_version` is never defaulted from an
+embedder anywhere: a `TextEmbedder` carries an identity and no version.
+
+A stored `None` is deliberately not a mismatch, on either key. A vector written
+before anything recorded a name says nothing about its model, and reading that
+silence as evidence of a *different* one would re-embed every pre-seam corpus
+on the first sweep after upgrading — the same trade `content_hash` makes one
+section above.
+
 ### The digest survives storage
 
 Whether it does is a property of the backend.

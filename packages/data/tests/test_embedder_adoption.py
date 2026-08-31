@@ -477,6 +477,79 @@ class TestTheVectorStoreFamily:
 
         assert store.vectors[vector_id].dtype == np.float32
 
+    async def test_the_embedder_s_identity_is_stored_beside_the_vector(self) -> None:
+        """The same keys ``add_records`` writes, from the same class.
+
+        A store has two entry points and they described their vectors
+        differently: ``add_records`` copies ``model_name`` and
+        ``model_version`` off the ``VectorField`` it was handed, while this
+        one recorded ``source_text`` and nothing about the model. So which of
+        a store's vectors could be judged against a model swap depended on
+        which method put them there --- and a swap is not a degradation for a
+        vector store, it is two incompatible spaces sharing an index.
+        """
+        store = self._store()
+        await store.initialize()
+
+        [vector_id] = await store.bulk_embed_and_store(
+            ["alpha"], embedder=DeterministicEmbedder(dimensions=8, model_id="v1")
+        )
+
+        assert store.metadata_store[vector_id]["model_name"] == "v1"
+
+    async def test_an_explicit_name_wins_over_the_embedder_s(self) -> None:
+        """The same precedence ``default_model_name`` gives every other site.
+
+        A caller who said what they meant is not overridden --- including one
+        deliberately recording a name that differs from the embedder's own.
+        """
+        store = self._store()
+        await store.initialize()
+
+        [vector_id] = await store.bulk_embed_and_store(
+            ["alpha"],
+            embedder=DeterministicEmbedder(dimensions=8, model_id="v1"),
+            model_name="what the caller meant",
+            model_version="3",
+        )
+
+        stored = store.metadata_store[vector_id]
+        assert stored["model_name"] == "what the caller meant"
+        assert stored["model_version"] == "3"
+
+    async def test_a_caller_supplied_name_is_not_overwritten(self) -> None:
+        """A per-vector name in ``metadata`` outranks the batch-wide one.
+
+        The opposite of ``source_text``, which this method derives from the
+        texts it was handed and so does know better about. Clobbering here
+        would discard the more specific of two answers, silently.
+        """
+        store = self._store()
+        await store.initialize()
+
+        [vector_id] = await store.bulk_embed_and_store(
+            ["alpha"],
+            embedder=DeterministicEmbedder(dimensions=8, model_id="v1"),
+            metadata=[{"model_name": "what this particular vector really is"}],
+        )
+
+        stored = store.metadata_store[vector_id]
+        assert stored["model_name"] == "what this particular vector really is"
+
+    async def test_an_unnamed_model_writes_no_key(self) -> None:
+        """Absent, not ``None``.
+
+        ``add_records`` omits the key entirely when the field carries no name,
+        and a metadata filter comparing against a stored ``None`` is a
+        different query from one finding nothing at all.
+        """
+        store = self._store()
+        await store.initialize()
+
+        [vector_id] = await store.bulk_embed_and_store(["alpha"], embedding_fn=_batch_sync)
+
+        assert "model_name" not in store.metadata_store[vector_id]
+
 
 class TestTheStalenessKeyTheEmbedderDefaults:
     """``model_id`` is documented as removing a class of error. It does not yet.

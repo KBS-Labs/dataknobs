@@ -9,7 +9,7 @@ import numpy as np
 
 from ...fields import VectorField
 from ...records import Record
-from ..embedding import embed_texts, require_embedding_source
+from ..embedding import default_model_name, embed_texts, require_embedding_source
 from ..types import VectorSearchResult
 from .common import VectorStoreBase
 
@@ -478,6 +478,8 @@ class VectorStore(ABC, VectorStoreBase):
         batch_size: int | None = None,
         *,
         embedder: TextEmbedder | None = None,
+        model_name: str | None = None,
+        model_version: str | None = None,
     ) -> list[str]:
         """Embed texts and store vectors.
 
@@ -492,6 +494,16 @@ class VectorStore(ABC, VectorStoreBase):
                 the typed path: batch, async, and carrying the model identity
                 that makes a stored vector's staleness judgeable. Keyword-only
                 so it cannot be mistaken for *embedding_fn* by position.
+            model_name: Recorded in each vector's metadata under the key
+                :meth:`add_records` uses, and defaulted from the *embedder*'s
+                ``model_id``. The store's two entry points described their
+                vectors differently until this existed: one copied the model
+                off the ``VectorField`` it was handed and this one recorded
+                only the source text, so whether a stored vector could be
+                judged against a model swap depended on which method put it
+                there.
+            model_version: Recorded the same way. Not defaulted from
+                *embedder*, which carries an identity and no version.
 
         Returns:
             List of IDs for added vectors
@@ -507,6 +519,7 @@ class VectorStore(ABC, VectorStoreBase):
         # bulk-embed sites guard here for that reason; this one is the fourth.
         require_embedding_source(embedder, embedding_fn)
 
+        model_name = default_model_name(model_name, embedder)
         batch_size = batch_size or self.batch_size
         all_ids = []
 
@@ -535,6 +548,20 @@ class VectorStore(ABC, VectorStoreBase):
 
             for j, text in enumerate(batch_texts):
                 batch_metadata[j]["source_text"] = text
+                # Absent rather than `None` when nothing named a model, which
+                # is what `add_records` does with the same two keys: a
+                # metadata filter comparing against a stored `None` is a
+                # different query from one that finds nothing at all.
+                #
+                # `setdefault`, so a per-vector name the caller put in
+                # `metadata` outranks the batch-wide one --- the reverse of
+                # `source_text` above, which this method derives from `texts`
+                # and so does know better about. Overwriting here would
+                # silently discard the more specific of two answers.
+                if model_name is not None:
+                    batch_metadata[j].setdefault("model_name", model_name)
+                if model_version is not None:
+                    batch_metadata[j].setdefault("model_version", model_version)
 
             # Store vectors
             stored_ids = await self.add_vectors(embeddings, ids=batch_ids, metadata=batch_metadata)

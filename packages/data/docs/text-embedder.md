@@ -26,6 +26,29 @@ present. It does not check their signatures, and `issubclass` is unavailable
 (a protocol carrying non-method members cannot support it). Treat it as a
 smoke test.
 
+### How an implementation proves it is one
+
+Nothing inherits this protocol. An adapter lives in whichever package holds
+the thing being adapted, and two of the four are in packages `data` cannot
+import, so every implementation matches the protocol structurally and says so
+in a docstring. A docstring is checked by nobody: it is true when written and
+free to stop being true when a signature drifts, and nothing raises until a
+consumer's call fails somewhere that names neither the class nor the protocol.
+
+So each implementation states it where the type checker can read it:
+
+```python
+if TYPE_CHECKING:
+    from dataknobs_data.vector.embedding import TextEmbedder
+
+    def _satisfies_text_embedder(x: MyEmbedder) -> TextEmbedder:
+        return x
+```
+
+One type-check, no runtime import, and strictly stronger than the `isinstance`
+above — a wrong return type, or an `embed` taking one text instead of a batch,
+passes that and fails this. Write it for any embedder you implement.
+
 ### Why batch-only
 
 `AsyncLLMProvider.embed` is arity-polymorphic: `str` in gives `list[float]`
@@ -67,11 +90,11 @@ whether a stored vector is still comparable — so a mismatch is discovered only
 by something that trusts it.
 
 `VectorStore.bulk_embed_and_store(texts, …)` is a different method that shares
-the name: it stores bare vectors rather than records, and takes no
-`model_name` or `model_version` at all. It writes `source_text` into each
-vector's metadata and no model identity, so passing `embedder=` there buys the
-typed dispatch but not a staleness key. Everything below about defaulting the
-key is about the database method.
+the name: it stores bare vectors rather than records, so the identity goes into
+each vector's metadata under the same `model_name` and `model_version` keys
+that `add_records` copies off a `VectorField`. Those two are the store's only
+entry points, and until they agreed, whether a stored vector could be judged
+against a model swap depended on which of them put it there.
 
 `model_id` removes that class of error. Pass `embedder=` and `model_name`
 defaults to the identity of the thing that actually produced the vectors:
@@ -79,7 +102,14 @@ defaults to the identity of the thing that actually produced the vectors:
 ```python
 await db.bulk_embed_and_store(records, "body", embedder=embedder)
 # the stored VectorField's model_name is embedder.model_id
+
+await store.bulk_embed_and_store(texts, embedder=embedder)
+# each vector's metadata["model_name"] is embedder.model_id
 ```
+
+`model_version` is never defaulted from an embedder, on any path. A
+`TextEmbedder` carries an identity and no version, so filling that key from one
+would write a value nothing produced.
 
 An explicit `model_name=` still wins, so a caller who said what they meant is
 not overridden.
@@ -129,8 +159,9 @@ from dataknobs_llm import LLMProviderEmbedder
 embedder = LLMProviderEmbedder(provider)
 ```
 
-`LLMProviderEmbedder` does not import `TextEmbedder` — it satisfies it
-structurally, which is what keeps the dependency edge one-directional.
+`LLMProviderEmbedder` does not inherit `TextEmbedder` — it satisfies the
+protocol structurally, and imports it under `TYPE_CHECKING` to assert that
+statically. See [How an implementation proves it is one](#how-an-implementation-proves-it-is-one).
 
 ### `dimensions` is answered, never guessed
 
@@ -173,6 +204,13 @@ a line. It writes `model_name` and reads it back, so passing an embedder is what
 makes those two the same fact — before, a caller with an embedder named the
 model twice, once by passing `embed` and once by passing `model_name=`, with
 nothing checking that the two agreed.
+
+`sync_vectors_with_text` closes the same loop for a caller that owns its own
+records. It writes the identity and compares it, so a sweep with a second
+embedder re-embeds rather than reporting a corpus current on the strength of
+text that did not change — the digest cannot see a model swap, because
+identical text through two models gives one digest and two incompatible vector
+spaces.
 
 Pass **one** of `embedder` and `embedding_fn`. Passing neither raises; so does
 passing both — resolving that by precedence would mean one of the two silently

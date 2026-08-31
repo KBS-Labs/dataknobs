@@ -296,8 +296,11 @@ provider's own config understates the model actually in use.
 There is no conversion in the adapter, and that absence is the point:
 `AsyncLLMProvider.embed` already returns `list[list[float]]` for a list input,
 which is exactly what `TextEmbedder.embed` returns. It satisfies the protocol
-*structurally* and imports nothing from `dataknobs-data`, which is what keeps
-that dependency edge one-directional.
+*structurally* rather than inheriting it — the one-directional edge is that
+`data` cannot import `llm`, which is why the protocol lives there and the
+implementation here. The protocol is imported under `TYPE_CHECKING` alone, so
+the conformance is checked while nothing pulls `dataknobs_data.vector`, and
+numpy behind it, into an `llm` import.
 
 ## Provider Backends
 

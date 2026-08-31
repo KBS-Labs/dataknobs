@@ -22,7 +22,7 @@ from .content import (
     compute_content_hash,
     content_hash_metadata,
 )
-from .embedding import embed_texts, require_embedding_source
+from .embedding import default_model_name, embed_texts, require_embedding_source
 from .types import BatchVectors
 
 if TYPE_CHECKING:
@@ -267,8 +267,7 @@ class AsyncBulkEmbedMixin:
         require_embedding_source(embedder, embedding_fn)
 
         text_fields = resolve_text_fields(text_field)
-        if model_name is None and embedder is not None:
-            model_name = embedder.model_id
+        model_name = default_model_name(model_name, embedder)
         processed_ids = []
 
         for batch in iter_batches(records, batch_size):

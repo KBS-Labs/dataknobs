@@ -125,6 +125,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Every `TextEmbedder` implementation now asserts its conformance where a
+  type checker reads it.** Nothing inherits the protocol — an adapter lives in
+  whichever package holds the thing it adapts, and two of the four are in
+  packages `data` cannot import — so "satisfies `TextEmbedder`" was a
+  docstring: true when written, free to stop being true when a signature
+  drifts, and nothing raising until a consumer's call failed somewhere naming
+  neither the class nor the protocol. `CachedEmbedder` and
+  `DeterministicEmbedder` carry a `TYPE_CHECKING`-only assertion, as do
+  `dataknobs-llm`'s `LLMProviderEmbedder` and `dataknobs-bots`' knowledge-base
+  adapter. It costs one type-check and no runtime import, and is stronger than
+  the `isinstance` the protocol already supported, which answers from member
+  names alone. The idiom is documented for consumers implementing their own.
+
 - **`embedding_fn` is optional on `VectorStore.bulk_embed_and_store`.** It was
   a required positional parameter; it now defaults to `None`, because
   `embedder=` is the other way of supplying the same thing and exactly one of
@@ -243,6 +256,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   nothing. See **Fixed** for the digest this consolidation was undertaken for.
 
 ### Fixed
+
+- **Two write paths stored vectors that named no model.** A digest answers
+  whether the *text* changed; it cannot answer whether the *model* did, since
+  identical text through two models gives one digest and two incompatible
+  vector spaces. `VectorSyncMixin.sync_vectors_with_text` and
+  `VectorStore.bulk_embed_and_store` both accepted an `embedder` — carrying a
+  `model_id` for exactly this — and stored neither a `model_name` nor a
+  `model_version`, so their output was permanently exempt from the model half
+  of currency while the four sibling writers recorded it.
+
+  `sync_vectors_with_text` also compared no model, so writing one would have
+  been description rather than a guard: it now defaults the identity from the
+  embedder, stores it through the shared `attach_vector_field` rather than a
+  sixth hand-built `VectorField`, and re-embeds when a sweep arrives with a
+  different model. `VectorStore.bulk_embed_and_store` writes the identity into
+  each vector's metadata under the same two keys `add_records` copies off a
+  `VectorField` — the store's two entry points described their vectors
+  differently until now, so whether a stored vector could be judged against a
+  model swap depended on which method put it there. Both gained keyword-only
+  `model_name` / `model_version`, defaulted the way every other site defaults
+  them. A stored `None` is still not a mismatch, so no corpus re-embeds on
+  upgrade.
 
 - **`AsyncElasticsearchDatabase.bulk_embed_and_store` stored nothing and
   reported success.** It was a stub: a logged warning and `return []`, which

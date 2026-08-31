@@ -66,7 +66,7 @@ from __future__ import annotations
 
 import hashlib
 from collections.abc import Callable, Sequence
-from typing import Any, Protocol, Self, cast, runtime_checkable
+from typing import TYPE_CHECKING, Any, Protocol, Self, cast, runtime_checkable
 
 from .embedding_fn import call_embedding_fn, call_embedding_fn_batch
 
@@ -93,6 +93,23 @@ class TextEmbedder(Protocol):
     present; it does not check their signatures, and ``issubclass`` is not
     available at all (a protocol carrying non-method members cannot support
     it). Treat the check as a smoke test, not a contract.
+
+    **Every implementation asserts its own conformance, statically.** No
+    implementation inherits this declaration --- an adapter lives in whichever
+    package holds the thing being adapted, and two of them are in packages
+    ``data`` cannot import --- so "satisfies ``TextEmbedder``" is otherwise a
+    comment: true when written, and free to stop being true when a signature
+    drifts, with nothing raising until a consumer's call site fails naming
+    neither the class nor the protocol. Each implementation carries::
+
+        if TYPE_CHECKING:
+
+            def _satisfies_text_embedder(x: TheImplementation) -> TextEmbedder:
+                return x
+
+    which costs one type-check and no runtime import, and is strictly stronger
+    than the ``isinstance`` above: a wrong return type, or an ``embed`` taking
+    one text instead of a batch, passes that and fails this.
     """
 
     @property
@@ -274,6 +291,18 @@ class CachedEmbedder:
         await self._cache.put_batch(model, to_embed, fresh)
 
         return [by_text[wanted[i]] if hit is None else hit for i, hit in enumerate(cached)]
+
+
+if TYPE_CHECKING:
+
+    def _satisfies_text_embedder(embedder: CachedEmbedder) -> TextEmbedder:
+        """A wrapper is the implementation most able to drift unnoticed.
+
+        It forwards two members and reimplements the third, so it keeps
+        satisfying the protocol for as long as the forwarding holds --- and
+        the one member it does not forward is the one with a signature.
+        """
+        return embedder
 
 
 def require_embedding_source(

@@ -23,9 +23,12 @@ from __future__ import annotations
 import functools
 import hashlib
 from collections.abc import Sequence
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
+
+if TYPE_CHECKING:
+    from dataknobs_data.vector.embedding import TextEmbedder
 
 __all__ = [
     "DeterministicEmbedder",
@@ -180,9 +183,12 @@ class DeterministicEmbedder:
     proves only that a method was called; this satisfies the real protocol, so
     the code under test runs its real path.
 
-    It satisfies ``TextEmbedder`` structurally and does not import it, which
-    keeps this module free of the vector package's import cost. A test that
-    wants the check spelled out can ``isinstance(embedder, TextEmbedder)``.
+    It satisfies ``TextEmbedder`` structurally and does not import it at run
+    time, which keeps this module free of the vector package's import cost.
+    The claim is checked all the same --- see ``_satisfies_text_embedder``
+    below, where the import is ``TYPE_CHECKING``-only and so costs nothing.
+    A test that wants the check at run time can
+    ``isinstance(embedder, TextEmbedder)``.
 
     Example:
         ```python
@@ -254,3 +260,15 @@ class DeterministicEmbedder:
     async def embed(self, texts: Sequence[str]) -> list[list[float]]:
         """Embed every text, in order. An empty batch returns an empty list."""
         return [self._vector(text) for text in texts]
+
+
+if TYPE_CHECKING:
+
+    def _satisfies_text_embedder(embedder: DeterministicEmbedder) -> TextEmbedder:
+        """The one implementation whose whole purpose is to stand in for others.
+
+        A test double that has drifted from the protocol tests the drift: every
+        suite using it keeps passing while the production implementations it
+        stands in for are held to something else.
+        """
+        return embedder

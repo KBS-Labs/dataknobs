@@ -1,7 +1,7 @@
 """Tests for vector change tracking functionality."""
 
 import asyncio
-from datetime import datetime
+from datetime import UTC, datetime
 
 import pytest
 
@@ -90,18 +90,54 @@ class TestUpdateTask:
         assert task.last_error is None
 
     def test_update_task_comparison(self):
-        """Test priority-based comparison of tasks."""
-        task1 = UpdateTask(record_id="1", vector_fields=set(), source_fields={}, priority=1)
+        """Test priority-based comparison of tasks.
 
-        task2 = UpdateTask(record_id="2", vector_fields=set(), source_fields={}, priority=5)
+        The timestamps are supplied rather than defaulted. Two tasks built
+        back to back land on the same ``datetime.now(UTC)`` reading far more
+        often than not — measured at 58% of iterations on one machine — so
+        letting the clock provide them made "newer sorts first" a coin flip
+        that reported a tie-break bug whenever the two constructions happened
+        to fall inside one clock tick. Naming the instants tests the
+        comparison rather than the clock's resolution.
+        """
+        earlier = datetime(2026, 1, 1, 12, 0, 0, tzinfo=UTC)
+        later = datetime(2026, 1, 1, 12, 0, 1, tzinfo=UTC)
 
-        # Higher priority should come first (less than)
+        task1 = UpdateTask(
+            record_id="1", vector_fields=set(), source_fields={}, priority=1, created_at=later
+        )
+        task2 = UpdateTask(
+            record_id="2", vector_fields=set(), source_fields={}, priority=5, created_at=earlier
+        )
+
+        # Higher priority comes first, whatever the timestamps say.
         assert task2 < task1
 
-        # Same priority - newer should come first
-        task3 = UpdateTask(record_id="3", vector_fields=set(), source_fields={}, priority=5)
+        task3 = UpdateTask(
+            record_id="3", vector_fields=set(), source_fields={}, priority=5, created_at=later
+        )
 
-        assert task3 < task2  # task3 is newer
+        assert task3 < task2  # same priority, and task3 is newer
+
+    def test_tasks_of_one_priority_and_one_instant_do_not_order(self):
+        """The tie the clock kept producing, made explicit.
+
+        ``__lt__`` breaks a priority tie on a strict timestamp comparison, so
+        two tasks sharing both are unordered in each direction. That is a
+        defensible answer — tasks queued in the same instant have no
+        meaningful order — and it is what the assertion above accidentally
+        depended on not happening.
+        """
+        instant = datetime(2026, 1, 1, 12, 0, 0, tzinfo=UTC)
+        first = UpdateTask(
+            record_id="1", vector_fields=set(), source_fields={}, priority=5, created_at=instant
+        )
+        second = UpdateTask(
+            record_id="2", vector_fields=set(), source_fields={}, priority=5, created_at=instant
+        )
+
+        assert not first < second
+        assert not second < first
 
 
 class TestChangeTracker:

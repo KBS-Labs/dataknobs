@@ -23,6 +23,8 @@ from typing import TYPE_CHECKING, Any
 from dataknobs_llm.llm.providers import create_embedding_provider
 
 if TYPE_CHECKING:
+    from dataknobs_data.vector.embedding import TextEmbedder
+
     from dataknobs_llm.llm.base import AsyncLLMProvider, LLMConfig
 
 __all__ = ["LLMProviderEmbedder", "create_text_embedder"]
@@ -31,9 +33,12 @@ __all__ = ["LLMProviderEmbedder", "create_text_embedder"]
 class LLMProviderEmbedder:
     """Presents an :class:`AsyncLLMProvider` as a ``TextEmbedder``.
 
-    Satisfies ``dataknobs_data.vector.TextEmbedder`` structurally; the protocol
-    is not imported, because doing so would make ``dataknobs-llm`` depend on
-    ``dataknobs-data`` for a type it only needs to *match*.
+    Satisfies ``dataknobs_data.vector.TextEmbedder`` structurally, and the
+    protocol is imported under ``TYPE_CHECKING`` alone so that the claim is
+    checked rather than asserted --- see ``_satisfies_text_embedder`` below.
+    Not at runtime: ``dataknobs_data.vector`` pulls numpy and twenty-odd
+    modules behind it, and this class matches the protocol rather than
+    inheriting from it, so nothing here needs the object at run time.
 
     Example:
         ```python
@@ -182,6 +187,18 @@ class LLMProviderEmbedder:
                 )
 
         return vectors
+
+
+if TYPE_CHECKING:
+
+    def _satisfies_text_embedder(embedder: LLMProviderEmbedder) -> TextEmbedder:
+        """Static proof of the claim the class docstring makes.
+
+        The idiom and the reason for it are documented once, on
+        :class:`~dataknobs_data.vector.embedding.TextEmbedder` itself. The
+        short version: a structural match nothing checks is a comment.
+        """
+        return embedder
 
 
 async def create_text_embedder(

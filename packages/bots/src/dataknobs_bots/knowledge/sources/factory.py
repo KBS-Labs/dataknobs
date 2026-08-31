@@ -25,6 +25,7 @@ from dataknobs_data.sources.base import GroundedSource
 if TYPE_CHECKING:
     from dataknobs_data.fields import FieldType
     from dataknobs_data.schema import DatabaseSchema
+    from dataknobs_data.vector.embedding import TextEmbedder
 
 logger = logging.getLogger(__name__)
 
@@ -342,8 +343,9 @@ class _KnowledgeBaseEmbedder:
     the index accommodating both, which is the fragmentation that protocol
     exists to end.
 
-    Satisfies ``TextEmbedder`` structurally --- the protocol is not imported
-    for an ``isinstance`` it does not need.
+    Satisfies ``TextEmbedder`` structurally --- the protocol is imported under
+    ``TYPE_CHECKING`` alone, for the static check below rather than for an
+    ``isinstance`` this does not need.
     """
 
     def __init__(self, kb: Any) -> None:
@@ -389,6 +391,19 @@ class _KnowledgeBaseEmbedder:
         if vectors and self._dimensions is None:
             self._dimensions = len(vectors[0])
         return vectors
+
+
+if TYPE_CHECKING:
+
+    def _satisfies_text_embedder(embedder: _KnowledgeBaseEmbedder) -> TextEmbedder:
+        """The adapter furthest from the protocol, and the one with no tests
+        that call it through the protocol's own consumers.
+
+        It exists to hand a duck-typed knowledge base to ``ClusterTopicIndex``,
+        so the only thing standing between a signature drift here and a
+        ``TypeError`` inside somebody's index is this line.
+        """
+        return embedder
 
 
 def _build_embedder(kb: Any) -> _KnowledgeBaseEmbedder | None:

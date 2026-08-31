@@ -13,8 +13,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   an embedding provider presented as the `TextEmbedder` seam that
   `dataknobs-data` declares. `dataknobs-data` owns the protocol and this
   package owns the implementation, because the dependency runs that way and
-  only that way; the adapter satisfies it *structurally* and imports nothing
-  from `dataknobs-data`, which is what keeps the edge one-directional.
+  only that way: `data` cannot import `llm`. The adapter satisfies the protocol
+  *structurally* rather than inheriting it, and imports it under
+  `TYPE_CHECKING` alone — so the conformance is checked by the type checker
+  while nothing pulls `dataknobs_data.vector`, and numpy behind it, into an
+  `llm` import.
 
   There is no conversion in it. `AsyncLLMProvider.embed` already returns
   `list[list[float]]` for a list input, which is exactly what the protocol
