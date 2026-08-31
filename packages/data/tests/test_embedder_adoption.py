@@ -276,10 +276,18 @@ def test_sync_embedder_is_not_a_text_embedder_but_isinstance_says_it_is() -> Non
     ``True`` --- which is the limitation the protocol's docstring names, met
     here by the one class in this package shaped to trip it.
 
-    Pinned rather than fixed: renaming ``embed`` would break the property the
-    class exists for --- that its methods already fit the parameters the
-    synchronous sites declare. The annotation is what stops the mistake; the
-    ``isinstance`` is a smoke test and this is the smoke.
+    Pinned rather than fixed --- but not because the fix is hard. An earlier
+    version of this docstring said renaming ``embed`` would break the property
+    the class exists for, and that is wrong: the five synchronous sites take a
+    *bound method* as a plain ``Callable``, never a ``SyncTextEmbedder`` as a
+    protocol, so the name is free to change and only the package docs follow
+    it. Distinct member names are exactly what make ``ResourceFactory.create``
+    and ``AsyncResourceFactory.create_async`` the one twin pair in this tree
+    that ``isinstance`` can tell apart. The rename is deferred because it is an
+    API decision of its own, not because it is unavailable.
+
+    Until then the annotation is what stops the mistake; the ``isinstance`` is
+    a smoke test and this is the smoke.
     """
     with SyncTextEmbedder(DeterministicEmbedder()) as sync:
         assert not asyncio.iscoroutinefunction(sync.embed)
