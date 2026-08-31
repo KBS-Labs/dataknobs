@@ -18,6 +18,13 @@ from .content import (
     recompute_content_hash,
     stored_assembly,
 )
+from .embedding import (
+    CachedEmbedder,
+    TextEmbedder,
+    VectorCache,
+    embedding_cache_key,
+)
+from .embedding_fn import call_embedding_fn
 from .exceptions import (
     VectorBackendError,
     VectorDimensionError,
@@ -64,6 +71,12 @@ from .hybrid import (
 __all__ = [
     # Field
     "VectorField",
+    # Embedding — the one shape for "turn text into vectors"
+    "CachedEmbedder",
+    "TextEmbedder",
+    "VectorCache",
+    "call_embedding_fn",
+    "embedding_cache_key",
     # Types
     "DistanceMetric",
     "VectorConfig",
