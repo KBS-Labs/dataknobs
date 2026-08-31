@@ -6,15 +6,15 @@ from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Any, Protocol
 
 from ..fields import FieldType, VectorField
+from .bulk_embed_mixin import attach_vector_field
 from .content import (
     CONTENT_HASH_KEY,
     DEFAULT_FIELD_SEPARATOR,
     assemble_source_text,
-    compute_content_hash,
-    content_hash_metadata,
     current_content_hash,
     stored_assembly,
 )
+from .embedding import default_model_name, embed_texts, require_embedding_source
 from .hybrid import (
     FusionStrategy,
     HybridSearchConfig,
@@ -22,13 +22,14 @@ from .hybrid import (
     reciprocal_rank_fusion,
     weighted_score_fusion,
 )
-from .types import DistanceMetric, VectorSearchResult
+from .types import BatchVectors, DistanceMetric, VectorSearchResult
 
 if TYPE_CHECKING:
     import numpy as np
     from collections.abc import Callable
     from ..query import Query
     from ..records import Record
+    from .embedding import TextEmbedder
 
 
 class VectorCapable(Protocol):
@@ -305,7 +306,7 @@ class SyncVectorOperationsMixin(ABC):
         records: list[Record],
         text_field: str | list[str],
         vector_field: str = "embedding",
-        embedding_fn: Callable[[list[str]], np.ndarray] | None = None,
+        embedding_fn: Callable[[list[str]], BatchVectors] | None = None,
         batch_size: int = 100,
         model_name: str | None = None,
         model_version: str | None = None,
@@ -552,10 +553,12 @@ class AsyncVectorOperationsMixin(ABC):
         records: list[Record],
         text_field: str | list[str],
         vector_field: str = "embedding",
-        embedding_fn: Callable[[list[str]], np.ndarray] | None = None,
+        embedding_fn: Callable[[list[str]], BatchVectors] | None = None,
         batch_size: int = 100,
         model_name: str | None = None,
         model_version: str | None = None,
+        *,
+        embedder: TextEmbedder | None = None,
     ) -> list[str]:
         """Embed text fields and store vectors with records.
 
@@ -563,10 +566,15 @@ class AsyncVectorOperationsMixin(ABC):
             records: Records to process
             text_field: Field name(s) containing text to embed
             vector_field: Field name to store vectors in
-            embedding_fn: Function to generate embeddings
+            embedding_fn: Function to generate embeddings. Still accepted;
+                prefer *embedder*.
             batch_size: Number of records to process at once
             model_name: Name of the embedding model
             model_version: Version of the embedding model
+            embedder: A :class:`~dataknobs_data.vector.TextEmbedder`. Carries
+                its own ``model_id``, so an implementation can fill
+                *model_name* from the thing that produced the vectors rather
+                than from a parameter the caller has to keep in step.
 
         Returns:
             List of record IDs that were processed
@@ -761,9 +769,13 @@ class VectorSyncMixin:
         records: list[Record],
         text_fields: list[str],
         vector_field: str = "embedding",
-        embedding_fn: Callable[[list[str]], np.ndarray] | None = None,
+        embedding_fn: Callable[[list[str]], BatchVectors] | None = None,
         force: bool = False,
         field_separator: str = DEFAULT_FIELD_SEPARATOR,
+        *,
+        embedder: TextEmbedder | None = None,
+        model_name: str | None = None,
+        model_version: str | None = None,
     ) -> int:
         """Synchronize vector embeddings with text content.
 
@@ -771,16 +783,30 @@ class VectorSyncMixin:
             records: Records to synchronize
             text_fields: Text fields to generate vectors from
             vector_field: Vector field to update
-            embedding_fn: Embedding function
+            embedding_fn: Embedding function. Still accepted; prefer
+                *embedder*.
             force: Force re-generation even if vectors exist
             field_separator: What to join ``text_fields`` on. Was hardcoded to
                 a space, which is the value it still defaults to.
+            embedder: A :class:`~dataknobs_data.vector.TextEmbedder`.
+            model_name: Identity to store beside the vector, and to judge an
+                existing one against. Defaults to the *embedder*'s own
+                ``model_id``, which is what stops a caller naming one model
+                while embedding with another.
+            model_version: Version to store beside the vector. Not defaulted
+                from *embedder*: a ``TextEmbedder`` carries an identity and no
+                version, and inventing one here would write a value nothing
+                produced.
 
         Returns:
             Number of records updated
+
+        Raises:
+            ValueError: Neither *embedding_fn* nor *embedder* was given, or
+                both were.
         """
-        if not embedding_fn:
-            raise ValueError("Embedding function is required for vector synchronization")
+        require_embedding_source(embedder, embedding_fn)
+        model_name = default_model_name(model_name, embedder)
 
         updated = 0
         for record in records:
@@ -789,7 +815,7 @@ class VectorSyncMixin:
 
             if not needs_update:
                 needs_update = self._text_vector_is_stale(
-                    record, vector_field, text_fields, field_separator
+                    record, vector_field, text_fields, field_separator, model_name
                 )
 
             if needs_update:
@@ -797,26 +823,23 @@ class VectorSyncMixin:
 
                 # Generate embedding
                 if text_content:
-                    from ..fields import VectorField
-
-                    result = embedding_fn([text_content])
-                    # Handle both sync and async embedding functions
-                    if hasattr(result, "__await__"):
-                        embeddings = await result
-                    else:
-                        embeddings = result
-                    record.fields[vector_field] = VectorField(
-                        name=vector_field,
-                        value=embeddings[0],
-                        source_field=",".join(text_fields),
-                        # Without this the field is unjudgeable: a
-                        # `VectorTextSynchronizer` sweeping the same corpus
-                        # finds no digest and treats it as current forever.
-                        metadata=content_hash_metadata(
-                            text_fields,
-                            field_separator,
-                            compute_content_hash(text_content),
-                        ),
+                    embeddings = await embed_texts(
+                        [text_content], embedder=embedder, embedding_fn=embedding_fn
+                    )
+                    # The shared builder rather than a sixth hand-rolled
+                    # `VectorField`: the digest and the model identity are the
+                    # two halves of what makes a stored vector judgeable, and
+                    # this site had the first and not the second for as long
+                    # as it built the field itself.
+                    attach_vector_field(
+                        record,
+                        vector_field,
+                        embeddings[0],
+                        text_content,
+                        text_fields,
+                        field_separator,
+                        model_name,
+                        model_version,
                     )
                     updated += 1
 
@@ -828,6 +851,7 @@ class VectorSyncMixin:
         vector_field: str,
         text_fields: list[str],
         field_separator: str,
+        model_name: str | None = None,
     ) -> bool:
         """Whether an existing vector no longer matches the text it names.
 
@@ -837,7 +861,20 @@ class VectorSyncMixin:
         digest closes it; the field-set comparison stays because a re-pointed
         `text_fields` changes what the vector means even when the digest
         cannot be read.
+
+        The model is the third comparison and answers a question the other two
+        cannot: identical text through two models gives one digest and two
+        incompatible vector spaces, so a swap is invisible to a check that
+        only reads the text.
         """
+        stored_name = getattr(record.fields[vector_field], "model_name", None)
+        # Two-sided, and the same rule `_has_current_vector` applies: a stored
+        # `None` means the vector predates anything recording a name, not that
+        # it disagrees. Calling those stale would re-embed a whole corpus on
+        # the first sweep after upgrading.
+        if model_name is not None and stored_name is not None and stored_name != model_name:
+            return True
+
         metadata = getattr(record.fields[vector_field], "metadata", None) or {}
 
         stored_fields, _stored_separator = stored_assembly(metadata)

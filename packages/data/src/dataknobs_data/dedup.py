@@ -21,13 +21,18 @@ import hashlib
 import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 
 from dataknobs_data.database import AsyncDatabase
 from dataknobs_data.query import Filter, Operator, Query
 from dataknobs_data.records import Record
+from dataknobs_data.vector.embedding import (
+    TextEmbedder,
+    embed_text,
+    require_embedding_source,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -109,6 +114,8 @@ class DedupChecker:
         config: DedupConfig,
         vector_store: Any | None = None,
         embedding_fn: Callable[[str], Awaitable[list[float]]] | None = None,
+        *,
+        embedder: TextEmbedder | None = None,
     ) -> None:
         """Initialize the dedup checker.
 
@@ -117,14 +124,54 @@ class DedupChecker:
             config: Deduplication configuration.
             vector_store: Optional vector store for semantic similarity search.
                 Expects a ``VectorStore``-compatible interface.
-            embedding_fn: Async function that takes text and returns an embedding
-                vector. Required when ``config.semantic_check`` is True and
-                ``vector_store`` is provided.
+            embedding_fn: Async function that takes text and returns an
+                embedding vector. Required, along with *vector_store*, when
+                ``config.semantic_check`` is True --- unless *embedder* is
+                given instead.
+            embedder: A :class:`~dataknobs_data.vector.TextEmbedder`, in place
+                of *embedding_fn*. Exact-hash matching needs neither, so
+                having no source is a supported construction.
+
+        Raises:
+            ValueError: Both *embedding_fn* and *embedder* were given.
         """
+        require_embedding_source(embedder, embedding_fn, allow_neither=True)
+
         self._db = db
         self._config = config
         self._vector_store = vector_store
+        self._embedder = embedder
         self._embedding_fn = embedding_fn
+
+    def _semantic_store(self) -> Any | None:
+        """The vector store to use for a semantic pass, or ``None`` if there is none.
+
+        Three conditions, asked in two places --- :meth:`check` before
+        searching and :meth:`register` before storing --- which must agree or
+        one half of the pair runs without the other. They were written out
+        twice, and adding a second embedding source to both copies is what
+        made that worth naming.
+
+        It returns the store rather than a bool because the caller needs the
+        store anyway. A predicate would leave every site re-reading
+        ``self._vector_store`` as an ``Any | None``, which is how a guard and
+        the thing it guards drift apart.
+        """
+        if not self._config.semantic_check or self._vector_store is None:
+            return None
+        if self._embedder is None and self._embedding_fn is None:
+            return None
+        return self._vector_store
+
+    async def _embed(self, text: str) -> Any:
+        """One embedding, from whichever source was configured.
+
+        Returns ``Any`` rather than ``list[float]`` because the callable path
+        deliberately hands back what the caller's own function returned,
+        unconverted --- an ``np.ndarray`` as readily as a list. Both callers
+        pass the result straight to ``np.array``.
+        """
+        return await embed_text(text, embedder=self._embedder, embedding_fn=self._embedding_fn)
 
     @property
     def config(self) -> DedupConfig:
@@ -181,12 +228,9 @@ class DedupChecker:
 
         # Step 2: Semantic similarity (optional)
         similar_items: list[SimilarItem] = []
-        if (
-            self._config.semantic_check
-            and self._vector_store is not None
-            and self._embedding_fn is not None
-        ):
-            similar_items = await self._find_similar(content)
+        store = self._semantic_store()
+        if store is not None:
+            similar_items = await self._find_similar(content, store)
 
         # Step 3: Build recommendation
         recommendation = "unique"
@@ -221,14 +265,11 @@ class DedupChecker:
         await self._db.create(record)
 
         # Store embedding in vector store (if semantic check enabled)
-        if (
-            self._config.semantic_check
-            and self._vector_store is not None
-            and self._embedding_fn is not None
-        ):
+        store = self._semantic_store()
+        if store is not None:
             text = self._build_semantic_text(content)
-            embedding = await self._embedding_fn(text)
-            await self._vector_store.add_vectors(
+            embedding = await self._embed(text)
+            await store.add_vectors(
                 vectors=np.array([embedding], dtype=np.float32),
                 ids=[record_id],
                 metadata=[{"text": text, "content_hash": content_hash}],
@@ -252,21 +293,30 @@ class DedupChecker:
         query = Query(filters=[Filter("content_hash", Operator.EQ, content_hash)])
         results = await self._db.search(query)
         if results:
-            return results[0].get_value("record_id")
+            # `get_value` answers `Any`. The field is written by `register`,
+            # whose `record_id` is declared `str`, so the cast states what the
+            # writer already guarantees rather than converting anything --- a
+            # `str(...)` here would silently stringify a value that got in by
+            # another route instead of leaving it visible.
+            return cast("str | None", results[0].get_value("record_id"))
         return None
 
-    async def _find_similar(self, content: dict[str, Any]) -> list[SimilarItem]:
+    async def _find_similar(self, content: dict[str, Any], store: Any) -> list[SimilarItem]:
         """Find semantically similar content via vector search.
 
         Args:
             content: Content dictionary to check.
+            store: The vector store to search, as returned by
+                :meth:`_semantic_store`. Passed in rather than re-read so the
+                caller's guard and this search cannot disagree about which
+                store --- or whether one exists at all.
 
         Returns:
             List of similar items above the configured threshold.
         """
         text = self._build_semantic_text(content)
-        embedding = await self._embedding_fn(text)  # type: ignore[misc]
-        results = await self._vector_store.search(
+        embedding = await self._embed(text)
+        results = await store.search(
             query_vector=np.array(embedding, dtype=np.float32),
             k=self._config.max_similar_results,
         )

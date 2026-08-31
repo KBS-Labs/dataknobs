@@ -36,6 +36,7 @@ from dataknobs_data.backends.file import AsyncFileDatabase
 from dataknobs_data.backends.memory import AsyncMemoryDatabase
 from dataknobs_data.backends.sqlite_async import AsyncSQLiteDatabase
 from dataknobs_data.fields import VectorField
+from dataknobs_data.testing import DeterministicEmbedder
 from dataknobs_data.vector.content import (
     CONTENT_HASH_KEY,
     FIELD_SEPARATOR_KEY,
@@ -204,3 +205,97 @@ class TestTheSyncMixinStillWorks:
         field = store.written["minted"].fields["embedding"]
         assert isinstance(field, VectorField)
         assert field.metadata[CONTENT_HASH_KEY] == compute_content_hash("alpha")
+
+
+class TestTheEmbedderPath:
+    """The typed alternative to ``embedding_fn``, across the same backends.
+
+    ``embedding_fn`` was one of eight incompatible spellings of "turn text
+    into vectors" in this package, none of which matched what an LLM provider
+    returns. ``embedder=`` is the one shape, and these pin that adopting it
+    stores the same thing the callable path stores --- plus the one thing the
+    callable path structurally cannot: the identity of the model that produced
+    the vectors.
+    """
+
+    async def test_an_embedder_stores_records(self, async_db: Any) -> None:
+        records = [Record(data={"title": "alpha"}), Record(data={"title": "bravo!"})]
+
+        ids = await async_db.bulk_embed_and_store(
+            records, "title", embedder=DeterministicEmbedder(dimensions=8)
+        )
+
+        assert all(isinstance(i, str) for i in ids)
+        assert len(await async_db.all()) == 2
+
+    async def test_the_stored_vector_is_the_embedders(self, async_db: Any) -> None:
+        embedder = DeterministicEmbedder(dimensions=8)
+
+        await async_db.bulk_embed_and_store(
+            [Record(data={"title": "alpha"})], "title", embedder=embedder
+        )
+
+        stored = (await async_db.all())[0]
+        expected = (await embedder.embed(["alpha"]))[0]
+        assert list(stored.fields["embedding"].value) == pytest.approx(expected)
+
+    async def test_model_name_defaults_to_the_embedders_identity(self, async_db: Any) -> None:
+        """The parameter the caller no longer has to keep in step by hand.
+
+        ``bulk_embed_and_store`` takes ``embedding_fn`` and ``model_name`` as
+        independent parameters, so nothing stopped a caller naming one model
+        while embedding with another --- and the name is the staleness key, so
+        the mismatch is only discovered by a later reader trusting it.
+        """
+        embedder = DeterministicEmbedder(dimensions=8, model_id="nomic-embed-text")
+
+        await async_db.bulk_embed_and_store(
+            [Record(data={"title": "alpha"})], "title", embedder=embedder
+        )
+
+        stored = (await async_db.all())[0]
+        assert stored.fields["embedding"].model_name == "nomic-embed-text"
+
+    async def test_an_explicit_model_name_still_wins(self, async_db: Any) -> None:
+        """Defaulting must not overwrite a caller who said what they meant."""
+        await async_db.bulk_embed_and_store(
+            [Record(data={"title": "alpha"})],
+            "title",
+            model_name="caller-said-so",
+            embedder=DeterministicEmbedder(dimensions=8),
+        )
+
+        stored = (await async_db.all())[0]
+        assert stored.fields["embedding"].model_name == "caller-said-so"
+
+    async def test_the_digest_metadata_is_written_either_way(self, async_db: Any) -> None:
+        await async_db.bulk_embed_and_store(
+            [Record(data={"title": "alpha", "body": "bravo"})],
+            ["title", "body"],
+            field_separator=" | ",
+            embedder=DeterministicEmbedder(dimensions=8),
+        )
+
+        metadata = (await async_db.all())[0].fields["embedding"].metadata
+        assert metadata[SOURCE_FIELDS_KEY] == ["title", "body"]
+        assert metadata[CONTENT_HASH_KEY] == compute_content_hash("alpha | bravo")
+
+    async def test_neither_source_is_an_error_even_with_no_records(self, async_db: Any) -> None:
+        """The guard runs before the loop, so an empty input still reports it.
+
+        Routing the choice through ``embed_texts`` inside the loop would make
+        this silently return ``[]`` --- the caller told it nothing to embed
+        with, and got a successful-looking answer.
+        """
+        with pytest.raises(ValueError, match="embedder is required"):
+            await async_db.bulk_embed_and_store([], "title")
+
+    async def test_both_sources_is_an_error(self, async_db: Any) -> None:
+        """One of the two would silently not run, and the caller cannot tell which."""
+        with pytest.raises(ValueError, match="not both"):
+            await async_db.bulk_embed_and_store(
+                [Record(data={"title": "alpha"})],
+                "title",
+                embedding_fn=_embed,
+                embedder=DeterministicEmbedder(dimensions=8),
+            )

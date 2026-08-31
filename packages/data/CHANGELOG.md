@@ -9,6 +9,108 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`TextEmbedder`** in `dataknobs_data.vector` — the one shape for "turn text
+  into vectors". Batch-only, async-only, returns `list[list[float]]`, and
+  carries `dimensions` and `model_id`. Eight mutually incompatible spellings of
+  that concept were in use across this package, varying on arity, synchrony,
+  return type and whether they were typed at all, and none of them matched what
+  `AsyncLLMProvider.embed` returns — so every consumer wiring a provider to a
+  vector path wrote its own adapter, differently at each of 25 call sites.
+  `dataknobs-llm` ships `LLMProviderEmbedder` and `create_text_embedder`, which
+  satisfy the protocol structurally: the protocol lives here because `data`
+  cannot import `llm`.
+
+- **`embedder=` on the vector write paths.** `VectorStore.bulk_embed_and_store`,
+  both `bulk_embed_and_store` abstracts, `AsyncBulkEmbedMixin`,
+  `VectorSyncMixin.sync_vectors_with_text` and the async Postgres backend all
+  take a keyword-only `embedder` alongside their existing `embedding_fn`.
+  Passing one defaults `model_name` to the embedder's own `model_id`, which is
+  the point: `model_name` and `embedding_fn` were independent parameters, so
+  nothing stopped a caller naming one model while embedding with another — and
+  the name is the staleness key, so the mismatch surfaced only when a later
+  reader trusted it.
+
+- **`VectorTextSynchronizer` compares `model_name`**, under the new
+  `SyncConfig.track_model_name` (default on). It previously decided currency on
+  `model_version` alone, which the embedder path never sets — so `model_name`
+  was written by two sites and compared by none, and swapping embedders left
+  every vector from the old model reported current forever. The `embedder=`
+  parameter above defaults the key; this is the half that reads it. A stored
+  `None` is not a mismatch, so a corpus that predates the seam is not
+  re-embedded on upgrade. Both the `VectorField` and plain-value lanes compare
+  it, kept in step deliberately: the version check diverged across those two
+  lanes once already.
+
+- **`embedder=` on the four long-running embedding paths** —
+  `VectorTextSynchronizer`, `VectorMigration`, `IncrementalVectorizer` and
+  `DedupChecker` (plus the two `from_config` classmethods). These were the
+  classes the adoption pass left behind, and they are the ones where an
+  embedder helps most: each embeds a corpus over time rather than a request at
+  a time, so a caller holding one had to unwrap it into a callable and throw
+  away the identity that travels with it.
+
+  `VectorTextSynchronizer` is the case that closes a loop rather than adding a
+  convenience. It *writes* `model_name` and it *reads* it back in
+  `_has_current_vector`, so before this a caller with an embedder had to name
+  the model twice — once by passing `embed`, once by passing `model_name=` —
+  with nothing checking the two agreed. Passing `embedder=` names it once.
+
+  Two behaviours worth knowing. `VectorTextSynchronizer` and
+  `IncrementalVectorizer` now **raise at construction** when given neither
+  source or both: they exist only to embed, and finding that out on the first
+  record means failing after a query, a batch and a partial write.
+  `VectorMigration` and `DedupChecker` permit **neither**, because adding a
+  schema field and exact-hash matching are useful without embedding at all;
+  they still refuse *both*, and demand a source where a vector is produced.
+
+- **`default_model_name`** (`dataknobs_data.vector`) — "what the caller said,
+  else what the embedder is", which four sites now share instead of each
+  writing the same two lines. `require_embedding_source` gains
+  `allow_neither=` for the two classes above whose embedding is optional; the
+  conflict is still refused there, since two sources are a mistake wherever
+  they are supplied.
+
+- **`call_embedding_fn_batch`** (`dataknobs_data.vector`) — the batch sibling of
+  `call_embedding_fn`, over a shared resolver both now use. See **Fixed** below
+  for the two defects that shared resolver closes.
+
+- **`BatchVectors`** (`dataknobs_data.vector`) — `np.ndarray | list[list[float]]`,
+  what a batch embedding callable may return. The `embedding_fn` parameters
+  previously said `np.ndarray` alone, which understated them: those sites hand
+  the result to `pair_records_with_vectors`, which requires only "something
+  indexable and sized", so the list arm was always accepted at runtime. Saying
+  so is what lets a `SyncTextEmbedder`'s `embed` be passed to them under a type
+  checker rather than only at runtime. Named rather than inlined because
+  `AsyncBulkEmbedMixin` and `AsyncVectorOperationsMixin` are mixed into the same
+  four backends and must agree on it.
+
+- **`CachedEmbedder`** and the narrow `VectorCache` port it takes. The key is
+  `(model_id, text)`; a cache keyed on text alone does not fail loudly after a
+  model swap, it *succeeds* and hands back vectors from a model no longer in
+  use, in a vector space the new one knows nothing about. `dataknobs-llm`'s
+  shipped `MemoryEmbeddingCache` and `SqliteEmbeddingCache` satisfy the port
+  where they already are; nothing moved between packages.
+
+- **`SyncTextEmbedder`** — how a synchronous site reaches an async embedder. It
+  owns one `SyncLoopBridge`, so it is callable from plain sync code and from
+  inside a running loop alike, and exposes `embed` / `embed_one`, which are the
+  shapes `Query.near_text`, `VectorField.from_text` and the three synchronous
+  `bulk_embed_and_store` lanes already declare. Those five signatures are
+  therefore unchanged: they need no `embedder` parameter to reach the seam, and
+  giving the protocol a synchronous twin so that they could would restore the
+  second shape it exists to remove.
+
+- **`embed_texts` / `embed_text` / `require_embedding_source`** — the choice
+  between an embedder and a callable, written once. Passing neither raises, and
+  so does passing both: resolving that by precedence means one of the two
+  silently does not run and the caller cannot tell which.
+
+- **`DeterministicEmbedder`** in `dataknobs_data.testing` — a published
+  `TextEmbedder` for tests, stable across processes, with distinct texts landing
+  near-orthogonal so a *ranking* can be asserted. It does not reuse the existing
+  `text_embedding` helper, which draws every component from `[0, 1)` and is
+  already documented as unusable for that.
+
 - **`SyncVectorOperationsMixin` and `AsyncVectorOperationsMixin`** — one
   vector-operations mixin per lane, in `dataknobs_data.vector`.
   `VectorOperationsMixin` remains as a name for the async one, so an existing
@@ -22,6 +124,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   needs the same reading the fluent builder gets.
 
 ### Changed
+
+- **Every `TextEmbedder` implementation now asserts its conformance where a
+  type checker reads it.** Nothing inherits the protocol — an adapter lives in
+  whichever package holds the thing it adapts, and two of the four are in
+  packages `data` cannot import — so "satisfies `TextEmbedder`" was a
+  docstring: true when written, free to stop being true when a signature
+  drifts, and nothing raising until a consumer's call failed somewhere naming
+  neither the class nor the protocol. `CachedEmbedder` and
+  `DeterministicEmbedder` carry a `TYPE_CHECKING`-only assertion, as do
+  `dataknobs-llm`'s `LLMProviderEmbedder` and `dataknobs-bots`' knowledge-base
+  adapter. It costs one type-check and no runtime import, and is stronger than
+  the `isinstance` the protocol already supported, which answers from member
+  names alone. The idiom is documented for consumers implementing their own.
+
+- **`embedding_fn` is optional on `VectorStore.bulk_embed_and_store`.** It was
+  a required positional parameter; it now defaults to `None`, because
+  `embedder=` is the other way of supplying the same thing and exactly one of
+  the two is required. Every existing positional call is unaffected. A call
+  passing neither still fails — but as a `ValueError` naming both parameters,
+  raised before the loop rather than by the loop's first iteration, so an empty
+  `texts` reports it too.
+
+- **Four "embedding function required" messages became one.**
+  `AsyncPostgresDatabase.bulk_embed_and_store`, `AsyncBulkEmbedMixin`,
+  `VectorMigration.add_vectors_to_existing` and
+  `VectorSyncMixin.sync_vectors_with_text` each phrased the same refusal
+  differently — `"embedding_fn is required for bulk_embed_and_store"`,
+  `"Embedding function required for adding vectors"`, `"Embedding function is
+  required for vector synchronization"`. All four now raise
+  `require_embedding_source`'s wording: ``"an embedder is required: pass
+  `embedder=` or `embedding_fn=`"``. Source-breaking only for a caller matching
+  on the old text. The **sync** `BulkEmbedMixin` keeps its original message,
+  deliberately: it takes no `embedder`, so a refusal naming one would send the
+  reader after a parameter that site does not have.
+
+- **`AsyncPostgresDatabase.bulk_embed_and_store` accepts a synchronous
+  `embedding_fn`.** It previously did `await embedding_fn(texts)`, so a plain
+  `def` raised `TypeError` there while working at every sibling site. It now
+  routes through the shared dispatch, which classifies the callable and
+  offloads a synchronous one with `asyncio.to_thread` rather than running it on
+  the event loop.
 
 - **An unrecognized operator or sort-order string now raises `ValueError`.**
   `Query.filter` mapped an unknown operator to equality and `Query.sort_by`
@@ -101,7 +244,135 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   for a caller that passed `check_interval=`; the fix it is part of is in
   **Fixed** below.
 
+- **`AsyncPostgresDatabase.bulk_embed_and_store` now behaves as the other async
+  backends' does**, being the same method rather than its own copy of it.
+  `vector_field` gained the default `"embedding"` the others have, and a
+  `field_separator` appeared beside it. Multiple text fields are assembled the
+  way the rest of the package assembles them: joined on that separator rather
+  than a hardcoded space, with empty values dropped rather than joined as blanks.
+  A record is updated when one is stored under its id and created otherwise,
+  where before it was updated whenever it merely carried a storage id — so a
+  record whose row had since been deleted took an update that silently wrote
+  nothing. See **Fixed** for the digest this consolidation was undertaken for.
+
 ### Fixed
+
+- **Two write paths stored vectors that named no model.** A digest answers
+  whether the *text* changed; it cannot answer whether the *model* did, since
+  identical text through two models gives one digest and two incompatible
+  vector spaces. `VectorSyncMixin.sync_vectors_with_text` and
+  `VectorStore.bulk_embed_and_store` both accepted an `embedder` — carrying a
+  `model_id` for exactly this — and stored neither a `model_name` nor a
+  `model_version`, so their output was permanently exempt from the model half
+  of currency while the four sibling writers recorded it.
+
+  `sync_vectors_with_text` also compared no model, so writing one would have
+  been description rather than a guard: it now defaults the identity from the
+  embedder, stores it through the shared `attach_vector_field` rather than a
+  sixth hand-built `VectorField`, and re-embeds when a sweep arrives with a
+  different model. `VectorStore.bulk_embed_and_store` writes the identity into
+  each vector's metadata under the same two keys `add_records` copies off a
+  `VectorField` — the store's two entry points described their vectors
+  differently until now, so whether a stored vector could be judged against a
+  model swap depended on which method put it there. Both gained keyword-only
+  `model_name` / `model_version`, defaulted the way every other site defaults
+  them. A stored `None` is still not a mismatch, so no corpus re-embeds on
+  upgrade.
+
+- **`AsyncElasticsearchDatabase.bulk_embed_and_store` stored nothing and
+  reported success.** It was a stub: a logged warning and `return []`, which
+  satisfied the abstract method without embedding or writing anything. The
+  empty list is indistinguishable from "there were no records", so a caller
+  embedding a corpus into Elasticsearch got a successful-looking no-op and an
+  empty index. It now mixes in `AsyncBulkEmbedMixin` like the other five async
+  backends, so it embeds, writes a content digest, and refuses a call that
+  names no embedding source — verified against a live cluster, including that
+  the digest survives the round trip through Elasticsearch's `vector_fields`
+  metadata.
+
+- **`SyncTextEmbedder` blocks the caller's loop, and now says so.** Both the
+  class docstring and the published page advertised it as callable "from
+  inside a running loop" without the other half: that means it does not
+  *deadlock*, not that it does not *block*. The calling thread waits on the
+  bridge's result for the whole embedding, so every co-tenant task on the
+  caller's loop is stalled for a network round trip. The test that was meant
+  to pin this reached the call through `asyncio.to_thread`, which moves it off
+  the loop — so it passed against a bridge and would have passed equally
+  against the `run_until_complete` the claim says would raise. Both halves are
+  now asserted directly. See the `dataknobs-common` changelog for the bridge's
+  own leak fixes, which this class was the first caller to need.
+
+- **`CachedEmbedder` trusted the cache's batch length.** `VectorCache.get_batch`
+  promises a list parallel to the texts, and nothing re-established that: a
+  cache answering with fewer entries produced fewer vectors, misaligned from
+  the dropped position onward, so a caller pairing the result against its own
+  input stored the wrong vector for the wrong text. A longer answer raised
+  `IndexError` from a comprehension naming neither the cache nor the mismatch.
+  `zip(..., strict=True)` already held the inner embedder to this guarantee;
+  the cache is the other supplier of it and now gets the same treatment.
+
+- **`VectorStore.bulk_embed_and_store` handed an async `embedding_fn` to
+  `add_vectors` un-awaited.** It called the callable directly, so an
+  `async def` produced a coroutine object where an array of vectors belonged.
+  It now routes through `embed_texts`, which also means a *synchronous*
+  callable is offloaded with `asyncio.to_thread` rather than run on the event
+  loop.
+
+- **Three writers left their vectors permanently exempt from staleness.**
+  A vector field with no `content_hash` is treated as *current* — deliberately,
+  so a corpus written before digests existed does not all re-embed on the first
+  sweep after upgrading. That exemption is safe only while every writer records
+  one, and three did not: `AsyncPostgresDatabase.bulk_embed_and_store`,
+  `VectorMigration`'s embedding pass, and `IncrementalVectorizer`. A corpus
+  written by any of them was never re-embedded however far its source text
+  drifted, and the sweep that skipped it reported success.
+
+  Measured: after a migration, editing a record's source text and sweeping
+  returns `updated=0`. It returns `1` now.
+
+  The first two each built their own `VectorField` instead of the shared one,
+  which is why the same defect was in two places; both now route through
+  `attach_vector_field`, and the async Postgres backend joins the four async
+  backends already on `AsyncBulkEmbedMixin` rather than keeping its own copy of
+  the embed-and-store loop. `IncrementalVectorizer` stores a
+  plain list rather than a `VectorField`, so it describes its vector in a
+  `{field}_metadata` sidecar; that sidecar now carries the same three keys, is
+  written whether or not a model was named, and both storage lanes ask one
+  function whether the digest still matches. The digest is compared against
+  text a reader reassembles, so recording it without the fields and separator
+  it was computed over would report every record outdated instead — the two
+  halves ship together.
+
+  A vector still carrying no digest remains current, so nothing already stored
+  re-embeds on upgrade.
+
+- **A synchronous batch `embedding_fn` no longer runs on the event loop.**
+  `call_embedding_fn` offloaded a synchronous callable with
+  `asyncio.to_thread` and documented why — embedding is CPU- or network-bound
+  work, and running it inline stalls every other task on the loop. Every batch
+  dispatch called it inline anyway, so the rule was stated in one half of the
+  module and broken in the other, with the broken half being the one that
+  blocks *longer*: a whole corpus rather than one text. Measured, a co-tenant
+  task made exactly zero progress across a 50 ms batch call.
+
+  Ruff's `ASYNC2xx` family cannot see this — those checks detect known blocking
+  calls like `open` and `time.sleep`, and a caller-supplied callable is neither
+  — so the guard is a test that pins both a blocking-detection and a
+  thread-identity proof.
+
+- **A plain `def` that returns a coroutine now yields a vector, not the
+  coroutine.** `call_embedding_fn` classified the *callable*, which is
+  correct — such a function really is synchronous — and then returned what the
+  worker thread handed back without re-examining it. That is a coroutine
+  object, stored as if it were a vector, with nothing raised: the same garbage
+  value the shared dispatch was built to eliminate, reached by a shape the
+  original fix did not enumerate.
+
+  It was reachable through `call_embedding_fn` and `embed_text` but not through
+  `embed_texts`, which did re-examine its result — so one callable produced a
+  vector through one entry point and a coroutine through the other. Both
+  arities now share one resolver, which classifies the callable *and* resolves
+  an awaitable result, so the two cannot disagree again.
 
 - **`IncrementalVectorizer.run_batch` can return.** Its only exit was a
   `break` that could never be taken: the break required
@@ -362,6 +633,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reported every implementation as an incompatible override.
 
 ### Removed
+
+- **The `EmbedFn`, `BatchEmbedFn` and `ClusterEmbedFn` aliases** in
+  `dataknobs_data.sources`, replaced by `TextEmbedder` in one change with no
+  deprecation cycle. **Source-breaking for an external importer of any of the
+  three.** They were three exported names for two types, and `EmbedFn` meant
+  something different depending on where you read it: the batch shape when
+  imported from `dataknobs_data.sources`, the single-text shape by the same
+  spelling inside `cluster_index.py`. A consumer could not tell which they had
+  from the name. Nothing in this workspace imported them from outside
+  `sources/` and no document in either docs tree mentioned them, but
+  `dataknobs-data` is published, so an external importer is the one thing the
+  tree cannot rule out.
+
+  With them go two parameter names. `ClusterTopicIndex.__init__` and
+  `.from_chunks` take `embedder=` where they took `embed_fn=` (still optional —
+  building an index for inspection only remains supported); `.build` takes a
+  single `embedder` positional where it took `batch_embed_fn` *and* a separate
+  `embed_fn`, two parameters for the same concept at two arities that nothing
+  stopped a caller pointing at different models, putting a corpus and the
+  queries searching it into different vector spaces.
+  `EmbeddingClusterer.embed_fn` and `QueryClusterScorer.embed_fn` are
+  `.embedder`, and `inject_embed_fn` is `inject_embedder`.
 
 - **The `{vector_field}_content_hash` record-field comparison.** Nothing in the
   library ever wrote that sibling field, so in production it compared `None`

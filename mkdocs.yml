@@ -135,6 +135,7 @@ nav:
         - packages/data/vector-timestamps.md
         - packages/data/vector-filter-semantics.md
         - packages/data/vector-staleness.md
+        - packages/data/text-embedder.md
       - Configuration:
         - packages/data/factory-pattern.md
         - packages/data/configuration.md

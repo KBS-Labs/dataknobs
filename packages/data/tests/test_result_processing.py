@@ -6,6 +6,8 @@ QueryRelevanceRanker), StrategyChain, ResultPipeline, and build_pipeline.
 
 from __future__ import annotations
 
+from typing import Any
+
 import pytest
 
 from dataknobs_data.sources.base import RetrievalIntent, SourceResult
@@ -605,26 +607,44 @@ class TestTfidfClusterer:
 # ------------------------------------------------------------------
 
 
+class _Embedder:
+    """A ``TextEmbedder`` over a per-text rule.
+
+    These tests need texts to land in *chosen* places --- "security" here,
+    everything else there --- which is the one thing ``DeterministicEmbedder``
+    deliberately will not do.
+    """
+
+    def __init__(self, rule: Any, *, dimensions: int) -> None:
+        self._rule = rule
+        self._dimensions = dimensions
+
+    @property
+    def dimensions(self) -> int:
+        return self._dimensions
+
+    @property
+    def model_id(self) -> str:
+        return "result-processing-test"
+
+    async def embed(self, texts: Any) -> list[list[float]]:
+        return [list(self._rule(text)) for text in texts]
+
+
 class TestEmbeddingClusterer:
     """Tests for EmbeddingClusterer."""
 
     @pytest.mark.asyncio
-    async def test_no_embed_fn_raises(self) -> None:
-        clusterer = EmbeddingClusterer(embed_fn=None)
-        with pytest.raises(StrategyUnavailable, match="No embed_fn"):
+    async def test_no_embedder_raises(self) -> None:
+        clusterer = EmbeddingClusterer(embedder=None)
+        with pytest.raises(StrategyUnavailable, match="No embedder"):
             await clusterer.process([_result(), _result()], _intent(), "test")
 
     @pytest.mark.asyncio
-    async def test_clusters_with_embed_fn(self) -> None:
-        async def mock_embed(texts: list[str]) -> list[list[float]]:
+    async def test_clusters_with_embedder(self) -> None:
+        def by_topic(text: str) -> list[float]:
             """Produce embeddings that cluster security vs database."""
-            embeddings = []
-            for t in texts:
-                if "security" in t.lower():
-                    embeddings.append([1.0, 0.0, 0.0])
-                else:
-                    embeddings.append([0.0, 1.0, 0.0])
-            return embeddings
+            return [1.0, 0.0, 0.0] if "security" in text.lower() else [0.0, 1.0, 0.0]
 
         results = [
             _result(content="OAuth security risks", source_id="a"),
@@ -634,7 +654,7 @@ class TestEmbeddingClusterer:
         clusterer = EmbeddingClusterer(
             similarity_threshold=0.5,
             min_cluster_size=2,
-            embed_fn=mock_embed,
+            embedder=_Embedder(by_topic, dimensions=3),
         )
         out = await clusterer.process(results, _intent(), "test")
 
@@ -654,7 +674,7 @@ class TestQueryClusterScorer:
 
     @pytest.mark.asyncio
     async def test_scores_with_terms(self) -> None:
-        """Term-based scoring when no embed_fn."""
+        """Term-based scoring when no embedder."""
         results = [
             SourceResult(
                 content="security risks in OAuth",
@@ -681,7 +701,7 @@ class TestQueryClusterScorer:
                 metadata={"cluster_id": 1, "cluster_label": "database", "cluster_size": 1},
             ),
         ]
-        scorer = QueryClusterScorer(embed_fn=None)
+        scorer = QueryClusterScorer(embedder=None)
         out = await scorer.process(
             results,
             _intent(),
@@ -715,7 +735,7 @@ class TestQueryClusterScorer:
                 metadata={"cluster_id": 1, "cluster_label": "sec", "cluster_size": 1},
             ),
         ]
-        scorer = QueryClusterScorer(embed_fn=None)
+        scorer = QueryClusterScorer(embedder=None)
         out = await scorer.process(
             results,
             _intent(),
@@ -726,14 +746,8 @@ class TestQueryClusterScorer:
 
     @pytest.mark.asyncio
     async def test_scores_with_embeddings(self) -> None:
-        async def mock_embed(texts: list[str]) -> list[list[float]]:
-            embeddings = []
-            for t in texts:
-                if "security" in t.lower():
-                    embeddings.append([1.0, 0.0])
-                else:
-                    embeddings.append([0.0, 1.0])
-            return embeddings
+        def by_topic(text: str) -> list[float]:
+            return [1.0, 0.0] if "security" in text.lower() else [0.0, 1.0]
 
         results = [
             SourceResult(
@@ -753,7 +767,7 @@ class TestQueryClusterScorer:
                 metadata={"cluster_id": 1, "cluster_label": "db", "cluster_size": 1},
             ),
         ]
-        scorer = QueryClusterScorer(embed_fn=mock_embed)
+        scorer = QueryClusterScorer(embedder=_Embedder(by_topic, dimensions=2))
         out = await scorer.process(
             results,
             _intent(),

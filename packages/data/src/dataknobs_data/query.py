@@ -648,7 +648,7 @@ class Query:
     def near_text(
         self,
         text: str,
-        embedding_fn: Callable[[str], np.ndarray],
+        embedding_fn: Callable[[str], np.ndarray | list[float]],
         field: str = "embedding",
         k: int = 10,
         metric: DistanceMetric | str = "cosine",
@@ -662,7 +662,12 @@ class Query:
 
         Args:
             text: Text to convert to vector for similarity search
-            embedding_fn: Function to convert text to vector
+            embedding_fn: Function to convert text to vector. The list
+                return is admitted because :meth:`similar_to`, where this
+                result goes, already accepts one --- and because it is the
+                shape :class:`~dataknobs_data.vector.SyncTextEmbedder`
+                returns, which is the supported way to reach an async
+                embedder from this synchronous call.
             field: Vector field name to search (default: "embedding")
             k: Number of results to return (default: 10)
             metric: Distance metric to use (default: "cosine")

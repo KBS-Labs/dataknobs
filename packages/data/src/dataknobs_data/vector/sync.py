@@ -13,7 +13,7 @@ import numpy as np
 
 from ..fields import VectorField
 from ..records import Record
-from .embedding_fn import call_embedding_fn
+from .embedding import TextEmbedder, default_model_name, embed_text, require_embedding_source
 from .content import (
     CONTENT_HASH_KEY,
     DEFAULT_FIELD_SEPARATOR,
@@ -53,6 +53,24 @@ def _stored_model_version(metadata: dict[str, Any]) -> str | None:
     return str(version) if version is not None else None
 
 
+def _stored_model_name(metadata: dict[str, Any]) -> str | None:
+    """Read a model name out of a ``{field}_metadata`` sidecar.
+
+    The sibling of :func:`_stored_model_version`, accepting the same two
+    shapes for the same reason: ``VectorMetadata.to_dict`` nests the name as
+    ``{"model": {"name": ...}}`` and a hand-built sidecar may carry it flat.
+    Reading only one shape is what made the version check compare against
+    something nothing wrote.
+    """
+    model = metadata.get("model")
+    if isinstance(model, dict):
+        name = model.get("name")
+        if name is not None:
+            return str(name)
+    name = metadata.get("model_name")
+    return str(name) if name is not None else None
+
+
 @dataclass
 class SyncConfig:
     """Configuration for vector synchronization."""
@@ -61,6 +79,13 @@ class SyncConfig:
     auto_update_on_text_change: bool = True
     batch_size: int = 100
     track_model_version: bool = True
+    # The identity an *embedder* supplies. `TextEmbedder` carries a `model_id`
+    # and no version, so `bulk_embed_and_store(embedder=...)` defaults
+    # `model_name` from it and leaves `model_version` unset --- which meant the
+    # key the seam writes was not the key this class compared, and a model swap
+    # read as current forever. Compared only when both sides carry a name, so a
+    # corpus that never recorded one is unaffected.
+    track_model_name: bool = True
     embedding_timeout: float = 30.0
     max_retries: int = 3
     retry_delay: float = 1.0
@@ -125,7 +150,8 @@ class VectorTextSynchronizer:
         self,
         database: AsyncDatabase,
         embedding_fn: Callable[[str], np.ndarray]
-        | Callable[[str], Coroutine[Any, Any, np.ndarray]],
+        | Callable[[str], Coroutine[Any, Any, np.ndarray]]
+        | None = None,
         text_fields: list[str] | str | None = None,
         vector_field: str = "embedding",
         field_separator: str = " ",
@@ -134,22 +160,40 @@ class VectorTextSynchronizer:
         model_name: str | None = None,
         model_version: str | None = None,
         config: SyncConfig | None = None,
+        *,
+        embedder: TextEmbedder | None = None,
     ):
         """Initialize the synchronizer with simplified API.
 
         Args:
             database: The database to synchronize
-            embedding_fn: Function to generate embeddings from text
+            embedding_fn: Function to generate embeddings from text. Optional
+                since *embedder* arrived; exactly one of the two is required.
             text_fields: Fields to concatenate for embedding (if None, uses all text fields)
             vector_field: Name of the vector field to store embeddings
             field_separator: Separator for concatenating text fields
             auto_sync: Whether to auto-sync on create/update
             batch_size: Batch size for bulk operations
-            model_name: Name of the embedding model
+            model_name: Name of the embedding model. Defaults to
+                ``embedder.model_id`` when an *embedder* is given, which is
+                what makes this class both the writer and the reader of one
+                key --- see :meth:`_has_current_vector`.
             model_version: Version of the embedding model
             config: Advanced configuration object (overrides other params)
+            embedder: A :class:`~dataknobs_data.vector.TextEmbedder`. Async by
+                declaration, so nothing about it has to be classified before
+                it is called.
+
+        Raises:
+            ValueError: Neither *embedding_fn* nor *embedder* was given, or
+                both were. Checked here rather than at the first embed, so a
+                misconfigured synchronizer fails where it is built rather than
+                part-way through a sweep.
         """
+        require_embedding_source(embedder, embedding_fn)
+
         self.database = database
+        self.embedder = embedder
         self.embedding_fn = embedding_fn
         self.embedding_function = embedding_fn  # Alias for compatibility
 
@@ -162,7 +206,12 @@ class VectorTextSynchronizer:
         self.field_separator = field_separator
         self.auto_sync = auto_sync
         self.batch_size = batch_size
-        self.model_name = model_name
+        # The embedder names itself, so a caller passing one does not also
+        # have to keep `model_name` in step by hand --- which is the class of
+        # error `model_id` exists to close, and this class is where the key is
+        # read back. An explicit `model_name=` still wins: a caller who said
+        # what they meant is not overridden.
+        self.model_name = default_model_name(model_name, embedder)
         self.model_version = model_version
 
         # Use config if provided, otherwise create from params
@@ -260,6 +309,15 @@ class VectorTextSynchronizer:
                 stored_version = field_obj.model_version
                 if stored_version != self.model_version:
                     return False
+
+            # `model_name` is the key the embedder seam actually writes. A
+            # stored `None` is not a mismatch: it means the vector predates
+            # anything recording a name, and calling every such vector stale
+            # would re-embed a whole corpus on upgrade for no new information.
+            if self.config.track_model_name and self.model_name:
+                stored_name = field_obj.model_name
+                if stored_name is not None and stored_name != self.model_name:
+                    return False
         else:
             # Plain value (list or array)
             vector_value = field_obj.value
@@ -277,36 +335,78 @@ class VectorTextSynchronizer:
                 if _stored_model_version(metadata) != self.model_version:
                     return False
 
+            # The same clause as the `VectorField` lane above, and it has to be
+            # spelled differently to mean the same thing: there the name is an
+            # attribute, here it is a sidecar record. An *absent* sidecar is
+            # therefore the plain lane's spelling of "recorded no name", so it
+            # cannot be a mismatch on its own --- unlike the version check
+            # directly above, which does treat it as one.
+            if self.config.track_model_name and self.model_name:
+                metadata = record.get_value(f"{vector_field}_metadata")
+                stored_name = _stored_model_name(metadata) if isinstance(metadata, dict) else None
+                if stored_name is not None and stored_name != self.model_name:
+                    return False
+
         # Compare the digest this class stored against the text the record
         # would produce now. The digest was previously written and never read:
         # a VectorField was treated as immutable once created, so an edited
         # source field left a stale vector in place and reported it current.
+        #
+        # Where the description lives is the whole of what the two lanes
+        # differ by -- a `VectorField` keeps it on the field, a plain value in
+        # a sidecar record field -- so only that much is asked here and the
+        # rule itself is asked once, below. Written per lane, the digest check
+        # reached only the `VectorField` one, which meant the same corpus and
+        # the same edit came out differently depending on which class had
+        # embedded it.
+        description: dict[str, Any] | None
         if isinstance(field_obj, VectorField):
-            stored_hash = (field_obj.metadata or {}).get(CONTENT_HASH_KEY)
-            if stored_hash is None:
-                # Nothing to compare against. Hand-built fields and records
-                # written before this class stored a digest are current, which
-                # is what they were before the comparison existed — the new
-                # behaviour is confined to fields this class can judge.
-                return True
+            description = field_obj.metadata
+        else:
+            sidecar = record.get_value(f"{vector_field}_metadata")
+            description = sidecar if isinstance(sidecar, dict) else None
 
-            # This class's own configuration, not the record's account of
-            # itself. A synchronizer that deferred to the record could never
-            # notice its own `text_fields` or `field_separator` changing: every
-            # record would keep matching the assembly it was written under, so
-            # the sweep meant to apply the new configuration would report
-            # nothing to do and the change would never take effect. Reading the
-            # record back is the *reader's* question -- see `.content`.
-            field_info = self._vector_fields.get(vector_field) or {}
-            current_hash = current_content_hash(
-                record,
-                field_info.get("source_fields") or [],
-                field_info.get("field_separator", DEFAULT_FIELD_SEPARATOR),
-            )
-            if current_hash is not None and stored_hash != current_hash:
-                return False
+        return self._digest_is_current(record, vector_field, description)
 
-        return True
+    def _digest_is_current(
+        self,
+        record: Record,
+        vector_field: str,
+        description: dict[str, Any] | None,
+    ) -> bool:
+        """Whether a stored digest still matches the text the record holds now.
+
+        Args:
+            record: The record to reassemble the source text from.
+            vector_field: The vector field being judged.
+            description: Whatever the storage lane recorded beside the vector,
+                or ``None`` if it recorded nothing.
+
+        Returns:
+            True if the vector is still current by digest.
+        """
+        stored_hash = (description or {}).get(CONTENT_HASH_KEY)
+        if stored_hash is None:
+            # Nothing to compare against. Hand-built fields and records
+            # written before this class stored a digest are current, which
+            # is what they were before the comparison existed — the new
+            # behaviour is confined to fields this class can judge.
+            return True
+
+        # This class's own configuration, not the record's account of
+        # itself. A synchronizer that deferred to the record could never
+        # notice its own `text_fields` or `field_separator` changing: every
+        # record would keep matching the assembly it was written under, so
+        # the sweep meant to apply the new configuration would report
+        # nothing to do and the change would never take effect. Reading the
+        # record back is the *reader's* question -- see `.content`.
+        field_info = self._vector_fields.get(vector_field) or {}
+        current_hash = current_content_hash(
+            record,
+            field_info.get("source_fields") or [],
+            field_info.get("field_separator", DEFAULT_FIELD_SEPARATOR),
+        )
+        return not (current_hash is not None and stored_hash != current_hash)
 
     def _needs_update(self, record: Record, vector_field: str) -> bool:
         """Check if a vector field needs to be updated.
@@ -381,8 +481,11 @@ class VectorTextSynchronizer:
 
         for attempt in range(self.config.max_retries):
             try:
-                result = await call_embedding_fn(
-                    self.embedding_fn, text, timeout=self.config.embedding_timeout
+                result = await embed_text(
+                    text,
+                    embedder=self.embedder,
+                    embedding_fn=self.embedding_fn,
+                    timeout=self.config.embedding_timeout,
                 )
 
                 if isinstance(result, np.ndarray):
@@ -733,35 +836,49 @@ class VectorTextSynchronizer:
         cls,
         database: AsyncDatabase,
         embedding_fn: Callable[[str], np.ndarray]
-        | Callable[[str], Coroutine[Any, Any, np.ndarray]],
-        config: SyncConfig,
+        | Callable[[str], Coroutine[Any, Any, np.ndarray]]
+        | None = None,
+        config: SyncConfig | None = None,
         text_fields: list[str] | None = None,
         vector_field: str = "embedding",
         model_name: str | None = None,
         model_version: str | None = None,
+        *,
+        embedder: TextEmbedder | None = None,
     ) -> VectorTextSynchronizer:
         """Create synchronizer from a config object for advanced use cases.
 
         Args:
             database: The database to synchronize
-            embedding_fn: Function to generate embeddings from text
-            config: Synchronization configuration
+            embedding_fn: Function to generate embeddings from text. Optional
+                since *embedder* arrived; exactly one of the two is required.
+            config: Synchronization configuration. Optional so that
+                ``embedder=`` may be passed by keyword without also restating
+                a config; the constructor's default is used when omitted.
             text_fields: Text field names (optional)
             vector_field: Name of the vector field
-            model_name: Name of the embedding model
+            model_name: Name of the embedding model, defaulted from
+                *embedder* when one is given
             model_version: Version of the embedding model
+            embedder: A :class:`~dataknobs_data.vector.TextEmbedder`
 
         Returns:
             Configured VectorTextSynchronizer instance
+
+        Raises:
+            ValueError: Neither *embedding_fn* nor *embedder* was given, or
+                both were.
         """
+        resolved = config or SyncConfig()
         return cls(
             database=database,
             embedding_fn=embedding_fn,
             text_fields=text_fields,
             vector_field=vector_field,
-            auto_sync=config.auto_embed_on_create,
-            batch_size=config.batch_size,
+            auto_sync=resolved.auto_embed_on_create,
+            batch_size=resolved.batch_size,
             model_name=model_name,
             model_version=model_version,
-            config=config,
+            config=resolved,
+            embedder=embedder,
         )

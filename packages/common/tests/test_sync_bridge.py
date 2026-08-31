@@ -12,8 +12,11 @@ real loop thread.
 from __future__ import annotations
 
 import asyncio
+import gc
 import threading
 import traceback
+import warnings
+import weakref
 from collections.abc import Callable
 
 import pytest
@@ -350,3 +353,42 @@ def test_close_stays_idempotent_after_a_failed_teardown(
         "blocked on a _closed_event that the failed teardown never set."
     )
     assert new_dk_daemon_threads(DK_SYNC_BRIDGE_THREAD) == []
+
+
+def test_a_running_bridge_is_reclaimable_when_its_owner_drops_it() -> None:
+    """The property every finalizer on this class depends on.
+
+    ``Thread`` holds its ``target`` for as long as the thread runs, so a
+    bound method as the target is a reference from the live loop thread
+    back to the bridge that owns it. A bridge nobody closes runs forever,
+    so that reference never went away and the object could not be
+    collected --- unreachable from any caller, alive in
+    ``threading._active``, and past the reach of the ``ResourceWarning``
+    meant to report exactly that.
+
+    Asserted directly rather than only through the warning, because the
+    warning is the symptom and this is the cause: a target that goes back
+    to being a bound method fails here, with the reason in the name.
+    """
+    bridge = SyncLoopBridge(thread_name="dk-reclaimable-probe")
+    bridge.run(_answer_42())
+    thread = bridge._thread
+    ref = weakref.ref(bridge)
+
+    assert thread.is_alive(), "the loop thread should still be running"
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", ResourceWarning)
+        del bridge
+        gc.collect()
+
+    assert ref() is None, (
+        "an unclosed bridge outlived its last reference: its loop thread "
+        "still holds it, so nothing can finalize or report it"
+    )
+    thread.join(timeout=5.0)
+    assert not thread.is_alive()
+
+
+async def _answer_42() -> int:
+    return 42

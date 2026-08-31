@@ -72,6 +72,24 @@ def _sync_embed(text: str) -> np.ndarray:
     return _vector_of(text)
 
 
+def _sync_def_returning_coroutine(text: str) -> object:
+    """The fifth shape, and the one this file's own enumeration was missing.
+
+    A plain ``def`` that returns a coroutine rather than awaiting it --- a
+    lambda over an async embedder, a thin wrapper someone forgot to mark
+    ``async``. ``is_async_callable`` answers for the *callable*, and this
+    callable really is synchronous, so it correctly says sync and the offload
+    correctly runs it on a worker thread. What comes back is a coroutine.
+
+    Which is the same garbage value described at the top of this file, reached
+    by a different route: the classification is right and the *result* still
+    has to be re-examined. Four shapes were enumerated here and this was not
+    one of them, which is how the batch dispatch came to handle it while the
+    per-text one did not.
+    """
+    return _async_embed(text)
+
+
 async def _corpus() -> AsyncMemoryDatabase:
     db = AsyncMemoryDatabase(config={"vector_enabled": True})
     await db.create(Record(data={"content": "the document"}))
@@ -83,8 +101,20 @@ class TestTheSharedCaller:
 
     @pytest.mark.parametrize(
         "embedding_fn",
-        [_async_embed, _sync_embed, AsyncEmbedderObject(), SyncEmbedderObject()],
-        ids=["async-function", "sync-function", "async-object", "sync-object"],
+        [
+            _async_embed,
+            _sync_embed,
+            AsyncEmbedderObject(),
+            SyncEmbedderObject(),
+            _sync_def_returning_coroutine,
+        ],
+        ids=[
+            "async-function",
+            "sync-function",
+            "async-object",
+            "sync-object",
+            "sync-function-returning-coroutine",
+        ],
     )
     async def test_every_shape_yields_the_embedding(self, embedding_fn: object) -> None:
         result = await call_embedding_fn(embedding_fn, "abcd")

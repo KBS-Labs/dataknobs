@@ -5,14 +5,18 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Any
 
+import numpy as np
+
 from ...fields import VectorField
 from ...records import Record
+from ..embedding import default_model_name, embed_texts, require_embedding_source
 from ..types import VectorSearchResult
 from .common import VectorStoreBase
 
 if TYPE_CHECKING:
-    import numpy as np
     from collections.abc import Callable
+
+    from ..embedding import TextEmbedder
 
 
 class VectorStore(ABC, VectorStoreBase):
@@ -468,23 +472,54 @@ class VectorStore(ABC, VectorStoreBase):
     async def bulk_embed_and_store(
         self,
         texts: list[str],
-        embedding_fn: Callable[[list[str]], np.ndarray],
+        embedding_fn: Callable[[list[str]], np.ndarray] | None = None,
         ids: list[str] | None = None,
         metadata: list[dict[str, Any]] | None = None,
         batch_size: int | None = None,
+        *,
+        embedder: TextEmbedder | None = None,
+        model_name: str | None = None,
+        model_version: str | None = None,
     ) -> list[str]:
         """Embed texts and store vectors.
 
         Args:
             texts: Texts to embed
-            embedding_fn: Function to generate embeddings
+            embedding_fn: Function to generate embeddings. Positional and
+                still accepted; prefer *embedder*.
             ids: Optional IDs for vectors
             metadata: Optional metadata for each vector
             batch_size: Batch size for embedding
+            embedder: A :class:`~dataknobs_data.vector.TextEmbedder`, which is
+                the typed path: batch, async, and carrying the model identity
+                that makes a stored vector's staleness judgeable. Keyword-only
+                so it cannot be mistaken for *embedding_fn* by position.
+            model_name: Recorded in each vector's metadata under the key
+                :meth:`add_records` uses, and defaulted from the *embedder*'s
+                ``model_id``. The store's two entry points described their
+                vectors differently until this existed: one copied the model
+                off the ``VectorField`` it was handed and this one recorded
+                only the source text, so whether a stored vector could be
+                judged against a model swap depended on which method put it
+                there.
+            model_version: Recorded the same way. Not defaulted from
+                *embedder*, which carries an identity and no version.
 
         Returns:
             List of IDs for added vectors
+
+        Raises:
+            ValueError: Neither *embedding_fn* nor *embedder* was given, or
+                both were.
         """
+        # Before the loop, not inside it. `embed_texts` applies the same check,
+        # but only once per batch --- so an empty `texts` skips the loop
+        # entirely and a caller who named no source, or named both, would get a
+        # successful-looking `[]` instead of the refusal. The three sibling
+        # bulk-embed sites guard here for that reason; this one is the fourth.
+        require_embedding_source(embedder, embedding_fn)
+
+        model_name = default_model_name(model_name, embedder)
         batch_size = batch_size or self.batch_size
         all_ids = []
 
@@ -494,7 +529,18 @@ class VectorStore(ABC, VectorStoreBase):
             batch_metadata = metadata[i : i + batch_size] if metadata else None
 
             # Generate embeddings
-            embeddings = embedding_fn(batch_texts)
+            embeddings = await embed_texts(
+                batch_texts, embedder=embedder, embedding_fn=embedding_fn
+            )
+            if embedder is not None:
+                # `add_vectors` is declared over `np.ndarray`, and a
+                # `TextEmbedder` returns `list[list[float]]` by design (the
+                # shape that needs no conversion at the `llm` boundary). This
+                # is the one conversion that buys that, and it is deliberately
+                # not applied to the `embedding_fn` path: an existing caller's
+                # array reaches `add_vectors` with its own dtype, exactly as
+                # before.
+                embeddings = np.asarray(embeddings, dtype=np.float32)
 
             # Add source text to metadata
             if batch_metadata is None:
@@ -502,6 +548,20 @@ class VectorStore(ABC, VectorStoreBase):
 
             for j, text in enumerate(batch_texts):
                 batch_metadata[j]["source_text"] = text
+                # Absent rather than `None` when nothing named a model, which
+                # is what `add_records` does with the same two keys: a
+                # metadata filter comparing against a stored `None` is a
+                # different query from one that finds nothing at all.
+                #
+                # `setdefault`, so a per-vector name the caller put in
+                # `metadata` outranks the batch-wide one --- the reverse of
+                # `source_text` above, which this method derives from `texts`
+                # and so does know better about. Overwriting here would
+                # silently discard the more specific of two answers.
+                if model_name is not None:
+                    batch_metadata[j].setdefault("model_name", model_name)
+                if model_version is not None:
+                    batch_metadata[j].setdefault("model_version", model_version)
 
             # Store vectors
             stored_ids = await self.add_vectors(embeddings, ids=batch_ids, metadata=batch_metadata)

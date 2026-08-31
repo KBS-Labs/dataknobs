@@ -21,11 +21,22 @@ Example:
 from __future__ import annotations
 
 import functools
-from typing import Any
+import hashlib
+from collections.abc import Sequence
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
-__all__ = ["chroma_embedding_function", "text_embedding", "vector", "vectors"]
+if TYPE_CHECKING:
+    from dataknobs_data.vector.embedding import TextEmbedder
+
+__all__ = [
+    "DeterministicEmbedder",
+    "chroma_embedding_function",
+    "text_embedding",
+    "vector",
+    "vectors",
+]
 
 
 def vectors(count: int, dim: int, seed: int = 0) -> np.ndarray:
@@ -158,3 +169,106 @@ def chroma_embedding_function(dim: int = 8) -> Any:
     to pick a small one is a side benefit, since nothing here needs 384.
     """
     return _deterministic_embedding_function_class()(dim)
+
+
+class DeterministicEmbedder:
+    """A :class:`~dataknobs_data.vector.embedding.TextEmbedder` with no model behind it.
+
+    Same text in, same vector out, in every process and every run --- so a test
+    can assert on a stored vector, and a second test can reproduce it without
+    sharing state with the first.
+
+    This is the sanctioned way to test an embedding-dependent path. The project
+    prohibits mocks by default, and a ``MagicMock`` standing in for an embedder
+    proves only that a method was called; this satisfies the real protocol, so
+    the code under test runs its real path.
+
+    It satisfies ``TextEmbedder`` structurally and does not import it at run
+    time, which keeps this module free of the vector package's import cost.
+    The claim is checked all the same --- see ``_satisfies_text_embedder``
+    below, where the import is ``TYPE_CHECKING``-only and so costs nothing.
+    A test that wants the check at run time can
+    ``isinstance(embedder, TextEmbedder)``.
+
+    Example:
+        ```python
+        embedder = DeterministicEmbedder(dimensions=8)
+        [a, b] = await embedder.embed(["alpha", "beta"])
+        assert a == (await embedder.embed(["alpha"]))[0]
+        ```
+
+    **Why this does not reuse :func:`text_embedding`.** That helper seeds from
+    the sum of the first ten characters' code points and draws every component
+    from ``[0, 1)``, and both properties are documented limitations of it: texts
+    agreeing in their first ten characters --- or merely permuting them ---
+    embed identically, and because every component is positive, *any* two of its
+    vectors are highly cosine-similar whatever their texts. That is usable for
+    asserting a particular row came back and unusable for asserting a ranking.
+    A published embedder that a consumer will point at a resolver has to survive
+    the ranking case, so this seeds from a full-text digest and draws from a
+    symmetric distribution instead. ``text_embedding`` is unchanged; vectors
+    already asserted against it stay valid.
+    """
+
+    def __init__(self, dimensions: int = 8, model_id: str = "deterministic") -> None:
+        """Args:
+        dimensions: Length of every vector returned. Small is fine and is
+            the point --- nothing here needs 384.
+        model_id: The identity reported as ``model_id``. Vary it to test a
+            staleness or cache-invalidation path, where the whole question
+            is what happens when this value changes.
+        """
+        if dimensions < 1:
+            raise ValueError(f"dimensions must be at least 1, got {dimensions}")
+        self._dimensions = dimensions
+        self._model_id = model_id
+
+    @property
+    def dimensions(self) -> int:
+        """Length of every vector :meth:`embed` returns."""
+        return self._dimensions
+
+    @property
+    def model_id(self) -> str:
+        """Stable identity, so a staleness key derived from it is stable too."""
+        return self._model_id
+
+    def _vector(self, text: str) -> list[float]:
+        """One unit vector, derived from *text* and this embedder's identity.
+
+        The seed is a SHA-256 digest of both, so two embedders with different
+        ``model_id`` put the same text in different places --- which is what
+        makes this usable for testing that a model swap invalidates rather
+        than silently serving the older model's vectors.
+
+        Drawn from a standard normal and normalized to unit length, so cosine
+        similarity means something: identical texts give exactly ``1.0`` and
+        unrelated ones concentrate near ``0`` rather than near ``1``.
+        """
+        digest = hashlib.sha256(f"{self._model_id}\x00{text}".encode()).digest()
+        seed = int.from_bytes(digest[:8], "big")
+        drawn = np.random.default_rng(seed).standard_normal(self._dimensions)
+        norm = float(np.linalg.norm(drawn))
+        # A standard normal draw is zero only with probability zero, but the
+        # guard costs nothing and a ZeroDivisionError inside a test double is
+        # a bad way to learn that.
+        if norm == 0.0:
+            drawn = np.ones(self._dimensions)
+            norm = float(np.linalg.norm(drawn))
+        return [float(x) for x in drawn / norm]
+
+    async def embed(self, texts: Sequence[str]) -> list[list[float]]:
+        """Embed every text, in order. An empty batch returns an empty list."""
+        return [self._vector(text) for text in texts]
+
+
+if TYPE_CHECKING:
+
+    def _satisfies_text_embedder(embedder: DeterministicEmbedder) -> TextEmbedder:
+        """The one implementation whose whole purpose is to stand in for others.
+
+        A test double that has drifted from the protocol tests the drift: every
+        suite using it keeps passing while the production implementations it
+        stands in for are held to something else.
+        """
+        return embedder

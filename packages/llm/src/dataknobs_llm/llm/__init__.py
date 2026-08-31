@@ -18,6 +18,10 @@ from .base import (
     ToolCall,
     normalize_llm_config,
 )
+from .embedding import (
+    LLMProviderEmbedder,
+    create_text_embedder,
+)
 from .model_profile import (
     BundledResourceSource,
     CallableModelMetadataSource,
@@ -99,6 +103,8 @@ __all__ = [
     "LLMProviderFactory",
     "create_llm_provider",
     "create_embedding_provider",
+    "create_text_embedder",
+    "LLMProviderEmbedder",
     "create_caching_provider",
     # Utils
     "TemplateStrategy",

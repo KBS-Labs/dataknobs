@@ -7,13 +7,11 @@ structured intent, and translate it deterministically to native queries.
 
 from .base import GroundedSource, RetrievalIntent, SourceResult, SourceSchema
 from .cluster_index import (
-    BatchEmbedFn,
     ClusterTopicConfig,
     ClusterTopicIndex,
     DEFAULT_LABEL_MIN_WORD_LENGTH,
     DEFAULT_LABEL_TOP_TERMS,
 )
-from .cluster_index import EmbedFn as ClusterEmbedFn
 from .cluster_index import VectorQueryFn as ClusterVectorQueryFn
 from .database import DatabaseSource
 from .topic_index import (
@@ -30,7 +28,6 @@ from .topic_index import (
 )
 from .processing import (
     CrossSourceNormalizer,
-    EmbedFn,
     EmbeddingClusterer,
     agglomerative_cluster,
     cosine_similarity,
@@ -44,12 +41,10 @@ from .processing import (
     TermOverlapClusterer,
     TfidfClusterer,
     build_pipeline,
-    inject_embed_fn,
+    inject_embedder,
 )
 
 __all__ = [
-    "BatchEmbedFn",
-    "ClusterEmbedFn",
     "ClusterTopicConfig",
     "ClusterTopicIndex",
     "ClusterVectorQueryFn",
@@ -62,7 +57,6 @@ __all__ = [
     "agglomerative_cluster",
     "cosine_similarity",
     "DatabaseSource",
-    "EmbedFn",
     "EmbeddingClusterer",
     "GroundedSource",
     "HeadingMatchConfig",
@@ -85,5 +79,5 @@ __all__ = [
     "expand_region",
     "extract_query_words",
     "find_heading_regions",
-    "inject_embed_fn",
+    "inject_embedder",
 ]

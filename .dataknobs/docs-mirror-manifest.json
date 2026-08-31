@@ -147,20 +147,16 @@
       ],
       "transclude": [
         {
+          "package": "api-reference.md",
+          "site": "api-reference.md"
+        },
+        {
           "package": "grounded-sources.md",
           "site": "grounded-sources.md"
         },
         {
-          "package": "vector-filter-semantics.md",
-          "site": "vector-filter-semantics.md"
-        },
-        {
-          "package": "vector-timestamps.md",
-          "site": "vector-timestamps.md"
-        },
-        {
-          "package": "api-reference.md",
-          "site": "api-reference.md"
+          "package": "text-embedder.md",
+          "site": "text-embedder.md"
         },
         {
           "package": "transactions.md",
@@ -171,8 +167,16 @@
           "site": "user-state.md"
         },
         {
+          "package": "vector-filter-semantics.md",
+          "site": "vector-filter-semantics.md"
+        },
+        {
           "package": "vector-staleness.md",
           "site": "vector-staleness.md"
+        },
+        {
+          "package": "vector-timestamps.md",
+          "site": "vector-timestamps.md"
         }
       ],
       "diverge": [

@@ -121,15 +121,74 @@ something other than this synchronizer — is treated as **current**. There is
 nothing to compare against, and inventing a comparison would report every such
 field stale on the first sweep.
 
-That default assumes the digest survives storage, and whether it does is a
-property of the backend.
+That default rests on two assumptions, and each has been false somewhere: that
+the writer recorded a digest, and that storage gave it back.
+
+### Every writer records one
+
+A writer that does not makes its whole output permanently exempt — and
+silently, since the sweep that skips it reports success. Three of them did not.
+
+| Writer | Where the description lives |
+|---|---|
+| `bulk_embed_and_store`, sync and async | on the `VectorField` |
+| `VectorSyncMixin.sync_vectors_with_text` | on the `VectorField` |
+| `VectorTextSynchronizer` | on the `VectorField` |
+| `VectorMigration` | on the `VectorField` |
+| `IncrementalVectorizer` | a `{field}_metadata` sidecar |
+
+The async Postgres backend and `VectorMigration` each built their own
+`VectorField` instead of the shared one and omitted the digest; both now route
+through `attach_vector_field`, which is the one place that field is built for
+text this package embedded. `IncrementalVectorizer` stores a plain list rather
+than a `VectorField`, so it describes the vector in a sidecar record field —
+a different place, not a different contract, and it now keeps the same three
+keys there. Both lanes ask one function whether the digest still matches.
+
+The sidecar is written whether or not a model was named. The digest is the half
+that does not depend on one, and gating the whole description on `model_name`
+left an unnamed vector undescribed.
+
+### And every writer records which model
+
+A digest answers "is this the text that produced the vector?". It cannot answer
+"was it produced by the model now in use?" — identical text through two models
+gives one digest and two incompatible vector spaces, so a swap is invisible to
+a check that reads only the text.
+
+`model_name` is that second key, and `TextEmbedder.model_id` is what supplies
+it: pass `embedder=` and the name written beside the vector comes from the
+thing that produced it rather than from a parameter a caller keeps in step by
+hand. Where the vectors go decides which spelling:
+
+| Writer | Where the identity lives |
+|---|---|
+| `bulk_embed_and_store` (database) | the `VectorField`'s `model_name` |
+| `VectorSyncMixin.sync_vectors_with_text` | the `VectorField`'s `model_name` |
+| `VectorTextSynchronizer`, `VectorMigration` | the `VectorField`'s `model_name` |
+| `IncrementalVectorizer` | the `{field}_metadata` sidecar |
+| `bulk_embed_and_store` (`VectorStore`) | each vector's metadata, under the key `add_records` uses |
+
+An explicit `model_name=` wins over the embedder's own, so a caller who said
+what they meant is not overridden. `model_version` is never defaulted from an
+embedder anywhere: a `TextEmbedder` carries an identity and no version.
+
+A stored `None` is deliberately not a mismatch, on either key. A vector written
+before anything recorded a name says nothing about its model, and reading that
+silence as evidence of a *different* one would re-embed every pre-seam corpus
+on the first sweep after upgrading — the same trade `content_hash` makes one
+section above.
+
+### The digest survives storage
+
+Whether it does is a property of the backend.
 
 | Backend | Vector field metadata | |
 |---|---|---|
 | memory, file (`json`), sqlite | round-trips | measured |
 | file (`csv`, `tsv`) | round-trips | measured |
 | file (`parquet`) | round-trips | shares the flat-format path; `pyarrow` is an optional extra, so a default test run does not measure it |
-| elasticsearch | round-trips, for vector fields declared on the index | |
+| elasticsearch | round-trips, for vector fields declared on the index | measured, against a live cluster |
 
 ### How a flat format carries it
 

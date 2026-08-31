@@ -57,7 +57,31 @@ _EMBEDDINGS = {
 _CONFIG = ClusterTopicConfig(cluster_threshold=0.5)
 
 
-async def _embed_near_a(text: str) -> list[float]:
+class _Embedder:
+    """A ``TextEmbedder`` over a per-text rule.
+
+    These tests turn on *which* text fails to embed --- a query, one seed
+    chunk, or every one of them --- so the rule is per text even though the
+    protocol is per batch. ``ClusterTopicIndex`` still embeds seeds one at a
+    time, which is what makes the single-bad-chunk case expressible at all.
+    """
+
+    def __init__(self, rule: Any) -> None:
+        self._rule = rule
+
+    @property
+    def dimensions(self) -> int:
+        return 4
+
+    @property
+    def model_id(self) -> str:
+        return "failure-surface-test"
+
+    async def embed(self, texts: Any) -> list[list[float]]:
+        return [list(self._rule(text)) for text in texts]
+
+
+def _near_a(text: str) -> list[float]:
     """Embed anything as a vector near the first cluster."""
     return [0.95, 0.05, 0.0, 0.0]
 
@@ -84,10 +108,10 @@ async def test_a_failing_query_embedding_does_not_read_as_no_topics() -> None:
     vocabulary gap worth falling back from.
     """
 
-    async def failing_embed(text: str) -> list[float]:
+    def failing_embed(text: str) -> list[float]:
         raise RuntimeError("embedding service unreachable")
 
-    idx = _lazy(embed_fn=failing_embed, vector_query_fn=_seed_fn)
+    idx = _lazy(embedder=_Embedder(failing_embed), vector_query_fn=_seed_fn)
 
     with pytest.raises(RuntimeError, match="embedding service unreachable"):
         await idx.resolve("authentication")
@@ -108,7 +132,7 @@ async def test_a_failing_seed_fetch_does_not_read_as_no_seeds() -> None:
     ) -> list[SourceResult]:
         raise RuntimeError("vector store unreachable")
 
-    idx = _lazy(embed_fn=_embed_near_a, vector_query_fn=failing_seeds)
+    idx = _lazy(embedder=_Embedder(_near_a), vector_query_fn=failing_seeds)
 
     with pytest.raises(RuntimeError, match="vector store unreachable"):
         await idx.resolve("authentication")
@@ -123,12 +147,12 @@ async def test_every_seed_failing_to_embed_does_not_read_as_no_seeds() -> None:
     empty pool reports the wrong one.
     """
 
-    async def embed_query_only(text: str) -> list[float]:
+    def embed_query_only(text: str) -> list[float]:
         if text == "authentication":
             return [0.95, 0.05, 0.0, 0.0]
         raise RuntimeError("embedding service unreachable")
 
-    idx = _lazy(embed_fn=embed_query_only, vector_query_fn=_seed_fn)
+    idx = _lazy(embedder=_Embedder(embed_query_only), vector_query_fn=_seed_fn)
 
     with pytest.raises(RuntimeError, match="seed chunk"):
         await idx.resolve("authentication")
@@ -144,14 +168,14 @@ async def test_one_seed_failing_to_embed_is_still_skipped() -> None:
     """
     by_content = {c.content: _EMBEDDINGS[c.source_id] for c in _CHUNKS}
 
-    async def embed_all_but_b1(text: str) -> list[float]:
+    def embed_all_but_b1(text: str) -> list[float]:
         if text.startswith("database"):
             raise RuntimeError("that one chunk will not embed")
         if text == "authentication":
             return [0.95, 0.05, 0.0, 0.0]
         return by_content[text]
 
-    idx = _lazy(embed_fn=embed_all_but_b1, vector_query_fn=_seed_fn)
+    idx = _lazy(embedder=_Embedder(embed_all_but_b1), vector_query_fn=_seed_fn)
 
     results = await idx.resolve("authentication")
 
@@ -169,11 +193,11 @@ async def test_a_working_index_with_no_match_still_answers_empty() -> None:
     actually drawn.
     """
 
-    async def embed_far_from_both(text: str) -> list[float]:
+    def embed_far_from_both(text: str) -> list[float]:
         if text == "unrelated":
             return [0.0, 0.0, 1.0, 0.0]
         return _EMBEDDINGS.get("a1", [1.0, 0.0, 0.0, 0.0])
 
-    idx = _lazy(embed_fn=embed_far_from_both, vector_query_fn=_seed_fn)
+    idx = _lazy(embedder=_Embedder(embed_far_from_both), vector_query_fn=_seed_fn)
 
     assert await idx.resolve("unrelated") == []

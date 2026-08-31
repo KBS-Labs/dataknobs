@@ -424,3 +424,70 @@ class TestAsyncPostgresVectorIntegration:
             assert stats.get("indexed") is True or stats.get("vector_count", 0) > 0
         finally:
             await db.close()
+
+    async def test_a_bulk_embedded_vector_can_be_judged_stale(self, vector_test_db):
+        """A vector this backend wrote could never be found stale by anything.
+
+        ``bulk_embed_and_store`` here built its own ``VectorField`` rather than
+        the one the shared helper builds, and so recorded no content digest.
+        ``vector/content.py`` documents a vector carrying no digest as
+        *current* --- deliberately, so that pre-digest corpora are not all
+        re-embedded on upgrade --- which means a corpus embedded through this
+        backend was exempt from staleness permanently. Edit the source text as
+        far as you like: the sweep reports success and re-embeds nothing.
+
+        The digest is only meaningful if it is computed under the assembly its
+        reader will repeat, so this pins both halves: the value the backend
+        stores, and the sweep that reads it back.
+        """
+        from dataknobs_data.backends.postgres import AsyncPostgresDatabase
+        from dataknobs_data.testing import DeterministicEmbedder
+        from dataknobs_data.vector import CONTENT_HASH_KEY, compute_content_hash
+        from dataknobs_data.vector.sync import VectorTextSynchronizer
+
+        db = AsyncPostgresDatabase(vector_test_db)
+        await db.connect()
+
+        try:
+            embedder = DeterministicEmbedder(dimensions=4, model_id="v1")
+            text_fields = ["title", "content"]
+
+            ids = await db.bulk_embed_and_store(
+                records=[Record({"title": "Doc", "content": "Body"})],
+                text_field=text_fields,
+                vector_field="content_vector",
+                embedder=embedder,
+            )
+            assert len(ids) == 1
+
+            stored = await db.read(ids[0])
+            assert stored is not None
+            metadata = stored.fields["content_vector"].metadata
+            assert metadata.get(CONTENT_HASH_KEY) == compute_content_hash("Doc Body"), (
+                "the digest must be written, and written over the same assembly "
+                "the synchronizer will recompute"
+            )
+
+            # The description of the assembly travels with it, so a reader
+            # reproduces the embedder's input from the record rather than from
+            # its own configuration.
+            assert metadata.get("content_source_fields") == text_fields
+
+            stored.set_value("content", "Body, substantially rewritten")
+            await db.update(ids[0], stored)
+
+            sync = VectorTextSynchronizer(
+                database=db,
+                embedder=embedder,
+                text_fields=text_fields,
+                vector_field="content_vector",
+            )
+            assert (await sync.sync_all())["updated"] == 1, (
+                "an edited record must be re-embedded by a sweep, whichever "
+                "backend first embedded it"
+            )
+
+            for record_id in ids:
+                await db.delete(record_id)
+        finally:
+            await db.close()

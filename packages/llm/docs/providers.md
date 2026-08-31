@@ -4,15 +4,17 @@ Factory functions for creating and initializing LLM providers from configuration
 
 ## Overview
 
-The `dataknobs-llm` package provides two factory functions for creating providers:
+The `dataknobs-llm` package provides three factory functions for creating providers:
 
 | Function | Purpose |
 |----------|---------|
 | `create_llm_provider()` | Create a chat/completion provider |
 | `create_embedding_provider()` | Create an embedding provider (initialized, mode forced) |
+| `create_text_embedder()` | Create an embedder carrying its own `dimensions` and `model_id` |
 
-Both use `LLMProviderFactory` internally and support all registered provider
-backends (Ollama, OpenAI, Anthropic, Amazon Bedrock, HuggingFace, Echo).
+All three use `LLMProviderFactory` internally and support all registered
+provider backends (Ollama, OpenAI, Anthropic, Amazon Bedrock, HuggingFace,
+Echo).
 
 ## create_llm_provider()
 
@@ -226,9 +228,83 @@ from dataknobs_llm import create_embedding_provider
 from dataknobs_bots.providers import create_embedding_provider
 ```
 
+## create_text_embedder()
+
+Create an embedder — an embedding provider presented as the `TextEmbedder`
+shape that `dataknobs-data`'s vector paths accept.
+
+```python
+from dataknobs_llm import create_text_embedder
+
+embedder = await create_text_embedder(
+    {"embedding": {"provider": "ollama", "model": "nomic-embed-text"}}
+)
+
+await db.bulk_embed_and_store(records, ["title", "body"], embedder=embedder)
+```
+
+### Signature
+
+```python
+async def create_text_embedder(
+    config: LLMConfig | dict[str, Any],
+    *,
+    dimensions: int | None = None,
+) -> LLMProviderEmbedder:
+```
+
+### Parameters
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `config` | `LLMConfig \| dict` | — | Anything `create_embedding_provider()` accepts, including both dict formats above |
+| `dimensions` | `int \| None` | `None` | The vector width, for a config that declares none |
+
+There is deliberately **no new config type**. An embedder config *is* an
+`LLMConfig`, which is what embedding providers were already configured by, so
+this adds a runtime surface and not a configuration one.
+
+### What it adds over `create_embedding_provider()`
+
+The two things a bare provider cannot answer in the shape a *stored* vector
+needs:
+
+| | |
+|---|---|
+| `dimensions` | The vector width, settled. Taken from the `dimensions` argument, else the provider's configured `dimensions`, else observed on the first `embed()` — and a *declared* width is checked against that batch rather than trusted, because the two can disagree and nothing else in the stack notices until a vector store rejects a write and names the store rather than the misconfigured provider. |
+| `model_id` | `provider:model`, the **staleness key** written beside a stored vector. A sweep reads it back to decide whether a vector is still comparable, having never seen the embedder that produced it. |
+
+`dimensions` raises if nothing has declared a width and nothing has been
+embedded yet, rather than guessing.
+
+### `LLMProviderEmbedder`
+
+The adapter itself, for a provider you have already built:
+
+```python
+from dataknobs_llm import LLMProviderEmbedder
+
+provider = await create_embedding_provider(config)
+embedder = LLMProviderEmbedder(provider, model="text-embedding-3-small", dimensions=1536)
+```
+
+`model=` overrides the name reported in `model_id`. It does **not** change
+which model the provider calls — it renames the vectors, so passing one that
+does not match is how a staleness key comes to lie. Use it only where the
+provider's own config understates the model actually in use.
+
+There is no conversion in the adapter, and that absence is the point:
+`AsyncLLMProvider.embed` already returns `list[list[float]]` for a list input,
+which is exactly what `TextEmbedder.embed` returns. It satisfies the protocol
+*structurally* rather than inheriting it — the one-directional edge is that
+`data` cannot import `llm`, which is why the protocol lives there and the
+implementation here. The protocol is imported under `TYPE_CHECKING` alone, so
+the conformance is checked while nothing pulls `dataknobs_data.vector`, and
+numpy behind it, into an `llm` import.
+
 ## Provider Backends
 
-Both factory functions support all registered providers:
+All three factory functions support all registered providers:
 
 | Provider | Key | Package |
 |----------|-----|---------|

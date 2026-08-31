@@ -45,18 +45,63 @@ long-lived bridge over spawning one per call (or per
 from __future__ import annotations
 
 import asyncio
+import sys
 import threading
+import warnings
 from collections.abc import Coroutine
 from types import TracebackType
 from typing import Any, Self, TypeVar
 
-__all__ = ["SyncLoopBridge", "run_coro_sync"]
+__all__ = ["SyncLoopBridge", "bridge_thread_names", "run_coro_sync"]
 
 T = TypeVar("T")
 
 # Name applied to the bridge's loop thread so tests (and debuggers) can assert
 # no bridge thread is left alive after teardown.
 _THREAD_NAME = "dk-sync-loop-bridge"
+
+# Every name a bridge has actually run under in this process, including the
+# ones callers supplied. The leak guard matches threads *by name*, so a name it
+# has never heard of is a thread it cannot see -- which is what made
+# `SyncTextEmbedder`'s `dk-sync-embedder` invisible to it at every call site,
+# silently. Registering here is what keeps `thread_name=` a diagnostic label
+# rather than a way out of the guard.
+_thread_names: set[str] = {_THREAD_NAME}
+
+
+def _run_loop(loop: asyncio.AbstractEventLoop, ready: threading.Event) -> None:
+    """Body of a bridge's loop thread.
+
+    Module-level, and taking the loop and the event rather than the bridge,
+    because ``Thread`` holds its target for as long as the thread runs and a
+    bound method holds ``self``. As a method this was a reference from the
+    live thread back to the bridge that owns it --- and a bridge nobody
+    closes runs forever, so that reference never went away. An unclosed
+    bridge was therefore *unreclaimable*: unreachable from any caller, alive
+    in ``threading._active``, and beyond the reach of any finalizer that
+    might have said so. Taking two arguments is what makes
+    :meth:`SyncLoopBridge.__del__` able to run at all.
+    """
+    asyncio.set_event_loop(loop)
+    loop.call_soon(ready.set)
+    loop.run_forever()
+    # ``run_forever`` returned -> ``close`` stopped the loop. Drain any
+    # leftover async generators and close the loop here, on the loop's own
+    # thread (the only thread allowed to close it cleanly).
+    try:
+        loop.run_until_complete(loop.shutdown_asyncgens())
+    finally:
+        loop.close()
+
+
+def bridge_thread_names() -> frozenset[str]:
+    """Every thread name a :class:`SyncLoopBridge` has used in this process.
+
+    Grows as bridges are constructed, so a guard resolving it late sees a
+    name first used after the guard started. Always contains the default.
+    """
+    # `set` copy under the GIL: `add` from another thread cannot interleave.
+    return frozenset(_thread_names)
 
 
 class SyncLoopBridge:
@@ -95,8 +140,11 @@ class SyncLoopBridge:
         Args:
             thread_name: Name for the loop's daemon thread. Defaults to a
                 stable name tests can assert against; override to
-                distinguish multiple bridges in diagnostics.
+                distinguish multiple bridges in diagnostics. Registered in
+                :func:`bridge_thread_names`, so naming a bridge does not
+                hide it from the leaked-thread guard.
         """
+        _thread_names.add(thread_name)
         self._closed = False
         self._close_lock = threading.Lock()
         # Set only after the winning ``close`` has stopped the loop and joined
@@ -106,7 +154,12 @@ class SyncLoopBridge:
         self._loop = asyncio.new_event_loop()
         self._ready = threading.Event()
         try:
-            self._thread = threading.Thread(target=self._run_loop, name=thread_name, daemon=True)
+            self._thread = threading.Thread(
+                target=_run_loop,
+                args=(self._loop, self._ready),
+                name=thread_name,
+                daemon=True,
+            )
             self._thread.start()
         except BaseException:
             # Thread creation/start failed -> close the loop we just created so
@@ -116,18 +169,6 @@ class SyncLoopBridge:
         # Block construction until the loop is actually running, so the first
         # ``run`` cannot race a not-yet-started loop.
         self._ready.wait()
-
-    def _run_loop(self) -> None:
-        asyncio.set_event_loop(self._loop)
-        self._loop.call_soon(self._ready.set)
-        self._loop.run_forever()
-        # ``run_forever`` returned -> ``close`` stopped the loop. Drain any
-        # leftover async generators and close the loop here, on the loop's own
-        # thread (the only thread allowed to close it cleanly).
-        try:
-            self._loop.run_until_complete(self._loop.shutdown_asyncgens())
-        finally:
-            self._loop.close()
 
     def run(self, coro: Coroutine[Any, Any, T], *, timeout: float | None = None) -> T:
         """Run ``coro`` to completion on the background loop and return it.
@@ -237,6 +278,53 @@ class SyncLoopBridge:
             self._thread.join()
         finally:
             self._closed_event.set()
+
+    def __del__(self) -> None:
+        """Warn about a bridge nobody closed, and best-effort close it.
+
+        A leaked bridge is silent by construction --- the thread is a daemon
+        so it cannot delay interpreter exit, the owning object goes on
+        working, and nothing raises. What it costs is a thread and an event
+        loop's self-pipe descriptors for the life of the process, once per
+        bridge: a server building one per tenant accumulates both and finds
+        out from neither an exception nor a log line. The ``ResourceWarning``
+        is what makes that visible, and it is the reason this method exists;
+        the teardown below is the repair.
+
+        Deliberately conditional, because a finalizer runs at a moment
+        nobody chose. :meth:`close` joins the loop thread, and a daemon
+        thread is killed rather than joined once interpreter finalization
+        starts --- so a join issued from here during shutdown would wait on a
+        thread that can no longer answer. The warning is unconditional; only
+        the join is skipped.
+        """
+        # `getattr`, not an attribute read: `__del__` also runs on an object
+        # whose `__init__` raised before `_closed` was ever assigned, and a
+        # finalizer that raises turns a leak into unignorable noise on stderr.
+        if getattr(self, "_closed", True):
+            return
+        # B028 is waived below: a `stacklevel` in a finalizer points at whichever
+        # frame happened to trigger collection, which has no relationship to
+        # the code that failed to close the bridge. `source=self` is the
+        # locator that means something for a ResourceWarning, and is what
+        # CPython's own `BaseEventLoop.__del__` uses for the same reason.
+        warnings.warn(  # noqa: B028
+            f"unclosed SyncLoopBridge (loop thread {self._thread.name!r}); "
+            f"call close() or use the bridge as a context manager",
+            ResourceWarning,
+            source=self,
+        )
+        if sys.is_finalizing() or threading.current_thread() is self._thread:
+            return
+        try:
+            self.close()
+        except Exception:  # pragma: no cover - teardown is already best-effort
+            # Swallowed rather than logged: an exception here is reported by
+            # the interpreter as "Exception ignored in __del__" regardless,
+            # and the caller has already been told about the leak by the
+            # warning above. Whatever went wrong will recur, diagnosably, for
+            # anyone who calls `close()` at a moment of their choosing.
+            pass
 
     def __enter__(self) -> Self:
         return self

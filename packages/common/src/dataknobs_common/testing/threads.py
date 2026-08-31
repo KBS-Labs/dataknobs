@@ -44,12 +44,14 @@ from contextlib import contextmanager
 
 from dataknobs_common.async_iter import _THREAD_NAME as _PUMP_THREAD_NAME
 from dataknobs_common.sync_bridge import _THREAD_NAME as _BRIDGE_THREAD_NAME
+from dataknobs_common.sync_bridge import bridge_thread_names
 
 __all__ = [
     "DK_AITER_PUMP_THREAD",
     "DK_DAEMON_THREAD_NAMES",
     "DK_SYNC_BRIDGE_THREAD",
     "assert_no_leaked_bridge_threads",
+    "dk_daemon_thread_names",
     "live_dk_daemon_threads",
 ]
 
@@ -63,10 +65,30 @@ DK_SYNC_BRIDGE_THREAD: str = _BRIDGE_THREAD_NAME
 #: producer thread.
 DK_AITER_PUMP_THREAD: str = _PUMP_THREAD_NAME
 
-#: Names of every dataknobs-managed daemon thread a ``close()`` is expected
-#: to release. Sourced from the modules that create them, so renaming one
-#: there cannot leave this set silently stale.
+#: The *default* names of the two dataknobs-managed daemon threads a
+#: ``close()`` is expected to release. Sourced from the modules that create
+#: them, so renaming one there cannot leave this set silently stale.
+#:
+#: Not the whole watch set. A :class:`~dataknobs_common.sync_bridge.SyncLoopBridge`
+#: may be given a ``thread_name`` for diagnostics, and one that is watched
+#: only under its default name is one that is not watched at all. Use
+#: :func:`dk_daemon_thread_names` for what is actually watched; this pair is
+#: for scoping an assertion to a specific thread.
 DK_DAEMON_THREAD_NAMES: frozenset[str] = frozenset({DK_SYNC_BRIDGE_THREAD, DK_AITER_PUMP_THREAD})
+
+
+def dk_daemon_thread_names() -> frozenset[str]:
+    """Every dataknobs daemon thread name in play *right now*.
+
+    The pump's one fixed name, plus every name a bridge has been
+    constructed under --- so a caller-supplied ``thread_name`` is covered
+    by the guard rather than exempted from it.
+
+    Resolved on each call rather than frozen at import, because a name is
+    registered when its bridge is built: a set captured earlier would
+    exclude exactly the bridge whose construction is under test.
+    """
+    return bridge_thread_names() | {DK_AITER_PUMP_THREAD}
 
 
 def live_dk_daemon_threads(
@@ -76,13 +98,14 @@ def live_dk_daemon_threads(
 
     Args:
         names: Thread names to look for. Defaults to
-            :data:`DK_DAEMON_THREAD_NAMES` (both of them).
+            :func:`dk_daemon_thread_names` --- the pump plus every bridge
+            name registered so far.
 
     Returns:
         The live :class:`threading.Thread` objects, in
         :func:`threading.enumerate` order.
     """
-    wanted = frozenset(names) if names is not None else DK_DAEMON_THREAD_NAMES
+    wanted = frozenset(names) if names is not None else dk_daemon_thread_names()
     return [t for t in threading.enumerate() if t.name in wanted]
 
 
@@ -100,12 +123,17 @@ def assert_no_leaked_bridge_threads(
     test's leak.
 
     Args:
-        names: Thread names to watch. Defaults to
-            :data:`DK_DAEMON_THREAD_NAMES`. Normalized once on entry, so a
-            one-shot iterable (a generator expression) works: the watch set
-            is needed on both entry and exit, and re-consuming an exhausted
-            iterator would leave the exit check watching nothing — a guard
-            that silently passes forever.
+        names: Thread names to watch. A supplied set is normalized once on
+            entry, so a one-shot iterable (a generator expression) works:
+            the watch set is needed on both entry and exit, and re-consuming
+            an exhausted iterator would leave the exit check watching
+            nothing — a guard that silently passes forever.
+
+            The default is :func:`dk_daemon_thread_names`, resolved
+            separately on entry and on exit. A bridge built *inside* the
+            block under a name this process had not seen before is
+            therefore watched: freezing the default on entry would exempt
+            precisely the block that introduced the name.
         grace_seconds: How long to wait for an apparently-leaked thread to
             finish shutting down before failing. A thread whose ``close()``
             has been called is joined well within this; a genuinely leaked
@@ -120,7 +148,10 @@ def assert_no_leaked_bridge_threads(
         out of the block is the more informative failure, and asserting on
         thread state while unwinding would mask it.
     """
-    watched = frozenset(names) if names is not None else DK_DAEMON_THREAD_NAMES
+    # `None` is kept as `None` rather than resolved here, so that the default
+    # is re-read at exit. A caller-supplied iterable is still consumed exactly
+    # once, which is the property the argument's docstring promises.
+    watched = frozenset(names) if names is not None else None
     before = set(live_dk_daemon_threads(watched))
     yield
     leaked = [t for t in live_dk_daemon_threads(watched) if t not in before]

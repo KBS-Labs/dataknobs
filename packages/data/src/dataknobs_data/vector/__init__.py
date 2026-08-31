@@ -18,6 +18,18 @@ from .content import (
     recompute_content_hash,
     stored_assembly,
 )
+from .embedding import (
+    CachedEmbedder,
+    SyncTextEmbedder,
+    TextEmbedder,
+    VectorCache,
+    embed_text,
+    embed_texts,
+    default_model_name,
+    embedding_cache_key,
+    require_embedding_source,
+)
+from .embedding_fn import call_embedding_fn, call_embedding_fn_batch
 from .exceptions import (
     VectorBackendError,
     VectorDimensionError,
@@ -47,6 +59,7 @@ from .operations import (
 from .sync import VectorTextSynchronizer
 from .tracker import ChangeTracker
 from .types import (
+    BatchVectors,
     DistanceMetric,
     VectorConfig,
     VectorIndexConfig,
@@ -64,7 +77,20 @@ from .hybrid import (
 __all__ = [
     # Field
     "VectorField",
+    # Embedding — the one shape for "turn text into vectors"
+    "CachedEmbedder",
+    "SyncTextEmbedder",
+    "TextEmbedder",
+    "VectorCache",
+    "call_embedding_fn",
+    "call_embedding_fn_batch",
+    "embed_text",
+    "embed_texts",
+    "default_model_name",
+    "embedding_cache_key",
+    "require_embedding_source",
     # Types
+    "BatchVectors",
     "DistanceMetric",
     "VectorConfig",
     "VectorIndexConfig",
