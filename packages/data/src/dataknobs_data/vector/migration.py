@@ -17,7 +17,8 @@ from ..query import Query
 from ..records import Record
 from ..schema import FieldSchema
 from .sync import SyncConfig, VectorTextSynchronizer
-from .content import assemble_source_text
+from .bulk_embed_mixin import attach_vector_field
+from .content import assemble_source_text, compute_content_hash, content_hash_metadata
 from .embedding import (
     TextEmbedder,
     default_model_name,
@@ -236,24 +237,23 @@ class VectorMigration:
                         text = assemble_source_text(record, self.text_fields, self.field_separator)
 
                         if text and self.has_embedding_source:
-                            # Generate embedding
                             embedding = await self._embed_one(text)
-
-                            # Create VectorField
-                            from ..fields import VectorField
-
-                            vector_field_obj = VectorField(
-                                value=embedding,
-                                name=self.vector_field,
-                                source_field=self.text_fields[0]
-                                if len(self.text_fields) == 1
-                                else None,
-                                model_name=self.model_name,
-                                model_version=self.model_version,
+                            # The field the whole package builds, rather than a
+                            # fifth copy of building it. The copy here recorded
+                            # no content digest, and a vector carrying none is
+                            # one nothing can judge --- so a synchronizer
+                            # sweeping the migrated corpus called every record
+                            # current however far its text had since drifted.
+                            attach_vector_field(
+                                record,
+                                self.vector_field,
+                                embedding,
+                                text,
+                                self.text_fields,
+                                self.field_separator,
+                                self.model_name,
+                                self.model_version,
                             )
-
-                            # Add to record
-                            record.fields[self.vector_field] = vector_field_obj
 
                         # Create in target database
                         await self.target_db.create(record)
@@ -963,21 +963,36 @@ class IncrementalVectorizer:
                 else embedding,
             }
 
-            # Add metadata
-            if self.model_name:
-                metadata = VectorMetadata(
-                    dimensions=len(embedding),
-                    # A list of field names, comma-joined -- which is how the
-                    # only reader of this key parses it. Joining them on
-                    # `field_separator` mixed a content separator into a field
-                    # list, so on any non-default separator the names came back
-                    # as one unsplittable string.
-                    source_field=",".join(self.text_fields),
-                    model_name=self.model_name,
-                    model_version=self.model_version,
-                    updated_at=datetime.now(UTC).isoformat(),
-                )
-                update_data[f"{self.vector_field}_metadata"] = metadata.to_dict()
+            # Describe the vector well enough to be judged. This class stores a
+            # plain list rather than a `VectorField`, so its description lives
+            # in a sidecar record field -- a different place, not a different
+            # contract. It carried no digest, which made everything this class
+            # wrote permanently exempt from staleness: a synchronizer sweeping
+            # the same corpus found nothing to compare and called every record
+            # current, however far its source text had drifted.
+            #
+            # Written whether or not a model was named, because the digest is
+            # the half that does not depend on one.
+            metadata = VectorMetadata(
+                dimensions=len(embedding),
+                # A list of field names, comma-joined -- which is how the
+                # only reader of this key parses it. Joining them on
+                # `field_separator` mixed a content separator into a field
+                # list, so on any non-default separator the names came back
+                # as one unsplittable string.
+                source_field=",".join(self.text_fields),
+                model_name=self.model_name,
+                model_version=self.model_version,
+                updated_at=datetime.now(UTC).isoformat(),
+            )
+            update_data[f"{self.vector_field}_metadata"] = {
+                **metadata.to_dict(),
+                **content_hash_metadata(
+                    self.text_fields,
+                    self.field_separator,
+                    compute_content_hash(source_text),
+                ),
+            }
 
             # Update the record with the new vector data
             for key, value in update_data.items():

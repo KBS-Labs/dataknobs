@@ -351,32 +351,62 @@ class VectorTextSynchronizer:
         # would produce now. The digest was previously written and never read:
         # a VectorField was treated as immutable once created, so an edited
         # source field left a stale vector in place and reported it current.
+        #
+        # Where the description lives is the whole of what the two lanes
+        # differ by -- a `VectorField` keeps it on the field, a plain value in
+        # a sidecar record field -- so only that much is asked here and the
+        # rule itself is asked once, below. Written per lane, the digest check
+        # reached only the `VectorField` one, which meant the same corpus and
+        # the same edit came out differently depending on which class had
+        # embedded it.
+        description: dict[str, Any] | None
         if isinstance(field_obj, VectorField):
-            stored_hash = (field_obj.metadata or {}).get(CONTENT_HASH_KEY)
-            if stored_hash is None:
-                # Nothing to compare against. Hand-built fields and records
-                # written before this class stored a digest are current, which
-                # is what they were before the comparison existed — the new
-                # behaviour is confined to fields this class can judge.
-                return True
+            description = field_obj.metadata
+        else:
+            sidecar = record.get_value(f"{vector_field}_metadata")
+            description = sidecar if isinstance(sidecar, dict) else None
 
-            # This class's own configuration, not the record's account of
-            # itself. A synchronizer that deferred to the record could never
-            # notice its own `text_fields` or `field_separator` changing: every
-            # record would keep matching the assembly it was written under, so
-            # the sweep meant to apply the new configuration would report
-            # nothing to do and the change would never take effect. Reading the
-            # record back is the *reader's* question -- see `.content`.
-            field_info = self._vector_fields.get(vector_field) or {}
-            current_hash = current_content_hash(
-                record,
-                field_info.get("source_fields") or [],
-                field_info.get("field_separator", DEFAULT_FIELD_SEPARATOR),
-            )
-            if current_hash is not None and stored_hash != current_hash:
-                return False
+        return self._digest_is_current(record, vector_field, description)
 
-        return True
+    def _digest_is_current(
+        self,
+        record: Record,
+        vector_field: str,
+        description: dict[str, Any] | None,
+    ) -> bool:
+        """Whether a stored digest still matches the text the record holds now.
+
+        Args:
+            record: The record to reassemble the source text from.
+            vector_field: The vector field being judged.
+            description: Whatever the storage lane recorded beside the vector,
+                or ``None`` if it recorded nothing.
+
+        Returns:
+            True if the vector is still current by digest.
+        """
+        stored_hash = (description or {}).get(CONTENT_HASH_KEY)
+        if stored_hash is None:
+            # Nothing to compare against. Hand-built fields and records
+            # written before this class stored a digest are current, which
+            # is what they were before the comparison existed — the new
+            # behaviour is confined to fields this class can judge.
+            return True
+
+        # This class's own configuration, not the record's account of
+        # itself. A synchronizer that deferred to the record could never
+        # notice its own `text_fields` or `field_separator` changing: every
+        # record would keep matching the assembly it was written under, so
+        # the sweep meant to apply the new configuration would report
+        # nothing to do and the change would never take effect. Reading the
+        # record back is the *reader's* question -- see `.content`.
+        field_info = self._vector_fields.get(vector_field) or {}
+        current_hash = current_content_hash(
+            record,
+            field_info.get("source_fields") or [],
+            field_info.get("field_separator", DEFAULT_FIELD_SEPARATOR),
+        )
+        return not (current_hash is not None and stored_hash != current_hash)
 
     def _needs_update(self, record: Record, vector_field: str) -> bool:
         """Check if a vector field needs to be updated.

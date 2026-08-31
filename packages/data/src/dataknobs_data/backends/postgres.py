@@ -27,7 +27,7 @@ from ..streaming import (
     resolve_conflict_write,
     run_stream_write,
 )
-from ..vector.embedding import embed_texts, require_embedding_source
+from ..vector.bulk_embed_mixin import AsyncBulkEmbedMixin
 from ..vector.mixins import AsyncVectorOperationsMixin, SyncVectorOperationsMixin
 from .config import PostgresDatabaseConfig
 from .postgres_mixins import (
@@ -71,7 +71,6 @@ if TYPE_CHECKING:
     from typing import ClassVar
     from ..fields import VectorField
     from ..records import Record
-    from ..vector.embedding import TextEmbedder
     from ..vector.types import VectorSearchResult
 
 logger = logging.getLogger(__name__)
@@ -1132,6 +1131,7 @@ _pool_manager = ConnectionPoolManager[asyncpg.Pool]()
 class AsyncPostgresDatabase(
     StructuredConfigConsumer[PostgresDatabaseConfig],
     AsyncDatabase,
+    AsyncBulkEmbedMixin,  # Must come before AsyncVectorOperationsMixin to override bulk_embed_and_store
     AsyncVectorOperationsMixin,
     PostgresBaseConfig,
     PostgresTableManager,
@@ -2121,114 +2121,6 @@ class AsyncPostgresDatabase(
             True if vector support is available
         """
         return self._vector_enabled
-
-    async def bulk_embed_and_store(
-        self,
-        records: list[Record],
-        text_field: str | list[str],
-        vector_field: str,
-        embedding_fn: Any | None = None,
-        batch_size: int = 100,
-        model_name: str | None = None,
-        model_version: str | None = None,
-        *,
-        embedder: TextEmbedder | None = None,
-    ) -> list[str]:
-        """Embed text fields and store vectors with records.
-
-        This is a placeholder implementation. In a real scenario, you would:
-        1. Extract text from the specified fields
-        2. Call the embedding function to generate vectors
-        3. Store the vectors alongside the records
-
-        Args:
-            records: Records to process
-            text_field: Field name(s) containing text to embed
-            vector_field: Field name to store vectors in
-            embedding_fn: Function to generate embeddings. Still accepted;
-                prefer *embedder*. Note that this used to be awaited
-                unconditionally, so a synchronous callable raised here while
-                working at every other site; routing through ``embed_texts``
-                classifies it as the rest of the package does.
-            batch_size: Number of records to process at once
-            model_name: Name of the embedding model. Defaults to the
-                *embedder*'s ``model_id`` when one is given.
-            model_version: Version of the embedding model
-            embedder: A :class:`~dataknobs_data.vector.TextEmbedder`.
-
-        Returns:
-            List of record IDs that were processed
-
-        Raises:
-            ValueError: Neither *embedding_fn* nor *embedder* was given, or
-                both were.
-        """
-        require_embedding_source(embedder, embedding_fn)
-        if model_name is None and embedder is not None:
-            model_name = embedder.model_id
-
-        from ..fields import VectorField
-
-        processed_ids = []
-
-        # Process in batches
-        for i in range(0, len(records), batch_size):
-            batch = records[i : i + batch_size]
-
-            # Extract texts
-            texts = []
-            for record in batch:
-                if isinstance(text_field, list):
-                    text = " ".join(
-                        str(record.fields.get(f, {}).value)
-                        for f in text_field
-                        if f in record.fields
-                    )
-                else:
-                    text = (
-                        str(record.fields.get(text_field, {}).value)
-                        if text_field in record.fields
-                        else ""
-                    )
-                texts.append(text)
-
-            # Generate embeddings
-            if texts:
-                embeddings = await embed_texts(texts, embedder=embedder, embedding_fn=embedding_fn)
-
-                # Store vectors with records
-                for j, record in enumerate(batch):
-                    if j < len(embeddings):
-                        vector = embeddings[j]
-
-                        # Add vector field to record
-                        record.fields[vector_field] = VectorField(
-                            name=vector_field,
-                            value=vector,
-                            dimensions=len(vector) if hasattr(vector, "__len__") else None,
-                            source_field=text_field
-                            if isinstance(text_field, str)
-                            else ",".join(text_field),
-                            model_name=model_name,
-                            model_version=model_version,
-                        )
-
-                        # Create or update record
-                        if record.has_storage_id():
-                            if record.storage_id is None:
-                                raise ValueError(
-                                    "Record has_storage_id() returned True but storage_id is None"
-                                )
-                            await self.update(record.storage_id, record)
-                        else:
-                            record_id = await self.create(record)
-                            record.storage_id = record_id
-
-                        if record.storage_id is None:
-                            raise ValueError("Record storage_id is None after create/update")
-                        processed_ids.append(record.storage_id)
-
-        return processed_ids
 
     async def create_vector_index(
         self,

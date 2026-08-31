@@ -121,8 +121,37 @@ something other than this synchronizer — is treated as **current**. There is
 nothing to compare against, and inventing a comparison would report every such
 field stale on the first sweep.
 
-That default assumes the digest survives storage, and whether it does is a
-property of the backend.
+That default rests on two assumptions, and each has been false somewhere: that
+the writer recorded a digest, and that storage gave it back.
+
+### Every writer records one
+
+A writer that does not makes its whole output permanently exempt — and
+silently, since the sweep that skips it reports success. Three of them did not.
+
+| Writer | Where the description lives |
+|---|---|
+| `bulk_embed_and_store`, sync and async | on the `VectorField` |
+| `VectorSyncMixin.sync_vectors_with_text` | on the `VectorField` |
+| `VectorTextSynchronizer` | on the `VectorField` |
+| `VectorMigration` | on the `VectorField` |
+| `IncrementalVectorizer` | a `{field}_metadata` sidecar |
+
+The async Postgres backend and `VectorMigration` each built their own
+`VectorField` instead of the shared one and omitted the digest; both now route
+through `attach_vector_field`, which is the one place that field is built for
+text this package embedded. `IncrementalVectorizer` stores a plain list rather
+than a `VectorField`, so it describes the vector in a sidecar record field —
+a different place, not a different contract, and it now keeps the same three
+keys there. Both lanes ask one function whether the digest still matches.
+
+The sidecar is written whether or not a model was named. The digest is the half
+that does not depend on one, and gating the whole description on `model_name`
+left an unnamed vector undescribed.
+
+### The digest survives storage
+
+Whether it does is a property of the backend.
 
 | Backend | Vector field metadata | |
 |---|---|---|

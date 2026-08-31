@@ -203,7 +203,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   for a caller that passed `check_interval=`; the fix it is part of is in
   **Fixed** below.
 
+- **`AsyncPostgresDatabase.bulk_embed_and_store` now behaves as the other async
+  backends' does**, being the same method rather than its own copy of it.
+  `vector_field` gained the default `"embedding"` the others have, and a
+  `field_separator` appeared beside it. Multiple text fields are assembled the
+  way the rest of the package assembles them: joined on that separator rather
+  than a hardcoded space, with empty values dropped rather than joined as blanks.
+  A record is updated when one is stored under its id and created otherwise,
+  where before it was updated whenever it merely carried a storage id — so a
+  record whose row had since been deleted took an update that silently wrote
+  nothing. See **Fixed** for the digest this consolidation was undertaken for.
+
 ### Fixed
+
+- **Three writers left their vectors permanently exempt from staleness.**
+  A vector field with no `content_hash` is treated as *current* — deliberately,
+  so a corpus written before digests existed does not all re-embed on the first
+  sweep after upgrading. That exemption is safe only while every writer records
+  one, and three did not: `AsyncPostgresDatabase.bulk_embed_and_store`,
+  `VectorMigration`'s embedding pass, and `IncrementalVectorizer`. A corpus
+  written by any of them was never re-embedded however far its source text
+  drifted, and the sweep that skipped it reported success.
+
+  Measured: after a migration, editing a record's source text and sweeping
+  returns `updated=0`. It returns `1` now.
+
+  The first two each built their own `VectorField` instead of the shared one,
+  which is why the same defect was in two places; both now route through
+  `attach_vector_field`, and the async Postgres backend joins the four async
+  backends already on `AsyncBulkEmbedMixin` rather than keeping its own copy of
+  the embed-and-store loop. `IncrementalVectorizer` stores a
+  plain list rather than a `VectorField`, so it describes its vector in a
+  `{field}_metadata` sidecar; that sidecar now carries the same three keys, is
+  written whether or not a model was named, and both storage lanes ask one
+  function whether the digest still matches. The digest is compared against
+  text a reader reassembles, so recording it without the fields and separator
+  it was computed over would report every record outdated instead — the two
+  halves ship together.
+
+  A vector still carrying no digest remains current, so nothing already stored
+  re-embeds on upgrade.
 
 - **A synchronous batch `embedding_fn` no longer runs on the event loop.**
   `call_embedding_fn` offloaded a synchronous callable with

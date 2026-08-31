@@ -144,7 +144,17 @@ class VectorIndexConfig:
 
 @dataclass
 class VectorMetadata:
-    """Metadata associated with vector fields."""
+    """Metadata associated with vector fields.
+
+    Not the whole of what a ``{field}_metadata`` sidecar holds.
+    ``IncrementalVectorizer`` merges the staleness digest in beside
+    :meth:`to_dict`'s output --- the three keys ``content_hash_metadata``
+    writes --- because a vector nothing can judge is treated as current
+    forever. So round-tripping such a sidecar through :meth:`from_dict` drops
+    the digest and silently restores that exemption; read the dict, or merge
+    the digest back. Nothing in this package does that round trip, which is
+    the only reason this is a note rather than a defect.
+    """
 
     dimensions: int
     source_field: str | None = None
