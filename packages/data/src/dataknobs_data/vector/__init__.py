@@ -58,6 +58,7 @@ from .operations import (
 from .sync import VectorTextSynchronizer
 from .tracker import ChangeTracker
 from .types import (
+    BatchVectors,
     DistanceMetric,
     VectorConfig,
     VectorIndexConfig,
@@ -86,6 +87,7 @@ __all__ = [
     "embedding_cache_key",
     "require_embedding_source",
     # Types
+    "BatchVectors",
     "DistanceMetric",
     "VectorConfig",
     "VectorIndexConfig",

@@ -30,6 +30,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the name is the staleness key, so the mismatch surfaced only when a later
   reader trusted it.
 
+- **`VectorTextSynchronizer` compares `model_name`**, under the new
+  `SyncConfig.track_model_name` (default on). It previously decided currency on
+  `model_version` alone, which the embedder path never sets — so `model_name`
+  was written by two sites and compared by none, and swapping embedders left
+  every vector from the old model reported current forever. The `embedder=`
+  parameter above defaults the key; this is the half that reads it. A stored
+  `None` is not a mismatch, so a corpus that predates the seam is not
+  re-embedded on upgrade. Both the `VectorField` and plain-value lanes compare
+  it, kept in step deliberately: the version check diverged across those two
+  lanes once already.
+
+- **`BatchVectors`** (`dataknobs_data.vector`) — `np.ndarray | list[list[float]]`,
+  what a batch embedding callable may return. The `embedding_fn` parameters
+  previously said `np.ndarray` alone, which understated them: those sites hand
+  the result to `pair_records_with_vectors`, which requires only "something
+  indexable and sized", so the list arm was always accepted at runtime. Saying
+  so is what lets a `SyncTextEmbedder`'s `embed` be passed to them under a type
+  checker rather than only at runtime. Named rather than inlined because
+  `AsyncBulkEmbedMixin` and `AsyncVectorOperationsMixin` are mixed into the same
+  four backends and must agree on it.
+
 - **`CachedEmbedder`** and the narrow `VectorCache` port it takes. The key is
   `(model_id, text)`; a cache keyed on text alone does not fail loudly after a
   model swap, it *succeeds* and hands back vectors from a model no longer in

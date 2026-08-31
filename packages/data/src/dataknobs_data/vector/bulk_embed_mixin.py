@@ -23,11 +23,11 @@ from .content import (
     content_hash_metadata,
 )
 from .embedding import embed_texts, require_embedding_source
+from .types import BatchVectors
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable, Iterator
 
-    import numpy as np
 
     from ..records import Record
     from .embedding import TextEmbedder
@@ -144,7 +144,7 @@ class BulkEmbedMixin:
         records: list[Record],
         text_field: str | list[str],
         vector_field: str = "embedding",
-        embedding_fn: Callable[[list[str]], np.ndarray] | None = None,
+        embedding_fn: Callable[[list[str]], BatchVectors] | None = None,
         batch_size: int = 100,
         model_name: str | None = None,
         model_version: str | None = None,
@@ -224,7 +224,10 @@ class AsyncBulkEmbedMixin:
         records: list[Record],
         text_field: str | list[str],
         vector_field: str = "embedding",
-        embedding_fn: Callable[[list[str]], np.ndarray | Awaitable[np.ndarray]] | None = None,
+        embedding_fn: Callable[
+            [list[str]], BatchVectors | Awaitable[BatchVectors]
+        ]
+        | None = None,
         batch_size: int = 100,
         model_name: str | None = None,
         model_version: str | None = None,
@@ -238,8 +241,10 @@ class AsyncBulkEmbedMixin:
             records: Records to process
             text_field: Field name(s) containing text to embed
             vector_field: Field name to store vectors in
-            embedding_fn: Function to generate embeddings (can be sync or
-                async). Still accepted; prefer *embedder*.
+            embedding_fn: Function to generate embeddings --- sync or async,
+                returning an array or a list of vectors. All four combinations
+                are handled, which is what ``embed_texts`` consolidated. Still
+                accepted; prefer *embedder*.
             batch_size: Number of records to process at once
             model_name: Name of the embedding model. Defaults to the
                 *embedder*'s own ``model_id`` when one is given, which is the

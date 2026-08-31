@@ -53,6 +53,24 @@ def _stored_model_version(metadata: dict[str, Any]) -> str | None:
     return str(version) if version is not None else None
 
 
+def _stored_model_name(metadata: dict[str, Any]) -> str | None:
+    """Read a model name out of a ``{field}_metadata`` sidecar.
+
+    The sibling of :func:`_stored_model_version`, accepting the same two
+    shapes for the same reason: ``VectorMetadata.to_dict`` nests the name as
+    ``{"model": {"name": ...}}`` and a hand-built sidecar may carry it flat.
+    Reading only one shape is what made the version check compare against
+    something nothing wrote.
+    """
+    model = metadata.get("model")
+    if isinstance(model, dict):
+        name = model.get("name")
+        if name is not None:
+            return str(name)
+    name = metadata.get("model_name")
+    return str(name) if name is not None else None
+
+
 @dataclass
 class SyncConfig:
     """Configuration for vector synchronization."""
@@ -61,6 +79,13 @@ class SyncConfig:
     auto_update_on_text_change: bool = True
     batch_size: int = 100
     track_model_version: bool = True
+    # The identity an *embedder* supplies. `TextEmbedder` carries a `model_id`
+    # and no version, so `bulk_embed_and_store(embedder=...)` defaults
+    # `model_name` from it and leaves `model_version` unset --- which meant the
+    # key the seam writes was not the key this class compared, and a model swap
+    # read as current forever. Compared only when both sides carry a name, so a
+    # corpus that never recorded one is unaffected.
+    track_model_name: bool = True
     embedding_timeout: float = 30.0
     max_retries: int = 3
     retry_delay: float = 1.0
@@ -260,6 +285,15 @@ class VectorTextSynchronizer:
                 stored_version = field_obj.model_version
                 if stored_version != self.model_version:
                     return False
+
+            # `model_name` is the key the embedder seam actually writes. A
+            # stored `None` is not a mismatch: it means the vector predates
+            # anything recording a name, and calling every such vector stale
+            # would re-embed a whole corpus on upgrade for no new information.
+            if self.config.track_model_name and self.model_name:
+                stored_name = field_obj.model_name
+                if stored_name is not None and stored_name != self.model_name:
+                    return False
         else:
             # Plain value (list or array)
             vector_value = field_obj.value
@@ -275,6 +309,20 @@ class VectorTextSynchronizer:
                 if not metadata or not isinstance(metadata, dict):
                     return False
                 if _stored_model_version(metadata) != self.model_version:
+                    return False
+
+            # The same clause as the `VectorField` lane above, and it has to be
+            # spelled differently to mean the same thing: there the name is an
+            # attribute, here it is a sidecar record. An *absent* sidecar is
+            # therefore the plain lane's spelling of "recorded no name", so it
+            # cannot be a mismatch on its own --- unlike the version check
+            # directly above, which does treat it as one.
+            if self.config.track_model_name and self.model_name:
+                metadata = record.get_value(f"{vector_field}_metadata")
+                stored_name = (
+                    _stored_model_name(metadata) if isinstance(metadata, dict) else None
+                )
+                if stored_name is not None and stored_name != self.model_name:
                     return False
 
         # Compare the digest this class stored against the text the record

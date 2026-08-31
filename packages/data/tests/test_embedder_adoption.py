@@ -22,12 +22,19 @@ from __future__ import annotations
 
 import asyncio
 import threading
+from collections.abc import Callable
 from typing import Any
 
 import numpy as np
 import pytest
 
+from dataknobs_data import Record
+from dataknobs_data.backends.memory import AsyncMemoryDatabase
+from dataknobs_data.fields import VectorField
+from dataknobs_data.query import Query
 from dataknobs_data.testing import DeterministicEmbedder
+from dataknobs_data.vector.stores.memory import MemoryVectorStore
+from dataknobs_data.vector.sync import VectorTextSynchronizer
 from dataknobs_data.vector import (
     SyncTextEmbedder,
     TextEmbedder,
@@ -254,16 +261,38 @@ def test_sync_embedder_close_is_idempotent() -> None:
 def test_sync_embedders_methods_fit_the_legacy_parameters() -> None:
     """The reason no sync signature had to change to reach the seam.
 
-    ``embed`` satisfies ``Callable[[list[str]], list[list[float]]]`` and
-    ``embed_one`` satisfies ``Callable[[str], list[float]]`` --- between them,
-    the shapes the five synchronous sites already declare.
+    The annotations are the assertion here, and they are deliberately the
+    *parameter* types rather than ``Any``: an ``Any`` on either side admits
+    anything, so the earlier form of this test passed against a mismatch and
+    would have passed against any mismatch. It was written while the sync
+    sites declared ``np.ndarray`` returns, which a ``SyncTextEmbedder`` does
+    not produce --- so the very snippet the docs publish was an ``arg-type``
+    error at three sites, and this test reported nothing.
+
+    Those parameters now admit the list shape they already accepted at
+    runtime, and these two lines fail type checking if that regresses.
     """
     with SyncTextEmbedder(DeterministicEmbedder(dimensions=4)) as sync:
-        batch_param: Any = sync.embed
-        single_param: Any = sync.embed_one
+        batch_param: Callable[[list[str]], np.ndarray | list[list[float]]] = sync.embed
+        single_param: Callable[[str], np.ndarray | list[float]] = sync.embed_one
 
         assert len(batch_param(["a", "b"])) == 2
         assert len(single_param("a")) == 4
+
+
+def test_the_published_sync_adoption_snippet_type_checks() -> None:
+    """The doc's own example, executed --- and annotated as the docs present it.
+
+    ``packages/data/docs/text-embedder.md`` tells a synchronous caller to hand
+    ``sync.embed_one`` to :meth:`Query.near_text`. That is the seam's only
+    documented sync adoption path, so if it does not type-check the sync half
+    of the seam is unreachable for a typed consumer whatever it does at runtime.
+    """
+    with SyncTextEmbedder(DeterministicEmbedder(dimensions=4)) as sync:
+        query = Query().near_text("some text", sync.embed_one)
+
+    assert query.vector_query is not None
+    assert len(query.vector_query.vector) == 4
 
 
 def test_sync_embedder_is_not_a_text_embedder_but_isinstance_says_it_is() -> None:
@@ -307,3 +336,213 @@ async def test_a_sync_embedder_used_as_an_async_one_fails_loudly() -> None:
     with SyncTextEmbedder(DeterministicEmbedder(dimensions=4)) as sync:
         with pytest.raises(TypeError, match="can't be used in 'await' expression"):
             await embed_texts(["alpha"], embedder=sync)  # type: ignore[arg-type]
+
+
+class TestTheVectorStoreFamily:
+    """``VectorStore.bulk_embed_and_store`` --- the fourth site, and the one
+    with no ``embedder`` coverage of any kind before this class.
+
+    Its three siblings (``AsyncBulkEmbedMixin``, ``VectorSyncMixin`` and
+    ``AsyncPostgresDatabase``) call :func:`require_embedding_source` before
+    their loop. This one does not, so the module docstring's first rule ---
+    *neither source is an error, and it must be raised before the loop* --- was
+    stated for four sites and pinned for one.
+
+    Inherited unchanged by ``MemoryVectorStore``, ``ChromaVectorStore``,
+    ``FaissVectorStore`` and ``PgVectorStore``, so the gap is the whole family's.
+    """
+
+    @staticmethod
+    def _store() -> MemoryVectorStore:
+        return MemoryVectorStore({"dimensions": 8})
+
+    async def test_neither_source_is_an_error_even_with_no_texts(self) -> None:
+        """The empty batch is the whole point: with texts, the loop runs and
+        ``embed_texts`` raises from inside it, so only this input can tell
+        whether the guard is where the contract says it is.
+        """
+        store = self._store()
+        await store.initialize()
+        with pytest.raises(ValueError, match="embedder is required"):
+            await store.bulk_embed_and_store([])
+
+    async def test_both_sources_is_an_error_even_with_no_texts(self) -> None:
+        """The other half of the same guard, and the more dangerous one.
+
+        A caller passing both has two models in play and no way to learn which
+        produced the vectors; returning ``[]`` tells them it went fine.
+        """
+        store = self._store()
+        await store.initialize()
+        with pytest.raises(ValueError, match="not both"):
+            await store.bulk_embed_and_store(
+                [], embedding_fn=_batch_sync, embedder=DeterministicEmbedder(dimensions=8)
+            )
+
+    async def test_the_embedder_path_stores_the_embedder_s_vectors(self) -> None:
+        """Coverage this family had none of: ``embedder=`` end to end."""
+        store = self._store()
+        await store.initialize()
+        embedder = DeterministicEmbedder(dimensions=8)
+
+        ids = await store.bulk_embed_and_store(["alpha", "beta"], embedder=embedder)
+
+        assert len(ids) == 2
+        [expected_alpha, _] = await embedder.embed(["alpha", "beta"])
+        stored = store.vectors[ids[0]]
+        np.testing.assert_allclose(stored, np.asarray(expected_alpha, dtype=np.float32), rtol=1e-6)
+
+    async def test_the_embedder_path_converts_to_float32(self) -> None:
+        """The ``np.asarray(..., dtype=np.float32)`` branch fires only under
+        ``embedder=``, and was reachable by no test.
+
+        A ``TextEmbedder`` returns ``list[list[float]]`` by design --- the shape
+        that needs no conversion at the ``llm`` boundary --- so this is the one
+        place that converts, and the dtype is what the store searches on.
+        """
+        store = self._store()
+        await store.initialize()
+
+        [vector_id] = await store.bulk_embed_and_store(
+            ["alpha"], embedder=DeterministicEmbedder(dimensions=8)
+        )
+
+        assert store.vectors[vector_id].dtype == np.float32
+
+
+class TestTheStalenessKeyTheEmbedderDefaults:
+    """``model_id`` is documented as removing a class of error. It does not yet.
+
+    The seam's stated reason for carrying an identity is that a stored vector's
+    staleness key should come from the thing that produced it rather than from a
+    parameter a caller keeps in step by hand. Both write sites honour that ---
+    they default ``model_name`` from ``embedder.model_id``.
+
+    But ``model_name`` is written by two sites and compared by none.
+    ``VectorTextSynchronizer._has_current_vector`` decides currency on
+    ``model_version``, a separate free-text constructor parameter the embedder
+    does not default and which disables the check entirely when left ``None``.
+    So the mismatch the identity exists to close is still reachable, and this
+    is where that is pinned.
+    """
+
+    @staticmethod
+    async def _store_with(db: Any, embedder: DeterministicEmbedder) -> Record:
+        [stored_id] = await db.bulk_embed_and_store(
+            [Record(data={"body": "the source text"})], "body", embedder=embedder
+        )
+        record = await db.read(stored_id)
+        assert record is not None
+        return record
+
+    async def test_the_defaulted_identity_is_written(self) -> None:
+        """The half that works, and the reason the gap is easy to miss."""
+        db = AsyncMemoryDatabase()
+        record = await self._store_with(db, DeterministicEmbedder(dimensions=8, model_id="v1"))
+
+        field = record.get_field("embedding")
+        assert isinstance(field, VectorField)
+        assert field.model_name == "v1"
+
+    async def test_a_model_swap_is_not_reported_current(self) -> None:
+        """The half that does not.
+
+        A corpus embedded by ``v1`` and then read by a synchronizer configured
+        for ``v2`` holds vectors from a different vector space. Nothing about
+        the source text changed, so the content digest matches --- and the
+        identity that *did* change is in a key the synchronizer never reads.
+
+        The vectors are therefore served forever against the new model's
+        queries, silently, which is the exact failure ``model_id`` is
+        documented as closing.
+        """
+        db = AsyncMemoryDatabase()
+        record = await self._store_with(db, DeterministicEmbedder(dimensions=8, model_id="v1"))
+
+        v2 = DeterministicEmbedder(dimensions=8, model_id="v2")
+        synchronizer = VectorTextSynchronizer(
+            database=db,
+            embedding_fn=lambda text: np.asarray(v2._vector(text), dtype=np.float32),
+            text_fields=["body"],
+            model_name=v2.model_id,
+        )
+
+        assert not synchronizer._has_current_vector(record, "embedding"), (
+            "a vector produced by a different model than the synchronizer is "
+            "configured for must not be reported current"
+        )
+
+    async def test_a_vector_with_no_recorded_name_is_left_alone(self) -> None:
+        """The upgrade clause, and it is a deliberate asymmetry.
+
+        A vector written before anything recorded a model name carries
+        ``None``, which is an absence of information rather than evidence of a
+        different model. Treating it as a mismatch would re-embed every corpus
+        predating the seam on the first sweep after upgrading --- an expensive
+        answer to a question nothing asked.
+        """
+        db = AsyncMemoryDatabase()
+        [stored_id] = await db.bulk_embed_and_store(
+            [Record(data={"body": "the source text"})],
+            "body",
+            embedding_fn=lambda texts: np.asarray(
+                [[float(len(t))] * 8 for t in texts], dtype=np.float32
+            ),
+        )
+        record = await db.read(stored_id)
+        assert record is not None
+        field = record.get_field("embedding")
+        assert isinstance(field, VectorField)
+        assert field.model_name is None, "precondition: nothing recorded a name"
+
+        synchronizer = VectorTextSynchronizer(
+            database=db,
+            embedding_fn=lambda text: np.asarray([1.0] * 8, dtype=np.float32),
+            text_fields=["body"],
+            model_name="v2",
+        )
+
+        assert synchronizer._has_current_vector(record, "embedding")
+
+    async def test_the_upgrade_clause_holds_in_both_lanes(self) -> None:
+        """And it has to be asserted in both, because the check is written twice.
+
+        ``_has_current_vector`` branches on whether the field is a
+        ``VectorField`` or a plain list, and each branch reads the model
+        identity from a different place --- the field's own attribute, or a
+        ``{field}_metadata`` sidecar. Two readers of one concept is how the
+        first version of this comparison came to exist in one lane and not the
+        other, so a clause stated for one lane is not evidence about the other.
+
+        The clause: a vector carrying no recorded name is an absence of
+        information, not a mismatch. An unpaired sidecar must therefore not
+        mean stale by itself --- otherwise turning the check on re-embeds every
+        plain-value corpus that never wrote one.
+        """
+        db = AsyncMemoryDatabase(config={"vector_enabled": True})
+        await db.connect()
+        try:
+            synchronizer = VectorTextSynchronizer(
+                database=db,
+                embedding_fn=lambda text: np.asarray([1.0] * 8, dtype=np.float32),
+                text_fields=["body"],
+                model_name="v2",
+            )
+
+            vector_field_lane = Record(data={"body": "the source text"})
+            vector_field_lane.fields["embedding"] = VectorField(
+                name="embedding", value=[1.0] * 8
+            )
+
+            plain_lane = Record(data={"body": "the source text", "embedding": [1.0] * 8})
+            assert not isinstance(plain_lane.fields["embedding"], VectorField), (
+                "precondition: this record must exercise the plain-value branch"
+            )
+
+            assert synchronizer._has_current_vector(
+                plain_lane, "embedding"
+            ) == synchronizer._has_current_vector(vector_field_lane, "embedding"), (
+                "the two lanes must agree about a vector that recorded no model name"
+            )
+        finally:
+            await db.close()

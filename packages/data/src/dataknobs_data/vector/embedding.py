@@ -38,6 +38,14 @@ the caller to keep the name in step with the function. :attr:`TextEmbedder.model
 removes that class of error: a stored vector's staleness key comes from the
 thing that produced it.
 
+The key is ``model_name``, and it is the *reader* that makes that true.
+``VectorTextSynchronizer`` compares it under ``SyncConfig.track_model_name``,
+alongside the older ``model_version`` comparison --- because defaulting a key
+nothing consults writes a value that describes the vector and protects nobody.
+A stored ``None`` is not a mismatch: a vector predating the seam records no
+name, and re-embedding every such corpus on upgrade answers a question nothing
+asked.
+
 Nothing here deletes the callable path. An untyped ``embedding_fn`` still has to
 be classified before it is called, and
 :func:`~dataknobs_data.vector.embedding_fn.call_embedding_fn` is the one correct
@@ -100,8 +108,13 @@ class TextEmbedder(Protocol):
         are invalid and must be regenerated rather than compared.
 
         "Stable" means across processes and across runs, not merely within
-        one: it is written into stored metadata and read back later by
-        something that never saw the embedder.
+        one: it is written into stored metadata --- as the ``VectorField``'s
+        ``model_name`` --- and read back later by something that never saw the
+        embedder. That reader is
+        :meth:`~dataknobs_data.vector.sync.VectorTextSynchronizer._has_current_vector`,
+        which compares it under ``SyncConfig.track_model_name``. Both halves
+        are required: a key written and never compared is a description, not a
+        guard.
         """
         ...
 
@@ -421,18 +434,22 @@ class SyncTextEmbedder:
     def embed(self, texts: Sequence[str]) -> list[list[float]]:
         """Blocking :meth:`TextEmbedder.embed`.
 
-        Satisfies ``Callable[[list[str]], list[list[float]]]``, which is what
-        the batch sync sites declare (modulo ``np.ndarray``, which
-        :class:`~dataknobs_data.fields.VectorField` and every backend's
-        ``add_vectors`` accept a list in place of).
+        Satisfies the batch sync sites' ``embedding_fn`` parameter, which
+        declares ``Callable[[list[str]], np.ndarray | list[list[float]]]``.
+        That union is not an accommodation for this class: those sites hand
+        the result to ``pair_records_with_vectors``, which requires only
+        "something indexable and sized", so the list arm was always accepted
+        at runtime and the annotation simply understated it.
         """
         return self._bridge.run(self._embedder.embed(list(texts)), timeout=self._timeout)
 
     def embed_one(self, text: str) -> list[float]:
         """Blocking single-text embed, for the per-text sync sites.
 
-        Satisfies ``Callable[[str], list[float]]`` --- the shape
-        ``Query.near_text`` and ``VectorField.from_text`` declare.
+        Satisfies ``Query.near_text``'s ``Callable[[str], np.ndarray |
+        list[float]]`` and ``VectorField.from_text``'s
+        ``Callable[[str], Any]``. ``near_text`` hands the result straight to
+        :meth:`Query.similar_to`, which has always declared the same union.
         """
         return self.embed([text])[0]
 

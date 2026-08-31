@@ -9,7 +9,7 @@ import numpy as np
 
 from ...fields import VectorField
 from ...records import Record
-from ..embedding import embed_texts
+from ..embedding import embed_texts, require_embedding_source
 from ..types import VectorSearchResult
 from .common import VectorStoreBase
 
@@ -500,6 +500,13 @@ class VectorStore(ABC, VectorStoreBase):
             ValueError: Neither *embedding_fn* nor *embedder* was given, or
                 both were.
         """
+        # Before the loop, not inside it. `embed_texts` applies the same check,
+        # but only once per batch --- so an empty `texts` skips the loop
+        # entirely and a caller who named no source, or named both, would get a
+        # successful-looking `[]` instead of the refusal. The three sibling
+        # bulk-embed sites guard here for that reason; this one is the fourth.
+        require_embedding_source(embedder, embedding_fn)
+
         batch_size = batch_size or self.batch_size
         all_ids = []
 

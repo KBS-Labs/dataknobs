@@ -76,6 +76,18 @@ await db.bulk_embed_and_store(records, "body", embedder=embedder)
 An explicit `model_name=` still wins, so a caller who said what they meant is
 not overridden.
 
+Defaulting the key is only half of it. `VectorTextSynchronizer` compares
+`model_name` — under `SyncConfig.track_model_name`, alongside the older
+`model_version` comparison — so a corpus embedded by one model and swept by a
+synchronizer configured for another reports stale and is re-embedded. Without
+that half, `model_id` would be recorded on every vector and consulted by
+nothing, which describes the vector without protecting anyone.
+
+A stored `None` is deliberately not a mismatch. A vector written before
+anything recorded a name carries no information about its model, and treating
+that absence as evidence of a different one would re-embed every pre-seam
+corpus on the first sweep after upgrading.
+
 ## Getting one
 
 `dataknobs-llm` supplies the implementation, because the dependency runs that
@@ -178,10 +190,18 @@ with SyncTextEmbedder(embedder) as sync:
     store.bulk_embed_and_store(records, "body", embedding_fn=sync.embed)
 ```
 
-`sync.embed` satisfies `Callable[[list[str]], list[list[float]]]` and
-`sync.embed_one` satisfies `Callable[[str], list[float]]` — between them, the
-shapes those five sites already declare. So the sync lanes need no new
-parameter to reach the seam.
+`sync.embed` satisfies `Callable[[list[str]], np.ndarray | list[list[float]]]`
+and `sync.embed_one` satisfies `Callable[[str], np.ndarray | list[float]]` —
+between them, the shapes those five sites declare. So the sync lanes need no
+new parameter to reach the seam.
+
+The list arm of each union is not an accommodation added for this class. Those
+sites hand the result to `pair_records_with_vectors`, which requires only
+"something indexable and sized", and `near_text` hands it to `Query.similar_to`,
+which has always declared `np.ndarray | list[float]`. The parameters previously
+said `np.ndarray` alone, which understated what they had always accepted — so
+the snippet above was correct at runtime and an `arg-type` error under `mypy`
+at three of the sites. The annotations now say what the code does.
 
 `SyncTextEmbedder` holds one `SyncLoopBridge`: a private event loop on a daemon
 thread, which makes it callable from plain sync code *and* from inside a

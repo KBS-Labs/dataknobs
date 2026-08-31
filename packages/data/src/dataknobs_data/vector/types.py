@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import numpy as np
+
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, TYPE_CHECKING
@@ -29,6 +31,23 @@ class DistanceMetric(Enum):
             DistanceMetric.L1: ["manhattan", "l1_distance"],
         }
         return aliases.get(self, [])
+
+
+# What a batch embedding callable may return. `np.ndarray` is the legacy
+# shape; the list arm is what a `TextEmbedder` produces and what these sites
+# always accepted at runtime --- `pair_records_with_vectors` requires only
+# "something indexable and sized".
+#
+# Named rather than inlined because `AsyncBulkEmbedMixin` and
+# `AsyncVectorOperationsMixin` are mixed into the same four backends. Widening
+# one declaration and not the other is not an error at either site: it is a
+# `[misc]` "incompatible definitions in base classes" finding on every backend
+# inheriting both, four files away from the edit that caused it.
+#
+# Not in `embedding.py`, whose freedom from numpy is deliberate and argued in
+# its own docstring --- the protocol returns `list[list[float]]` precisely so
+# the `llm` boundary needs no numpy.
+BatchVectors = np.ndarray | list[list[float]]
 
 
 @dataclass
@@ -88,7 +107,11 @@ class VectorIndexConfig:
 
     def get_optimal_params(self, num_vectors: int) -> dict[str, Any]:
         """Get optimal index parameters based on dataset size."""
-        params = {}
+        # Annotated, not inferred: the first assignment is a `str` and every
+        # tuning value after it is an `int`, so an inferred `dict[str, str]`
+        # made all ten of those a finding. The return type already says
+        # `dict[str, Any]`.
+        params: dict[str, Any] = {}
 
         if self.index_type == "auto":
             # Auto-select based on dataset size

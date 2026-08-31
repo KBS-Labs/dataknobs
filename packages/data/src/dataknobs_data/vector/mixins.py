@@ -23,7 +23,7 @@ from .hybrid import (
     reciprocal_rank_fusion,
     weighted_score_fusion,
 )
-from .types import DistanceMetric, VectorSearchResult
+from .types import BatchVectors, DistanceMetric, VectorSearchResult
 
 if TYPE_CHECKING:
     import numpy as np
@@ -307,7 +307,7 @@ class SyncVectorOperationsMixin(ABC):
         records: list[Record],
         text_field: str | list[str],
         vector_field: str = "embedding",
-        embedding_fn: Callable[[list[str]], np.ndarray] | None = None,
+        embedding_fn: Callable[[list[str]], BatchVectors] | None = None,
         batch_size: int = 100,
         model_name: str | None = None,
         model_version: str | None = None,
@@ -554,7 +554,7 @@ class AsyncVectorOperationsMixin(ABC):
         records: list[Record],
         text_field: str | list[str],
         vector_field: str = "embedding",
-        embedding_fn: Callable[[list[str]], np.ndarray] | None = None,
+        embedding_fn: Callable[[list[str]], BatchVectors] | None = None,
         batch_size: int = 100,
         model_name: str | None = None,
         model_version: str | None = None,
@@ -770,7 +770,7 @@ class VectorSyncMixin:
         records: list[Record],
         text_fields: list[str],
         vector_field: str = "embedding",
-        embedding_fn: Callable[[list[str]], np.ndarray] | None = None,
+        embedding_fn: Callable[[list[str]], BatchVectors] | None = None,
         force: bool = False,
         field_separator: str = DEFAULT_FIELD_SEPARATOR,
         *,
