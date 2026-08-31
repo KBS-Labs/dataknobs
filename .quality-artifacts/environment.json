@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-08-31T19:53:12Z",
+  "timestamp": "2026-08-31T20:36:42Z",
   "python_version": "Python 3.12.12",
   "uv_version": "uv 0.12.5 (Homebrew 2026-08-14 aarch64-apple-darwin)",
   "os": "Darwin",
   "os_version": "24.6.0",
-  "git_branch": "sbk/text-embedder-seam",
-  "git_commit": "535b985300a4d54c987031e52074ad58b1d0b5ac",
+  "git_branch": "sbk/vector-docs-model-identity",
+  "git_commit": "78d6916f2ce3e5c4e1ab45dd34270e7bb00f984c",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }
