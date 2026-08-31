@@ -257,6 +257,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`BatchProcessor` and `ChangeTracker` discarded an async callback that was
+  an object rather than a function.** Both take a callback from the caller and
+  branched on `asyncio.iscoroutinefunction`, which answers correctly for a
+  function and reports a callable object with an `async def __call__` as
+  synchronous — and holding state is the ordinary reason to pass an object,
+  so that is the shape a consumer arrives with. `BatchProcessor` then called
+  it and dropped the coroutine; `ChangeTracker`, whose synchronous arm is a
+  thread offload, invoked it on a worker thread and dropped the coroutine
+  there, while `process_batch` went on to count the task as processed. Neither
+  raised. Both now use `is_async_callable`, which
+  `dataknobs_data.vector` had already adopted in two other places —
+  `embedding_fn` and `migration`'s progress callback — so this was an
+  adoption that stopped partway through one subpackage rather than a question
+  the package had not answered. A census test now fails on any raw
+  `iscoroutinefunction` under `vector/` whose subject is not declared with a
+  reason; three remain declared, on bound methods and a function taken off a
+  class dict, which the stdlib check reads correctly.
+
 - **Two write paths stored vectors that named no model.** A digest answers
   whether the *text* changed; it cannot answer whether the *model* did, since
   identical text through two models gives one digest and two incompatible
