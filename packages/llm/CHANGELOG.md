@@ -9,6 +9,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`AsyncLLMProvider.stream_complete` is declared as what it returns.** It was
+  `async def ... -> AsyncIterator[LLMStreamResponse]` with a `pass` body, which
+  types the call as a *coroutine wrapping* an iterator. Every one of the seven
+  providers implements it as an async generator, so the call really returns the
+  iterator, and `async for` over it — what every call site in this repo does,
+  and what this package's own examples show — is correct.
+
+  Nothing broke, because nobody believed the declaration. What it cost was
+  advice: a type checker reported each of those correct call sites as *"not
+  async iterable ... Maybe you forgot to use `await`?"*, and taking that
+  advice raises `TypeError` at runtime. It reported six of the seven
+  providers, plus the capturing provider in `testing`, as incompatible
+  overrides of their own base for good measure. Consumers type-checking
+  against this package saw the same on their own call sites. The declaration
+  is now `def ... -> AsyncIterator[...]`, matching
+  `SyncProviderAdapter.stream_complete`, which has always been spelled that
+  way. Thirteen findings across twelve files went with it, and runtime
+  behaviour is unchanged.
+
+- **`VectorRetriever.index_documents` and `.retrieve` run.** Both opened with
+  `from dataknobs_fsm.llm.providers import get_provider`, a module the FSM →
+  LLM migration removed, so both raised `ModuleNotFoundError` on their first
+  line — and `LLMWorkflow._execute_rag` calls `retrieve`, so the whole RAG
+  workflow went with them. Behind that import was a branch on
+  `config.provider_config`, a field `RAGConfig` has never declared, whose
+  `else` was the embedding path that actually works. The fallback was
+  unreachable behind a guard that could not itself be evaluated.
+
+  The unreachable branch is gone and the content-derived embeddings it fell
+  back to are now the path. They are deterministic and stable but carry no
+  semantic structure, so this ranks consistently rather than meaningfully;
+  `RAGConfig.embedding_model` names a model nothing consults. For real
+  embeddings use `create_embedding_provider` / `LLMProviderEmbedder` with a
+  vector store from `dataknobs-data`. Both the retriever's methods and the
+  inert field are now covered.
+
 - **`LLMWorkflow` builds an FSM again, and its end state is terminal.** Every
   state `_build_fsm` assembled carried a `type` key — `initial`, `task`,
   `terminal` — that the FSM state schema has never declared. While unknown keys

@@ -12,6 +12,7 @@ from dataknobs_llm.fsm_integration import (
     RAGConfig,
     AgentConfig,
     LLMWorkflowConfig,
+    VectorRetriever,
     LLMWorkflow,
     create_simple_llm_workflow,
     create_rag_workflow,
@@ -91,6 +92,74 @@ def test_a_built_workflow_has_a_state_the_engine_treats_as_final(
         "terminal state named in a key the schema discards is not a terminal state"
     )
     workflow._fsm.close()
+
+
+# --------------------------------------------------------------------------- #
+# The retriever the RAG workflow retrieves with
+# --------------------------------------------------------------------------- #
+
+
+async def test_the_retriever_indexes_and_retrieves() -> None:
+    """Both public methods ran to completion for the first time here.
+
+    Each opened with ``from dataknobs_fsm.llm.providers import get_provider``,
+    a module the FSM -> LLM migration removed --- so both raised
+    ``ModuleNotFoundError`` on their first line, and ``_execute_rag`` took the
+    whole RAG workflow down with them. Behind that import was a branch on
+    ``config.provider_config``, a field ``RAGConfig`` has never declared, whose
+    ``else`` was the embedding path that actually works. The fallback was
+    unreachable behind a guard that could not itself be evaluated.
+    """
+    docs = ["cats sit on mats", "quantum chromodynamics", "the mats were blue"]
+    retriever = VectorRetriever(RAGConfig(retriever_type="vector"))
+
+    await retriever.index_documents(docs)
+    hits = await retriever.retrieve("mats", top_k=2)
+
+    assert len(hits) == 2
+    assert all(hit in docs for hit in hits)
+
+
+async def test_retrieval_is_deterministic() -> None:
+    """The embeddings are content-derived, so the same query ranks the same way.
+
+    This is the property the class actually has, and asserting it rather than
+    relevance is deliberate: the vectors are sha256-derived, so they carry no
+    semantic structure and a test that expected ``"mats"`` to find the mats
+    would be asserting a capability this retriever does not have.
+    """
+    docs = ["alpha", "beta", "gamma"]
+    retriever = VectorRetriever(RAGConfig(retriever_type="vector"))
+    await retriever.index_documents(docs)
+
+    assert await retriever.retrieve("alpha") == await retriever.retrieve("alpha")
+
+
+async def test_retrieving_before_indexing_returns_nothing() -> None:
+    """The empty case returns early, ahead of the import that used to raise."""
+    assert await VectorRetriever(RAGConfig(retriever_type="vector")).retrieve("q") == []
+
+
+async def test_the_embedding_model_field_is_accepted_and_read_by_nothing() -> None:
+    """``RAGConfig.embedding_model`` names a model nothing consults.
+
+    It is recorded rather than removed because the field is on a public
+    dataclass, and stated here rather than left implicit because a config key
+    that parses and does nothing is indistinguishable from one that works ---
+    which is the whole reason the branch above was able to sit broken.
+
+    Routing this retriever through the real embedder seam
+    (``create_embedding_provider`` / ``LLMProviderEmbedder``) is the fix that
+    would give the field a meaning, and it belongs with the consolidation of
+    the embedder shapes rather than with a type-annotation pass.
+    """
+    named = VectorRetriever(RAGConfig(retriever_type="vector", embedding_model="nomic-embed-text"))
+    unnamed = VectorRetriever(RAGConfig(retriever_type="vector"))
+
+    await named.index_documents(["one"])
+    await unnamed.index_documents(["one"])
+
+    assert named.embeddings == unnamed.embeddings
 
 
 # Coverage gap, tracked: `workflows.py` is 760 lines, and beyond the FSM each

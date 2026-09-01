@@ -14,7 +14,7 @@ import asyncio
 
 from dataknobs_fsm.api.simple import SimpleFSM
 from dataknobs_fsm.core.data_modes import DataHandlingMode
-from dataknobs_llm.llm.base import LLMConfig, LLMMessage, LLMResponse
+from dataknobs_llm.llm.base import AsyncLLMProvider, LLMConfig, LLMMessage, LLMResponse
 from dataknobs_llm.llm.providers import create_llm_provider
 from dataknobs_llm.llm.utils import MessageTemplate, MessageBuilder, ResponseParser
 
@@ -144,51 +144,27 @@ class LLMWorkflowConfig:
 
 
 class VectorRetriever:
-    """Simple vector-based retriever for RAG."""
+    """In-memory retriever ranking documents by content-derived vectors.
+
+    The vectors are sha256-derived, so they are deterministic and stable but
+    carry no semantic structure: this ranks consistently, not meaningfully.
+    For real embeddings use the provider seam --- ``create_embedding_provider``
+    and ``LLMProviderEmbedder`` --- with a vector store from ``dataknobs-data``.
+    """
 
     def __init__(self, config: RAGConfig):
         self.config = config
-        self.documents = []
-        self.embeddings = []
+        self.documents: List[str] = []
+        self.embeddings: List[List[float]] = []
 
     async def index_documents(self, documents: List[str]) -> None:
         """Index documents for retrieval.
 
-        Generates embeddings for documents using the configured LLM provider.
-        In production, these would be stored in a vector database.
-
         Args:
             documents: List of documents to index
         """
-        from dataknobs_fsm.llm.providers import get_provider
-
         self.documents = documents
-
-        # Try to use a real embedding provider if available
-        if self.config.provider_config:
-            try:
-                provider = get_provider(self.config.provider_config)
-
-                # Check if provider supports embeddings
-                if hasattr(provider, "embed"):
-                    # Generate embeddings for all documents
-                    self.embeddings = await provider.embed(documents)
-
-                    # Normalize embeddings for cosine similarity
-                    self.embeddings = [self._normalize_embedding(emb) for emb in self.embeddings]
-                else:
-                    # Fallback to mock embeddings if provider doesn't support them
-                    self.embeddings = self._generate_mock_embeddings(documents)
-            except Exception as e:
-                # Log error and fallback to mock embeddings
-                import logging
-
-                logger = logging.getLogger(__name__)
-                logger.warning(f"Failed to generate real embeddings: {e}. Using mock embeddings.")
-                self.embeddings = self._generate_mock_embeddings(documents)
-        else:
-            # No provider configured, use mock embeddings
-            self.embeddings = self._generate_mock_embeddings(documents)
+        self.embeddings = self._derive_embeddings(documents)
 
     def _normalize_embedding(self, embedding: List[float]) -> List[float]:
         """Normalize an embedding vector for cosine similarity.
@@ -206,14 +182,19 @@ class VectorRetriever:
             return embedding
         return [x / norm for x in embedding]
 
-    def _generate_mock_embeddings(self, documents: List[str]) -> List[List[float]]:
-        """Generate mock embeddings for testing.
+    def _derive_embeddings(self, documents: List[str]) -> List[List[float]]:
+        """Derive a normalized vector per document from its content hash.
+
+        Named for what it does rather than ``_generate_mock_embeddings``, which
+        it was called while it was the fallback for a provider path that could
+        not run. It is the only path now, and a "mock" that is the sole
+        implementation reads as scaffolding a caller may ignore.
 
         Args:
             documents: Documents to generate embeddings for
 
         Returns:
-            Mock embedding vectors
+            Deterministic, content-derived embedding vectors
         """
         import hashlib
 
@@ -240,38 +221,22 @@ class VectorRetriever:
 
         return embeddings
 
-    async def retrieve(self, query: str, top_k: int = None) -> List[str]:
-        """Retrieve relevant documents using semantic similarity.
+    async def retrieve(self, query: str, top_k: int | None = None) -> List[str]:
+        """Retrieve the documents whose vectors sit closest to the query's.
 
         Args:
             query: Query string
             top_k: Number of documents to retrieve
 
         Returns:
-            List of most relevant documents
+            List of most similar documents
         """
-        from dataknobs_fsm.llm.providers import get_provider
-
         top_k = top_k or self.config.top_k
 
         if not self.documents:
             return []
 
-        # Generate embedding for query
-        query_embedding = None
-
-        if self.config.provider_config:
-            try:
-                provider = get_provider(self.config.provider_config)
-                if hasattr(provider, "embed"):
-                    query_embedding = await provider.embed(query)
-                    query_embedding = self._normalize_embedding(query_embedding)
-            except Exception:
-                pass
-
-        if query_embedding is None:
-            # Fallback to mock embedding
-            query_embedding = self._generate_mock_embeddings([query])[0]
+        query_embedding = self._derive_embeddings([query])[0]
 
         # Calculate cosine similarities
         similarities = []
@@ -316,9 +281,9 @@ class LLMWorkflow:
         """
         self.config = config
         self._fsm = self._build_fsm()
-        self._providers = {}
-        self._history = []
-        self._context = {}
+        self._providers: Dict[str, AsyncLLMProvider] = {}
+        self._history: List[LLMMessage] = []
+        self._context: Dict[str, Any] = {}
         self._retriever = None
 
         # Initialize retriever if RAG
@@ -412,7 +377,7 @@ class LLMWorkflow:
 
         return SimpleFSM(fsm_config)
 
-    async def _get_provider(self, step: LLMStep | None = None):
+    async def _get_provider(self, step: LLMStep | None = None) -> AsyncLLMProvider:
         """Get LLM provider for step."""
         config = (
             step.model_config if step and step.model_config else self.config.default_model_config
@@ -480,7 +445,7 @@ class LLMWorkflow:
                     continue
 
                 # Parse response if needed
-                result = response.content
+                result: Any = response.content
                 if step.parse_json:
                     result = ResponseParser.extract_json(response)
                 elif step.extract_code:
@@ -488,7 +453,7 @@ class LLMWorkflow:
 
                 # Post-process
                 if step.post_processor:
-                    result = step.post_processor(result)  # type: ignore
+                    result = step.post_processor(result)
 
                 # Update history
                 if self.config.maintain_history:
@@ -528,10 +493,13 @@ class LLMWorkflow:
 
         # Build augmented prompt
         context = "\n\n".join(documents)
-        if self.config.rag_config.context_template:
-            augmented_prompt = self.config.rag_config.context_template.format(
-                context=context, query=query
-            )
+        # Read off the retriever rather than `self.config.rag_config`: the
+        # retriever holds that same object and is not optional here, so the
+        # invariant the guard above established is expressed rather than
+        # re-asserted.
+        context_template = self._retriever.config.context_template
+        if context_template:
+            augmented_prompt = context_template.format(context=context, query=query)
         else:
             augmented_prompt = f"""Context:
 {context}
@@ -674,7 +642,10 @@ Based on the reasoning above, provide the final solution:"""
 
 
 def create_simple_llm_workflow(
-    prompt_template: str, model: str = "gpt-3.5-turbo", provider: str = "openai", **kwargs
+    prompt_template: str,
+    model: str = "gpt-3.5-turbo",
+    provider: str = "openai",
+    **kwargs: Any,
 ) -> LLMWorkflow:
     """Create simple LLM workflow.
 
@@ -703,7 +674,7 @@ def create_rag_workflow(
     provider: str = "openai",
     retriever_type: str = "vector",
     top_k: int = 5,
-    **kwargs,
+    **kwargs: Any,
 ) -> LLMWorkflow:
     """Create RAG workflow.
 
@@ -728,7 +699,10 @@ def create_rag_workflow(
 
 
 def create_chain_workflow(
-    steps: List[Dict[str, Any]], model: str = "gpt-3.5-turbo", provider: str = "openai", **kwargs
+    steps: List[Dict[str, Any]],
+    model: str = "gpt-3.5-turbo",
+    provider: str = "openai",
+    **kwargs: Any,
 ) -> LLMWorkflow:
     """Create chain workflow.
 

@@ -19,7 +19,7 @@ from dataknobs_common.structured_config import (
 
 from ..api.simple import SimpleFSM
 from ..core.data_modes import DataHandlingMode
-from ..io.base import IOConfig, IOFormat, IOMode
+from ..io.base import AsyncIOProvider, IOConfig, IOFormat, IOMode
 from ..io.utils import IOMetrics, create_io_provider, retry_io_operation
 
 
@@ -115,7 +115,7 @@ class CircuitBreaker:
         self.threshold = threshold
         self.timeout = timeout
         self.failure_count = 0
-        self.last_failure = None
+        self.last_failure: datetime | None = None
         self.is_open = False
         self._lock = asyncio.Lock()
 
@@ -136,7 +136,7 @@ class CircuitBreaker:
             # Check if circuit is open
             if self.is_open:
                 if self.last_failure:
-                    elapsed = (datetime.now() - self.last_failure).total_seconds()  # type: ignore[unreachable]
+                    elapsed = (datetime.now() - self.last_failure).total_seconds()
                     if elapsed < self.timeout:
                         from ..core.exceptions import CircuitBreakerError
 
@@ -185,9 +185,9 @@ class APIOrchestrator(StructuredConfigConsumer[APIOrchestrationConfig]):
     def _setup(self) -> None:
         config = self.config
         self._fsm = self._build_fsm()
-        self._providers = {}
-        self._circuit_breakers = {}
-        self._cache = {}
+        self._providers: Dict[str, AsyncIOProvider] = {}
+        self._circuit_breakers: Dict[str, CircuitBreaker] = {}
+        self._cache: Dict[str, tuple[Any, datetime]] = {}
         self._metrics = IOMetrics() if config.metrics_enabled else None
 
         # Initialize rate limiter (single instance handles global + per-endpoint)
@@ -338,7 +338,7 @@ class APIOrchestrator(StructuredConfigConsumer[APIOrchestrationConfig]):
 
         return SimpleFSM(fsm_config)
 
-    def _create_provider(self, endpoint: APIEndpoint):
+    def _create_provider(self, endpoint: APIEndpoint) -> AsyncIOProvider:
         """Create I/O provider for endpoint.
 
         Args:
@@ -357,7 +357,20 @@ class APIOrchestrator(StructuredConfigConsumer[APIOrchestrationConfig]):
             retry_delay=endpoint.retry_delay,
         )
 
-        return create_io_provider(io_config, is_async=True)
+        provider = create_io_provider(io_config, is_async=True)
+        if not isinstance(provider, AsyncIOProvider):
+            # Never fires: every adapter returns its ``Async*`` provider for
+            # ``is_async=True``. Checked rather than cast because the factory
+            # is declared ``-> IOProvider`` --- the base with no ``read``,
+            # ``write`` or awaitable ``close`` --- so this call site is where
+            # the async contract the caller depends on is actually established.
+            # The factory could say so itself, as ``create_llm_provider`` does
+            # with ``@overload`` on ``is_async``, but the four adapter
+            # implementations would have to be overloaded with it.
+            raise TypeError(
+                f"expected an async I/O provider for {endpoint.name}, got {type(provider).__name__}"
+            )
+        return provider
 
     async def _call_endpoint(
         self, endpoint: APIEndpoint, input_data: Dict[str, Any] | None = None
@@ -385,7 +398,7 @@ class APIOrchestrator(StructuredConfigConsumer[APIOrchestrationConfig]):
 
         # Transform input if needed
         if endpoint.transform_input and input_data:
-            request_data = endpoint.transform_input(input_data)
+            request_data: Dict[str, Any] | str = endpoint.transform_input(input_data)
         else:
             request_data = endpoint.body or {}
 
@@ -398,14 +411,25 @@ class APIOrchestrator(StructuredConfigConsumer[APIOrchestrationConfig]):
         # Make API call with circuit breaker
         circuit_breaker = self._circuit_breakers[endpoint.name]
 
-        async def make_request():
+        async def make_request() -> Any:
             if not provider.is_open:
                 await provider.open()
 
+            response: Any
             if endpoint.method == "GET":
                 response = await provider.read(params=endpoint.params)
             elif endpoint.method == "POST":
-                response = await provider.write(request_data, params=endpoint.params)
+                # A POST endpoint yields nothing to work with: `write` returns
+                # `None` by declaration, and `AsyncHTTPProvider.write` does
+                # post the body, raise for status, and discard the response.
+                # So `response_parser` runs on `None`, `None` is what gets
+                # cached, and `None` is what the orchestration reports.
+                # Written out rather than left as `response = await ...`,
+                # which reads like a value is being collected. Tracked: the
+                # fix is a return value on `AsyncIOProvider.write`, in
+                # `io/base.py` and the four adapters.
+                await provider.write(request_data, params=endpoint.params)
+                response = None
             else:
                 # Handle other methods
                 response = await provider.read(params=endpoint.params)
@@ -586,7 +610,10 @@ def create_graphql_orchestrator(
 
     if batch_queries:
         # Create single batched endpoint
-        batched_query = {"query": "\\n".join(q["query"] for q in queries), "variables": {}}
+        batched_query: Dict[str, Any] = {
+            "query": "\\n".join(q["query"] for q in queries),
+            "variables": {},
+        }
         for q in queries:
             if "variables" in q:
                 batched_query["variables"].update(q["variables"])
@@ -600,7 +627,7 @@ def create_graphql_orchestrator(
         )
     else:
         # Create separate endpoints for each query
-        api_endpoints = []
+        api_endpoints: List[APIEndpoint] = []
         for q in queries:
             endpoint_config = APIEndpoint(
                 name=q.get("name", f"query_{len(api_endpoints)}"),

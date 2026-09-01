@@ -78,6 +78,7 @@ from typing import (
     Iterator,
     Callable,
     Protocol,
+    Self,
 )
 
 if TYPE_CHECKING:
@@ -1308,8 +1309,6 @@ class LLMProvider(ABC):
             when = parsedate_to_datetime(str(raw))
         except (TypeError, ValueError):
             return None
-        if when is None:  # older Pythons return None instead of raising
-            return None
         if when.tzinfo is None:
             when = when.replace(tzinfo=UTC)
         return max(0.0, (when - datetime.now(UTC)).total_seconds())
@@ -1774,12 +1773,17 @@ class LLMProvider(ABC):
         """Check if provider is initialized."""
         return self._is_initialized
 
-    def __enter__(self):
+    def __enter__(self) -> Self:
         """Context manager entry."""
         self.initialize()
         return self
 
-    def __exit__(self, exc_type, exc_val, exc_tb):
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: types.TracebackType | None,
+    ) -> None:
         """Context manager exit."""
         self.close()
 
@@ -1797,6 +1801,12 @@ class ConfigOverrideMixin:
         - Callback hooks for logging/metrics
         - Options dict merging
     """
+
+    #: Supplied by the provider this is mixed into --- ``LLMProvider.__init__``
+    #: assigns it. Declared here so the four ``self.config`` lookups below are
+    #: checked rather than each carrying a ``type: ignore[attr-defined]``,
+    #: which also left them typed ``Any`` and the return values with it.
+    config: LLMConfig
 
     # Supported fields for config overrides (base set)
     ALLOWED_CONFIG_OVERRIDES: ClassVar[set[str]] = {
@@ -2000,7 +2010,7 @@ class ConfigOverrideMixin:
             LLMConfig to use for this request (original or cloned with overrides)
         """
         if not config_overrides:
-            return self.config  # type: ignore[attr-defined]
+            return self.config
 
         self._validate_config_overrides(config_overrides)
 
@@ -2008,13 +2018,13 @@ class ConfigOverrideMixin:
         expanded = self._expand_preset(config_overrides)
 
         # Handle options merging specially
-        if "options" in expanded and self.config.options:  # type: ignore[attr-defined]
+        if "options" in expanded and self.config.options:
             expanded["options"] = self._merge_options(
-                self.config.options,  # type: ignore[attr-defined]
+                self.config.options,
                 expanded["options"],
             )
 
-        runtime_config = self.config.clone(**expanded)  # type: ignore[attr-defined]
+        runtime_config = self.config.clone(**expanded)
 
         # Notify callbacks
         self._notify_override_callbacks(config_overrides, runtime_config)
@@ -2031,7 +2041,7 @@ class AsyncLLMProvider(LLMProvider, ConfigOverrideMixin):
         messages: Union[str, List[LLMMessage]],
         config_overrides: Dict[str, Any] | None = None,
         tools: list[Any] | None = None,
-        **kwargs,
+        **kwargs: Any,
     ) -> LLMResponse:
         """Generate completion asynchronously.
 
@@ -2112,7 +2122,7 @@ class AsyncLLMProvider(LLMProvider, ConfigOverrideMixin):
         prompt_type: str = "user",
         index: int = 0,
         include_rag: bool = True,
-        **llm_kwargs,
+        **llm_kwargs: Any,
     ) -> LLMResponse:
         """Render prompt from library and execute LLM completion.
 
@@ -2161,7 +2171,7 @@ class AsyncLLMProvider(LLMProvider, ConfigOverrideMixin):
         prompt_type: str = "user",
         index: int = 0,
         include_rag: bool = True,
-        **llm_kwargs,
+        **llm_kwargs: Any,
     ) -> AsyncIterator[LLMStreamResponse]:
         """Render prompt and stream LLM response.
 
@@ -2240,13 +2250,20 @@ class AsyncLLMProvider(LLMProvider, ConfigOverrideMixin):
 
         return messages
 
+    # Declared ``def`` returning an iterator, not ``async def``, because every
+    # implementation is an async *generator* --- so calling it returns the
+    # iterator directly and the caller writes ``async for`` with no ``await``.
+    # As ``async def`` with a ``pass`` body it was read as a coroutine, which
+    # contradicted all seven providers, and mypy told each of the 81 correct
+    # call sites to add an ``await`` that raises at runtime. The sync sibling
+    # below has always been spelled this way.
     @abstractmethod
-    async def stream_complete(
+    def stream_complete(
         self,
         messages: Union[str, List[LLMMessage]],
         config_overrides: Dict[str, Any] | None = None,
         tools: list[Any] | None = None,
-        **kwargs,
+        **kwargs: Any,
     ) -> AsyncIterator[LLMStreamResponse]:
         r"""Generate streaming completion asynchronously.
 
@@ -2315,7 +2332,7 @@ class AsyncLLMProvider(LLMProvider, ConfigOverrideMixin):
 
     @abstractmethod
     async def embed(
-        self, texts: Union[str, List[str]], **kwargs
+        self, texts: Union[str, List[str]], **kwargs: Any
     ) -> Union[List[float], List[List[float]]]:
         """Generate embeddings asynchronously.
 
@@ -2388,7 +2405,7 @@ class AsyncLLMProvider(LLMProvider, ConfigOverrideMixin):
 
     @abstractmethod
     async def function_call(
-        self, messages: List[LLMMessage], functions: List[Dict[str, Any]], **kwargs
+        self, messages: List[LLMMessage], functions: List[Dict[str, Any]], **kwargs: Any
     ) -> LLMResponse:
         """Execute function calling asynchronously.
 
@@ -2505,7 +2522,7 @@ class AsyncLLMProvider(LLMProvider, ConfigOverrideMixin):
         """
         pass
 
-    def __enter__(self) -> None:
+    def __enter__(self) -> NoReturn:
         """Prevent sync context manager usage on async providers."""
         raise TypeError("Use 'async with' for AsyncLLMProvider, not 'with'")
 
@@ -2517,11 +2534,22 @@ class AsyncLLMProvider(LLMProvider, ConfigOverrideMixin):
     ) -> None:
         """Sync exit — unreachable since __enter__ raises."""
 
-    async def initialize(self) -> None:
+    # ``LLMProvider`` declares this pair sync, so the async subtree contradicts
+    # its own base and is not substitutable for it. Suppressed rather than
+    # fixed: resolving it means moving ``initialize``/``close`` (and the sync
+    # context manager that calls them) down into ``SyncLLMProvider``, which
+    # changes what the public ABC guarantees to anyone subclassing it directly.
+    # That is a contract change needing consumer verification, not a type pass.
+    # Unlike ``stream_complete`` above --- where all seven implementations
+    # disagreed with the base, so the base was provably the wrong one --- the
+    # base is coherent here for the sync subtree, and which side gives way is a
+    # design decision. The ceiling falls by two for this reason rather than
+    # because the code improved.
+    async def initialize(self) -> None:  # type: ignore[override]
         """Initialize the async LLM client."""
         self._is_initialized = True
 
-    async def close(self) -> None:
+    async def close(self) -> None:  # type: ignore[override]
         """Close provider, cancelling in-flight requests.
 
         Safe to call multiple times (idempotent). Cancels any tracked
@@ -2570,7 +2598,7 @@ class AsyncLLMProvider(LLMProvider, ConfigOverrideMixin):
             if task:
                 self._in_flight.discard(task)
 
-    async def __aenter__(self):
+    async def __aenter__(self) -> Self:
         """Async context manager entry."""
         await self.initialize()
         return self
@@ -2594,7 +2622,7 @@ class SyncLLMProvider(LLMProvider, ConfigOverrideMixin):
         messages: Union[str, List[LLMMessage]],
         config_overrides: Dict[str, Any] | None = None,
         tools: list[Any] | None = None,
-        **kwargs,
+        **kwargs: Any,
     ) -> LLMResponse:
         """Generate completion synchronously.
 
@@ -2618,7 +2646,7 @@ class SyncLLMProvider(LLMProvider, ConfigOverrideMixin):
         prompt_type: str = "user",
         index: int = 0,
         include_rag: bool = True,
-        **llm_kwargs,
+        **llm_kwargs: Any,
     ) -> LLMResponse:
         """Render prompt from library and execute LLM completion.
 
@@ -2667,7 +2695,7 @@ class SyncLLMProvider(LLMProvider, ConfigOverrideMixin):
         prompt_type: str = "user",
         index: int = 0,
         include_rag: bool = True,
-        **llm_kwargs,
+        **llm_kwargs: Any,
     ) -> Iterator[LLMStreamResponse]:
         """Render prompt and stream LLM response.
 
@@ -2752,7 +2780,7 @@ class SyncLLMProvider(LLMProvider, ConfigOverrideMixin):
         messages: Union[str, List[LLMMessage]],
         config_overrides: Dict[str, Any] | None = None,
         tools: list[Any] | None = None,
-        **kwargs,
+        **kwargs: Any,
     ) -> Iterator[LLMStreamResponse]:
         """Generate streaming completion synchronously.
 
@@ -2771,7 +2799,7 @@ class SyncLLMProvider(LLMProvider, ConfigOverrideMixin):
 
     @abstractmethod
     def embed(
-        self, texts: Union[str, List[str]], **kwargs
+        self, texts: Union[str, List[str]], **kwargs: Any
     ) -> Union[List[float], List[List[float]]]:
         """Generate embeddings synchronously.
 
@@ -2786,7 +2814,7 @@ class SyncLLMProvider(LLMProvider, ConfigOverrideMixin):
 
     @abstractmethod
     def function_call(
-        self, messages: List[LLMMessage], functions: List[Dict[str, Any]], **kwargs
+        self, messages: List[LLMMessage], functions: List[Dict[str, Any]], **kwargs: Any
     ) -> LLMResponse:
         """Execute function calling synchronously.
 
