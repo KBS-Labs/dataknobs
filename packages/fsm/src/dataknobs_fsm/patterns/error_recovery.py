@@ -15,6 +15,7 @@ from datetime import datetime
 from enum import Enum
 from typing import Any, Callable, ClassVar, Dict, List
 
+from dataknobs_common.callbacks import run_callback
 from dataknobs_common.retry import BackoffStrategy, RetryConfig, RetryExecutor
 from dataknobs_common.structured_config import (
     StructuredConfig,
@@ -183,11 +184,13 @@ class CircuitBreaker(StructuredConfigConsumer[CircuitBreakerConfig]):
                     raise CircuitBreakerError()
 
         try:
-            # Execute function
-            if asyncio.iscoroutinefunction(func):
-                result = await func(*args, **kwargs)
-            else:
-                result = func(*args, **kwargs)
+            # `run_callback` rather than a hand-spelled `iscoroutinefunction`
+            # branch: this class decides success and failure from what the call
+            # does, and an un-awaited coroutine neither succeeds nor fails. It
+            # returns a truthy object and raises nothing, so a breaker in front
+            # of an operation that has never once worked stays closed --- fast-
+            # failing nothing, which is the one thing a breaker must not do.
+            result = await run_callback(func, *args, **kwargs)
 
             # Success
             async with self._lock:
@@ -269,11 +272,10 @@ class Bulkhead(StructuredConfigConsumer[BulkheadConfig]):
         self.active_count += 1
 
         try:
-            # Execute function
-            if asyncio.iscoroutinefunction(func):
-                result = await func(*args, **kwargs)
-            else:
-                result = func(*args, **kwargs)
+            # As the circuit breaker above: an un-awaited coroutine would be
+            # counted in `executed` as work that never ran, and the slot
+            # released while the operation had not started.
+            result = await run_callback(func, *args, **kwargs)
 
             if self.metrics:
                 self.metrics["executed"] += 1
@@ -423,13 +425,11 @@ class ErrorRecoveryWorkflow(StructuredConfigConsumer[ErrorRecoveryConfig]):
     async def _execute_with_fallback(self, func: Callable, *args: Any, **kwargs: Any) -> Any:
         """Execute with fallback."""
         try:
-            # Try primary function
-            result = (
-                await func(*args, **kwargs)
-                if asyncio.iscoroutinefunction(func)
-                else func(*args, **kwargs)
-            )
-            return result
+            # Try primary function. Awaited through `run_callback`, so a
+            # primary that fails is seen to fail --- an un-awaited coroutine
+            # raises nothing, and the `except` below that selects the fallback
+            # is never entered for the async callable shape.
+            return await run_callback(func, *args, **kwargs)
 
         except Exception as e:
             # Check if should use fallback
@@ -466,12 +466,7 @@ class ErrorRecoveryWorkflow(StructuredConfigConsumer[ErrorRecoveryConfig]):
 
         try:
             # Execute function
-            result = (
-                await func(*args, **kwargs)
-                if asyncio.iscoroutinefunction(func)
-                else func(*args, **kwargs)
-            )
-            return result
+            return await run_callback(func, *args, **kwargs)
 
         except Exception:
             # Execute compensation
@@ -484,10 +479,12 @@ class ErrorRecoveryWorkflow(StructuredConfigConsumer[ErrorRecoveryConfig]):
                 # Run compensation actions
                 for action in self.config.compensation_config.compensation_actions:
                     try:
-                        if asyncio.iscoroutinefunction(action):
-                            await action(saved_state)
-                        else:
-                            action(saved_state)
+                        # A compensation action's side effect *is* its
+                        # contract, so this dispatch is the one place a
+                        # misjudged callable leaves the half-finished
+                        # operation un-undone while `compensations` records
+                        # that it was handled.
+                        await run_callback(action, saved_state)
                     except Exception as comp_error:
                         # Log compensation error
                         if self.config.log_errors:
@@ -536,22 +533,29 @@ class ErrorRecoveryWorkflow(StructuredConfigConsumer[ErrorRecoveryConfig]):
                 result = await self._execute_with_bulkhead(func, *args, **kwargs)
 
             elif self.config.primary_strategy == RecoveryStrategy.DEADLINE:
-                # Execute with timeout
+                # Execute with timeout.
+                #
+                # The branch this replaces could not run the input it was
+                # written for: it passed the *return value* of a synchronous
+                # function to `asyncio.create_task`, which requires a
+                # coroutine, so every synchronous function raised TypeError.
+                #
+                # The deadline bounds the awaiting, which for a synchronous
+                # function means it bounds nothing --- a synchronous body
+                # cannot be interrupted, and it now runs to completion before
+                # `wait_for` gets a chance to look. That is the honest shape of
+                # the guarantee rather than a regression: the alternative is a
+                # worker thread, which `wait_for` cannot cancel either, and
+                # which would move the callable off the loop as a side effect
+                # of asking for a timeout.
                 timeout = self.config.global_timeout
                 result = await asyncio.wait_for(
-                    func(*args, **kwargs)
-                    if asyncio.iscoroutinefunction(func)
-                    else asyncio.create_task(func(*args, **kwargs)),
-                    timeout=timeout,
+                    run_callback(func, *args, **kwargs), timeout=timeout
                 )
 
             else:
                 # Direct execution
-                result = (
-                    await func(*args, **kwargs)
-                    if asyncio.iscoroutinefunction(func)
-                    else func(*args, **kwargs)
-                )
+                result = await run_callback(func, *args, **kwargs)
 
             # Cache successful result
             if self.config.fallback_config and self.config.fallback_config.use_cache:

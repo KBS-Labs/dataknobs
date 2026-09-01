@@ -7,6 +7,184 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Fixed
+
+- **`ParallelIOExecutor` silently skipped every synchronous provider.**
+  `read_all` and `write_all` built their task list inside
+  `if asyncio.iscoroutinefunction(provider.read)` with no `else`, so a
+  `SyncIOProvider` — as much an `IOProvider` as an async one, and what
+  `create_io_provider(config, is_async=False)` returns — was not read from and
+  **not written to**. `write_all` returns `None` either way, so a caller
+  fanning a write across providers had no way to learn that some of them
+  received nothing. Both kinds now participate, with a synchronous read or
+  write offloaded to a worker thread so the providers still proceed
+  concurrently and a slow disk does not stall the others.
+
+- **`IORouter` used its route's `condition` and `transform` without awaiting
+  them.** Both come from the caller and `add_route` accepts any callable. An
+  async condition returned a coroutine, which is always truthy, so the route
+  matched **every** record; an async transform's coroutine was written to the
+  provider in place of the transformed data. Neither raised. Both are now
+  awaited when they turn out to be awaitable.
+
+- **`IOBuffer` lost its overflow when the handler was a callable object.**
+  `asyncio.iscoroutinefunction` reports an object with an `async def
+  __call__` as synchronous — the shape anything stateful takes — so the
+  handler was invoked without being awaited and its coroutine discarded. The
+  items are removed from the buffer *before* the handler is called and no copy
+  is kept, so they were gone. The same misreading affected each transform in
+  `async_transform_pipeline`, where the un-awaited coroutine became the input
+  to the next transform in the chain.
+
+- **A synchronous provider write and a synchronous overflow flush no longer
+  run on the event loop.** Both are the consumer's I/O, and a blocking call
+  inside an `async def` stalls every other task on the loop for its duration.
+  They are dispatched through `dataknobs_common.callbacks.run_callback_off_loop`,
+  which judges the callable and offloads the synchronous case. The transform
+  pipeline deliberately stays inline and says so: a transform computes rather
+  than does, and runs once per item, so it would pay for a thread hop on every
+  record.
+
+- **`AsyncStreamExecutor` credited records to a sink that never received
+  them.** `progress.records_emitted` is incremented immediately before the
+  sink is dispatched, and the dispatch branched on
+  `asyncio.iscoroutinefunction` — which reports a callable object with an
+  `async def __call__` as synchronous. So an object sink was handed to
+  `run_in_executor`, which constructed its coroutine on a worker thread and
+  dropped it, while `AsyncStreamResult.emitted` reported every record as
+  delivered. Data loss with an accounting trail that said otherwise.
+
+- **`AsyncStreamExecutor` and `AsyncBatchExecutor` stopped reporting progress
+  to a callable-object callback.** The same misreading in
+  `_fire_progress_callback`, whose body was byte-identical in the two classes
+  — which is why one defect appeared in two places. Both now delegate to
+  `dataknobs_common.callbacks.run_callback_off_loop`, so the judgement is made
+  once rather than spelled out per class, and a synchronous progress hook
+  still runs off the loop as it did before.
+
+- **`IOBuffer` discarded the overflow when the handler failed.** The items are
+  sliced off the buffer before the handler is called and no copy is kept, so a
+  handler raising — a full disk, a refused socket — took them with it and the
+  exception reached the caller with the data already gone. They are now
+  restored to the front of the buffer, so a failed flush leaves the overflow
+  held rather than merely reported, and a retry drains the oldest first.
+
+- **`IOBuffer(max_size=1)` never drained and grew without bound.** The drain
+  is `max_size // 2`, which is `0` at one: the handler was invoked with an
+  empty list on every subsequent `add`, the buffer kept every item, and it
+  grew past the maximum it was configured with — unbounded memory in the one
+  component whose contract is to bound it. The drain now moves at least one
+  item, and `max_size < 1` is refused at construction.
+
+- **`ParallelIOExecutor` ignored `max_workers`.** It was stored by `__init__`,
+  documented by the `parallel_io_executor` factory, and read nowhere. That was
+  inert while synchronous providers were skipped entirely; once they began
+  being offloaded, every one became an `asyncio.to_thread` submission issued
+  at once into the event loop's **default** executor — which is process-wide
+  and shared with every other offload in the application. A caller asking for
+  4 workers over 200 slow providers saturated that pool for all of them. The
+  bound is now enforced by a semaphore held for the executor's lifetime, so
+  two concurrent `read_all` calls share it rather than getting one each, and
+  `max_workers < 1` is refused.
+
+- **An arc condition written as a callable object matched every record.**
+  `AsyncExecutionEngine._evaluate_arc` asked `asyncio.iscoroutinefunction`,
+  which reports an object with an `async def __call__` as synchronous, and
+  ends in `bool(result)` — where a coroutine is truthy. A condition that
+  answered `False` was therefore read as `True`, uniformly, with nothing
+  raised and nothing logged. Not a gate that leaked: a gate that was not
+  there.
+
+- **The resilience wrappers recorded outcomes for calls they never made.**
+  `CircuitBreaker.call` (in both `patterns/error_recovery` and
+  `patterns/api_orchestration`), `Bulkhead.execute`, and every
+  `ErrorRecoveryWorkflow` strategy dispatched the caller's operation on the
+  same misreading. A discarded coroutine raises nothing, so a failing
+  operation took the *success* path: a breaker in front of a dependency that
+  had never once worked stayed closed, the bulkhead counted the call in
+  `executed`, the fallback strategy never fell back, and an async
+  compensation action left the half-finished operation un-undone while
+  `compensations` recorded that it had been handled.
+
+- **`RecoveryStrategy.DEADLINE` could not run a synchronous function.** Its
+  synchronous branch passed the function's *return value* to
+  `asyncio.create_task`, which requires a coroutine — so the branch written
+  to handle synchronous functions raised `TypeError` on every one of them.
+  Note the deadline now bounds the awaiting rather than the execution: a
+  synchronous body cannot be interrupted, so it runs to completion before the
+  timeout is consulted.
+
+- **An async record predicate admitted every record.**
+  `normalize_record_callable` chose its sync or async adapter with bare
+  `inspect.iscoroutinefunction`, so a callable object took the synchronous
+  adapter and the gate's terminal `bool` was applied to a coroutine rather
+  than to the predicate's answer — `True` for every record, from a validator
+  that had said no.
+
+- **`AsyncStreamContext.stream_async` reported success over writes that never
+  happened.** It called its `sink` and its `transform` without judging either.
+  `if not sink(chunk)` reads a coroutine as truthy, so a sink that refused
+  every chunk logged zero errors; the transform's coroutine was carried into
+  the chunk in place of the data. `StreamingFileProcessor.process` had the
+  same pair, where the transform's coroutine was written to the **output
+  file**.
+
+- **`FunctionWrapper` misread a `functools.partial` around an async callable
+  object as synchronous**, and read a *class* with an `async def __call__` as
+  async. Its `_check_async` was a hand-maintained copy of
+  `dataknobs_common.callbacks.is_async_callable` missing both cases; it now
+  delegates. The config builder's resolved-function adapter selection and the
+  engine's transform dispatch carried their own copies with the same
+  `partial` gap, and now delegate too.
+
+### Changed
+
+- **`IORouter.add_route` and `IOBuffer` accept async callbacks in their
+  annotations, not merely in their behaviour.** `add_route`'s docstring
+  already said the condition and transform "may be sync or async" and
+  `IOBuffer`'s overflow handler already accepted either, while the published
+  signatures said `Callable[[Any], bool]` and
+  `Callable[[List[Any]], None]` — so a consumer passing the async callback the
+  code supports got a type error at their own call site.
+
+- **`IORouter.route` logs when a matched route's provider cannot be written
+  to.** The transformed value still joins the returned list, so a caller
+  reading the return value could not tell that nothing had been written.
+
+- **`AsyncStreamContext.stream_async` and `StreamingFileProcessor` accept
+  async callbacks in their annotations**, as `IORouter` and `IOBuffer` do
+  above, and for the same reason: the behaviour supports them and the
+  published signature did not.
+
+- **One judgement about whether a callable is async, made in one place.**
+  Nine modules asked it for themselves, in five spellings — bare
+  `iscoroutinefunction`, `iscoroutinefunction` plus a second check on
+  `__call__`, a check on `type(f).__call__`, an `_is_async` attribute hint,
+  and no check at all. All now route through
+  `dataknobs_common.callbacks.is_async_callable` or the two `run_callback`
+  helpers. The repository-level adoption guard covers `packages/fsm/src` as a
+  result, so a new dispatch that skips the judgement fails a test rather than
+  reaching a consumer.
+
+**Migrating.** Three consequences worth checking before upgrading:
+
+- A provider list holding **both** an async and a synchronous provider for the
+  same destination now receives **two** writes where it previously received
+  one, because the synchronous half was silently skipped. `write_all` returns
+  `None`, so nothing surfaces this.
+- A synchronous `overflow_handler`, provider write, sink, progress callback,
+  arc condition, transform, or validator now runs on a **worker thread**
+  rather than on the loop thread. One that touches state which is not
+  thread-safe, calls `loop.call_soon`, or uses `asyncio.Queue.put_nowait`
+  needs to say so itself. `asyncio.to_thread` copies the context, so a
+  callback that *sets* a contextvar no longer affects its caller.
+- **Async callbacks that were silently doing nothing now run.** An async arc
+  condition, sink, transform, validator, compensation action or wrapped
+  operation whose coroutine was previously discarded is now awaited. If a
+  pipeline was passing because its async condition matched everything, or
+  because its async transform was a no-op that left the data untouched, it
+  will now behave as written — which may be a change in output.
+
 ## v0.4.2 - 2026-08-26
 
 ### Fixed

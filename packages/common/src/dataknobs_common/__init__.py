@@ -63,6 +63,8 @@ from dataknobs_common.callbacks import (
     RecordingCallbackRegistry,
     StageOrdering,
     is_async_callable,
+    run_callback,
+    run_callback_off_loop,
 )
 from dataknobs_common.async_iter import (
     aiter_sync_in_thread,
@@ -354,6 +356,8 @@ __all__ = [
     "RecordingCallbackRegistry",
     "StageOrdering",
     "is_async_callable",
+    "run_callback",
+    "run_callback_off_loop",
     # Async iteration
     "aiter_sync_in_thread",
     # Async->sync bridge

@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-08-31T22:33:47Z",
+  "timestamp": "2026-09-01T03:31:50Z",
   "python_version": "Python 3.12.12",
   "uv_version": "uv 0.12.5 (Homebrew 2026-08-14 aarch64-apple-darwin)",
   "os": "Darwin",
   "os_version": "24.6.0",
-  "git_branch": "sbk/vector-docs-model-identity",
-  "git_commit": "8716ebfb932ae2cc1200f30b6f45b2d8bd78290e",
+  "git_branch": "sbk/consumer-callbacks-off-the-loop",
+  "git_commit": "571106cbdee1fafd4906c0d3677b7efe4a0e23be",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }

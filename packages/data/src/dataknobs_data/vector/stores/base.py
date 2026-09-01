@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
-from dataknobs_common.callbacks import run_callback
+from dataknobs_common.callbacks import run_callback_off_loop
 
 from ...fields import VectorField
 from ...records import Record
@@ -440,7 +440,10 @@ class VectorStore(ABC, VectorStoreBase):
         # Fetch full records if function provided
         records_map = {}
         if fetch_records and record_ids:
-            records = await run_callback(fetch_records, record_ids)
+            # Off the loop, not on it: the parameter's own docstring says
+            # fetching by id is I/O, so a synchronous fetcher is a database
+            # round-trip and `run_callback` would run it on the event loop.
+            records = await run_callback_off_loop(fetch_records, record_ids)
             records_map = {r.id: r for r in records}
 
         for vector_id, score, metadata in results:
