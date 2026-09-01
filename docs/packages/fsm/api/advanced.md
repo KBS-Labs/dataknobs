@@ -799,30 +799,40 @@ advanced_fsm.set_execution_strategy(TraversalStrategy.DEPTH_FIRST)
 
 ## Data Handlers
 
-Configure custom data handlers:
+Data handling is selected by **mode**, not by injecting a handler. Each state
+resolves its handler on entry from its own `data_mode` (falling back to the
+FSM's default), and there are three:
 
-```python
-from dataknobs_fsm.core.data_modes import DataHandler, DataHandlingMode
+| Mode | Handler | What it does |
+|---|---|---|
+| `COPY` | `CopyModeHandler` | Deep-copies data on entry, so a state's mutations cannot reach the caller's object. The default |
+| `REFERENCE` | `ReferenceModeHandler` | Passes the same object through, tracking modifications |
+| `DIRECT` | `DirectModeHandler` | Passes the object through untracked — the cheapest and the least safe |
 
-class CustomDataHandler(DataHandler):
-    def __init__(self):
-        super().__init__(DataHandlingMode.COPY)
+Set it per state in configuration, or as the FSM's default:
 
-    def on_entry(self, data):
-        # Handle data when entering a state
-        return dict(data) if isinstance(data, dict) else data
+```yaml
+data_mode:
+  default: copy
 
-    def on_modification(self, data):
-        # Handle data modification within a state
-        return dict(data) if isinstance(data, dict) else data
-
-    def on_exit(self, data):
-        # Handle data when exiting a state
-        return data
-
-handler = CustomDataHandler()
-advanced_fsm.set_data_handler(handler)
+networks:
+  - name: main
+    states:
+      - name: enrich
+        data_mode: reference    # this state only
 ```
+
+The modes, what each costs, and how to choose between them are covered in the
+[Data Modes guide](../guides/data-modes.md), which also documents the
+`DataHandler` ABC in full.
+
+**Supplying a custom handler is not currently reachable.** `DataModeManager`
+holds a fixed three-entry table keyed by `DataHandlingMode` and exposes no way
+to register a fourth, so a handler you write has neither a key to be stored
+under nor a setter to store it. An `AdvancedFSM.set_data_handler()` method
+previously appeared here; it assigned to an attribute the execution engine
+never read, so every handler passed to it was silently ignored. It has been
+removed rather than left to look like a route that works.
 
 ## Complete Example
 
