@@ -4,7 +4,9 @@ import logging
 import time
 from typing import Any, Callable, Dict, Iterator, List, Union
 
-from dataknobs_data.database import AsyncDatabase, SyncDatabase
+from dataknobs_common.callbacks import is_async_callable
+from dataknobs_common.exceptions import ConfigurationError
+from dataknobs_data.database import SyncDatabase
 from dataknobs_data.query import Query
 from dataknobs_data.records import Record
 
@@ -17,6 +19,32 @@ from dataknobs_fsm.streaming.core import (
 logger = logging.getLogger(__name__)
 
 
+def _require_sync_database(database: SyncDatabase, used_by: str) -> SyncDatabase:
+    """Refuse an async database, which these synchronous classes cannot drive.
+
+    All three classes below implement synchronous protocols --- ``IStreamSource``
+    and ``IStreamSink`` --- so an ``AsyncDatabase`` handed to one of them has its
+    coroutines built and dropped rather than awaited. That failure is silent in
+    both directions: ``write_chunk`` returns ``True`` having written nothing, and
+    ``read_chunk`` turns the resulting ``TypeError`` into an empty chunk marked
+    ``is_last``, which reads as a stream that ended normally.
+
+    Checked at construction rather than left to the annotation, because the
+    annotation stops nobody at runtime and the failure it prevents is silent.
+    Probes ``create`` with ``is_async_callable`` --- the same detection
+    ``BatchOperations`` uses for this identical union in ``dataknobs-data``.
+    """
+    probe = getattr(database, "create", None)
+    if probe is not None and is_async_callable(probe):
+        raise ConfigurationError(
+            f"{used_by} is synchronous and requires a sync database, but "
+            f"{type(database).__name__} is asynchronous. Awaiting is not possible "
+            "from a synchronous stream, so every operation would be silently "
+            "discarded. Use a SyncDatabase, or drive the async database directly."
+        )
+    return database
+
+
 class DatabaseStreamSource(IStreamSource):
     """Database-based stream source with cursor iteration.
 
@@ -26,7 +54,7 @@ class DatabaseStreamSource(IStreamSource):
 
     def __init__(
         self,
-        database: Union[SyncDatabase, AsyncDatabase],
+        database: SyncDatabase,
         query: Query | None = None,
         batch_size: int = 1000,
         cursor_field: str | None = None,
@@ -41,7 +69,7 @@ class DatabaseStreamSource(IStreamSource):
             cursor_field: Field to use for cursor pagination.
             start_cursor: Starting cursor value.
         """
-        self.database = database
+        self.database = _require_sync_database(database, "DatabaseStreamSource")
         self.query = query or Query()
         self.batch_size = batch_size
         self.cursor_field = cursor_field or "id"
@@ -52,6 +80,7 @@ class DatabaseStreamSource(IStreamSource):
         self._exhausted = False
 
         # Get total count if possible
+        self._total_records: int | None
         try:
             self._total_records = database.count(self.query)
         except Exception:
@@ -79,40 +108,24 @@ class DatabaseStreamSource(IStreamSource):
 
             # Update cursor for next batch
             if records and self.cursor_field:
-                last_record = records[-1]  # type: ignore
-                if isinstance(last_record, Record):
-                    # Use Record's API to get field value
-                    if self.cursor_field == "id":
-                        self.current_cursor = last_record.id
-                    elif last_record.has_field(self.cursor_field):
-                        self.current_cursor = last_record.get_value(self.cursor_field)
-                elif isinstance(last_record, dict) and self.cursor_field in last_record:
-                    self.current_cursor = last_record[self.cursor_field]
-                elif hasattr(last_record, self.cursor_field):
-                    self.current_cursor = getattr(last_record, self.cursor_field)
+                last_record = records[-1]
+                if self.cursor_field == "id":
+                    self.current_cursor = last_record.id
+                elif last_record.has_field(self.cursor_field):
+                    self.current_cursor = last_record.get_value(self.cursor_field)
 
             # Calculate progress
             progress = 0.0
-            if self._total_records and self._total_records > 0:  # type: ignore
-                progress = min(1.0, (self._record_count + len(records)) / self._total_records)  # type: ignore
+            if self._total_records and self._total_records > 0:
+                progress = min(1.0, (self._record_count + len(records)) / self._total_records)
 
             # Check if this is the last chunk
-            is_last = len(records) < self.batch_size  # type: ignore
+            is_last = len(records) < self.batch_size
             if is_last:
                 self._exhausted = True
 
             # Convert records to serializable format
-            chunk_data = []
-            for record in records:
-                if isinstance(record, Record):
-                    # Use Record's built-in serialization
-                    chunk_data.append(record.to_dict(include_metadata=True))
-                elif hasattr(record, "to_dict"):
-                    chunk_data.append(record.to_dict())
-                elif hasattr(record, "__dict__"):
-                    chunk_data.append(record.__dict__)
-                else:
-                    chunk_data.append(record)
+            chunk_data = [record.to_dict(include_metadata=True) for record in records]
 
             # Create chunk
             chunk = StreamChunk(
@@ -130,7 +143,7 @@ class DatabaseStreamSource(IStreamSource):
             )
 
             self._chunk_count += 1
-            self._record_count += len(records)  # type: ignore
+            self._record_count += len(records)
 
             return chunk
 
@@ -192,7 +205,7 @@ class DatabaseStreamSink(IStreamSink):
 
     def __init__(
         self,
-        database: Union[SyncDatabase, AsyncDatabase],
+        database: SyncDatabase,
         table_name: str | None = None,
         batch_size: int = 1000,
         upsert: bool = False,
@@ -209,7 +222,7 @@ class DatabaseStreamSink(IStreamSink):
             transaction_batch: Records per transaction.
             on_conflict_update: Fields to update on conflict.
         """
-        self.database = database
+        self.database = _require_sync_database(database, "DatabaseStreamSink")
         self.table_name = table_name
         self.batch_size = batch_size
         self.upsert = upsert
@@ -360,16 +373,18 @@ class DatabaseBulkLoader:
     for different database backends.
     """
 
-    def __init__(self, database: Union[SyncDatabase, AsyncDatabase], table_name: str | None = None):
+    def __init__(self, database: SyncDatabase, table_name: str | None = None):
         """Initialize bulk loader.
 
         Args:
             database: Target database.
             table_name: Target table name.
         """
-        self.database = database
+        self.database = _require_sync_database(database, "DatabaseBulkLoader")
         self.table_name = table_name
-        self._stats = {
+        # ``Any``, not ``int``: the counters are ints and the two timestamps
+        # are floats written by ``time.time()`` over a ``None`` initialiser.
+        self._stats: Dict[str, Any] = {
             "records_loaded": 0,
             "batches_processed": 0,
             "errors": 0,
@@ -402,12 +417,12 @@ class DatabaseBulkLoader:
                 success = sink.write_chunk(chunk)
 
                 if not success:
-                    self._stats["errors"] += 1  # type: ignore
+                    self._stats["errors"] += 1
 
-                self._stats["batches_processed"] += 1  # type: ignore
+                self._stats["batches_processed"] += 1
 
                 if chunk.data:
-                    self._stats["records_loaded"] += len(chunk.data)  # type: ignore
+                    self._stats["records_loaded"] += len(chunk.data)
 
                 # Call progress callback if provided
                 if progress_callback:
@@ -453,12 +468,12 @@ class DatabaseBulkLoader:
                 success = sink.write_chunk(chunk)
 
                 if not success:
-                    self._stats["errors"] += 1  # type: ignore
+                    self._stats["errors"] += 1
 
-                self._stats["batches_processed"] += 1  # type: ignore
+                self._stats["batches_processed"] += 1
 
                 if chunk.data:
-                    self._stats["records_loaded"] += len(chunk.data)  # type: ignore
+                    self._stats["records_loaded"] += len(chunk.data)
 
                 # Call progress callback if provided
                 if progress_callback:

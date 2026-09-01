@@ -21,6 +21,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **The database streaming classes take a sync database, and say so.**
+  `DatabaseStreamSource`, `DatabaseStreamSink` and `DatabaseBulkLoader` declared
+  `database: Union[SyncDatabase, AsyncDatabase]` while implementing the
+  synchronous `IStreamSource` / `IStreamSink` protocols. There is no async
+  database source or sink in the package, so the union was a promise nothing
+  kept: an `AsyncDatabase` handed to any of them had its coroutines built and
+  dropped rather than awaited, and **every row was lost in silence, in both
+  directions**. `write_chunk` returned `True` having written nothing, because
+  `create()` returned a coroutine that was discarded. `read_chunk`'s
+  `search()` result was a coroutine — truthy, so the `if not records` guard did
+  not fire — and the resulting `TypeError` was caught by the method's trailing
+  `except Exception`, which returned an empty chunk marked `is_last`. Iterating
+  yielded that one chunk and stopped, so the caller saw a stream that had ended
+  normally; the error appeared only in `chunk.metadata["error"]`, which nothing
+  reads and nothing logs.
+
+    The declared type is now `SyncDatabase`, and an async database is refused at
+    construction with `ConfigurationError` naming what was passed. Detection
+    reuses `is_async_callable` from `dataknobs-common`, the same probe
+    `BatchOperations` already used for this identical union in `dataknobs-data`.
+    Code passing a sync database is unaffected; code passing an async one was
+    already losing its data and now finds out at construction instead of never.
+
 - **A configuration key the schema does not declare now fails the load.** Every
   model in `dataknobs_fsm.config.schema` refuses unknown keys, and the error
   names the key and where it sat (`networks.0.resources.0.provider`). Until
