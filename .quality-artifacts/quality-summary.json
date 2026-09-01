@@ -1,5 +1,5 @@
 {
-  "timestamp": "2026-09-01T18:42:31Z",
+  "timestamp": "2026-09-01T19:55:13Z",
   "overall_status": "PASS",
   "run_mode": "pr",
   "environment": "host",
@@ -14,7 +14,7 @@
     "common": "398135cb4cf848e796778c5563465a4260f57b10ac2423d668125d940c5b0fde",
     "config": "30895cfb558b0a798c73cfa923da7e75ec76b3c3eacea9bc68861e28fe146347",
     "data": "caea934e75286d83b1f5303839a1b1fb339164932b42e18ba8804471af7df95a",
-    "fsm": "922d673dbc2964437e1e9a10bf9d15b5592c837c9083015e39a9bbec3b0506bc",
+    "fsm": "e006df28fe49e10f074b532f158c5d077d9be6f8071d6660cfd92cd3bf03afcf",
     "legacy": "f626b387e3b4dc7f7de016a1e6f67f1a6df33b685b55c1226762d4abb338d217",
     "llm": "e7ae3e094c66d4dae250fa6c512521fcb4cde37db0613991cfacede7ce3970d8",
     "structures": "73fcd3ad3753d60eab53a1c4ecc7b6665862e9325920eb5daebdca42c1673af3",
@@ -24,10 +24,10 @@
   },
   "workspace_hashes": {
     "toolchain": "0fb983f88318648c256cf4b7829874713d5e884ce8b5a74a27812498b759a7b9",
-    "workspace_tests": "43cb2779e275402afd0228de26bd3286eacb18e0be1b8ed65253117fa82166e0",
-    "docs": "d4f9631ec0e88df128764cc6429778fbb63e0d51617d996d1b3bbaa278d8f95e"
+    "workspace_tests": "434647e9e24e422bd1813786fc17df1020dd8aaa21c13031d8181740cf53bf8d",
+    "docs": "4481e9c34f1d480f0146e9a7eb71f11ab3dd69a70b67d7dbc0979194b499f861"
   },
-  "total_seconds": 169,
+  "total_seconds": 171,
   "checks": {
     "workflow_lint": {
       "status": "pass",
@@ -59,7 +59,7 @@
       "exit_code": 0,
       "skipped": false,
       "tool": "mkdocs",
-      "duration_seconds": 24
+      "duration_seconds": 25
     },
     "documentation_versions": {
       "status": "pass",
