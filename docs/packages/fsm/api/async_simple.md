@@ -221,23 +221,27 @@ asyncio.run(main())
 ```python
 async validate(
     data: Union[Dict[str, Any], Record]
-) -> bool
+) -> Dict[str, Any]
 ```
 
-Validate data against the FSM's schema asynchronously.
+Validate data against the schema declared on the FSM's **start state**. A start
+state carrying no `schema` block validates everything.
 
 **Parameters:**
 - `data`: Data to validate
 
-**Returns:** True if valid, False otherwise
+**Returns:** `{"valid": bool, "errors": list[str]}`
+
+**Raises:** `ValueError` if the FSM has no start state.
 
 **Example:**
 ```python
 async def main():
     fsm = AsyncSimpleFSM("config.yaml")
 
-    is_valid = await fsm.validate({"required_field": "value"})
-    print(f"Data is valid: {is_valid}")
+    result = await fsm.validate({"required_field": "value"})
+    if not result["valid"]:
+        print(f"Rejected: {result['errors']}")
 
     await fsm.close()
 

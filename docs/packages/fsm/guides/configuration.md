@@ -185,8 +185,8 @@ Control how data flows through states:
 
 ### 4. Data Schemas
 
-A state may carry a `schema` block (spelled `data_schema` if you prefer) that
-validates the data arriving at it. It is a JSON Schema object definition:
+A state may carry a `schema` block (spelled `data_schema` if you prefer)
+declaring the shape of the data it expects, as a JSON Schema object definition:
 
 ```python
 {
@@ -204,7 +204,10 @@ validates the data arriving at it. It is a JSON Schema object definition:
 }
 ```
 
-Reach the verdict through the state, or through the FSM's start state:
+**Nothing checks it for you.** The engine never consults a state's schema
+while running a record through it — the block is a declaration, and a caller
+reaches the verdict explicitly, through the state or through the FSM's start
+state:
 
 ```python
 state = fsm.get_state("validate_order")
@@ -231,7 +234,7 @@ knowing before you write a schema that assumes otherwise:
 | `{"type": "integer"}` given `True` | Passes — `bool` is a subclass of `int` in Python |
 
 A schema is therefore a cheap shape check, not a full JSON Schema
-implementation. Validation that must be exhaustive belongs in a `validate`
+implementation. Validation that must be exhaustive belongs in a `validators`
 function on the state, where you can run any library you like.
 
 ## Common Patterns

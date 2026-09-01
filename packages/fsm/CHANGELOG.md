@@ -56,6 +56,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   start-less network — validation refuses one — so this guards the contract the
   return type declares rather than a reachable configuration.
 
+- **`AsyncSimpleFSM.validate()` was documented as returning `bool`.** The API
+  reference gave the signature as `-> bool` and the return as "True if valid,
+  False otherwise", with an example branching on it — while the method has
+  always returned `{"valid": ..., "errors": [...]}`. A caller who wrote the
+  documented `if await fsm.validate(data):` accepted every record, valid or
+  not: a non-empty dict is truthy whatever `valid` holds. The reference now
+  gives the return shape, the start-state-only scope and the `ValueError`, and
+  the synchronous `SimpleFSM.validate()` docstring carries the same contract.
+
+- **A state `schema` was documented as validating data on arrival, and an
+  example used a keyword nothing honours.** Nothing in the engine consults a
+  state's schema while running a record — it is a declaration checked only when
+  a caller asks, through `StateDefinition.validate_data()` or
+  `SimpleFSM.validate()` / `AsyncSimpleFSM.validate()` for the start state. A
+  configuration-guide example also carried `{"type": "integer", "minimum": 0}`,
+  which reads as a bound and is silently ignored. Both guides now say what is
+  checked, what is ignored, and who does the checking.
+
 - **The two halves of `ResourceManager` teardown disagreed about the registry
   they share, and a provider could be lost between them.** `close()` iterates
   `_providers` under the manager's lock and clears it in the same critical

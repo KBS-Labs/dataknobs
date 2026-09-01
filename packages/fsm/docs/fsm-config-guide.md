@@ -81,6 +81,21 @@ States are the nodes in your FSM graph. Each state has a name and metadata that 
 }
 ```
 
+**`schema`** — A JSON Schema object definition declaring the shape of the data
+the state expects. **Nothing checks it for you:** the engine never consults it
+while running a record, so the block is a declaration a caller validates
+against explicitly — `state.validate_data(data)` for one state, or
+`fsm.validate(data)` for the FSM's start state. Both return
+`(is_valid, errors)` / `{"valid": ..., "errors": [...]}` respectively.
+
+The checking is deliberately partial. Two keywords are honoured — `required`,
+and `type` on each entry in `properties` — and the recognised types are
+`string`, `integer`, `number`, `boolean`, `array` and `object`. Everything else
+is accepted and ignored, `minimum`, `maxLength`, `pattern`, `format` and
+`additionalProperties` included, and an unrecognised `type` passes rather than
+failing. Validation that must be exhaustive belongs in a `validators` function,
+where you can run any library you like.
+
 **`run_on_failure`** — When a state transform raises, the engines record the
 failure and skip the transforms of every subsequent state (and the failing
 state's remaining transforms) so indeterminate, pre-failure data is not mutated
@@ -132,7 +147,7 @@ states across STREAM, BATCH, and WHOLE.)
             "type": "object",
             "properties": {
                 "data": {"type": "string"},
-                "count": {"type": "integer", "minimum": 0}
+                "count": {"type": "integer"}
             },
             "required": ["data"]
         },
