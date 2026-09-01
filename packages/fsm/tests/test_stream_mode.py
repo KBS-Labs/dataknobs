@@ -28,11 +28,13 @@ class TestStreamMode:
                 ),
                 StateConfig(
                     name="process",
-                    functions={
-                        "transform": FunctionReference(
-                            type="inline", code="data['processed'] = True; data"
-                        )
-                    },
+                    # `transforms` is the field StateConfig declares. The legacy
+                    # `functions={"transform": ...}` spelling is converted by the
+                    # loader, so a config constructed directly --- as this one is
+                    # --- has to use the real one, or the transform is not wired.
+                    transforms=[
+                        FunctionReference(type="inline", code="data['processed'] = True; data")
+                    ],
                     arcs=[ArcConfig(target="end", priority=1)],
                 ),
                 StateConfig(name="end", is_end=True),

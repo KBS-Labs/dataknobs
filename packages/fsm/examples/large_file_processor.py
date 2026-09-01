@@ -253,14 +253,13 @@ config = {
                     },
                 },
                 {
+                    # Chunking is done by the registered ``process_chunk``
+                    # function below. A state carries no ``streaming`` block:
+                    # the schema declares one on a network only, and nothing in
+                    # the engine reads even that, so a block here described a
+                    # configuration that never took effect.
                     "name": "process_chunks",
                     "functions": {"transform": {"type": "registered", "name": "process_chunk"}},
-                    "streaming": {
-                        "enabled": True,
-                        "chunk_size": 1000,
-                        "parallel": True,
-                        "max_workers": 4,
-                    },
                 },
                 {
                     "name": "aggregate",

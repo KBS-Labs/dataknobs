@@ -72,17 +72,20 @@ def create(template: str, output: str, format: str):
             "name": "ETL_Pipeline",
             "data_mode": "copy",
             "resources": [
+                # Backend settings belong under ``config``, whose contents
+                # become the provider's constructor keywords. Spelled flat they
+                # were discarded, and the key is ``backend`` rather than
+                # ``provider`` --- so the scaffold handed the user two database
+                # resources that could not be built.
                 {
                     "name": "source_db",
                     "type": "database",
-                    "provider": "sqlite",
-                    "path": "source.db",
+                    "config": {"backend": "sqlite", "path": "source.db"},
                 },
                 {
                     "name": "target_db",
                     "type": "database",
-                    "provider": "sqlite",
-                    "path": "target.db",
+                    "config": {"backend": "sqlite", "path": "target.db"},
                 },
             ],
             "states": [

@@ -351,9 +351,17 @@ resolved when the builder builds the state. The schema accepts four more —
 nothing reads any of them. They parse, they validate, and they change nothing;
 put a per-state override on the state.
 
-Pydantic also accepts unknown keys silently, so a `data_mode` block written
-under a network — where it does not belong — is dropped without complaint and
-every state runs `copy`.
+A `data_mode` block written under a network — where it does not belong — is
+refused when the configuration loads, naming the key and where it sat. It used
+to be dropped without complaint, leaving every state on `copy` while the
+configuration read as though it said otherwise.
+
+Note the two different answers, because they are deliberate. The four keys
+above are *declared*, so they are accepted and ignored — a schema cannot tell
+you that a field it knows about is unused. A key the schema does **not**
+declare is refused outright. What that leaves is a narrow class of inert
+configuration, which is why the four are named here rather than left to be
+discovered.
 
 ## Data Mode Manager
 

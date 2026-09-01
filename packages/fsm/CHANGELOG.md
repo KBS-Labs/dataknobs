@@ -21,6 +21,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **A configuration key the schema does not declare now fails the load.** Every
+  model in `dataknobs_fsm.config.schema` refuses unknown keys, and the error
+  names the key and where it sat (`networks.0.resources.0.provider`). Until
+  now the schema was strict about *values* — an unknown function `type` raised
+  — while an unknown *key* was discarded in silence, so a block written one
+  level too deep, or a field name with a typo in it, left the FSM running on
+  the defaults the author believed they had replaced.
+
+    Three shapes in this package were doing exactly that, and are fixed here.
+    The `config create etl` scaffold spelled its resources `provider:` and
+    `path:` outside the `config` block they belong in, and `provider` is not
+    the key — so both were discarded and the adapter fell back to its default:
+    **an ETL scaffold naming `source.db` and `target.db` built two in-memory
+    databases**, and every row it moved was lost at exit. `ErrorRecoveryWorkflow`
+    and `APIOrchestrator` marked their terminal state with a `type: "terminal"`
+    key the schema has never had, so **their end states were not end states**.
+    And the large-file example declared a per-state `streaming` block, a level
+    at which the schema declares none and the engine reads none.
+
+    Arbitrary data still travels in the field built for it — `metadata` on the
+    FSM, a network, a state or an arc, `config` on a resource, `params` on a
+    function reference. A `transaction:` block remains exempt: it warns and
+    loads, as it has since the transaction coordinator was retired, because a
+    key that *was* valid earns a migration signal where one that never was does
+    not.
+
+- **`$include` and `$import` are stripped, with a warning, when the loader is
+  not going to resolve them** — under `resolve_references=False`, and on
+  `load_from_dict`, which has no file to anchor a reference against. They are
+  the loader's language rather than the schema's, and previously survived into
+  validation to be discarded there.
+
 - **`StateSchema` is constructed from a JSON Schema mapping.** It takes the
   state's `data_schema` block (alias `schema`) directly:
 

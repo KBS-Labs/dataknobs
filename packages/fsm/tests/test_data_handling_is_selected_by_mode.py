@@ -28,6 +28,9 @@ from __future__ import annotations
 
 from typing import Any
 
+import pytest
+from pydantic import ValidationError
+
 from dataknobs_fsm import AdvancedFSM
 from dataknobs_fsm.config.builder import FSMBuilder
 from dataknobs_fsm.config.loader import ConfigLoader
@@ -132,21 +135,25 @@ def test_copy_is_the_mode_when_nothing_says_otherwise() -> None:
     assert state.data_mode is DataHandlingMode.COPY
 
 
-def test_a_data_mode_block_under_a_network_is_dropped_without_complaint() -> None:
-    """The trap the guide's own example fell into for its whole life.
+def test_a_data_mode_block_under_a_network_is_refused() -> None:
+    """The trap the guide's own example fell into, and no longer can.
 
-    Pydantic accepts unknown keys silently and ``NetworkConfig`` has no
-    ``data_mode`` field, so a block written there validates, is discarded, and
-    leaves every state on ``copy``. Nothing warns. The guide taught this shape
-    in all three of its configuration examples.
+    ``NetworkConfig`` has no ``data_mode`` field. The block written there used
+    to validate, be discarded, and leave every state on ``copy`` --- so the
+    author read their own configuration back as evidence of a mode that was
+    never in effect. The configuration models refuse a key they do not declare,
+    which is what turns this from a silent default into a failed load.
+
+    Kept here rather than left to ``test_unknown_config_keys_are_refused.py``
+    because the cost is specific to this subject: of everything that can be
+    misplaced in a configuration, a data mode is the one whose silent default
+    looks exactly like success.
     """
     config = _config()
     config["networks"][0]["data_mode"] = {"default": "direct"}
 
-    fsm = _build(config)
-
-    assert not hasattr(fsm.networks["main"], "data_mode")
-    assert fsm.get_start_state().data_mode is DataHandlingMode.COPY
+    with pytest.raises(ValidationError):
+        _build(config)
 
 
 def test_the_other_data_mode_keys_are_accepted_and_read_by_nothing() -> None:

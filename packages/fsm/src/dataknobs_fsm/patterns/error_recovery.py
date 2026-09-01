@@ -327,16 +327,16 @@ class ErrorRecoveryWorkflow(StructuredConfigConsumer[ErrorRecoveryConfig]):
     def _build_fsm(self) -> SimpleFSM:
         """Build FSM for error recovery workflow."""
         # Add start state
-        states = [{"name": "start", "type": "initial", "is_start": True}]
+        states = [{"name": "start", "is_start": True}]
         arcs = []
 
         # Main execution state
-        states.append({"name": "execute", "type": "task"})
+        states.append({"name": "execute"})
         arcs.append({"from": "start", "to": "execute", "name": "init"})
 
         # Recovery states based on strategy
         if self.config.primary_strategy == RecoveryStrategy.RETRY:
-            states.append({"name": "retry", "type": "task"})
+            states.append({"name": "retry"})
             arcs.append(
                 {
                     "from": "execute",
@@ -355,7 +355,7 @@ class ErrorRecoveryWorkflow(StructuredConfigConsumer[ErrorRecoveryConfig]):
             arcs.append({"from": "circuit_check", "to": "execute", "name": "circuit_closed"})
 
         elif self.config.primary_strategy == RecoveryStrategy.FALLBACK:
-            states.append({"name": "fallback", "type": "task"})
+            states.append({"name": "fallback"})
             arcs.append(
                 {
                     "from": "execute",
@@ -367,9 +367,7 @@ class ErrorRecoveryWorkflow(StructuredConfigConsumer[ErrorRecoveryConfig]):
             arcs.append({"from": "fallback", "to": "end", "name": "fallback_complete"})
 
         elif self.config.primary_strategy == RecoveryStrategy.COMPENSATE:
-            states.extend(
-                [{"name": "save_state", "type": "task"}, {"name": "compensate", "type": "task"}]
-            )
+            states.extend([{"name": "save_state"}, {"name": "compensate"}])
             arcs.append({"from": "start", "to": "save_state", "name": "init"})
             arcs.append({"from": "save_state", "to": "execute", "name": "state_saved"})
             arcs.append(
@@ -393,7 +391,7 @@ class ErrorRecoveryWorkflow(StructuredConfigConsumer[ErrorRecoveryConfig]):
         )
 
         # Add end state
-        states.append({"name": "end", "type": "terminal"})
+        states.append({"name": "end", "is_end": True})
 
         # Build FSM configuration
         fsm_config = {
