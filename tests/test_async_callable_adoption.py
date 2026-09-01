@@ -23,6 +23,23 @@ larger population and the one that produces the worse failures. The first
 version of this check was keyed to the token, scanned one subpackage, and
 reported green over three unchecked dispatches in a file it was reading.
 
+**And the first AST version repeated that mistake one level up.** It read a
+callback only where it was a *parameter of the dispatching function*, matched
+as a bare ``ast.Name``. Almost no real callback is spelled that way: it is
+taken by ``__init__``, stored, and dispatched later as ``self.overflow_handler``
+or ``self.progress_callback``. So the structurally superior check covered none
+of the four sites that motivated it, and the token check --- the one this
+paragraph disparages --- was the only half doing any work. Attribute-held
+callbacks are now first-class; see :func:`_callback_attributes` and
+:func:`_dispatch_key`. Turning it on found four unjudged dispatches in
+``keyed_store.py``, a file the guard had been reading and passing all along.
+
+Still not covered, and named here so the next reader knows the edge rather
+than discovering it: a callback reached through a container
+(``route["condition"]``) or bound by a loop over one. Deciding what those hold
+is type inference, and the over-reporting this guard prefers stops being safe
+once a finding cannot be settled by reading one function.
+
 There is no allowlist. Both findings are zero in scope, so an exemption
 would be an empty declaration whose only effect is to rot --- and the one
 entry the token-keyed version *did* carry turned out to rest on a reason that
@@ -54,14 +71,28 @@ from tests._workspace import ROOT, rel, tracked_python_files
 #:
 #: Widening is this constant plus the work to bring the added package to zero
 #: --- which is the whole cost, and it is not small. The remaining packages
-#: measure 37 sites of the first shape and 12 of the second, and they are not
-#: a backlog of oversights: each is a published dispatch whose behaviour
+#: measure **28 sites of the first shape and 34 of the second**, and they are
+#: not a backlog of oversights: each is a published dispatch whose behaviour
 #: changes when it starts awaiting, so each needs its own reproduce-first
-#: proof. Several are tracked already, at high severity, because the failure
-#: is not a dropped notification but a circuit breaker recording a success it
-#: never executed and a streaming sink dropping records it has already
-#: counted. Adding a package here without doing that work turns a guard that
+#: proof. Adding a package here without doing that work turns a guard that
 #: passes into a guard that is disabled.
+#:
+#: Two things to know before quoting those numbers.
+#:
+#: **They move when the detector does, not only when the code does.** The
+#: second figure was 12 while the shape-two check could see only a callback
+#: held in a local parameter; teaching it about ``self.<attr>`` (see
+#: :func:`_callback_attributes`) is most of the rise to 34. The sites were
+#: always there. A census is a property of the question asked, so re-measure
+#: rather than quoting this comment --- the previous figure was also one off
+#: on the day it was written.
+#:
+#: **Eight of them are in modules nothing calls.** ``patterns/error_recovery``
+#: and ``patterns/api_orchestration`` have no in-tree importer, so the cost of
+#: a reproduce-first proof there buys a guarantee for code with no caller to
+#: guarantee it to. Whether those modules should be driven, deprecated or
+#: deleted is a question about the modules, and it is worth answering before
+#: paying to certify them --- not after.
 SCOPE = ("packages/data/src",)
 
 #: Enough scanned files that an empty finding list means "clean" rather than
@@ -127,7 +158,23 @@ def _call_name(node: ast.Call) -> str:
     return ""
 
 
-def _callback_parameters(fn: ast.AsyncFunctionDef) -> set[str]:
+def _dispatch_key(node: ast.expr) -> str | None:
+    """How one callback is spelled, canonicalised so the sets can compare.
+
+    Two spellings reach the same callback and both have to answer to the same
+    judgement: a bare parameter (``callback``) and an instance attribute
+    holding one (``self.progress_callback``). Keying on a string rather than
+    on the node lets ``judged``, ``delegated`` and the dispatch walk all speak
+    one vocabulary instead of three.
+    """
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name):
+        return f"{node.value.id}.{node.attr}"
+    return None
+
+
+def _callback_parameters(fn: ast.FunctionDef | ast.AsyncFunctionDef) -> set[str]:
     """Parameters annotated as something callable.
 
     Read off the annotation rather than resolved, for the reason the file
@@ -145,6 +192,75 @@ def _callback_parameters(fn: ast.AsyncFunctionDef) -> set[str]:
         annotation = ast.unparse(arg.annotation)
         if "Callable" in annotation or "Awaitable" in annotation:
             found.add(arg.arg)
+    return found
+
+
+def _callback_attributes(cls: ast.ClassDef) -> set[str]:
+    """``self.x`` keys for attributes holding a constructor's callback.
+
+    The shape this guard was blind to, and the one every defect it has
+    actually caught was written in. A callback taken by ``__init__`` and
+    stored is not a parameter of the method that later dispatches it, so a
+    detector reading only ``fn.args`` cannot see ``self.overflow_handler(...)``
+    or ``self.progress_callback(...)`` however carefully it reads them ---
+    which is how a check whose whole argument is that the structural shape
+    beats the token came to cover none of the four sites that motivated it.
+
+    Two sources, both read off the annotation as above:
+
+    - ``self.cb = cb`` in ``__init__``, where ``cb`` is annotated callable.
+      Covers the overwhelming majority, including every site here.
+    - ``self.cb: Callable[...] = ...``, an annotated attribute assignment,
+      wherever it appears in the class body.
+
+    Not covered, deliberately: an attribute assembled from a container or
+    rebound in a method the constructor never sees. Deciding what those hold
+    is type inference, and the over-reporting this guard prefers stops being
+    safe once a finding cannot be settled by looking at one function.
+    """
+    found: set[str] = set()
+
+    for node in cls.body:
+        # `self.cb: Callable[...] = ...` --- annotated in the class body.
+        if isinstance(node, ast.AnnAssign) and node.annotation is not None:
+            annotation = ast.unparse(node.annotation)
+            key = _dispatch_key(node.target)
+            if key and key.startswith("self.") and (
+                "Callable" in annotation or "Awaitable" in annotation
+            ):
+                found.add(key)
+
+        if not isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
+            continue
+        if node.name != "__init__":
+            continue
+        callable_parameters = _callback_parameters(node)
+        for statement in ast.walk(node):
+            if isinstance(statement, ast.AnnAssign):
+                targets: list[ast.expr] = [statement.target]
+                value = statement.value
+            elif isinstance(statement, ast.Assign):
+                targets = list(statement.targets)
+                value = statement.value
+            else:
+                continue
+            # `self.cb = cb`, and `self.cb = cb or default` --- the second
+            # because a `None`-defaulted callback is normally coalesced.
+            sources: list[ast.expr] = []
+            if value is not None:
+                sources = [value]
+                if isinstance(value, ast.BoolOp):
+                    sources = list(value.values)
+            if not any(
+                isinstance(source, ast.Name) and source.id in callable_parameters
+                for source in sources
+            ):
+                continue
+            for target in targets:
+                key = _dispatch_key(target)
+                if key and key.startswith("self."):
+                    found.add(key)
+
     return found
 
 
@@ -173,20 +289,26 @@ def _judged_names(fn: ast.AsyncFunctionDef) -> set[str]:
                 targets = node.targets
             elif node.target is not None:
                 targets = [node.target]
-            if isinstance(value, ast.Call) and isinstance(value.func, ast.Name):
-                for target in targets:
-                    if isinstance(target, ast.Name):
-                        assigned_from[target.id] = value.func.id
+            if isinstance(value, ast.Call):
+                source = _dispatch_key(value.func)
+                if source is not None:
+                    for target in targets:
+                        key = _dispatch_key(target)
+                        if key is not None:
+                            assigned_from[key] = source
 
     for node in ast.walk(fn):
         if not isinstance(node, ast.Call) or _call_name(node) not in CLASSIFIERS:
             continue
         for argument in node.args:
-            if isinstance(argument, ast.Name):
-                judged.add(argument.id)
-                # `isawaitable(result)` judges whatever produced `result`.
-                judged.add(assigned_from.get(argument.id, argument.id))
-            elif isinstance(argument, ast.Attribute) and isinstance(argument.value, ast.Name):
+            key = _dispatch_key(argument)
+            if key is None:
+                continue
+            judged.add(key)
+            # `isawaitable(result)` judges whatever produced `result`.
+            judged.add(assigned_from.get(key, key))
+            # `isawaitable(wrapper.attr)` also settles `wrapper` itself.
+            if isinstance(argument, ast.Attribute) and isinstance(argument.value, ast.Name):
                 judged.add(argument.value.id)
     return judged
 
@@ -237,28 +359,41 @@ def _findings(source: str, path: Path) -> list[Finding]:
                     )
                 )
 
+    # A callback stored by `__init__` is dispatched by methods that do not
+    # take it as a parameter, so the class is the unit that knows about it.
+    attributes_in_scope: dict[int, set[str]] = {}
+    for cls in ast.walk(tree):
+        if not isinstance(cls, ast.ClassDef):
+            continue
+        attributes = _callback_attributes(cls)
+        if not attributes:
+            continue
+        for node in ast.walk(cls):
+            if isinstance(node, ast.AsyncFunctionDef):
+                attributes_in_scope.setdefault(id(node), set()).update(attributes)
+
     for fn in ast.walk(tree):
         if not isinstance(fn, ast.AsyncFunctionDef):
             continue
-        callbacks = _callback_parameters(fn)
+        callbacks = _callback_parameters(fn) | attributes_in_scope.get(id(fn), set())
         if not callbacks:
             continue
         judged = _judged_names(fn)
         awaited = {id(node.value) for node in ast.walk(fn) if isinstance(node, ast.Await)}
         delegated = {
-            argument.id
+            key
             for node in ast.walk(fn)
             if isinstance(node, ast.Call) and _call_name(node) in DELEGATORS
             for argument in node.args
-            if isinstance(argument, ast.Name)
+            if (key := _dispatch_key(argument)) is not None
         }
         for node in ast.walk(fn):
             if not isinstance(node, ast.Call) or id(node) in awaited:
                 continue
-            if not isinstance(node.func, ast.Name):
+            callback = _dispatch_key(node.func)
+            if callback is None or callback not in callbacks:
                 continue
-            callback = node.func.id
-            if callback not in callbacks or callback in judged or callback in delegated:
+            if callback in judged or callback in delegated:
                 continue
             if exempt(node.lineno):
                 continue

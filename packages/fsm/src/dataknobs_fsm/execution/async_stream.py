@@ -3,8 +3,9 @@
 import asyncio
 import time
 from dataclasses import dataclass, field
-from typing import Any, AsyncIterator, Callable, Dict, List, Tuple, Union
+from typing import Any, AsyncIterator, Callable, Dict, List, Tuple, Union, cast
 
+from dataknobs_common.callbacks import run_callback_off_loop
 from dataknobs_fsm.core.fsm import FSM
 from dataknobs_fsm.core.modes import ProcessingMode, TransactionMode
 from dataknobs_fsm.execution.async_engine import AsyncExecutionEngine
@@ -171,7 +172,7 @@ class AsyncStreamExecutor:
         max_transitions: int,
         progress: StreamProgress,
         sink: Union[Callable, None],
-    ):
+    ) -> None:
         """Process a chunk of items.
 
         Args:
@@ -231,14 +232,18 @@ class AsyncStreamExecutor:
             # the streaming path, symmetric with batch/whole.
             progress.records_emitted += len(successful_results)
 
-            # Send to sink if provided
+            # Send to sink if provided.
+            #
+            # `records_emitted` was incremented directly above, so this
+            # dispatch is the one place a misjudged callable costs data rather
+            # than a notification: the caller would report records the sink
+            # never received. `run_callback_off_loop` is right on both counts
+            # --- it judges a callable object correctly, where
+            # `iscoroutinefunction` reports one as sync and silently discards
+            # the coroutine, and a sink writes somewhere, so it belongs off
+            # the event loop.
             if sink and successful_results:
-                if asyncio.iscoroutinefunction(sink):
-                    await sink(successful_results)
-                else:
-                    # Run sync sink in executor
-                    loop = asyncio.get_running_loop()
-                    await loop.run_in_executor(None, sink, successful_results)
+                await run_callback_off_loop(sink, successful_results)
 
             # Update progress
             progress.chunks_processed += 1
@@ -304,7 +309,7 @@ class AsyncStreamExecutor:
         state_def = self.fsm.get_state(state_name)
         return getattr(state_def, "emit_output", True) if state_def else True
 
-    async def _sync_to_async_iter(self, sync_iter):
+    async def _sync_to_async_iter(self, sync_iter: Any) -> AsyncIterator[Any]:
         """Convert sync iterator to async iterator.
 
         Args:
@@ -332,7 +337,9 @@ class AsyncStreamExecutor:
                     return next(iter(network.initial_states))
         elif main_network and hasattr(main_network, "initial_states"):
             if main_network.initial_states:
-                return next(iter(main_network.initial_states))
+                # `main_network` came from `getattr`, so it is `Any`; the
+                # attribute is `Set[str]` on every network type that has it.
+                return cast("str", next(iter(main_network.initial_states)))
 
         # Fallback: check all networks
         for network in self.fsm.networks.values():
@@ -341,15 +348,17 @@ class AsyncStreamExecutor:
 
         return None
 
-    async def _fire_progress_callback(self, progress: StreamProgress):
+    async def _fire_progress_callback(self, progress: StreamProgress) -> None:
         """Fire progress callback.
+
+        Dispatched off the loop, as :class:`AsyncBatchExecutor` dispatches
+        its identical callback: a consumer's progress hook plausibly writes a
+        line to a log or bumps a metrics endpoint, and shipped code cannot see
+        who else is on its loop.
 
         Args:
             progress: Progress information.
         """
-        if asyncio.iscoroutinefunction(self.progress_callback):
-            await self.progress_callback(progress)
-        else:
-            # Run sync callback in executor
-            loop = asyncio.get_running_loop()
-            await loop.run_in_executor(None, self.progress_callback, progress)  # type: ignore
+        if self.progress_callback is None:
+            return
+        await run_callback_off_loop(self.progress_callback, progress)

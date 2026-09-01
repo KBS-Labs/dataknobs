@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Fixed
+
+- **`run_callback` and `run_callback_off_loop` handed back an un-run async
+  generator instead of refusing it.** `inspect.iscoroutinefunction` answers
+  `False` for an async generator function, so the synchronous arm called it —
+  which merely *constructs* an async generator without running a line of its
+  body — and `inspect.isawaitable` answers `False` for that object, so the
+  result-level net did not catch it either. The generator came back as the
+  callback's return value: truthy, non-`None`, and indistinguishable from real
+  data until something downstream tried to use it. All three spellings were
+  affected: an `async def` with a `yield`, an object whose `__call__` is one,
+  and a plain `def` that returns one.
+
+  Both helpers now raise `TypeError` naming the shape and the alternative.
+  Refusing rather than consuming is deliberate: collecting a generator means
+  choosing a policy — every item, the first, a bounded prefix — that belongs
+  to the surface that knows what the items are for. This follows
+  `RetryExecutor.execute_sync`, which meets the same class of problem and
+  rejects rather than guessing.
+
 ### Added
 
 - **`is_async_callable` — "will calling this produce an awaitable?", answered
@@ -88,8 +108,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   awaits an async callable directly and hands a synchronous one to
   `asyncio.to_thread`.
 
-  Extracted rather than invented: four dispatches across `data` and `fsm` had
-  each hand-written the same predicate-plus-offload, and half of the sibling
+  Extracted rather than invented: dispatches across `data` and `fsm` had each
+  hand-written the same predicate-plus-offload, and half of the sibling
   dispatches beside them omitted the offload entirely — which is what a rule
   spelled out at each site rather than named once produces. The pair now
   states the choice, and it is a property of the surface: a thread hop costs
@@ -97,6 +117,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   thread, so a callback touching state that is not thread-safe changes
   meaning. Both are reasons to choose deliberately rather than to leave the
   choice unmade.
+
+  **Convergence is under way rather than finished.** Every hand-written copy
+  in `data` and in `dataknobs_fsm.io` / `dataknobs_fsm.execution` now
+  delegates. Copies remain in `dataknobs_fsm.patterns`,
+  `dataknobs_fsm.functions`, `dataknobs_fsm.execution.async_engine` and in
+  `bots`, `llm` and `xization` — 28 sites asking the wrong predicate and 34
+  making no judgement at all. Each changes behaviour for a callable object
+  when it converts, so each needs its own proof; `tests/test_async_callable_adoption.py`
+  measures the remainder and scopes the guard to what has actually been
+  brought to zero.
 
   It also catches the one shape `is_async_callable` cannot: a plain `def` that
   returns a coroutine builds it on the worker thread without running any of

@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Fixed
+
+- **`VectorStore.search_similar_records` ran a synchronous `fetch_records` on
+  the event loop.** The parameter's own docstring says "fetching by id is I/O,
+  so an async database's fetcher is the ordinary shape here", and the dispatch
+  used `run_callback` — the helper for a predicate or a per-record transform,
+  which runs a synchronous callable inline. A consumer whose fetcher is backed
+  by a `SyncDatabase` therefore stalled every other task on the loop for the
+  whole fan-out, once per search. It now goes through `run_callback_off_loop`.
+  The returned value was correct either way, which is why nothing caught it.
+
+### Changed
+
+- **`VectorMigration`'s progress callback and `call_embedding_fn`'s dispatch
+  delegate instead of spelling the branch out.** Both hand-wrote a judgement
+  that `dataknobs_common.callbacks` now owns, and the copy in
+  `embedding_fn._await_or_offload` had already drifted from the shared one: it
+  asked `hasattr(result, "__await__")`, which answers `False` for a
+  generator-based coroutine that `inspect.isawaitable` accepts. The `timeout`
+  on `call_embedding_fn` keeps its deliberately narrow scope — a worker thread
+  stays unbounded, because `wait_for` cannot cancel one.
+
+**Migrating.** A synchronous `fetch_records` now runs on a worker thread
+rather than on the loop thread. One that touches state which is not
+thread-safe, or that relies on being on the loop thread, needs to say so
+itself.
+
 ### Added
 
 - **`TextEmbedder`** in `dataknobs_data.vector` — the one shape for "turn text

@@ -45,6 +45,75 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   than does, and runs once per item, so it would pay for a thread hop on every
   record.
 
+- **`AsyncStreamExecutor` credited records to a sink that never received
+  them.** `progress.records_emitted` is incremented immediately before the
+  sink is dispatched, and the dispatch branched on
+  `asyncio.iscoroutinefunction` — which reports a callable object with an
+  `async def __call__` as synchronous. So an object sink was handed to
+  `run_in_executor`, which constructed its coroutine on a worker thread and
+  dropped it, while `AsyncStreamResult.emitted` reported every record as
+  delivered. Data loss with an accounting trail that said otherwise.
+
+- **`AsyncStreamExecutor` and `AsyncBatchExecutor` stopped reporting progress
+  to a callable-object callback.** The same misreading in
+  `_fire_progress_callback`, whose body was byte-identical in the two classes
+  — which is why one defect appeared in two places. Both now delegate to
+  `dataknobs_common.callbacks.run_callback_off_loop`, so the judgement is made
+  once rather than spelled out per class, and a synchronous progress hook
+  still runs off the loop as it did before.
+
+- **`IOBuffer` discarded the overflow when the handler failed.** The items are
+  sliced off the buffer before the handler is called and no copy is kept, so a
+  handler raising — a full disk, a refused socket — took them with it and the
+  exception reached the caller with the data already gone. They are now
+  restored to the front of the buffer, so a failed flush leaves the overflow
+  held rather than merely reported, and a retry drains the oldest first.
+
+- **`IOBuffer(max_size=1)` never drained and grew without bound.** The drain
+  is `max_size // 2`, which is `0` at one: the handler was invoked with an
+  empty list on every subsequent `add`, the buffer kept every item, and it
+  grew past the maximum it was configured with — unbounded memory in the one
+  component whose contract is to bound it. The drain now moves at least one
+  item, and `max_size < 1` is refused at construction.
+
+- **`ParallelIOExecutor` ignored `max_workers`.** It was stored by `__init__`,
+  documented by the `parallel_io_executor` factory, and read nowhere. That was
+  inert while synchronous providers were skipped entirely; once they began
+  being offloaded, every one became an `asyncio.to_thread` submission issued
+  at once into the event loop's **default** executor — which is process-wide
+  and shared with every other offload in the application. A caller asking for
+  4 workers over 200 slow providers saturated that pool for all of them. The
+  bound is now enforced by a semaphore held for the executor's lifetime, so
+  two concurrent `read_all` calls share it rather than getting one each, and
+  `max_workers < 1` is refused.
+
+### Changed
+
+- **`IORouter.add_route` and `IOBuffer` accept async callbacks in their
+  annotations, not merely in their behaviour.** `add_route`'s docstring
+  already said the condition and transform "may be sync or async" and
+  `IOBuffer`'s overflow handler already accepted either, while the published
+  signatures said `Callable[[Any], bool]` and
+  `Callable[[List[Any]], None]` — so a consumer passing the async callback the
+  code supports got a type error at their own call site.
+
+- **`IORouter.route` logs when a matched route's provider cannot be written
+  to.** The transformed value still joins the returned list, so a caller
+  reading the return value could not tell that nothing had been written.
+
+**Migrating.** Two consequences worth checking before upgrading:
+
+- A provider list holding **both** an async and a synchronous provider for the
+  same destination now receives **two** writes where it previously received
+  one, because the synchronous half was silently skipped. `write_all` returns
+  `None`, so nothing surfaces this.
+- A synchronous `overflow_handler`, provider write, sink or progress callback
+  now runs on a **worker thread** rather than on the loop thread. One that
+  touches state which is not thread-safe, calls `loop.call_soon`, or uses
+  `asyncio.Queue.put_nowait` needs to say so itself. `asyncio.to_thread`
+  copies the context, so a callback that *sets* a contextvar no longer affects
+  its caller.
+
 ## v0.4.2 - 2026-08-26
 
 ### Fixed

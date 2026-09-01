@@ -45,9 +45,10 @@ callable, which the batch lane did not do at all.
 from __future__ import annotations
 
 import asyncio
+import inspect
 from typing import TYPE_CHECKING, Any
 
-from dataknobs_common.callbacks import is_async_callable
+from dataknobs_common.callbacks import is_async_callable, run_callback_off_loop
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -82,18 +83,32 @@ async def _await_or_offload(
     the batch dispatch and not by the per-text one, so the same callable
     produced a vector through one entry point and a coroutine object through
     the other --- silently, since neither raises.
-    """
-    if is_async_callable(embedding_fn):
-        result = embedding_fn(argument)
-        if timeout is not None:
-            return await asyncio.wait_for(result, timeout=timeout)
-        return await result
 
+    **The three shapes are no longer decided here.** They are exactly what
+    :func:`~dataknobs_common.callbacks.run_callback_off_loop` decides, and a
+    second copy of one judgement is how the two entry points came to disagree
+    in the first place. This copy had already drifted from the shared one: it
+    asked ``hasattr(result, "__await__")``, which answers ``False`` for a
+    generator-based coroutine that :func:`inspect.isawaitable` accepts.
+
+    What stays here is the ``timeout``, whose scope is deliberately narrower
+    than the whole call --- see :func:`call_embedding_fn` for why a worker
+    thread is left unbounded. Delegating the sync arm wholesale would widen
+    it silently, which is why that one arm is still spelled out.
+    """
+    if timeout is None:
+        return await run_callback_off_loop(embedding_fn, argument)
+
+    if is_async_callable(embedding_fn):
+        # Nothing is offloaded on this arm, so bounding the whole dispatch
+        # bounds exactly the awaitable the contract says it bounds.
+        return await asyncio.wait_for(run_callback_off_loop(embedding_fn, argument), timeout)
+
+    # A synchronous callable. The thread stays unbounded on purpose; only a
+    # coroutine it hands back is bounded.
     result = await asyncio.to_thread(embedding_fn, argument)
-    if hasattr(result, "__await__"):
-        if timeout is not None:
-            return await asyncio.wait_for(result, timeout=timeout)
-        return await result
+    if inspect.isawaitable(result):
+        return await asyncio.wait_for(result, timeout=timeout)
     return result
 
 

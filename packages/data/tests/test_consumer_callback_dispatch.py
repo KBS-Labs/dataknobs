@@ -516,6 +516,39 @@ class TestVectorStoreAcceptsAnAsyncRecordFetcher:
 
         assert [result.record.get_value("content") for result in results] == ["alpha"]
 
+    async def test_a_synchronous_fetcher_runs_off_the_loop_thread(self) -> None:
+        """Judged correctly, and then run in the wrong place.
+
+        The parameter's own docstring says *"fetching by id is I/O, so an
+        async database's fetcher is the ordinary shape here"* --- and the
+        dispatch used ``run_callback``, which runs a synchronous callable on
+        the event loop. A consumer whose fetcher is backed by a
+        ``SyncDatabase`` therefore stalled every other task on the loop for
+        the whole fan-out, once per search. The returned value is correct
+        either way, so only thread identity can see it.
+        """
+        store = MemoryVectorStore(dimensions=3)
+        await store.add_vectors(
+            np.array([[0.1, 0.2, 0.3]], dtype=np.float32),
+            ids=["v-1"],
+            metadata=[{"record_id": "r-1"}],
+        )
+        record = Record({"id": "r-1", "content": "alpha"})
+        threads: list[str] = []
+
+        def fetch_records(ids: list[str]) -> list[Record]:
+            threads.append(threading.current_thread().name)
+            return [record]
+
+        await store.search_similar_records(
+            np.array([0.1, 0.2, 0.3], dtype=np.float32),
+            k=1,
+            fetch_records=fetch_records,
+        )
+
+        assert threads, "the fetcher never ran"
+        assert all(name != threading.current_thread().name for name in threads)
+
 
 class TestPredicateResultsAreNotCoroutines:
     """A coroutine is always truthy, so an un-awaited predicate admits

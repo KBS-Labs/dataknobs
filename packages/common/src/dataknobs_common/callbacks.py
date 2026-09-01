@@ -152,6 +152,52 @@ def is_async_callable(candidate: Any) -> TypeGuard[Callable[..., Awaitable[Any]]
     return inspect.iscoroutinefunction(candidate.__call__)
 
 
+def _refuse_async_generator(helper: str) -> TypeError:
+    """The refusal both helpers raise, worded once.
+
+    Neither helper can dispatch an async generator, and neither should guess:
+    consuming one means choosing a collection policy --- every item, the
+    first, a bounded prefix --- which belongs to the surface that knows what
+    the items are for. What it must not do is what it did before: hand the
+    un-iterated generator back as though it were the callback's return value,
+    where it is truthy, non-``None``, and indistinguishable from real data
+    until something downstream tries to use it.
+
+    Loud beats silent here for the same reason
+    :meth:`~dataknobs_common.retry.RetryExecutor.execute_sync` rejects a
+    callable whose result turns out awaitable rather than returning it.
+    """
+    return TypeError(
+        f"{helper} requires a callable returning a value or an awaitable; this one "
+        "produces an async generator, which is iterated rather than awaited. "
+        "Consume it where the items mean something --- `async for item in cb(...)` "
+        f"--- and give {helper} a callable that returns the collected result."
+    )
+
+
+async def _await_result(result: Any, helper: str) -> Any:
+    """Finish a call: await what is awaitable, refuse what cannot be.
+
+    Shared by both helpers so the result-level half of the judgement cannot
+    drift between them, which is the drift the pair was extracted to end.
+
+    Checked on the result rather than on the callable, though an async
+    generator *function* is detectable up front, because only this position
+    also catches a plain ``def`` that returns one --- invisible to any amount
+    of inspecting the callable, for the same reason judging the result catches
+    a ``def`` returning a coroutine when ``iscoroutinefunction`` never will.
+    One check that covers three shapes beats two that cover three between
+    them.
+    """
+    if inspect.isasyncgen(result):
+        # Never started, so it holds no suspended frame and owns no
+        # "never awaited" warning; closing it would itself need an await.
+        raise _refuse_async_generator(helper)
+    if inspect.isawaitable(result):
+        return await result
+    return result
+
+
 async def run_callback(
     callback: Callable[..., _T | Awaitable[_T]], /, *args: Any, **kwargs: Any
 ) -> _T:
@@ -199,14 +245,14 @@ async def run_callback(
 
     Returns:
         What ``callback`` returned, awaited first if it was awaitable.
+
+    Raises:
+        TypeError: If the call produced an async generator. That is iterated
+            rather than awaited, so there is no correct answer this function
+            can give --- see :func:`_refuse_async_generator`. Whatever
+            ``callback`` itself raises propagates unchanged.
     """
-    result = callback(*args, **kwargs)
-    if inspect.isawaitable(result):
-        # `await` on the narrowed `Awaitable[Any]` widens to `Any`; the
-        # negative branch below needs no cast, because failing the narrowing
-        # leaves `result` as `_T` already.
-        return cast("_T", await result)
-    return result
+    return cast("_T", await _await_result(callback(*args, **kwargs), "run_callback"))
 
 
 async def run_callback_off_loop(
@@ -246,6 +292,11 @@ async def run_callback_off_loop(
 
     Returns:
         What ``callback`` returned, awaited first if it was awaitable.
+
+    Raises:
+        TypeError: If the call produced an async generator, as
+            :func:`run_callback`. Whatever ``callback`` itself raises
+            propagates unchanged, across the worker-thread boundary included.
     """
     if is_async_callable(callback):
         return cast("_T", await callback(*args, **kwargs))
@@ -254,9 +305,7 @@ async def run_callback_off_loop(
     # without running any of it --- calling an async function only constructs
     # the object. Awaiting it here runs its body on the loop, which is where a
     # coroutine belongs, and is the one shape `is_async_callable` cannot see.
-    if inspect.isawaitable(result):
-        return cast("_T", await result)
-    return result
+    return cast("_T", await _await_result(result, "run_callback_off_loop"))
 
 
 # --------------------------------------------------------------------- #

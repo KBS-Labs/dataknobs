@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
-from dataknobs_common.callbacks import is_async_callable, run_callback
+from dataknobs_common.callbacks import run_callback
 
 from ..fields import FieldType
 from ..query import Query
@@ -1312,13 +1312,13 @@ class IncrementalVectorizer:
 
                 if progress_callback:
                     # Same classification question as the embedding function,
-                    # so the same predicate answers it -- a callable object
-                    # with an async ``__call__`` is the natural shape for a
-                    # progress reporter that accumulates.
-                    if is_async_callable(progress_callback):
-                        await progress_callback(processed, total, batch)
-                    else:
-                        progress_callback(processed, total, batch)
+                    # so the same helper answers it -- a callable object with
+                    # an async ``__call__`` is the natural shape for a progress
+                    # reporter that accumulates. `run_callback` rather than a
+                    # hand-spelled branch: judging the *result* also catches a
+                    # plain `def` that returns a coroutine, which no amount of
+                    # inspecting the callable ever will.
+                    await run_callback(progress_callback, processed, total, batch)
 
         return {
             "processed": processed,

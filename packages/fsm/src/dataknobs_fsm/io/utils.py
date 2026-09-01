@@ -4,6 +4,7 @@ This module provides utility functions for common I/O patterns.
 """
 
 import asyncio
+import logging
 from typing import Any, Dict, List, Union, AsyncIterator, Iterator, Callable, TypeVar, Awaitable
 from functools import reduce
 
@@ -11,6 +12,8 @@ from dataknobs_common.callbacks import run_callback, run_callback_off_loop
 
 from .base import IOAdapter, IOConfig, IOFormat, IOProvider
 from .adapters import FileIOAdapter, DatabaseIOAdapter, HTTPIOAdapter
+
+logger = logging.getLogger(__name__)
 
 T = TypeVar("T")
 
@@ -137,9 +140,9 @@ class IORouter:
 
     def add_route(
         self,
-        condition: Callable[[Any], bool],
+        condition: Callable[[Any], bool] | Callable[[Any], Awaitable[bool]],
         provider: IOProvider,
-        transform: Callable[[Any], Any] | None = None,
+        transform: Callable[[Any], Any] | Callable[[Any], Awaitable[Any]] | None = None,
     ) -> None:
         """Add a routing rule.
 
@@ -177,6 +180,17 @@ class IORouter:
                 transformed = await run_callback(route["transform"], data)
                 if hasattr(route["provider"], "write"):
                     await run_callback_off_loop(route["provider"].write, transformed)
+                else:
+                    # The transformed value still joins `results`, so a caller
+                    # reading the return value cannot tell that nothing was
+                    # written. Say so rather than dropping it in silence --
+                    # a provider registered on a route and unable to accept a
+                    # write is a wiring mistake, not a routing decision.
+                    logger.warning(
+                        "Route provider %r has no write(); data matched the route "
+                        "and was transformed but not written",
+                        type(route["provider"]).__name__,
+                    )
                 results.append(transformed)
         return results
 
@@ -185,14 +199,25 @@ class IOBuffer:
     """Buffer for I/O operations with overflow handling."""
 
     def __init__(
-        self, max_size: int = 10000, overflow_handler: Callable[[List[Any]], None] | None = None
+        self,
+        max_size: int = 10000,
+        overflow_handler: Callable[[List[Any]], None]
+        | Callable[[List[Any]], Awaitable[None]]
+        | None = None,
     ):
         """Initialize buffer.
 
         Args:
-            max_size: Maximum buffer size
-            overflow_handler: Function to handle overflow
+            max_size: Maximum buffer size. Values below 2 still drain one item
+                at a time rather than never draining.
+            overflow_handler: Function to handle overflow. Sync or async ---
+                a synchronous one is run off the event loop, since a flush
+                writes somewhere. It is called with the items already removed
+                from the buffer; if it raises, they are put back, so the
+                overflow is never lost between the two.
         """
+        if max_size < 1:
+            raise ValueError(f"max_size must be at least 1, got {max_size}")
         self.max_size = max_size
         self.overflow_handler = overflow_handler
         self.buffer: List[Any] = []
@@ -231,11 +256,34 @@ class IOBuffer:
         where ``iscoroutinefunction`` reports one as sync and silently
         discards the coroutine, and it keeps a handler that writes the
         overflow somewhere off the event loop.
+
+        Two consequences of that same no-copy design, which the reasoning
+        above describes and the code did not honour:
+
+        **A failed flush must not consume the overflow.** A handler writing to
+        a full disk or a refused socket raises, and the items it was given are
+        already gone from the buffer. They go back, at the front, so the
+        exception reaches the caller with the data still held rather than
+        merely reported.
+
+        **The drain has to move at least one item.** ``max_size // 2`` is zero
+        at ``max_size=1``, which called the handler with an empty list on
+        every subsequent ``add`` while the buffer kept everything ---
+        unbounded growth in the component whose contract is to bound it.
         """
-        if self.overflow_handler:
-            overflow_items = self.buffer[: self.max_size // 2]
-            self.buffer = self.buffer[self.max_size // 2 :]
+        if not self.overflow_handler:
+            return
+
+        drain = max(1, self.max_size // 2)
+        overflow_items = self.buffer[:drain]
+        self.buffer = self.buffer[drain:]
+        try:
             await run_callback_off_loop(self.overflow_handler, overflow_items)
+        except BaseException:
+            # Back to the front, so a retry drains the oldest first and the
+            # buffer's ordering survives a failed flush.
+            self.buffer = overflow_items + self.buffer
+            raise
 
 
 class IOMetrics:
@@ -333,11 +381,44 @@ def parallel_io_executor(providers: List[IOProvider], max_workers: int = 4) -> "
 
 
 class ParallelIOExecutor:
-    """Execute I/O operations in parallel."""
+    """Execute I/O operations in parallel, up to ``max_workers`` at a time."""
 
     def __init__(self, providers: List[IOProvider], max_workers: int = 4) -> None:
+        """Initialize the executor.
+
+        Args:
+            providers: I/O providers to drive. Sync and async alike.
+            max_workers: Maximum provider calls in flight at once.
+
+        Raises:
+            ValueError: If ``max_workers`` is below 1, which would deadlock.
+        """
+        if max_workers < 1:
+            raise ValueError(f"max_workers must be at least 1, got {max_workers}")
         self.providers = providers
         self.max_workers = max_workers
+        # One semaphore for the executor's lifetime rather than one per call,
+        # so two concurrent `read_all`s share the bound instead of getting one
+        # each. Safe to build outside a running loop on the supported Pythons:
+        # a Semaphore has not bound itself to a loop at construction since 3.10.
+        self._semaphore = asyncio.Semaphore(max_workers)
+
+    async def _bounded(self, callback: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
+        """Dispatch one provider call, holding a slot for its duration.
+
+        Wraps :func:`~dataknobs_common.callbacks.run_callback_off_loop` rather
+        than replacing it: the judgement about the callable is still made
+        there, and this adds only the bound.
+
+        Without the bound, every synchronous provider becomes a
+        ``to_thread`` submission issued at once into the loop's *default*
+        executor --- which is process-wide and shared with every other
+        offload in the application, this package's own included. Fanning out
+        unboundedly there is not merely ignoring a knob; it is spending
+        somebody else's thread pool.
+        """
+        async with self._semaphore:
+            return await run_callback_off_loop(callback, *args, **kwargs)
 
     async def read_all(self, **kwargs: Any) -> List[Any]:
         """Read from all providers in parallel.
@@ -347,13 +428,13 @@ class ParallelIOExecutor:
         and this class is annotated to take either; a synchronous read is
         offloaded to a worker thread rather than run on the event loop, so
         the providers still proceed concurrently and a slow disk read does
-        not stall the others.
+        not stall the others --- up to ``max_workers`` of them at a time.
 
         Returns:
             Results from all providers
         """
         tasks = [
-            run_callback_off_loop(provider.read, **kwargs)
+            self._bounded(provider.read, **kwargs)
             for provider in self.providers
             if hasattr(provider, "read")
         ]
@@ -374,7 +455,7 @@ class ParallelIOExecutor:
             data: Data to write
         """
         tasks = [
-            run_callback_off_loop(provider.write, data, **kwargs)
+            self._bounded(provider.write, data, **kwargs)
             for provider in self.providers
             if hasattr(provider, "write")
         ]
