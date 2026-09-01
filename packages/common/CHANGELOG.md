@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Changed
+
+- **`lifecycle`'s teardown table now scopes its blessing of `async def
+  close()`.** That row holds for a collaborator whose shape the holder knows
+  statically, which is the case these helpers are for. It does not extend to a
+  collaborator held in a heterogeneous registry, where the method's name is the
+  only thing the holder can route on and an `async def close()` is
+  indistinguishable from a synchronous one until its coroutine has already been
+  discarded.
+
 ### Fixed
 
 - **`run_callback` and `run_callback_off_loop` handed back an un-run async

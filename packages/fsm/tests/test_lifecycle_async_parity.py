@@ -25,6 +25,9 @@ than an inference.
 
 from __future__ import annotations
 
+import asyncio
+from pathlib import Path
+
 import pytest
 from dataknobs_common.testing import (
     assert_no_blocking,
@@ -41,6 +44,8 @@ from dataknobs_fsm.config.schema import (
     NetworkConfig,
     StateConfig,
 )
+from dataknobs_fsm.resources.base import ResourceStatus
+from dataknobs_fsm.resources.database import AsyncDatabaseResourceAdapter
 from dataknobs_fsm.resources.manager import ResourceManager
 from dataknobs_fsm.resources.pool import PoolConfig
 from dataknobs_fsm.resources.properties import PropertiesResource
@@ -320,3 +325,66 @@ async def test_both_close_forms_are_terminal_the_same_way() -> None:
         closed_async.acquire("props", owner_id="x")
 
     assert str(sync_error.value) == str(async_error.value)
+
+
+# --------------------------------------------------------------------------- #
+# …and it must actually close the providers
+# --------------------------------------------------------------------------- #
+#
+# Everything above compares what the two halves do *around* provider teardown —
+# the acquired-resource release, the pools, the closed flag, the terminality —
+# and nothing compared the teardown itself, which is the thing ``cleanup()``
+# exists to do. That gap is why the case below survived: an
+# ``AsyncDatabaseResourceAdapter`` does not override ``close()``, so the sync
+# half runs the inherited ``BaseResourceProvider.close``, releases the handle
+# list, and never touches the database. No coroutine is created, so nothing
+# warns; the manager then clears its registry and the object holding the open
+# connection becomes unreachable.
+
+
+def _manager_with_async_database(tmp_path: Path) -> tuple[ResourceManager, object]:
+    """A manager holding one async-database provider with an open backend."""
+    manager = ResourceManager()
+    adapter = AsyncDatabaseResourceAdapter(
+        "target_db", type="file", path=str(tmp_path / "target.json")
+    )
+    manager.register_provider("target_db", adapter)
+    return manager, adapter
+
+
+@pytest.mark.asyncio
+async def test_cleanup_closes_an_async_database_provider(tmp_path: Path) -> None:
+    """The working half, pinned before the reporting half is added.
+
+    ``cleanup()`` gets this right by accident of ordering — it probes
+    ``aclose`` before falling through to the sync bucket — so this passes
+    today and exists to keep it passing.
+    """
+    manager, adapter = _manager_with_async_database(tmp_path)
+    await adapter._ensure_db()
+    assert adapter._database is not None
+
+    await manager.cleanup()
+
+    assert adapter._database is None, "cleanup() left the database open"
+    assert adapter.status is ResourceStatus.CLOSED
+
+
+def test_close_reports_the_async_database_it_cannot_close(tmp_path: Path) -> None:
+    """The sync half cannot await, so it must say so rather than claim success.
+
+    The connection really does stay open — a synchronous ``close()`` has no
+    loop to await ``aclose()`` on, and running one is not available to it:
+    ``close()`` is reachable from ``__exit__``, where a loop may already be
+    running in this thread. What is available is telling the truth about it,
+    which is what makes the leak diagnosable instead of invisible.
+    """
+    manager, adapter = _manager_with_async_database(tmp_path)
+    asyncio.run(adapter._ensure_db())
+    assert adapter._database is not None
+
+    manager.close()
+
+    assert "target_db" in manager.unclosed_providers, (
+        "a provider whose teardown must be awaited was closed synchronously and reported as closed"
+    )

@@ -624,6 +624,68 @@ print(f"Average acquisition time: {db_metrics.average_acquisition_time}s")
 all_metrics = manager.get_metrics()
 ```
 
+## Teardown: `close()` is sync, `aclose()` is awaited
+
+A `ResourceManager` holds providers of unrelated types in one registry, so the
+only thing it can route teardown on is the method's **name**:
+
+| Method | Meaning |
+|---|---|
+| `close()` | synchronous teardown; never a coroutine |
+| `aclose()` | teardown that must be awaited |
+
+A provider wrapping an async transport — an `AsyncDatabase`, an async HTTP
+client, an async connection pool — exposes `aclose()`. Spelling that teardown
+`close` is refused at registration:
+
+```python
+class BadProvider(BaseResourceProvider):
+    def acquire(self, **kwargs):
+        return self._client
+
+    def release(self, resource):
+        pass
+
+    async def close(self):        # wrong name for an awaited teardown
+        await self._client.aclose()
+
+manager.register_provider("bad", BadProvider("bad"))
+# ValueError: Provider 'bad' defines an async close(). Resource teardown is
+# synchronous by convention; name an awaitable teardown 'aclose()' so
+# ResourceManager.cleanup() can await it.
+```
+
+The check runs at registration rather than at teardown because that is the last
+moment the provider's author can still act on it. Without it, the synchronous
+path calls `close()`, discards the coroutine it returns, and reports success —
+so the teardown never runs and nothing says otherwise.
+
+The mistake runs the other way too, and is refused the same way: a
+**synchronous** method spelled `aclose()` is awaited, so its body runs and then
+the `await` raises — a teardown that in fact completed gets recorded as one that
+failed. On the synchronous path it is never called at all.
+
+```python
+class AlsoBad(BaseResourceProvider):
+    def acquire(self, **kwargs):
+        return self._handle
+
+    def release(self, resource):
+        pass
+
+    def aclose(self):             # wrong name for a synchronous teardown
+        self._handle.close()
+
+manager.register_provider("bad", AlsoBad("bad"))
+# ValueError: Provider 'bad' defines a synchronous aclose(). Resource teardown
+# named 'aclose' is awaited by convention; name a synchronous teardown
+# 'close()' so ResourceManager.close() can call it.
+```
+
+`cleanup()` is honoured as an alternate spelling of `aclose()` for providers
+that already used it, and carries the same obligation to be awaitable. New
+providers should use `aclose()`.
+
 ## Async Cleanup
 
 The ResourceManager supports async cleanup for resources:
@@ -638,6 +700,46 @@ async def cleanup_resources():
 # Run cleanup
 asyncio.run(cleanup_resources())
 ```
+
+`cleanup()` does everything `close()` does and additionally awaits providers
+exposing `aclose()`. From async code, prefer it — a synchronous `close()` has
+no loop to await an `aclose()` on, and cannot start one, since `close()` is
+reachable from `__exit__` where a loop may already be running in this thread.
+
+## Checking what teardown could not finish
+
+`unclosed_providers` records providers whose teardown did not complete — name
+to reason. Empty is the normal answer, and asserting it is how a caller that
+cares about resource lifetime checks that nothing was left open:
+
+```python
+with ResourceManager() as manager:
+    manager.register_provider("db", db_resource)
+    ...
+
+assert not manager.unclosed_providers      # nothing was left open
+```
+
+Two populations are recorded:
+
+- a provider whose teardown must be awaited (`aclose`) but was closed
+  synchronously — the transport really is still open, and the record is what
+  makes that diagnosable rather than invisible;
+- a provider whose teardown raised. Teardown continues past a failure rather
+  than abandoning the providers after it, and `close()` does not propagate the
+  exception — it is reachable from `__exit__`, where raising would replace
+  whatever the `with` body was raising.
+
+Two things are easy to get wrong about it:
+
+- **It is monotonic over the manager's life.** Entries accumulate and are never
+  cleared. `close()` is terminal and empties the registry, so a second call
+  finds nothing to close and would otherwise reset the record, erasing the
+  first call's evidence.
+- **A provider with no teardown method at all is not a member.** There was
+  nothing to close, which is a legitimate shape.
+
+The reason strings are diagnostic and may change. Assert on the keys.
 
 ## Resource Patterns
 

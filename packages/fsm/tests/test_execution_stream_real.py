@@ -3,6 +3,8 @@
 import time
 from typing import Any, List
 
+import pytest
+
 from dataknobs_fsm.execution.stream import StreamExecutor, StreamPipeline, StreamProgress
 from dataknobs_fsm.core.fsm import FSM
 from dataknobs_fsm.core.network import StateNetwork
@@ -412,3 +414,25 @@ class TestStreamExecutorReal:
         assert result["chunks_processed"] == 0
         assert result["successful"] == 0
         assert result["failed"] == 0
+
+    def test_multi_stage_pipeline_without_a_source_is_refused(self):
+        """A pipeline with no source is a broken pipeline, caught where it is made.
+
+        ``create_multi_stage_pipeline`` read the source with ``.get("source")``
+        and handed the result to a dataclass that requires one, so a stage list
+        without that key produced a ``StreamPipeline`` holding ``None``. Nothing
+        objected until ``execute_stream`` iterated it, and the ``AttributeError``
+        raised there names ``NoneType`` rather than the stage that omitted the
+        source.
+        """
+        executor = StreamExecutor(fsm=self.create_test_fsm())
+
+        with pytest.raises(ValueError, match="source"):
+            executor.create_multi_stage_pipeline([{"type": "transform", "function": lambda d: d}])
+
+    def test_multi_stage_pipeline_with_no_stages_is_refused(self):
+        """``stages[0]`` on an empty list is an IndexError with nothing to read."""
+        executor = StreamExecutor(fsm=self.create_test_fsm())
+
+        with pytest.raises(ValueError, match="stage"):
+            executor.create_multi_stage_pipeline([])

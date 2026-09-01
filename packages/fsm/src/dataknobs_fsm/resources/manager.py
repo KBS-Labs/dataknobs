@@ -1,11 +1,24 @@
-"""Central resource manager for FSM."""
+"""Central resource manager for FSM.
 
+Teardown is routed by method name --- see the convention in
+:mod:`dataknobs_fsm.resources.base`. This module both enforces it
+(:meth:`ResourceManager.register_provider`) and reports where it cannot be
+honoured (:attr:`ResourceManager.unclosed_providers`).
+"""
+
+import asyncio
+import logging
 import threading
 from contextlib import contextmanager
-from typing import Any, Dict, Set
+from types import MappingProxyType, TracebackType
+from typing import Any, Dict, Iterator, Mapping, Self, Set
+
+from dataknobs_common import is_async_callable
 
 from dataknobs_fsm.functions.base import ResourceError, ResourceConfig
 from dataknobs_fsm.resources.base import (
+    AsyncCleanable,
+    AsyncClosable,
     IResourceProvider,
     IResourcePool,
     ResourceStatus,
@@ -14,11 +27,64 @@ from dataknobs_fsm.resources.base import (
 )
 from dataknobs_fsm.resources.pool import ResourcePool, PoolConfig
 
+logger = logging.getLogger(__name__)
+
+#: Recorded against a provider whose awaited teardown the synchronous path
+#: cannot run. The text is diagnostic, not contractual --- assert on the keys
+#: of :attr:`ResourceManager.unclosed_providers`, never on these strings.
+_SKIPPED_ASYNC_TEARDOWN = (
+    "teardown must be awaited (aclose); close() cannot run it, "
+    "so the underlying transport is still open"
+)
+
+
+def _check_teardown_convention(name: str, provider: Any) -> None:
+    """Refuse a provider whose teardown is spelled against its asyncness.
+
+    Both directions, because the registry routes on the name and so a name
+    that lies about the method is the whole defect --- in either direction:
+
+    * an awaited ``close`` is called by the synchronous path, which discards
+      the coroutine it returns and reports success;
+    * a synchronous ``aclose``/``cleanup`` is *awaited*, which runs the body
+      and then raises ``TypeError`` on the ``await``, so a teardown that in
+      fact completed is recorded as one that failed --- and on the
+      synchronous path it is never called at all.
+
+    Presence is tested as "not ``None``" to match
+    :class:`~dataknobs_fsm.resources.base.AsyncClosable` exactly: a class
+    disclaiming an inherited hook with ``aclose = None`` fails that
+    ``isinstance`` too, so it must not be refused here either.
+
+    Args:
+        name: The registration name, for the message.
+        provider: The provider about to be registered.
+
+    Raises:
+        ValueError: If a teardown method's name contradicts its asyncness.
+    """
+    if is_async_callable(getattr(provider, "close", None)):
+        raise ValueError(
+            f"Provider '{name}' defines an async close(). Resource teardown "
+            "is synchronous by convention; name an awaitable teardown "
+            "'aclose()' so ResourceManager.cleanup() can await it."
+        )
+
+    for spelling in ("aclose", "cleanup"):
+        teardown = getattr(provider, spelling, None)
+        if teardown is not None and not is_async_callable(teardown):
+            raise ValueError(
+                f"Provider '{name}' defines a synchronous {spelling}(). "
+                f"Resource teardown named '{spelling}' is awaited by "
+                "convention; name a synchronous teardown 'close()' so "
+                "ResourceManager.close() can call it."
+            )
+
 
 class ResourceManager:
     """Manages resources across the FSM system."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         """Initialize the resource manager."""
         self._providers: Dict[str, IResourceProvider] = {}
         self._pools: Dict[str, IResourcePool] = {}
@@ -26,6 +92,38 @@ class ResourceManager:
         self._resource_owners: Dict[str, Set[str]] = {}  # resource_name -> owner_ids
         self._lock = threading.RLock()
         self._closed = False
+        self._unclosed_providers: Dict[str, str] = {}
+
+    @property
+    def unclosed_providers(self) -> Mapping[str, str]:
+        """Providers whose teardown did not complete, name to reason.
+
+        Empty is the normal answer, and asserting it is how a caller that
+        cares about resource lifetime checks that nothing was left open::
+
+            with SimpleFSM(config) as fsm:
+                ...
+            assert not fsm.unclosed_providers
+
+        Two populations are recorded: a provider whose teardown must be
+        awaited but was closed synchronously, and a provider whose teardown
+        raised. A provider exposing no teardown at all is *not* recorded ---
+        there was nothing to close, which is a legitimate shape.
+
+        Lifetime-scoped and monotonic: entries accumulate and are never
+        cleared. :meth:`close` is terminal and empties the registry, so a
+        second call finds nothing to close and would otherwise reset the
+        record, erasing the first call's evidence.
+
+        The reason strings are diagnostic and may change. Assert on the keys.
+        """
+        with self._lock:
+            return MappingProxyType(dict(self._unclosed_providers))
+
+    def _record_unclosed(self, name: str, reason: str) -> None:
+        """Note that ``name``'s teardown did not complete."""
+        with self._lock:
+            self._unclosed_providers[name] = reason
 
     def register_provider(
         self, name: str, provider: IResourceProvider, pool_config: PoolConfig | None = None
@@ -36,7 +134,21 @@ class ResourceManager:
             name: Resource name.
             provider: Resource provider.
             pool_config: Optional pool configuration.
+
+        Raises:
+            ValueError: If ``name`` is taken, or if a teardown method's name
+                contradicts its asyncness --- an awaited ``close``, or a
+                synchronous ``aclose``/``cleanup`` (see the teardown
+                convention in :mod:`dataknobs_fsm.resources.base`).
         """
+        # Every provider enters here --- `register_from_dict` and the config
+        # builder both end at this call --- so it is the one place the teardown
+        # convention can be enforced for providers this package never sees.
+        # Raising rather than warning: a provider whose teardown is misnamed
+        # cannot be torn down correctly by any caller of this manager, and this
+        # is the last moment its author can still act on the mistake.
+        _check_teardown_convention(name, provider)
+
         with self._lock:
             if name in self._providers:
                 raise ValueError(f"Provider '{name}' already registered")
@@ -88,7 +200,7 @@ class ResourceManager:
         with self._lock:
             return dict(self._providers)
 
-    def acquire(self, name: str, owner_id: str, timeout: float | None = None, **kwargs) -> Any:
+    def acquire(self, name: str, owner_id: str, timeout: float | None = None, **kwargs: Any) -> Any:
         """Acquire a resource.
 
         Args:
@@ -295,7 +407,9 @@ class ResourceManager:
             return all_metrics
 
     @contextmanager
-    def resource_context(self, name: str, owner_id: str, timeout: float | None = None, **kwargs):
+    def resource_context(
+        self, name: str, owner_id: str, timeout: float | None = None, **kwargs: Any
+    ) -> Iterator[Any]:
         """Context manager for resource acquisition.
 
         Args:
@@ -380,15 +494,25 @@ class ResourceManager:
         Terminal: a closed manager rejects further :meth:`acquire` calls.
         Use :meth:`cleanup` from async code — it does everything this does
         and additionally awaits providers whose cleanup is a coroutine.
+
+        Never raises: a provider that fails teardown is recorded in
+        :attr:`unclosed_providers` and the remaining providers are still
+        closed. This method is reachable from ``__exit__``, where propagating
+        would replace whatever the ``with`` body was raising.
         """
         self._closed = True
         self._release_acquired_and_close_pools()
 
         with self._lock:
-            # Close all providers
-            for provider in self._providers.values():
-                if hasattr(provider, "close"):
-                    provider.close()
+            # Close all providers. Per-provider isolation matches `cleanup`:
+            # without it one raising provider abandons every provider after it
+            # in iteration order and skips the registry clear below, leaving a
+            # manager marked closed while still holding everything it failed to
+            # close. `close` is reachable from `__exit__`, where propagating
+            # would additionally replace whatever the `with` body was raising --
+            # so the failure is recorded instead of thrown.
+            for name, provider in self._providers.items():
+                self._close_provider(name, provider)
             self._providers.clear()
 
             self._resources.clear()
@@ -409,11 +533,6 @@ class ResourceManager:
         *weaker* one, and the two even reported a later ``acquire`` failure
         with different messages for the same underlying state.
         """
-        import asyncio
-        import logging
-
-        logger = logging.getLogger(__name__)
-
         # Claim closure up front exactly as `close` does, so the terminal
         # state does not depend on which half the caller reached for.
         self._closed = True
@@ -422,27 +541,29 @@ class ResourceManager:
         # into provider code that may block.
         await asyncio.to_thread(self._release_acquired_and_close_pools)
 
-        cleanup_tasks = []
-        sync_providers = []
+        # Names are carried alongside the coroutines: `gather` returns results
+        # positionally, so without the pairing a failure can only be reported
+        # as an index into a list the reader cannot see.
+        awaited: list[tuple[str, Any]] = []
+        sync_providers: list[tuple[str, IResourceProvider]] = []
 
         # Separate async and sync providers
         for name, provider in self._providers.items():
-            if hasattr(provider, "aclose") or hasattr(provider, "cleanup"):
-                # Provider has async cleanup method
-                if hasattr(provider, "aclose"):
-                    cleanup_tasks.append(self._async_close_provider(name, provider))
-                elif hasattr(provider, "cleanup"):
-                    cleanup_tasks.append(self._async_cleanup_provider(name, provider))
+            if isinstance(provider, AsyncClosable):
+                awaited.append((name, self._async_close_provider(name, provider)))
+            elif isinstance(provider, AsyncCleanable):
+                awaited.append((name, self._async_cleanup_provider(name, provider)))
             else:
                 # Provider only has sync cleanup
                 sync_providers.append((name, provider))
 
         # Run async cleanups concurrently
-        if cleanup_tasks:
-            results = await asyncio.gather(*cleanup_tasks, return_exceptions=True)
-            for i, result in enumerate(results):
-                if isinstance(result, Exception):
-                    logger.error(f"Error during async cleanup (task {i}): {result}")
+        if awaited:
+            results = await asyncio.gather(*(task for _, task in awaited), return_exceptions=True)
+            for (name, _), result in zip(awaited, results, strict=True):
+                if isinstance(result, BaseException):
+                    logger.error("Error during async cleanup of %s: %s", name, result)
+                    self._record_unclosed(name, f"aclose() raised: {result}")
 
         # Run sync cleanups in executor to avoid blocking
         if sync_providers:
@@ -451,7 +572,8 @@ class ResourceManager:
                 try:
                     await loop.run_in_executor(None, self._close_provider, name, provider)
                 except Exception as e:
-                    logger.error(f"Error closing sync provider {name}: {e}")
+                    logger.error("Error closing sync provider %s: %s", name, e)
+                    self._record_unclosed(name, f"close() raised: {e}")
 
         # Clear tracking data
         with self._lock:
@@ -460,59 +582,75 @@ class ResourceManager:
             self._pools.clear()
             self._providers.clear()
 
-    async def _async_close_provider(self, name: str, provider: IResourceProvider) -> None:
-        """Close a provider that has an async close method.
+    async def _async_close_provider(self, name: str, provider: AsyncClosable) -> None:
+        """Close a provider whose teardown must be awaited.
 
         Args:
             name: Provider name
             provider: Provider instance
         """
-        import logging
-
-        logger = logging.getLogger(__name__)
-
         try:
             await provider.aclose()
-            logger.debug(f"Successfully closed async provider {name}")
+            logger.debug("Successfully closed async provider %s", name)
         except Exception as e:
-            logger.error(f"Error closing async provider {name}: {e}")
+            logger.error("Error closing async provider %s: %s", name, e)
             raise
 
-    async def _async_cleanup_provider(self, name: str, provider: IResourceProvider) -> None:
-        """Clean up a provider that has an async cleanup method.
+    async def _async_cleanup_provider(self, name: str, provider: AsyncCleanable) -> None:
+        """Clean up a provider spelling its awaited teardown ``cleanup``.
 
         Args:
             name: Provider name
             provider: Provider instance
         """
-        import logging
-
-        logger = logging.getLogger(__name__)
-
         try:
             await provider.cleanup()
-            logger.debug(f"Successfully cleaned up async provider {name}")
+            logger.debug("Successfully cleaned up async provider %s", name)
         except Exception as e:
-            logger.error(f"Error cleaning up async provider {name}: {e}")
+            logger.error("Error cleaning up async provider %s: %s", name, e)
             raise
 
     def _close_provider(self, name: str, provider: IResourceProvider) -> None:
-        """Close a sync provider.
+        """Close a provider synchronously, recording what it could not finish.
+
+        Two things can go wrong here and neither may propagate --- this runs
+        from :meth:`close`, which is reachable from ``__exit__`` --- so both
+        are recorded in :attr:`unclosed_providers` instead.
+
+        The provider's awaited teardown cannot be run from here: there is no
+        loop to await it on, and starting one is not available to a method
+        ``__exit__`` may call while a loop is already running in this thread.
+        Its synchronous ``close`` still runs (on a
+        :class:`~dataknobs_fsm.resources.base.BaseResourceProvider` that
+        releases the acquired handles), and what it could not do is reported
+        rather than logged as a success.
 
         Args:
             name: Provider name
             provider: Provider instance
         """
-        import logging
+        needs_await = isinstance(provider, (AsyncClosable, AsyncCleanable))
+        close = getattr(provider, "close", None)
 
-        logger = logging.getLogger(__name__)
+        if close is not None:
+            try:
+                close()
+            except Exception as e:
+                logger.error("Error closing provider %s: %s", name, e)
+                self._record_unclosed(name, f"close() raised: {e}")
+                return
 
-        try:
-            if hasattr(provider, "close"):
-                provider.close()
-                logger.debug(f"Successfully closed sync provider {name}")
-        except Exception as e:
-            logger.error(f"Error closing sync provider {name}: {e}")
+        if needs_await:
+            logger.error(
+                "Provider %s was closed synchronously; its awaited teardown was "
+                "NOT run and the underlying transport is still open. Use "
+                "`await ResourceManager.cleanup()`, or close the FSM with "
+                "`await aclose()` / `async with`.",
+                name,
+            )
+            self._record_unclosed(name, _SKIPPED_ASYNC_TEARDOWN)
+        elif close is not None:
+            logger.debug("Successfully closed sync provider %s", name)
 
     def create_provider_from_dict(self, name: str, config: Dict[str, Any]) -> IResourceProvider:
         """Create a resource provider from a dictionary configuration.
@@ -534,13 +672,13 @@ class ResourceManager:
             or for simple static data resources.
             """
 
-            def __init__(self, name: str, config: Dict[str, Any]):
+            def __init__(self, name: str, config: Dict[str, Any]) -> None:
                 self.name = name
                 self.config = config
                 self.data = config.get("data", {})
                 self._status = ResourceStatus.IDLE
 
-            def acquire(self, **kwargs) -> Any:
+            def acquire(self, **kwargs: Any) -> Any:
                 self._status = ResourceStatus.BUSY
                 return self.data
 
@@ -560,11 +698,11 @@ class ResourceManager:
                     failed_acquisitions=0,
                 )
 
-            async def get_resource(self):
+            async def get_resource(self) -> Any:
                 return self.data
 
-            async def close(self):
-                pass
+            def close(self) -> None:
+                """Nothing to release: the data is a dict from the config."""
 
         return SimpleResourceProvider(name, config)
 
@@ -590,11 +728,16 @@ class ResourceManager:
         provider = self.create_provider_from_dict(name, config)
         self.register_provider(name, provider)
 
-    def __enter__(self):
+    def __enter__(self) -> Self:
         """Enter context manager."""
         return self
 
-    def __exit__(self, exc_type, exc_val, exc_tb):
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: TracebackType | None,
+    ) -> None:
         """Exit context manager."""
         self.close()
 

@@ -5,6 +5,8 @@ including connection pooling, lifecycle management, and health checks.
 """
 
 from dataknobs_fsm.resources.base import (
+    AsyncCleanable,
+    AsyncClosable,
     IResourceProvider,
     IResourcePool,
     ResourceStatus,
@@ -15,6 +17,8 @@ from dataknobs_fsm.resources.manager import ResourceManager
 from dataknobs_fsm.resources.pool import ResourcePool, PoolConfig
 
 __all__ = [
+    "AsyncCleanable",
+    "AsyncClosable",
     "IResourceProvider",
     "IResourcePool",
     "ResourceStatus",
