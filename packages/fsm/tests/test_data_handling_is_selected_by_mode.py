@@ -94,9 +94,7 @@ def _build(config: dict[str, Any]) -> Any:
     return FSMBuilder().build(ConfigLoader().load_from_dict(config))
 
 
-def _config(
-    *, default: str | None = None, state_mode: str | None = None
-) -> dict[str, Any]:
+def _config(*, default: str | None = None, state_mode: str | None = None) -> dict[str, Any]:
     start: dict[str, Any] = {"name": "start", "is_start": True}
     if state_mode is not None:
         start["data_mode"] = state_mode
