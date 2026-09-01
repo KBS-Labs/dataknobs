@@ -706,6 +706,32 @@ exposing `aclose()`. From async code, prefer it — a synchronous `close()` has
 no loop to await an `aclose()` on, and cannot start one, since `close()` is
 reachable from `__exit__` where a loop may already be running in this thread.
 
+### A manager that is tearing down refuses new providers
+
+Both `close()` and `cleanup()` claim closure before they begin, and
+`register_provider()` refuses from that moment on:
+
+```python
+await manager.cleanup()
+
+manager.register_provider("late", provider)
+# ResourceError: Resource manager is closed
+#   .resource_name == "late"
+#   .operation     == "register_provider"
+```
+
+This matters most *during* an awaited teardown rather than after it.
+`cleanup()` suspends while it awaits each `aclose()`, and a provider
+registered in that window would arrive too late to be swept and would then be
+dropped by the registry clear that ends teardown — never closed, and not a
+teardown failure, so not recorded in `unclosed_providers` either. Refusing the
+registration is what keeps that from being silent: the caller gets the error
+at the point of the mistake instead of an open transport nothing names.
+
+It is the same condition and the same exception type `acquire()` already
+raises for a closed manager, so a caller asking "did I use this after tearing
+it down?" catches `ResourceError` once rather than one type per method.
+
 ## Checking what teardown could not finish
 
 `unclosed_providers` records providers whose teardown did not complete — name

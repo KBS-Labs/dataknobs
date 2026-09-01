@@ -136,11 +136,33 @@ class ResourceManager:
             pool_config: Optional pool configuration.
 
         Raises:
+            ResourceError: If the manager is closed or closing. Reported the
+                way :meth:`acquire` reports the same condition, so a caller
+                asking "did I use this after tearing it down?" catches one
+                type rather than two.
             ValueError: If ``name`` is taken, or if a teardown method's name
                 contradicts its asyncness --- an awaited ``close``, or a
                 synchronous ``aclose``/``cleanup`` (see the teardown
                 convention in :mod:`dataknobs_fsm.resources.base`).
         """
+        # Before the convention check, because a closed manager is closed
+        # whatever the provider looks like: running the shape check first
+        # would report a misnamed teardown to a caller whose real mistake is
+        # the sequencing, and they would fix the name and hit this anyway.
+        #
+        # `close` and `cleanup` both claim closure before they begin, so this
+        # covers teardown in progress as well as teardown finished. That is
+        # the case it exists for: a provider registered during the awaited
+        # sweep is in neither the classification pass nor the final clear, so
+        # it was never closed, never recorded in `unclosed_providers`, and
+        # gone from the registry -- an open transport with nothing naming it.
+        if self._closed:
+            raise ResourceError(
+                "Resource manager is closed",
+                resource_name=name,
+                operation="register_provider",
+            )
+
         # Every provider enters here --- `register_from_dict` and the config
         # builder both end at this call --- so it is the one place the teardown
         # convention can be enforced for providers this package never sees.
@@ -547,8 +569,25 @@ class ResourceManager:
         awaited: list[tuple[str, Any]] = []
         sync_providers: list[tuple[str, IResourceProvider]] = []
 
+        # Snapshot under the lock, then classify outside it. `close` iterates
+        # the registry *under* the lock; this half read it unlocked, so the
+        # two disagreed about the same dict and a concurrent
+        # `unregister_provider` could abort the sweep mid-way -- leaving every
+        # provider after the mutation point untorn-down and the registry
+        # uncleared, with the exception surfacing from whatever `aclose` the
+        # caller wrote inside `__aexit__`.
+        #
+        # A snapshot rather than a wider critical section: `self._lock` is a
+        # `threading.RLock`, which is re-entrant per *thread* and not per
+        # task, so holding it across the `gather` below would block every
+        # other thread for the whole of teardown -- and would not make the
+        # await points any safer, since the lock is not what a suspended
+        # coroutine yields.
+        with self._lock:
+            registered = list(self._providers.items())
+
         # Separate async and sync providers
-        for name, provider in self._providers.items():
+        for name, provider in registered:
             if isinstance(provider, AsyncClosable):
                 awaited.append((name, self._async_close_provider(name, provider)))
             elif isinstance(provider, AsyncCleanable):
