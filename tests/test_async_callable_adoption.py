@@ -48,6 +48,11 @@ needs an exception takes a line-level ``# async-dispatch-exempt: <reason>``
 marker, which travels with the line rather than with a spelling of its
 argument, and which cannot be satisfied by a bare marker.
 
+:data:`UNADOPTED` is not that. It excludes whole *packages* rather than
+findings, it records what they still hold between them, and a ratchet fails it
+the moment an entry stops being true --- which is the property the allowlist
+above lacked.
+
 This guard is structural, so it can only ever say that a judgement was
 *made*. Whether the judgement is *right* is a runtime question, and these
 files answer it by driving each dispatch with a real callable object and
@@ -72,7 +77,54 @@ import ast
 from dataclasses import dataclass
 from pathlib import Path
 
-from tests._workspace import ROOT, rel, tracked_python_files
+from tests._workspace import ROOT, load_bin_module, rel, tracked_python_files
+
+#: Packages left outside the scope, each because its sites are not clear yet.
+#:
+#: Not a backlog of oversights. Every one is a published dispatch whose
+#: behaviour changes the moment it starts awaiting, so each needs its own
+#: reproduce-first proof before its package can move --- adding a package to
+#: the scope without doing that work turns a guard that passes into a guard
+#: that is disabled. The four hold **9 sites of the first shape and 30 of the
+#: second** as this was written, and that figure is worth re-measuring rather
+#: than quoting: a census is a property of the question asked, and this one
+#: moved once already when the detector learned about ``self.<attr>``
+#: callbacks (see :func:`_callback_attributes`), which roughly tripled the
+#: second shape against unchanged code.
+#:
+#: Distinct from the finding allowlist the module docstring says this guard
+#: does not have, and distinct in the way that matters: an entry here cannot
+#: quietly stop meaning anything, because
+#: :func:`test_an_unadopted_package_still_has_something_to_adopt` fails when
+#: one of these becomes clean. The list can only shrink, and it shrinks by
+#: being noticed.
+#:
+#: What the ``fsm`` pass cost, since the paragraph above is worth calibrating
+#: against a case where the bill came in: 23 findings across 9 modules, and
+#: fewer distinct defects than that --- four of the six in ``async_engine``
+#: were two hand-written copies of one judgement, counted twice because the
+#: token appears twice. Eight sat in ``patterns/`` modules that no *shipped*
+#: module imports, which had looked like a reason to defer them; it was not,
+#: because their fix turned out to be one delegation each and the tests that
+#: prove it are the tests those modules did not otherwise have.
+UNADOPTED = frozenset({"bots", "common", "llm", "xization"})
+
+
+def _undeprecated_packages() -> tuple[str, ...]:
+    """Every package the registry declares and does not mark deprecated.
+
+    Through ``bin/list-packages.py`` rather than by parsing the JSON here. That
+    script is the registry's reader, and its own comment gives the reason this
+    file should not become a second one: the shape is owned by
+    ``.dataknobs/packages.json``, and a second declaration of it is one more
+    thing to keep in step with the file it describes.
+    """
+    registry = load_bin_module("list-packages")
+    declared = registry.filter_packages(
+        registry.load_registry()["packages"], exclude_deprecated=True
+    )
+    return tuple(sorted(package["name"] for package in declared))
+
 
 #: The scanned scope, as directory prefixes.
 #:
@@ -82,54 +134,35 @@ from tests._workspace import ROOT, rel, tracked_python_files
 #: defect. A scope narrower than the unit a contributor edits is a scope that
 #: certifies the region already cleaned.
 #:
-#: Widening is this constant plus the work to bring the added package to zero
-#: --- which is the whole cost, and it is not small. The packages still
-#: outside measure **9 sites of the first shape and 30 of the second**, and
-#: they are not a backlog of oversights: each is a published dispatch whose
-#: behaviour changes when it starts awaiting, so each needs its own
-#: reproduce-first proof. Adding a package here without doing that work turns
-#: a guard that passes into a guard that is disabled.
+#: Derived rather than listed, and the difference is which way the default
+#: falls. A hand-written tuple leaves a *new* package outside this guard
+#: silently and for good: nothing prompts the edit, and a package nobody
+#: thought about is indistinguishable from one deliberately left out. Deriving
+#: inverts that --- a package is in scope the day it is registered, and if it
+#: holds findings the two checks below fail and name them. The only way out is
+#: :data:`UNADOPTED`, which is a sentence someone has to write.
 #:
-#: Two things to know before quoting those numbers.
+#: **Deprecated packages are out, by the registry's own flag rather than by an
+#: opinion recorded here.** That distinction is the whole value: a name in this
+#: file claims a package is deprecated, and claims it in a place nothing
+#: revisits, so the day a package stops being deprecated --- or the day
+#: somebody adds a name for a different reason and calls it the same thing ---
+#: the exclusion has started hiding live code. Reading ``deprecated`` from the
+#: declaration every other tool reads cannot drift that way.
 #:
-#: **They move when the detector does, not only when the code does.** The
-#: shape-two figure was 12 while that check could see only a callback held in
-#: a local parameter; teaching it about ``self.<attr>`` (see
-#: :func:`_callback_attributes`) roughly tripled it against unchanged code.
-#: A census is a property of the question asked, so re-measure rather than
-#: quoting this comment.
+#: It costs no coverage here either way. ``legacy`` is 202 lines: four
+#: ``__init__`` shims re-exporting the modular packages, and the ``sys.modules``
+#: aliasing helper behind them. There is no ``async def`` anywhere in it, and
+#: this guard reads nothing but ``AsyncFunctionDef`` bodies and
+#: ``iscoroutinefunction`` calls --- so there is no finding for it to have, now
+#: or after any edit that keeps it a compatibility alias.
 #:
-#: **Four more packages already measure zero** --- ``config``, ``structures``,
-#: ``utils`` and ``legacy`` --- so adding any of them costs nothing but the
-#: line. They are left out only because nobody has decided whether a guard
-#: should bind a deprecated package, which is a question about ``legacy`` and
-#: not about the other three.
-#:
-#: What the ``fsm`` pass cost, since the estimate above is worth calibrating
-#: against a case where the bill came in: 23 findings across 9 modules, and
-#: fewer distinct defects than that --- four of the six in ``async_engine``
-#: were two hand-written copies of one judgement, counted twice because the
-#: token appears twice. Eight sat in ``patterns/`` modules that no *shipped*
-#: module imports, which had looked like a reason to defer them; it was not,
-#: because their fix turned out to be one delegation each and the tests that
-#: prove it are the tests those modules did not otherwise have.
-SCOPE = ("packages/data/src", "packages/fsm/src")
-
-#: Enough scanned files that an empty finding list means "clean" rather than
-#: "matched nothing". Set well under the real count (170 across the two
-#: packages) so ordinary growth and deletion do not move it, but far enough
-#: above zero that a scope expression resolving to nothing fails instead of
-#: passing. This is the only anti-vacuity anchor the guard has: with no
-#: allowlist there is no declaration whose staleness would otherwise catch a
-#: scope that stopped matching.
-#:
-#: Raised from 70 with the second package, and the raise is the point rather
-#: than bookkeeping: at 70, dropping either entry from ``SCOPE`` left the
-#: other matching enough files to pass, so the anchor would have watched a
-#: halved scope go by. A floor that only catches the scope going to *zero*
-#: does not cover a two-element scope. Above the larger package's own count
-#: (95), so losing either one fails here.
-MINIMUM_FILES_SCANNED = 120
+#: ``config``, ``structures`` and ``utils`` arrived the same way and are worth
+#: naming for contrast with the cost paragraph on :data:`UNADOPTED`: all three
+#: already measured zero, so they joined for the price of being registered.
+#: Widening is expensive where there is something to fix and free where there
+#: is not, and only a measurement tells you which you are looking at.
+SCOPE = tuple(f"packages/{name}/src" for name in _undeprecated_packages() if name not in UNADOPTED)
 
 #: A line-level opt-out. The reason is mandatory --- a bare marker would make
 #: this an escape hatch from the guard rather than a documented exception to
@@ -166,13 +199,19 @@ class Finding:
         return f"{self.path}:{self.line}: {self.detail}"
 
 
+def _files_under(prefix: str) -> list[Path]:
+    """Every tracked ``*.py`` under one directory prefix.
+
+    Per prefix rather than over the whole scope at once, because two checks
+    want it that way: the anti-vacuity one asks each entry separately, and the
+    ratchet on :data:`UNADOPTED` asks about a package the scope excludes.
+    """
+    return [ROOT / name for name in tracked_python_files() if name.startswith(f"{prefix}/")]
+
+
 def _scanned_files() -> list[Path]:
     """Every tracked ``*.py`` under a declared scope prefix."""
-    return [
-        ROOT / name
-        for name in tracked_python_files()
-        if any(name.startswith(f"{prefix}/") for prefix in SCOPE)
-    ]
+    return [path for prefix in SCOPE for path in _files_under(prefix)]
 
 
 def _call_name(node: ast.Call) -> str:
@@ -440,12 +479,15 @@ def _findings(source: str, path: Path) -> list[Finding]:
     return found
 
 
+def _scan_paths(paths: list[Path]) -> list[Finding]:
+    return [
+        finding for path in paths for finding in _findings(path.read_text(encoding="utf-8"), path)
+    ]
+
+
 def _scan() -> tuple[list[Finding], int]:
     scanned = _scanned_files()
-    findings = [
-        finding for path in scanned for finding in _findings(path.read_text(encoding="utf-8"), path)
-    ]
-    return findings, len(scanned)
+    return _scan_paths(scanned), len(scanned)
 
 
 def test_no_dispatch_misreads_a_callable_object() -> None:
@@ -477,13 +519,63 @@ def test_no_consumer_callback_is_dispatched_without_judgement() -> None:
     )
 
 
-def test_the_scope_still_matches_files() -> None:
-    """Anti-vacuity. Two empty finding lists agree with a scope matching nothing."""
-    _, scanned = _scan()
+def test_every_scope_entry_still_matches_files() -> None:
+    """Anti-vacuity. Two empty finding lists agree with a scope matching nothing.
 
-    assert scanned >= MINIMUM_FILES_SCANNED, (
-        f"the declared scope {SCOPE} matched {scanned} files, under the floor of "
-        f"{MINIMUM_FILES_SCANNED}. With no allowlist to go stale, this is the only "
-        "thing standing between a scope expression that stopped resolving and two "
-        "tests that pass because they read nothing."
+    Per entry rather than against a total, because a total cannot guard entries
+    this unequal. The scope spans 209 files of which ``structures`` is five, so
+    any floor loose enough to survive ordinary deletion is also loose enough to
+    lose that entry whole. The floor this replaces was 120 --- set, correctly
+    for a two-element scope, above the larger package's own count so that
+    losing either one would fail. Against five entries the same number would
+    have watched ``config``, ``structures`` and ``utils`` all leave together
+    and still reported green, which is the failure it was written to catch.
+
+    One file per entry needs no maintenance and catches what actually happens:
+    a prefix that stops resolving because a package was renamed or moved.
+    """
+    assert SCOPE, (
+        "the scope derived from the package registry is empty, so both checks "
+        "above passed by reading nothing. Either the registry declares no "
+        f"undeprecated package, or UNADOPTED ({sorted(UNADOPTED)}) now covers "
+        "every one that it does."
+    )
+
+    empty = [prefix for prefix in SCOPE if not _files_under(prefix)]
+    assert not empty, (
+        f"{len(empty)} scope entr(ies) matched no tracked Python file: "
+        f"{', '.join(empty)}. A prefix that stopped resolving reads exactly like "
+        "a package with nothing wrong in it — the two checks above have simply "
+        "stopped covering it. Either the package moved, or it is gone and its "
+        "name should leave the registry."
+    )
+
+
+def test_an_unadopted_package_still_has_something_to_adopt() -> None:
+    """A package that has become clean belongs in the scope, not beside it.
+
+    The ratchet under :data:`UNADOPTED`, and the reason that list is not the
+    kind of allowlist this guard refuses to keep. An exception whose staleness
+    nothing detects is indistinguishable from a decision, and this one would go
+    stale in the direction that costs: findings get fixed one at a time by
+    people who are not thinking about this file, and the last fix in a package
+    would silently leave it certified by nobody.
+    """
+    registered = set(_undeprecated_packages())
+
+    unknown = sorted(UNADOPTED - registered)
+    assert not unknown, (
+        f"UNADOPTED names {', '.join(unknown)}, which the registry does not "
+        "declare as undeprecated packages. An entry naming nothing excludes "
+        "nothing, and reads as a decision that is still holding."
+    )
+
+    clean = sorted(
+        name for name in UNADOPTED if not _scan_paths(_files_under(f"packages/{name}/src"))
+    )
+    assert not clean, (
+        f"{', '.join(clean)} now measures zero findings while still sitting in "
+        "UNADOPTED, so nothing is stopping the package from joining SCOPE — and "
+        "until it does, a new unjudged dispatch there is invisible. Drop the "
+        "name from UNADOPTED; the scope follows from the registry."
     )
