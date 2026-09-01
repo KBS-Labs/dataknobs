@@ -44,48 +44,9 @@ from dataknobs_fsm.api.advanced import AdvancedFSM
 from dataknobs_fsm.api.async_simple import AsyncSimpleFSM
 from dataknobs_fsm.api.simple import SimpleFSM
 from dataknobs_fsm.config.builder import FSMBuilder
-from dataknobs_fsm.config.schema import (
-    ArcConfig,
-    FSMConfig,
-    NetworkConfig,
-    StateConfig,
-)
 from dataknobs_fsm.resources.base import ResourceHealth, ResourceMetrics, ResourceStatus
 
-
-def _trivial_dict() -> dict[str, object]:
-    """The same FSM in the dict form ``SimpleFSM`` accepts."""
-    return {
-        "name": "trivial",
-        "main_network": "main",
-        "networks": [
-            {
-                "name": "main",
-                "states": [
-                    {"name": "start", "is_start": True},
-                    {"name": "end", "is_end": True},
-                ],
-                "arcs": [{"from": "start", "to": "end", "name": "go"}],
-            }
-        ],
-    }
-
-
-def _trivial_config() -> FSMConfig:
-    """A minimal start->end FSM (no transforms, no resources)."""
-    return FSMConfig(
-        name="trivial",
-        main_network="main",
-        networks=[
-            NetworkConfig(
-                name="main",
-                states=[
-                    StateConfig(name="start", is_start=True, arcs=[ArcConfig(target="end")]),
-                    StateConfig(name="end", is_end=True),
-                ],
-            )
-        ],
-    )
+from _trivial_fsm import trivial_config, trivial_dict
 
 
 class _Provider:
@@ -163,7 +124,7 @@ def test_advanced_fsm_names_the_provider_its_sync_close_could_not_await() -> Non
     read the log, and the only way to *assert* it was to touch a private
     attribute.
     """
-    fsm = AdvancedFSM(FSMBuilder().build(_trivial_config()))
+    fsm = AdvancedFSM(FSMBuilder().build(trivial_config()))
     provider = _AsyncProvider("db")
     fsm.register_resource("db", provider)
 
@@ -183,7 +144,7 @@ def test_advanced_fsm_aclose_awaits_it_and_records_nothing() -> None:
     """
 
     async def run() -> tuple[AdvancedFSM, _AsyncProvider]:
-        fsm = AdvancedFSM(FSMBuilder().build(_trivial_config()))
+        fsm = AdvancedFSM(FSMBuilder().build(trivial_config()))
         provider = _AsyncProvider("db")
         fsm.register_resource("db", provider)
         await fsm.aclose()
@@ -197,7 +158,7 @@ def test_advanced_fsm_aclose_awaits_it_and_records_nothing() -> None:
 
 def test_advanced_fsm_names_a_provider_whose_close_raised() -> None:
     """The second recorded population, from the surface a caller holds."""
-    fsm = AdvancedFSM(FSMBuilder().build(_trivial_config()))
+    fsm = AdvancedFSM(FSMBuilder().build(trivial_config()))
     fsm.register_resource("bad", _RaisingProvider("bad"))
 
     fsm.close()
@@ -207,7 +168,7 @@ def test_advanced_fsm_names_a_provider_whose_close_raised() -> None:
 
 def test_advanced_fsm_records_nothing_when_teardown_succeeds() -> None:
     """Empty is the normal answer, and is what a caller asserts."""
-    fsm = AdvancedFSM(FSMBuilder().build(_trivial_config()))
+    fsm = AdvancedFSM(FSMBuilder().build(trivial_config()))
     provider = _Provider("props")
     fsm.register_resource("props", provider)
 
@@ -225,7 +186,7 @@ def test_advanced_fsm_reports_it_after_a_context_manager_exit() -> None:
     raising. The record is what is left instead of the exception, so it has
     to be readable once the block is over.
     """
-    fsm = AdvancedFSM(FSMBuilder().build(_trivial_config()))
+    fsm = AdvancedFSM(FSMBuilder().build(trivial_config()))
 
     with fsm:
         fsm.register_resource("bad", _RaisingProvider("bad"))
@@ -240,7 +201,7 @@ def test_advanced_fsm_reports_it_after_a_context_manager_exit() -> None:
 
 @pytest.mark.asyncio
 async def test_async_simple_fsm_names_a_provider_whose_aclose_raised() -> None:
-    fsm = AsyncSimpleFSM(_trivial_dict())
+    fsm = AsyncSimpleFSM(trivial_dict())
     fsm.register_resource("bad", _RaisingAsyncProvider("bad"))
 
     await fsm.close()
@@ -250,7 +211,7 @@ async def test_async_simple_fsm_names_a_provider_whose_aclose_raised() -> None:
 
 @pytest.mark.asyncio
 async def test_async_simple_fsm_records_nothing_when_teardown_succeeds() -> None:
-    fsm = AsyncSimpleFSM(_trivial_dict())
+    fsm = AsyncSimpleFSM(trivial_dict())
     provider = _AsyncProvider("db")
     fsm.register_resource("db", provider)
 
@@ -273,7 +234,7 @@ def test_simple_fsm_sync_close_still_awaits_an_aclose_provider() -> None:
     awaited teardown, and nothing is recorded. A reader who assumes the two
     sync surfaces behave alike would assume the opposite.
     """
-    fsm = SimpleFSM(_trivial_dict())
+    fsm = SimpleFSM(trivial_dict())
     provider = _AsyncProvider("db")
     fsm.register_resource("db", provider)
 
@@ -284,7 +245,7 @@ def test_simple_fsm_sync_close_still_awaits_an_aclose_provider() -> None:
 
 
 def test_simple_fsm_names_a_provider_whose_teardown_raised() -> None:
-    fsm = SimpleFSM(_trivial_dict())
+    fsm = SimpleFSM(trivial_dict())
     fsm.register_resource("bad", _RaisingAsyncProvider("bad"))
 
     fsm.close()
@@ -304,7 +265,7 @@ def test_simple_fsm_shares_one_manager_with_the_async_class_behind_it() -> None:
     both. Reaching for the inner class is the point of this test and of no
     other in the file.
     """
-    fsm = SimpleFSM(_trivial_dict())
+    fsm = SimpleFSM(trivial_dict())
     fsm.register_resource("bad", _RaisingProvider("bad"))
 
     fsm.close()
@@ -319,7 +280,7 @@ def test_simple_fsm_shares_one_manager_with_the_async_class_behind_it() -> None:
 
 def test_the_record_cannot_be_edited_through_the_api_property() -> None:
     """A caller must not be able to clear the evidence by accident."""
-    fsm = AdvancedFSM(FSMBuilder().build(_trivial_config()))
+    fsm = AdvancedFSM(FSMBuilder().build(trivial_config()))
     fsm.register_resource("bad", _RaisingProvider("bad"))
     fsm.close()
 
@@ -345,9 +306,9 @@ def _close_anyhow(fsm: object) -> None:
 
 
 _ALL_THREE: list[Any] = [
-    pytest.param(lambda: SimpleFSM(_trivial_dict()), id="SimpleFSM"),
-    pytest.param(lambda: AsyncSimpleFSM(_trivial_dict()), id="AsyncSimpleFSM"),
-    pytest.param(lambda: AdvancedFSM(FSMBuilder().build(_trivial_config())), id="AdvancedFSM"),
+    pytest.param(lambda: SimpleFSM(trivial_dict()), id="SimpleFSM"),
+    pytest.param(lambda: AsyncSimpleFSM(trivial_dict()), id="AsyncSimpleFSM"),
+    pytest.param(lambda: AdvancedFSM(FSMBuilder().build(trivial_config())), id="AdvancedFSM"),
 ]
 
 
@@ -404,7 +365,7 @@ def test_a_provider_registered_through_the_simple_api_is_torn_down() -> None:
     tears down --- if it reached any other object this would pass every
     assertion except this one.
     """
-    fsm = SimpleFSM(_trivial_dict())
+    fsm = SimpleFSM(trivial_dict())
     provider = _Provider("db")
     fsm.register_resource("db", provider)
 

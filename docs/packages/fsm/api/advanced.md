@@ -570,6 +570,10 @@ advanced_fsm.register_resource("defaults", {"data": {"region": "us-east-1"}})
 # the two abstract members; `validate`, `health_check` and `get_metrics` have
 # usable defaults on the base class.
 class ConnectionProvider(BaseResourceProvider):
+    def __init__(self, name, pool):
+        super().__init__(name)     # BaseResourceProvider takes (name, config=None)
+        self._pool = pool
+
     def acquire(self, **kwargs):
         return self._pool.checkout()
 
@@ -579,7 +583,9 @@ class ConnectionProvider(BaseResourceProvider):
     def close(self):          # `aclose` instead if teardown must be awaited
         self._pool.dispose()
 
-advanced_fsm.register_resource("db", ConnectionProvider("db"))
+# `pool` is your own connection pool — the FSM never constructs it, it only
+# calls the three methods above and tears the provider down on close.
+advanced_fsm.register_resource("db", ConnectionProvider("db", pool))
 
 assert advanced_fsm.get_resources() == ["defaults", "db"]
 ```

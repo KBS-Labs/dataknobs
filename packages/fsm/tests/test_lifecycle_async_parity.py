@@ -38,52 +38,13 @@ from dataknobs_fsm.api.advanced import AdvancedFSM
 from dataknobs_fsm.api.async_simple import AsyncSimpleFSM
 from dataknobs_fsm.api.simple import SimpleFSM
 from dataknobs_fsm.config.builder import FSMBuilder
-from dataknobs_fsm.config.schema import (
-    ArcConfig,
-    FSMConfig,
-    NetworkConfig,
-    StateConfig,
-)
 from dataknobs_fsm.resources.base import ResourceStatus
 from dataknobs_fsm.resources.database import AsyncDatabaseResourceAdapter
 from dataknobs_fsm.resources.manager import ResourceManager
 from dataknobs_fsm.resources.pool import PoolConfig
 from dataknobs_fsm.resources.properties import PropertiesResource
 
-
-def _trivial_dict() -> dict[str, object]:
-    """The same FSM in the dict form ``SimpleFSM`` accepts."""
-    return {
-        "name": "trivial",
-        "main_network": "main",
-        "networks": [
-            {
-                "name": "main",
-                "states": [
-                    {"name": "start", "is_start": True},
-                    {"name": "end", "is_end": True},
-                ],
-                "arcs": [{"from": "start", "to": "end", "name": "go"}],
-            }
-        ],
-    }
-
-
-def _trivial_config() -> FSMConfig:
-    """A minimal start→end FSM (no transforms, no resources)."""
-    return FSMConfig(
-        name="trivial",
-        main_network="main",
-        networks=[
-            NetworkConfig(
-                name="main",
-                states=[
-                    StateConfig(name="start", is_start=True, arcs=[ArcConfig(target="end")]),
-                    StateConfig(name="end", is_end=True),
-                ],
-            )
-        ],
-    )
+from _trivial_fsm import trivial_config, trivial_dict
 
 
 # --------------------------------------------------------------------------- #
@@ -104,7 +65,7 @@ async def test_advanced_fsm_aclose_does_not_block_the_event_loop() -> None:
     synchronous step, which is itself blocking and would otherwise be the
     thing detected.
     """
-    fsm = AdvancedFSM(FSMBuilder().build(_trivial_config()))
+    fsm = AdvancedFSM(FSMBuilder().build(trivial_config()))
     fsm.fsm.get_sync_bridge()  # allocate the daemon thread to be joined
     try:
         with assert_no_blocking():
@@ -116,7 +77,7 @@ async def test_advanced_fsm_aclose_does_not_block_the_event_loop() -> None:
 @pytest.mark.asyncio
 async def test_simple_fsm_aclose_does_not_block_the_event_loop() -> None:
     """Same contract on the sibling API, which has the same dual shape."""
-    fsm = SimpleFSM(_trivial_dict())
+    fsm = SimpleFSM(trivial_dict())
     fsm._fsm.get_sync_bridge()
     try:
         with assert_no_blocking():
@@ -139,7 +100,7 @@ async def test_simple_fsm_aclose_releases_the_bridge_thread() -> None:
     docs recommend — leaked the daemon thread outright.
     """
     with assert_no_leaked_bridge_threads():
-        fsm = SimpleFSM(_trivial_dict())
+        fsm = SimpleFSM(trivial_dict())
         fsm._fsm.get_sync_bridge()
         await fsm.aclose()
 
@@ -153,7 +114,7 @@ async def test_advanced_fsm_aclose_releases_the_bridge_thread() -> None:
     scheduled for collection.
     """
     with assert_no_leaked_bridge_threads():
-        fsm = AdvancedFSM(FSMBuilder().build(_trivial_config()))
+        fsm = AdvancedFSM(FSMBuilder().build(trivial_config()))
         fsm.fsm.get_sync_bridge()
         await fsm.aclose()
 
@@ -172,7 +133,7 @@ def test_simple_fsm_is_a_sync_context_manager() -> None:
     is how the leak happened in the first place.
     """
     with assert_no_leaked_bridge_threads():
-        with SimpleFSM(_trivial_dict()) as fsm:
+        with SimpleFSM(trivial_dict()) as fsm:
             fsm._fsm.get_sync_bridge()
 
 
@@ -180,7 +141,7 @@ def test_simple_fsm_is_a_sync_context_manager() -> None:
 async def test_simple_fsm_is_an_async_context_manager() -> None:
     """``async with SimpleFSM(...)`` routes through the non-blocking half."""
     with assert_no_leaked_bridge_threads():
-        async with SimpleFSM(_trivial_dict()) as fsm:
+        async with SimpleFSM(trivial_dict()) as fsm:
             fsm._fsm.get_sync_bridge()
 
 
@@ -193,7 +154,7 @@ async def test_async_simple_fsm_is_an_async_context_manager() -> None:
     gap it closes is the same one: a lifecycle whose only spelling was a
     method call the caller had to remember.
     """
-    async with AsyncSimpleFSM(_trivial_dict()) as fsm:
+    async with AsyncSimpleFSM(trivial_dict()) as fsm:
         provider = PropertiesResource("props", initial_properties={"k": "v"})
         fsm.register_resource("props", provider)
         fsm._resource_manager.acquire("props", owner_id="state_a")
@@ -395,7 +356,8 @@ def test_close_reports_the_async_database_it_cannot_close(tmp_path: Path) -> Non
 # --------------------------------------------------------------------------- #
 
 
-def test_simple_fsm_delegates_every_public_member_of_the_class_it_wraps() -> None:
+@pytest.mark.asyncio
+async def test_simple_fsm_delegates_every_public_member_of_the_class_it_wraps() -> None:
     """A member added to ``AsyncSimpleFSM`` must not stop at the wrapper.
 
     ``SimpleFSM`` owns no capability of its own --- it holds an
@@ -414,13 +376,25 @@ def test_simple_fsm_delegates_every_public_member_of_the_class_it_wraps() -> Non
     the async class lacks is not automatically wrong, but it means the two
     have started to disagree about what the API is, and that is worth a
     deliberate decision rather than a silent divergence.
+
+    Built objects rather than the two classes. ``dir()`` on a class sees only
+    what the class body declares, so a public attribute assigned in
+    ``__init__`` is invisible to it --- and ``data_mode`` is exactly that
+    shape on both classes today. A class-level comparison would therefore
+    report a clean surface while being structurally unable to see one of the
+    members it claims to compare, which is the failure mode this guard exists
+    to close rather than to reproduce.
     """
 
-    def public(cls: type) -> set[str]:
-        return {n for n in dir(cls) if not n.startswith("_")}
+    def public(obj: object) -> set[str]:
+        return {n for n in dir(obj) if not n.startswith("_")}
 
-    on_async = public(AsyncSimpleFSM)
-    on_sync = public(SimpleFSM)
+    async with (
+        SimpleFSM(trivial_dict()) as sync_fsm,
+        AsyncSimpleFSM(trivial_dict()) as async_fsm,
+    ):
+        on_sync = public(sync_fsm)
+        on_async = public(async_fsm)
 
     assert not (on_async - on_sync), (
         f"AsyncSimpleFSM members with no SimpleFSM delegation: {sorted(on_async - on_sync)}"
@@ -438,7 +412,7 @@ def test_simple_fsm_get_state_reaches_the_same_state_the_async_class_does() -> N
     returns, and pins it against the class being wrapped rather than against
     a literal, so it stays true if the state definition type changes.
     """
-    with SimpleFSM(_trivial_dict()) as fsm:
+    with SimpleFSM(trivial_dict()) as fsm:
         state = fsm.get_state("start")
 
         assert state is fsm._async_fsm.get_state("start")
