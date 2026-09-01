@@ -29,7 +29,6 @@ so a stand-in for one would be testing the stand-in.
 from __future__ import annotations
 
 import asyncio
-import sys
 import threading
 from typing import Any
 
@@ -81,23 +80,6 @@ class _GatedProvider(_Provider):
         self._entered.set()
         await self._release.wait()
         self.aclosed = True
-
-
-@pytest.fixture
-def brief_switch_interval() -> Any:
-    """Make GIL handoff frequent enough that a thread can interleave.
-
-    The classification sweep is a few hundred bytecodes and completes well
-    inside the default 5ms slice, so a concurrent mutation never lands and the
-    race reads as absent rather than as unreproducible. The interval is
-    process-global; restoring it is what keeps that confined to one test.
-    """
-    previous = sys.getswitchinterval()
-    sys.setswitchinterval(1e-6)
-    try:
-        yield
-    finally:
-        sys.setswitchinterval(previous)
 
 
 # --------------------------------------------------------------------------- #

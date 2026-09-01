@@ -274,7 +274,7 @@ import asyncio
 import inspect
 import logging
 import time
-from collections.abc import AsyncGenerator, Callable, Mapping
+from collections.abc import AsyncGenerator, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from enum import Enum
@@ -296,9 +296,9 @@ from ..execution.history import ExecutionHistory
 
 if TYPE_CHECKING:
     from ..core.arc import ArcExecution, TransformSpec
-from ..resources.base import IResourceProvider
 from ..resources.manager import ResourceManager
 from ..storage.base import IHistoryStorage
+from ._resource_surface import ResourceSurface
 
 logger = logging.getLogger(__name__)
 
@@ -355,7 +355,7 @@ class StepResult:
     failed_states: list[str] | None = None
 
 
-class AdvancedFSM:
+class AdvancedFSM(ResourceSurface):
     """Advanced FSM interface with full control capabilities."""
 
     def __init__(
@@ -420,20 +420,6 @@ class AdvancedFSM:
             handler: Data handler implementation
         """
         self._engine.data_handler = handler
-
-    def register_resource(self, name: str, resource: IResourceProvider | dict[str, Any]) -> None:
-        """Register a custom resource.
-
-        Args:
-            name: Resource name
-            resource: Resource instance or configuration
-        """
-        if isinstance(resource, dict):
-            # Use ResourceManager factory method
-            self._resource_manager.register_from_dict(name, resource)
-        else:
-            # Assume it's already a provider
-            self._resource_manager.register_provider(name, resource)
 
     def set_hooks(self, hooks: ExecutionHook) -> None:
         """Set execution hooks for monitoring.
@@ -1701,30 +1687,6 @@ class AdvancedFSM:
             "final_state": context.current_state,
             "final_data": context.get_data_snapshot(),
         }
-
-    @property
-    def unclosed_providers(self) -> Mapping[str, str]:
-        """Providers whose teardown did not complete, name to reason.
-
-        Empty is the normal answer, and asserting it is how a caller that
-        cares about resource lifetime checks that nothing was left open::
-
-            with AdvancedFSM(config) as fsm:
-                ...
-            assert not fsm.unclosed_providers
-
-        Read-only, and monotonic over the manager's life --- see
-        :attr:`~dataknobs_fsm.resources.manager.ResourceManager.unclosed_providers`
-        for what is recorded and why it is never cleared. The reason strings
-        are diagnostic and may change; assert on the keys.
-
-        This is the one surface where a caller can reach the *other* recorded
-        population. :meth:`close` runs the synchronous teardown path, which
-        cannot await a provider exposing ``aclose`` --- such a provider is
-        left open and named here, which is what makes that diagnosable rather
-        than invisible. :meth:`aclose` (or ``async with``) awaits it instead.
-        """
-        return self._resource_manager.unclosed_providers
 
     def close(self) -> None:
         """Release lifecycle resources held by this FSM. Idempotent.

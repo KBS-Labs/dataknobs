@@ -195,7 +195,7 @@ async def test_async_simple_fsm_is_an_async_context_manager() -> None:
     """
     async with AsyncSimpleFSM(_trivial_dict()) as fsm:
         provider = PropertiesResource("props", initial_properties={"k": "v"})
-        fsm._resource_manager.register_provider("props", provider)
+        fsm.register_resource("props", provider)
         fsm._resource_manager.acquire("props", owner_id="state_a")
         assert provider.get_all_instances()
 
@@ -388,3 +388,60 @@ def test_close_reports_the_async_database_it_cannot_close(tmp_path: Path) -> Non
     assert "target_db" in manager.unclosed_providers, (
         "a provider whose teardown must be awaited was closed synchronously and reported as closed"
     )
+
+
+# --------------------------------------------------------------------------- #
+# SimpleFSM is AsyncSimpleFSM's synchronous facade, and must stay one
+# --------------------------------------------------------------------------- #
+
+
+def test_simple_fsm_delegates_every_public_member_of_the_class_it_wraps() -> None:
+    """A member added to ``AsyncSimpleFSM`` must not stop at the wrapper.
+
+    ``SimpleFSM`` owns no capability of its own --- it holds an
+    ``AsyncSimpleFSM`` and drives it through the shared bridge, so its public
+    surface is that class's surface, spelled synchronously. That makes a
+    forgotten delegation invisible: the wrapper keeps working, nothing raises,
+    and the missing member is discovered only by a caller who needed it and
+    then reached through ``_async_fsm`` to get it.
+
+    ``get_state`` was missing this way while ``get_states`` was present ---
+    the singular accessor added to the async class and never carried across.
+    Naming the members individually would guard the ones someone thought of;
+    comparing the two surfaces guards the next one too.
+
+    The reverse direction is asserted as well. ``SimpleFSM`` growing a member
+    the async class lacks is not automatically wrong, but it means the two
+    have started to disagree about what the API is, and that is worth a
+    deliberate decision rather than a silent divergence.
+    """
+
+    def public(cls: type) -> set[str]:
+        return {n for n in dir(cls) if not n.startswith("_")}
+
+    on_async = public(AsyncSimpleFSM)
+    on_sync = public(SimpleFSM)
+
+    assert not (on_async - on_sync), (
+        f"AsyncSimpleFSM members with no SimpleFSM delegation: {sorted(on_async - on_sync)}"
+    )
+    assert not (on_sync - on_async), (
+        f"SimpleFSM members the class it wraps does not have: {sorted(on_sync - on_async)}"
+    )
+
+
+def test_simple_fsm_get_state_reaches_the_same_state_the_async_class_does() -> None:
+    """The delegation lands on the right method, not merely on some method.
+
+    The surface comparison above proves ``get_state`` exists; it would pass
+    just as well if the body called ``get_states()``. This pins what it
+    returns, and pins it against the class being wrapped rather than against
+    a literal, so it stays true if the state definition type changes.
+    """
+    with SimpleFSM(_trivial_dict()) as fsm:
+        state = fsm.get_state("start")
+
+        assert state is fsm._async_fsm.get_state("start")
+        assert state is not None, "the fixture is wrong: 'start' is not a state"
+        assert state.name == "start"
+        assert fsm.get_state("no_such_state") is None

@@ -204,7 +204,7 @@ See Also:
 """
 
 import asyncio
-from collections.abc import Callable, Coroutine, Mapping
+from collections.abc import Callable, Coroutine
 from pathlib import Path
 from types import TracebackType
 from typing import Any, Self, TypeVar
@@ -212,6 +212,7 @@ from typing import Any, Self, TypeVar
 from dataknobs_data import Record
 
 from ..core.data_modes import DataHandlingMode
+from ._resource_surface import ResourceSurface
 from .async_simple import AsyncSimpleFSM
 
 #: The value a bridged coroutine produces. ``SyncLoopBridge.run`` is already
@@ -221,7 +222,7 @@ from .async_simple import AsyncSimpleFSM
 T = TypeVar("T")
 
 
-class SimpleFSM:
+class SimpleFSM(ResourceSurface):
     """Synchronous FSM interface for simple workflows.
 
     This class provides a purely synchronous API for FSM operations,
@@ -745,38 +746,19 @@ class SimpleFSM:
         """Get list of all state names in the FSM."""
         return self._async_fsm.get_states()
 
-    def get_resources(self) -> list[str]:
-        """Get list of registered resource names."""
-        return self._async_fsm.get_resources()
+    def get_state(self, name: str) -> Any:
+        """Get a state definition by name (or ``None`` if absent).
+
+        Public accessor over the underlying FSM so consumers can inspect a
+        state's attributes (e.g. ``emit_output``) without reaching into the
+        private ``_fsm`` handle.
+        """
+        return self._async_fsm.get_state(name)
 
     @property
     def config(self) -> Any:
         """Get the FSM configuration object."""
-        return self._async_fsm._config
-
-    @property
-    def unclosed_providers(self) -> Mapping[str, str]:
-        """Providers whose teardown did not complete, name to reason.
-
-        Empty is the normal answer, and asserting it is how a caller that
-        cares about resource lifetime checks that nothing was left open::
-
-            with SimpleFSM(config) as fsm:
-                ...
-            assert not fsm.unclosed_providers
-
-        Read-only, and monotonic over the manager's life --- see
-        :attr:`~dataknobs_fsm.resources.manager.ResourceManager.unclosed_providers`
-        for what is recorded and why it is never cleared. The reason strings
-        are diagnostic and may change; assert on the keys.
-
-        Despite being the synchronous surface, this class does not skip
-        awaited teardown: :meth:`close` drives the async cleanup through the
-        shared bridge, so a provider exposing ``aclose`` is awaited. The
-        population recorded here is therefore providers whose teardown
-        *raised*.
-        """
-        return self._async_fsm.unclosed_providers
+        return self._async_fsm.config
 
     def close(self) -> None:
         """Clean up resources and close connections synchronously."""

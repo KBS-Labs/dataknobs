@@ -282,7 +282,7 @@ See Also:
 """
 
 import logging
-from collections.abc import AsyncIterator, Callable, Mapping
+from collections.abc import AsyncIterator, Callable
 from pathlib import Path
 from types import TracebackType
 from typing import Any, Self
@@ -299,11 +299,12 @@ from ..execution.async_engine import AsyncExecutionEngine
 from ..execution.async_stream import AsyncStreamExecutor
 from ..resources.manager import ResourceManager
 from ..streaming.core import StreamConfig as CoreStreamConfig
+from ._resource_surface import ResourceSurface
 
 logger = logging.getLogger(__name__)
 
 
-class AsyncSimpleFSM:
+class AsyncSimpleFSM(ResourceSurface):
     """Async-first FSM interface for production workflows.
 
     This class provides a fully asynchronous API for FSM operations, designed
@@ -862,37 +863,10 @@ class AsyncSimpleFSM:
                 states.append(state.name)
         return states
 
-    def get_resources(self) -> list[str]:
-        """Get list of registered resource names."""
-        return list(self._resource_manager._providers.keys())
-
     @property
     def config(self) -> Any:
         """Get the FSM configuration object."""
         return self._config
-
-    @property
-    def unclosed_providers(self) -> Mapping[str, str]:
-        """Providers whose teardown did not complete, name to reason.
-
-        Empty is the normal answer, and asserting it is how a caller that
-        cares about resource lifetime checks that nothing was left open::
-
-            async with AsyncSimpleFSM(config) as fsm:
-                ...
-            assert not fsm.unclosed_providers
-
-        Read-only, and monotonic over the manager's life --- see
-        :attr:`~dataknobs_fsm.resources.manager.ResourceManager.unclosed_providers`
-        for what is recorded and why it is never cleared. The reason strings
-        are diagnostic and may change; assert on the keys.
-
-        This class always awaits teardown, so the population recorded here is
-        providers whose teardown *raised*. A provider skipped because it could
-        not be awaited is reachable only from a synchronous close --- see
-        :class:`~dataknobs_fsm.api.advanced.AdvancedFSM`.
-        """
-        return self._resource_manager.unclosed_providers
 
     async def close(self) -> None:
         """Clean up resources and close connections asynchronously."""

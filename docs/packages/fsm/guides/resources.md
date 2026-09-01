@@ -770,17 +770,24 @@ The reason strings are diagnostic and may change. Assert on the keys.
 ### From the FSM you actually hold
 
 A consumer holds a `SimpleFSM`, an `AdvancedFSM` or an `AsyncSimpleFSM`, not a
-`ResourceManager`. All three expose the same record read-only:
+`ResourceManager`. All three carry the same resource surface — register a
+provider, list what is registered, read what teardown could not finish — so
+the code below is the same on any of them:
 
 ```python
-with AdvancedFSM(config) as fsm:
-    fsm.register_resource("db", db_provider)
+with AdvancedFSM(config) as fsm:              # or SimpleFSM(config)
+    fsm.register_resource("db", db_provider)  # a provider, or a config dict
+    assert fsm.get_resources() == ["db"]
     ...
 
-assert not fsm.unclosed_providers      # nothing was left open
+assert not fsm.unclosed_providers             # nothing was left open
 ```
 
-The three do not answer alike, because their teardown paths differ:
+All three methods are synchronous, including on `AsyncSimpleFSM`: registering
+and listing touch only the manager's own registry, and the record is read
+after teardown has finished.
+
+The three *answers* differ, though, because their teardown paths do:
 
 | Class | `close()` runs | Can report a skipped awaited teardown? |
 |---|---|---|

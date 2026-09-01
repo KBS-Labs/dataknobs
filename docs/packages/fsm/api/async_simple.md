@@ -379,6 +379,28 @@ async def main():
 asyncio.run(main())
 ```
 
+## Resources
+
+Configuration is the usual way in — the `resources` constructor parameter, or
+a `resources:` block in the config file. To add one at runtime, or to inspect
+what is registered, `AsyncSimpleFSM` carries the same three members
+`AdvancedFSM` and `SimpleFSM` do:
+
+```python
+async with AsyncSimpleFSM("workflow.yaml") as fsm:
+    fsm.register_resource("cache", cache_provider)   # sync, on the async class
+    assert fsm.get_resources() == ["cache"]
+    result = await fsm.process({"value": 10})
+
+assert not fsm.unclosed_providers
+```
+
+`register_resource` takes a provider instance or a config dict.
+`unclosed_providers` is empty unless a provider's teardown raised. See
+[the resources guide](../guides/resources.md)
+for the provider contract, the teardown naming convention, and what
+`unclosed_providers` records.
+
 ## Error Handling
 
 AsyncSimpleFSM provides comprehensive error handling:
