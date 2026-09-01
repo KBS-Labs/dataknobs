@@ -1,5 +1,5 @@
 {
-  "timestamp": "2026-08-31T22:33:47Z",
+  "timestamp": "2026-09-01T01:39:15Z",
   "overall_status": "PASS",
   "run_mode": "pr",
   "environment": "host",
@@ -19,10 +19,10 @@
   "coverage_percent": null,
   "package_hashes": {
     "bots": "6e688796b38ec5942b733292fbc1a058ef537ac1d24ce4e0e92542a54120f708",
-    "common": "e00ef9b8c5f9a6acb85339bb105cf0c9adb2a3c6c74f22f74369d7c7f693a7ed",
+    "common": "9f108960ee224dc5dd5040ebc8fc6ad21711bc2583cc243796736fb26370542a",
     "config": "30895cfb558b0a798c73cfa923da7e75ec76b3c3eacea9bc68861e28fe146347",
-    "data": "eb5881cfec4fbd1eeda2faaca4c8c1e8ceddc600c3ddf40a184fbf0ddcc64d73",
-    "fsm": "4652a128da264d046eb29e05a6b4e955e5df5cba2991a2e1076176a39013ded6",
+    "data": "5c4047692f9c278424e9ae0670f06d2489587582bfb06a5475a835f6232d953c",
+    "fsm": "4a82867b882e6d0f69fe9ca7bed0bba100ed813f80cc3e405b84fc0d62ac5982",
     "legacy": "f626b387e3b4dc7f7de016a1e6f67f1a6df33b685b55c1226762d4abb338d217",
     "llm": "e7ae3e094c66d4dae250fa6c512521fcb4cde37db0613991cfacede7ce3970d8",
     "structures": "73fcd3ad3753d60eab53a1c4ecc7b6665862e9325920eb5daebdca42c1673af3",
@@ -32,10 +32,10 @@
   },
   "workspace_hashes": {
     "toolchain": "eb96eff3f8ef90513249126b997a10b02357581b03d780f7ea90c17fdbe085cc",
-    "workspace_tests": "4445e6b0361b21d5fc19b9ea4ae1399821ae9785e734a17d33f25037f82e728b",
+    "workspace_tests": "dc2dd2a567671503970acfb8f3cdce919d62eb594bc1843fb2d9d04c11241b88",
     "docs": "3d7d3c57165356f5f41d4b4a5d39582258950d2333263114471bd5fb3c1c38f1"
   },
-  "total_seconds": 347,
+  "total_seconds": 344,
   "checks": {
     "workflow_lint": {
       "status": "pass",
@@ -60,14 +60,14 @@
       "exit_code": 0,
       "skipped": false,
       "tool": "validate.sh",
-      "duration_seconds": 84
+      "duration_seconds": 82
     },
     "documentation": {
       "status": "pass",
       "exit_code": 0,
       "skipped": false,
       "tool": "mkdocs",
-      "duration_seconds": 25
+      "duration_seconds": 26
     },
     "documentation_versions": {
       "status": "pass",
@@ -81,13 +81,13 @@
       "exit_code": 0,
       "skipped": false,
       "tool": "docs-mirror-check.py",
-      "duration_seconds": 1
+      "duration_seconds": 0
     },
     "unit_tests": {
       "status": "pass",
       "exit_code": 0,
       "skipped": false,
-      "duration_seconds": 122,
+      "duration_seconds": 121,
       "workspace_guards_seconds": 61
     },
     "integration_tests": {
