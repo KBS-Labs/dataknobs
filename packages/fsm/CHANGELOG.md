@@ -9,6 +9,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The two halves of `ResourceManager` teardown disagreed about the registry
+  they share, and a provider could be lost between them.** `close()` iterates
+  `_providers` under the manager's lock and clears it in the same critical
+  section; `cleanup()` read the same dict unlocked, and suspends three times
+  while holding nothing. Two distinct costs followed:
+
+    - **A provider registered while teardown ran was silently dropped.** It
+      arrived after the classification sweep, so it was never closed; it was
+      not a teardown failure, so it was never recorded in `unclosed_providers`;
+      and the registry clear that ends `cleanup()` removed it. The transport
+      stayed open with nothing anywhere naming it. `register_provider` now
+      refuses a manager that has claimed closure — which both `close()` and
+      `cleanup()` do before they begin — reporting it as the `ResourceError`
+      that `acquire()` already raises for the same condition, so a caller
+      catches one exception type rather than one per method.
+    - **A registry mutated during the sweep could abort it.** A concurrent
+      `unregister_provider` raised `RuntimeError: dictionary changed size
+      during iteration` out of `cleanup()`, stranding every provider after the
+      mutation point and leaving the registry uncleared — surfacing from
+      whatever `aclose()` the caller had written inside `__aexit__`. The sweep
+      now classifies a snapshot taken under the lock. A snapshot rather than a
+      wider critical section: the lock is a `threading.RLock`, re-entrant per
+      thread and not per task, so holding it across the awaited teardowns would
+      block every other thread for the duration and would not make the
+      suspension points any safer.
+
+  **`register_provider` on a closed or closing manager now raises where it
+  previously returned.** The provider it accepted was never torn down, so the
+  call had no effect a caller could rely on beyond leaking the transport.
+
 - **A provider whose teardown had to be awaited was torn down as though it did
   not.** `ResourceManager` routes teardown on the method's *name* — `close()`
   synchronous, `aclose()` awaited — which is the only thing a registry of
