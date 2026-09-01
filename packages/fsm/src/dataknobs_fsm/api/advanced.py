@@ -295,10 +295,10 @@ from ..execution.context import ExecutionContext
 from ..execution.history import ExecutionHistory
 
 if TYPE_CHECKING:
-    from ..core.arc import ArcExecution
-from ..resources.base import IResourceProvider
+    from ..core.arc import ArcExecution, TransformSpec
 from ..resources.manager import ResourceManager
 from ..storage.base import IHistoryStorage
+from ._resource_surface import ResourceSurface
 
 logger = logging.getLogger(__name__)
 
@@ -355,7 +355,7 @@ class StepResult:
     failed_states: list[str] | None = None
 
 
-class AdvancedFSM:
+class AdvancedFSM(ResourceSurface):
     """Advanced FSM interface with full control capabilities."""
 
     def __init__(
@@ -400,9 +400,9 @@ class AdvancedFSM:
         self._history: ExecutionHistory | None = None
         self._storage: IHistoryStorage | None = None
         self._hooks = ExecutionHook()
-        self._breakpoints = set()
-        self._trace_buffer = []
-        self._profile_data = {}
+        self._breakpoints: set[str] = set()
+        self._trace_buffer: list[dict[str, Any]] = []
+        self._profile_data: dict[str, Any] = {}
         self._custom_functions = custom_functions or {}
 
     def set_execution_strategy(self, strategy: TraversalStrategy) -> None:
@@ -420,20 +420,6 @@ class AdvancedFSM:
             handler: Data handler implementation
         """
         self._engine.data_handler = handler
-
-    def register_resource(self, name: str, resource: IResourceProvider | dict[str, Any]) -> None:
-        """Register a custom resource.
-
-        Args:
-            name: Resource name
-            resource: Resource instance or configuration
-        """
-        if isinstance(resource, dict):
-            # Use ResourceManager factory method
-            self._resource_manager.register_from_dict(name, resource)
-        else:
-            # Assume it's already a provider
-            self._resource_manager.register_provider(name, resource)
 
     def set_hooks(self, hooks: ExecutionHook) -> None:
         """Set execution hooks for monitoring.
@@ -464,7 +450,7 @@ class AdvancedFSM:
         self._breakpoints.clear()
 
     @property
-    def breakpoints(self) -> set:
+    def breakpoints(self) -> set[str]:
         """Get the current breakpoints."""
         return self._breakpoints.copy()
 
@@ -479,8 +465,14 @@ class AdvancedFSM:
         return self._history is not None
 
     @property
-    def max_history_depth(self) -> int:
-        """Get the maximum history depth."""
+    def max_history_depth(self) -> int | None:
+        """The history's depth limit, or ``None`` when it is unbounded.
+
+        ``ExecutionHistory.max_depth`` is optional and ``None`` means "prune
+        nothing" --- the common case. Declaring this ``int`` reported that as
+        a depth of ``None`` through a signature promising a number. ``0`` is
+        the separate answer for "no history is being kept at all".
+        """
         return self._history.max_depth if self._history else 0
 
     @property
@@ -553,17 +545,12 @@ class AdvancedFSM:
         if context.current_state:
             self._update_state_instance(context, context.current_state)
 
-        # Register custom functions if any
-        if self._custom_functions:
-            registry = getattr(self.fsm, "function_registry", None)
-            if registry is None:
-                self.fsm.function_registry = {}
-                registry = self.fsm.function_registry
-            for name, func in self._custom_functions.items():
-                if hasattr(registry, "register"):
-                    registry.register(name, func)
-                elif isinstance(registry, dict):
-                    registry[name] = func
+        # Register custom functions if any. `FSM.__init__` always creates a
+        # `FunctionRegistry`, so this needs no fallback for a missing or
+        # dict-shaped registry --- the old one would have replaced the real
+        # registry with a plain dict if it had ever been reachable.
+        for name, func in self._custom_functions.items():
+            self.fsm.function_registry.register(name, func)
 
         return context
 
@@ -846,12 +833,12 @@ class AdvancedFSM:
         to_visit = [s.name for s in self.fsm.states.values() if s.is_start]
 
         while to_visit:
-            state = to_visit.pop(0)
-            if state in reachable:
+            visiting = to_visit.pop(0)
+            if visiting in reachable:
                 continue
-            reachable.add(state)
+            reachable.add(visiting)
 
-            arcs = self.fsm.get_outgoing_arcs(state)
+            arcs = self.fsm.get_outgoing_arcs(visiting)
             for arc in arcs:
                 if arc.target_state not in reachable:
                     to_visit.append(arc.target_state)
@@ -874,8 +861,8 @@ class AdvancedFSM:
                 "total_states": len(self.fsm.states),
                 "reachable_states": len(reachable),
                 "unreachable_states": len(unreachable),
-                "start_states": sum(1 for s in self.fsm.states.values() if s.is_start),  # type: ignore
-                "end_states": sum(1 for s in self.fsm.states.values() if s.is_end),  # type: ignore
+                "start_states": sum(1 for s in self.fsm.states.values() if s.is_start),
+                "end_states": sum(1 for s in self.fsm.states.values() if s.is_end),
             },
         }
 
@@ -946,8 +933,17 @@ class AdvancedFSM:
         error = self._prepare_initial_state(context)
         if error is not None:
             return error
+
+        # `_prepare_initial_state` either returns an error or leaves a state
+        # set, so this is not None. Re-read rather than asserted: if that ever
+        # stops holding, there is no initial state to run transforms for, which
+        # is this method's own "nothing to do" answer.
+        current_state = context.current_state
+        if current_state is None:
+            return None
+
         if not context._initial_transforms_executed:
-            await self._execute_state_transforms_async(context, context.current_state)
+            await self._execute_state_transforms_async(context, current_state)
             context._initial_transforms_executed = True
         return None
 
@@ -968,7 +964,15 @@ class AdvancedFSM:
         if signal is None:
             return None
 
-        for arc in self.fsm.get_outgoing_arcs(context.current_state):
+        # Reached only through `_get_candidate_arcs`, which returns before
+        # calling this when there is no current state. Falling through on
+        # ``None`` is the same answer this method gives for an unmatched
+        # signal, so the invariant is checked rather than assumed.
+        current_state = context.current_state
+        if current_state is None:
+            return None
+
+        for arc in self.fsm.get_outgoing_arcs(current_state):
             if arc.target_state == signal:
                 logger.debug(
                     "Using transition signal: %s -> %s",
@@ -1026,7 +1030,14 @@ class AdvancedFSM:
         if early is not None:
             return early
 
-        arcs = self.fsm.get_outgoing_arcs(context.current_state)
+        # `_get_candidate_arcs` answers with a list when there is no current
+        # state, so there is one here. Re-read rather than asserted: the
+        # fallback is the same empty answer that helper would have given.
+        current_state = context.current_state
+        if current_state is None:
+            return []
+
+        arcs = self.fsm.get_outgoing_arcs(current_state)
         transitions: list[Any] = []
         for arc in arcs:
             if arc_name and arc.name != arc_name:
@@ -1053,7 +1064,7 @@ class AdvancedFSM:
     @staticmethod
     def _normalize_transform_names(
         transform: Any,
-    ) -> list[str]:
+    ) -> "list[str | TransformSpec]":
         """Parse stringified list transforms for backward compat.
 
         Handles the case where ``FSMBuilder`` previously stringified list
@@ -1064,7 +1075,11 @@ class AdvancedFSM:
             transform: Raw transform value from an ``Arc``.
 
         Returns:
-            List of transform name strings (may be empty).
+            List of transform name strings (may be empty). Declared as the
+            element type ``ArcDefinition.transform`` accepts rather than the
+            ``str`` this actually yields --- ``list`` is invariant, so a
+            ``list[str]`` is not assignable there and narrowing the producer
+            would only move the mismatch to the call site.
         """
         if isinstance(transform, list):
             return transform
@@ -1178,7 +1193,7 @@ class AdvancedFSM:
         if state:
             return state.is_end
 
-        return context.metadata.get("is_end_state", False)
+        return bool(context.metadata.get("is_end_state", False))
 
     def _record_trace_entry(
         self, from_state: str, to_state: str, arc_name: str | None, context: ExecutionContext
@@ -1213,7 +1228,7 @@ class AdvancedFSM:
             context: Execution context
         """
         if self._history:
-            step = self._history.add_step(  # type: ignore[unreachable]
+            step = self._history.add_step(
                 state_name=state_name,
                 network_name=getattr(context, "network_name", "main"),
                 data=context.data,
@@ -1276,7 +1291,14 @@ class AdvancedFSM:
         if early is not None:
             return early
 
-        arcs = self.fsm.get_outgoing_arcs(context.current_state)
+        # `_get_candidate_arcs` answers with a list when there is no current
+        # state, so there is one here. Re-read rather than asserted: the
+        # fallback is the same empty answer that helper would have given.
+        current_state = context.current_state
+        if current_state is None:
+            return []
+
+        arcs = self.fsm.get_outgoing_arcs(current_state)
         transitions: list[Any] = []
         for arc in arcs:
             if arc_name and arc.name != arc_name:
@@ -1586,8 +1608,8 @@ class AdvancedFSM:
 
         start_time = time.time()
         transitions = 0
-        state_times = {}
-        transition_times = []
+        state_times: dict[str, list[float]] = {}
+        transition_times: list[float] = []
 
         for _ in range(max_steps):
             state_start = time.time()

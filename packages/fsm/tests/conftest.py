@@ -1,8 +1,10 @@
 """Pytest configuration and shared fixtures for dataknobs_fsm tests."""
 
-import pytest
+import sys
 from collections.abc import Iterator
 from pathlib import Path
+
+import pytest
 
 from dataknobs_common.testing import (
     assert_no_leaked_bridge_threads,
@@ -51,6 +53,27 @@ def _no_leaked_daemon_threads() -> Iterator[None]:
     """
     with assert_no_leaked_bridge_threads():
         yield
+
+
+@pytest.fixture
+def brief_switch_interval() -> Iterator[None]:
+    """Make GIL handoff frequent enough that a thread can interleave.
+
+    The reads and sweeps this repo locks are a few hundred bytecodes each and
+    complete well inside the default 5ms slice, so a concurrent mutation never
+    lands and an unlocked read reads as *safe* rather than as unreproducible.
+    Shortening the interval is what turns "it did not happen in twenty runs"
+    into a result.
+
+    The interval is process-global; restoring it in the teardown is what keeps
+    that confined to the test that asked for it.
+    """
+    previous = sys.getswitchinterval()
+    sys.setswitchinterval(1e-6)
+    try:
+        yield
+    finally:
+        sys.setswitchinterval(previous)
 
 
 @pytest.fixture

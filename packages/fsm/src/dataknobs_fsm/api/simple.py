@@ -204,18 +204,25 @@ See Also:
 """
 
 import asyncio
-from collections.abc import Callable
+from collections.abc import Callable, Coroutine
 from pathlib import Path
 from types import TracebackType
-from typing import Any, Self
+from typing import Any, Self, TypeVar
 
 from dataknobs_data import Record
 
 from ..core.data_modes import DataHandlingMode
+from ._resource_surface import ResourceSurface
 from .async_simple import AsyncSimpleFSM
 
+#: The value a bridged coroutine produces. ``SyncLoopBridge.run`` is already
+#: generic in it, so carrying it through :meth:`SimpleFSM._run_async` is what
+#: lets every synchronous wrapper below return its own declared type instead
+#: of ``Any``.
+T = TypeVar("T")
 
-class SimpleFSM:
+
+class SimpleFSM(ResourceSurface):
     """Synchronous FSM interface for simple workflows.
 
     This class provides a purely synchronous API for FSM operations,
@@ -512,7 +519,7 @@ class SimpleFSM:
         self._resource_manager = self._async_fsm._resource_manager
         self._async_engine = self._async_fsm._async_engine
 
-    def _run_async(self, coro: Any, timeout: float | None = None) -> Any:
+    def _run_async(self, coro: Coroutine[Any, Any, T], timeout: float | None = None) -> T:
         """Run an async operation to completion synchronously.
 
         Drives the single async execution engine through the FSM's shared
@@ -528,7 +535,9 @@ class SimpleFSM:
                 coroutine finishes anyway.
 
         Returns:
-            The result of the coroutine
+            The result of the coroutine, with its own type --- this is generic
+            in the coroutine's result so the synchronous wrappers below do not
+            each have to widen to ``Any`` and back.
 
         Raises:
             TimeoutError: If ``timeout`` elapses before the coroutine finishes.
@@ -558,7 +567,7 @@ class SimpleFSM:
         """
 
         # Create the coroutine with the async process method
-        async def _process():
+        async def _process() -> dict[str, Any]:
             # Import here to avoid circular dependency
             from ..core.context_factory import ContextFactory
             from ..core.modes import ProcessingMode
@@ -706,7 +715,7 @@ class SimpleFSM:
             )
         else:
             # Source is an async iterator, need to handle it properly
-            async def _process():
+            async def _process() -> dict[str, Any]:
                 return await self._async_fsm.process_stream(
                     source=source,
                     sink=sink,
@@ -737,14 +746,19 @@ class SimpleFSM:
         """Get list of all state names in the FSM."""
         return self._async_fsm.get_states()
 
-    def get_resources(self) -> list[str]:
-        """Get list of registered resource names."""
-        return self._async_fsm.get_resources()
+    def get_state(self, name: str) -> Any:
+        """Get a state definition by name (or ``None`` if absent).
+
+        Public accessor over the underlying FSM so consumers can inspect a
+        state's attributes (e.g. ``emit_output``) without reaching into the
+        private ``_fsm`` handle.
+        """
+        return self._async_fsm.get_state(name)
 
     @property
     def config(self) -> Any:
         """Get the FSM configuration object."""
-        return self._async_fsm._config
+        return self._async_fsm.config
 
     def close(self) -> None:
         """Clean up resources and close connections synchronously."""
@@ -797,7 +811,7 @@ class SimpleFSM:
 def create_fsm(
     config: str | Path | dict[str, Any],
     custom_functions: dict[str, Callable] | None = None,
-    **kwargs,
+    **kwargs: Any,
 ) -> SimpleFSM:
     """Factory function to create a SimpleFSM instance.
 

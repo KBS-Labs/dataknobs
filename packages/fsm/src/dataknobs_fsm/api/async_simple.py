@@ -299,11 +299,12 @@ from ..execution.async_engine import AsyncExecutionEngine
 from ..execution.async_stream import AsyncStreamExecutor
 from ..resources.manager import ResourceManager
 from ..streaming.core import StreamConfig as CoreStreamConfig
+from ._resource_surface import ResourceSurface
 
 logger = logging.getLogger(__name__)
 
 
-class AsyncSimpleFSM:
+class AsyncSimpleFSM(ResourceSurface):
     """Async-first FSM interface for production workflows.
 
     This class provides a fully asynchronous API for FSM operations, designed
@@ -569,8 +570,14 @@ class AsyncSimpleFSM:
             except Exception as e:
                 logger.warning("Failed to register resource '%s': %s", name, e)
 
-    def _create_resource_provider(self, resource_config):
-        """Create a resource provider from ResourceConfig."""
+    def _create_resource_provider(self, resource_config: Any) -> Any:
+        """Create a resource provider from ResourceConfig.
+
+        Typed loosely on purpose: ``FSMBuilder._create_resource`` accepts the
+        several config shapes the loader produces and returns whichever
+        provider class matches, so naming one narrows a contract this method
+        only forwards.
+        """
         # Use the same logic as FSMBuilder
         builder = FSMBuilder()
         return builder._create_resource(resource_config)
@@ -720,6 +727,11 @@ class AsyncSimpleFSM:
             fsm=self._fsm, stream_config=stream_config, progress_callback=on_progress
         )
 
+        # Both element shapes are intended and both reach the executor, which
+        # branches on `isinstance(item, list)`: streaming mode yields
+        # pre-chunked lists, regular mode yields one record at a time.
+        stream_source: AsyncIterator[list[dict[str, Any]]] | AsyncIterator[dict[str, Any]]
+
         # Choose between streaming and regular mode
         if use_streaming and isinstance(source, (str, Path)):
             # Use memory-efficient streaming for large files
@@ -851,10 +863,6 @@ class AsyncSimpleFSM:
                 states.append(state.name)
         return states
 
-    def get_resources(self) -> list[str]:
-        """Get list of registered resource names."""
-        return list(self._resource_manager._providers.keys())
-
     @property
     def config(self) -> Any:
         """Get the FSM configuration object."""
@@ -883,7 +891,7 @@ class AsyncSimpleFSM:
 async def create_async_fsm(
     config: str | Path | dict[str, Any],
     custom_functions: dict[str, Callable] | None = None,
-    **kwargs,
+    **kwargs: Any,
 ) -> AsyncSimpleFSM:
     """Factory function to create an AsyncSimpleFSM instance.
 

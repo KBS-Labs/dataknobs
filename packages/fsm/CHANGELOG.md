@@ -234,9 +234,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   evidence. A provider exposing no teardown at all is not a member — there was
   nothing to close.
 
+- **`SimpleFSM.get_state(name)`** — the singular accessor its `AsyncSimpleFSM`
+  already had. `SimpleFSM` owns no capability of its own; it drives an
+  `AsyncSimpleFSM` through the shared bridge, so its public surface is that
+  class's surface spelled synchronously. `get_states()` was delegated and
+  `get_state()` was not, which left a caller wanting one state definition
+  reaching through `_async_fsm` for it. A test now compares the two classes'
+  public surfaces in both directions, so the next member added to the async
+  class cannot stop at the wrapper unnoticed.
+
 - **`AsyncClosable` and `AsyncCleanable`** (`dataknobs_fsm.resources`) — the
   awaited halves of the teardown convention, named so routing can narrow a type
   rather than probe a method name.
+
+- **One resource surface on `SimpleFSM`, `AdvancedFSM` and `AsyncSimpleFSM`** —
+  `register_resource()`, `get_resources()` and `unclosed_providers`, meaning
+  the same thing on all three. Registration and listing used to sit on
+  *opposite* halves of the API: the two simple classes could list registered
+  providers and offered no way to add one, while the advanced class could add
+  one and could not list them. A caller picked their class by which half they
+  needed, and the two simple classes could only be given a provider by reaching
+  through two private attributes.
+
+  All three members are synchronous, `AsyncSimpleFSM` included — registering
+  and listing touch only the manager's own registry, and the record is read
+  after teardown. `register_resource` takes the shape `AdvancedFSM` already
+  published: a provider instance, or a config dict.
+
+  `unclosed_providers` is the record of teardown that did not complete, and the
+  three do not answer alike. `AdvancedFSM.close()` runs the synchronous
+  teardown path, so it is the one surface that can report a provider whose
+  `aclose` could not be awaited. `SimpleFSM.close()` is synchronous in name
+  only — it drives the async cleanup through the shared bridge, so such a
+  provider is awaited and nothing is recorded. `AsyncSimpleFSM` awaits
+  throughout. The property's docstring carries the comparison.
+
+  `get_resources()` now reads the manager's public accessor, which copies the
+  registry under its lock, rather than the manager's private dict. No behaviour
+  change — `list()` over a dict view is a single C call and never observed a
+  concurrent write — but it leaves `_providers` reachable only from the class
+  that owns the lock, which is what makes that lock discipline checkable by
+  reading one file.
 
 ### Changed
 

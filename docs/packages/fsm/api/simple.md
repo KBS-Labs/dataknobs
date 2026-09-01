@@ -425,6 +425,28 @@ async with SimpleFSM("workflow.yaml") as fsm:
 Calling `close()` / `await aclose()` directly is equivalent; both are
 idempotent.
 
+## Resources
+
+Configuration is the usual way in — the `resources` constructor parameter, or
+a `resources:` block in the config file. To add one at runtime, or to inspect
+what is registered, `SimpleFSM` carries the same three members
+`AdvancedFSM` and `AsyncSimpleFSM` do:
+
+```python
+with SimpleFSM("workflow.yaml") as fsm:
+    fsm.register_resource("cache", cache_provider)
+    assert fsm.get_resources() == ["cache"]
+    result = fsm.process({"value": 10})
+
+assert not fsm.unclosed_providers
+```
+
+`register_resource` takes a provider instance or a config dict.
+`unclosed_providers` is empty unless a provider's teardown raised. See
+[the resources guide](../guides/resources.md)
+for the provider contract, the teardown naming convention, and what
+`unclosed_providers` records.
+
 ## Error Handling
 
 SimpleFSM provides error handling through:

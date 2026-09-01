@@ -555,31 +555,46 @@ assert empty == []
 
 ## Resource Management
 
-Register and manage external resources:
+Register and manage external resources. This surface is shared with
+`SimpleFSM` and `AsyncSimpleFSM` — the same three members mean the same thing
+on all three classes.
 
 ```python
-from dataknobs_fsm.resources.base import IResourceProvider
+from dataknobs_fsm.resources.base import BaseResourceProvider
 
-# Register resource from dict
-advanced_fsm.register_resource("database", {
-    "type": "database",
-    "backend": "postgresql",
-    "connection_string": "postgresql://..."
-})
+# Register from a dict: builds a simple in-memory provider whose `acquire()`
+# returns the `data` mapping. Static configuration, no external transport.
+advanced_fsm.register_resource("defaults", {"data": {"region": "us-east-1"}})
 
-# Register resource instance
-class CustomResource(IResourceProvider):
-    async def acquire(self):
-        # Acquire resource
-        pass
+# Register a provider instance for anything else. `acquire` and `release` are
+# the two abstract members; `validate`, `health_check` and `get_metrics` have
+# usable defaults on the base class.
+class ConnectionProvider(BaseResourceProvider):
+    def __init__(self, name, pool):
+        super().__init__(name)     # BaseResourceProvider takes (name, config=None)
+        self._pool = pool
 
-    async def release(self):
-        # Release resource
-        pass
+    def acquire(self, **kwargs):
+        return self._pool.checkout()
 
-resource = CustomResource()
-advanced_fsm.register_resource("custom", resource)
+    def release(self, resource):
+        self._pool.checkin(resource)
+
+    def close(self):          # `aclose` instead if teardown must be awaited
+        self._pool.dispose()
+
+# `pool` is your own connection pool — the FSM never constructs it, it only
+# calls the three methods above and tears the provider down on close.
+advanced_fsm.register_resource("db", ConnectionProvider("db", pool))
+
+assert advanced_fsm.get_resources() == ["defaults", "db"]
 ```
+
+Name the teardown method for what it is: `register_resource` rejects a
+synchronous `aclose()` or an awaited `close()` outright, because a provider
+whose teardown is misnamed cannot be torn down correctly by any caller. See
+[the resources guide](../guides/resources.md)
+for the convention and for `unclosed_providers`.
 
 ## Database Atomicity
 
@@ -972,7 +987,9 @@ for entry in trace:
 | `set_hooks(hooks)` | Set execution hooks | None |
 | `enable_history(storage, max_depth)` | Enable history tracking | None |
 | `disable_history()` | Disable history tracking | None |
-| `register_resource(name, resource)` | Register resource | None |
+| `register_resource(name, resource)` | Register a provider, by instance or config dict | None |
+| `get_resources()` | Names of the registered providers | list[str] |
+| `unclosed_providers` | *(property)* Providers whose teardown did not complete | Mapping[str, str] |
 | `get_available_transitions(state_name)` | Get available transitions | List[Dict] |
 | `inspect_state(state_name)` | Inspect state config | Dict |
 | `visualize_fsm()` | Generate DOT visualization | str |
