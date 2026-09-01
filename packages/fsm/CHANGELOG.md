@@ -9,6 +9,55 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A provider whose teardown had to be awaited was torn down as though it did
+  not.** `ResourceManager` routes teardown on the method's *name* — `close()`
+  synchronous, `aclose()` awaited — which is the only thing a registry of
+  unrelated provider types can route on. Nothing held a provider to it: the
+  contract declared no teardown method at all, and `BaseResourceProvider` gives
+  every provider a `close()`, so probing for one distinguished nothing. Three
+  consequences, and the quietest was the costliest:
+
+    - `AsyncDatabaseResourceAdapter` did not override `close()`, so a
+      synchronous teardown ran the inherited base close, released the handle
+      list, and never touched the database. No coroutine is created on that
+      path, so nothing warned; the manager then cleared its registry and the
+      object holding the open connection became unreachable. Reachable from any
+      config declaring an `async_database` resource that is closed with
+      `close()` / `__exit__` rather than `await cleanup()`.
+    - The provider `register_from_dict` creates defined `async def close()`,
+      violating the manager's own routing rule: its coroutine was discarded and
+      the teardown logged as a success.
+    - The stream executor probed a source for `aclose` *or* `close` and then
+      called `close` unconditionally, so a source offering only the former
+      raised `AttributeError` from a `finally:` — replacing whatever exception
+      the body was propagating.
+
+  `register_provider` now refuses a provider that spells an awaited teardown
+  `close`, naming the fix, at the last moment its author can act on it. The
+  convention is stated in `dataknobs_fsm.resources.base`, and `AsyncClosable` /
+  `AsyncCleanable` name its awaited halves so teardown routing narrows a type
+  instead of probing a string.
+
+- **`ResourceManager.close()` abandoned teardown at the first provider that
+  failed.** Its provider loop had no error isolation, so one raising provider
+  left every provider after it in iteration order unclosed, skipped the
+  registry clear that follows, and propagated out through `__exit__` — where it
+  replaces whatever the `with` body was raising. Failures are now isolated per
+  provider, matching what `cleanup()` already did on both of its paths.
+
+- **`ResourceManager.cleanup()` could not name the provider that failed.** Its
+  awaited tasks were a bare list, so `gather`'s results could only be reported
+  as `task {i}` — an index into a list the reader cannot see. Names are now
+  carried alongside the tasks.
+
+- **`StreamExecutor.create_multi_stage_pipeline` built a pipeline with no
+  source.** It read the source with `.get("source")` and handed the result to a
+  dataclass that requires one, so a stage list missing that key produced a
+  pipeline holding `None` and an empty list raised `IndexError` on the first
+  index. Both are now refused where the pipeline is built, with a message
+  naming the problem, rather than surfacing later as an `AttributeError` on
+  `NoneType` once iteration starts.
+
 - **`ParallelIOExecutor` silently skipped every synchronous provider.**
   `read_all` and `write_all` built their task list inside
   `if asyncio.iscoroutinefunction(provider.read)` with no `else`, so a
@@ -136,6 +185,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   delegates. The config builder's resolved-function adapter selection and the
   engine's transform dispatch carried their own copies with the same
   `partial` gap, and now delegate too.
+
+### Added
+
+- **`ResourceManager.unclosed_providers`** — a mapping of provider name to
+  reason, recording teardown that did not complete: a provider whose awaited
+  teardown the synchronous path could not run, and a provider whose teardown
+  raised. Empty is the normal answer, and asserting it is how a caller that
+  cares about resource lifetime checks that nothing was left open. Monotonic
+  over the manager's life, so a second `close()` cannot erase the first call's
+  evidence. A provider exposing no teardown at all is not a member — there was
+  nothing to close.
+
+- **`AsyncClosable` and `AsyncCleanable`** (`dataknobs_fsm.resources`) — the
+  awaited halves of the teardown convention, named so routing can narrow a type
+  rather than probe a method name.
 
 ### Changed
 

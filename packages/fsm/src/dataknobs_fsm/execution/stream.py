@@ -1,5 +1,6 @@
 """Stream executor for chunk-based processing."""
 
+import logging
 import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Tuple, Union
@@ -9,6 +10,7 @@ from dataknobs_common import SyncLoopBridge
 from dataknobs_fsm.core.fsm import FSM
 from dataknobs_fsm.core.modes import ProcessingMode, TransactionMode
 from dataknobs_fsm.execution.context import ExecutionContext
+from dataknobs_fsm.resources.base import AsyncClosable
 from dataknobs_fsm.streaming.core import (
     IStreamSink,
     IStreamSource,
@@ -16,6 +18,8 @@ from dataknobs_fsm.streaming.core import (
     StreamConfig,
     StreamContext,
 )
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -203,9 +207,22 @@ class StreamExecutor:
             # Tear down the operation-scoped bridge (joins its loop thread).
             bridge.close()
 
-            # Clean up
-            if hasattr(pipeline.source, "aclose") or hasattr(pipeline.source, "close"):
-                pipeline.source.close()
+            # Clean up. Probe and call must name the same method: admitting
+            # either name and then calling `close` unconditionally raises
+            # `AttributeError` here for a source offering only `aclose` --- from
+            # a `finally:`, where it replaces whatever the body was propagating.
+            # Same policy as `ResourceManager._close_provider`: run the
+            # synchronous half if there is one, then report the half this
+            # engine cannot run rather than claiming success.
+            source = pipeline.source
+            if hasattr(source, "close"):
+                source.close()
+            if isinstance(source, AsyncClosable):
+                logger.error(
+                    "Stream source %s must be closed with `await aclose()`; the "
+                    "synchronous stream executor cannot await it, so it is still open.",
+                    type(source).__name__,
+                )
 
             if pipeline.sink:
                 pipeline.sink.flush()
@@ -343,11 +360,25 @@ class StreamExecutor:
         """Create a multi-stage processing pipeline.
 
         Args:
-            stages: List of stage configurations.
+            stages: List of stage configurations. The first must carry a
+                ``source``.
 
         Returns:
             Configured pipeline.
+
+        Raises:
+            ValueError: If ``stages`` is empty or its first stage has no
+                ``source``. A pipeline without one is unusable, and the
+                failure is far more legible here than as an ``AttributeError``
+                on ``None`` once ``execute_stream`` starts iterating it.
         """
+        if not stages:
+            raise ValueError("A multi-stage pipeline needs at least one stage")
+
+        source = stages[0].get("source")
+        if source is None:
+            raise ValueError("The first stage of a multi-stage pipeline must have a 'source'")
+
         # Build pipeline from stages
         transformations = []
         chunk_processors = []
@@ -361,7 +392,7 @@ class StreamExecutor:
                 chunk_processors.append(stage["function"])
 
         return StreamPipeline(
-            source=stages[0].get("source"),
+            source=source,
             sink=stages[-1].get("sink"),
             transformations=transformations,
             chunk_processors=chunk_processors,

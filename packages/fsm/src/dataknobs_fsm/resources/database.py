@@ -4,7 +4,7 @@ import asyncio
 import logging
 import uuid
 from contextlib import contextmanager
-from typing import Any, Dict, List
+from typing import Any, Dict, Iterator, List
 
 from dataknobs_common import CapabilityNotSupportedError
 from dataknobs_common.exceptions import ConfigurationError
@@ -35,7 +35,7 @@ class DatabaseResourceAdapter(BaseResourceProvider):
     resource management capabilities for FSM states.
     """
 
-    def __init__(self, name: str, backend: str = "memory", **backend_config):
+    def __init__(self, name: str, backend: str = "memory", **backend_config: Any) -> None:
         """Initialize database resource adapter.
 
         Args:
@@ -69,7 +69,7 @@ class DatabaseResourceAdapter(BaseResourceProvider):
                 operation="initialize",
             ) from e
 
-    def acquire(self, **kwargs) -> SyncDatabase:
+    def acquire(self, **kwargs: Any) -> SyncDatabase:
         """Acquire database connection/instance.
 
         The returned database object can be used for all database operations.
@@ -169,7 +169,7 @@ class DatabaseResourceAdapter(BaseResourceProvider):
             return ResourceHealth.UNHEALTHY
 
     @contextmanager
-    def transaction_context(self, database: SyncDatabase | None = None):
+    def transaction_context(self, database: SyncDatabase | None = None) -> Iterator[SyncDatabase]:
         """Context manager for database transactions.
 
         Note: Transaction support depends on the backend.
@@ -747,6 +747,28 @@ class AsyncDatabaseResourceAdapter(BaseResourceProvider):
         if fetch_one:
             return results[0] if results else None
         return results
+
+    def close(self) -> None:
+        """Release acquired handles. The database itself needs :meth:`aclose`.
+
+        ``BaseResourceProvider.close`` releases the handle list and stops
+        there, which for this adapter leaves the ``AsyncDatabase`` open --- and
+        because the manager clears its registry afterwards, the object holding
+        the connection then becomes unreachable. No coroutine is created on
+        that path, so nothing warns.
+
+        The class that knows the difference is the one that says so. The
+        manager records the same fact in ``unclosed_providers``; this is the
+        message a reader of the log gets.
+        """
+        super().close()
+        if self._database is not None:
+            logger.error(
+                "Resource %s was closed synchronously; its async database was NOT "
+                "closed and the connection is still open. Use `await aclose()`, or "
+                "close the FSM with `await aclose()` / `async with`.",
+                self.name,
+            )
 
     async def aclose(self) -> None:
         """Flush and close the underlying async database."""

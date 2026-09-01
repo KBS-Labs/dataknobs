@@ -1,10 +1,39 @@
-"""Base interfaces and classes for resource management."""
+"""Base interfaces and classes for resource management.
+
+Teardown convention
+-------------------
+
+``ResourceManager`` holds providers of unrelated types in one registry, so the
+only thing it can route teardown on is the method's *name*. The convention is
+the standard one --- ``asyncio``, ``contextlib.aclosing``, and the pair
+``dataknobs_common.lifecycle`` probes:
+
+======================  ==========================================
+``close()``             synchronous teardown; never a coroutine
+``aclose()``            teardown that must be awaited
+======================  ==========================================
+
+A provider whose teardown must be awaited spells it ``aclose``. Spelling it
+``close`` is served by the synchronous path, which calls it, discards the
+coroutine it returns, and reports success --- so the teardown never runs and
+nothing says otherwise. :meth:`ResourceManager.register_provider` refuses such
+a provider at registration, which is the last moment its author can still act
+on the mistake.
+
+``cleanup()`` is honoured as an alternate spelling of ``aclose`` for providers
+that already used it; new providers should use ``aclose``.
+
+:class:`AsyncClosable` and :class:`AsyncCleanable` name the awaited halves, so
+the routing can be a type narrowing rather than a string probe. Being
+``runtime_checkable``, they test for the *presence* of the method and not for
+its being a coroutine function --- that is what the registration check is for.
+"""
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
-from typing import Any, Dict, List, Protocol, runtime_checkable
+from typing import Any, Dict, Iterator, List, Protocol, runtime_checkable
 from contextlib import contextmanager
 
 
@@ -103,9 +132,18 @@ class ResourceMetrics:
 
 @runtime_checkable
 class IResourceProvider(Protocol):
-    """Interface for resource providers."""
+    """Interface for resource providers.
 
-    def acquire(self, **kwargs) -> Any:
+    Teardown is *optional* and is not declared here on purpose: this Protocol
+    is ``runtime_checkable``, so a new required member would change
+    ``isinstance`` for every provider a consumer has already written. A
+    provider that needs teardown supplies ``close()`` (synchronous) or
+    ``aclose()`` (awaited) per the convention in this module's docstring;
+    :meth:`ResourceManager.register_provider` enforces it, which covers
+    consumer providers the Protocol cannot.
+    """
+
+    def acquire(self, **kwargs: Any) -> Any:
         """Acquire a resource.
 
         Args:
@@ -201,6 +239,42 @@ class IResourcePool(Protocol):
         """Close the pool and release all resources."""
         ...
 
+    def get_metrics(self) -> ResourceMetrics:
+        """Get pool metrics.
+
+        Returns:
+            Current metrics.
+        """
+        ...
+
+
+@runtime_checkable
+class AsyncClosable(Protocol):
+    """A collaborator whose teardown must be awaited.
+
+    Named so teardown routing can narrow a type rather than probe a string.
+    ``runtime_checkable`` tests only that the attribute is present --- it does
+    not verify the method is a coroutine function, which is
+    :meth:`ResourceManager.register_provider`'s job.
+    """
+
+    async def aclose(self) -> None:
+        """Release the underlying transport."""
+        ...
+
+
+@runtime_checkable
+class AsyncCleanable(Protocol):
+    """A collaborator spelling its awaited teardown ``cleanup``.
+
+    Honoured as an alternate spelling of :class:`AsyncClosable` for providers
+    that already used it. New providers should define ``aclose``.
+    """
+
+    async def cleanup(self) -> None:
+        """Release the underlying transport."""
+        ...
+
 
 class BaseResourceProvider(ABC):
     """Base class for resource providers."""
@@ -219,7 +293,7 @@ class BaseResourceProvider(ABC):
         self._resources: List[Any] = []
 
     @abstractmethod
-    def acquire(self, **kwargs) -> Any:
+    def acquire(self, **kwargs: Any) -> Any:
         """Acquire a resource.
 
         Args:
@@ -272,7 +346,7 @@ class BaseResourceProvider(ABC):
         return self.metrics
 
     @contextmanager
-    def resource_context(self, **kwargs):
+    def resource_context(self, **kwargs: Any) -> Iterator[Any]:
         """Context manager for resource acquisition.
 
         Args:

@@ -44,6 +44,18 @@ The row is stated as "an ``aclose()``" rather than "both ``close()`` and
 (``AsyncMemoryBank``) satisfies two rows, and either helper is correct
 there — the rows are not disjoint, and do not need to be.
 
+The second row's blessing of an ``async def close()`` holds for a
+collaborator whose shape the holder knows **statically** — which is the
+case these helpers are for, since choosing between them is itself a
+static decision. It does not extend to a collaborator held in a
+heterogeneous *registry*, where the holder has many objects of unrelated
+types and the method's name is the only thing it can route on. There an
+``async def close()`` is indistinguishable from a synchronous one until
+it has already been called and its coroutine discarded, so the name has
+to carry the distinction: ``close()`` synchronous, ``aclose()`` awaited,
+enforced when the collaborator is registered.
+``dataknobs_fsm.resources.ResourceManager`` is such a registry.
+
 What *is* worth knowing: each helper probes for exactly one method name
 and skips when it is absent, so reaching for :func:`aclose_if_owned` on a
 plain ``close()``-only collaborator closes **nothing**. That skip is
