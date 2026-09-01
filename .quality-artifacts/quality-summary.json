@@ -1,21 +1,10 @@
 {
-  "timestamp": "2026-09-01T03:31:50Z",
+  "timestamp": "2026-09-01T03:47:15Z",
   "overall_status": "PASS",
-  "run_mode": "pr",
+  "run_mode": "all",
   "environment": "host",
-  "packages": "bots common config data fsm legacy llm structures utils xization",
-  "tested_packages": [
-    "bots",
-    "common",
-    "config",
-    "data",
-    "fsm",
-    "legacy",
-    "llm",
-    "structures",
-    "utils",
-    "xization"
-  ],
+  "packages": "all",
+  "tested_packages": [],
   "coverage_percent": null,
   "package_hashes": {
     "bots": "6e688796b38ec5942b733292fbc1a058ef537ac1d24ce4e0e92542a54120f708",
@@ -31,43 +20,43 @@
     "_algorithm_version": 3
   },
   "workspace_hashes": {
-    "toolchain": "eb96eff3f8ef90513249126b997a10b02357581b03d780f7ea90c17fdbe085cc",
+    "toolchain": "0fb983f88318648c256cf4b7829874713d5e884ce8b5a74a27812498b759a7b9",
     "workspace_tests": "de5391a1afd41cee77c5eee297a041caebb64509a9027a62d16a997126a32690",
     "docs": "3d7d3c57165356f5f41d4b4a5d39582258950d2333263114471bd5fb3c1c38f1"
   },
-  "total_seconds": 345,
+  "total_seconds": 353,
   "checks": {
     "workflow_lint": {
       "status": "pass",
       "exit_code": 0,
       "tool": "lint-workflows.sh",
-      "duration_seconds": 0
+      "duration_seconds": 1
     },
     "shell_lint": {
       "status": "pass",
       "exit_code": 0,
       "tool": "lint-shell.sh",
-      "duration_seconds": 5
+      "duration_seconds": 4
     },
     "contract": {
       "status": "pass",
       "exit_code": 0,
       "tool": "quality-contract.py",
-      "duration_seconds": 1
+      "duration_seconds": 5
     },
     "validation": {
       "status": "pass",
       "exit_code": 0,
       "skipped": false,
       "tool": "validate.sh",
-      "duration_seconds": 82
+      "duration_seconds": 86
     },
     "documentation": {
       "status": "pass",
       "exit_code": 0,
       "skipped": false,
       "tool": "mkdocs",
-      "duration_seconds": 26
+      "duration_seconds": 25
     },
     "documentation_versions": {
       "status": "pass",
@@ -87,7 +76,7 @@
       "status": "pass",
       "exit_code": 0,
       "skipped": false,
-      "duration_seconds": 122,
+      "duration_seconds": 124,
       "workspace_guards_seconds": 62
     },
     "integration_tests": {
