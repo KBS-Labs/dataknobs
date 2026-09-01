@@ -4,7 +4,6 @@ import pytest
 from typing import Any, Dict
 from time import sleep
 
-from dataknobs_data.fields import Field, FieldType
 from dataknobs_fsm.core.state import (
     StateType,
     StateStatus,
@@ -48,31 +47,35 @@ class MockTransformFunction(ITransformFunction):
 
 
 class TestStateSchema:
-    """Tests for StateSchema."""
+    """Tests for StateSchema.
+
+    The schemas here are JSON Schema mappings because that is the only shape
+    anything builds. These tests previously constructed a ``Field``-list form
+    that configuration could not produce and production never held, so they
+    covered a type that existed only in this file.
+    """
 
     def test_schema_creation(self):
         """Test creating a state schema."""
         schema = StateSchema(
-            fields=[
-                Field("name", "test", FieldType.STRING),
-                Field("age", 25, FieldType.INTEGER),
-            ],
-            required_fields={"name"},
-            allow_extra_fields=True,
+            {
+                "type": "object",
+                "properties": {"name": {"type": "string"}, "age": {"type": "integer"}},
+                "required": ["name"],
+            }
         )
 
-        assert len(schema.fields) == 2
-        assert "name" in schema.required_fields
-        assert schema.allow_extra_fields is True
+        assert schema.definition["required"] == ["name"]
+        assert set(schema.definition["properties"]) == {"name", "age"}
 
     def test_validate_valid_data(self):
         """Test validating valid data."""
         schema = StateSchema(
-            fields=[
-                Field("name", "", FieldType.STRING),
-                Field("age", 0, FieldType.INTEGER),
-            ],
-            required_fields={"name"},
+            {
+                "type": "object",
+                "properties": {"name": {"type": "string"}, "age": {"type": "integer"}},
+                "required": ["name"],
+            }
         )
 
         data = {"name": "Alice", "age": 30}
@@ -84,7 +87,11 @@ class TestStateSchema:
     def test_validate_missing_required(self):
         """Test validation with missing required fields."""
         schema = StateSchema(
-            fields=[Field("name", "", FieldType.STRING)], required_fields={"name", "email"}
+            {
+                "type": "object",
+                "properties": {"name": {"type": "string"}},
+                "required": ["name", "email"],
+            }
         )
 
         data = {"name": "Alice"}
@@ -95,33 +102,31 @@ class TestStateSchema:
 
     def test_validate_wrong_type(self):
         """Test validation with wrong field type."""
-        schema = StateSchema(fields=[Field("age", 0, FieldType.INTEGER)])
+        schema = StateSchema({"type": "object", "properties": {"age": {"type": "integer"}}})
 
         data = {"age": "not a number"}
         is_valid, errors = schema.validate(data)
 
         assert is_valid is False
-        assert any("invalid type" in error for error in errors)
+        assert errors == ["Field 'age' has wrong type"]
 
-    def test_validate_extra_fields_allowed(self):
-        """Test validation with extra fields allowed."""
-        schema = StateSchema(fields=[Field("name", "", FieldType.STRING)], allow_extra_fields=True)
+    def test_validate_extra_fields_are_accepted(self):
+        """Extra fields pass, and there is no way to ask for anything else.
+
+        This replaces a pair of tests that set ``allow_extra_fields`` True and
+        False. That flag was readable only from Python: ``additionalProperties``
+        --- the configuration keyword that would have set it --- was never
+        mapped onto it, so no configured FSM could reach the False branch. The
+        flag is gone rather than kept as a knob nothing could turn, and the
+        gap it papered over is recorded as a follow-up on validator fidelity.
+        """
+        schema = StateSchema({"type": "object", "properties": {"name": {"type": "string"}}})
 
         data = {"name": "Alice", "extra": "value"}
         is_valid, errors = schema.validate(data)
 
         assert is_valid is True
         assert errors == []
-
-    def test_validate_extra_fields_disallowed(self):
-        """Test validation with extra fields disallowed."""
-        schema = StateSchema(fields=[Field("name", "", FieldType.STRING)], allow_extra_fields=False)
-
-        data = {"name": "Alice", "extra": "value"}
-        is_valid, errors = schema.validate(data)
-
-        assert is_valid is False
-        assert "Unexpected field 'extra'" in errors
 
 
 class TestStateDefinition:
@@ -170,7 +175,11 @@ class TestStateDefinition:
     def test_validate_data_with_schema(self):
         """Test data validation with schema."""
         schema = StateSchema(
-            fields=[Field("value", 0, FieldType.INTEGER)], required_fields={"value"}
+            {
+                "type": "object",
+                "properties": {"value": {"type": "integer"}},
+                "required": ["value"],
+            }
         )
         state = StateDefinition(name="test", schema=schema)
 
@@ -394,7 +403,11 @@ class TestStateIntegration:
     def test_state_with_validation(self):
         """Test state with validation functions."""
         schema = StateSchema(
-            fields=[Field("value", 0, FieldType.INTEGER)], required_fields={"value"}
+            {
+                "type": "object",
+                "properties": {"value": {"type": "integer"}},
+                "required": ["value"],
+            }
         )
 
         definition = StateDefinition(

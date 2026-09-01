@@ -33,7 +33,7 @@ from dataknobs_fsm.core.arc import ArcDefinition, PushArc, TransformSpec
 from dataknobs_fsm.core.data_modes import DataHandler, DataHandlingMode, get_data_handler
 from dataknobs_fsm.core.data_wrapper import ensure_dict
 from dataknobs_fsm.core.network import StateNetwork
-from dataknobs_fsm.core.state import StateDefinition, StateType
+from dataknobs_fsm.core.state import StateDefinition, StateSchema, StateType
 from dataknobs_fsm.core.fsm import FSM as CoreFSMClass  # noqa: N811
 from dataknobs_fsm.execution.context import ExecutionContext
 from dataknobs_fsm.functions.base import (
@@ -713,88 +713,16 @@ class FSMBuilder:
             arc.required_resources = self._normalize_arc_resources(arc_config.resources)
             return arc
 
-    def _build_schema(self, schema_config: Dict[str, Any]) -> Any:
-        """Build a schema from configuration.
+    def _build_schema(self, schema_config: Dict[str, Any]) -> StateSchema:
+        """Build the validator for a state's ``data_schema`` block.
 
         Args:
             schema_config: Schema configuration (JSON Schema format).
 
         Returns:
-            Schema object for validation.
+            The :class:`StateSchema` that ``StateDefinition.schema`` declares.
         """
-        # Handle JSON Schema format - create a simple validation schema
-        # that can be used by the FSM's validation system
-
-        # For JSON Schema format, create a simple validator wrapper
-        class JSONSchemaValidator:
-            """Simple JSON Schema validator for FSM data validation.
-
-            Validates data against JSON Schema definitions, checking required fields
-            and type constraints. Supports object schemas with properties and required fields.
-            """
-
-            def __init__(self, schema_def):
-                self.schema_def = schema_def
-
-            def validate(self, data):
-                """Validate data against JSON schema."""
-                from dataknobs_data import Record
-
-                # Convert Record to dict if needed
-                if isinstance(data, Record):
-                    data_dict = data.to_dict()
-                elif isinstance(data, dict):
-                    data_dict = data
-                else:
-                    return type(
-                        "Result",
-                        (),
-                        {
-                            "valid": False,
-                            "errors": [f"Expected object or Record, got {type(data).__name__}"],
-                        },
-                    )()
-
-                # Simple validation for basic JSON schema
-                if self.schema_def.get("type") == "object":
-                    errors = []
-                    properties = self.schema_def.get("properties", {})
-                    required = self.schema_def.get("required", [])
-
-                    # Check required fields
-                    for field in required:
-                        if field not in data_dict:
-                            errors.append(f"Required field '{field}' is missing")
-
-                    # Check field types
-                    for field, value in data_dict.items():
-                        if field in properties:
-                            field_schema = properties[field]
-                            field_type = field_schema.get("type")
-                            if field_type and not self._validate_type(value, field_type):
-                                errors.append(f"Field '{field}' has wrong type")
-
-                    return type("Result", (), {"valid": len(errors) == 0, "errors": errors})()
-                else:
-                    # Simple pass-through for non-object schemas
-                    return type("Result", (), {"valid": True, "errors": []})()
-
-            def _validate_type(self, value, expected_type):
-                """Validate value type."""
-                type_map = {
-                    "string": str,
-                    "integer": int,
-                    "number": (int, float),
-                    "boolean": bool,
-                    "array": list,
-                    "object": dict,
-                }
-                expected_python_type = type_map.get(expected_type)
-                if expected_python_type:
-                    return isinstance(value, expected_python_type)
-                return True
-
-        return JSONSchemaValidator(schema_config)
+        return StateSchema(schema_config)
 
     def _materialize_library_function(
         self,

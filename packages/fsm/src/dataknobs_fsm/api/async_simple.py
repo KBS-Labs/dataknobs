@@ -818,32 +818,28 @@ class AsyncSimpleFSM(ResourceSurface):
                 await run_callback_off_loop(cleanup_func)
 
     async def validate(self, data: dict[str, Any] | Record) -> dict[str, Any]:
-        """Validate data against FSM's start state schema asynchronously.
+        """Validate data against the FSM's start-state schema.
 
         Args:
-            data: Data to validate
+            data: Mapping or :class:`Record` to validate.
 
         Returns:
-            Dict containing validation results
+            ``{"valid": bool, "errors": list[str]}``.
+
+        Raises:
+            ValueError: If the FSM has no start state. Reporting ``valid``
+                for a machine that validated nothing against nothing is the
+                answer this method used to give by accident, via an
+                ``AttributeError`` on ``None``.
         """
-        # Convert to Record if needed
-        if isinstance(data, dict):
-            record = Record(data)
-        else:
-            record = data
-
-        # Get start state
         start_state = self._fsm.get_start_state()
-
-        # Validate against schema
-        if start_state.schema:
-            validation_result = start_state.schema.validate(record)
-            return {
-                "valid": validation_result.valid,
-                "errors": validation_result.errors if not validation_result.valid else [],
-            }
-        else:
+        if start_state is None:
+            raise ValueError(f"FSM '{self._fsm.name}' has no start state to validate against")
+        if start_state.schema is None:
             return {"valid": True, "errors": []}
+
+        valid, errors = start_state.schema.validate(data)
+        return {"valid": valid, "errors": errors}
 
     def get_state(self, name: str) -> Any:
         """Get a state definition by name (or ``None`` if absent).

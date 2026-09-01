@@ -7,7 +7,54 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Changed
+
+- **`StateSchema` is constructed from a JSON Schema mapping.** It takes the
+  state's `data_schema` block (alias `schema`) directly:
+
+    ```python
+    StateSchema({"type": "object",
+                 "properties": {"n": {"type": "integer"}},
+                 "required": ["n"]})
+    ```
+
+  It previously took a `dataknobs_data` `Field` list with `required_fields`,
+  `constraints` and `allow_extra_fields` — a shape nothing built. `constraints`
+  was never read, and `allow_extra_fields` was readable only from Python
+  because `additionalProperties`, the configuration keyword that would have set
+  it, was never mapped onto it; both are gone rather than kept as knobs no
+  configuration could turn. `StateSchema` is importable from
+  `dataknobs_fsm.core.state` and is exported from no `__init__`, so this
+  reaches only code that imported it from the module path and constructed one
+  by hand.
+
 ### Fixed
+
+- **`StateDefinition.validate_data()` raised `TypeError` on every FSM built
+  from configuration.** It is declared to return `tuple[bool, list[str]]`, and
+  did — for a schema constructed by hand. The builder did not construct one: it
+  minted a fresh class per call, defined inside the method body and reachable
+  by no importable name, whose `validate()` returned an anonymous object
+  carrying `.valid` and `.errors`. So `StateDefinition.schema` never held the
+  `StateSchema` it declares, and unpacking the documented return raised
+  `TypeError: cannot unpack non-iterable Result object`. The builder now
+  constructs the declared type, and the JSON-Schema semantics that configured
+  FSMs have always run are that type's body.
+
+    **No configured FSM changes verdict.** Every rule is carried across
+    unchanged, including three that are wrong and are pinned by tests until
+    they are fixed deliberately: `bool` satisfies an `integer` field
+    (`isinstance(True, int)`), `additionalProperties: false` is accepted and
+    ignored, and no keyword beyond `type` and `required` is honoured. The one
+    difference is that a non-`dict` `Mapping` is now accepted where it was
+    previously rejected by type name.
+
+- **`AsyncSimpleFSM.validate()` on an FSM with no start state raised
+  `AttributeError` naming `NoneType`.** `get_start_state()` is declared to
+  return `StateDefinition | None` and was dereferenced unguarded. It now raises
+  `ValueError` naming the FSM. Configuration cannot currently produce a
+  start-less network — validation refuses one — so this guards the contract the
+  return type declares rather than a reachable configuration.
 
 - **The two halves of `ResourceManager` teardown disagreed about the registry
   they share, and a provider could be lost between them.** `close()` iterates

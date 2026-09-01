@@ -183,6 +183,57 @@ Control how data flows through states:
 }
 ```
 
+### 4. Data Schemas
+
+A state may carry a `schema` block (spelled `data_schema` if you prefer) that
+validates the data arriving at it. It is a JSON Schema object definition:
+
+```python
+{
+    "name": "validate_order",
+    "is_start": True,
+    "schema": {
+        "type": "object",
+        "properties": {
+            "order_id": {"type": "string"},
+            "quantity": {"type": "integer"},
+            "express":  {"type": "boolean"},
+        },
+        "required": ["order_id"],
+    },
+}
+```
+
+Reach the verdict through the state, or through the FSM's start state:
+
+```python
+state = fsm.get_state("validate_order")
+is_valid, errors = state.validate_data({"quantity": 2})
+# (False, ["Required field 'order_id' is missing"])
+
+fsm.validate({"order_id": "A1", "quantity": 2})
+# {"valid": True, "errors": []}
+```
+
+**What is checked.** Two keywords, and only two: `required`, and `type` on each
+entry in `properties`. The types recognised are `string`, `integer`, `number`,
+`boolean`, `array` and `object`.
+
+**What is not.** The checking is deliberately partial, and the gaps are worth
+knowing before you write a schema that assumes otherwise:
+
+| Written in the schema | What happens |
+|---|---|
+| A top level whose `type` is not `"object"` | Everything passes — there are no `properties` to check against |
+| `additionalProperties: false` | Accepted and ignored; extra fields are always allowed |
+| `format`, `minimum`, `maxLength`, `pattern`, … | Ignored — no keyword beyond `type` and `required` is honoured |
+| A `type` this list does not name | Passes, rather than failing as unknown |
+| `{"type": "integer"}` given `True` | Passes — `bool` is a subclass of `int` in Python |
+
+A schema is therefore a cheap shape check, not a full JSON Schema
+implementation. Validation that must be exhaustive belongs in a `validate`
+function on the state, where you can run any library you like.
+
 ## Common Patterns
 
 ### Validation → Process → Output

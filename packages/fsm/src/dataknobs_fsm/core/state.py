@@ -215,13 +215,14 @@ See Also:
     - :class:`~dataknobs_fsm.functions.base.ITransformFunction`: Transform function interface
 """
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field as dataclass_field
 from datetime import datetime
 from enum import Enum
-from typing import Any, Dict, List, Set, Tuple, TYPE_CHECKING
+from typing import Any, ClassVar, Dict, List, Tuple, TYPE_CHECKING
 from uuid import uuid4
 
-from dataknobs_data.fields import Field
+from dataknobs_data import Record
 from dataknobs_fsm.core.data_modes import DataHandlingMode, DataModeManager
 from dataknobs_fsm.functions.base import (
     IValidationFunction,
@@ -332,46 +333,85 @@ class StateStatus(Enum):
     PAUSED = "paused"  # Paused execution
 
 
-@dataclass
+@dataclass(frozen=True)
 class StateSchema:
-    """Schema definition for state data."""
+    """Validates state data against a JSON Schema object definition.
 
-    fields: List[Field]
-    required_fields: Set[str] = dataclass_field(default_factory=set)
-    constraints: Dict[str, Any] = dataclass_field(default_factory=dict)
-    allow_extra_fields: bool = True
+    Built from the ``data_schema`` block (alias ``schema``) of a state's
+    configuration, which is the only route that produces one. ``validate``
+    returns the pair :meth:`StateDefinition.validate_data` declares, so a
+    caller reads one shape whichever route reached it.
 
-    def validate(self, data: Dict[str, Any]) -> Tuple[bool, List[str]]:
-        """Validate data against schema.
+    The checking is deliberately partial and is the checking configured FSMs
+    have always had: ``type`` and ``required``, nothing else. An unrecognised
+    ``type`` keyword passes rather than failing, and a definition whose top
+    level is not ``object`` passes everything. Three known-wrong verdicts are
+    preserved rather than corrected here --- ``bool`` satisfies ``integer``
+    (``isinstance(True, int)``), ``additionalProperties`` is accepted and
+    ignored, and no keyword beyond ``type``/``required`` is honoured --- so
+    that this change is a type unification and not a silent change of what
+    validates. Each is pinned by a test.
+    """
+
+    definition: Mapping[str, Any]
+
+    _TYPES: ClassVar[Dict[str, type | Tuple[type, ...]]] = {
+        "string": str,
+        "integer": int,
+        "number": (int, float),
+        "boolean": bool,
+        "array": list,
+        "object": dict,
+    }
+
+    def validate(self, data: object) -> Tuple[bool, List[str]]:
+        """Validate data against the schema.
 
         Args:
-            data: Data to validate.
+            data: A mapping or a :class:`Record`. Typed ``object`` rather than
+                that union because reporting the type of anything else is part
+                of this method's contract, and a union narrow enough to
+                document the supported shapes makes that branch statically
+                dead --- the check would then be unreachable to the type
+                checker while still being reached at runtime by the untyped
+                callers it exists for.
 
         Returns:
             Tuple of (is_valid, error_messages).
         """
-        errors = []
+        if isinstance(data, Record):
+            values: Mapping[str, Any] = data.to_dict()
+        elif isinstance(data, Mapping):
+            values = data
+        else:
+            return False, [f"Expected object or Record, got {type(data).__name__}"]
 
-        # Check required fields
-        for field_name in self.required_fields:
-            if field_name not in data:
-                errors.append(f"Required field '{field_name}' is missing")
+        if self.definition.get("type") != "object":
+            # A non-object top level carries no properties to check against.
+            return True, []
 
-        # Check field types
-        field_map = {f.name: f for f in self.fields}
-        for field_name, value in data.items():
-            if field_name in field_map:
-                field_def = field_map[field_name]
-                test_field = Field(field_name, value, field_def.type)
-                if not test_field.validate():
-                    errors.append(
-                        f"Field '{field_name}' has invalid type. "
-                        f"Expected {field_def.type}, got {type(value).__name__}"
-                    )
-            elif not self.allow_extra_fields:
-                errors.append(f"Unexpected field '{field_name}'")
+        properties = self.definition.get("properties", {})
+        errors = [
+            f"Required field '{name}' is missing"
+            for name in self.definition.get("required", [])
+            if name not in values
+        ]
+        for name, value in values.items():
+            expected = properties.get(name, {}).get("type") if name in properties else None
+            if expected is not None and not self._is_type(value, expected):
+                errors.append(f"Field '{name}' has wrong type")
 
-        return len(errors) == 0, errors
+        return not errors, errors
+
+    def _is_type(self, value: Any, expected: str) -> bool:
+        """Whether ``value`` satisfies a JSON Schema ``type`` keyword.
+
+        An unknown keyword is not a failure --- the schema may be using a
+        vocabulary this validator does not implement, and rejecting data on
+        that basis would be worse than not checking it.
+        """
+        python_type = self._TYPES.get(expected)
+        return True if python_type is None else isinstance(value, python_type)
 
 
 @dataclass
@@ -773,7 +813,7 @@ class StateInstance:
     """
 
     id: str = dataclass_field(default_factory=lambda: str(uuid4()))
-    definition: StateDefinition = None
+    definition: StateDefinition | None = None
     status: StateStatus = StateStatus.PENDING
 
     # Data handling
@@ -795,7 +835,7 @@ class StateInstance:
     executed_arcs: List[str] = dataclass_field(default_factory=list)
     next_state: str | None = None
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         """Initialize data mode manager if not provided."""
         if self.data_mode_manager is None:
             # Use definition's data_mode if available and not None, else default to COPY
@@ -955,7 +995,7 @@ class StateInstance:
 class State:
     """Simplified state class for use in state networks."""
 
-    def __init__(self, name: str, **kwargs):
+    def __init__(self, name: str, **kwargs: Any) -> None:
         """Initialize state.
 
         Args:
