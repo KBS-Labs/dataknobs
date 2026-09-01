@@ -738,7 +738,13 @@ class SimpleFSM(ResourceSurface):
             data: Data to validate
 
         Returns:
-            Dict containing validation results
+            ``{"valid": bool, "errors": list[str]}``.
+
+        Raises:
+            ValueError: If the FSM has no start state. Raised by the async
+                method this delegates to, and repeated here because a caller
+                reading only the synchronous surface would not otherwise see
+                it.
         """
         return self._run_async(self._async_fsm.validate(data))
 

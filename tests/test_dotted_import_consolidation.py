@@ -34,7 +34,7 @@ from tests._workspace import ROOT
 DEFERRED = {
     # Takes a pre-split `FunctionRef`, so it parses no path — but it does
     # import dynamically, which is what the scan sees.
-    "fsm/src/dataknobs_fsm/config/builder.py:920",
+    "fsm/src/dataknobs_fsm/config/builder.py:848",
     # Inside `_cli_main`, `# pragma: no cover`: parses a CLI argument and
     # exits. Not config-driven resolution at all.
     "llm/src/dataknobs_llm/prompts/syntax.py:491",
