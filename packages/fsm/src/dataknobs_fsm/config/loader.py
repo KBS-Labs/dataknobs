@@ -8,10 +8,11 @@ This module provides functionality to load FSM configurations from various sourc
 """
 
 import contextlib
+import logging
 import os
 from collections.abc import Iterator
 from pathlib import Path
-from typing import Any, Dict, List, Set, Union
+from typing import Any, Dict, List, Set, Union, cast
 
 from dataknobs_common.config_loading import (
     ConfigLoadError,
@@ -31,6 +32,9 @@ from dataknobs_fsm.config.schema import (
     apply_template,
     validate_config,
 )
+
+
+logger = logging.getLogger(__name__)
 
 
 @contextlib.contextmanager
@@ -184,6 +188,8 @@ class ConfigLoader:
             processed_config = self._resolve_references(
                 processed_config, PathAnchor.anchored_at(file_path, config_root)
             )
+        else:
+            processed_config = self._strip_reference_directives(processed_config)
 
         # Apply common transformations and validate
         return self._finalize_config(processed_config)
@@ -212,6 +218,10 @@ class ConfigLoader:
         # Resolve environment variables
         if resolve_env:
             processed_config = self._resolve_environment_vars(processed_config)
+
+        # A dictionary has no file behind it to anchor a reference against, so
+        # this path never resolves one and must not hand it to the schema.
+        processed_config = self._strip_reference_directives(processed_config)
 
         # Apply common transformations and validate
         return self._finalize_config(processed_config)
@@ -277,7 +287,11 @@ class ConfigLoader:
         # consolidates them under ``ValueError`` so callers see a
         # single, stable type).
         try:
-            return load_yaml_or_json(file_path, require_dict=False)
+            # ``require_dict=False`` selects the overload returning ``Any``, which
+            # is what lets a non-dict root through to `_finalize_config`. Callers
+            # may still assume a mapping: that is the contract, and this is the
+            # one place the legacy tolerance leaks past it.
+            return cast("Dict[str, Any]", load_yaml_or_json(file_path, require_dict=False))
         except ConfigUnsupportedFormatError as e:
             raise ValueError(str(e)) from e
         except ConfigYAMLNotInstalledError as e:
@@ -715,6 +729,53 @@ class ConfigLoader:
             yield
         finally:
             self._resolving.pop()
+
+    #: The loader's own directives. They are part of the configuration
+    #: *language*, not of the FSM schema, and are consumed by
+    #: ``_resolve_references`` --- so a validated config never contains one.
+    _REFERENCE_DIRECTIVES = ("$include", "$import")
+
+    def _strip_reference_directives(self, config: Any) -> Any:
+        """Remove reference directives from a configuration nothing will resolve.
+
+        ``$include`` and ``$import`` are the loader's language. On the resolving
+        path they are consumed and the schema never sees them; with resolution
+        switched off, or from a dictionary that has no file to anchor a
+        reference against, they used to survive into validation and be silently
+        discarded there.
+
+        They are removed rather than refused, and warned about rather than
+        dropped in silence. The distinction is the one the schema now draws: a
+        key it does not recognise is an error, because the author's intent is
+        unrealisable; a key the *loader* recognises but will not act on is a
+        request it cannot honour here, and the author needs to be told which of
+        the two happened.
+
+        Args:
+            config: Any part of a configuration --- the walk is recursive.
+
+        Returns:
+            The same structure with every directive removed. Mappings and lists
+            are rebuilt rather than mutated: a caller of ``load_from_dict``
+            still holds the dictionary it passed in.
+        """
+        if isinstance(config, dict):
+            found = [key for key in self._REFERENCE_DIRECTIVES if key in config]
+            if found:
+                logger.warning(
+                    "%s not resolved and ignored: reference resolution is off for "
+                    "this load, so the referenced content is not part of the "
+                    "configuration.",
+                    " and ".join(found),
+                )
+            return {
+                key: self._strip_reference_directives(value)
+                for key, value in config.items()
+                if key not in self._REFERENCE_DIRECTIVES
+            }
+        if isinstance(config, list):
+            return [self._strip_reference_directives(item) for item in config]
+        return config
 
     def _resolve_references(self, config: Dict[str, Any], anchor: PathAnchor) -> Dict[str, Any]:
         """Resolve file references (includes/imports) in configuration.

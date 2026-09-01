@@ -14,7 +14,7 @@ import logging
 from enum import Enum
 from typing import Any, Dict, List, Literal, Union
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from dataknobs_config import deep_merge
 
@@ -45,7 +45,29 @@ class ExecutionStrategy(str, Enum):
     STREAM_OPTIMIZED = "stream_optimized"
 
 
-class FunctionReference(BaseModel):
+class _StrictModel(BaseModel):
+    """Base for every configuration model: an unknown key is an error.
+
+    Pydantic's default is to discard a key no field declares, which made a
+    block written one level too deep --- or a field name with a typo in it ---
+    do nothing and say nothing. That was never a decision about this schema; it
+    was the default surviving in a file whose strictness about *values* is
+    deliberate, so an unknown ``type`` raised while an unknown key did not.
+
+    Inheriting the setting rather than repeating it on ten models is what makes
+    an eleventh strict by construction. ``tests/test_unknown_config_keys_are_refused.py``
+    walks this module and fails on a model that is not.
+
+    A configuration still carries data the schema has no field for --- through
+    ``metadata`` on the FSM, network, state and arc, ``config`` on a resource,
+    and ``params`` on a function reference. Refusing an unknown key routes that
+    data to the field built for it instead of dropping it.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class FunctionReference(_StrictModel):
     """Reference to a function."""
 
     type: Literal["builtin", "custom", "inline", "registered"]
@@ -68,7 +90,7 @@ class FunctionReference(BaseModel):
         return self
 
 
-class DataModeConfig(BaseModel):
+class DataModeConfig(_StrictModel):
     """Configuration for data handling modes."""
 
     default: DataHandlingMode = DataHandlingMode.COPY
@@ -78,7 +100,7 @@ class DataModeConfig(BaseModel):
     direct_config: Dict[str, Any] = Field(default_factory=dict)
 
 
-class StreamConfig(BaseModel):
+class StreamConfig(_StrictModel):
     """Configuration for streaming support."""
 
     enabled: bool = False
@@ -89,7 +111,7 @@ class StreamConfig(BaseModel):
     format: str | None = None
 
 
-class ResourceConfig(BaseModel):
+class ResourceConfig(_StrictModel):
     """Configuration for a resource."""
 
     name: str
@@ -102,7 +124,7 @@ class ResourceConfig(BaseModel):
     health_check_interval: int | None = Field(default=None, ge=1)
 
 
-class ArcConfig(BaseModel):
+class ArcConfig(_StrictModel):
     """Configuration for an arc."""
 
     target: str
@@ -139,7 +161,7 @@ class PushArcConfig(ArcConfig):
     result_mapping: Dict[str, str] = Field(default_factory=dict)
 
 
-class StateConfig(BaseModel):
+class StateConfig(_StrictModel):
     """Configuration for a state."""
 
     name: str
@@ -156,7 +178,8 @@ class StateConfig(BaseModel):
     run_on_failure: bool = False
     metadata: Dict[str, Any] = Field(default_factory=dict)
 
-    model_config = {"populate_by_name": True}  # Allow both 'schema' and 'data_schema'
+    # Allow both 'schema' and 'data_schema'; the extras setting is inherited.
+    model_config = ConfigDict(populate_by_name=True)
 
     @field_validator("arcs", mode="before")
     @classmethod
@@ -174,7 +197,7 @@ class StateConfig(BaseModel):
         return result  # type: ignore
 
 
-class NetworkConfig(BaseModel):
+class NetworkConfig(_StrictModel):
     """Configuration for a state network."""
 
     name: str
@@ -202,7 +225,7 @@ class NetworkConfig(BaseModel):
         return self
 
 
-class FSMConfig(BaseModel):
+class FSMConfig(_StrictModel):
     """Complete FSM configuration."""
 
     name: str
@@ -229,7 +252,7 @@ class FSMConfig(BaseModel):
 
     @model_validator(mode="before")
     @classmethod
-    def _warn_on_removed_transaction_key(cls, data: Any) -> Any:
+    def _warn_and_drop_removed_transaction_key(cls, data: Any) -> Any:
         """Warn when a configuration carries a removed ``transaction`` block.
 
         The strategy-based transaction coordinator was removed; it configured an
@@ -237,6 +260,18 @@ class FSMConfig(BaseModel):
         leftover ``transaction:`` block is now ignored. Database atomicity is
         provided by the AsyncDatabase.transaction() primitive, the
         DatabaseTransaction function, and BatchCommit(atomicity="require").
+
+        The key is dropped here so that it never reaches the extras check every
+        model now applies. That check exists to refuse a key the schema does not
+        know; this one is known, and known to be obsolete, so it is answered
+        with a migration signal rather than a failed load. The distinction is
+        that this key *was* valid --- which is what a misspelling or a
+        misplacement never was --- and a configuration written against an
+        earlier version should be told what to change rather than stopped.
+
+        A copy is returned rather than the caller's own mapping mutated: this
+        validator can be reached through ``model_validate`` with a dictionary
+        the caller still holds.
         """
         if isinstance(data, dict) and "transaction" in data:
             logger.warning(
@@ -246,6 +281,7 @@ class FSMConfig(BaseModel):
                 "primitive, the DatabaseTransaction function, or "
                 "BatchCommit(atomicity='require') for database atomicity."
             )
+            return {key: value for key, value in data.items() if key != "transaction"}
         return data
 
     @model_validator(mode="after")
@@ -282,7 +318,7 @@ class UseCaseTemplate(str, Enum):
     STREAM_PROCESSING = "stream_processing"
 
 
-class TemplateConfig(BaseModel):
+class TemplateConfig(_StrictModel):
     """Configuration for using a template."""
 
     template: UseCaseTemplate

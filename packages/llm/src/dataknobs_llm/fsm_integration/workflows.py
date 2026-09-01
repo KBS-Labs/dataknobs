@@ -328,12 +328,12 @@ class LLMWorkflow:
     def _build_fsm(self) -> SimpleFSM:
         """Build FSM for LLM workflow."""
         # Add start state
-        states = [{"name": "start", "type": "initial", "is_start": True}]
+        states = [{"name": "start", "is_start": True}]
         arcs = []
 
         if self.config.workflow_type == WorkflowType.SIMPLE:
             # Single LLM call
-            states.append({"name": "llm_call", "type": "task"})
+            states.append({"name": "llm_call"})
             arcs.append({"from": "start", "to": "llm_call", "name": "init"})
             arcs.append({"from": "llm_call", "to": "end", "name": "complete"})
 
@@ -341,7 +341,7 @@ class LLMWorkflow:
             # Sequential chain
             for i, step in enumerate(self.config.steps):
                 state_name = f"step_{step.name}"
-                states.append({"name": state_name, "type": "task"})
+                states.append({"name": state_name})
 
                 if i == 0:
                     arcs.append({"from": "start", "to": state_name, "name": f"init_{step.name}"})
@@ -362,9 +362,9 @@ class LLMWorkflow:
             # RAG pipeline
             states.extend(
                 [
-                    {"name": "retrieve", "type": "task"},
-                    {"name": "augment", "type": "task"},
-                    {"name": "generate", "type": "task"},
+                    {"name": "retrieve"},
+                    {"name": "augment"},
+                    {"name": "generate"},
                 ]
             )
 
@@ -381,9 +381,9 @@ class LLMWorkflow:
             # Chain-of-thought reasoning
             states.extend(
                 [
-                    {"name": "decompose", "type": "task"},
-                    {"name": "reason", "type": "task"},
-                    {"name": "synthesize", "type": "task"},
+                    {"name": "decompose"},
+                    {"name": "reason"},
+                    {"name": "synthesize"},
                 ]
             )
 
@@ -396,8 +396,10 @@ class LLMWorkflow:
                 ]
             )
 
-        # Add end state
-        states.append({"name": "end", "type": "terminal"})
+        # Add end state. ``is_end`` is the flag the schema declares; a
+        # ``type`` key was never read, so the end state built as an
+        # ordinary one and no workflow here had a terminal state.
+        states.append({"name": "end", "is_end": True})
 
         # Build FSM configuration
         fsm_config = {

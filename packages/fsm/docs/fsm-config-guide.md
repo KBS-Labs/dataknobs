@@ -1609,6 +1609,27 @@ Each result dict contains:
    - Verify function parameters match expected signature
    - Check that state.data structure matches what functions expect
 
+6. **"Extra inputs are not permitted"**
+   - The configuration carries a key no field declares, and the error names
+     where it sat (`networks.0.resources.0.provider`)
+   - Usually a nesting level: a resource's backend settings go inside its
+     `config` block, and `data_mode` is top-level rather than per-network
+   - Otherwise a spelling: `is_endd` for `is_end`
+   - If the key is genuinely yours, put it in the field built for arbitrary
+     data — `metadata` on the FSM, a network, a state or an arc; `config` on a
+     resource; `params` on a function reference
+
+### Unrecognised keys
+
+An unrecognised key fails the load rather than being discarded. Until the
+schema was extended to keys it was strict only about *values*, so an unknown
+function `type` raised while an unknown key vanished — and a configuration
+could read as though it said something the FSM never saw.
+
+One key is exempt: a `transaction:` block warns and loads, because it was valid
+against an earlier version and its author needs a migration signal rather than
+a failure. A key that was never valid gets no such grace.
+
 ### Debugging Tips
 
 1. **Enable logging** to track state transitions

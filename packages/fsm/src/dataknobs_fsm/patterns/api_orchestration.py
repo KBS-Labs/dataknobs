@@ -224,14 +224,14 @@ class APIOrchestrator(StructuredConfigConsumer[APIOrchestrationConfig]):
         """Build FSM for API orchestration."""
         # Create FSM configuration based on orchestration mode
         # Add start state
-        states = [{"name": "start", "type": "initial", "is_start": True}]
+        states = [{"name": "start", "is_start": True}]
         arcs = []
 
         if self.config.mode == OrchestrationMode.SEQUENTIAL:
             # Create sequential states
             for i, endpoint in enumerate(self.config.endpoints):
                 state_name = f"call_{endpoint.name}"
-                states.append({"name": state_name, "type": "task"})
+                states.append({"name": state_name})
 
                 if i == 0:
                     arcs.append(
@@ -254,14 +254,14 @@ class APIOrchestrator(StructuredConfigConsumer[APIOrchestrationConfig]):
 
         elif self.config.mode == OrchestrationMode.PARALLEL:
             # Create parallel states with fork/join
-            states.append({"name": "fork", "type": "fork"})
-            states.append({"name": "join", "type": "join"})
+            states.append({"name": "fork"})
+            states.append({"name": "join"})
 
             arcs.append({"from": "start", "to": "fork", "name": "init_parallel"})
 
             for endpoint in self.config.endpoints:
                 state_name = f"call_{endpoint.name}"
-                states.append({"name": state_name, "type": "task"})
+                states.append({"name": state_name})
                 arcs.append({"from": "fork", "to": state_name, "name": f"fork_to_{endpoint.name}"})
                 arcs.append({"from": state_name, "to": "join", "name": f"{endpoint.name}_to_join"})
 
@@ -273,10 +273,10 @@ class APIOrchestrator(StructuredConfigConsumer[APIOrchestrationConfig]):
                 state_name = f"call_{endpoint.name}"
                 transform_name = f"transform_{endpoint.name}"
 
-                states.append({"name": state_name, "type": "task"})
+                states.append({"name": state_name})
 
                 if endpoint.transform_input:
-                    states.append({"name": transform_name, "type": "task"})
+                    states.append({"name": transform_name})
 
                 if i == 0:
                     if endpoint.transform_input:
@@ -325,7 +325,7 @@ class APIOrchestrator(StructuredConfigConsumer[APIOrchestrationConfig]):
                     )
 
         # Add end state
-        states.append({"name": "end", "type": "terminal"})
+        states.append({"name": "end", "is_end": True})
 
         # Build FSM configuration
         fsm_config = {

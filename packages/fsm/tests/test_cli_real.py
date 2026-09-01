@@ -498,10 +498,9 @@ class TestAdvancedCLIFeatures:
         complex_config = {
             "name": "complex_fsm",
             "data_mode": "copy",
-            "functions": {
-                "double": {"code": 'data["value"] = data.get("value", 0) * 2; data'},
-                "validate": {"code": 'data.get("value", 0) > 0'},
-            },
+            # No top-level "functions" block: the arcs below carry their code
+            # inline, and FSMConfig declares no such field, so one written here
+            # would now be refused rather than discarded.
             "states": [
                 {"name": "start", "is_start": True},
                 {"name": "process"},
@@ -546,8 +545,16 @@ class TestAdvancedCLIFeatures:
             "name": "resource_fsm",
             "data_mode": "copy",
             "resources": [
-                {"name": "database", "type": "database", "provider": "sqlite", "path": ":memory:"},
-                {"name": "cache", "type": "custom", "provider": "memory", "size": 1000},
+                # `config` holds the provider's constructor keywords, so the
+                # backend key is `backend`. Spelled flat, or spelled
+                # `provider`, these were discarded and both resources fell back
+                # to an in-memory database.
+                {
+                    "name": "database",
+                    "type": "database",
+                    "config": {"backend": "sqlite", "path": ":memory:"},
+                },
+                {"name": "cache", "type": "database", "config": {"backend": "memory"}},
             ],
             "states": [
                 {"name": "start", "is_start": True, "resources": ["database"]},
@@ -931,3 +938,47 @@ class TestHistoryCLICommands:
         assert result.exit_code == 0, result.output
         assert "exec-lis" in result.output
         assert "in_progress" in result.output
+
+
+class TestCreatedScaffoldsAreUsable:
+    """What `config create` writes must mean what it says.
+
+    The scaffold is the first configuration most users see, so a key it spells
+    wrongly is a mistake every reader inherits. The ETL template spelled its
+    database settings flat and called the backend key ``provider``; both were
+    discarded, the adapter fell back to its default, and a pipeline naming
+    ``source.db`` and ``target.db`` ran against two in-memory databases that
+    were dropped on exit. It validated, and it built --- which is why nothing
+    caught it.
+    """
+
+    @pytest.mark.parametrize("template", ["basic", "etl", "workflow", "processing"])
+    def test_a_created_scaffold_builds_an_fsm(self, runner, tmp_path, template):
+        """Validating a scaffold is not the same as being able to run it."""
+        from dataknobs_fsm.config.builder import FSMBuilder
+        from dataknobs_fsm.config.loader import ConfigLoader
+
+        out = tmp_path / f"{template}.yaml"
+        result = runner.invoke(cli, ["config", "create", template, "--output", str(out)])
+        assert result.exit_code == 0
+
+        fsm = FSMBuilder().build(ConfigLoader().load_from_file(out))
+
+        assert fsm.networks, f"the {template} scaffold built an FSM with no networks"
+
+    def test_the_etl_scaffold_keeps_the_database_settings_it_names(self, runner, tmp_path):
+        """The settings must survive the load, not just appear in the file.
+
+        Asserted on the loaded configuration rather than on the built resource:
+        the failure was that the keys never reached it, and the loaded config is
+        where that becomes visible without reaching into the resource manager.
+        """
+        from dataknobs_fsm.config.loader import ConfigLoader
+
+        out = tmp_path / "etl.yaml"
+        runner.invoke(cli, ["config", "create", "etl", "--output", str(out)])
+
+        resources = {r.name: r.config for r in ConfigLoader().load_from_file(out).resources}
+
+        assert resources["source_db"] == {"backend": "sqlite", "path": "source.db"}
+        assert resources["target_db"] == {"backend": "sqlite", "path": "target.db"}

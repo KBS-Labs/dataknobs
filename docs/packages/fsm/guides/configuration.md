@@ -403,6 +403,25 @@ For full details see the package-level
 | "Arc target 'X' not found in network" | Ensure arc targets exist |
 | "Main network 'X' not found" | Check `main_network` name matches |
 | Function execution errors | Verify lambda syntax and data structure |
+| "Extra inputs are not permitted" | A key the schema does not declare — see below |
+
+### Unrecognised keys are refused, not ignored
+
+A configuration key no field declares fails the load, and the error names both
+the key and where it sat (`networks.0.states.2.is_endd`). It is the same answer
+the schema has always given an unrecognised *value*; until it was extended to
+keys, a block written one level too deep — or a field name with a typo in it —
+was discarded silently, and the FSM ran on the defaults the author believed
+they had replaced.
+
+Arbitrary data still travels, in the field built for it: `metadata` on the FSM,
+a network, a state or an arc; `config` on a resource; `params` on a function
+reference. If a key is being refused and it is genuinely yours, `metadata` is
+where it goes.
+
+One key is exempt. A `transaction:` block warns and loads: it was valid against
+an earlier version, so its author is told what to change rather than stopped. A
+key that was never valid gets no such grace.
 
 ### Debugging Tips
 
