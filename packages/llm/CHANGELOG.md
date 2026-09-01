@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Fixed
+
+- **`LLMWorkflow` builds an FSM again, and its end state is terminal.** Every
+  state `_build_fsm` assembled carried a `type` key — `initial`, `task`,
+  `terminal` — that the FSM state schema has never declared. While unknown keys
+  were discarded in silence the workflows built, but `{"name": "end", "type":
+  "terminal"}` produced an ordinary state, so **no workflow type here had a
+  state the engine treats as final**. Now that the schema refuses a key it does
+  not declare, the same dicts would have failed to load at all; the keys are
+  gone and the end state is marked `is_end`. `_build_fsm` runs from
+  `__init__`, so this was reached by constructing a workflow of any type.
+
+  It was covered by nothing: the module's tests asserted that its names import,
+  which stays true of a class whose constructor raises. Each workflow type is
+  now built and checked for a terminal state.
+
 ### Added
 
 - **`LLMProviderEmbedder`** and **`create_text_embedder`** (`dataknobs_llm`) —

@@ -349,7 +349,7 @@ class ErrorRecoveryWorkflow(StructuredConfigConsumer[ErrorRecoveryConfig]):
             arcs.append({"from": "retry", "to": "end", "name": "max_retries_reached"})
 
         elif self.config.primary_strategy == RecoveryStrategy.CIRCUIT_BREAKER:
-            states.append({"name": "circuit_check", "type": "decision"})
+            states.append({"name": "circuit_check"})
             arcs.append({"from": "execute", "to": "circuit_check", "name": "check_circuit"})
             arcs.append({"from": "circuit_check", "to": "end", "name": "circuit_open"})
             arcs.append({"from": "circuit_check", "to": "execute", "name": "circuit_closed"})

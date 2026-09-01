@@ -36,7 +36,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     **an ETL scaffold naming `source.db` and `target.db` built two in-memory
     databases**, and every row it moved was lost at exit. `ErrorRecoveryWorkflow`
     and `APIOrchestrator` marked their terminal state with a `type: "terminal"`
-    key the schema has never had, so **their end states were not end states**.
+    key the schema has never had, so **their end states were not end states** —
+    and `ErrorRecoveryWorkflow` spelled a `type: "decision"` on the state
+    reachable only under the circuit-breaker strategy, which now builds as well.
     And the large-file example declared a per-state `streaming` block, a level
     at which the schema declares none and the engine reads none.
 
