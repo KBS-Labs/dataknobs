@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-09-01T14:41:23Z",
+  "timestamp": "2026-09-01T17:26:06Z",
   "python_version": "Python 3.12.12",
   "uv_version": "uv 0.12.5 (Homebrew 2026-08-14 aarch64-apple-darwin)",
   "os": "Darwin",
   "os_version": "24.6.0",
-  "git_branch": "sbk/provider-teardown-convention",
-  "git_commit": "a5e569437ff7ca18e547040d085bece189108569",
+  "git_branch": "sbk/resource-manager-takes-its-own-lock",
+  "git_commit": "b535af83e6cd9e21cfbbfeb9916af78caec5945e",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }
