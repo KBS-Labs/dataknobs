@@ -10,6 +10,7 @@ from datetime import datetime
 from enum import Enum
 from typing import Any, Callable, ClassVar, Dict, List, Union
 
+from dataknobs_common.callbacks import run_callback
 from dataknobs_common.ratelimit import InMemoryRateLimiter, RateLimit, RateLimiterConfig
 from dataknobs_common.structured_config import (
     StructuredConfig,
@@ -145,11 +146,12 @@ class CircuitBreaker:
                 self.failure_count = 0
 
         try:
-            # Execute function
-            if asyncio.iscoroutinefunction(func):
-                result = await func(*args, **kwargs)
-            else:
-                result = func(*args, **kwargs)
+            # The same judgement, and the same reason, as the circuit breaker
+            # in ``patterns/error_recovery`` --- a discarded coroutine is
+            # recorded as a success by a class whose output is that record.
+            # An API client holding a session is precisely the callable
+            # *object* `iscoroutinefunction` reports as synchronous.
+            result = await run_callback(func, *args, **kwargs)
 
             # Success - reset failure count
             async with self._lock:

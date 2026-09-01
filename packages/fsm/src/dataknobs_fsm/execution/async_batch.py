@@ -2,8 +2,9 @@
 
 import asyncio
 import time
-from typing import Any, Callable, Dict, List, Union
+from typing import Any, Callable, Dict, List, Union, cast
 
+from dataknobs_common.callbacks import run_callback_off_loop
 from dataknobs_fsm.core.fsm import FSM
 from dataknobs_fsm.core.modes import ProcessingMode, TransactionMode
 from dataknobs_fsm.execution.async_engine import AsyncExecutionEngine
@@ -272,7 +273,9 @@ class AsyncBatchExecutor:
             elif hasattr(network, "get_initial_states"):
                 initial_states = network.get_initial_states()
                 if initial_states:
-                    return next(iter(initial_states))
+                    # Duck-typed accessor, so `Any`; every implementation
+                    # returns state names.
+                    return cast("str", next(iter(initial_states)))
 
         # Fallback: check all networks
         for network in self.fsm.networks.values():
@@ -281,15 +284,17 @@ class AsyncBatchExecutor:
 
         return None
 
-    async def _fire_progress_callback(self, progress: BatchProgress):
+    async def _fire_progress_callback(self, progress: BatchProgress) -> None:
         """Fire progress callback asynchronously.
+
+        Dispatched off the loop, as :class:`AsyncStreamExecutor` dispatches
+        its identical callback: a consumer's progress hook plausibly writes a
+        line to a log or bumps a metrics endpoint, and shipped code cannot see
+        who else is on its loop.
 
         Args:
             progress: Progress information.
         """
-        if asyncio.iscoroutinefunction(self.progress_callback):
-            await self.progress_callback(progress)
-        else:
-            # Run sync callback in executor
-            loop = asyncio.get_running_loop()
-            await loop.run_in_executor(None, self.progress_callback, progress)  # type: ignore
+        if self.progress_callback is None:
+            return
+        await run_callback_off_loop(self.progress_callback, progress)

@@ -7,13 +7,14 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import TYPE_CHECKING, Any, Protocol
 
+from dataknobs_common.callbacks import run_callback
 from dataknobs_common.structured_config import StructuredConfig
 
 from .exceptions import DuplicateRecordError, OperationError
 
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator, Callable, Iterator
+    from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
     from .query import Query
     from .records import Record
 
@@ -50,7 +51,7 @@ class StreamConfig(StructuredConfig):
     on_error: Callable[[Exception, Record | None], bool] | None = None
     on_conflict: ConflictPolicy = ConflictPolicy.INSERT
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         """Validate configuration."""
         if self.batch_size <= 0:
             raise ValueError("batch_size must be positive")
@@ -631,11 +632,11 @@ class StreamProcessor:
 
     @staticmethod
     async def async_filter_stream(
-        iterator: AsyncIterator[Record], predicate: Callable[[Record], bool]
+        iterator: AsyncIterator[Record], predicate: Callable[[Record], bool | Awaitable[bool]]
     ) -> AsyncIterator[Record]:
         """Filter records in an async stream."""
         async for record in iterator:
-            if predicate(record):
+            if await run_callback(predicate, record):
                 yield record
 
     @staticmethod
@@ -650,11 +651,12 @@ class StreamProcessor:
 
     @staticmethod
     async def async_transform_stream(
-        iterator: AsyncIterator[Record], transform: Callable[[Record], Record | None]
+        iterator: AsyncIterator[Record],
+        transform: Callable[[Record], Record | Awaitable[Record | None] | None],
     ) -> AsyncIterator[Record]:
         """Transform records in an async stream, filtering out None results."""
         async for record in iterator:
-            result = transform(record)
+            result = await run_callback(transform, record)
             if result is not None:
                 yield result
 

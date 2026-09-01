@@ -11,6 +11,8 @@ from typing import Any, Callable, Dict, Union, Protocol, runtime_checkable
 from enum import Enum
 import logging
 
+from dataknobs_common.callbacks import is_async_callable
+
 from dataknobs_fsm.functions.base import (
     IValidationFunction,
     ITransformFunction,
@@ -103,7 +105,23 @@ class FunctionWrapper:
         return func
 
     def _check_async(self, func: Callable) -> bool:
-        """Check if a function is async.
+        """Check if calling ``func`` produces an awaitable.
+
+        Delegates to :func:`~dataknobs_common.callbacks.is_async_callable`
+        rather than re-deriving the answer. The version this replaces was that
+        function minus two of its cases, which is what an independently
+        maintained copy of a shared judgement looks like after a while:
+
+        - It could not unwrap a ``functools.partial`` around a callable
+          *object*. ``iscoroutinefunction`` unwraps one around a *function*;
+          around an object, ``partial.__call__`` is a C dispatcher, so asking
+          about ``__call__`` answers about the wrong object. Binding arguments
+          onto a stateful callable is ordinary, and the result was dispatched
+          to ``run_in_executor``, where calling it built a coroutine nobody
+          awaited.
+        - It read a *class* with an ``async def __call__`` as async, because
+          ``SomeClass.__call__`` is the plain unbound function. Calling a class
+          runs ``type.__call__`` and returns an instance, never an awaitable.
 
         Args:
             func: Function to check
@@ -111,21 +129,7 @@ class FunctionWrapper:
         Returns:
             True if async, False otherwise
         """
-        # Direct coroutine function check
-        if asyncio.iscoroutinefunction(func):
-            return True
-
-        # Check for async __call__ method (for callable objects)
-        # But not for regular functions which also have __call__
-        if callable(func) and not inspect.isfunction(func) and not inspect.ismethod(func):
-            # Check if the __call__ method itself is async
-            try:
-                if asyncio.iscoroutinefunction(func.__call__):  # type: ignore[operator]
-                    return True
-            except AttributeError:
-                pass
-
-        return False
+        return is_async_callable(func)
 
     @property
     def is_async(self) -> bool:
@@ -242,7 +246,6 @@ class InterfaceWrapper:
             Method that calls the wrapped function
         """
         # Check if the function expects a single state argument (common for inline lambdas)
-        import inspect
 
         func = self.wrapper.func
         try:
@@ -294,7 +297,6 @@ class InterfaceWrapper:
     def _create_test_method(self):
         """Create a test method that returns (bool, reason)."""
         # Check if the function expects a single state argument (common for inline lambdas)
-        import inspect
 
         func = self.wrapper.func
         try:

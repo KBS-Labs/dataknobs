@@ -170,6 +170,11 @@ class AsyncKeyedRecordStore(Generic[T]):
         record = await self._db.read(key)
         if record is None:
             return None
+        # async-dispatch-exempt: the deserializer is half of a sync-only pair shared
+        # with SyncKeyedRecordStore. Both stores route every write through the module-
+        # level `_build_record`, which is a plain `def` and so pins the serializer
+        # synchronous; a consumer's `deserializer=from_record` has to work unchanged in
+        # the twin that cannot await. Widening only this half would split one contract.
         return self._deserializer(record)
 
     async def exists(self, key: str) -> bool:
@@ -193,6 +198,11 @@ class AsyncKeyedRecordStore(Generic[T]):
     async def get_batch(self, keys: Sequence[str]) -> list[T | None]:
         """Return values for ``keys`` in order (``None`` for misses)."""
         records = await self._db.read_batch(list(keys))
+        # async-dispatch-exempt: the deserializer is half of a sync-only pair shared
+        # with SyncKeyedRecordStore. Both stores route every write through the module-
+        # level `_build_record`, which is a plain `def` and so pins the serializer
+        # synchronous; a consumer's `deserializer=from_record` has to work unchanged in
+        # the twin that cannot await. Widening only this half would split one contract.
         return [self._deserializer(r) if r is not None else None for r in records]
 
     async def delete_batch(self, keys: Sequence[str]) -> int:
@@ -260,6 +270,11 @@ class AsyncKeyedRecordStore(Generic[T]):
             vector_query=vector_query,
         )
         records = await self._db.search(q)
+        # async-dispatch-exempt: the deserializer is half of a sync-only pair shared
+        # with SyncKeyedRecordStore. Both stores route every write through the module-
+        # level `_build_record`, which is a plain `def` and so pins the serializer
+        # synchronous; a consumer's `deserializer=from_record` has to work unchanged in
+        # the twin that cannot await. Widening only this half would split one contract.
         return [self._deserializer(r) for r in records]
 
     async def count(
@@ -291,6 +306,11 @@ class AsyncKeyedRecordStore(Generic[T]):
         if filter_data or filter_metadata:
             q = _build_query(filter_data=filter_data, filter_metadata=filter_metadata)
         async for record in self._db.stream_read(q, config):
+            # async-dispatch-exempt: the deserializer is half of a sync-only pair shared
+            # with SyncKeyedRecordStore. Both stores route every write through the module-
+            # level `_build_record`, which is a plain `def` and so pins the serializer
+            # synchronous; a consumer's `deserializer=from_record` has to work unchanged in
+            # the twin that cannot await. Widening only this half would split one contract.
             yield self._deserializer(record)
 
     async def search(self, query: Query) -> Sequence[Record]:

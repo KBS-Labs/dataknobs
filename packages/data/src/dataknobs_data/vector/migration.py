@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
-from dataknobs_common.callbacks import is_async_callable
+from dataknobs_common.callbacks import run_callback
 
 from ..fields import FieldType
 from ..query import Query
@@ -211,7 +211,7 @@ class VectorMigration:
         self._rollback_data: dict[str, dict[str, Any]] = {}
 
     async def run(
-        self, progress_callback: Callable[[MigrationStatus], None] | None = None
+        self, progress_callback: Callable[[MigrationStatus], Awaitable[None] | None] | None = None
     ) -> MigrationStatus:
         """Run the complete migration.
 
@@ -265,7 +265,7 @@ class VectorMigration:
                         self.status.errors.append({"record_id": record.id, "error": str(e)})
 
                 if progress_callback:
-                    progress_callback(self.status)
+                    await run_callback(progress_callback, self.status)
 
             self.status.end_time = datetime.now(UTC)
             return self.status
@@ -314,7 +314,7 @@ class VectorMigration:
         self,
         vector_fields: dict[str, str],  # vector_field -> source_field mapping
         filter_query: dict[str, Any] | None = None,
-        progress_callback: Callable[[MigrationStatus], None] | None = None,
+        progress_callback: Callable[[MigrationStatus], Awaitable[None] | None] | None = None,
     ) -> MigrationStatus:
         """Add vector fields to existing records.
 
@@ -450,7 +450,7 @@ class VectorMigration:
                         batch[-1].id if batch else None,
                     )
                     if progress_callback:
-                        progress_callback(status)
+                        await run_callback(progress_callback, status)
 
             # Verify migration if enabled
             if self.config.verify_migration:
@@ -612,8 +612,8 @@ class VectorMigration:
     async def migrate_between_backends(
         self,
         field_mapping: dict[str, str] | None = None,
-        transform_fn: Callable[[Record], Record] | None = None,
-        progress_callback: Callable[[MigrationStatus], None] | None = None,
+        transform_fn: Callable[[Record], Record | Awaitable[Record]] | None = None,
+        progress_callback: Callable[[MigrationStatus], Awaitable[None] | None] | None = None,
     ) -> MigrationStatus:
         """Migrate vector data between different backends.
 
@@ -658,7 +658,7 @@ class VectorMigration:
 
                         # Apply transformation
                         if transform_fn:
-                            record = transform_fn(record)
+                            record = await run_callback(transform_fn, record)
 
                         # Create in target database
                         await self.target_db.create(record)
@@ -676,7 +676,7 @@ class VectorMigration:
 
                 # Progress update
                 if progress_callback:
-                    progress_callback(status)
+                    await run_callback(progress_callback, status)
 
         finally:
             status.end_time = datetime.now(UTC)
@@ -1312,13 +1312,13 @@ class IncrementalVectorizer:
 
                 if progress_callback:
                     # Same classification question as the embedding function,
-                    # so the same predicate answers it -- a callable object
-                    # with an async ``__call__`` is the natural shape for a
-                    # progress reporter that accumulates.
-                    if is_async_callable(progress_callback):
-                        await progress_callback(processed, total, batch)
-                    else:
-                        progress_callback(processed, total, batch)
+                    # so the same helper answers it -- a callable object with
+                    # an async ``__call__`` is the natural shape for a progress
+                    # reporter that accumulates. `run_callback` rather than a
+                    # hand-spelled branch: judging the *result* also catches a
+                    # plain `def` that returns a coroutine, which no amount of
+                    # inspecting the callable ever will.
+                    await run_callback(progress_callback, processed, total, batch)
 
         return {
             "processed": processed,

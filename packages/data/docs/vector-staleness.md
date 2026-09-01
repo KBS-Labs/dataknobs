@@ -166,12 +166,20 @@ hand. Where the vectors go decides which spelling:
 | `bulk_embed_and_store` (database) | the `VectorField`'s `model_name` |
 | `VectorSyncMixin.sync_vectors_with_text` | the `VectorField`'s `model_name` |
 | `VectorTextSynchronizer`, `VectorMigration` | the `VectorField`'s `model_name` |
-| `IncrementalVectorizer` | the `{field}_metadata` sidecar |
-| `bulk_embed_and_store` (`VectorStore`) | each vector's metadata, under the key `add_records` uses |
+| `IncrementalVectorizer` | the `{field}_metadata` sidecar, **nested**: `{"model": {"name": ..., "version": ...}}` |
+| `bulk_embed_and_store` (`VectorStore`) | each vector's metadata, **flat**: `model_name`, the key `add_records` already used |
 
 An explicit `model_name=` wins over the embedder's own, so a caller who said
 what they meant is not overridden. `model_version` is never defaulted from an
 embedder anywhere: a `TextEmbedder` carries an identity and no version.
+
+The sidecar's nesting is worth reading twice if you write your own reader. It
+is `model.name`, not a flat `model_name`, and reaching for the flat spelling is
+not hypothetical — it shipped. `_stored_model_version` read only `model_version`
+while `VectorMetadata.to_dict` wrote only the nested form, so every record
+vectorized that way reported a version mismatch and was re-embedded on **every**
+sweep. Both helpers accept both shapes now; the nested one is the one that
+exists.
 
 A stored `None` is deliberately not a mismatch, on either key. A vector written
 before anything recorded a name says nothing about its model, and reading that

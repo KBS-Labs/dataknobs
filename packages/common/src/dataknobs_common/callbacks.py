@@ -61,7 +61,7 @@ from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import dataclass
 from enum import Enum
 from functools import cmp_to_key, partial
-from typing import Any, Generic, Protocol, TypeGuard, TypeVar, runtime_checkable
+from typing import Any, Generic, Protocol, TypeGuard, TypeVar, cast, runtime_checkable
 
 from dataknobs_common.events import Event, EventBus, EventType
 from dataknobs_common.exceptions import DataknobsError
@@ -78,12 +78,15 @@ __all__ = [
     "is_async_callable",
     "PriorityOrdering",
     "RecordingCallbackRegistry",
+    "run_callback",
+    "run_callback_off_loop",
     "StageOrdering",
 ]
 
 logger = logging.getLogger(__name__)
 
 CallbackT = TypeVar("CallbackT", bound=Callable[..., Any])
+_T = TypeVar("_T")
 
 
 # --------------------------------------------------------------------- #
@@ -147,6 +150,162 @@ def is_async_callable(candidate: Any) -> TypeGuard[Callable[..., Awaitable[Any]]
     # ``callable()`` has just established exists. The checks above already
     # settled every other callable, so a ``False`` from here is genuine.
     return inspect.iscoroutinefunction(candidate.__call__)
+
+
+def _refuse_async_generator(helper: str) -> TypeError:
+    """The refusal both helpers raise, worded once.
+
+    Neither helper can dispatch an async generator, and neither should guess:
+    consuming one means choosing a collection policy --- every item, the
+    first, a bounded prefix --- which belongs to the surface that knows what
+    the items are for. What it must not do is what it did before: hand the
+    un-iterated generator back as though it were the callback's return value,
+    where it is truthy, non-``None``, and indistinguishable from real data
+    until something downstream tries to use it.
+
+    Loud beats silent here for the same reason
+    :meth:`~dataknobs_common.retry.RetryExecutor.execute_sync` rejects a
+    callable whose result turns out awaitable rather than returning it.
+    """
+    return TypeError(
+        f"{helper} requires a callable returning a value or an awaitable; this one "
+        "produces an async generator, which is iterated rather than awaited. "
+        "Consume it where the items mean something --- `async for item in cb(...)` "
+        f"--- and give {helper} a callable that returns the collected result."
+    )
+
+
+async def _await_result(result: Any, helper: str) -> Any:
+    """Finish a call: await what is awaitable, refuse what cannot be.
+
+    Shared by both helpers so the result-level half of the judgement cannot
+    drift between them, which is the drift the pair was extracted to end.
+
+    Checked on the result rather than on the callable, though an async
+    generator *function* is detectable up front, because only this position
+    also catches a plain ``def`` that returns one --- invisible to any amount
+    of inspecting the callable, for the same reason judging the result catches
+    a ``def`` returning a coroutine when ``iscoroutinefunction`` never will.
+    One check that covers three shapes beats two that cover three between
+    them.
+    """
+    if inspect.isasyncgen(result):
+        # Never started, so it holds no suspended frame and owns no
+        # "never awaited" warning; closing it would itself need an await.
+        raise _refuse_async_generator(helper)
+    if inspect.isawaitable(result):
+        return await result
+    return result
+
+
+async def run_callback(
+    callback: Callable[..., _T | Awaitable[_T]], /, *args: Any, **kwargs: Any
+) -> _T:
+    """Call ``callback`` with *args*, awaiting the result if it is awaitable.
+
+    The counterpart to :func:`is_async_callable`, and one of three ways to
+    dispatch a callback whose shape you do not control. Which one is right is
+    a property of the **surface**, not of the site, and stating it per surface
+    is what stops the three drifting apart across sibling methods:
+
+    ==================================  ====================================
+    The consumer's sync callback...     Use
+    ==================================  ====================================
+    computes, and may run per item      ``await run_callback(cb, x)``
+    may block --- I/O, or a flush       ``await run_callback_off_loop(cb, x)``
+    is wrapped rather than called       ``if is_async_callable(cb): ...``
+    ==================================  ====================================
+
+    The first two both judge the callable for you; the third is for a caller
+    that needs the answer for some *other* reason than dispatching --- to
+    build a wrapper of the matching shape, say. Prefer either of the first two
+    over spelling the branch out, because judging the **result** is strictly
+    more robust than judging the callable: it catches a plain ``def`` that
+    returns a coroutine, which no amount of inspecting the function ever will.
+
+    This one runs the sync callback **on the event loop**, so it is the right
+    choice only where that code is expected to be quick: a predicate, a
+    per-record transform, a counter. Where the callback is the consumer's
+    chance to do something --- write the batch somewhere, flush an overflow,
+    hand data to an I/O provider --- it can block the loop for every other
+    task on it, and :func:`run_callback_off_loop` is the one to reach for.
+
+    Reaching for neither is the defect this exists to retire. Calling a
+    consumer's callback and moving on raises nothing when the consumer's
+    callback is async: the coroutine is truthy, non-``None``, and either
+    discarded or --- where the return value is used --- substituted for it, so
+    a transform yields a coroutine object and a predicate answers ``True``
+    unconditionally.
+
+    Args:
+        callback: Any callable. Positional-only, so a callback taking its own
+            ``callback=`` keyword argument is not shadowed by this signature.
+        *args: Passed through.
+        **kwargs: Passed through.
+
+    Returns:
+        What ``callback`` returned, awaited first if it was awaitable.
+
+    Raises:
+        TypeError: If the call produced an async generator. That is iterated
+            rather than awaited, so there is no correct answer this function
+            can give --- see :func:`_refuse_async_generator`. Whatever
+            ``callback`` itself raises propagates unchanged.
+    """
+    return cast("_T", await _await_result(callback(*args, **kwargs), "run_callback"))
+
+
+async def run_callback_off_loop(
+    callback: Callable[..., _T | Awaitable[_T]], /, *args: Any, **kwargs: Any
+) -> _T:
+    """Call ``callback``, keeping a synchronous one off the event loop.
+
+    :func:`run_callback` with one difference, and it is the difference the
+    async-transport rule is about: a callback that turns out to be synchronous
+    runs on an :func:`asyncio.to_thread` worker rather than on the loop. An
+    asynchronous one is awaited directly, since it is already cooperative and
+    a thread hop would buy nothing.
+
+    Reach for this wherever the callback is the consumer's chance to *do*
+    something rather than to compute one --- an I/O provider's write, a buffer
+    overflow flush, a per-batch completion hook. Such a callback plausibly
+    opens a file or a socket, and a blocking call inside an ``async def``
+    stalls every other task on the loop for its duration. Shipped code cannot
+    see who else is on its loop, so it has to assume the worst.
+
+    Not free, and not neutral, which is why it is a second function rather
+    than the behaviour of the first. A thread hop costs real microseconds, so
+    a per-record predicate should not pay it; and the consumer's callback no
+    longer runs on the loop thread, which changes the meaning of one touching
+    state that is not thread-safe. Both of those are reasons to choose
+    deliberately, not reasons to leave the choice unmade --- and leaving it
+    unmade is what produced the drift this pair exists to end, where sibling
+    dispatches in one package hand-rolled the same three lines and half of
+    them omitted the offload.
+
+    Args:
+        callback: Any callable. Positional-only, matching
+            :func:`run_callback`, so a callback taking its own ``callback=``
+            keyword argument is not shadowed.
+        *args: Passed through.
+        **kwargs: Passed through.
+
+    Returns:
+        What ``callback`` returned, awaited first if it was awaitable.
+
+    Raises:
+        TypeError: If the call produced an async generator, as
+            :func:`run_callback`. Whatever ``callback`` itself raises
+            propagates unchanged, across the worker-thread boundary included.
+    """
+    if is_async_callable(callback):
+        return cast("_T", await callback(*args, **kwargs))
+    result = await asyncio.to_thread(callback, *args, **kwargs)
+    # A plain `def` that returns a coroutine built it on the worker thread
+    # without running any of it --- calling an async function only constructs
+    # the object. Awaiting it here runs its body on the loop, which is where a
+    # coroutine belongs, and is the one shape `is_async_callable` cannot see.
+    return cast("_T", await _await_result(result, "run_callback_off_loop"))
 
 
 # --------------------------------------------------------------------- #
@@ -563,9 +722,7 @@ class CallbackRegistry(Generic[CallbackT]):
         failures: list[tuple[CallbackEntry[CallbackT], BaseException]] = []
         for entry in entries:
             try:
-                result = entry.callback(payload)
-                if inspect.isawaitable(result):
-                    await result
+                await run_callback(entry.callback, payload)
             except Exception as exc:
                 self._handle_failure(entry, exc, failures)
         if self._error_policy is ErrorPolicy.LOG_AND_RAISE_AT_END and failures:

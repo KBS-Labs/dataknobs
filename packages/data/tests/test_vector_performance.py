@@ -308,6 +308,22 @@ class TestConnectionPool:
         with pytest.raises(RuntimeError):
             await pool.acquire()
 
+    async def test_constructing_one_warns(self):
+        """The deprecation is a contract, so it is pinned rather than assumed.
+
+        ``ConnectionPool`` is not repaired -- it deadlocks the event loop
+        when two coroutines acquire concurrently, and four of its five
+        config fields are inert -- so the warning is the only thing telling
+        a caller to reach for ``ConnectionPoolManager`` instead. If it stops
+        being emitted, nothing else in the tree says so.
+        """
+
+        async def factory():
+            return object()
+
+        with pytest.warns(DeprecationWarning, match="ConnectionPoolManager"):
+            ConnectionPool(factory)
+
 
 class TestQueryOptimizer:
     """Test query optimization logic."""

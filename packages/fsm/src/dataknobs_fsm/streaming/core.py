@@ -10,6 +10,7 @@ from enum import Enum
 from typing import (
     Any,
     AsyncIterator,
+    Awaitable,
     Callable,
     ClassVar,
     Dict,
@@ -21,6 +22,7 @@ from typing import (
 )
 from uuid import uuid4
 
+from dataknobs_common.callbacks import run_callback, run_callback_off_loop
 from dataknobs_common.structured_config import (
     StructuredConfig,
     StructuredConfigConsumer,
@@ -511,36 +513,56 @@ class AsyncStreamContext(StructuredConfigConsumer[StreamConfig]):
             maxsize=self.config.buffer_size
         )
 
-        self._processors: list[Callable[[StreamChunk], StreamChunk | None]] = []
+        # Processors run inside `process_task` below, which is an `async def`,
+        # so one may be async. The annotation says so; `run_callback` at the
+        # dispatch settles which it is.
+        self._processors: list[
+            Callable[[StreamChunk], StreamChunk | None]
+            | Callable[[StreamChunk], Awaitable[StreamChunk | None]]
+        ] = []
         self._stop_event = asyncio.Event()
 
     async def stream_async(
         self,
         source: AsyncIterator[StreamChunk],
-        sink: Callable[[StreamChunk], bool],
-        transform: Callable[[Any], Any] | None = None,
+        sink: Callable[[StreamChunk], bool] | Callable[[StreamChunk], Awaitable[bool]],
+        transform: Callable[[Any], Any] | Callable[[Any], Awaitable[Any]] | None = None,
     ) -> StreamMetrics:
         """Async streaming from source to sink.
 
+        Both callbacks may be synchronous or asynchronous, and either may be a
+        callable *object* rather than a function. The sink's answer is a
+        boolean the error metric is derived from and the transform's answer is
+        the data written onward, so a coroutine returned in place of either is
+        not a dropped notification --- it is a stream that reports success over
+        writes that never happened, or that carries coroutine objects into the
+        output.
+
         Args:
             source: Async data source iterator.
-            sink: Sink function.
-            transform: Optional transformation.
+            sink: Sink function. A synchronous one is run off the event loop:
+                a sink writes somewhere, and a blocking write would stall
+                every other task on the loop for its duration.
+            transform: Optional transformation. A synchronous one runs on the
+                loop --- it computes per chunk rather than doing I/O, and a
+                thread hop per chunk would cost more than it saves.
 
         Returns:
             Stream processing metrics.
         """
         if transform:
-            self._processors.append(
-                lambda c: StreamChunk(
-                    data=transform(c.data),
+
+            async def transform_chunk(c: StreamChunk) -> StreamChunk:
+                return StreamChunk(
+                    data=await run_callback(transform, c.data),
                     chunk_id=c.chunk_id,
                     sequence_number=c.sequence_number,
                     metadata=c.metadata,
                     timestamp=c.timestamp,
                     is_last=c.is_last,
                 )
-            )
+
+            self._processors.append(transform_chunk)
 
         self.metrics.start_time = time.time()
         self.status = StreamStatus.ACTIVE
@@ -570,7 +592,7 @@ class AsyncStreamContext(StructuredConfigConsumer[StreamConfig]):
                 result = chunk
                 for processor in self._processors:
                     if result:
-                        result = processor(result)
+                        result = await run_callback(processor, result)
 
                 if result:
                     await self._output_queue.put(result)
@@ -584,7 +606,13 @@ class AsyncStreamContext(StructuredConfigConsumer[StreamConfig]):
                     poison_pills += 1
                     continue
 
-                if not sink(chunk):
+                # Off the loop for a synchronous sink: what a sink does is
+                # write, and a blocking write here stalls the reader and the
+                # processors with it. `run_callback_off_loop` also gets the
+                # judgement right --- the previous `sink(chunk)` used a
+                # coroutine as a boolean, and a coroutine is always truthy,
+                # so a sink that refused every chunk reported no errors.
+                if not await run_callback_off_loop(sink, chunk):
                     self.metrics.errors_count += 1
 
                 if chunk.is_last:

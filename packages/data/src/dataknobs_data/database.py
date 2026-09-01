@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import functools
 import hashlib
-import inspect
 import json
 import logging
 import os
@@ -25,6 +24,7 @@ from dataknobs_common import (
     CapabilityMixin,
     CapabilityNotSupportedError,
 )
+from dataknobs_common.callbacks import is_async_callable, run_callback
 from dataknobs_common.exceptions import ConfigurationError
 from dataknobs_common.structured_config import StructuredConfigConsumer
 
@@ -35,7 +35,14 @@ from .schema import DatabaseSchema, FieldSchema
 from .transactions import VALID_TRANSACTION_POLICIES, BufferedTransaction
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator, Callable, Container, Iterable, Iterator
+    from collections.abc import (
+        AsyncIterator,
+        Awaitable,
+        Callable,
+        Container,
+        Iterable,
+        Iterator,
+    )
     from types import TracebackType
 
     from .query_logic import ComplexQuery
@@ -206,7 +213,7 @@ def _wrap_write(name: str, fn: Callable[..., Any]) -> Callable[..., Any]:
     entirely — steady-state overhead on the hot write path collapses to a
     single flag read per call, independent of batch size.
     """
-    if inspect.iscoroutinefunction(fn):
+    if is_async_callable(fn):
 
         @functools.wraps(fn)
         async def async_wrapper(self: Any, *args: Any, **kwargs: Any) -> Any:
@@ -1273,7 +1280,7 @@ class AsyncDatabase(RecordStorageMixin, CapabilityMixin, ABC):
     async def stream_transform(
         self,
         query: Query | None = None,
-        transform: Callable[[Record], Record | None] | None = None,
+        transform: Callable[[Record], Record | Awaitable[Record | None] | None] | None = None,
         config: StreamConfig | None = None,
     ) -> AsyncIterator[Record]:
         """Stream records through a transformation.
@@ -1290,7 +1297,7 @@ class AsyncDatabase(RecordStorageMixin, CapabilityMixin, ABC):
         """
         async for record in self.stream_read(query, config):
             if transform:
-                transformed = transform(record)
+                transformed = await run_callback(transform, record)
                 if transformed:  # None means filter out
                     yield transformed
             else:

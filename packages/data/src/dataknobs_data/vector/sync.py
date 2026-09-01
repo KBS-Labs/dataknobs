@@ -11,6 +11,8 @@ from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
+from dataknobs_common.callbacks import run_callback
+
 from ..fields import VectorField
 from ..records import Record
 from .embedding import TextEmbedder, default_model_name, embed_text, require_embedding_source
@@ -18,6 +20,7 @@ from .content import (
     CONTENT_HASH_KEY,
     DEFAULT_FIELD_SEPARATOR,
     FIELD_SEPARATOR_KEY,
+    MODEL_NAME_KEY,
     SOURCE_FIELDS_KEY,
     assemble_source_text,
     compute_content_hash,
@@ -27,7 +30,7 @@ from .content import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Collection, Coroutine
+    from collections.abc import Awaitable, Callable, Collection, Coroutine
 
     from ..database import AsyncDatabase
 
@@ -67,7 +70,7 @@ def _stored_model_name(metadata: dict[str, Any]) -> str | None:
         name = model.get("name")
         if name is not None:
             return str(name)
-    name = metadata.get("model_name")
+    name = metadata.get(MODEL_NAME_KEY)
     return str(name) if name is not None else None
 
 
@@ -635,7 +638,7 @@ class VectorTextSynchronizer:
         self,
         batch_size: int | None = None,
         force: bool = False,
-        progress_callback: Callable[[int, int], None] | None = None,
+        progress_callback: Callable[[int, int], Awaitable[None] | None] | None = None,
     ) -> dict[str, Any]:
         """Synchronize all records in the database.
 
@@ -673,7 +676,7 @@ class VectorTextSynchronizer:
                     failed += 1
 
                 if progress_callback:
-                    progress_callback(processed, total)
+                    await run_callback(progress_callback, processed, total)
 
         return {
             "processed": processed,
@@ -686,7 +689,7 @@ class VectorTextSynchronizer:
         self,
         records: list[Record] | None = None,
         force: bool = False,
-        progress_callback: Callable[[SyncStatus], None] | None = None,
+        progress_callback: Callable[[SyncStatus], Awaitable[None] | None] | None = None,
     ) -> SyncStatus:
         """Synchronize vectors for multiple records in batches.
 
@@ -740,7 +743,7 @@ class VectorTextSynchronizer:
 
                 # Call progress callback
                 if progress_callback:
-                    progress_callback(status)
+                    await run_callback(progress_callback, status)
 
         finally:
             status.end_time = datetime.now(UTC)

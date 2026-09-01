@@ -787,6 +787,8 @@ class ChromaVectorStore(VectorStore):
         ):
             if n_results <= 0:
                 break
+            # async-dispatch-exempt: `build_rows` is not consumer-supplied --- both
+            # callers are `search` in this module, passing their own local closure.
             rows = build_rows(await run_query(n_results))
             if len(rows) >= k:
                 break

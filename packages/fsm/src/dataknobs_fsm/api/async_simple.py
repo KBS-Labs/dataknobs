@@ -281,13 +281,13 @@ See Also:
     - :mod:`dataknobs_fsm.resources.manager`: Resource management and pooling
 """
 
-import asyncio
 import logging
 from collections.abc import AsyncIterator, Callable
 from pathlib import Path
 from types import TracebackType
 from typing import Any, Self
 
+from dataknobs_common.callbacks import run_callback_off_loop
 from dataknobs_data import Record
 
 from ..config.builder import FSMBuilder
@@ -796,10 +796,14 @@ class AsyncSimpleFSM:
             # blocking write never runs on the event loop — symmetric with
             # how the per-chunk sync sink is run via the executor.
             if cleanup_func:
-                if asyncio.iscoroutinefunction(cleanup_func):
-                    await cleanup_func()
-                else:
-                    await asyncio.to_thread(cleanup_func)
+                # `run_callback_off_loop` is those two branches, with the
+                # judgement made correctly: `iscoroutinefunction` reports a
+                # callable object with an `async def` __call__ as synchronous,
+                # and a sink holding a file handle is exactly that shape --- so
+                # its close would have been dispatched to a worker thread,
+                # where calling it built a coroutine that nothing awaited and
+                # the file was never flushed.
+                await run_callback_off_loop(cleanup_func)
 
     async def validate(self, data: dict[str, Any] | Record) -> dict[str, Any]:
         """Validate data against FSM's start state schema asynchronously.
