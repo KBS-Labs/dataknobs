@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-09-01T17:26:06Z",
+  "timestamp": "2026-09-01T18:17:59Z",
   "python_version": "Python 3.12.12",
   "uv_version": "uv 0.12.5 (Homebrew 2026-08-14 aarch64-apple-darwin)",
   "os": "Darwin",
   "os_version": "24.6.0",
-  "git_branch": "sbk/resource-manager-takes-its-own-lock",
-  "git_commit": "b535af83e6cd9e21cfbbfeb9916af78caec5945e",
+  "git_branch": "sbk/unclosed-providers-on-the-fsm-apis",
+  "git_commit": "59ec335aa2d2742f4fe1c842de3d4eac513714c9",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }
