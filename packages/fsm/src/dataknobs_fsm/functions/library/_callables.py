@@ -15,6 +15,8 @@ import inspect
 from collections.abc import Callable
 from typing import Any
 
+from dataknobs_common.callbacks import is_async_callable
+
 
 def normalize_record_callable(
     fn: Callable[..., Any],
@@ -29,8 +31,12 @@ def normalize_record_callable(
     :class:`~dataknobs_fsm.functions.base.ITransformFunction`'s bound method
     (sync ``(data)`` or async ``(data, context)``). The returned callable always
     accepts ``(record, context)``, forwards the right number of arguments, and is
-    a coroutine function iff ``fn`` is — so the caller's ``iscoroutinefunction`` /
-    ``isawaitable`` check routes it correctly.
+    a coroutine function iff calling ``fn`` produces an awaitable — so the
+    caller's ``iscoroutinefunction`` / ``isawaitable`` check routes it correctly.
+    Note the second half of that: a callable *object* with an ``async def``
+    ``__call__`` is not itself a coroutine function, and normalizing it yields
+    one, which is the point. The judgement is
+    :func:`~dataknobs_common.callbacks.is_async_callable`'s.
 
     Arity detection counts positional parameters only: a callable declaring two
     or more positionals (or ``*args``) receives ``(record, context)``; otherwise
@@ -67,7 +73,13 @@ def normalize_record_callable(
         # and pass only the record (the common ``record -> X`` shape).
         wants_context = False
 
-    if inspect.iscoroutinefunction(fn):
+    # `is_async_callable` rather than `inspect.iscoroutinefunction`: the latter
+    # answers for functions and reports a callable *object* with an `async def`
+    # __call__ as synchronous. Such a callable would take `sync_call` below,
+    # where `coerce` is applied to the coroutine rather than to the answer ---
+    # and the gate's `coerce` is `bool`, so a predicate that said no becomes a
+    # gate that says yes, uniformly, for every record.
+    if is_async_callable(fn):
 
         async def async_call(data: dict, context: Any = None) -> Any:
             out = await (fn(data, context) if wants_context else fn(data))

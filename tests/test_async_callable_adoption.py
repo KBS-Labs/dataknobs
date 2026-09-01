@@ -48,9 +48,22 @@ needs an exception takes a line-level ``# async-dispatch-exempt: <reason>``
 marker, which travels with the line rather than with a spelling of its
 argument, and which cannot be satisfied by a bare marker.
 
-Related runtime proof: ``packages/data/tests/test_consumer_callback_dispatch.py``
-drives every dispatch this guard covers with a callable object and asserts
-the callback actually ran.
+This guard is structural, so it can only ever say that a judgement was
+*made*. Whether the judgement is *right* is a runtime question, and these
+files answer it by driving each dispatch with a real callable object and
+asserting the callback actually ran:
+
+- ``packages/common/tests/test_callbacks_dispatch.py`` --- the two helpers
+  themselves, against every callable shape including the ones they refuse.
+- ``packages/data/tests/test_consumer_callback_dispatch.py``
+- ``packages/fsm/tests/`` --- ``test_consumer_callback_dispatch``,
+  ``test_execution_callback_dispatch``, ``test_engine_callable_object_dispatch``,
+  ``test_streaming_callback_dispatch``, ``test_resilience_callback_dispatch``,
+  ``test_async_detection_delegation``.
+
+The split matters when reading a failure. This file failing means somebody
+dispatched without asking; one of those failing means somebody asked and got
+the wrong answer. Only the second kind has ever cost data.
 """
 
 from __future__ import annotations
@@ -70,39 +83,53 @@ from tests._workspace import ROOT, rel, tracked_python_files
 #: certifies the region already cleaned.
 #:
 #: Widening is this constant plus the work to bring the added package to zero
-#: --- which is the whole cost, and it is not small. The remaining packages
-#: measure **28 sites of the first shape and 34 of the second**, and they are
-#: not a backlog of oversights: each is a published dispatch whose behaviour
-#: changes when it starts awaiting, so each needs its own reproduce-first
-#: proof. Adding a package here without doing that work turns a guard that
-#: passes into a guard that is disabled.
+#: --- which is the whole cost, and it is not small. The packages still
+#: outside measure **9 sites of the first shape and 30 of the second**, and
+#: they are not a backlog of oversights: each is a published dispatch whose
+#: behaviour changes when it starts awaiting, so each needs its own
+#: reproduce-first proof. Adding a package here without doing that work turns
+#: a guard that passes into a guard that is disabled.
 #:
 #: Two things to know before quoting those numbers.
 #:
 #: **They move when the detector does, not only when the code does.** The
-#: second figure was 12 while the shape-two check could see only a callback
-#: held in a local parameter; teaching it about ``self.<attr>`` (see
-#: :func:`_callback_attributes`) is most of the rise to 34. The sites were
-#: always there. A census is a property of the question asked, so re-measure
-#: rather than quoting this comment --- the previous figure was also one off
-#: on the day it was written.
+#: shape-two figure was 12 while that check could see only a callback held in
+#: a local parameter; teaching it about ``self.<attr>`` (see
+#: :func:`_callback_attributes`) roughly tripled it against unchanged code.
+#: A census is a property of the question asked, so re-measure rather than
+#: quoting this comment.
 #:
-#: **Eight of them are in modules nothing calls.** ``patterns/error_recovery``
-#: and ``patterns/api_orchestration`` have no in-tree importer, so the cost of
-#: a reproduce-first proof there buys a guarantee for code with no caller to
-#: guarantee it to. Whether those modules should be driven, deprecated or
-#: deleted is a question about the modules, and it is worth answering before
-#: paying to certify them --- not after.
-SCOPE = ("packages/data/src",)
+#: **Four more packages already measure zero** --- ``config``, ``structures``,
+#: ``utils`` and ``legacy`` --- so adding any of them costs nothing but the
+#: line. They are left out only because nobody has decided whether a guard
+#: should bind a deprecated package, which is a question about ``legacy`` and
+#: not about the other three.
+#:
+#: What the ``fsm`` pass cost, since the estimate above is worth calibrating
+#: against a case where the bill came in: 23 findings across 9 modules, and
+#: fewer distinct defects than that --- four of the six in ``async_engine``
+#: were two hand-written copies of one judgement, counted twice because the
+#: token appears twice. Eight sat in ``patterns/`` modules that no *shipped*
+#: module imports, which had looked like a reason to defer them; it was not,
+#: because their fix turned out to be one delegation each and the tests that
+#: prove it are the tests those modules did not otherwise have.
+SCOPE = ("packages/data/src", "packages/fsm/src")
 
 #: Enough scanned files that an empty finding list means "clean" rather than
-#: "matched nothing". Set well under the real count (95 when this was
-#: written) so ordinary growth and deletion do not move it, but far enough
+#: "matched nothing". Set well under the real count (170 across the two
+#: packages) so ordinary growth and deletion do not move it, but far enough
 #: above zero that a scope expression resolving to nothing fails instead of
 #: passing. This is the only anti-vacuity anchor the guard has: with no
 #: allowlist there is no declaration whose staleness would otherwise catch a
 #: scope that stopped matching.
-MINIMUM_FILES_SCANNED = 70
+#:
+#: Raised from 70 with the second package, and the raise is the point rather
+#: than bookkeeping: at 70, dropping either entry from ``SCOPE`` left the
+#: other matching enough files to pass, so the anchor would have watched a
+#: halved scope go by. A floor that only catches the scope going to *zero*
+#: does not cover a two-element scope. Above the larger package's own count
+#: (95), so losing either one fails here.
+MINIMUM_FILES_SCANNED = 120
 
 #: A line-level opt-out. The reason is mandatory --- a bare marker would make
 #: this an escape hatch from the guard rather than a documented exception to
@@ -225,8 +252,10 @@ def _callback_attributes(cls: ast.ClassDef) -> set[str]:
         if isinstance(node, ast.AnnAssign) and node.annotation is not None:
             annotation = ast.unparse(node.annotation)
             key = _dispatch_key(node.target)
-            if key and key.startswith("self.") and (
-                "Callable" in annotation or "Awaitable" in annotation
+            if (
+                key
+                and key.startswith("self.")
+                and ("Callable" in annotation or "Awaitable" in annotation)
             ):
                 found.add(key)
 

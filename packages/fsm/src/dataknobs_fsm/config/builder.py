@@ -11,12 +11,12 @@ It also provides :func:`build_fsm`, the standard way to create an FSM from
 raw configuration with optional custom functions.
 """
 
-import asyncio
 import importlib
 import inspect
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Type
 
+from dataknobs_common.callbacks import is_async_callable
 from dataknobs_common.imports import resolve_class
 
 from dataknobs_fsm.config.schema import (
@@ -843,11 +843,16 @@ class FSMBuilder:
         # pick the async adapter so the engine awaits it rather than storing an
         # un-awaited coroutine. The built-in library is entirely synchronous, so
         # builtin references always take the sync adapter (executor-offloaded).
+        #
+        # `is_async_callable` rather than `iscoroutinefunction`, because the
+        # interface method need not be a method: a class may satisfy it with a
+        # callable object attribute, which `iscoroutinefunction` reports as
+        # synchronous. That is the sync adapter over an async implementation,
+        # which is exactly the un-awaited coroutine this branch exists to
+        # prevent. A missing method answers `False` either way.
         impl = getattr(instance, _INTERFACE_METHODS[expected_type], None)
         adapter_cls = (
-            _AsyncResolvedLibraryFunction
-            if asyncio.iscoroutinefunction(impl)
-            else _ResolvedLibraryFunction
+            _AsyncResolvedLibraryFunction if is_async_callable(impl) else _ResolvedLibraryFunction
         )
         return adapter_cls(instance, expected_type)
 

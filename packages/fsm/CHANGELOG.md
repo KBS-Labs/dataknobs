@@ -87,6 +87,56 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   two concurrent `read_all` calls share it rather than getting one each, and
   `max_workers < 1` is refused.
 
+- **An arc condition written as a callable object matched every record.**
+  `AsyncExecutionEngine._evaluate_arc` asked `asyncio.iscoroutinefunction`,
+  which reports an object with an `async def __call__` as synchronous, and
+  ends in `bool(result)` — where a coroutine is truthy. A condition that
+  answered `False` was therefore read as `True`, uniformly, with nothing
+  raised and nothing logged. Not a gate that leaked: a gate that was not
+  there.
+
+- **The resilience wrappers recorded outcomes for calls they never made.**
+  `CircuitBreaker.call` (in both `patterns/error_recovery` and
+  `patterns/api_orchestration`), `Bulkhead.execute`, and every
+  `ErrorRecoveryWorkflow` strategy dispatched the caller's operation on the
+  same misreading. A discarded coroutine raises nothing, so a failing
+  operation took the *success* path: a breaker in front of a dependency that
+  had never once worked stayed closed, the bulkhead counted the call in
+  `executed`, the fallback strategy never fell back, and an async
+  compensation action left the half-finished operation un-undone while
+  `compensations` recorded that it had been handled.
+
+- **`RecoveryStrategy.DEADLINE` could not run a synchronous function.** Its
+  synchronous branch passed the function's *return value* to
+  `asyncio.create_task`, which requires a coroutine — so the branch written
+  to handle synchronous functions raised `TypeError` on every one of them.
+  Note the deadline now bounds the awaiting rather than the execution: a
+  synchronous body cannot be interrupted, so it runs to completion before the
+  timeout is consulted.
+
+- **An async record predicate admitted every record.**
+  `normalize_record_callable` chose its sync or async adapter with bare
+  `inspect.iscoroutinefunction`, so a callable object took the synchronous
+  adapter and the gate's terminal `bool` was applied to a coroutine rather
+  than to the predicate's answer — `True` for every record, from a validator
+  that had said no.
+
+- **`AsyncStreamContext.stream_async` reported success over writes that never
+  happened.** It called its `sink` and its `transform` without judging either.
+  `if not sink(chunk)` reads a coroutine as truthy, so a sink that refused
+  every chunk logged zero errors; the transform's coroutine was carried into
+  the chunk in place of the data. `StreamingFileProcessor.process` had the
+  same pair, where the transform's coroutine was written to the **output
+  file**.
+
+- **`FunctionWrapper` misread a `functools.partial` around an async callable
+  object as synchronous**, and read a *class* with an `async def __call__` as
+  async. Its `_check_async` was a hand-maintained copy of
+  `dataknobs_common.callbacks.is_async_callable` missing both cases; it now
+  delegates. The config builder's resolved-function adapter selection and the
+  engine's transform dispatch carried their own copies with the same
+  `partial` gap, and now delegate too.
+
 ### Changed
 
 - **`IORouter.add_route` and `IOBuffer` accept async callbacks in their
@@ -101,18 +151,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   to.** The transformed value still joins the returned list, so a caller
   reading the return value could not tell that nothing had been written.
 
-**Migrating.** Two consequences worth checking before upgrading:
+- **`AsyncStreamContext.stream_async` and `StreamingFileProcessor` accept
+  async callbacks in their annotations**, as `IORouter` and `IOBuffer` do
+  above, and for the same reason: the behaviour supports them and the
+  published signature did not.
+
+- **One judgement about whether a callable is async, made in one place.**
+  Nine modules asked it for themselves, in five spellings — bare
+  `iscoroutinefunction`, `iscoroutinefunction` plus a second check on
+  `__call__`, a check on `type(f).__call__`, an `_is_async` attribute hint,
+  and no check at all. All now route through
+  `dataknobs_common.callbacks.is_async_callable` or the two `run_callback`
+  helpers. The repository-level adoption guard covers `packages/fsm/src` as a
+  result, so a new dispatch that skips the judgement fails a test rather than
+  reaching a consumer.
+
+**Migrating.** Three consequences worth checking before upgrading:
 
 - A provider list holding **both** an async and a synchronous provider for the
   same destination now receives **two** writes where it previously received
   one, because the synchronous half was silently skipped. `write_all` returns
   `None`, so nothing surfaces this.
-- A synchronous `overflow_handler`, provider write, sink or progress callback
-  now runs on a **worker thread** rather than on the loop thread. One that
-  touches state which is not thread-safe, calls `loop.call_soon`, or uses
-  `asyncio.Queue.put_nowait` needs to say so itself. `asyncio.to_thread`
-  copies the context, so a callback that *sets* a contextvar no longer affects
-  its caller.
+- A synchronous `overflow_handler`, provider write, sink, progress callback,
+  arc condition, transform, or validator now runs on a **worker thread**
+  rather than on the loop thread. One that touches state which is not
+  thread-safe, calls `loop.call_soon`, or uses `asyncio.Queue.put_nowait`
+  needs to say so itself. `asyncio.to_thread` copies the context, so a
+  callback that *sets* a contextvar no longer affects its caller.
+- **Async callbacks that were silently doing nothing now run.** An async arc
+  condition, sink, transform, validator, compensation action or wrapped
+  operation whose coroutine was previously discarded is now awaited. If a
+  pipeline was passing because its async condition matched everything, or
+  because its async transform was a no-op that left the data untouched, it
+  will now behave as written — which may be a change in output.
 
 ## v0.4.2 - 2026-08-26
 

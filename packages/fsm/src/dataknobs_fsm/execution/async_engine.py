@@ -7,6 +7,8 @@ import time
 from collections.abc import Callable
 from typing import Any, Dict, List, Tuple
 
+from dataknobs_common.callbacks import run_callback_off_loop
+
 from dataknobs_fsm.core.arc import ArcDefinition, DataIsolationMode, PushArc
 from dataknobs_fsm.core.exceptions import FunctionError
 from dataknobs_fsm.core.fsm import FSM
@@ -501,18 +503,15 @@ class AsyncExecutionEngine(BaseExecutionEngine):
             )
 
             try:
-                # Check if it's async
-                if asyncio.iscoroutinefunction(pre_test_func):
-                    result = await pre_test_func(context.data, func_context)
-                else:
-                    # Run sync function in executor
-                    loop = asyncio.get_running_loop()
-                    result = await loop.run_in_executor(
-                        None,
-                        pre_test_func,
-                        context.data,
-                        func_context,
-                    )
+                # `run_callback_off_loop` makes the async judgement once,
+                # correctly, and keeps the executor offload for a synchronous
+                # condition. The branch it replaces asked
+                # `iscoroutinefunction`, which reports a callable *object* with
+                # an `async def` __call__ as synchronous --- and this method
+                # ends in `bool(result)`, where a coroutine is truthy. A
+                # condition that said no was therefore read as yes for every
+                # record: not a gate that leaks, a gate that is not there.
+                result = await run_callback_off_loop(pre_test_func, context.data, func_context)
             except FSMValidationError:
                 # An explicit "this record is invalid" signal → the arc is
                 # unavailable (a soft reject). The build_record_validator gate
@@ -651,21 +650,16 @@ class AsyncExecutionEngine(BaseExecutionEngine):
                                     transform_func, context, func_context, None
                                 )
                             else:
-                                # Check if it's async
-                                is_async = asyncio.iscoroutinefunction(transform_func)
-                                if not is_async and callable(transform_func):
-                                    is_async = asyncio.iscoroutinefunction(transform_func.__call__)
-
-                                if is_async:
-                                    result = await transform_func(context.data, func_context)
-                                else:
-                                    loop = asyncio.get_running_loop()
-                                    result = await loop.run_in_executor(
-                                        None,
-                                        transform_func,
-                                        context.data,
-                                        func_context,
-                                    )
+                                # One judgement, made where it is published.
+                                # The two-step check this replaces read a
+                                # callable object correctly but not a
+                                # `functools.partial` around one --- and a
+                                # transform's answer becomes `context.data`,
+                                # so a coroutine here is coalesced in place of
+                                # the record.
+                                result = await run_callback_off_loop(
+                                    transform_func, context.data, func_context
+                                )
 
                             context.data = self._coalesce_transform_result(result, context.data)
 
@@ -1102,24 +1096,19 @@ class AsyncExecutionEngine(BaseExecutionEngine):
         if hasattr(state, "validation_functions") and state.validation_functions:
             for validator in state.validation_functions:
                 try:
-                    # Handle both async and sync validators
-                    if asyncio.iscoroutinefunction(validator.validate):
-                        # Try with state object first (for inline lambdas)
-                        try:
-                            result = await validator.validate(state_obj)
-                        except (TypeError, AttributeError):
-                            # Fall back to standard signature
-                            result = await validator.validate(ensure_dict(context.data), context)
-                    else:
-                        # Run sync function in executor
-                        loop = asyncio.get_running_loop()
-                        try:
-                            result = await loop.run_in_executor(None, validator.validate, state_obj)
-                        except (TypeError, AttributeError):
-                            # Fall back to standard signature
-                            result = await loop.run_in_executor(
-                                None, validator.validate, ensure_dict(context.data), context
-                            )
+                    # The arity fallback was written twice, once per async
+                    # arm, because the async judgement was made above it.
+                    # `run_callback_off_loop` makes that judgement inside the
+                    # dispatch, so the state-object-first / (data, context)
+                    # fallback is written once and cannot drift between the
+                    # two shapes of validator.
+                    try:
+                        result = await run_callback_off_loop(validator.validate, state_obj)
+                    except (TypeError, AttributeError):
+                        # Fall back to standard signature
+                        result = await run_callback_off_loop(
+                            validator.validate, ensure_dict(context.data), context
+                        )
 
                     if isinstance(result, dict):
                         # Merge validation results into context data
@@ -1240,35 +1229,30 @@ class AsyncExecutionEngine(BaseExecutionEngine):
         if hasattr(transform_func, "transform"):
             actual_func = transform_func.transform
 
-        # Detect async via the callable, its __call__, or a wrapper hint.
-        is_async = asyncio.iscoroutinefunction(actual_func)
-        if not is_async and callable(actual_func):
-            # A callable *object* may carry an async ``__call__``; inspect the
-            # type's bound slot (``callable()`` above guarantees it exists).
-            is_async = asyncio.iscoroutinefunction(type(actual_func).__call__)
-        if not is_async and getattr(transform_func, "_is_async", False):
-            is_async = True
-
+        # The async judgement is `run_callback_off_loop`'s, made inside the
+        # dispatch rather than above it. Three things follow from moving it:
+        #
+        # - The arity fallback below is written once instead of once per arm.
+        #   It was two copies of the same `try state_obj / except TypeError`,
+        #   which is the shape a bug hides in when only one copy gets fixed.
+        # - A `functools.partial` around a callable object is detected, which
+        #   none of the three hand-written checks here managed.
+        # - The `_is_async` wrapper hint is no longer read, and no longer
+        #   needs to be: a wrapper that returns a coroutine is caught by the
+        #   result-level check, which is strictly more robust than any
+        #   attribute a wrapper can remember to set. Constructing that
+        #   coroutine on a worker thread costs nothing --- calling an async
+        #   callable runs none of its body --- and it is awaited back here on
+        #   the loop, where a coroutine belongs.
         if self._is_interface_transform(transform_func):
             data = ensure_dict(context.data)
-            if is_async:
-                return await actual_func(data, func_context)
-            loop = asyncio.get_running_loop()
-            return await loop.run_in_executor(None, actual_func, data, func_context)
+            return await run_callback_off_loop(actual_func, data, func_context)
 
         # Non-interface callable: state_obj first, fall back to (data, context).
-        if is_async:
-            try:
-                return await actual_func(state_obj)
-            except (TypeError, AttributeError):
-                return await actual_func(ensure_dict(context.data), func_context)
-        loop = asyncio.get_running_loop()
         try:
-            return await loop.run_in_executor(None, actual_func, state_obj)
+            return await run_callback_off_loop(actual_func, state_obj)
         except (TypeError, AttributeError):
-            return await loop.run_in_executor(
-                None, actual_func, ensure_dict(context.data), func_context
-            )
+            return await run_callback_off_loop(actual_func, ensure_dict(context.data), func_context)
 
     def _build_function_context(
         self,

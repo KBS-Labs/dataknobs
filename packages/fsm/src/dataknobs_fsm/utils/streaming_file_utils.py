@@ -10,9 +10,10 @@ import json
 import time
 from collections import deque
 from pathlib import Path
-from typing import Any, AsyncIterator, Callable, Dict, Iterator, List, Tuple, Union
+from typing import Any, AsyncIterator, Awaitable, Callable, Dict, Iterator, List, Tuple, Union
 
 from dataknobs_common import aiter_sync_in_thread
+from dataknobs_common.callbacks import run_callback, run_callback_off_loop
 
 from dataknobs_fsm.streaming.core import StreamChunk, StreamConfig, StreamMetrics
 from dataknobs_fsm.utils.file_utils import detect_format, get_csv_delimiter
@@ -456,7 +457,9 @@ class StreamingFileProcessor:
         self,
         input_path: Union[str, Path],
         output_path: Union[str, Path],
-        transform_fn: Callable[[Dict[str, Any]], Dict[str, Any]] | None = None,
+        transform_fn: Callable[[Dict[str, Any]], Dict[str, Any]]
+        | Callable[[Dict[str, Any]], Awaitable[Dict[str, Any]]]
+        | None = None,
         chunk_size: int = 1000,
         input_format: str = "auto",
         output_format: str | None = None,
@@ -466,7 +469,10 @@ class StreamingFileProcessor:
         Args:
             input_path: Input file path
             output_path: Output file path
-            transform_fn: Optional transformation function for each record
+            transform_fn: Optional transformation function for each record.
+                Sync or async, function or callable object; whichever it is,
+                its answer is what gets written, so it is awaited when it
+                needs to be rather than serialized as a coroutine object.
             chunk_size: Records per chunk
             input_format: Input file format
             output_format: Output file format (auto-detected if None)
@@ -480,12 +486,19 @@ class StreamingFileProcessor:
         self.transform_fn = transform_fn or (lambda x: x)
 
     async def process(
-        self, progress_callback: Callable[[int, int], None] | None = None
+        self,
+        progress_callback: Callable[[int, int], None]
+        | Callable[[int, int], Awaitable[None]]
+        | None = None,
     ) -> StreamMetrics:
         """Process the file with streaming.
 
         Args:
-            progress_callback: Optional callback for progress updates (items_processed, total_chunks)
+            progress_callback: Optional callback for progress updates
+                (items_processed, total_chunks). Sync or async. A synchronous
+                one is run off the event loop, since a progress hook plausibly
+                writes a log line or bumps a metrics endpoint --- the same
+                treatment the execution executors give theirs.
 
         Returns:
             Combined metrics from processing
@@ -498,7 +511,12 @@ class StreamingFileProcessor:
                 transformed_data = []
                 for record in chunk.data:
                     try:
-                        transformed = self.transform_fn(record)
+                        # On the loop, not off it: this computes per *record*
+                        # rather than doing I/O, so a thread hop here would be
+                        # paid once per row. `run_callback` still awaits an
+                        # async transform --- without it a coroutine object
+                        # was appended and written to the output file.
+                        transformed = await run_callback(self.transform_fn, record)
                         if transformed is not None:
                             transformed_data.append(transformed)
                     except Exception:
@@ -517,9 +535,13 @@ class StreamingFileProcessor:
 
                 total_items += len(chunk.data)
 
-                # Report progress
+                # Report progress. Once per chunk rather than per record, so
+                # the thread hop a synchronous hook costs is amortised over
+                # `chunk_size` rows.
                 if progress_callback:
-                    progress_callback(total_items, self.reader._chunk_count)
+                    await run_callback_off_loop(
+                        progress_callback, total_items, self.reader._chunk_count
+                    )
 
         # Combine metrics
         combined_metrics = StreamMetrics(
