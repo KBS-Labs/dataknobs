@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-09-01T01:39:15Z",
+  "timestamp": "2026-09-01T03:31:50Z",
   "python_version": "Python 3.12.12",
   "uv_version": "uv 0.12.5 (Homebrew 2026-08-14 aarch64-apple-darwin)",
   "os": "Darwin",
   "os_version": "24.6.0",
-  "git_branch": "main",
-  "git_commit": "b26affec1b23ea7ca32df98ffddbed2ce3731b63",
+  "git_branch": "sbk/consumer-callbacks-off-the-loop",
+  "git_commit": "571106cbdee1fafd4906c0d3677b7efe4a0e23be",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }
