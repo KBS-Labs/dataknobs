@@ -285,7 +285,7 @@ from typing import TYPE_CHECKING, Any, Self
 from dataknobs_data import Record
 
 from ..core.context_factory import ContextFactory
-from ..core.data_modes import DataHandler, DataHandlingMode
+from ..core.data_modes import DataHandlingMode
 from ..core.fsm import FSM
 from ..core.modes import ProcessingMode
 from ..core.state import StateInstance
@@ -412,14 +412,6 @@ class AdvancedFSM(ResourceSurface):
             strategy: Execution strategy to use
         """
         self._engine.strategy = strategy
-
-    def set_data_handler(self, handler: DataHandler) -> None:
-        """Set custom data handler.
-
-        Args:
-            handler: Data handler implementation
-        """
-        self._engine.data_handler = handler
 
     def set_hooks(self, hooks: ExecutionHook) -> None:
         """Set execution hooks for monitoring.

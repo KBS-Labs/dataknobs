@@ -65,13 +65,15 @@ result = fsm.process({
 ### Configuration
 
 ```yaml
-# In FSM configuration
+# `data_mode` is a top-level block, not a per-network one
+data_mode:
+  default: copy          # the mode every state uses unless it says otherwise
+
 networks:
   - name: main
-    data_mode:
-      default: copy  # Default mode for all states
-      state_overrides:
-        heavy_compute: direct  # Override for specific state
+    states:
+      - name: heavy_compute
+        data_mode: direct    # per-state override goes on the state
 ```
 
 ### Benefits
@@ -124,13 +126,12 @@ result = fsm.process({
 ### Configuration
 
 ```yaml
+data_mode:
+  default: reference
+
 networks:
   - name: main
-    data_mode:
-      default: reference
-      reference_config:
-        track_versions: true
-        cleanup_on_exit: true
+    states: [...]
 ```
 
 ### Implementation Details
@@ -190,12 +191,12 @@ result = fsm.process(data)
 ### Configuration
 
 ```yaml
+data_mode:
+  default: direct
+
 networks:
   - name: main
-    data_mode:
-      default: direct
-      direct_config:
-        validate_single_thread: true
+    states: [...]
 ```
 
 ### Concurrency Protection
@@ -317,7 +318,18 @@ data_handling = DataHandlingMode.COPY  # Each of those 100 gets copied for safet
 
 ## State-Level Configuration
 
-Override data modes for specific states:
+Override data modes for specific states. In configuration, the override is the
+state's own `data_mode` key:
+
+```yaml
+networks:
+  - name: main
+    states:
+      - name: heavy_compute
+        data_mode: direct
+```
+
+The same override, built in Python:
 
 ```python
 from dataknobs_fsm.core.state import StateDefinition
@@ -329,6 +341,19 @@ state = StateDefinition(
     # ... other config
 )
 ```
+
+### What the `data_mode` block accepts and ignores
+
+`default` is the only key in the top-level `data_mode` block that has an
+effect: a state's mode is `state_config.data_mode or fsm_config.data_mode.default`,
+resolved when the builder builds the state. The schema accepts four more —
+`state_overrides`, `copy_config`, `reference_config` and `direct_config` — and
+nothing reads any of them. They parse, they validate, and they change nothing;
+put a per-state override on the state.
+
+Pydantic also accepts unknown keys silently, so a `data_mode` block written
+under a network — where it does not belong — is dropped without complaint and
+every state runs `copy`.
 
 ## Data Mode Manager
 

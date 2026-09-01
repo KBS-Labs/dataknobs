@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Removed
+
+- **`AdvancedFSM.set_data_handler()`.** It assigned `self._engine.data_handler`,
+  a name the execution engine neither declares nor reads, so every handler
+  passed to it was silently ignored — the call returned `None` and changed
+  nothing. Calling it now raises `AttributeError`, which is the first
+  diagnostic the method has ever given. Data handling is selected by **mode**:
+  `data_mode.default` at the top level of a configuration, overridden per state
+  by that state's own `data_mode`. Supplying a custom handler is not currently
+  reachable by any route; `DataModeManager` holds a fixed three-entry table and
+  exposes no registration.
+
 ### Changed
 
 - **`StateSchema` is constructed from a JSON Schema mapping.** It takes the
@@ -29,6 +41,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   by hand.
 
 ### Fixed
+
+- **The data-mode documentation taught a configuration shape that is silently
+  discarded.** All three configuration examples in the Data Modes guide nested
+  `data_mode` under a network. `NetworkConfig` has no such field and Pydantic
+  accepts unknown keys without complaint, so the block validated, was dropped,
+  and every state ran `copy` whatever the example said. `data_mode` is a
+  top-level block; a per-state override is the state's own `data_mode` key. The
+  guide also advertised `state_overrides`, `copy_config`, `reference_config`
+  and `direct_config`, none of which is read by anything — `default` is the
+  only key in that block with an effect. The examples now show what works and
+  the guide records what does not.
+
+- **The Advanced API's `DataHandler` example could not be instantiated.** It
+  implemented three of the ABC's four abstract methods, omitting
+  `supports_concurrent_access`, and gave `on_exit` the wrong arity — the ABC
+  declares `on_exit(data, commit=True)` and `StateInstance` calls it
+  positionally with both. The section is replaced by one describing mode
+  selection, which is how data handling is actually chosen.
 
 - **`StateDefinition.validate_data()` raised `TypeError` on every FSM built
   from configuration.** It is declared to return `tuple[bool, list[str]]`, and
