@@ -157,9 +157,9 @@ class CircuitBreaker(StructuredConfigConsumer[CircuitBreakerConfig]):
         self.state = CircuitBreakerState.CLOSED
         self.failure_count = 0
         self.success_count = 0
-        self.last_failure_time = None
+        self.last_failure_time: float | None = None
         self.window_start = time.time()
-        self.window_failures = []
+        self.window_failures: list[float] = []
         self._lock = asyncio.Lock()
 
     async def call(self, func: Callable, *args: Any, **kwargs: Any) -> Any:
@@ -169,7 +169,7 @@ class CircuitBreaker(StructuredConfigConsumer[CircuitBreakerConfig]):
             if self.state == CircuitBreakerState.OPEN:
                 # Check if should transition to half-open
                 if self.last_failure_time:
-                    elapsed = time.time() - self.last_failure_time  # type: ignore[unreachable]
+                    elapsed = time.time() - self.last_failure_time
                     if elapsed >= self.config.timeout:
                         self.state = CircuitBreakerState.HALF_OPEN
                         if self.config.on_half_open:
@@ -250,7 +250,7 @@ class Bulkhead(StructuredConfigConsumer[BulkheadConfig]):
     def _setup(self) -> None:
         config = self.config
         self.semaphore = asyncio.Semaphore(config.max_concurrent)
-        self.queue = asyncio.Queue(maxsize=config.max_queue_size)
+        self.queue: asyncio.Queue[Any] = asyncio.Queue(maxsize=config.max_queue_size)
         self.active_count = 0
         self.queued_count = 0
         self.metrics = (
@@ -305,10 +305,12 @@ class ErrorRecoveryWorkflow(StructuredConfigConsumer[ErrorRecoveryConfig]):
         self._retry_executor = None
         self._circuit_breaker = None
         self._bulkhead = None
-        self._cache = {}
-        self._state_history = []
+        self._cache: Dict[str, Any] = {}
+        self._state_history: List[Dict[str, Any]] = []
         self._error_count = 0
-        self._metrics = {
+        # ``Any``, not ``int``: execution times land here as floats and
+        # ``get_metrics`` adds nested dicts to a copy of it.
+        self._metrics: Dict[str, Any] = {
             "attempts": 0,
             "successes": 0,
             "failures": 0,
@@ -624,7 +626,9 @@ class ErrorRecoveryWorkflow(StructuredConfigConsumer[ErrorRecoveryConfig]):
 
 
 def create_retry_workflow(
-    max_attempts: int = 3, backoff_strategy: BackoffStrategy = BackoffStrategy.EXPONENTIAL, **kwargs
+    max_attempts: int = 3,
+    backoff_strategy: BackoffStrategy = BackoffStrategy.EXPONENTIAL,
+    **kwargs: Any,
 ) -> ErrorRecoveryWorkflow:
     """Create retry-based error recovery workflow.
 
@@ -647,7 +651,7 @@ def create_retry_workflow(
 
 
 def create_circuit_breaker_workflow(
-    failure_threshold: int = 5, timeout: float = 60.0, **kwargs
+    failure_threshold: int = 5, timeout: float = 60.0, **kwargs: Any
 ) -> ErrorRecoveryWorkflow:
     """Create circuit breaker workflow.
 
