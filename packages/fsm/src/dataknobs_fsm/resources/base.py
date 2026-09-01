@@ -16,12 +16,18 @@ the standard one --- ``asyncio``, ``contextlib.aclosing``, and the pair
 A provider whose teardown must be awaited spells it ``aclose``. Spelling it
 ``close`` is served by the synchronous path, which calls it, discards the
 coroutine it returns, and reports success --- so the teardown never runs and
-nothing says otherwise. :meth:`ResourceManager.register_provider` refuses such
-a provider at registration, which is the last moment its author can still act
-on the mistake.
+nothing says otherwise.
+
+The mistake runs both ways, because it is the *name* that is the contract. A
+synchronous method spelled ``aclose`` is awaited: its body runs, and then the
+``await`` raises, so a teardown that in fact completed is recorded as one that
+failed --- and on the synchronous path it is never called at all.
+:meth:`ResourceManager.register_provider` refuses both at registration, which
+is the last moment their author can still act on the mistake.
 
 ``cleanup()`` is honoured as an alternate spelling of ``aclose`` for providers
-that already used it; new providers should use ``aclose``.
+that already used it, and carries the same obligation to be awaitable; new
+providers should use ``aclose``.
 
 :class:`AsyncClosable` and :class:`AsyncCleanable` name the awaited halves, so
 the routing can be a type narrowing rather than a string probe. Being

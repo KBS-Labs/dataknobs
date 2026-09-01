@@ -38,6 +38,49 @@ _SKIPPED_ASYNC_TEARDOWN = (
 )
 
 
+def _check_teardown_convention(name: str, provider: Any) -> None:
+    """Refuse a provider whose teardown is spelled against its asyncness.
+
+    Both directions, because the registry routes on the name and so a name
+    that lies about the method is the whole defect --- in either direction:
+
+    * an awaited ``close`` is called by the synchronous path, which discards
+      the coroutine it returns and reports success;
+    * a synchronous ``aclose``/``cleanup`` is *awaited*, which runs the body
+      and then raises ``TypeError`` on the ``await``, so a teardown that in
+      fact completed is recorded as one that failed --- and on the
+      synchronous path it is never called at all.
+
+    Presence is tested as "not ``None``" to match
+    :class:`~dataknobs_fsm.resources.base.AsyncClosable` exactly: a class
+    disclaiming an inherited hook with ``aclose = None`` fails that
+    ``isinstance`` too, so it must not be refused here either.
+
+    Args:
+        name: The registration name, for the message.
+        provider: The provider about to be registered.
+
+    Raises:
+        ValueError: If a teardown method's name contradicts its asyncness.
+    """
+    if is_async_callable(getattr(provider, "close", None)):
+        raise ValueError(
+            f"Provider '{name}' defines an async close(). Resource teardown "
+            "is synchronous by convention; name an awaitable teardown "
+            "'aclose()' so ResourceManager.cleanup() can await it."
+        )
+
+    for spelling in ("aclose", "cleanup"):
+        teardown = getattr(provider, spelling, None)
+        if teardown is not None and not is_async_callable(teardown):
+            raise ValueError(
+                f"Provider '{name}' defines a synchronous {spelling}(). "
+                f"Resource teardown named '{spelling}' is awaited by "
+                "convention; name a synchronous teardown 'close()' so "
+                "ResourceManager.close() can call it."
+            )
+
+
 class ResourceManager:
     """Manages resources across the FSM system."""
 
@@ -93,22 +136,18 @@ class ResourceManager:
             pool_config: Optional pool configuration.
 
         Raises:
-            ValueError: If ``name`` is taken, or if the provider spells an
-                awaited teardown ``close`` (see the teardown convention in
-                :mod:`dataknobs_fsm.resources.base`).
+            ValueError: If ``name`` is taken, or if a teardown method's name
+                contradicts its asyncness --- an awaited ``close``, or a
+                synchronous ``aclose``/``cleanup`` (see the teardown
+                convention in :mod:`dataknobs_fsm.resources.base`).
         """
         # Every provider enters here --- `register_from_dict` and the config
         # builder both end at this call --- so it is the one place the teardown
         # convention can be enforced for providers this package never sees.
-        # Raising rather than warning: a provider whose `close` must be awaited
+        # Raising rather than warning: a provider whose teardown is misnamed
         # cannot be torn down correctly by any caller of this manager, and this
         # is the last moment its author can still act on the mistake.
-        if is_async_callable(getattr(provider, "close", None)):
-            raise ValueError(
-                f"Provider '{name}' defines an async close(). Resource teardown "
-                "is synchronous by convention; name an awaitable teardown "
-                "'aclose()' so ResourceManager.cleanup() can await it."
-            )
+        _check_teardown_convention(name, provider)
 
         with self._lock:
             if name in self._providers:
@@ -605,8 +644,8 @@ class ResourceManager:
             logger.error(
                 "Provider %s was closed synchronously; its awaited teardown was "
                 "NOT run and the underlying transport is still open. Use "
-                "`await cleanup()`, or close the FSM with `await aclose()` / "
-                "`async with`.",
+                "`await ResourceManager.cleanup()`, or close the FSM with "
+                "`await aclose()` / `async with`.",
                 name,
             )
             self._record_unclosed(name, _SKIPPED_ASYNC_TEARDOWN)

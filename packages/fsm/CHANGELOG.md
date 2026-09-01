@@ -32,11 +32,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
       raised `AttributeError` from a `finally:` — replacing whatever exception
       the body was propagating.
 
-  `register_provider` now refuses a provider that spells an awaited teardown
-  `close`, naming the fix, at the last moment its author can act on it. The
-  convention is stated in `dataknobs_fsm.resources.base`, and `AsyncClosable` /
-  `AsyncCleanable` name its awaited halves so teardown routing narrows a type
-  instead of probing a string.
+  `register_provider` now refuses a provider whose teardown method's name
+  contradicts its asyncness — an awaited `close`, or a synchronous
+  `aclose`/`cleanup` — naming the fix, at the last moment its author can act on
+  it. The convention is stated in `dataknobs_fsm.resources.base`, and
+  `AsyncClosable` / `AsyncCleanable` name its awaited halves so teardown routing
+  narrows a type instead of probing a string.
+
+  **A provider defining a synchronous `aclose()` or `cleanup()` now fails to
+  register where it previously registered.** It was never torn down correctly:
+  the awaited path ran its body and then raised on the `await`, recording a
+  teardown that had in fact completed as one that failed, and the synchronous
+  path never called it at all. Rename such a method to `close()`.
 
 - **`ResourceManager.close()` abandoned teardown at the first provider that
   failed.** Its provider loop had no error isolation, so one raising provider

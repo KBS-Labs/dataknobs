@@ -150,6 +150,64 @@ def test_a_provider_with_aclose_still_registers() -> None:
     assert "good" in manager.get_all_providers()
 
 
+def test_registering_a_provider_with_a_sync_aclose_is_refused() -> None:
+    """The other half of the same naming mistake.
+
+    ``AsyncClosable`` is ``runtime_checkable``, so the routing sees the name
+    and not the asyncness --- ``await provider.aclose()`` then runs a
+    synchronous body for its side effect and raises ``TypeError`` on the
+    ``await``, which the manager records as a teardown that failed. The
+    teardown in fact ran. Refusing at registration is what makes the record
+    mean what it says, and it is the same "the name is the contract" defect
+    as an async ``close``.
+    """
+
+    class SyncAcloseProvider(RecordingProvider):
+        def aclose(self) -> None:
+            pass
+
+    manager = ResourceManager()
+
+    with pytest.raises(ValueError, match="synchronous aclose"):
+        manager.register_provider("bad", SyncAcloseProvider("bad"))
+
+
+def test_registering_a_provider_with_a_sync_cleanup_is_refused() -> None:
+    """``cleanup`` is the alternate spelling, so it carries the same obligation.
+
+    Worse than the ``aclose`` case on the synchronous path: the provider has
+    no ``close``, so ``_close_provider`` calls nothing at all and records the
+    skipped-awaited-teardown reason over a method that was synchronous and
+    callable the whole time.
+    """
+
+    class SyncCleanupProvider(RecordingProvider):
+        def cleanup(self) -> None:
+            pass
+
+    manager = ResourceManager()
+
+    with pytest.raises(ValueError, match="synchronous cleanup"):
+        manager.register_provider("bad", SyncCleanupProvider("bad"))
+
+
+def test_a_provider_disclaiming_an_inherited_aclose_still_registers() -> None:
+    """The guard tests presence the way the routing does: not ``None``.
+
+    ``AsyncClosable`` is an ``isinstance`` against a ``runtime_checkable``
+    Protocol, and setting the attribute to ``None`` fails that check --- so
+    such a provider is routed down the synchronous path and must not be
+    refused on the way in.
+    """
+
+    class DisclaimingProvider(RecordingProvider):
+        aclose = None
+
+    manager = ResourceManager()
+    manager.register_provider("good", DisclaimingProvider("good"))
+    assert "good" in manager.get_all_providers()
+
+
 def test_the_managers_own_provider_tears_down_without_discarding_a_coroutine() -> None:
     """``create_provider_from_dict`` violated the manager's own routing rule.
 

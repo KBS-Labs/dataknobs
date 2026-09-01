@@ -3,6 +3,8 @@
 import time
 from typing import Any, List
 
+import pytest
+
 from dataknobs_fsm.execution.stream import StreamExecutor, StreamPipeline, StreamProgress
 from dataknobs_fsm.core.fsm import FSM
 from dataknobs_fsm.core.network import StateNetwork
@@ -423,8 +425,6 @@ class TestStreamExecutorReal:
         raised there names ``NoneType`` rather than the stage that omitted the
         source.
         """
-        import pytest
-
         executor = StreamExecutor(fsm=self.create_test_fsm())
 
         with pytest.raises(ValueError, match="source"):
@@ -432,8 +432,6 @@ class TestStreamExecutorReal:
 
     def test_multi_stage_pipeline_with_no_stages_is_refused(self):
         """``stages[0]`` on an empty list is an IndexError with nothing to read."""
-        import pytest
-
         executor = StreamExecutor(fsm=self.create_test_fsm())
 
         with pytest.raises(ValueError, match="stage"):

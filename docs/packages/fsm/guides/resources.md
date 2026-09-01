@@ -660,8 +660,31 @@ moment the provider's author can still act on it. Without it, the synchronous
 path calls `close()`, discards the coroutine it returns, and reports success —
 so the teardown never runs and nothing says otherwise.
 
+The mistake runs the other way too, and is refused the same way: a
+**synchronous** method spelled `aclose()` is awaited, so its body runs and then
+the `await` raises — a teardown that in fact completed gets recorded as one that
+failed. On the synchronous path it is never called at all.
+
+```python
+class AlsoBad(BaseResourceProvider):
+    def acquire(self, **kwargs):
+        return self._handle
+
+    def release(self, resource):
+        pass
+
+    def aclose(self):             # wrong name for a synchronous teardown
+        self._handle.close()
+
+manager.register_provider("bad", AlsoBad("bad"))
+# ValueError: Provider 'bad' defines a synchronous aclose(). Resource teardown
+# named 'aclose' is awaited by convention; name a synchronous teardown
+# 'close()' so ResourceManager.close() can call it.
+```
+
 `cleanup()` is honoured as an alternate spelling of `aclose()` for providers
-that already used it. New providers should use `aclose()`.
+that already used it, and carries the same obligation to be awaitable. New
+providers should use `aclose()`.
 
 ## Async Cleanup
 
