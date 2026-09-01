@@ -7,7 +7,9 @@ import asyncio
 from typing import Any, Dict, List, Union, AsyncIterator, Iterator, Callable, TypeVar, Awaitable
 from functools import reduce
 
-from .base import IOConfig, IOFormat, IOProvider
+from dataknobs_common.callbacks import run_callback, run_callback_off_loop
+
+from .base import IOAdapter, IOConfig, IOFormat, IOProvider
 from .adapters import FileIOAdapter, DatabaseIOAdapter, HTTPIOAdapter
 
 T = TypeVar("T")
@@ -23,7 +25,10 @@ def create_io_provider(config: IOConfig, is_async: bool = True) -> IOProvider:
     Returns:
         Appropriate I/O provider instance
     """
-    # Determine adapter based on format and source
+    # Determine adapter based on format and source. Annotated at the base:
+    # the branches below assign three different adapters, and inferring the
+    # type from the first makes the other two errors.
+    adapter: IOAdapter
     if config.format == IOFormat.DATABASE:
         adapter = DatabaseIOAdapter()
     elif config.format == IOFormat.API or (
@@ -101,6 +106,13 @@ def async_transform_pipeline(
 ) -> Callable[[Any], Awaitable[Any]]:
     """Create an asynchronous transformation pipeline.
 
+    A synchronous transform runs **on the event loop**, unlike the provider
+    writes and the overflow flush elsewhere in this module. A transform is
+    named for computing rather than for doing, and it runs once per item,
+    so it would pay for a thread hop on every record; the surface decides,
+    and this surface says inline. A transform that really does block belongs
+    behind :func:`asyncio.to_thread` in the caller's own transform.
+
     Args:
         *transforms: Transformation functions (sync or async) to apply in sequence
 
@@ -111,10 +123,7 @@ def async_transform_pipeline(
     async def pipeline(data: Any) -> Any:
         result = data
         for transform in transforms:
-            if asyncio.iscoroutinefunction(transform):
-                result = await transform(result)
-            else:
-                result = transform(result)
+            result = await run_callback(transform, result)
         return result
 
     return pipeline
@@ -123,21 +132,22 @@ def async_transform_pipeline(
 class IORouter:
     """Routes data between multiple I/O providers based on conditions."""
 
-    def __init__(self):
-        self.routes = []
+    def __init__(self) -> None:
+        self.routes: List[Dict[str, Any]] = []
 
     def add_route(
         self,
         condition: Callable[[Any], bool],
         provider: IOProvider,
         transform: Callable[[Any], Any] | None = None,
-    ):
+    ) -> None:
         """Add a routing rule.
 
         Args:
-            condition: Function to determine if route should be used
+            condition: Decides whether this route takes the data. May be sync
+                or async; an async one is awaited before its answer is read.
             provider: I/O provider for this route
-            transform: Optional transformation to apply
+            transform: Optional transformation to apply. May be sync or async.
         """
         self.routes.append(
             {"condition": condition, "provider": provider, "transform": transform or (lambda x: x)}
@@ -145,6 +155,11 @@ class IORouter:
 
     async def route(self, data: Any) -> List[Any]:
         """Route data to appropriate providers.
+
+        The condition and the transform run inline and the provider's write
+        is offloaded, which is the same rule the rest of this module follows:
+        a predicate and a per-record transform compute, and a write is I/O
+        whether the provider spells it ``async`` or not.
 
         Args:
             data: Data to route
@@ -154,13 +169,14 @@ class IORouter:
         """
         results = []
         for route in self.routes:
-            if route["condition"](data):
-                transformed = route["transform"](data)
+            # `run_callback`, not a bare call: both of these are supplied by
+            # the caller and may be async, and a coroutine is truthy -- so an
+            # unjudged condition matches every record, and an unjudged
+            # transform is written to the provider in place of the data.
+            if await run_callback(route["condition"], data):
+                transformed = await run_callback(route["transform"], data)
                 if hasattr(route["provider"], "write"):
-                    if asyncio.iscoroutinefunction(route["provider"].write):
-                        await route["provider"].write(transformed)
-                    else:
-                        route["provider"].write(transformed)
+                    await run_callback_off_loop(route["provider"].write, transformed)
                 results.append(transformed)
         return results
 
@@ -179,7 +195,7 @@ class IOBuffer:
         """
         self.max_size = max_size
         self.overflow_handler = overflow_handler
-        self.buffer = []
+        self.buffer: List[Any] = []
         self._lock = asyncio.Lock()
 
     async def add(self, item: Any) -> None:
@@ -205,20 +221,27 @@ class IOBuffer:
             return items
 
     async def _handle_overflow(self) -> None:
-        """Handle buffer overflow."""
+        """Handle buffer overflow.
+
+        The handler is the only thing standing between the overflow and
+        losing it: the items are off the buffer before it is called, and no
+        copy is kept. So it is dispatched by
+        :func:`~dataknobs_common.callbacks.run_callback_off_loop`, which is
+        right on both counts here -- it judges a callable object correctly,
+        where ``iscoroutinefunction`` reports one as sync and silently
+        discards the coroutine, and it keeps a handler that writes the
+        overflow somewhere off the event loop.
+        """
         if self.overflow_handler:
             overflow_items = self.buffer[: self.max_size // 2]
             self.buffer = self.buffer[self.max_size // 2 :]
-            if asyncio.iscoroutinefunction(self.overflow_handler):
-                await self.overflow_handler(overflow_items)
-            else:
-                self.overflow_handler(overflow_items)
+            await run_callback_off_loop(self.overflow_handler, overflow_items)
 
 
 class IOMetrics:
     """Track metrics for I/O operations."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.metrics = {
             "read_count": 0,
             "write_count": 0,
@@ -229,21 +252,21 @@ class IOMetrics:
             "duration_ms": 0,
         }
 
-    def record_read(self, bytes_read: int = 0):
+    def record_read(self, bytes_read: int = 0) -> None:
         """Record read operation."""
         self.metrics["read_count"] += 1
         self.metrics["bytes_read"] += bytes_read
 
-    def record_write(self, bytes_written: int = 0):
+    def record_write(self, bytes_written: int = 0) -> None:
         """Record write operation."""
         self.metrics["write_count"] += 1
         self.metrics["bytes_written"] += bytes_written
 
-    def record_error(self):
+    def record_error(self) -> None:
         """Record error."""
         self.metrics["errors"] += 1
 
-    def record_retry(self):
+    def record_retry(self) -> None:
         """Record retry."""
         self.metrics["retries"] += 1
 
@@ -251,7 +274,7 @@ class IOMetrics:
         """Get current metrics."""
         return self.metrics.copy()
 
-    def reset(self):
+    def reset(self) -> None:
         """Reset all metrics."""
         for key in self.metrics:
             self.metrics[key] = 0
@@ -312,37 +335,49 @@ def parallel_io_executor(providers: List[IOProvider], max_workers: int = 4) -> "
 class ParallelIOExecutor:
     """Execute I/O operations in parallel."""
 
-    def __init__(self, providers: List[IOProvider], max_workers: int = 4):
+    def __init__(self, providers: List[IOProvider], max_workers: int = 4) -> None:
         self.providers = providers
         self.max_workers = max_workers
 
-    async def read_all(self, **kwargs) -> List[Any]:
+    async def read_all(self, **kwargs: Any) -> List[Any]:
         """Read from all providers in parallel.
+
+        Both kinds of provider participate. ``SyncIOProvider`` is as much an
+        :class:`~dataknobs_fsm.io.base.IOProvider` as ``AsyncIOProvider`` is,
+        and this class is annotated to take either; a synchronous read is
+        offloaded to a worker thread rather than run on the event loop, so
+        the providers still proceed concurrently and a slow disk read does
+        not stall the others.
 
         Returns:
             Results from all providers
         """
-        tasks = []
-        for provider in self.providers:
-            if hasattr(provider, "read"):
-                if asyncio.iscoroutinefunction(provider.read):
-                    tasks.append(provider.read(**kwargs))
+        tasks = [
+            run_callback_off_loop(provider.read, **kwargs)
+            for provider in self.providers
+            if hasattr(provider, "read")
+        ]
 
         if tasks:
             return await asyncio.gather(*tasks)
         return []
 
-    async def write_all(self, data: Any, **kwargs) -> None:
+    async def write_all(self, data: Any, **kwargs: Any) -> None:
         """Write to all providers in parallel.
+
+        As with :meth:`read_all`, a synchronous provider is written to on a
+        worker thread rather than skipped. This method returns ``None`` either
+        way, so a provider silently receiving nothing was undetectable from
+        the outside.
 
         Args:
             data: Data to write
         """
-        tasks = []
-        for provider in self.providers:
-            if hasattr(provider, "write"):
-                if asyncio.iscoroutinefunction(provider.write):
-                    tasks.append(provider.write(data, **kwargs))
+        tasks = [
+            run_callback_off_loop(provider.write, data, **kwargs)
+            for provider in self.providers
+            if hasattr(provider, "write")
+        ]
 
         if tasks:
             await asyncio.gather(*tasks)

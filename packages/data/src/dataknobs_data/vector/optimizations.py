@@ -12,7 +12,7 @@ from typing import Any, TYPE_CHECKING
 
 import numpy as np
 
-from dataknobs_common.callbacks import run_callback
+from dataknobs_common.callbacks import run_callback, run_callback_off_loop
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -153,10 +153,16 @@ class BatchProcessor:
                     # The callback comes from the caller, so it may be a
                     # callable object holding state -- and calling one of those
                     # without awaiting it discards the coroutine it returns and
-                    # raises nothing. `run_callback` judges the result, which
-                    # covers that shape and a plain `def` returning a coroutine
-                    # besides.
-                    await run_callback(callback, item)
+                    # raises nothing. `run_callback_off_loop` judges the
+                    # result, which covers that shape and a plain `def`
+                    # returning a coroutine besides.
+                    #
+                    # `_off_loop` because this is a per-item completion hook:
+                    # what a caller does in one is record the item somewhere,
+                    # which blocks. `ChangeTracker.process_batch` has always
+                    # offloaded the same kind of dispatch, and the two
+                    # surfaces disagreeing was drift rather than a decision.
+                    await run_callback_off_loop(callback, item)
                 processed += 1
             except Exception as e:
                 logger.error(f"Error processing item: {e}")

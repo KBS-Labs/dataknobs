@@ -7,6 +7,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Fixed
+
+- **`ParallelIOExecutor` silently skipped every synchronous provider.**
+  `read_all` and `write_all` built their task list inside
+  `if asyncio.iscoroutinefunction(provider.read)` with no `else`, so a
+  `SyncIOProvider` — as much an `IOProvider` as an async one, and what
+  `create_io_provider(config, is_async=False)` returns — was not read from and
+  **not written to**. `write_all` returns `None` either way, so a caller
+  fanning a write across providers had no way to learn that some of them
+  received nothing. Both kinds now participate, with a synchronous read or
+  write offloaded to a worker thread so the providers still proceed
+  concurrently and a slow disk does not stall the others.
+
+- **`IORouter` used its route's `condition` and `transform` without awaiting
+  them.** Both come from the caller and `add_route` accepts any callable. An
+  async condition returned a coroutine, which is always truthy, so the route
+  matched **every** record; an async transform's coroutine was written to the
+  provider in place of the transformed data. Neither raised. Both are now
+  awaited when they turn out to be awaitable.
+
+- **`IOBuffer` lost its overflow when the handler was a callable object.**
+  `asyncio.iscoroutinefunction` reports an object with an `async def
+  __call__` as synchronous — the shape anything stateful takes — so the
+  handler was invoked without being awaited and its coroutine discarded. The
+  items are removed from the buffer *before* the handler is called and no copy
+  is kept, so they were gone. The same misreading affected each transform in
+  `async_transform_pipeline`, where the un-awaited coroutine became the input
+  to the next transform in the chain.
+
+- **A synchronous provider write and a synchronous overflow flush no longer
+  run on the event loop.** Both are the consumer's I/O, and a blocking call
+  inside an `async def` stalls every other task on the loop for its duration.
+  They are dispatched through `dataknobs_common.callbacks.run_callback_off_loop`,
+  which judges the callable and offloads the synchronous case. The transform
+  pipeline deliberately stays inline and says so: a transform computes rather
+  than does, and runs once per item, so it would pay for a thread hop on every
+  record.
+
 ## v0.4.2 - 2026-08-26
 
 ### Fixed

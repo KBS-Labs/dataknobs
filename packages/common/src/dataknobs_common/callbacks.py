@@ -79,6 +79,7 @@ __all__ = [
     "PriorityOrdering",
     "RecordingCallbackRegistry",
     "run_callback",
+    "run_callback_off_loop",
     "StageOrdering",
 ]
 
@@ -156,24 +157,32 @@ async def run_callback(
 ) -> _T:
     """Call ``callback`` with *args*, awaiting the result if it is awaitable.
 
-    The counterpart to :func:`is_async_callable`, and the one to reach for
-    unless the sync branch has to do something *other* than call inline. The
-    two answer the same question at different moments, and the moment decides
-    which is usable:
+    The counterpart to :func:`is_async_callable`, and one of three ways to
+    dispatch a callback whose shape you do not control. Which one is right is
+    a property of the **surface**, not of the site, and stating it per surface
+    is what stops the three drifting apart across sibling methods:
 
-    ============================  ==================================
-    The sync branch...            Use
-    ============================  ==================================
-    calls the callback inline     ``await run_callback(cb, x)``
-    offloads it, or wraps it      ``if is_async_callable(cb): ...``
-    ============================  ==================================
+    ==================================  ====================================
+    The consumer's sync callback...     Use
+    ==================================  ====================================
+    computes, and may run per item      ``await run_callback(cb, x)``
+    may block --- I/O, or a flush       ``await run_callback_off_loop(cb, x)``
+    is wrapped rather than called       ``if is_async_callable(cb): ...``
+    ==================================  ====================================
 
-    A caller that offloads has to decide *before* calling --- there is no
-    offloading a call already made --- so it cannot use this and must classify
-    the callable instead. Everyone else can, and should, because judging the
-    **result** is strictly more robust than judging the callable: it catches a
-    plain ``def`` that returns a coroutine, which no amount of inspecting the
-    function ever will.
+    The first two both judge the callable for you; the third is for a caller
+    that needs the answer for some *other* reason than dispatching --- to
+    build a wrapper of the matching shape, say. Prefer either of the first two
+    over spelling the branch out, because judging the **result** is strictly
+    more robust than judging the callable: it catches a plain ``def`` that
+    returns a coroutine, which no amount of inspecting the function ever will.
+
+    This one runs the sync callback **on the event loop**, so it is the right
+    choice only where that code is expected to be quick: a predicate, a
+    per-record transform, a counter. Where the callback is the consumer's
+    chance to do something --- write the batch somewhere, flush an overflow,
+    hand data to an I/O provider --- it can block the loop for every other
+    task on it, and :func:`run_callback_off_loop` is the one to reach for.
 
     Reaching for neither is the defect this exists to retire. Calling a
     consumer's callback and moving on raises nothing when the consumer's
@@ -196,6 +205,56 @@ async def run_callback(
         # `await` on the narrowed `Awaitable[Any]` widens to `Any`; the
         # negative branch below needs no cast, because failing the narrowing
         # leaves `result` as `_T` already.
+        return cast("_T", await result)
+    return result
+
+
+async def run_callback_off_loop(
+    callback: Callable[..., _T | Awaitable[_T]], /, *args: Any, **kwargs: Any
+) -> _T:
+    """Call ``callback``, keeping a synchronous one off the event loop.
+
+    :func:`run_callback` with one difference, and it is the difference the
+    async-transport rule is about: a callback that turns out to be synchronous
+    runs on an :func:`asyncio.to_thread` worker rather than on the loop. An
+    asynchronous one is awaited directly, since it is already cooperative and
+    a thread hop would buy nothing.
+
+    Reach for this wherever the callback is the consumer's chance to *do*
+    something rather than to compute one --- an I/O provider's write, a buffer
+    overflow flush, a per-batch completion hook. Such a callback plausibly
+    opens a file or a socket, and a blocking call inside an ``async def``
+    stalls every other task on the loop for its duration. Shipped code cannot
+    see who else is on its loop, so it has to assume the worst.
+
+    Not free, and not neutral, which is why it is a second function rather
+    than the behaviour of the first. A thread hop costs real microseconds, so
+    a per-record predicate should not pay it; and the consumer's callback no
+    longer runs on the loop thread, which changes the meaning of one touching
+    state that is not thread-safe. Both of those are reasons to choose
+    deliberately, not reasons to leave the choice unmade --- and leaving it
+    unmade is what produced the drift this pair exists to end, where sibling
+    dispatches in one package hand-rolled the same three lines and half of
+    them omitted the offload.
+
+    Args:
+        callback: Any callable. Positional-only, matching
+            :func:`run_callback`, so a callback taking its own ``callback=``
+            keyword argument is not shadowed.
+        *args: Passed through.
+        **kwargs: Passed through.
+
+    Returns:
+        What ``callback`` returned, awaited first if it was awaitable.
+    """
+    if is_async_callable(callback):
+        return cast("_T", await callback(*args, **kwargs))
+    result = await asyncio.to_thread(callback, *args, **kwargs)
+    # A plain `def` that returns a coroutine built it on the worker thread
+    # without running any of it --- calling an async function only constructs
+    # the object. Awaiting it here runs its body on the loop, which is where a
+    # coroutine belongs, and is the one shape `is_async_callable` cannot see.
+    if inspect.isawaitable(result):
         return cast("_T", await result)
     return result
 

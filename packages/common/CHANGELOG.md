@@ -78,6 +78,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and the memo would answer for an unrelated object. It now holds a reference
   to every source it has seen, as `copy.deepcopy` does for the same reason.
 
+- **`run_callback_off_loop` — the same dispatch, with the synchronous branch
+  kept off the event loop.** `run_callback` runs a synchronous callback
+  inline, which is right for a predicate or a per-record transform and wrong
+  where the callback is the consumer's chance to *do* something: an I/O
+  provider's write, a buffer overflow flush, a per-batch completion hook. Such
+  a callback plausibly opens a file or a socket, and a blocking call inside an
+  `async def` stalls every other task on the loop for its duration. This one
+  awaits an async callable directly and hands a synchronous one to
+  `asyncio.to_thread`.
+
+  Extracted rather than invented: four dispatches across `data` and `fsm` had
+  each hand-written the same predicate-plus-offload, and half of the sibling
+  dispatches beside them omitted the offload entirely — which is what a rule
+  spelled out at each site rather than named once produces. The pair now
+  states the choice, and it is a property of the surface: a thread hop costs
+  real microseconds, and the consumer's callback no longer runs on the loop
+  thread, so a callback touching state that is not thread-safe changes
+  meaning. Both are reasons to choose deliberately rather than to leave the
+  choice unmade.
+
+  It also catches the one shape `is_async_callable` cannot: a plain `def` that
+  returns a coroutine builds it on the worker thread without running any of
+  it, and the result is awaited here, on the loop.
+
+  `run_callback` and `run_callback_off_loop` are now re-exported from
+  `dataknobs_common` alongside `is_async_callable`, so the three are found
+  together.
+
 ### Fixed
 
 - **An unclosed `SyncLoopBridge` could not be reclaimed, reported, or

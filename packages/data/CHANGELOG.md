@@ -153,6 +153,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`BatchProcessor` runs a synchronous per-item callback on a worker thread,
+  not on the event loop.** What a caller does in a "callback when item is
+  processed" is record the item somewhere, and that blocks; a blocking call
+  inside an `async def` stalls every other task on the loop for its duration.
+  Its sibling `ChangeTracker.process_batch` has always offloaded the same kind
+  of dispatch, so the two surfaces disagreed with neither of them saying which
+  was right. Both now go through
+  `dataknobs_common.callbacks.run_callback_off_loop` — the shape `ChangeTracker`
+  had hand-written, which is where that helper came from.
+
+  **This changes where a consumer's synchronous callback runs.** One that
+  touches state which is not thread-safe, or that relies on being on the loop
+  thread, needs to say so itself. Asynchronous callbacks are unaffected: they
+  are awaited directly, as before.
+
 - **Every `TextEmbedder` implementation now asserts its conformance where a
   type checker reads it.** Nothing inherits the protocol — an adapter lives in
   whichever package holds the thing it adapts, and two of the four are in

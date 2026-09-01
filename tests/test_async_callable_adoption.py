@@ -87,7 +87,15 @@ CLASSIFIERS = frozenset({"iscoroutinefunction", "is_async_callable", "isawaitabl
 #: Calls that hand a callable somewhere else to be run, rather than running it
 #: here. The callable is not dispatched at this site, so this site owes no
 #: judgement about it.
-DELEGATORS = frozenset({"to_thread", "run_in_executor", "run_callback", "submit"})
+#:
+#: ``run_callback`` and ``run_callback_off_loop`` differ only in whether a
+#: synchronous callback runs on the loop or on a worker thread. Both judge the
+#: callable, which is the question this guard asks, so both discharge it; which
+#: of the two a site should use is a property of the surface and is argued at
+#: the site rather than checked here.
+DELEGATORS = frozenset(
+    {"to_thread", "run_in_executor", "run_callback", "run_callback_off_loop", "submit"}
+)
 
 
 @dataclass(frozen=True)

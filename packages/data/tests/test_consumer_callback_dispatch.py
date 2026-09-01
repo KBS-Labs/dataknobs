@@ -35,10 +35,14 @@ about the vector subpackage.
 
 from __future__ import annotations
 
+import threading
+from pathlib import Path
 from typing import Any
 
 import numpy as np
 import pytest
+
+from dataknobs_common.testing import assert_no_blocking, requires_blockbuster
 
 from dataknobs_data.backends.memory import AsyncMemoryDatabase
 from dataknobs_data.migration.migrator import Migrator
@@ -169,6 +173,43 @@ class TestBatchProcessorAwaitsACallableObject:
         await processor.add("b", seen.append)
 
         assert seen == ["a", "b"]
+
+    @requires_blockbuster
+    async def test_a_blocking_callback_does_not_stall_the_loop(self, tmp_path: Path) -> None:
+        """The per-item callback is the caller's chance to record the item.
+
+        Its sibling ``ChangeTracker.process_batch`` has always offloaded the
+        same kind of dispatch, and this one called it inline --- so the two
+        surfaces disagreed about whether a consumer's callback may block, with
+        neither of them saying which was right.
+        """
+        log = tmp_path / "processed.txt"
+        processor = BatchProcessor(BatchConfig(size=2, parallel_workers=1))
+
+        def record(item: Any) -> None:
+            with open(log, "a", encoding="utf-8") as handle:
+                handle.write(f"{item}\n")
+
+        with assert_no_blocking():
+            await processor.add("a", record)
+            await processor.add("b", record)
+
+        assert log.read_text() == "a\nb\n"
+
+    async def test_the_callback_runs_off_the_event_loop(self) -> None:
+        """Structural proof, for a callback that blocks in a way blockbuster does not patch.
+
+        The detector covers the common syscalls; it does not cover an
+        arbitrary CPU-bound consumer callback. Naming the thread pins the
+        offload itself rather than one class of symptom.
+        """
+        processor = BatchProcessor(BatchConfig(size=1, parallel_workers=1))
+        loop_thread = threading.current_thread()
+        seen: list[threading.Thread] = []
+
+        await processor.add("a", lambda _: seen.append(threading.current_thread()))
+
+        assert seen and seen[0] is not loop_thread
 
 
 class TestConnectionPoolClosesAnObjectsCloseMethod:
