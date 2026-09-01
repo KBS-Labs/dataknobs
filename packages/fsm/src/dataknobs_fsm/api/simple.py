@@ -204,15 +204,21 @@ See Also:
 """
 
 import asyncio
-from collections.abc import Callable
+from collections.abc import Callable, Coroutine, Mapping
 from pathlib import Path
 from types import TracebackType
-from typing import Any, Self
+from typing import Any, Self, TypeVar
 
 from dataknobs_data import Record
 
 from ..core.data_modes import DataHandlingMode
 from .async_simple import AsyncSimpleFSM
+
+#: The value a bridged coroutine produces. ``SyncLoopBridge.run`` is already
+#: generic in it, so carrying it through :meth:`SimpleFSM._run_async` is what
+#: lets every synchronous wrapper below return its own declared type instead
+#: of ``Any``.
+T = TypeVar("T")
 
 
 class SimpleFSM:
@@ -512,7 +518,7 @@ class SimpleFSM:
         self._resource_manager = self._async_fsm._resource_manager
         self._async_engine = self._async_fsm._async_engine
 
-    def _run_async(self, coro: Any, timeout: float | None = None) -> Any:
+    def _run_async(self, coro: Coroutine[Any, Any, T], timeout: float | None = None) -> T:
         """Run an async operation to completion synchronously.
 
         Drives the single async execution engine through the FSM's shared
@@ -528,7 +534,9 @@ class SimpleFSM:
                 coroutine finishes anyway.
 
         Returns:
-            The result of the coroutine
+            The result of the coroutine, with its own type --- this is generic
+            in the coroutine's result so the synchronous wrappers below do not
+            each have to widen to ``Any`` and back.
 
         Raises:
             TimeoutError: If ``timeout`` elapses before the coroutine finishes.
@@ -558,7 +566,7 @@ class SimpleFSM:
         """
 
         # Create the coroutine with the async process method
-        async def _process():
+        async def _process() -> dict[str, Any]:
             # Import here to avoid circular dependency
             from ..core.context_factory import ContextFactory
             from ..core.modes import ProcessingMode
@@ -706,7 +714,7 @@ class SimpleFSM:
             )
         else:
             # Source is an async iterator, need to handle it properly
-            async def _process():
+            async def _process() -> dict[str, Any]:
                 return await self._async_fsm.process_stream(
                     source=source,
                     sink=sink,
@@ -745,6 +753,30 @@ class SimpleFSM:
     def config(self) -> Any:
         """Get the FSM configuration object."""
         return self._async_fsm._config
+
+    @property
+    def unclosed_providers(self) -> Mapping[str, str]:
+        """Providers whose teardown did not complete, name to reason.
+
+        Empty is the normal answer, and asserting it is how a caller that
+        cares about resource lifetime checks that nothing was left open::
+
+            with SimpleFSM(config) as fsm:
+                ...
+            assert not fsm.unclosed_providers
+
+        Read-only, and monotonic over the manager's life --- see
+        :attr:`~dataknobs_fsm.resources.manager.ResourceManager.unclosed_providers`
+        for what is recorded and why it is never cleared. The reason strings
+        are diagnostic and may change; assert on the keys.
+
+        Despite being the synchronous surface, this class does not skip
+        awaited teardown: :meth:`close` drives the async cleanup through the
+        shared bridge, so a provider exposing ``aclose`` is awaited. The
+        population recorded here is therefore providers whose teardown
+        *raised*.
+        """
+        return self._async_fsm.unclosed_providers
 
     def close(self) -> None:
         """Clean up resources and close connections synchronously."""
@@ -797,7 +829,7 @@ class SimpleFSM:
 def create_fsm(
     config: str | Path | dict[str, Any],
     custom_functions: dict[str, Callable] | None = None,
-    **kwargs,
+    **kwargs: Any,
 ) -> SimpleFSM:
     """Factory function to create a SimpleFSM instance.
 

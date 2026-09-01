@@ -282,7 +282,7 @@ See Also:
 """
 
 import logging
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Callable, Mapping
 from pathlib import Path
 from types import TracebackType
 from typing import Any, Self
@@ -569,8 +569,14 @@ class AsyncSimpleFSM:
             except Exception as e:
                 logger.warning("Failed to register resource '%s': %s", name, e)
 
-    def _create_resource_provider(self, resource_config):
-        """Create a resource provider from ResourceConfig."""
+    def _create_resource_provider(self, resource_config: Any) -> Any:
+        """Create a resource provider from ResourceConfig.
+
+        Typed loosely on purpose: ``FSMBuilder._create_resource`` accepts the
+        several config shapes the loader produces and returns whichever
+        provider class matches, so naming one narrows a contract this method
+        only forwards.
+        """
         # Use the same logic as FSMBuilder
         builder = FSMBuilder()
         return builder._create_resource(resource_config)
@@ -720,6 +726,11 @@ class AsyncSimpleFSM:
             fsm=self._fsm, stream_config=stream_config, progress_callback=on_progress
         )
 
+        # Both element shapes are intended and both reach the executor, which
+        # branches on `isinstance(item, list)`: streaming mode yields
+        # pre-chunked lists, regular mode yields one record at a time.
+        stream_source: AsyncIterator[list[dict[str, Any]]] | AsyncIterator[dict[str, Any]]
+
         # Choose between streaming and regular mode
         if use_streaming and isinstance(source, (str, Path)):
             # Use memory-efficient streaming for large files
@@ -860,6 +871,29 @@ class AsyncSimpleFSM:
         """Get the FSM configuration object."""
         return self._config
 
+    @property
+    def unclosed_providers(self) -> Mapping[str, str]:
+        """Providers whose teardown did not complete, name to reason.
+
+        Empty is the normal answer, and asserting it is how a caller that
+        cares about resource lifetime checks that nothing was left open::
+
+            async with AsyncSimpleFSM(config) as fsm:
+                ...
+            assert not fsm.unclosed_providers
+
+        Read-only, and monotonic over the manager's life --- see
+        :attr:`~dataknobs_fsm.resources.manager.ResourceManager.unclosed_providers`
+        for what is recorded and why it is never cleared. The reason strings
+        are diagnostic and may change; assert on the keys.
+
+        This class always awaits teardown, so the population recorded here is
+        providers whose teardown *raised*. A provider skipped because it could
+        not be awaited is reachable only from a synchronous close --- see
+        :class:`~dataknobs_fsm.api.advanced.AdvancedFSM`.
+        """
+        return self._resource_manager.unclosed_providers
+
     async def close(self) -> None:
         """Clean up resources and close connections asynchronously."""
         await self._resource_manager.cleanup()
@@ -883,7 +917,7 @@ class AsyncSimpleFSM:
 async def create_async_fsm(
     config: str | Path | dict[str, Any],
     custom_functions: dict[str, Callable] | None = None,
-    **kwargs,
+    **kwargs: Any,
 ) -> AsyncSimpleFSM:
     """Factory function to create an AsyncSimpleFSM instance.
 

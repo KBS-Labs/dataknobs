@@ -208,6 +208,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   awaited halves of the teardown convention, named so routing can narrow a type
   rather than probe a method name.
 
+- **`unclosed_providers` on `SimpleFSM`, `AdvancedFSM` and `AsyncSimpleFSM`** —
+  the same record, read-only, on the object a consumer actually holds. The
+  manager is private to each of the three, so until now the only reader was a
+  test reaching into `_resource_manager`.
+
+  The three do not answer alike, and each property's docstring says which it
+  is. `AdvancedFSM.close()` runs the synchronous teardown path, so it is the
+  one surface that can report a provider whose `aclose` could not be awaited.
+  `SimpleFSM.close()` is synchronous in name only — it drives the async
+  cleanup through the shared bridge, so such a provider is awaited and nothing
+  is recorded. `AsyncSimpleFSM` awaits throughout.
+
 ### Changed
 
 - **`IORouter.add_route` and `IOBuffer` accept async callbacks in their
