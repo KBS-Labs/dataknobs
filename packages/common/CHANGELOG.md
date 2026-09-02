@@ -47,6 +47,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`PluginRegistry`'s class-factory gate refused the implementation it exists
+  to admit, whenever `validate_type` was a Protocol carrying a property.**
+  `issubclass` rejects such a Protocol outright — the whole call, not the
+  offending member — so the gate did not judge the class and reject it: it
+  raised `TypeError: Protocols with non-method members don't support
+  issubclass()` before any class was judged, on the conforming class as
+  readily as on a wrong one, naming neither the registry, the protocol, nor
+  the class. Passing the identical class to a registry with no `validate_type`
+  worked, so the constraint was strictly worse than its own absence — it
+  rejected the right shape and gated nothing, because the shape it exists to
+  exclude was never evaluated. Only class factories reached it; a callable
+  factory skipped the branch entirely, which is why a registry could carry the
+  defect while its tests passed.
+
+  Such a Protocol is now checked against its declared members. That is the
+  same check `issubclass` performs for a method-only Protocol, so a
+  property-carrying Protocol and its method-only twin reach the same verdict on
+  the same class. A Protocol that was never decorated `@runtime_checkable` is
+  the other way the check cannot run, and is reported at registration naming
+  the missing decorator, rather than passing registration and failing at
+  `create()` for an unstated cause; a `validate_type` that is not a class at
+  all still raises `issubclass`'s own `TypeError`, which is the disposition
+  `resolve_class` documents for the same condition.
+
+  Both gates now share one implementation. `set_default_factory` had its own
+  copy, which named neither the class it rejected nor the registry that
+  rejected it; every rejection from either gate now names the registry, the
+  base, the class, and any missing members.
+
+- **`DataknobsError` documented its two context arguments as merged, and they
+  are not.** The constructor resolves `details or context or {}`, so the first
+  *non-empty* argument becomes both attributes and the other is discarded — a
+  consumer following the docstring and passing halves of one dict to `context`
+  and `details` would silently lose one of them. Corrected on
+  `DataknobsError`, on `RateLimitError`, which carried a copy of the same
+  sentence, and in the API reference. Behaviour is unchanged; only the claim
+  about it was wrong.
+
 - **`run_callback` and `run_callback_off_loop` handed back an un-run async
   generator instead of refusing it.** `inspect.iscoroutinefunction` answers
   `False` for an async generator function, so the synchronous arm called it —

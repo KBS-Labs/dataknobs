@@ -1,16 +1,21 @@
 # Common API Reference
 
-Complete API reference for the `dataknobs-common` package.
+Curated reference for the most-used parts of the `dataknobs-common` package.
 
-> **📖 Also see:** [Auto-generated API Reference](../../api/reference/common.md) - Complete documentation from source code docstrings
+> **📖 For everything:** [Auto-generated API Reference](../../api/reference/common.md) — every public symbol, generated from source docstrings
 
-This page provides curated examples and usage patterns. The auto-generated reference provides exhaustive technical documentation with all methods, parameters, and type annotations.
+This page covers a selection — the exception hierarchy, the four registries,
+serialization, metadata, retry, transitions and lifecycle — with worked
+examples and the surrounding rationale. It is deliberately not exhaustive:
+`dataknobs_common` exports roughly two hundred names, and the auto-generated
+reference above is the complete one. When the two disagree, the generated page
+is built from the source and wins.
 
 ---
 
 ## Module Overview
 
-The `dataknobs-common` package provides these core modules:
+The modules this page covers:
 
 - **`dataknobs_common.exceptions`** - Exception hierarchy with context support
 - **`dataknobs_common.registry`** - Generic registry implementations
@@ -19,8 +24,25 @@ The `dataknobs-common` package provides these core modules:
 - **`dataknobs_common.retry`** - Configurable retry execution with backoff strategies
 - **`dataknobs_common.lifecycle`** - Owned-vs-injected collaborator teardown guard
 - **`dataknobs_common.transitions`** - Stateless transition validation for status graphs
-- **`dataknobs_common.events`** - Event bus for pub/sub messaging
-- **`dataknobs_common.testing`** - Test utilities, markers, and configuration factories
+
+The package ships more than these. Several of the modules below have a guide
+of their own linked from the [package overview](index.md); all of them appear
+in full in the [auto-generated reference](../../api/reference/common.md):
+
+| Module | What it provides |
+|---|---|
+| `events` | Event bus for pub/sub messaging (in-memory, PostgreSQL, Redis, SQS) |
+| `locks` | Distributed and in-process locks, and the lock backend registry |
+| `ratelimit` | Rate limiters, limits, and the rate-limiter backend registry |
+| `capabilities` | Capability declaration and the `require_capability` / `supports_capability` guards |
+| `resolver`, `discriminator`, `scope` | Resource resolution, routing, and scope projection protocols with reference implementations |
+| `structured_config` | `StructuredConfig` and the consumer mixin |
+| `config_loading`, `paths`, `postgres_config` | YAML/JSON loading, safe path joining, PostgreSQL DSN normalization |
+| `tenancy`, `packs` | Tenant contexts and composable configuration packs |
+| `callbacks`, `async_iter`, `sync_bridge` | Callback registries, sync-iterator offloading, and the sync/async bridge |
+| `expressions` | Safe expression evaluation over a restricted builtin set |
+| `imports`, `copying`, `bounded_cache`, `aws` | Dotted-path resolution, structure copying, an LRU cache, and the shared aioboto3 session |
+| `testing` | Test utilities, skip markers, and configuration factories |
 
 ## Exceptions Module
 
@@ -37,17 +59,24 @@ class DataknobsError(Exception):
 
 **Constructor:**
 ```python
-DataknobsError(message: str, context: dict[str, Any] | None = None)
+DataknobsError(
+    message: str,
+    context: dict[str, Any] | None = None,
+    details: dict[str, Any] | None = None,
+)
 ```
 
 **Parameters:**
 - `message` (str): Error message
 - `context` (dict[str, Any] | None): Optional context dictionary with additional error details
+- `details` (dict[str, Any] | None): The same thing under the name FSM-derived code uses. The two are never merged — the attribute becomes the first non-empty of `details`, `context`, `{}` — so `details` wins over `context` except when `details` is itself empty
 
 **Attributes:**
-- `message` (str): The error message
-- `context` (dict[str, Any] | None): Context dictionary if provided
-- `details` (property): Alias for `context` (for backward compatibility)
+- `context` (dict[str, Any]): The context dictionary — always a dict, `{}` when neither argument was given, so it is safe to subscript without a `None` check
+- `details` (dict[str, Any]): The same object as `context`, not a copy
+
+There is no `message` attribute. The message is the exception's `args[0]`,
+reached with `str(e)` as for any built-in exception.
 
 **Example:**
 ```python
@@ -62,18 +91,24 @@ raise DataknobsError(
     context={"operation": "save", "item_id": "123"}
 )
 
-# Access context
+# Access message and context
 try:
     operation()
 except DataknobsError as e:
-    print(e.message)  # "Operation failed"
+    print(str(e))     # "Operation failed"
     print(e.context)  # {"operation": "save", "item_id": "123"}
-    print(e.details)  # Same as context (alias)
+    print(e.details)  # the same dict object as e.context
 ```
 
 ### Standard Exceptions
 
 All standard exceptions extend `DataknobsError` and follow the same constructor pattern.
+
+Beyond the eight below, the hierarchy also carries `ConsentRequiredError`,
+`RateLimitError` (which extends `OperationError`), and the dotted-path pair
+`DottedPathError` / `DottedPathTypeError` (both extending
+`ConfigurationError`). See the
+[auto-generated reference](../../api/reference/common.md) for those.
 
 #### `ValidationError`
 
@@ -247,29 +282,31 @@ class Registry(Generic[T]):
 ```python
 Registry(
     name: str,
-    enable_metrics: bool = False,
-    allow_override: bool = False
+    enable_metrics: bool = False
 )
 ```
 
 **Parameters:**
 - `name` (str): Registry name (for logging and metrics)
-- `enable_metrics` (bool): Enable metrics tracking (default: False)
-- `allow_override` (bool): Allow overriding existing keys (default: False)
+- `enable_metrics` (bool): Record a registration timestamp and the `metadata` argument for each key, readable through `get_metrics()`. When `False` (the default), `metadata` passed to `register()` is accepted and discarded
+
+**Properties:**
+- `name` (str): The registry name given at construction
 
 **Methods:**
 
-##### `register(key: str, item: T, metadata: dict[str, Any] | None = None) -> None`
+##### `register(key: str, item: T, metadata: dict[str, Any] | None = None, allow_overwrite: bool = False) -> None`
 
 Register an item with a key.
 
 **Parameters:**
 - `key` (str): Unique identifier for the item
 - `item` (T): The item to register
-- `metadata` (dict[str, Any] | None): Optional metadata
+- `metadata` (dict[str, Any] | None): Optional metadata. Retained only when the registry was built with `enable_metrics=True`
+- `allow_overwrite` (bool): Replace an existing registration instead of raising. Per call, not per registry
 
 **Raises:**
-- `ValueError`: If key already exists and `allow_override` is False
+- `OperationError`: If key already exists and `allow_overwrite` is False
 
 **Example:**
 ```python
@@ -277,7 +314,7 @@ from dataknobs_common import Registry
 
 registry = Registry[str]("messages")
 registry.register("greeting", "Hello, world!")
-registry.register("farewell", "Goodbye!", metadata={"lang": "en"})
+registry.register("farewell", "Goodbye!", allow_overwrite=True)
 ```
 
 ##### `get(key: str) -> T`
@@ -291,14 +328,14 @@ Get an item by key.
 - `T`: The registered item
 
 **Raises:**
-- `KeyError`: If key not found
+- `NotFoundError`: If key not found. Its `context` carries `key`, `registry` and `available_keys`
 
 **Example:**
 ```python
 message = registry.get("greeting")  # "Hello, world!"
 ```
 
-##### `get_or_none(key: str) -> T | None`
+##### `get_optional(key: str) -> T | None`
 
 Get an item by key, returning None if not found.
 
@@ -310,8 +347,8 @@ Get an item by key, returning None if not found.
 
 **Example:**
 ```python
-message = registry.get_or_none("greeting")  # "Hello, world!"
-missing = registry.get_or_none("unknown")   # None
+message = registry.get_optional("greeting")  # "Hello, world!"
+missing = registry.get_optional("unknown")   # None
 ```
 
 ##### `has(key: str) -> bool`
@@ -341,7 +378,7 @@ Remove and return an item.
 - `T`: The removed item
 
 **Raises:**
-- `KeyError`: If key not found
+- `NotFoundError`: If key not found
 
 **Example:**
 ```python
@@ -406,19 +443,25 @@ Remove all items.
 registry.clear()
 ```
 
-##### `get_metadata(key: str) -> dict[str, Any] | None`
+##### `get_metrics(key: str | None = None) -> dict[str, Any]`
 
-Get metadata for a key.
+Get registration metrics. Empty unless the registry was built with
+`enable_metrics=True`; this is also where the `metadata` passed to
+`register()` is read back from.
 
 **Parameters:**
-- `key` (str): Item key
+- `key` (str | None): A specific key, or `None` for every key
 
 **Returns:**
-- `dict[str, Any] | None`: Metadata or None
+- `dict[str, Any]`: For a single key, `{"registered_at": float, "metadata": dict}`. For `None`, a dict of those keyed by registration key. `{}` when metrics are off, or when the key is unknown
 
 **Example:**
 ```python
-meta = registry.get_metadata("farewell")  # {"lang": "en"}
+registry = Registry[str]("messages", enable_metrics=True)
+registry.register("farewell", "Goodbye!", metadata={"lang": "en"})
+
+registry.get_metrics("farewell")
+# {"registered_at": 1699456789.0, "metadata": {"lang": "en"}}
 ```
 
 **Magic Methods:**
@@ -426,7 +469,7 @@ meta = registry.get_metadata("farewell")  # {"lang": "en"}
 ```python
 len(registry)           # Same as count()
 key in registry         # Same as has(key)
-for key in registry     # Iterate over keys
+for item in registry    # Iterate over items — the same sequence as list_items()
 ```
 
 ### Cached Registry
@@ -445,29 +488,35 @@ class CachedRegistry(Registry[T]):
 CachedRegistry(
     name: str,
     cache_ttl: int = 300,
-    enable_metrics: bool = True,
-    allow_override: bool = False
+    max_cache_size: int = 1000
 )
 ```
 
 **Parameters:**
 - `name` (str): Registry name
 - `cache_ttl` (int): Cache TTL in seconds (default: 300)
-- `enable_metrics` (bool): Enable metrics tracking (default: True)
-- `allow_override` (bool): Allow overriding existing keys (default: False)
+- `max_cache_size` (int): Entries to hold before evicting the oldest tenth (default: 1000)
+
+Metrics are always on for a cached registry — it passes `enable_metrics=True`
+to the base constructor and takes no argument for it.
 
 **Additional Methods:**
 
-##### `get_cached(key: str, factory: Callable[[], T]) -> T`
+##### `get_cached(key: str, factory: Callable[[], T], force_refresh: bool = False) -> T`
 
 Get cached item or create with factory.
 
 **Parameters:**
 - `key` (str): Cache key
 - `factory` (Callable[[], T]): Factory function to create item if not cached
+- `force_refresh` (bool): Call the factory and re-cache even on a live entry
 
 **Returns:**
 - `T`: Cached or newly created item
+
+The cache is separate from the registry's own items: `get_cached` never
+consults `register()`ed entries, and `clear()` does not empty it. Use
+`invalidate_cache()` for that.
 
 **Example:**
 ```python
@@ -501,7 +550,7 @@ cache.invalidate_cache()           # Invalidate all items
 Get cache statistics.
 
 **Returns:**
-- `dict[str, Any]`: Statistics including hits, misses, hit_rate
+- `dict[str, Any]`: `size`, `max_size`, `ttl_seconds`, `hits`, `misses`, `total_requests`, `hit_rate` (a float in `0.0..1.0`, and `0.0` before the first request)
 
 **Example:**
 ```python
@@ -525,19 +574,19 @@ class AsyncRegistry(Generic[T]):
 ```python
 AsyncRegistry(
     name: str,
-    enable_metrics: bool = False,
-    allow_override: bool = False
+    enable_metrics: bool = False
 )
 ```
 
 **Methods:**
 
-All methods are async versions of the base Registry methods:
+The same surface as `Registry`, with every method a coroutine and the same
+`NotFoundError` / `OperationError` behaviour:
 
 ```python
-await registry.register(key, item, metadata=None)
+await registry.register(key, item, metadata=None, allow_overwrite=False)
 item = await registry.get(key)
-item = await registry.get_or_none(key)
+item = await registry.get_optional(key)
 exists = await registry.has(key)
 item = await registry.unregister(key)
 items = await registry.list_items()
@@ -545,8 +594,16 @@ keys = await registry.list_keys()
 pairs = await registry.items()
 count = await registry.count()
 await registry.clear()
-meta = await registry.get_metadata(key)
+metrics = await registry.get_metrics(key)
 ```
+
+It is not a subclass of `Registry` — it reimplements the surface over an
+`asyncio.Lock` — so `isinstance(reg, Registry)` is `False` for one.
+
+Four members are deliberately synchronous, reading the dict without taking the
+lock: the `name` property, and `len()` / `in` / iteration, which give the count,
+key membership, and a snapshot of the items. They are the same shapes the sync
+registry offers, usable without an `await`.
 
 **Example:**
 ```python
@@ -585,22 +642,28 @@ PluginRegistry(
     config_key_default: str | None = None,
     strip_config_key: bool = False,
     on_first_access: Callable[[PluginRegistry[T]], None] | None = None,
+    not_found_kind: str | None = None,
+    not_found_exception: type[Exception] = NotFoundError,
+    default_warning: str | None = None,
 )
 ```
 
 **Parameters:**
 - `name` (str): Registry name for identification
 - `default_factory` (type[T] | Callable | None): Default factory when key not found
-- `validate_type` (type[T] | None): Base type to validate registrations against
+- `validate_type` (type[T] | None): Base type to validate registrations against. A class, an ABC, or a `@runtime_checkable` Protocol — including one carrying properties. See [What `validate_type` checks](plugin-registry.md#what-validate_type-checks)
 - `canonicalize_keys` (bool): Lowercase all keys for case-insensitive lookup
 - `config_key` (str | None): Field name to extract lookup key from config dicts in `create()`
 - `config_key_default` (str | None): Fallback value when `config_key` field is absent
 - `strip_config_key` (bool): Remove the config key field from config before passing to factory
 - `on_first_access` (Callable | None): Callback invoked once before first public method access. Supports re-entrant calls (e.g., callback can call `register()`)
+- `not_found_kind` (str | None): Kind label for the not-found message from `create()` / `create_async()`. Setting it to e.g. `"event bus backend"` produces `"Unknown event bus backend: <key>. Available backends: <sorted-keys>"`; leaving it `None` keeps `"Plugin '<key>' not registered"`
+- `not_found_exception` (type[Exception]): Class raised on not-found by `create()` / `create_async()`. `NotFoundError` by default; a shim preserving a historical `ValueError` contract passes that instead. A class not rooted in `DataknobsError` is constructed with the message only, since a stdlib exception would reject the `context=` keyword
+- `default_warning` (str | None): What this registry's fallback costs, logged at WARNING when the routing key was absent from config and `config_key_default` supplied it. Interpolated with `%(config_key)s`, `%(key)s` and `%(registry)s`; a literal percent must be written `%%`. Leave it `None` when the default is simply the recommended answer — the fallback is then recorded at DEBUG
 
 **Methods:**
 
-##### `register(key, factory, override=False, metadata=None) -> None`
+##### `register(key, factory, override=False, metadata=None, *, allow_overwrite=None) -> None`
 
 Register a plugin class or factory function.
 
@@ -609,10 +672,11 @@ Register a plugin class or factory function.
 - `factory` (type[T] | Callable[..., T]): Plugin class or factory
 - `override` (bool): Allow replacing existing registration
 - `metadata` (dict[str, Any] | None): Optional metadata for the registration
+- `allow_overwrite` (bool | None): Keyword alias for `override`, matching `Registry.register`. When not `None` it wins; use whichever name fits the surrounding code
 
 **Raises:**
 - `OperationError`: If key already registered and `override=False`
-- `TypeError`: If factory doesn't match `validate_type`
+- `TypeError`: If `factory` is not a class or callable, if it is a class that cannot produce `validate_type`, or if `validate_type` cannot be checked against at all. A callable factory's result is checked instead by `get()` / `create()`, which raise `OperationError`
 
 ##### `get(key, config=None, use_cache=True, use_default=True) -> T`
 
@@ -641,8 +705,8 @@ Create a fresh instance without caching. Uses `(config, **kwargs)` factory signa
 
 **Raises:**
 - `ValueError`: If `key` is None and cannot be resolved
-- `NotFoundError`: If resolved key is not registered
-- `OperationError`: If factory raises an exception
+- `NotFoundError`: If resolved key is not registered — or whatever class `not_found_exception` names
+- `OperationError`: If the factory raises, or if it returns something that is not a `validate_type`. The factory's own message is not copied into the wrapper; it travels on `__cause__`
 
 ##### `get_factory(key) -> type[T] | Callable[..., T] | None`
 
@@ -656,9 +720,14 @@ Check whether a key is registered.
 
 List all registered plugin keys (insertion order).
 
-##### `get_metadata(key) -> dict[str, Any]`
+##### `get_metadata(key, *, follow_alias=False) -> dict[str, Any]`
 
 Get metadata for a registration (returns empty dict if no metadata stored).
+The returned dict is a deep copy, so editing a nested value in it does not
+change what the next caller reads. With `follow_alias=True`, a key carrying no
+metadata of its own answers with the metadata of a key sharing its factory —
+which is what makes an alias like `pg` answer for `postgres` rather than
+returning `{}`.
 
 **Example:**
 ```python
@@ -691,10 +760,15 @@ handler_cls = handlers.get_factory("custom")
 **Additional methods** (see auto-generated API reference for full details):
 
 - `get_async(key, config, use_cache, use_default)` — Async version of `get()`, awaits coroutine factories
-- `unregister(key)` — Remove a registration (raises `NotFoundError` if not found)
+- `unregister(key)` — Forget a key, whether registered or declared unavailable (raises `NotFoundError` if the registry has never heard of it)
 - `clear_cache(key=None)` — Clear cached instances (specific key or all)
 - `set_default_factory(factory)` — Set/change the default factory
-- `bulk_register(factories, override)` — Register multiple plugins at once
+- `bulk_register(factories, override)` — Register multiple plugins at once, by delegating to `register()`
+- `create_async(key, config, **kwargs)` — Async version of `create()`, awaiting coroutine factories before the `validate_type` check
+- `declare_unavailable(key, *, reason, ...)` — Mark a key as known-but-unbuildable, so a lookup explains why instead of reporting it missing
+- `has(key)` / `is_known(key)` — Registered, versus registered *or* declared unavailable
+- `list_canonical_keys()` / `list_known_keys()` — Keys without aliases, and keys including the unavailable ones
+- `load_declared_type(key)` — Load the type a declaration named, without instantiating it
 - `copy()` — Get a copy of the factories dict
 - `name` (property) — Registry name
 - `cached_instances` (property) — Direct access to instance cache dict
@@ -718,7 +792,7 @@ class Serializable(Protocol):
     def to_dict(self) -> dict: ...
 
     @classmethod
-    def from_dict(cls, data: dict) -> Self: ...
+    def from_dict(cls: type[T], data: dict) -> T: ...
 ```
 
 **Example:**
@@ -954,8 +1028,8 @@ merged = enforce_immutable_keys(
     target=dict(caller),                  # mutated and returned
     caller=caller,                        # source for warning attribution
     source=system,                        # authoritative for immutable keys
-    immutable_keys={"domain_id", "chunk_index"},
-    component="MyComponent",              # used in WARNING log
+    keys={"domain_id", "chunk_index"},    # the keys the caller cannot override
+    context="MyComponent",                # prefixes the WARNING log
 )
 
 # merged == {
@@ -975,8 +1049,9 @@ def enforce_immutable_keys(
     target: dict[str, Any],
     caller: dict[str, Any] | None,
     source: dict[str, Any],
-    immutable_keys: Iterable[str],
-    component: str = "metadata",
+    keys: Iterable[str],
+    logger: logging.Logger | None = None,
+    context: str | None = None,
 ) -> dict[str, Any]:
     ...
 ```
@@ -984,10 +1059,11 @@ def enforce_immutable_keys(
 **Parameters:**
 
 - `target` — The dict to mutate and return. Typically a copy of `caller` (or a fresh layered merge).
-- `caller` — Caller-supplied metadata, used only for warning emission (compares each immutable-key value against `source`). Pass `None` to enforce immutability silently (e.g. on subsequent iterations of a loop after the warning has already been emitted once).
-- `source` — Authoritative source for immutable-key values. For each `key in immutable_keys`, `target[key]` is set to `source[key]` (when the key is present in `source`).
-- `immutable_keys` — Iterable of key names that the caller cannot override.
-- `component` — Component name included in the WARNING log (e.g. `"VectorMemory"`, `"RAGKnowledgeBase"`).
+- `caller` — Caller-supplied metadata, used only for warning emission (compares each immutable key's value against `source`). Pass `None` to enforce immutability silently (e.g. on subsequent iterations of a loop after the warning has already been emitted once).
+- `source` — Authoritative source for immutable-key values. For each `key in keys`, `target[key]` is set to `source[key]` (when the key is present in `source`).
+- `keys` — Iterable of key names that the caller cannot override.
+- `logger` — Logger to warn through. Defaults to the `dataknobs_common.metadata` logger, so a caller wanting the warning attributed to its own module passes its own.
+- `context` — Prefix for the WARNING message, naming the component (e.g. `"VectorMemory"`, `"RAGKnowledgeBase"`). Omitted from the message when `None`.
 
 **Behavior notes:**
 
@@ -1527,7 +1603,7 @@ The version string for the dataknobs-common package.
 ```python
 from dataknobs_common import __version__
 
-print(__version__)  # "1.3.0"
+print(__version__)  # e.g. "3.1.0"
 ```
 
 ## Import Patterns
@@ -1649,9 +1725,9 @@ try:
     # Any dataknobs operation
     result = some_dataknobs_operation()
 except DataknobsError as e:
-    logger.error(f"Dataknobs error: {e.message}")
+    logger.error("Dataknobs error: %s", e)
     if e.context:
-        logger.error(f"Context: {e.context}")
+        logger.error("Context: %s", e.context)
 ```
 
 ### Catching Specific Errors
@@ -1675,18 +1751,18 @@ except ResourceError as e:
 ### Registry Error Handling
 
 ```python
-from dataknobs_common import Registry
+from dataknobs_common import NotFoundError, Registry
 
 registry = Registry[Tool]("tools")
 
 try:
     tool = registry.get("calculator")
-except KeyError:
+except NotFoundError:
     # Handle missing key
     tool = default_tool
 
-# Or use get_or_none
-tool = registry.get_or_none("calculator")
+# Or use get_optional
+tool = registry.get_optional("calculator")
 if tool is None:
     tool = default_tool
 ```
@@ -1699,8 +1775,8 @@ from dataknobs_common import deserialize, SerializationError
 try:
     user = deserialize(User, data)
 except SerializationError as e:
-    logger.error(f"Failed to deserialize: {e.message}")
-    logger.error(f"Error context: {e.context}")
+    logger.error("Failed to deserialize: %s", e)
+    logger.error("Error context: %s", e.context)
     # Handle error appropriately
 ```
 
@@ -1714,11 +1790,17 @@ from dataknobs_common import Registry
 class ValidatedRegistry(Registry[T]):
     """Registry with validation on registration."""
 
-    def register(self, key: str, item: T, metadata: dict | None = None) -> None:
+    def register(
+        self,
+        key: str,
+        item: T,
+        metadata: dict | None = None,
+        allow_overwrite: bool = False,
+    ) -> None:
         # Validate before registering
         if not self._validate(item):
             raise ValueError(f"Item validation failed: {key}")
-        super().register(key, item, metadata)
+        super().register(key, item, metadata, allow_overwrite)
 
     def _validate(self, item: T) -> bool:
         # Custom validation logic
@@ -1835,32 +1917,24 @@ class MyRegistry:
 
 ## Dependencies
 
-The Common package has minimal dependencies:
-
 - **Python**: >= 3.12
-- **Standard library only**: No external dependencies
+- **Base install**: no third-party dependencies — `[project.dependencies]` is empty, so `pip install dataknobs-common` pulls in nothing else
+
+Backends that need a driver ship it as an extra, lazy-imported at its use site
+so importing the module never requires it:
+
+| Extra | Pulls in | Used by |
+|---|---|---|
+| `dotenv` | `python-dotenv` | the optional `.env` layer in `normalize_postgres_connection_config` |
+| `postgres` | `asyncpg` | the PostgreSQL LISTEN/NOTIFY event bus |
+| `redis` | `redis` | the Redis pub/sub event bus and the Redis-bucket rate limiter |
+| `aws` | `aioboto3` | the shared async AWS session factory |
+| `sqs` | `dataknobs-common[aws]` | the SQS-backed event bus |
 
 ## Changelog
 
-### Version 1.4.0
-- Enhanced `PluginRegistry` with configuration-driven factory mode:
-  - `canonicalize_keys` for case-insensitive key lookup
-  - `config_key` / `config_key_default` / `strip_config_key` for config-driven key resolution
-  - `on_first_access` callback for lazy initialization with re-entrancy support
-  - `create()` method for fresh-instance factory invocation (uses `from_config` classmethods)
-  - `metadata` parameter on `register()` with `get_metadata()` accessor
+See [`packages/common/CHANGELOG.md`](https://github.com/kbs-labs/dataknobs/blob/main/packages/common/CHANGELOG.md).
 
-### Version 1.3.0
-- Added `dataknobs_common.retry` module (BackoffStrategy, RetryConfig, RetryExecutor)
-- Added `dataknobs_common.transitions` module (InvalidTransitionError, TransitionValidator)
-- Retry primitives extracted from `dataknobs_fsm.patterns.error_recovery` (zero FSM dependency)
-- FSM module re-exports from common for backward compatibility
-
-### Version 1.0.1
-- Added Registry, CachedRegistry, AsyncRegistry implementations
-- Added comprehensive Exception hierarchy
-- Added Serialization protocol and utilities
-- Initial production release
-
-### Version 1.0.0
-- Initial release with basic version management
+This page no longer carries its own copy: a second changelog is a second thing
+to remember to update, and it stopped being updated at 1.4.0 while the package
+went on to 3.x.
