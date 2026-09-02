@@ -617,3 +617,83 @@ class TestCreateCachingProvider:
         inner = _create_echo_provider()
         with pytest.raises(ValueError, match="Unknown cache backend"):
             await create_caching_provider(inner, cache_backend="redis")
+
+
+# ---------------------------------------------------------------------------
+# Width is part of a vector's identity
+# ---------------------------------------------------------------------------
+
+
+class TestCachedWidth:
+    """A cached vector is only reusable for the width it was made at.
+
+    The module was built on "same (model, text) always produces the same
+    vector", which stopped being true once a stated width was honoured:
+    ``(model, text)`` no longer determines the vector, ``(model, text,
+    width)`` does. A hit returns without consulting the inner provider, so
+    the width check on the way out never runs -- which put the one silent
+    wrong-width path left in the package inside the wrapper meant to be
+    transparent.
+    """
+
+    @pytest.mark.asyncio
+    async def test_a_narrower_request_is_not_served_from_a_wider_hit(self):
+        provider = CachingEmbedProvider(_create_echo_provider(), MemoryEmbeddingCache())
+        await provider.initialize()
+
+        wide = await provider.embed("hello", dimensions=512)
+        assert len(wide) == 512
+
+        narrow = await provider.embed("hello", dimensions=256)
+        assert len(narrow) == 256, "the 512-wide vector was served for a 256-wide request"
+
+    @pytest.mark.asyncio
+    async def test_a_batch_is_not_served_at_two_different_widths(self):
+        """The mixed batch is worse than the single: the list is ragged.
+
+        One text hits at the old width while its neighbour misses and is
+        embedded at the new one, so a caller who asked for one width gets a
+        list whose members disagree with each other.
+        """
+        provider = CachingEmbedProvider(_create_echo_provider(), MemoryEmbeddingCache())
+        await provider.initialize()
+
+        await provider.embed("a", dimensions=512)
+        both = await provider.embed(["a", "b"], dimensions=256)
+
+        assert {len(v) for v in both} == {256}, (
+            f"ragged batch: widths {sorted({len(v) for v in both})}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_an_unstated_width_does_not_collide_with_a_stated_one(self):
+        """Asking for nothing is its own identity, not a wildcard.
+
+        A caller who states no width wants the model's native answer. Serving
+        that from a row written under an explicit request is the same defect
+        in the other direction.
+        """
+        provider = CachingEmbedProvider(_create_echo_provider(), MemoryEmbeddingCache())
+        await provider.initialize()
+
+        await provider.embed("hello", dimensions=256)
+        native = await provider.embed("hello")
+
+        assert len(native) == 768, "the 256-wide row was served for a request that stated no width"
+
+    @pytest.mark.asyncio
+    async def test_one_width_still_hits_the_cache(self):
+        """The fix must not turn every call into a miss.
+
+        Two identical requests are still one inner call -- the point of the
+        wrapper. Only a *differing* width is a different row.
+        """
+        inner = _create_echo_provider()
+        provider = CachingEmbedProvider(inner, MemoryEmbeddingCache())
+        await provider.initialize()
+
+        await provider.embed("hello", dimensions=256)
+        before = inner.embed_call_count
+        await provider.embed("hello", dimensions=256)
+
+        assert inner.embed_call_count == before, "the second call was not a hit"

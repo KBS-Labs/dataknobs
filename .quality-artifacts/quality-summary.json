@@ -1,20 +1,12 @@
 {
-  "timestamp": "2026-09-02T02:35:59Z",
+  "timestamp": "2026-09-02T03:41:18Z",
   "overall_status": "PASS",
   "run_mode": "pr",
   "environment": "host",
-  "packages": "bots common config data fsm legacy llm structures utils xization",
+  "packages": "bots llm",
   "tested_packages": [
     "bots",
-    "common",
-    "config",
-    "data",
-    "fsm",
-    "legacy",
-    "llm",
-    "structures",
-    "utils",
-    "xization"
+    "llm"
   ],
   "coverage_percent": null,
   "package_hashes": {
@@ -24,7 +16,7 @@
     "data": "cd4f771280d8e9c60c3273bb2765f8f830c95fc866a162d0e4856cdc229cfd5c",
     "fsm": "cf80cbb63dfeb9efa2e96ab0069e51db8020c0b9ab5d73b34ab9fb438f4b69c6",
     "legacy": "f626b387e3b4dc7f7de016a1e6f67f1a6df33b685b55c1226762d4abb338d217",
-    "llm": "47e745a85e46553ea3141954d1b8049f7a078f9d932833e1060da139d057baef",
+    "llm": "2141daa7112391926ede7a141ba3b420f228476e67db4d5574d0cb19f11e697b",
     "structures": "73fcd3ad3753d60eab53a1c4ecc7b6665862e9325920eb5daebdca42c1673af3",
     "utils": "bc4890e2fe6ea8859a63e9a105fdb125cc07d6df881b978560d4e8edc9c104a7",
     "xization": "cfcd8ffc9a197bc7765e37dfa5ca33397d7c518dbfa2e8e49f9dc7b3c2ea84a2",
@@ -32,10 +24,10 @@
   },
   "workspace_hashes": {
     "toolchain": "0fb983f88318648c256cf4b7829874713d5e884ce8b5a74a27812498b759a7b9",
-    "workspace_tests": "1595747aeba2fae9284642e1f49c6d2e617e6d9b248de00a85f5dd68ea05e06d",
-    "docs": "c1ef798fb4a9074c969f6349ee1309bf82e8030d4e1227272208fcdfc2797203"
+    "workspace_tests": "a38237bc17e3a5c48d54344d0016bc1f47fc557231d2eb4596f74692377fb3f7",
+    "docs": "fb73f2dbe88e1b0030072aedfe5e51a8283e2cd7d883b716b1a0a3dc04aa1717"
   },
-  "total_seconds": 345,
+  "total_seconds": 234,
   "checks": {
     "workflow_lint": {
       "status": "pass",
@@ -60,7 +52,7 @@
       "exit_code": 0,
       "skipped": false,
       "tool": "validate.sh",
-      "duration_seconds": 83
+      "duration_seconds": 40
     },
     "documentation": {
       "status": "pass",
@@ -87,14 +79,14 @@
       "status": "pass",
       "exit_code": 0,
       "skipped": false,
-      "duration_seconds": 124,
-      "workspace_guards_seconds": 63
+      "duration_seconds": 83,
+      "workspace_guards_seconds": 61
     },
     "integration_tests": {
       "status": "pass",
       "exit_code": 0,
       "skipped": false,
-      "duration_seconds": 104
+      "duration_seconds": 78
     }
   }
 }

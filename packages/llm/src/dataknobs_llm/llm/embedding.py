@@ -85,10 +85,12 @@ class LLMProviderEmbedder:
         is a network round trip, and this is a property callers read freely.
 
         A declared value is checked against the first batch rather than
-        trusted, because the two can disagree and nothing else in the stack
-        would notice. ``EchoProvider``, for one, sizes its vectors from
-        ``config.options["embedding_dim"]`` and ignores ``config.dimensions``
-        entirely, so a config asking for 16 yields 768 with nothing raised.
+        trusted. The constructor argument is the case that needs it: it names
+        the width *this embedder* promises its callers, and the provider never
+        sees it, so nothing else in the stack could reconcile the two. A width
+        declared in ``config.dimensions`` is reconciled one layer down --- the
+        provider forwards it where its model accepts one and refuses it where
+        the model's width is fixed --- and reaches this check already agreed.
         See :meth:`embed`.
 
         Raises:
@@ -132,12 +134,15 @@ class LLMProviderEmbedder:
         error on one.
 
         The width of the first batch settles :attr:`dimensions` when nothing
-        declared it, and is checked against it when something did. That check
-        is the seam earning its keep: a provider whose vectors are not the
-        width its config advertises is a real and currently-shipping
-        condition, and until something declared a width beside ``embed`` there
-        was nowhere for it to be caught. Downstream it is caught by a vector
-        store rejecting a write, which names the store.
+        declared it, and is checked against it when something did. The check
+        earns its keep on the width declared *here*, which no provider can
+        see. It once earned it on ``config.dimensions`` too --- five of six
+        providers ignored that field, so a config asking for 16 got whatever
+        the model produced --- and the fix went where the knowledge is: a
+        provider now honours a stated width or refuses it, naming the model.
+        Either way the failure names the misconfiguration, rather than
+        surfacing downstream as a vector store rejecting a write, which names
+        the store.
 
         Raises:
             TypeError: The provider answered a list input with a single flat

@@ -121,6 +121,11 @@ def _openai_heuristic(model: str) -> ModelProfile:
     # Embedding models are a disjoint family (no chat/tool capabilities).
     if "embedding" in model_lower or model_lower.startswith("text-embedding-"):
         capabilities.add(ModelCapability.EMBEDDINGS)
+        # The 3-series takes a `dimensions` parameter; ada-002 rejects it.
+        # Named here as well as in the bundled resource so a 3-series model
+        # the table does not yet list still resolves the right answer.
+        if model_lower.startswith("text-embedding-3-"):
+            capabilities.add(ModelCapability.EMBEDDING_DIMENSIONS)
         return ModelProfile(capabilities=frozenset(capabilities))
     capabilities.add(ModelCapability.CODE)
     if any(m in model_lower for m in _TOOL_CAPABLE_FAMILIES):
@@ -407,7 +412,13 @@ class OpenAIProvider(ProfileDetectionMixin, AsyncLLMProvider):
         super().__init__(llm_config, prompt_builder=prompt_builder)
         self.adapter = OpenAIAdapter()
 
-    async def initialize(self) -> None:
+    # Same finding as ``AsyncLLMProvider.initialize`` one level up, and the
+    # same answer: ``LLMProvider`` declares the pair sync, so the whole async
+    # subtree contradicts its own base. Resolving it moves the pair down into
+    # ``SyncLLMProvider`` --- a public-ABC contract change needing consumer
+    # verification, argued and deferred where the base declares it. Suppressed
+    # here for that decision, not because this override is wrong.
+    async def initialize(self) -> None:  # type: ignore[override]
         """Initialize OpenAI client."""
         try:
             import openai
@@ -687,9 +698,28 @@ class OpenAIProvider(ProfileDetectionMixin, AsyncLLMProvider):
                 yield chunk_resp
 
     async def embed(
-        self, texts: Union[str, List[str]], **kwargs
+        self, texts: Union[str, List[str]], **kwargs: Any
     ) -> Union[List[float], List[List[float]]]:
-        """Generate embeddings."""
+        """Generate embeddings, at the requested width where the model allows it.
+
+        The 3-series (``text-embedding-3-small`` / ``-3-large``) accepts a
+        ``dimensions`` parameter and returns vectors of that length;
+        ``text-embedding-ada-002`` does not and rejects the parameter, so the
+        request is forwarded only for a model that advertises
+        :attr:`~dataknobs_llm.llm.base.ModelCapability.EMBEDDING_DIMENSIONS`.
+        Where it cannot be forwarded the answer is checked instead — one rule
+        for both, so no stated width is silently dropped.
+
+        Forwarding this is not a formality on OpenAI. A consumer asking
+        ``text-embedding-3-large`` for 512 and receiving 3072 gets valid
+        vectors, six times wider than requested, at six times the storage —
+        and pays for the difference.
+
+        Args:
+            texts: A single text or a batch.
+            **kwargs: ``dimensions`` (int) overrides ``LLMConfig.dimensions``
+                for this call. Other keys are ignored.
+        """
         if not self._is_initialized:
             await self.initialize()
 
@@ -699,17 +729,21 @@ class OpenAIProvider(ProfileDetectionMixin, AsyncLLMProvider):
         else:
             single = False
 
-        response = await self._call_api(
-            lambda: self._client.embeddings.create(
-                input=texts, model=self.config.model or "text-embedding-ada-002"
-            )
-        )
+        model = self.config.model or "text-embedding-ada-002"
+        requested = self._requested_embedding_dimensions(kwargs)
+        params: Dict[str, Any] = {"input": texts, "model": model}
+        forwardable = self._forwardable_embedding_dimensions(kwargs)
+        if forwardable is not None:
+            params["dimensions"] = forwardable
+
+        response = await self._call_api(lambda: self._client.embeddings.create(**params))
 
         embeddings = [e.embedding for e in response.data]
+        self._check_embedding_width(embeddings, requested)
         return embeddings[0] if single else embeddings
 
     async def function_call(
-        self, messages: List[LLMMessage], functions: List[Dict[str, Any]], **kwargs
+        self, messages: List[LLMMessage], functions: List[Dict[str, Any]], **kwargs: Any
     ) -> LLMResponse:
         """Execute function calling."""
         warnings.warn(

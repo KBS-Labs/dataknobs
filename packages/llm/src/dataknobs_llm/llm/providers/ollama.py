@@ -866,7 +866,13 @@ class OllamaProvider(ProfileDetectionMixin, AsyncLLMProvider):
         """
         return self.adapter.adapt_messages(messages)
 
-    async def initialize(self) -> None:
+    # Same finding as ``AsyncLLMProvider.initialize`` one level up, and the
+    # same answer: ``LLMProvider`` declares the pair sync, so the whole async
+    # subtree contradicts its own base. Resolving it moves the pair down into
+    # ``SyncLLMProvider`` --- a public-ABC contract change needing consumer
+    # verification, argued and deferred where the base declares it. Suppressed
+    # here for that decision, not because this override is wrong.
+    async def initialize(self) -> None:  # type: ignore[override]
         """Initialize Ollama client."""
         try:
             import aiohttp
@@ -1278,9 +1284,26 @@ class OllamaProvider(ProfileDetectionMixin, AsyncLLMProvider):
             self._raise_translated(exc)
 
     async def embed(
-        self, texts: Union[str, List[str]], **kwargs
+        self, texts: Union[str, List[str]], **kwargs: Any
     ) -> Union[List[float], List[List[float]]]:
-        """Generate embeddings."""
+        """Generate embeddings, checking any width the caller asked for.
+
+        Ollama's ``/api/embeddings`` takes a model and a prompt: the width is
+        the model's and there is no parameter to change it. So a stated
+        ``dimensions`` cannot be forwarded, and the choice is between checking
+        it and ignoring it. This checks — a config asking for 512 from a
+        768-wide model used to receive 768 and say nothing, which is how a
+        width promised in config and a width written to a store come apart.
+
+        Declaring the width a model *does* produce stays valid and silent;
+        the rule is that a stated width is never ignored, not that one may
+        not be stated.
+
+        Args:
+            texts: A single text or a batch.
+            **kwargs: ``dimensions`` (int) overrides ``LLMConfig.dimensions``
+                for this call. Checked, not forwarded — see above.
+        """
         if not self._is_initialized:
             await self.initialize()
 
@@ -1290,6 +1313,7 @@ class OllamaProvider(ProfileDetectionMixin, AsyncLLMProvider):
         else:
             single = False
 
+        requested = self._requested_embedding_dimensions(kwargs)
         embeddings = []
         for text in texts:
             payload = {"model": self.config.model, "prompt": text}
@@ -1304,10 +1328,11 @@ class OllamaProvider(ProfileDetectionMixin, AsyncLLMProvider):
             except Exception as exc:
                 self._raise_translated(exc)
 
+        self._check_embedding_width(embeddings, requested)
         return embeddings[0] if single else embeddings
 
     async def function_call(
-        self, messages: List[LLMMessage], functions: List[Dict[str, Any]], **kwargs
+        self, messages: List[LLMMessage], functions: List[Dict[str, Any]], **kwargs: Any
     ) -> LLMResponse:
         """Execute function calling with native Ollama tools support.
 

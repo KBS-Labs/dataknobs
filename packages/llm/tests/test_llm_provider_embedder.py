@@ -102,22 +102,46 @@ def test_explicit_dimensions_are_answered_without_a_call() -> None:
     assert LLMProviderEmbedder(echo(), dimensions=32).dimensions == 32
 
 
-async def test_a_provider_whose_width_contradicts_its_config_raises() -> None:
-    """A currently-shipping condition, and the reason the check is not a formality.
+async def test_a_provider_whose_width_contradicts_this_embedder_raises() -> None:
+    """The check is not a formality, and it is the last line rather than the first.
 
-    ``EchoProvider`` sizes its vectors from ``config.options["embedding_dim"]``
-    and ignores ``config.dimensions`` --- the field ``LLMConfig`` documents as
-    its embedding dimensionality and ``create_embedding_provider`` documents as
-    forwarded to the provider. So this config asks for 16 and gets 768.
+    A width declared *here* is one the provider never sees:
+    ``LLMProviderEmbedder(..., dimensions=N)`` names the length this embedder
+    promises its callers, and nothing downstream of the constructor can
+    reconcile it with what the provider actually returns. So the seam checks,
+    and raising beats writing vectors of one width under a key promising
+    another.
 
-    Before the seam there was nowhere to catch that: nothing declared a width
-    beside ``embed``, so the mismatch surfaced downstream as a vector store
-    rejecting a write, which names the store rather than the misconfiguration.
+    This cell used to reach the same check through ``config.dimensions`` and
+    ``EchoProvider``, which sized its vectors from
+    ``options["embedding_dim"]`` and ignored the documented field --- a config
+    asking for 16 got 768 with nothing raised. That is fixed: every provider
+    now honours a stated width or refuses it, so a *config* contradiction is
+    caught one layer down, by the provider that knows whether its model can
+    deliver the width. What is left here is the contradiction no provider can
+    see, which is why the guard stays.
     """
-    embedder = LLMProviderEmbedder(echo(dimensions=16))
+    embedder = LLMProviderEmbedder(echo(), dimensions=16)
 
     with pytest.raises(ValueError, match="declares 16"):
         await embedder.embed(["anything"])
+
+
+async def test_a_config_contradiction_is_caught_by_the_provider_first() -> None:
+    """Where the check moved to, and why that is the better place.
+
+    ``EchoProvider`` can produce any width, so a config asking for 16 now
+    gets 16 and the seam has nothing to object to. A provider that *cannot*
+    deliver a stated width raises from ``embed`` itself, naming the model ---
+    a message that points at the misconfiguration rather than at whatever
+    downstream component noticed the wrong-sized vectors.
+    """
+    embedder = LLMProviderEmbedder(echo(dimensions=16))
+
+    vectors = await embedder.embed(["anything"])
+
+    assert len(vectors[0]) == 16
+    assert embedder.dimensions == 16
 
 
 async def test_a_matching_declaration_passes_through() -> None:

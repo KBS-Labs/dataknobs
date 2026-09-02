@@ -181,7 +181,13 @@ class HuggingFaceProvider(ProfileDetectionMixin, AsyncLLMProvider):
         super().__init__(llm_config, prompt_builder=prompt_builder)
         self.base_url = llm_config.api_base or "https://api-inference.huggingface.co/models"
 
-    async def initialize(self) -> None:
+    # Same finding as ``AsyncLLMProvider.initialize`` one level up, and the
+    # same answer: ``LLMProvider`` declares the pair sync, so the whole async
+    # subtree contradicts its own base. Resolving it moves the pair down into
+    # ``SyncLLMProvider`` --- a public-ABC contract change needing consumer
+    # verification, argued and deferred where the base declares it. Suppressed
+    # here for that decision, not because this override is wrong.
+    async def initialize(self) -> None:  # type: ignore[override]
         """Initialize HuggingFace client."""
         try:
             import aiohttp
@@ -401,9 +407,21 @@ class HuggingFaceProvider(ProfileDetectionMixin, AsyncLLMProvider):
         )
 
     async def embed(
-        self, texts: Union[str, List[str]], **kwargs
+        self, texts: Union[str, List[str]], **kwargs: Any
     ) -> Union[List[float], List[List[float]]]:
-        """Generate embeddings."""
+        """Generate embeddings, checking any width the caller asked for.
+
+        The feature-extraction endpoint takes inputs and returns whatever
+        the model produces; there is no width parameter to forward a stated
+        ``dimensions`` into. It is checked instead, on the same rule every
+        provider follows — see
+        :meth:`~dataknobs_llm.llm.base.LLMProvider._check_embedding_width`.
+
+        Args:
+            texts: A single text or a batch.
+            **kwargs: ``dimensions`` (int) overrides ``LLMConfig.dimensions``
+                for this call. Checked, not forwarded.
+        """
         if not self._is_initialized:
             await self.initialize()
 
@@ -413,9 +431,11 @@ class HuggingFaceProvider(ProfileDetectionMixin, AsyncLLMProvider):
         else:
             single = False
 
+        requested = self._requested_embedding_dimensions(kwargs)
         url = f"{self.base_url}/{self.config.model}"
         payload = {"inputs": texts}
 
+        embeddings: List[List[float]]
         try:
             async with self._session.post(url, json=payload) as response:
                 await raise_for_status_with_body(response)
@@ -423,10 +443,11 @@ class HuggingFaceProvider(ProfileDetectionMixin, AsyncLLMProvider):
         except Exception as exc:
             self._raise_translated(exc)
 
+        self._check_embedding_width(embeddings, requested)
         return embeddings[0] if single else embeddings
 
     async def function_call(
-        self, messages: List[LLMMessage], functions: List[Dict[str, Any]], **kwargs
+        self, messages: List[LLMMessage], functions: List[Dict[str, Any]], **kwargs: Any
     ) -> LLMResponse:
         """HuggingFace doesn't have native function calling."""
         warnings.warn(

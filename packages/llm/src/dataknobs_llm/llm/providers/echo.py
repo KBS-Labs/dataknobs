@@ -151,7 +151,16 @@ class EchoProvider(AsyncLLMProvider):
 
         # Echo-specific configuration from options
         self.echo_prefix = llm_config.options.get("echo_prefix", "Echo: ")
-        self.embedding_dim = llm_config.options.get("embedding_dim", 768)
+        # `dimensions` is the field every other surface documents; the
+        # `embedding_dim` option predates it and is kept working for configs
+        # that use it. Reading only the option was the defect: a config
+        # asking for 16-wide vectors from the project's own testing provider
+        # got 768, and nothing said so.
+        self.embedding_dim = (
+            llm_config.dimensions
+            if llm_config.dimensions is not None
+            else llm_config.options.get("embedding_dim", 768)
+        )
         self.mock_tokens = llm_config.options.get("mock_tokens", True)
         self.stream_delay = llm_config.options.get("stream_delay", 0.0)  # seconds per char
 
@@ -422,7 +431,8 @@ class EchoProvider(AsyncLLMProvider):
             if isinstance(msg, LLMMessage) and msg.role == "user":
                 return msg.content
             elif isinstance(msg, dict) and msg.get("role") == "user":
-                return msg.get("content", "")
+                content: str = msg.get("content", "")
+                return content
         return None
 
     # =========================================================================
@@ -543,7 +553,7 @@ class EchoProvider(AsyncLLMProvider):
         user_messages = [msg.content for msg in messages if msg.role == "user"]
         return " ".join(user_messages)
 
-    def _generate_embedding(self, text: str) -> List[float]:
+    def _generate_embedding(self, text: str, width: int | None = None) -> List[float]:
         """Generate deterministic embedding vector from text.
 
         Uses SHA-256 hash to create a deterministic vector that:
@@ -553,22 +563,27 @@ class EchoProvider(AsyncLLMProvider):
 
         Args:
             text: Input text
+            width: Vector length, defaulting to the configured
+                :attr:`embedding_dim`. Passed by :meth:`embed` when a call
+                states its own ``dimensions``.
 
         Returns:
-            Embedding vector of size self.embedding_dim
+            Embedding vector of size *width*
         """
+        size = self.embedding_dim if width is None else width
+
         # Create hash of the text
         hash_obj = hashlib.sha256(text.encode("utf-8"))
         hash_bytes = hash_obj.digest()
 
         # Generate embedding by repeatedly hashing
-        embedding = []
+        embedding: List[float] = []
         current_hash = hash_bytes
 
-        while len(embedding) < self.embedding_dim:
+        while len(embedding) < size:
             # Convert hash bytes to floats in [-1, 1]
             for byte in current_hash:
-                if len(embedding) >= self.embedding_dim:
+                if len(embedding) >= size:
                     break
                 # Normalize byte (0-255) to [-1, 1]
                 embedding.append((byte / 127.5) - 1.0)
@@ -576,7 +591,7 @@ class EchoProvider(AsyncLLMProvider):
             # Rehash for next batch of values
             current_hash = hashlib.sha256(current_hash).digest()
 
-        return embedding[: self.embedding_dim]
+        return embedding[:size]
 
     def _count_tokens(self, text: str) -> int:
         """Mock token counting (simple character-based estimate).
@@ -590,7 +605,13 @@ class EchoProvider(AsyncLLMProvider):
         # Rough approximation: 1 token ~= 4 characters
         return max(1, len(text) // 4)
 
-    async def initialize(self) -> None:
+    # Same finding as ``AsyncLLMProvider.initialize`` one level up, and the
+    # same answer: ``LLMProvider`` declares the pair sync, so the whole async
+    # subtree contradicts its own base. Resolving it moves the pair down into
+    # ``SyncLLMProvider`` --- a public-ABC contract change needing consumer
+    # verification, argued and deferred where the base declares it. Suppressed
+    # here for that decision, not because this override is wrong.
+    async def initialize(self) -> None:  # type: ignore[override]
         """Initialize echo provider. Tracks call count via ``init_count``.
 
         Note: ``complete()``, ``stream_complete()``, ``embed()``, and
@@ -600,7 +621,13 @@ class EchoProvider(AsyncLLMProvider):
         self._init_count += 1
         self._is_initialized = True
 
-    async def close(self) -> None:
+    # Same finding as ``AsyncLLMProvider.close`` one level up, and the
+    # same answer: ``LLMProvider`` declares the pair sync, so the whole async
+    # subtree contradicts its own base. Resolving it moves the pair down into
+    # ``SyncLLMProvider`` --- a public-ABC contract change needing consumer
+    # verification, argued and deferred where the base declares it. Suppressed
+    # here for that decision, not because this override is wrong.
+    async def close(self) -> None:  # type: ignore[override]
         """Close echo provider, tracking the call.
 
         Increments ``close_count`` on every call (even redundant ones)
@@ -820,11 +847,19 @@ class EchoProvider(AsyncLLMProvider):
     async def embed(
         self, texts: Union[str, List[str]], **kwargs: Any
     ) -> Union[List[float], List[List[float]]]:
-        """Generate deterministic mock embeddings.
+        """Generate deterministic mock embeddings, at the requested width.
+
+        Echo's width is synthetic, so it can honor any width asked for --- by
+        ``LLMConfig.dimensions``, by the legacy ``options["embedding_dim"]``,
+        or per call. That matters beyond Echo itself: a testing provider whose
+        vectors ignore the width its config states makes every test written
+        against that config a demonstration of the defect rather than a guard
+        against it.
 
         Args:
             texts: Input text(s)
-            **kwargs: Additional parameters (ignored)
+            **kwargs: ``dimensions`` (int) overrides the configured width for
+                this call. Other keys are ignored.
 
         Returns:
             Embedding vector(s)
@@ -834,10 +869,12 @@ class EchoProvider(AsyncLLMProvider):
 
         self._embed_history.append({"texts": texts, "kwargs": kwargs})
 
+        requested = self._requested_embedding_dimensions(kwargs)
+        width = self.embedding_dim if requested is None else requested
         if isinstance(texts, str):
-            return self._generate_embedding(texts)
+            return self._generate_embedding(texts, width)
         else:
-            return [self._generate_embedding(text) for text in texts]
+            return [self._generate_embedding(text, width) for text in texts]
 
     async def function_call(
         self, messages: List[LLMMessage], functions: List[Dict[str, Any]], **kwargs: Any
@@ -873,7 +910,7 @@ class EchoProvider(AsyncLLMProvider):
             params = first_func.get("parameters", {})
             properties = params.get("properties", {})
 
-            mock_args = {}
+            mock_args: Dict[str, Any] = {}
             for param_name, param_schema in properties.items():
                 param_type = param_schema.get("type", "string")
 
