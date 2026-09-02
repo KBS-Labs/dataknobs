@@ -7,6 +7,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Fixed
+
+- **`import dataknobs_llm.conversations` failed on any install without
+  `dataknobs-fsm`, putting `ConversationManager` out of reach.** The FSM engine
+  backs exactly two surfaces — the `fsm_integration` subpackage and
+  `ConversationFlowAdapter` — but `conversations/flow/__init__.py` re-exported
+  the adapter eagerly, and `conversations/manager.py` imports the FSM-free leaf
+  `conversations.flow.flow`. Importing a submodule runs its parent package's
+  `__init__` first, so that eager re-export pulled `dataknobs_fsm` into the
+  import of `conversations`, and from there into `ConversationManager` — the
+  package's headline surface — on every base install. The adapter and
+  `FlowExecutionState` now resolve on first attribute access (PEP 562);
+  both remain importable from `dataknobs_llm.conversations.flow` exactly as
+  before, and nothing that already had the engine changes behaviour.
+
+### Added
+
+- **`fsm` extra.** `dataknobs-fsm` backs `dataknobs_llm.fsm_integration`
+  (`LLMResource`, `AsyncLLMResource`, `LLMSession`, `LLMProvider`, the FSM
+  function library) and `ConversationFlowAdapter`. It was previously declared
+  nowhere — not in `dependencies`, not in any extra, not in `all` — so
+  `pip install dataknobs-llm[all]` followed by
+  `from dataknobs_llm.fsm_integration import LLMResource` raised
+  `ModuleNotFoundError`, and no extra existed that a consumer could have
+  installed instead. Install `dataknobs-llm[fsm]`, which `[all]` now includes.
+  The floor is `>=0.4.0`: that release rebased `dataknobs_fsm.functions.base`
+  onto the shared `dataknobs_common` exception hierarchy, and this package
+  raises `ResourceError` and re-exports `TransformError` / `ValidationError`
+  from it.
+
+- **`dataknobs-structures` is now declared.** `Tree` backs `ConversationState`
+  and is imported at module scope by `conversations/manager.py` and
+  `conversations/storage.py`, so every subpackage — including a bare
+  `import dataknobs_llm` — requires it. It was reaching installs only through
+  `dataknobs-utils`' own dependency list, which is not a guarantee this
+  package's metadata made.
+
 ## v0.9.0 - 2026-09-02
 
 ### Fixed

@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-09-02T18:14:10Z",
+  "timestamp": "2026-09-02T19:15:08Z",
   "python_version": "Python 3.12.12",
   "uv_version": "uv 0.12.5 (Homebrew 2026-08-14 aarch64-apple-darwin)",
   "os": "Darwin",
   "os_version": "24.6.0",
-  "git_branch": "sbk/create-release",
-  "git_commit": "e1ea795a2057870673a3540d014b21ed708e432c",
+  "git_branch": "sbk/llm-declare-sibling-deps",
+  "git_commit": "76f89ec8d6330ba79a94825e982271fc2df2279c",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }

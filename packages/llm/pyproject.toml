@@ -11,6 +11,7 @@ dependencies = [
     "dataknobs-common>=3.2.0",
     "dataknobs-config>=0.7.1",
     "dataknobs-data>=0.11.0",
+    "dataknobs-structures>=1.0.17",  # Tree backs ConversationState; imported at module scope by conversations/{manager,storage}.py. Floor single-sourced from the one dataknobs-utils declares, which is what supplied it transitively while it went undeclared.
     "dataknobs-utils>=2.0.2",
     "pyyaml>=6.0.2",  # 6.0 lacks cp312/cp313 wheels and source build fails on Cython 3
     "jinja2>=3.1.6",  # GHSA-cpwx-vrp4-4pq7, GHSA-gmj6-6f8f-6699, GHSA-h75v-3vvj-5mfj, GHSA-q2x7-8rv6-6q7h fixed by 3.1.6
@@ -36,6 +37,20 @@ embeddings = [
 sqlite-cache = [
     "aiosqlite>=0.19.0",
 ]
+# dataknobs_llm.fsm_integration (LLMResource / AsyncLLMResource / the FSM
+# function library) and conversations.flow.ConversationFlowAdapter are the
+# only surfaces needing an FSM engine, so it stays optional rather than
+# pulling dataknobs-fsm into every install. The flow package resolves the
+# adapter lazily (PEP 562) so importing dataknobs_llm.conversations does not
+# require this extra.
+# Floor: 0.4.0 rebased dataknobs_fsm.functions.base onto the shared
+# dataknobs_common exception hierarchy. fsm_integration/resources.py RAISES
+# ResourceError and functions.py re-exports TransformError / ValidationError;
+# below 0.4.0 those are unrelated types, so a consumer catching the common
+# hierarchy would miss them.
+fsm = [
+    "dataknobs-fsm>=0.4.0",
+]
 # Amazon Bedrock provider (Converse chat + Titan/Cohere embeddings). The
 # async bedrock-runtime transport is aioboto3, pulled via the shared
 # ``dataknobs-common[aws]`` session-factory extra rather than re-pinning it
@@ -45,13 +60,15 @@ bedrock = [
     "dataknobs-common[aws]",
 ]
 all = [
-    "dataknobs-llm[openai,anthropic,bedrock,ollama,huggingface,embeddings,sqlite-cache]",
+    "dataknobs-llm[openai,anthropic,bedrock,ollama,huggingface,embeddings,sqlite-cache,fsm]",
 ]
 
 [tool.uv.sources]
 dataknobs-common = { workspace = true }
 dataknobs-config = { workspace = true }
 dataknobs-data = { workspace = true }
+dataknobs-fsm = { workspace = true }
+dataknobs-structures = { workspace = true }
 dataknobs-utils = { workspace = true }
 
 [build-system]
