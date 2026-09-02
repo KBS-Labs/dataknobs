@@ -1,14 +1,16 @@
 # Vector Store Capabilities
 
-Not every vector-store method exists on every backend. `save()` and
-`load()` are meaningless for a store the service persists continuously;
-`create_index()` has no analogue in a brute-force store. Before this,
-reaching one of those methods through the `VectorStore` abstraction
-meant an `isinstance` downcast — and a consumer that downcasts has
-stopped being portable, which is what the abstraction was for.
+Not every vector-store operation works on every backend. `save()` and
+`load()` are meaningless for a store whose service persists
+continuously; `create_index()` has no analogue in a brute-force store;
+handing raw text to the store and letting *it* choose the embedding
+model is one backend's bargain and not the family's.
 
+Two things are needed to make that usable, and they only work together.
 The family implements `CapabilityContract` (from
-`dataknobs_common.capabilities`), so the question has an answer:
+`dataknobs_common.capabilities`), so the question has an answer — and
+the guarded methods live on `VectorStore` itself, so the answer can be
+acted on without an `isinstance` downcast:
 
 ```python
 from dataknobs_common import Capability
@@ -20,16 +22,20 @@ else:
     ...
 ```
 
+Skip the check and a backend that cannot do the thing raises
+`CapabilityNotSupportedError`, following `AsyncDatabase.begin_transaction`:
+the caller learns on the first call rather than on the first restore.
+
 ## The matrix
 
 <!-- capability-matrix:start -->
 
-| Backend | `VECTOR_PERSIST` | `VECTOR_INDEX_TUNING` |
-|---|---|---|
-| `MemoryVectorStore` | with `persist_path` | — |
-| `FaissVectorStore` | with `persist_path` | — |
-| `ChromaVectorStore` | — | — |
-| `PgVectorStore` | — | yes |
+| Backend | `VECTOR_PERSIST` | `VECTOR_INDEX_TUNING` | `VECTOR_DOCUMENT_API` |
+|---|---|---|---|
+| `MemoryVectorStore` | with `persist_path` | — | — |
+| `FaissVectorStore` | with `persist_path` | — | — |
+| `ChromaVectorStore` | — | — | yes |
+| `PgVectorStore` | — | yes | — |
 
 <!-- capability-matrix:end -->
 
@@ -46,12 +52,33 @@ accumulate under a promise nobody was checking.
 
 ## Why `VECTOR_PERSIST` is answered per instance
 
-`save()` and `load()` return early when `persist_path` is unset. A
-`MemoryVectorStore` built without one therefore persists exactly as much
-as a server-backed store does: not at all. The methods are still
-*present*, so the failure mode of getting this wrong is the bad kind —
-a caller who checked by reading the class, or by `hasattr`, gets a
-silent no-op rather than an error, and finds out when the data is gone.
+A `MemoryVectorStore` built without a `persist_path` persists exactly as
+much as a server-backed store does: not at all. Since the methods are on
+the ABC, `hasattr` answers `True` for every backend and settles nothing
+— which is the point, but it means probing for the method instead of
+asking for the capability tells you less than nothing.
+
+There are two ways a store can decline to persist and **they behave the
+same**: no `VECTOR_PERSIST`, no snapshot, `CapabilityNotSupportedError`.
+
+| | Why it declines |
+|---|---|
+| Chroma, pgvector | the rows live in a service; there is no snapshot to take |
+| Memory, FAISS with no `persist_path` | the class can snapshot; this instance has nowhere to put one |
+
+The second case used to return quietly, and that was the more dangerous
+of the two — a request to persist answered with a successful-looking
+call and nothing on disk to restore from. A caller that legitimately
+does not know whether a store persists gates on the capability:
+
+```python
+if store.supports(Capability.VECTOR_PERSIST):
+    await store.save()
+```
+
+which is what `MemoryVectorStore.initialize()` now does with
+`persist_path` before calling `load()` — the shape
+`FaissVectorStore.initialize()` already had.
 
 So the capability is computed from instance state rather than declared
 on the class:
@@ -107,3 +134,29 @@ For a capability that depends on construction, override
 Consumer-defined capabilities need no enum member: `supports()` accepts
 a raw string, so an out-of-tree backend can advertise its own vocabulary
 without a change here.
+
+## `VECTOR_DOCUMENT_API` is not the portable way to store text
+
+This one is easy to misread as "only Chroma can store documents", and
+that is not what it says. Every backend can:
+
+```python
+await store.bulk_embed_and_store(texts, embedder=my_embedder, ids=ids)
+```
+
+`bulk_embed_and_store` is on `VectorStore`, so it is the family's
+portable text-to-vector path, and it is the one to reach for by default.
+
+What `VECTOR_DOCUMENT_API` marks is a genuinely different bargain.
+Chroma's `add_documents()` / `search_documents()` embed **server-side**,
+using the embedding function its client was configured with. That is
+convenient and it costs something specific: the model is the store's, so
+the caller neither chooses it nor records which one produced a given
+vector. A store whose rows were written that way cannot answer "are
+these vectors stale against the current model?", because nothing wrote
+down which model it was — whereas `bulk_embed_and_store` records the
+model identity in each row's metadata.
+
+So the capability is worth advertising in both directions. A consumer
+that wants the convenience can find the one backend offering it; a
+consumer that needs provenance can tell it is about to lose it.

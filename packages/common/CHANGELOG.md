@@ -9,13 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **`Capability.VECTOR_PERSIST` and `Capability.VECTOR_INDEX_TUNING`,** with a
-  `vector_storage` family in `CAPABILITY_FAMILIES`. Both are for the vector
-  stores in `dataknobs-data`, whose family had no way to say which of its
-  public methods a given backend actually has. `VECTOR_PERSIST` carries a note
+- **`Capability.VECTOR_PERSIST`, `Capability.VECTOR_INDEX_TUNING` and
+  `Capability.VECTOR_DOCUMENT_API`,** with a `vector_storage` family in
+  `CAPABILITY_FAMILIES`. All three are for the vector stores in
+  `dataknobs-data`, whose family had no way to say which of its public
+  operations a given backend actually supports. `VECTOR_PERSIST` carries a note
   on the member itself that it is instance-scoped: a store can have `save()`
   and `load()` and still not persist, so declaring it from a `ClassVar` claims
-  a guarantee the instance cannot keep.
+  a guarantee the instance cannot keep. `VECTOR_DOCUMENT_API` marks
+  *server-side* embedding specifically — the portable text path is
+  `VectorStore.bulk_embed_and_store`, which every backend has — because the
+  two differ in whether the caller can later tell which model produced a
+  vector.
 
 ### Changed
 

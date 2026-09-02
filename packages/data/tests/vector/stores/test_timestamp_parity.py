@@ -21,8 +21,11 @@ import asyncio
 from typing import Any
 
 import pytest
+from dataknobs_common.testing import is_chromadb_available
 
 from dataknobs_data.testing import vector as _vector
+
+from .conftest import running_vector_store
 
 # The backend roster, the availability marks, the per-backend construction
 # and the Chroma teardown all live in ``conftest.py``. This suite needs an
@@ -134,3 +137,55 @@ async def test_update_vectors_preserves_created(
     assert second["_updated_at"] > first["_updated_at"], "updated_at must advance"
     # And the replacement is still a replacement, not a merge.
     assert second["v"] == 2
+
+
+# ---------------------------------------------------------------------------
+# The document search path, which the parity fixture above cannot reach.
+#
+# ``search_documents`` is Chroma's alone — it embeds the query server-side,
+# which no other backend can do — so it has no cross-backend cell. That is
+# exactly why it drifted: the parity suite ran over four backends and this
+# method was on none of the four paths it exercised, so ``search`` and
+# ``get_vectors`` gained ``include_timestamps`` while the sibling one file
+# away did not. A single-backend method still needs the assertion; it just
+# cannot get it from a parametrized fixture.
+# ---------------------------------------------------------------------------
+@pytest.mark.asyncio
+@pytest.mark.skipif(not is_chromadb_available(), reason="chromadb not installed")
+async def test_search_documents_exposes_timestamps(request: pytest.FixtureRequest) -> None:
+    """``search_documents`` honours ``include_timestamps`` like its siblings.
+
+    Reproduces the gap: before the fix this raised ``TypeError`` on an
+    unexpected keyword argument, because the parameter reached ``search``
+    and ``get_vectors`` and stopped there.
+    """
+    async with running_vector_store("chroma", request, collection_prefix="test_docts_") as store:
+        await store.add_documents(["a small brown dog"], ids=["d1"], metadata=[{"k": "v"}])
+
+        rows = await store.search_documents("dog", k=1, include_timestamps=True)
+
+        assert len(rows) == 1
+        _, _, doc, meta = rows[0]
+        assert doc == "a small brown dog"
+        assert meta is not None
+        assert meta["k"] == "v"
+        assert meta["_created_at"] is not None
+        assert meta["_updated_at"] is not None
+
+
+@pytest.mark.asyncio
+@pytest.mark.skipif(not is_chromadb_available(), reason="chromadb not installed")
+async def test_search_documents_omits_timestamps_by_default(
+    request: pytest.FixtureRequest,
+) -> None:
+    """Default ``search_documents`` omits the keys, as the siblings do."""
+    async with running_vector_store("chroma", request, collection_prefix="test_docts_") as store:
+        await store.add_documents(["a small brown dog"], ids=["d1"], metadata=[{"k": "v"}])
+
+        rows = await store.search_documents("dog", k=1)
+
+        assert len(rows) == 1
+        meta = rows[0][3]
+        assert meta is not None
+        assert "_created_at" not in meta
+        assert "_updated_at" not in meta

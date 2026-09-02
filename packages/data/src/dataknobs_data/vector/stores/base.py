@@ -8,7 +8,11 @@ from typing import TYPE_CHECKING, Any
 import numpy as np
 
 from dataknobs_common.callbacks import run_callback_off_loop
-from dataknobs_common.capabilities import DynamicCapabilityMixin
+from dataknobs_common.capabilities import (
+    Capability,
+    DynamicCapabilityMixin,
+    require_capability,
+)
 
 from ...fields import VectorField
 from ...records import Record
@@ -294,6 +298,119 @@ class VectorStore(DynamicCapabilityMixin, ABC, VectorStoreBase):
         """
         pass
 
+    # ------------------------------------------------------------------
+    # Capability-gated surface.
+    #
+    # These three exist on the abstraction so that a consumer holding a
+    # ``VectorStore`` can *call* what it has just confirmed the store
+    # supports. Declaring the capability without declaring the method left
+    # the check reachable and the call not: ``supports`` answered
+    # truthfully and then the only way to act on the answer was to
+    # downcast to a concrete backend, which is what the abstraction was
+    # for. Advertising and reaching ship together.
+    #
+    # The default is a refusal rather than a silent no-op, following
+    # ``AsyncDatabase.begin_transaction``: a backend that cannot do the
+    # thing says so, and the consumer that skipped the ``supports`` check
+    # learns on the first call instead of on the first restore.
+    # ------------------------------------------------------------------
+
+    async def save(self, *, force: bool = False) -> None:
+        """Snapshot this store to its configured ``persist_path``.
+
+        Guarded by :attr:`~dataknobs_common.Capability.VECTOR_PERSIST`,
+        which is advertised per instance — see
+        :class:`~dataknobs_data.vector.stores.common.PathPersistedCapabilityMixin`.
+
+        **One rule, whatever the reason.** A store that does not advertise
+        ``VECTOR_PERSIST`` raises, and there are two ways to be such a
+        store: a backend whose rows live in a service has nothing to
+        snapshot and inherits this default, and a backend that *can*
+        snapshot was built without a ``persist_path``. The second used to
+        return quietly, which answered a request to persist with a
+        successful-looking call and nothing on disk to restore from —
+        precisely the silent degradation the advertisement exists to
+        replace. So the capability answers both "will this persist?" and
+        "will this raise?", and one check covers both.
+
+        Args:
+            force: Write regardless of what is on disk, accepting the loss
+                of whatever another writer persisted there. Backends that
+                do not compare against the file ignore it.
+
+        Raises:
+            CapabilityNotSupportedError: The store does not support
+                ``VECTOR_PERSIST``.
+        """
+        require_capability(self, Capability.VECTOR_PERSIST)
+        # Advertised and unimplemented: a backend declared the capability
+        # and inherited this default. Silence here would be the exact
+        # failure the advertisement exists to prevent --- a consumer that
+        # checked, was told yes, and persisted nothing.
+        raise NotImplementedError(
+            f"{type(self).__name__} advertises "
+            f"{Capability.VECTOR_PERSIST.value!r} but does not implement save()"
+        )
+
+    async def load(self) -> None:
+        """Restore this store from its configured ``persist_path``.
+
+        The counterpart of :meth:`save`, gated by the same capability
+        under the same single rule. A caller that loads conditionally
+        gates on ``persist_path`` (or on ``supports``) rather than calling
+        this and relying on a no-op — which is what
+        ``MemoryVectorStore.initialize`` now does, matching the shape
+        ``FaissVectorStore.initialize`` already had.
+
+        Raises:
+            CapabilityNotSupportedError: The store does not support
+                ``VECTOR_PERSIST``.
+        """
+        require_capability(self, Capability.VECTOR_PERSIST)
+        raise NotImplementedError(
+            f"{type(self).__name__} advertises "
+            f"{Capability.VECTOR_PERSIST.value!r} but does not implement load()"
+        )
+
+    async def create_index(
+        self,
+        index_type: str | None = None,
+        params: dict[str, Any] | None = None,
+        if_not_exists: bool = True,
+    ) -> bool:
+        """Build or rebuild a backend-native ANN index.
+
+        Guarded by
+        :attr:`~dataknobs_common.Capability.VECTOR_INDEX_TUNING`. Unlike
+        :meth:`save`, this one is genuinely a property of the backend
+        rather than of the configuration: the parameters are the index
+        structure's own (HNSW's ``m`` and ``ef_construction``, IVFFlat's
+        ``lists``), so a store either has such an index to tune or does
+        not. FAISS chooses its index at construction and exposes no
+        runtime tuning verb, which is why it withholds the capability
+        despite being the other ANN backend.
+
+        Args:
+            index_type: Backend-specific index kind. Defaults to the
+                store's configured type.
+            params: Index parameters, defaulting to the configured ones.
+            if_not_exists: Skip creation when the index already exists.
+
+        Returns:
+            True when an index was created, False when the call was
+            skipped because one already existed.
+
+        Raises:
+            CapabilityNotSupportedError: The store does not support
+                ``VECTOR_INDEX_TUNING``.
+        """
+        require_capability(self, Capability.VECTOR_INDEX_TUNING)
+        raise NotImplementedError(
+            f"{type(self).__name__} advertises "
+            f"{Capability.VECTOR_INDEX_TUNING.value!r} but does not "
+            "implement create_index()"
+        )
+
     async def update_metadata_where(
         self,
         filter: dict[str, Any] | None,
@@ -536,6 +653,20 @@ class VectorStore(DynamicCapabilityMixin, ABC, VectorStoreBase):
         model_version: str | None = None,
     ) -> list[str]:
         """Embed texts and store vectors.
+
+        **This is the family's portable text-to-vector path**, and the one
+        to reach for by default: it is declared here, so every backend has
+        it, and the caller supplies the embedder — which is what lets each
+        row record the model identity that makes a stored vector's
+        staleness judgeable later.
+
+        The alternative is one backend's alone.
+        :attr:`~dataknobs_common.Capability.VECTOR_DOCUMENT_API` marks a
+        store that embeds text *server-side* with its own configured
+        model (``ChromaVectorStore.add_documents``). Convenient, and it
+        drops that record — the caller neither chooses the model nor
+        learns which one produced a vector. Advertised so the two can be
+        told apart before the rows are written, not after.
 
         Args:
             texts: Texts to embed

@@ -105,6 +105,14 @@ class Capability(str, Enum):
     # closes by being *declared* rather than by being implemented
     # everywhere.
     VECTOR_INDEX_TUNING = "vector_index_tuning"
+    # Accept raw text and embed it *server-side*, without the caller
+    # supplying an embedder. Not the family's portable document path —
+    # ``VectorStore.bulk_embed_and_store`` is, and every backend has it —
+    # but a genuinely different bargain: the model is the store's, so the
+    # caller neither chooses it nor records which one produced a vector.
+    # Declared so a consumer can tell the two apart before writing rows
+    # whose provenance it cannot later reconstruct.
+    VECTOR_DOCUMENT_API = "vector_document_api"
 
 
 CAPABILITY_FAMILIES: Mapping[str, frozenset[Capability]] = MappingProxyType(
@@ -156,6 +164,7 @@ CAPABILITY_FAMILIES: Mapping[str, frozenset[Capability]] = MappingProxyType(
             {
                 Capability.VECTOR_PERSIST,
                 Capability.VECTOR_INDEX_TUNING,
+                Capability.VECTOR_DOCUMENT_API,
             }
         ),
     }

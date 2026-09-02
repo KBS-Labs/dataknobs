@@ -10,6 +10,8 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
+from dataknobs_common.capabilities import Capability, require_capability
+
 from ..types import DistanceMetric
 from .base import VectorStore
 from .common import PathPersistedCapabilityMixin
@@ -982,8 +984,12 @@ class FaissVectorStore(PathPersistedCapabilityMixin, VectorStore):
                 the alternative that loses nothing is to open a second
                 store on the file and re-add these rows to it.
         """
-        if not self.persist_path:
-            return
+        # A store built without a ``persist_path`` does not advertise
+        # VECTOR_PERSIST, so this is the same refusal a server-backed
+        # backend gives, for the same reason: the call cannot persist.
+        # It replaces an early return, which answered a request to
+        # snapshot with a successful-looking no-op.
+        require_capability(self, Capability.VECTOR_PERSIST)
         if self.index is None:
             # The index is created in initialize(); a save() before that
             # has nothing to persist. Skip rather than crash downstream in
@@ -1071,8 +1077,12 @@ class FaissVectorStore(PathPersistedCapabilityMixin, VectorStore):
         :func:`asyncio.to_thread`. A no-op when ``persist_path`` is unset
         or no file exists.
         """
-        if not self.persist_path:
-            return
+        # A store built without a ``persist_path`` does not advertise
+        # VECTOR_PERSIST, so this is the same refusal a server-backed
+        # backend gives, for the same reason: the call cannot persist.
+        # It replaces an early return, which answered a request to
+        # snapshot with a successful-looking no-op.
+        require_capability(self, Capability.VECTOR_PERSIST)
         async with self._save_lock:
             await asyncio.to_thread(self._load_from_disk)
 
