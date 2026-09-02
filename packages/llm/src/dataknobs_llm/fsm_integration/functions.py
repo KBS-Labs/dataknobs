@@ -218,8 +218,12 @@ class LLMCaller(ITransformFunction):
 
         system_prompt = data.get("system_prompt")
 
+        # Only the provider call is wrapped. The handler reports the
+        # exception's type and nothing else, deliberately -- a provider's text
+        # carries endpoint URLs and response bodies -- so anything raised
+        # inside its reach loses its own message. The contract check below
+        # therefore sits outside it.
         try:
-            # Call LLM
             response = await resource.generate(
                 prompt=prompt,
                 system_prompt=system_prompt,
@@ -228,27 +232,34 @@ class LLMCaller(ITransformFunction):
                 max_tokens=self.max_tokens,
                 stream=self.stream,
             )
-
-            if self.stream:
-                # For streaming, return an async generator
-                return {
-                    **data,
-                    self.response_field: response,  # Async generator
-                    "is_streaming": True,
-                }
-            # Non-streaming. `generate()` returns a dict here and an async
-            # iterator when streaming, and only the dict carries usage --
-            # narrowing on the value rather than on `self.stream` is what
-            # makes that readable to the type checker as well as the reader.
-            usage = response.get("usage", {}) if isinstance(response, dict) else {}
-            return {
-                **data,
-                self.response_field: response,
-                "tokens_used": usage.get("total_tokens"),
-            }
-
         except Exception as e:
             raise TransformError(f"LLM call failed ({type(e).__name__})") from e
+
+        if self.stream:
+            # For streaming, return an async generator
+            return {
+                **data,
+                self.response_field: response,  # Async generator
+                "is_streaming": True,
+            }
+
+        # `generate()` returns a dict for a non-streaming call and an async
+        # iterator for a streaming one. Saying so is what lets `usage` be read
+        # at all; leaving it unsaid would mean reporting `tokens_used: None`
+        # for a response that is not a mapping, which is the silent-success
+        # shape this module is otherwise being cleared of.
+        if not isinstance(response, dict):
+            raise TransformError(
+                f"LLM resource '{self.resource_name}' returned "
+                f"{type(response).__name__} for a non-streaming call; "
+                f"generate() must return a dict when stream is False"
+            )
+
+        return {
+            **data,
+            self.response_field: response,
+            "tokens_used": response.get("usage", {}).get("total_tokens"),
+        }
 
     def get_transform_description(self) -> str:
         """Get a description of the transformation.

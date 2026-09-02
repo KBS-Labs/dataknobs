@@ -35,6 +35,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   obscurely partway through the call and now fails immediately with a message
   naming the requirement.
 
+- **`LLMCaller` reported no token usage instead of a broken contract.**
+  `generate()` returns a dict for a non-streaming call and an async iterator
+  for a streaming one; the non-streaming path read `usage` off the response
+  without saying which it required, so a resource returning anything else
+  yielded `tokens_used: None` and no error. It now names what came back and
+  what was required. The blanket handler around the provider call --- which
+  reports only the exception's type, so a provider's endpoint URLs and
+  response bodies cannot reach a caller --- has been narrowed to the call
+  itself, so this contract error keeps its own message rather than being
+  re-reported as `LLM call failed (TransformError)`. That disclosure bound is
+  otherwise unchanged and still covered by its recurrence guard.
+
 - **`PromptBuilder` nested variables never worked.** A dotted entry in
   `variables` (e.g. `"user.name"`) was resolved out of the data and stored
   under the dotted key, then passed to `str.format(**variables)` — which reads

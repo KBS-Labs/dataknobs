@@ -309,6 +309,94 @@ class TestResourceGuards:
         assert await generator.transform(data) == data
 
 
+class TestLLMCallerResponseContract:
+    """A non-streaming `generate()` must hand back a dict, and say so if not."""
+
+    async def test_a_non_dict_response_is_reported_not_silently_dropped(self):
+        """The narrowing must not turn a broken contract into a quiet None.
+
+        `tokens_used` is read off the response, so a non-dict response used to
+        raise `AttributeError` and surface -- uninformatively -- as "LLM call
+        failed (AttributeError)". Narrowing the type for the checker must not
+        replace that with `tokens_used: None` and no error at all: this
+        module's whole subject is calls that report success without having
+        worked.
+        """
+
+        class BrokenResource(AsyncLLMResource):
+            """Violates `generate()`'s own contract for a non-streaming call."""
+
+            async def generate(self, *args: object, **kwargs: object) -> object:
+                return ["not", "a", "dict"]
+
+        resource = BrokenResource(
+            "llm",
+            provider="echo",
+            model="echo-test",
+            async_provider=_echo_provider(),
+        )
+        caller = LLMCaller(resource_name="llm", stream=False)
+        data = {"_resources": {"llm": resource}, "prompt": "hi"}
+
+        with pytest.raises(TransformError) as excinfo:
+            await caller.transform(data)
+
+        message = str(excinfo.value)
+        assert "list" in message, "the error must name what came back"
+        assert "dict" in message, "the error must name what was required"
+
+    async def test_the_contract_error_is_not_swallowed_by_the_call_wrapper(self):
+        """The message must survive, not become 'failed (TransformError)'.
+
+        The provider call is wrapped by a blanket handler that reports only
+        the exception's type name -- deliberately, so vendor text cannot
+        reach a caller. A contract error raised inside that handler's reach
+        would be re-wrapped and its message lost.
+        """
+
+        class BrokenResource(AsyncLLMResource):
+            async def generate(self, *args: object, **kwargs: object) -> object:
+                return 42
+
+        resource = BrokenResource(
+            "llm",
+            provider="echo",
+            model="echo-test",
+            async_provider=_echo_provider(),
+        )
+        caller = LLMCaller(resource_name="llm")
+
+        with pytest.raises(TransformError) as excinfo:
+            await caller.transform({"_resources": {"llm": resource}, "prompt": "hi"})
+
+        assert "TransformError" not in str(excinfo.value), (
+            "the contract error was re-wrapped by the blanket handler and its "
+            "message replaced with the wrapper's type name"
+        )
+
+    async def test_a_provider_failure_still_reports_only_its_type(self):
+        """The disclosure bound on the provider call is unchanged."""
+
+        class ExplodingResource(AsyncLLMResource):
+            async def generate(self, *args: object, **kwargs: object) -> object:
+                raise RuntimeError("endpoint https://internal.example/v1 refused")
+
+        resource = ExplodingResource(
+            "llm",
+            provider="echo",
+            model="echo-test",
+            async_provider=_echo_provider(),
+        )
+        caller = LLMCaller(resource_name="llm")
+
+        with pytest.raises(TransformError) as excinfo:
+            await caller.transform({"_resources": {"llm": resource}, "prompt": "hi"})
+
+        message = str(excinfo.value)
+        assert "internal.example" not in message, "vendor text reached the caller"
+        assert "RuntimeError" in message
+
+
 class TestPromptBuilderNestedVariables:
     """The nested-access path, whose local is re-bound to None on a miss."""
 
